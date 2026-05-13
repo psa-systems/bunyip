@@ -12,7 +12,7 @@ use crate::components::layout::BrandMark;
 use crate::components::theme::ThemeToggle;
 use crate::modules::oidc::OidcConfig;
 use crate::routes::Route;
-use crate::stores::auth::{refresh_auth, use_auth, AuthState};
+use crate::stores::auth::{self, use_auth, AuthState};
 use crate::stores::toast::use_toast;
 
 /// Given an OAuth client's registered redirect_uri (e.g.
@@ -274,8 +274,16 @@ fn DashboardHeader(user_name: String, org_name: String) -> Element {
 
     let sign_out = move |_| {
         spawn(async move {
+            // Best-effort server-side logout (clears the OP session
+            // cookie on mokosh-server). Ignored on failure - we always
+            // tear down the local session below.
             let _ = api::auth::logout().await;
-            refresh_auth(auth).await;
+            // The Bearer token in localStorage is a stateless JWT and
+            // is NOT invalidated by /v1/auth/logout, so we cannot
+            // verify "signed out" by re-fetching /me - that would
+            // succeed and bounce the user right back into the
+            // dashboard. Clear local state explicitly instead.
+            auth::sign_out(auth);
             toast.info("Signed out.");
             nav.replace(Route::LoginPage {});
         });
