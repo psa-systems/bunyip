@@ -1,16 +1,19 @@
+use crate::state::AppState;
 use axum::{
     extract::State,
     routing::{get, post},
     Json, Router,
 };
 use serde_json::{json, Value};
-use crate::state::AppState;
 
 // Phase 4 fills in /oidc/authorize consent rendering + /oidc/consent handling.
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/.well-known/openid-configuration", get(openid_configuration))
+        .route(
+            "/.well-known/openid-configuration",
+            get(openid_configuration),
+        )
         .route("/.well-known/jwks.json", get(jwks))
         .route("/oidc/authorize", get(stub))
         .route("/oidc/consent", post(stub))

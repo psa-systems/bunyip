@@ -42,7 +42,9 @@ fn read_current_theme() -> Theme {
 }
 
 fn apply_theme(theme: Theme) {
-    let Some(window) = web_sys::window() else { return };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
     if let Some(html) = window.document().and_then(|d| d.document_element()) {
         let list = html.class_list();
         match theme {
@@ -70,7 +72,11 @@ pub fn ThemeToggle() -> Element {
     };
 
     let is_dark = theme() == Theme::Dark;
-    let aria = if is_dark { "Switch to light mode" } else { "Switch to dark mode" };
+    let aria = if is_dark {
+        "Switch to light mode"
+    } else {
+        "Switch to dark mode"
+    };
 
     rsx! {
         button {

@@ -64,8 +64,23 @@ pub fn FeedbackPage() -> Element {
 
     let page_path = web_sys::window()
         .and_then(|w| w.document())
-        .and_then(|d| d.referrer().split('/').collect::<Vec<_>>().into_iter().skip(3).collect::<Vec<_>>().join("/").into())
-        .map(|s: String| if s.is_empty() { None } else { Some(format!("/{}", s)) })
+        .and_then(|d| {
+            d.referrer()
+                .split('/')
+                .collect::<Vec<_>>()
+                .into_iter()
+                .skip(3)
+                .collect::<Vec<_>>()
+                .join("/")
+                .into()
+        })
+        .map(|s: String| {
+            if s.is_empty() {
+                None
+            } else {
+                Some(format!("/{}", s))
+            }
+        })
         .unwrap_or(None);
 
     let toggle_tag = move |tag: String| {
@@ -251,7 +266,11 @@ pub fn FeedbackPage() -> Element {
 }
 
 fn opt(s: String) -> Option<String> {
-    if s.trim().is_empty() { None } else { Some(s) }
+    if s.trim().is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 #[component]

@@ -16,8 +16,8 @@ use crate::modules::oidc::{self, FlowError, LoginOutcome};
 use crate::routes::Route;
 use crate::stores::auth::{refresh_auth, use_auth};
 use crate::stores::config::OidcConfig;
-use crate::stores::tokens::{save_tokens, Tokens};
 use crate::stores::toast::use_toast;
+use crate::stores::tokens::{save_tokens, Tokens};
 
 const TRUST_TOKEN_KEY: &str = "bunyip.trust_token";
 
@@ -372,10 +372,8 @@ pub fn SignupCompletePage(token: String) -> Element {
         }
         let req = SignupCompleteRequest {
             password: state.read().password.clone(),
-            first_name: Some(state.read().first_name.clone())
-                .filter(|s| !s.trim().is_empty()),
-            last_name: Some(state.read().last_name.clone())
-                .filter(|s| !s.trim().is_empty()),
+            first_name: Some(state.read().first_name.clone()).filter(|s| !s.trim().is_empty()),
+            last_name: Some(state.read().last_name.clone()).filter(|s| !s.trim().is_empty()),
         };
         let token = submit_token.clone();
         spawn(async move {

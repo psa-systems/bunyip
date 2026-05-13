@@ -45,7 +45,12 @@ async fn submit_feedback(
     if body.message.trim().is_empty() {
         return Err(AppError::BadRequest("message is required".into()));
     }
-    if body.website.as_deref().map(|s| !s.is_empty()).unwrap_or(false) {
+    if body
+        .website
+        .as_deref()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+    {
         // Silent honeypot: pretend success without recording.
         return Err(AppError::BadRequest("nope".into()));
     }
@@ -57,8 +62,14 @@ async fn submit_feedback(
     // If the user is signed in, fall back to their profile for name/email.
     let (name, email) = if let Some(uid) = actor {
         let user = store.find_user(uid);
-        let n = body.name.clone().or_else(|| user.as_ref().map(|u| u.name.clone()));
-        let e = body.email.clone().or_else(|| user.as_ref().map(|u| u.email.clone()));
+        let n = body
+            .name
+            .clone()
+            .or_else(|| user.as_ref().map(|u| u.name.clone()));
+        let e = body
+            .email
+            .clone()
+            .or_else(|| user.as_ref().map(|u| u.email.clone()));
         (n, e)
     } else {
         (body.name.clone(), body.email.clone())

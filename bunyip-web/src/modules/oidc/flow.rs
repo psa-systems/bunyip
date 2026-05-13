@@ -120,10 +120,12 @@ pub async fn complete_login(cfg: &OidcConfig) -> Result<(Tokens, String), FlowEr
         error: "invalid_request".into(),
         description: "missing code".into(),
     })?;
-    let state = params.get("state").ok_or_else(|| FlowError::TokenEndpoint {
-        error: "invalid_request".into(),
-        description: "missing state".into(),
-    })?;
+    let state = params
+        .get("state")
+        .ok_or_else(|| FlowError::TokenEndpoint {
+            error: "invalid_request".into(),
+            description: "missing state".into(),
+        })?;
 
     if let Some(err) = params.get("error") {
         return Err(FlowError::TokenEndpoint {
@@ -443,6 +445,24 @@ pub async fn issuer_post_authed<T: serde::de::DeserializeOwned, B: serde::Serial
     resp.json::<T>()
         .await
         .map_err(|e| FlowError::Network(format!("body: {e}")))
+}
+
+/// Issuer-authed POST with empty body. Returns Ok(()) on any 2xx;
+/// the body is discarded. Used for endpoints that return 204
+/// (e.g. `/v1/auth/sessions/{id}/revoke`).
+pub async fn issuer_post_authed_empty(cfg: &OidcConfig, path: &str) -> Result<(), FlowError> {
+    let token = current_access_token().ok_or_else(|| FlowError::Network("not signed in".into()))?;
+    let url = format!("{}{path}", cfg.issuer_trimmed());
+    let resp = Request::post(&url)
+        .header("Authorization", &format!("Bearer {token}"))
+        .header("Content-Length", "0")
+        .send()
+        .await
+        .map_err(|e| FlowError::Network(e.to_string()))?;
+    if !resp.ok() {
+        return Err(FlowError::Network(format!("HTTP {}", resp.status())));
+    }
+    Ok(())
 }
 
 pub async fn issuer_get<T: serde::de::DeserializeOwned>(

@@ -24,13 +24,24 @@ pub fn router() -> Router<AppState> {
         .route("/v1/orgs/{slug}/members", get(list_members))
         .route("/v1/orgs/{slug}/members/{user_id}", delete(remove_member))
         .route("/v1/orgs/{slug}/members/{user_id}/role", patch(change_role))
-        .route("/v1/orgs/{slug}/invitations", get(list_invitations).post(create_invitation))
-        .route("/v1/orgs/{slug}/invitations/{id}", delete(revoke_invitation))
+        .route(
+            "/v1/orgs/{slug}/invitations",
+            get(list_invitations).post(create_invitation),
+        )
+        .route(
+            "/v1/orgs/{slug}/invitations/{id}",
+            delete(revoke_invitation),
+        )
         .route("/v1/invitations/accept", post(accept_invitation))
         .route("/v1/invitations/lookup", get(lookup_invitation))
 }
 
-fn audit(action: &str, actor: Option<Uuid>, org_id: Option<Uuid>, target: Option<&str>) -> AuditLog {
+fn audit(
+    action: &str,
+    actor: Option<Uuid>,
+    org_id: Option<Uuid>,
+    target: Option<&str>,
+) -> AuditLog {
     AuditLog {
         id: Uuid::new_v4(),
         actor_user_id: actor,
@@ -92,11 +103,11 @@ async fn rename_org(
 ) -> Result<Json<Org>, AppError> {
     let uid = current_user_id(&cookies).ok_or(AppError::Unauthorized)?;
     let mut store = state.store.write();
-    let org_id = store
-        .org_by_slug(&slug)
-        .ok_or(AppError::NotFound)?
-        .id;
-    if !matches!(store.role_in_org(uid, org_id), Some(MembershipRole::Owner | MembershipRole::Admin)) {
+    let org_id = store.org_by_slug(&slug).ok_or(AppError::NotFound)?.id;
+    if !matches!(
+        store.role_in_org(uid, org_id),
+        Some(MembershipRole::Owner | MembershipRole::Admin)
+    ) {
         return Err(AppError::Forbidden);
     }
     let Some(org) = store.orgs.iter_mut().find(|o| o.id == org_id) else {
@@ -104,7 +115,12 @@ async fn rename_org(
     };
     org.name = body.name.clone();
     let org = org.clone();
-    store.log_audit(audit("org.rename", Some(uid), Some(org_id), Some(&org.name)));
+    store.log_audit(audit(
+        "org.rename",
+        Some(uid),
+        Some(org_id),
+        Some(&org.name),
+    ));
     Ok(Json(org))
 }
 
@@ -117,7 +133,9 @@ async fn leave_org(
     let mut store = state.store.write();
     let org = store.org_by_slug(&slug).ok_or(AppError::NotFound)?;
     if org.owner_user_id == uid {
-        return Err(AppError::BadRequest("owners cannot leave their own org".into()));
+        return Err(AppError::BadRequest(
+            "owners cannot leave their own org".into(),
+        ));
     }
     if !store.remove_member(org.id, uid) {
         return Err(AppError::NotFound);
@@ -161,7 +179,10 @@ async fn remove_member(
     let actor = current_user_id(&cookies).ok_or(AppError::Unauthorized)?;
     let mut store = state.store.write();
     let org = store.org_by_slug(&slug).ok_or(AppError::NotFound)?;
-    if !matches!(store.role_in_org(actor, org.id), Some(MembershipRole::Owner | MembershipRole::Admin)) {
+    if !matches!(
+        store.role_in_org(actor, org.id),
+        Some(MembershipRole::Owner | MembershipRole::Admin)
+    ) {
         return Err(AppError::Forbidden);
     }
     if user_id == org.owner_user_id {
@@ -170,7 +191,12 @@ async fn remove_member(
     if !store.remove_member(org.id, user_id) {
         return Err(AppError::NotFound);
     }
-    store.log_audit(audit("org.member.remove", Some(actor), Some(org.id), Some(&user_id.to_string())));
+    store.log_audit(audit(
+        "org.member.remove",
+        Some(actor),
+        Some(org.id),
+        Some(&user_id.to_string()),
+    ));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -197,7 +223,12 @@ async fn change_role(
     if !store.change_member_role(org.id, user_id, body.role) {
         return Err(AppError::NotFound);
     }
-    store.log_audit(audit("org.member.role_change", Some(actor), Some(org.id), Some(&user_id.to_string())));
+    store.log_audit(audit(
+        "org.member.role_change",
+        Some(actor),
+        Some(org.id),
+        Some(&user_id.to_string()),
+    ));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -211,7 +242,10 @@ async fn list_invitations(
     let uid = current_user_id(&cookies).ok_or(AppError::Unauthorized)?;
     let store = state.store.read();
     let org = store.org_by_slug(&slug).ok_or(AppError::NotFound)?;
-    if !matches!(store.role_in_org(uid, org.id), Some(MembershipRole::Owner | MembershipRole::Admin)) {
+    if !matches!(
+        store.role_in_org(uid, org.id),
+        Some(MembershipRole::Owner | MembershipRole::Admin)
+    ) {
         return Err(AppError::Forbidden);
     }
     Ok(Json(store.invitations_for_org(org.id)))
@@ -232,7 +266,10 @@ async fn create_invitation(
     let actor = current_user_id(&cookies).ok_or(AppError::Unauthorized)?;
     let mut store = state.store.write();
     let org = store.org_by_slug(&slug).ok_or(AppError::NotFound)?;
-    if !matches!(store.role_in_org(actor, org.id), Some(MembershipRole::Owner | MembershipRole::Admin)) {
+    if !matches!(
+        store.role_in_org(actor, org.id),
+        Some(MembershipRole::Owner | MembershipRole::Admin)
+    ) {
         return Err(AppError::Forbidden);
     }
     let inv = store.create_invitation(org.id, body.email.clone(), body.role, actor);
@@ -241,7 +278,12 @@ async fn create_invitation(
         state.config.public_base_url, inv.token
     );
     tracing::info!(email = %body.email, link = %link, "mock invitation email sent");
-    store.log_audit(audit("org.invite.send", Some(actor), Some(org.id), Some(&body.email)));
+    store.log_audit(audit(
+        "org.invite.send",
+        Some(actor),
+        Some(org.id),
+        Some(&body.email),
+    ));
     Ok((StatusCode::CREATED, Json(inv)))
 }
 
@@ -253,13 +295,21 @@ async fn revoke_invitation(
     let actor = current_user_id(&cookies).ok_or(AppError::Unauthorized)?;
     let mut store = state.store.write();
     let org = store.org_by_slug(&slug).ok_or(AppError::NotFound)?;
-    if !matches!(store.role_in_org(actor, org.id), Some(MembershipRole::Owner | MembershipRole::Admin)) {
+    if !matches!(
+        store.role_in_org(actor, org.id),
+        Some(MembershipRole::Owner | MembershipRole::Admin)
+    ) {
         return Err(AppError::Forbidden);
     }
     if !store.delete_invitation(org.id, invite_id) {
         return Err(AppError::NotFound);
     }
-    store.log_audit(audit("org.invite.revoke", Some(actor), Some(org.id), Some(&invite_id.to_string())));
+    store.log_audit(audit(
+        "org.invite.revoke",
+        Some(actor),
+        Some(org.id),
+        Some(&invite_id.to_string()),
+    ));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -282,7 +332,9 @@ async fn lookup_invitation(
     axum::extract::Query(q): axum::extract::Query<InvitationLookupQuery>,
 ) -> Result<Json<InvitationLookupResponse>, AppError> {
     let store = state.store.read();
-    let inv = store.invitation_by_token(&q.token).ok_or(AppError::NotFound)?;
+    let inv = store
+        .invitation_by_token(&q.token)
+        .ok_or(AppError::NotFound)?;
     let org = store
         .orgs
         .iter()
@@ -324,6 +376,11 @@ async fn accept_invitation(
         .find(|o| o.id == inv.org_id)
         .cloned()
         .ok_or(AppError::NotFound)?;
-    store.log_audit(audit("org.invite.accept", Some(uid), Some(inv.org_id), Some(&inv.email)));
+    store.log_audit(audit(
+        "org.invite.accept",
+        Some(uid),
+        Some(inv.org_id),
+        Some(&inv.email),
+    ));
     Ok(Json(org))
 }

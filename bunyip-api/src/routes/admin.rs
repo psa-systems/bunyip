@@ -1,8 +1,8 @@
+use crate::state::AppState;
 use axum::{
     routing::{get, patch, post},
     Router,
 };
-use crate::state::AppState;
 
 // Stubs - real handlers land in Phase 6.
 
@@ -22,7 +22,7 @@ pub fn router() -> Router<AppState> {
         .route("/v1/admin/oidc-clients", get(stub).post(stub))
         .route("/v1/admin/oidc-clients/{id}", axum::routing::delete(stub))
         .route("/v1/admin/oidc-clients/{id}/rotate", post(stub))
-        // /v1/admin/feedback handlers live in routes/feedback.rs
+    // /v1/admin/feedback handlers live in routes/feedback.rs
 }
 
 async fn stub() -> axum::http::StatusCode {

@@ -19,9 +19,15 @@ pub fn router() -> Router<AppState> {
         .route("/v1/billing/tiers", get(list_tiers))
         .route("/v1/orgs/{slug}/billing", get(get_billing))
         .route("/v1/orgs/{slug}/billing/checkout", post(create_checkout))
-        .route("/v1/orgs/{slug}/billing/portal", post(create_portal_session))
+        .route(
+            "/v1/orgs/{slug}/billing/portal",
+            post(create_portal_session),
+        )
         .route("/v1/orgs/{slug}/billing/cancel", post(cancel_subscription))
-        .route("/v1/orgs/{slug}/billing/uncancel", post(uncancel_subscription))
+        .route(
+            "/v1/orgs/{slug}/billing/uncancel",
+            post(uncancel_subscription),
+        )
         .route("/v1/stripe/webhook", post(stripe_webhook_stub))
 }
 
@@ -78,7 +84,10 @@ async fn create_checkout(
     let uid = current_user_id(&cookies).ok_or(AppError::Unauthorized)?;
     let mut store = state.store.write();
     let org = store.org_by_slug(&slug).ok_or(AppError::NotFound)?;
-    if !matches!(store.role_in_org(uid, org.id), Some(MembershipRole::Owner | MembershipRole::Admin)) {
+    if !matches!(
+        store.role_in_org(uid, org.id),
+        Some(MembershipRole::Owner | MembershipRole::Admin)
+    ) {
         return Err(AppError::Forbidden);
     }
     // Simulate the checkout: just upgrade the org's subscription to the requested tier.
@@ -133,11 +142,17 @@ async fn create_portal_session(
     let uid = current_user_id(&cookies).ok_or(AppError::Unauthorized)?;
     let store = state.store.read();
     let org = store.org_by_slug(&slug).ok_or(AppError::NotFound)?;
-    if !matches!(store.role_in_org(uid, org.id), Some(MembershipRole::Owner | MembershipRole::Admin)) {
+    if !matches!(
+        store.role_in_org(uid, org.id),
+        Some(MembershipRole::Owner | MembershipRole::Admin)
+    ) {
         return Err(AppError::Forbidden);
     }
     Ok(Json(PortalResponse {
-        url: format!("{}/mock-stripe/portal?org={}", state.config.public_base_url, org.slug),
+        url: format!(
+            "{}/mock-stripe/portal?org={}",
+            state.config.public_base_url, org.slug
+        ),
     }))
 }
 
@@ -149,7 +164,10 @@ async fn cancel_subscription(
     let uid = current_user_id(&cookies).ok_or(AppError::Unauthorized)?;
     let mut store = state.store.write();
     let org = store.org_by_slug(&slug).ok_or(AppError::NotFound)?;
-    if !matches!(store.role_in_org(uid, org.id), Some(MembershipRole::Owner | MembershipRole::Admin)) {
+    if !matches!(
+        store.role_in_org(uid, org.id),
+        Some(MembershipRole::Owner | MembershipRole::Admin)
+    ) {
         return Err(AppError::Forbidden);
     }
     if let Some(s) = store.subscriptions.iter_mut().find(|s| s.org_id == org.id) {
@@ -177,7 +195,10 @@ async fn uncancel_subscription(
     let uid = current_user_id(&cookies).ok_or(AppError::Unauthorized)?;
     let mut store = state.store.write();
     let org = store.org_by_slug(&slug).ok_or(AppError::NotFound)?;
-    if !matches!(store.role_in_org(uid, org.id), Some(MembershipRole::Owner | MembershipRole::Admin)) {
+    if !matches!(
+        store.role_in_org(uid, org.id),
+        Some(MembershipRole::Owner | MembershipRole::Admin)
+    ) {
         return Err(AppError::Forbidden);
     }
     if let Some(s) = store.subscriptions.iter_mut().find(|s| s.org_id == org.id) {

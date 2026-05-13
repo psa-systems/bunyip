@@ -10,3 +10,6 @@ pub mod landing;
 pub mod orgs;
 pub mod placeholder;
 pub mod pricing;
+pub mod profile;
+pub mod security;
+pub mod sessions;

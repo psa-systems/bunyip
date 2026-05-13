@@ -115,12 +115,7 @@ impl MockStore {
     }
 
     /// Inserts a new user (verified-on-create false) and returns the new row.
-    pub fn create_user(
-        &mut self,
-        email: String,
-        name: String,
-        mfa_enabled: bool,
-    ) -> User {
+    pub fn create_user(&mut self, email: String, name: String, mfa_enabled: bool) -> User {
         let user = User {
             id: Uuid::new_v4(),
             email,
@@ -197,10 +192,7 @@ impl MockStore {
     }
 
     pub fn invitation_by_token(&self, token: &str) -> Option<Invitation> {
-        self.invitations
-            .iter()
-            .find(|i| i.token == token)
-            .cloned()
+        self.invitations.iter().find(|i| i.token == token).cloned()
     }
 
     pub fn create_invitation(
@@ -227,12 +219,20 @@ impl MockStore {
 
     pub fn delete_invitation(&mut self, org_id: Uuid, invite_id: Uuid) -> bool {
         let before = self.invitations.len();
-        self.invitations.retain(|i| !(i.org_id == org_id && i.id == invite_id));
+        self.invitations
+            .retain(|i| !(i.org_id == org_id && i.id == invite_id));
         self.invitations.len() != before
     }
 
-    pub fn accept_invitation(&mut self, token: &str, accepting_user_id: Uuid) -> Option<Invitation> {
-        let inv_idx = self.invitations.iter().position(|i| i.token == token && i.accepted_at.is_none())?;
+    pub fn accept_invitation(
+        &mut self,
+        token: &str,
+        accepting_user_id: Uuid,
+    ) -> Option<Invitation> {
+        let inv_idx = self
+            .invitations
+            .iter()
+            .position(|i| i.token == token && i.accepted_at.is_none())?;
         let inv = self.invitations[inv_idx].clone();
         if inv.expires_at < chrono::Utc::now() {
             return None;
@@ -252,11 +252,17 @@ impl MockStore {
 
     pub fn remove_member(&mut self, org_id: Uuid, user_id: Uuid) -> bool {
         let before = self.memberships.len();
-        self.memberships.retain(|m| !(m.org_id == org_id && m.user_id == user_id));
+        self.memberships
+            .retain(|m| !(m.org_id == org_id && m.user_id == user_id));
         self.memberships.len() != before
     }
 
-    pub fn change_member_role(&mut self, org_id: Uuid, user_id: Uuid, role: MembershipRole) -> bool {
+    pub fn change_member_role(
+        &mut self,
+        org_id: Uuid,
+        user_id: Uuid,
+        role: MembershipRole,
+    ) -> bool {
         if let Some(m) = self
             .memberships
             .iter_mut()
@@ -270,10 +276,7 @@ impl MockStore {
     }
 }
 
-fn load_json<T: serde::de::DeserializeOwned>(
-    dir: &Path,
-    filename: &str,
-) -> Result<T, LoadError> {
+fn load_json<T: serde::de::DeserializeOwned>(dir: &Path, filename: &str) -> Result<T, LoadError> {
     let path = dir.join(filename);
     if !path.exists() {
         return Err(LoadError::Missing(path.display().to_string()));

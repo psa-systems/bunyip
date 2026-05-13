@@ -39,9 +39,18 @@ pub fn router() -> Router<AppState> {
         .route("/v1/auth/totp/verify-setup", post(totp_verify_setup))
         .route("/v1/auth/totp/disable", post(totp_disable))
         .route("/v1/auth/totp/verify", post(totp_verify))
-        .route("/v1/auth/totp/recovery-codes/regenerate", post(totp_regenerate_codes))
-        .route("/v1/auth/trusted-devices", get(list_trusted_devices).post(trust_device))
-        .route("/v1/auth/trusted-devices/{id}", delete(revoke_trusted_device))
+        .route(
+            "/v1/auth/totp/recovery-codes/regenerate",
+            post(totp_regenerate_codes),
+        )
+        .route(
+            "/v1/auth/trusted-devices",
+            get(list_trusted_devices).post(trust_device),
+        )
+        .route(
+            "/v1/auth/trusted-devices/{id}",
+            delete(revoke_trusted_device),
+        )
 }
 
 // --- Helpers ---
@@ -118,7 +127,8 @@ async fn signup(
     cookies: Cookies,
     Json(body): Json<SignupRequest>,
 ) -> Result<(StatusCode, Json<SignupResponse>), AppError> {
-    body.validate().map_err(|e| AppError::BadRequest(e.to_string()))?;
+    body.validate()
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
     let mut store = state.store.write();
     if store.email_taken(&body.email) {
@@ -190,7 +200,11 @@ async fn login(
     let mut store = state.store.write();
     if user.mfa_enabled && !device_is_trusted(&cookies, user.id) {
         cookies.add(challenge_cookie(user.id.to_string()));
-        store.log_audit(audit("auth.login.mfa_required", Some(user.id), Some(&user.email)));
+        store.log_audit(audit(
+            "auth.login.mfa_required",
+            Some(user.id),
+            Some(&user.email),
+        ));
         return Ok(Json(LoginResponse {
             user,
             requires_mfa: true,
@@ -198,7 +212,11 @@ async fn login(
     }
 
     cookies.add(session_cookie(user.id.to_string()));
-    store.log_audit(audit("auth.login.success", Some(user.id), Some(&user.email)));
+    store.log_audit(audit(
+        "auth.login.success",
+        Some(user.id),
+        Some(&user.email),
+    ));
     Ok(Json(LoginResponse {
         user,
         requires_mfa: false,
@@ -213,7 +231,10 @@ fn device_is_trusted(_cookies: &Cookies, _user_id: Uuid) -> bool {
 
 async fn logout(State(state): State<AppState>, cookies: Cookies) -> StatusCode {
     if let Some(uid) = current_user_id(&cookies) {
-        state.store.write().log_audit(audit("auth.logout", Some(uid), None));
+        state
+            .store
+            .write()
+            .log_audit(audit("auth.logout", Some(uid), None));
     }
     cookies.remove(Cookie::build(SESSION_COOKIE).path("/").build());
     cookies.remove(Cookie::build(CHALLENGE_COOKIE).path("/").build());
@@ -239,7 +260,8 @@ async fn verify_email(
     State(state): State<AppState>,
     Json(body): Json<VerifyEmailRequest>,
 ) -> Result<StatusCode, AppError> {
-    let user_id = Uuid::parse_str(&body.token).map_err(|_| AppError::BadRequest("invalid token".into()))?;
+    let user_id =
+        Uuid::parse_str(&body.token).map_err(|_| AppError::BadRequest("invalid token".into()))?;
     let mut store = state.store.write();
     if !store.verify_user_email(user_id) {
         return Err(AppError::NotFound);
@@ -303,7 +325,8 @@ async fn reset_password(
     State(state): State<AppState>,
     Json(body): Json<ResetPasswordRequest>,
 ) -> Result<StatusCode, AppError> {
-    let user_id = Uuid::parse_str(&body.token).map_err(|_| AppError::BadRequest("invalid token".into()))?;
+    let user_id =
+        Uuid::parse_str(&body.token).map_err(|_| AppError::BadRequest("invalid token".into()))?;
     let mut store = state.store.write();
     if store.find_user(user_id).is_none() {
         return Err(AppError::NotFound);
@@ -343,14 +366,18 @@ async fn magic_link_consume(
     cookies: Cookies,
     Query(q): Query<MagicLinkConsumeQuery>,
 ) -> Result<axum::response::Redirect, AppError> {
-    let user_id = Uuid::parse_str(&q.token).map_err(|_| AppError::BadRequest("invalid token".into()))?;
+    let user_id =
+        Uuid::parse_str(&q.token).map_err(|_| AppError::BadRequest("invalid token".into()))?;
     let user = state
         .store
         .read()
         .find_user(user_id)
         .ok_or(AppError::NotFound)?;
     cookies.add(session_cookie(user.id.to_string()));
-    state.store.write().log_audit(audit("auth.magic_link.consumed", Some(user.id), None));
+    state
+        .store
+        .write()
+        .log_audit(audit("auth.magic_link.consumed", Some(user.id), None));
     Ok(axum::response::Redirect::to("/dashboard"))
 }
 
@@ -367,7 +394,11 @@ async fn totp_setup(
     cookies: Cookies,
 ) -> Result<Json<TotpSetupResponse>, AppError> {
     let uid = current_user_id(&cookies).ok_or(AppError::Unauthorized)?;
-    let user = state.store.read().find_user(uid).ok_or(AppError::Unauthorized)?;
+    let user = state
+        .store
+        .read()
+        .find_user(uid)
+        .ok_or(AppError::Unauthorized)?;
     // A hard-coded mock secret (base32-ish). Real implementation moves to
     // Mokosh Server.
     let secret = "JBSWY3DPEHPK3PXP".to_string();
@@ -375,7 +406,10 @@ async fn totp_setup(
         "otpauth://totp/Bunyip:{}?secret={}&issuer=Bunyip",
         user.email, secret
     );
-    Ok(Json(TotpSetupResponse { secret, otpauth_url }))
+    Ok(Json(TotpSetupResponse {
+        secret,
+        otpauth_url,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -400,7 +434,9 @@ async fn totp_verify_setup(
         .map(|i| format!("bunyip-mock-{i:02}-{}", &uid.to_string()[..6]))
         .collect();
     store.log_audit(audit("auth.totp.enabled", Some(uid), None));
-    Ok(Json(serde_json::json!({ "recovery_codes": recovery_codes })))
+    Ok(Json(
+        serde_json::json!({ "recovery_codes": recovery_codes }),
+    ))
 }
 
 async fn totp_disable(
@@ -433,10 +469,17 @@ async fn totp_verify(
     if !is_valid_mock_totp(&state.config.mock_totp_code, &body.code) {
         return Err(AppError::Unauthorized);
     }
-    let user = state.store.read().find_user(user_id).ok_or(AppError::Unauthorized)?;
+    let user = state
+        .store
+        .read()
+        .find_user(user_id)
+        .ok_or(AppError::Unauthorized)?;
     cookies.remove(Cookie::build(CHALLENGE_COOKIE).path("/").build());
     cookies.add(session_cookie(user.id.to_string()));
-    state.store.write().log_audit(audit("auth.totp.verified", Some(user.id), None));
+    state
+        .store
+        .write()
+        .log_audit(audit("auth.totp.verified", Some(user.id), None));
     Ok(Json(user))
 }
 
@@ -454,11 +497,17 @@ async fn totp_regenerate_codes(
     cookies: Cookies,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let uid = current_user_id(&cookies).ok_or(AppError::Unauthorized)?;
-    state.store.write().log_audit(audit("auth.totp.recovery_codes.regenerate", Some(uid), None));
+    state.store.write().log_audit(audit(
+        "auth.totp.recovery_codes.regenerate",
+        Some(uid),
+        None,
+    ));
     let recovery_codes: Vec<String> = (1..=10)
         .map(|i| format!("bunyip-mock-{i:02}-{}", &uid.to_string()[..6]))
         .collect();
-    Ok(Json(serde_json::json!({ "recovery_codes": recovery_codes })))
+    Ok(Json(
+        serde_json::json!({ "recovery_codes": recovery_codes }),
+    ))
 }
 
 // --- Trusted devices (placeholder until Phase 3c) ---

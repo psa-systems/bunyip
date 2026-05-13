@@ -23,10 +23,7 @@ pub struct MeResponse {
     pub memberships: Vec<OrgMembership>,
 }
 
-async fn me(
-    State(state): State<AppState>,
-    cookies: Cookies,
-) -> Result<Json<MeResponse>, AppError> {
+async fn me(State(state): State<AppState>, cookies: Cookies) -> Result<Json<MeResponse>, AppError> {
     let uid = current_user_id(&cookies).ok_or(AppError::Unauthorized)?;
     let store = state.store.read();
     let user = store.find_user(uid).ok_or(AppError::Unauthorized)?;

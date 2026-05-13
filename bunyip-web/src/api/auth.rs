@@ -51,11 +51,7 @@ pub async fn signup_complete(
     token: &str,
     req: &SignupCompleteRequest,
 ) -> Result<serde_json::Value, ApiError> {
-    post_json(
-        &format!("/v1/auth/signup/by-token/{token}/complete"),
-        req,
-    )
-    .await
+    post_json(&format!("/v1/auth/signup/by-token/{token}/complete"), req).await
 }
 
 #[derive(Debug, Serialize)]
@@ -65,11 +61,7 @@ struct ForgotPasswordRequest {
 
 /// POST `/v1/auth/password-reset`. Enumeration-resistant; always 200.
 pub async fn forgot_password(email: String) -> Result<(), ApiError> {
-    post_json_empty(
-        "/v1/auth/password-reset",
-        &ForgotPasswordRequest { email },
-    )
-    .await
+    post_json_empty("/v1/auth/password-reset", &ForgotPasswordRequest { email }).await
 }
 
 #[derive(Debug, Deserialize)]

@@ -115,7 +115,10 @@ pub fn AppShell(title: String, children: Element) -> Element {
     let (user_name, org_name) = match &state {
         AuthState::SignedIn(me) => (
             me.user.name.clone(),
-            me.memberships.first().map(|m| m.org.name.clone()).unwrap_or_else(|| "Personal".to_string()),
+            me.memberships
+                .first()
+                .map(|m| m.org.name.clone())
+                .unwrap_or_else(|| "Personal".to_string()),
         ),
         _ => (String::new(), String::new()),
     };

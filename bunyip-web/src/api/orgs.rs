@@ -55,10 +55,13 @@ pub async fn create_invitation(
 }
 
 pub async fn revoke_invitation(slug: &str, invite_id: &str) -> Result<(), ApiError> {
-    let resp = super::request("DELETE", &format!("/v1/orgs/{slug}/invitations/{invite_id}"))
-        .send()
-        .await
-        .map_err(|e| ApiError::Network(e.to_string()))?;
+    let resp = super::request(
+        "DELETE",
+        &format!("/v1/orgs/{slug}/invitations/{invite_id}"),
+    )
+    .send()
+    .await
+    .map_err(|e| ApiError::Network(e.to_string()))?;
     if resp.ok() {
         Ok(())
     } else {

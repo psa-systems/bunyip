@@ -16,6 +16,9 @@ use crate::pages::{
     orgs::{OrgListPage, OrgMembersPage},
     placeholder::PlaceholderPage,
     pricing::PricingPage,
+    profile::ProfilePage,
+    security::SecurityPage,
+    sessions::SessionsPage,
 };
 
 #[derive(Routable, Clone, Debug, PartialEq)]
@@ -62,6 +65,15 @@ pub enum Route {
     // Authenticated
     #[route("/dashboard")]
     DashboardPage {},
+
+    #[route("/settings/profile")]
+    ProfilePage {},
+
+    #[route("/settings/security")]
+    SecurityPage {},
+
+    #[route("/settings/sessions")]
+    SessionsPage {},
 
     #[route("/settings/orgs")]
     OrgListPage {},

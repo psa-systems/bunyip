@@ -24,9 +24,7 @@ pub struct OidcConfig {
 impl OidcConfig {
     pub fn from_env() -> Self {
         Self {
-            issuer: option_env!("BUNYIP_OIDC_ISSUER")
-                .unwrap_or("")
-                .to_string(),
+            issuer: option_env!("BUNYIP_OIDC_ISSUER").unwrap_or("").to_string(),
             client_id: option_env!("BUNYIP_OIDC_CLIENT_ID")
                 .unwrap_or("")
                 .to_string(),

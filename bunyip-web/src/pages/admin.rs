@@ -16,9 +16,7 @@ pub fn AdminFeedbackPage() -> Element {
     let feedback_resource = use_resource(move || {
         let filter = filter();
         let _ = refresh_key.read();
-        async move {
-            feedback::list_admin(if filter == "all" { None } else { Some(&filter) }).await
-        }
+        async move { feedback::list_admin(if filter == "all" { None } else { Some(&filter) }).await }
     });
 
     rsx! {
@@ -78,7 +76,11 @@ fn FilterChip(
 }
 
 #[component]
-fn FeedbackRow(entry: Feedback, refresh_key: Signal<u64>, toast: crate::stores::toast::ToastStore) -> Element {
+fn FeedbackRow(
+    entry: Feedback,
+    refresh_key: Signal<u64>,
+    toast: crate::stores::toast::ToastStore,
+) -> Element {
     let mut refresh_key = refresh_key;
     let id_close = entry.id.clone();
     let id_triage = entry.id.clone();
@@ -88,7 +90,10 @@ fn FeedbackRow(entry: Feedback, refresh_key: Signal<u64>, toast: crate::stores::
         let id = id_close.clone();
         spawn(async move {
             match feedback::update_status(&id, FeedbackStatus::Closed).await {
-                Ok(()) => { toast.success("Closed."); refresh_key.set(refresh_key() + 1); }
+                Ok(()) => {
+                    toast.success("Closed.");
+                    refresh_key.set(refresh_key() + 1);
+                }
                 Err(e) => toast.error(e.user_message()),
             }
         });
@@ -97,7 +102,10 @@ fn FeedbackRow(entry: Feedback, refresh_key: Signal<u64>, toast: crate::stores::
         let id = id_triage.clone();
         spawn(async move {
             match feedback::update_status(&id, FeedbackStatus::Triaged).await {
-                Ok(()) => { toast.info("Marked triaged."); refresh_key.set(refresh_key() + 1); }
+                Ok(()) => {
+                    toast.info("Marked triaged.");
+                    refresh_key.set(refresh_key() + 1);
+                }
                 Err(e) => toast.error(e.user_message()),
             }
         });
@@ -106,7 +114,10 @@ fn FeedbackRow(entry: Feedback, refresh_key: Signal<u64>, toast: crate::stores::
         let id = id_reopen.clone();
         spawn(async move {
             match feedback::update_status(&id, FeedbackStatus::New).await {
-                Ok(()) => { toast.info("Reopened."); refresh_key.set(refresh_key() + 1); }
+                Ok(()) => {
+                    toast.info("Reopened.");
+                    refresh_key.set(refresh_key() + 1);
+                }
                 Err(e) => toast.error(e.user_message()),
             }
         });

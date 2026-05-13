@@ -47,7 +47,12 @@ pub fn OrgBillingPage(slug: String) -> Element {
 }
 
 #[component]
-fn CurrentPlan(view: BillingView, slug: String, refresh_key: Signal<u64>, toast: crate::stores::toast::ToastStore) -> Element {
+fn CurrentPlan(
+    view: BillingView,
+    slug: String,
+    refresh_key: Signal<u64>,
+    toast: crate::stores::toast::ToastStore,
+) -> Element {
     let slug_for_cancel = slug.clone();
     let mut refresh_key = refresh_key;
 
@@ -81,7 +86,10 @@ fn CurrentPlan(view: BillingView, slug: String, refresh_key: Signal<u64>, toast:
         .subscription
         .as_ref()
         .map(|s| status_pill(&s.status))
-        .unwrap_or(("No subscription", "bg-bunyip-reed-50 dark:bg-bunyip-reed-900 text-bunyip-reed-700 dark:text-bunyip-reed-200"));
+        .unwrap_or((
+        "No subscription",
+        "bg-bunyip-reed-50 dark:bg-bunyip-reed-900 text-bunyip-reed-700 dark:text-bunyip-reed-200",
+    ));
 
     rsx! {
         div { class: "mt-6 p-6 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800",
@@ -170,7 +178,12 @@ fn format_or_dash(ts: Option<&str>) -> String {
 }
 
 #[component]
-fn TierPicker(tiers: Vec<TierConfig>, slug: String, refresh_key: Signal<u64>, toast: crate::stores::toast::ToastStore) -> Element {
+fn TierPicker(
+    tiers: Vec<TierConfig>,
+    slug: String,
+    refresh_key: Signal<u64>,
+    toast: crate::stores::toast::ToastStore,
+) -> Element {
     let mut refresh_key = refresh_key;
     let slug = std::rc::Rc::new(slug);
 

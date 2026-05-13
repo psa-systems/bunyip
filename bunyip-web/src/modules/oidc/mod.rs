@@ -25,8 +25,9 @@ pub mod storage;
 pub mod tokens;
 
 pub use flow::{
-    complete_login, mfa_verify, password_login, refresh_tokens, snapshot_initial_search,
-    start_login, FlowError, LoginOutcome, MfaVerifyOk,
+    complete_login, issuer_get, issuer_get_authed, issuer_post, issuer_post_authed,
+    issuer_post_authed_empty, mfa_verify, password_login, refresh_tokens, revoke_refresh_token,
+    snapshot_initial_search, start_login, FlowError, LoginOutcome, MfaVerifyOk,
 };
 pub use tokens::IdTokenClaims;
 

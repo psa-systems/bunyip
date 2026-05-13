@@ -59,7 +59,11 @@ pub struct CheckoutResponse {
 }
 
 pub async fn create_checkout(slug: &str, tier_key: String) -> Result<CheckoutResponse, ApiError> {
-    post_json(&format!("/v1/orgs/{slug}/billing/checkout"), &CheckoutRequest { tier_key }).await
+    post_json(
+        &format!("/v1/orgs/{slug}/billing/checkout"),
+        &CheckoutRequest { tier_key },
+    )
+    .await
 }
 
 pub async fn cancel_subscription(slug: &str) -> Result<(), ApiError> {

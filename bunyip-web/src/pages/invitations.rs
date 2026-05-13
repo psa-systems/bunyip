@@ -20,7 +20,8 @@ pub fn AcceptInvitationPage() -> Element {
             .and_then(|w| w.location().search().ok())
             .and_then(|s| {
                 let qs = s.trim_start_matches('?').to_string();
-                qs.split('&').find_map(|p| p.strip_prefix("token=").map(|t| t.to_string()))
+                qs.split('&')
+                    .find_map(|p| p.strip_prefix("token=").map(|t| t.to_string()))
             })
     });
 
@@ -32,7 +33,9 @@ pub fn AcceptInvitationPage() -> Element {
     let mut submitting = use_signal(|| false);
 
     let accept = move |_| {
-        let Some(t) = token() else { return; };
+        let Some(t) = token() else {
+            return;
+        };
         if submitting() {
             return;
         }
@@ -65,7 +68,11 @@ pub fn AcceptInvitationPage() -> Element {
 }
 
 #[component]
-fn LookupCard(lookup: InvitationLookup, submitting: bool, onaccept: EventHandler<MouseEvent>) -> Element {
+fn LookupCard(
+    lookup: InvitationLookup,
+    submitting: bool,
+    onaccept: EventHandler<MouseEvent>,
+) -> Element {
     let role_text = match lookup.role {
         crate::api::types::MembershipRole::Owner => "Owner",
         crate::api::types::MembershipRole::Admin => "Admin",

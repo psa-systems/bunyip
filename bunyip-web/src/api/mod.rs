@@ -85,8 +85,14 @@ impl ApiError {
             ApiError::Network(_) => "Network error - check your connection.".into(),
             ApiError::NotAuthenticated => "You are signed out.".into(),
             ApiError::Status { status: 401, .. } => "Email or password didn't match.".into(),
-            ApiError::Status { status: 409, message } => message.clone(),
-            ApiError::Status { status: 400, message } => message.clone(),
+            ApiError::Status {
+                status: 409,
+                message,
+            } => message.clone(),
+            ApiError::Status {
+                status: 400,
+                message,
+            } => message.clone(),
             ApiError::Status { message, .. } => message.clone(),
             ApiError::Decode(_) => "Server returned an unexpected response.".into(),
         }
