@@ -6,18 +6,18 @@ use crate::routes::Route;
 #[component]
 pub fn LandingPage() -> Element {
     rsx! {
-        div { class: "min-h-screen flex flex-col bg-gradient-to-b from-bunyip-reed-50 via-bunyip-reed-50 to-white",
+        div { class: "min-h-screen flex flex-col bg-gradient-to-b from-bunyip-reed-50 via-bunyip-reed-50 to-white dark:from-bunyip-reed-900 dark:via-bunyip-reed-900 dark:to-bunyip-reed-800",
             PublicNav {}
 
             // Hero
             section { class: "flex-1 px-6 pt-12 pb-20",
                 div { class: "max-w-6xl mx-auto grid md:grid-cols-2 gap-12 items-center",
                     div {
-                        span { class: "inline-flex items-center gap-2 px-3 py-1 rounded-full bg-bunyip-reed-100 text-bunyip-reed-800 text-xs font-medium tracking-wide uppercase",
-                            span { class: "w-1.5 h-1.5 rounded-full bg-bunyip-reed-600" }
+                        span { class: "inline-flex items-center gap-2 px-3 py-1 rounded-full bg-bunyip-reed-100 dark:bg-bunyip-reed-800 text-bunyip-reed-800 dark:text-bunyip-reed-100 text-xs font-medium tracking-wide uppercase",
+                            span { class: "w-1.5 h-1.5 rounded-full bg-bunyip-reed-600 dark:bg-bunyip-reed-300" }
                             "Now in early access"
                         }
-                        h1 { class: "mt-6 text-4xl md:text-6xl font-bold tracking-tight text-bunyip-reed-900 leading-[1.05]",
+                        h1 { class: "mt-6 text-4xl md:text-6xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50 leading-[1.05]",
                             "The SaaS layer for your "
                             span { class: "relative inline-block",
                                 span { class: "relative z-10 text-bunyip-water-500",
@@ -27,7 +27,7 @@ pub fn LandingPage() -> Element {
                             }
                             "."
                         }
-                        p { class: "mt-6 text-lg text-bunyip-reed-700 leading-relaxed max-w-xl",
+                        p { class: "mt-6 text-lg text-bunyip-reed-700 dark:text-bunyip-reed-200 leading-relaxed max-w-xl",
                             "Bunyip handles the business-y bits - signup, billing, members, invitations - so Mokosh can focus on what makes your MSP tick."
                         }
                         div { class: "mt-10 flex flex-wrap gap-3",
@@ -42,7 +42,7 @@ pub fn LandingPage() -> Element {
                                 "See pricing"
                             }
                         }
-                        div { class: "mt-10 flex flex-wrap items-center gap-x-8 gap-y-2 text-sm text-bunyip-reed-700",
+                        div { class: "mt-10 flex flex-wrap items-center gap-x-8 gap-y-2 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-300",
                             Bullet { text: "No credit card required" }
                             Bullet { text: "14-day trial" }
                             Bullet { text: "Cancel anytime" }
@@ -54,16 +54,16 @@ pub fn LandingPage() -> Element {
             }
 
             // Features
-            section { class: "px-6 py-20 bg-white border-y border-bunyip-reed-100",
+            section { class: "px-6 py-20 bg-white dark:bg-bunyip-reed-800 border-y border-bunyip-reed-100 dark:border-bunyip-reed-700",
                 div { class: "max-w-6xl mx-auto",
                     div { class: "max-w-2xl",
-                        p { class: "text-sm uppercase tracking-wide text-bunyip-reed-600 font-semibold",
+                        p { class: "text-sm uppercase tracking-wide text-bunyip-reed-600 dark:text-bunyip-reed-300 font-semibold",
                             "What you get"
                         }
-                        h2 { class: "mt-2 text-3xl md:text-4xl font-bold tracking-tight",
+                        h2 { class: "mt-2 text-3xl md:text-4xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50",
                             "Everything around the product. Nothing in it."
                         }
-                        p { class: "mt-4 text-bunyip-reed-700",
+                        p { class: "mt-4 text-bunyip-reed-700 dark:text-bunyip-reed-200",
                             "Bunyip is the business shell that wraps Mokosh. We do the boring infrastructure so you can ship the PSA."
                         }
                     }
@@ -131,14 +131,14 @@ pub fn LandingPage() -> Element {
 #[component]
 fn FeatureCard(icon: Element, title: &'static str, body: &'static str) -> Element {
     rsx! {
-        div { class: "p-6 rounded-xl border border-bunyip-reed-100 bg-bunyip-reed-50 hover:border-bunyip-reed-300 hover:bg-white transition-colors",
-            div { class: "w-10 h-10 rounded-lg bg-white border border-bunyip-reed-200 flex items-center justify-center text-bunyip-reed-700",
+        div { class: "p-6 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-bunyip-reed-50 dark:bg-bunyip-reed-900 hover:border-bunyip-reed-300 dark:hover:border-bunyip-reed-500 hover:bg-white dark:hover:bg-bunyip-reed-800 transition-colors",
+            div { class: "w-10 h-10 rounded-lg bg-white dark:bg-bunyip-reed-800 border border-bunyip-reed-200 dark:border-bunyip-reed-700 flex items-center justify-center text-bunyip-reed-700 dark:text-bunyip-reed-100",
                 {icon}
             }
-            h3 { class: "mt-4 font-semibold text-lg text-bunyip-reed-900",
+            h3 { class: "mt-4 font-semibold text-lg text-bunyip-reed-900 dark:text-bunyip-reed-50",
                 "{title}"
             }
-            p { class: "mt-2 text-sm text-bunyip-reed-700 leading-relaxed",
+            p { class: "mt-2 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 leading-relaxed",
                 "{body}"
             }
         }
@@ -167,20 +167,20 @@ fn Bullet(text: &'static str) -> Element {
 #[component]
 fn Footer() -> Element {
     rsx! {
-        footer { class: "px-6 py-10 border-t border-bunyip-reed-100 bg-white",
-            div { class: "max-w-6xl mx-auto flex flex-col md:flex-row gap-4 md:items-center md:justify-between text-sm text-bunyip-reed-700",
+        footer { class: "px-6 py-10 border-t border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-900",
+            div { class: "max-w-6xl mx-auto flex flex-col md:flex-row gap-4 md:items-center md:justify-between text-sm text-bunyip-reed-700 dark:text-bunyip-reed-300",
                 div { class: "flex items-center gap-3",
                     BunyipMark {}
                     div { "Bunyip · a8n.systems" }
                 }
                 div { class: "flex gap-6",
-                    Link { to: Route::PricingPage {}, class: "hover:text-bunyip-reed-900",
+                    Link { to: Route::PricingPage {}, class: "hover:text-bunyip-reed-900 dark:hover:text-white",
                         "Pricing"
                     }
-                    Link { to: Route::LoginPage {}, class: "hover:text-bunyip-reed-900",
+                    Link { to: Route::LoginPage {}, class: "hover:text-bunyip-reed-900 dark:hover:text-white",
                         "Sign in"
                     }
-                    a { href: "https://msp.a8n.systems", class: "hover:text-bunyip-reed-900",
+                    a { href: "https://msp.a8n.systems", class: "hover:text-bunyip-reed-900 dark:hover:text-white",
                         "Open Mokosh"
                     }
                 }

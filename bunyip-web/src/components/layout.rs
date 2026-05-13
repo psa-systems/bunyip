@@ -1,28 +1,29 @@
 use dioxus::prelude::*;
 
+use crate::components::theme::ThemeToggle;
 use crate::routes::Route;
 
 /// Top-of-page nav shown on public marketing pages (landing, pricing).
 #[component]
 pub fn PublicNav() -> Element {
     rsx! {
-        header { class: "px-6 py-4 backdrop-blur supports-backdrop-blur:bg-white/70 border-b border-bunyip-reed-100/50",
+        header { class: "px-6 py-4 backdrop-blur supports-backdrop-blur:bg-white/70 dark:supports-backdrop-blur:bg-bunyip-reed-900/70 border-b border-bunyip-reed-100/50 dark:border-bunyip-reed-800/60",
             div { class: "max-w-6xl mx-auto flex items-center justify-between",
                 Link { to: Route::LandingPage {}, class: "flex items-center gap-2 group",
                     BrandMark {}
-                    span { class: "text-xl font-semibold tracking-tight text-bunyip-reed-900 group-hover:text-bunyip-reed-700 transition-colors",
+                    span { class: "text-xl font-semibold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50 group-hover:text-bunyip-reed-700 dark:group-hover:text-bunyip-reed-200 transition-colors",
                         "Bunyip"
                     }
                 }
                 nav { class: "flex items-center gap-1 text-sm",
                     Link {
                         to: Route::PricingPage {},
-                        class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 hover:text-bunyip-reed-900 hover:bg-bunyip-reed-50 transition-colors",
+                        class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:text-bunyip-reed-900 hover:bg-bunyip-reed-50 dark:hover:text-white dark:hover:bg-bunyip-reed-800 transition-colors",
                         "Pricing"
                     }
                     Link {
                         to: Route::LoginPage {},
-                        class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 hover:text-bunyip-reed-900 hover:bg-bunyip-reed-50 transition-colors",
+                        class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:text-bunyip-reed-900 hover:bg-bunyip-reed-50 dark:hover:text-white dark:hover:bg-bunyip-reed-800 transition-colors",
                         "Sign in"
                     }
                     Link {
@@ -30,6 +31,7 @@ pub fn PublicNav() -> Element {
                         class: "ml-1 px-3.5 py-1.5 rounded-md bg-bunyip-reed-700 text-white font-medium hover:bg-bunyip-reed-800 shadow-sm transition-colors",
                         "Sign up"
                     }
+                    ThemeToggle {}
                 }
             }
         }
@@ -60,26 +62,27 @@ pub fn BrandMark() -> Element {
 #[component]
 pub fn AuthShell(title: &'static str, subtitle: &'static str, children: Element) -> Element {
     rsx! {
-        div { class: "min-h-screen flex flex-col bg-gradient-to-b from-bunyip-reed-50 to-white",
-            header { class: "px-6 py-4",
-                div { class: "max-w-6xl mx-auto",
+        div { class: "min-h-screen flex flex-col bg-gradient-to-b from-bunyip-reed-50 to-white dark:from-bunyip-reed-900 dark:to-bunyip-reed-900",
+            header { class: "px-6 py-4 flex items-center justify-between",
+                div { class: "max-w-6xl mx-auto w-full flex items-center justify-between",
                     Link { to: Route::LandingPage {}, class: "flex items-center gap-2 group w-fit",
                         BrandMark {}
-                        span { class: "text-xl font-semibold tracking-tight text-bunyip-reed-900 group-hover:text-bunyip-reed-700 transition-colors",
+                        span { class: "text-xl font-semibold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50 group-hover:text-bunyip-reed-700 dark:group-hover:text-bunyip-reed-200 transition-colors",
                             "Bunyip"
                         }
                     }
+                    ThemeToggle {}
                 }
             }
             main { class: "flex-1 flex items-start justify-center px-6 py-10",
                 div { class: "w-full max-w-md",
-                    h1 { class: "text-3xl font-bold tracking-tight text-bunyip-reed-900",
+                    h1 { class: "text-3xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50",
                         "{title}"
                     }
-                    p { class: "mt-2 text-sm text-bunyip-reed-700",
+                    p { class: "mt-2 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-300",
                         "{subtitle}"
                     }
-                    div { class: "mt-8 p-7 rounded-2xl border border-bunyip-reed-100 bg-white shadow-sm",
+                    div { class: "mt-8 p-7 rounded-2xl border border-bunyip-reed-100 dark:border-bunyip-reed-800 bg-white dark:bg-bunyip-reed-800 shadow-sm",
                         {children}
                     }
                 }
@@ -118,36 +121,37 @@ pub fn AppShell(title: String, children: Element) -> Element {
     };
 
     rsx! {
-        div { class: "min-h-screen bg-bunyip-reed-50",
-            header { class: "px-6 py-3 bg-white border-b border-bunyip-reed-100 sticky top-0 z-10",
+        div { class: "min-h-screen bg-bunyip-reed-50 dark:bg-bunyip-reed-900",
+            header { class: "px-6 py-3 bg-white dark:bg-bunyip-reed-800 border-b border-bunyip-reed-100 dark:border-bunyip-reed-700 sticky top-0 z-10",
                 div { class: "max-w-7xl mx-auto flex items-center justify-between",
                     div { class: "flex items-center gap-4",
                         Link { to: Route::DashboardPage {}, class: "flex items-center gap-2",
                             BrandMark {}
-                            span { class: "text-lg font-semibold text-bunyip-reed-900", "Bunyip" }
+                            span { class: "text-lg font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50", "Bunyip" }
                         }
                         if !org_name.is_empty() {
-                            span { class: "h-5 w-px bg-bunyip-reed-200" }
-                            div { class: "flex items-center gap-2 px-3 py-1.5 rounded-md bg-bunyip-reed-50",
-                                span { class: "w-2 h-2 rounded-full bg-bunyip-reed-600" }
-                                span { class: "text-sm font-medium text-bunyip-reed-900", "{org_name}" }
+                            span { class: "h-5 w-px bg-bunyip-reed-200 dark:bg-bunyip-reed-700" }
+                            div { class: "flex items-center gap-2 px-3 py-1.5 rounded-md bg-bunyip-reed-50 dark:bg-bunyip-reed-900",
+                                span { class: "w-2 h-2 rounded-full bg-bunyip-reed-600 dark:bg-bunyip-reed-400" }
+                                span { class: "text-sm font-medium text-bunyip-reed-900 dark:text-bunyip-reed-100", "{org_name}" }
                             }
                         }
                     }
                     nav { class: "flex items-center gap-2 text-sm",
                         Link {
                             to: Route::OrgListPage {},
-                            class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 hover:bg-bunyip-reed-50",
+                            class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:bg-bunyip-reed-50 dark:hover:bg-bunyip-reed-900",
                             "Orgs"
                         }
                         if !user_name.is_empty() {
-                            span { class: "px-2 text-bunyip-reed-700", "{user_name}" }
+                            span { class: "px-2 text-bunyip-reed-700 dark:text-bunyip-reed-200", "{user_name}" }
                             button {
-                                class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 hover:text-bunyip-reed-900 hover:bg-bunyip-reed-50 transition-colors",
+                                class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:text-bunyip-reed-900 hover:bg-bunyip-reed-50 dark:hover:text-white dark:hover:bg-bunyip-reed-900 transition-colors",
                                 onclick: sign_out,
                                 "Sign out"
                             }
                         }
+                        ThemeToggle {}
                     }
                 }
             }

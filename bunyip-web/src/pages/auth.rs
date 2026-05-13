@@ -56,7 +56,7 @@ pub fn SignupPage() -> Element {
                 AuthInput { name: "password", label: "Password", input_type: "password", placeholder: "demo", value: password(), oninput: move |v| password.set(v) }
                 AuthInput { name: "org", label: "Organization name", input_type: "text", placeholder: "Example MSP", value: org_name(), oninput: move |v| org_name.set(v) }
                 SubmitButton { busy: submitting(), label: "Create account" }
-                p { class: "text-sm text-bunyip-reed-700 text-center",
+                p { class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 text-center",
                     "Already have an account? "
                     Link { to: Route::LoginPage {}, class: "underline", "Sign in" }
                 }
@@ -110,11 +110,11 @@ pub fn LoginPage() -> Element {
                 AuthInput { name: "email", label: "Email", input_type: "email", placeholder: "owner@example.com", value: email(), oninput: move |v| email.set(v) }
                 AuthInput { name: "password", label: "Password", input_type: "password", placeholder: "demo", value: password(), oninput: move |v| password.set(v) }
                 SubmitButton { busy: submitting(), label: "Sign in" }
-                div { class: "flex justify-between text-sm text-bunyip-reed-700",
+                div { class: "flex justify-between text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
                     Link { to: Route::MagicLinkPage {}, class: "underline", "Email me a magic link" }
                     Link { to: Route::ForgotPasswordPage {}, class: "underline", "Forgot password?" }
                 }
-                p { class: "text-sm text-bunyip-reed-700 text-center",
+                p { class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 text-center",
                     "No account? "
                     Link { to: Route::SignupPage {}, class: "underline", "Sign up" }
                 }
@@ -207,7 +207,7 @@ pub fn MagicLinkPage() -> Element {
                 form { class: "space-y-4", onsubmit: submit,
                     AuthInput { name: "email", label: "Email", input_type: "email", placeholder: "owner@example.com", value: email(), oninput: move |v| email.set(v) }
                     SubmitButton { busy: submitting(), label: "Send link" }
-                    p { class: "text-sm text-bunyip-reed-700 text-center",
+                    p { class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 text-center",
                         Link { to: Route::LoginPage {}, class: "underline", "Back to sign in" }
                     }
                 }
@@ -352,9 +352,9 @@ fn AuthInput(
 ) -> Element {
     rsx! {
         label { class: "block",
-            span { class: "text-sm font-medium text-bunyip-reed-800", "{label}" }
+            span { class: "text-sm font-medium text-bunyip-reed-800 dark:text-bunyip-reed-100", "{label}" }
             input {
-                class: "mt-1 w-full px-3 py-2 rounded border border-bunyip-reed-200 bg-white focus:outline-none focus:ring-2 focus:ring-bunyip-reed-600",
+                class: "mt-1 w-full px-3 py-2 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-900 text-bunyip-reed-900 dark:text-bunyip-reed-50 focus:outline-none focus:ring-2 focus:ring-bunyip-reed-600 dark:focus:ring-bunyip-reed-400",
                 name: "{name}",
                 r#type: "{input_type}",
                 placeholder: "{placeholder}",
