@@ -2,7 +2,11 @@ use dioxus::prelude::*;
 
 use crate::pages::{
     admin::AdminFeedbackPage,
-    auth::{ForgotPasswordPage, LoginPage, LoginTotpPage, MagicLinkPage, ResetPasswordPage, SignupPage, VerifyEmailPage},
+    auth::{
+        ForgotPasswordPage, LoginPage, LoginTotpPage, MagicLinkPage, ResetPasswordPage,
+        SignupCompletePage, SignupPage, VerifyEmailPage,
+    },
+    auth_callback::AuthCallbackPage,
     billing::OrgBillingPage,
     dashboard::DashboardPage,
     errors::NotFoundPage,
@@ -46,8 +50,14 @@ pub enum Route {
     #[route("/forgot-password")]
     ForgotPasswordPage {},
 
-    #[route("/reset-password")]
-    ResetPasswordPage {},
+    #[route("/reset-password/:token")]
+    ResetPasswordPage { token: String },
+
+    #[route("/signup/:token")]
+    SignupCompletePage { token: String },
+
+    #[route("/auth/callback")]
+    AuthCallbackPage {},
 
     // Authenticated
     #[route("/dashboard")]

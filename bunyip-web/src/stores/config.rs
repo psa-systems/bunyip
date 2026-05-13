@@ -44,6 +44,18 @@ impl OidcConfig {
     pub fn issuer_trimmed(&self) -> &str {
         self.issuer.trim_end_matches('/')
     }
+
+    /// Resolve the redirect_uri. Returns the env-baked value if
+    /// non-empty; otherwise falls back to `<origin>/auth/callback` at
+    /// runtime via `window.location.origin`.
+    pub fn resolve_redirect_uri(&self) -> Result<String, &'static str> {
+        if !self.redirect_uri.is_empty() {
+            return Ok(self.redirect_uri.clone());
+        }
+        let win = web_sys::window().ok_or("no window")?;
+        let origin = win.location().origin().map_err(|_| "no origin")?;
+        Ok(format!("{origin}/auth/callback"))
+    }
 }
 
 #[cfg(test)]

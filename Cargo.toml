@@ -39,3 +39,6 @@ validator = { version = "0.19", features = ["derive"] }
 
 # Random for mock tokens
 rand = "0.8"
+
+# Hashing (PKCE S256 challenge in bunyip-web)
+sha2 = "0.10"

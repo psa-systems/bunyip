@@ -60,7 +60,7 @@ pub fn BrandMark() -> Element {
 
 /// Centered shell for auth pages (signup, login, etc.).
 #[component]
-pub fn AuthShell(title: &'static str, subtitle: &'static str, children: Element) -> Element {
+pub fn AuthShell(title: String, subtitle: String, children: Element) -> Element {
     rsx! {
         div { class: "min-h-screen flex flex-col bg-gradient-to-b from-bunyip-reed-50 to-white dark:from-bunyip-reed-900 dark:to-bunyip-reed-900",
             header { class: "px-6 py-4 flex items-center justify-between",

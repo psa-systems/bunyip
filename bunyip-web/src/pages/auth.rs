@@ -1,68 +1,62 @@
-//! Auth pages wired to the mock backend. Signup creates a user + org and
-//! drops a verification link in the dev logs. Login uses `MOCK_PASSWORD`.
+//! Auth pages wired to mokosh-server.
+//!
+//! Single-component state machines:
+//!   - LoginPage: password form -> MFA prompt (auto-submits on 6 digits)
+//!     -> token persistence -> route to Dashboard / `return_to`.
+//!   - SignupPage: email-only "we sent you a link" form.
+//!   - SignupCompletePage: at /signup/:token, sets password + names.
+//!   - ForgotPasswordPage: "we sent reset instructions" form.
+//!   - ResetPasswordPage: at /reset-password/:token, sets new password.
 
 use dioxus::prelude::*;
 
 use crate::api::{self, auth::*};
 use crate::components::layout::AuthShell;
+use crate::modules::oidc::{self, FlowError, LoginOutcome};
 use crate::routes::Route;
 use crate::stores::auth::{refresh_auth, use_auth};
+use crate::stores::config::OidcConfig;
+use crate::stores::tokens::{save_tokens, Tokens};
 use crate::stores::toast::use_toast;
 
-#[component]
-pub fn SignupPage() -> Element {
-    let nav = navigator();
-    let toast = use_toast();
-    let auth = use_auth();
+const TRUST_TOKEN_KEY: &str = "bunyip.trust_token";
 
-    let mut name = use_signal(String::new);
-    let mut email = use_signal(String::new);
-    let mut password = use_signal(String::new);
-    let mut org_name = use_signal(String::new);
-    let mut submitting = use_signal(|| false);
+fn read_trust_token() -> Option<String> {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item(TRUST_TOKEN_KEY).ok().flatten())
+        .filter(|s| !s.is_empty())
+}
 
-    let submit = move |evt: Event<FormData>| {
-        evt.prevent_default();
-        if submitting() {
-            return;
-        }
-        let req = SignupRequest {
-            name: name(),
-            email: email(),
-            password: password(),
-            org_name: org_name(),
-        };
-        spawn(async move {
-            submitting.set(true);
-            match api::auth::signup(&req).await {
-                Ok(resp) => {
-                    toast.success(format!("Welcome {}! Check the dev log for your verification email.", resp.user.name));
-                    refresh_auth(auth).await;
-                    nav.replace(Route::DashboardPage {});
-                }
-                Err(e) => toast.error(e.user_message()),
-            }
-            submitting.set(false);
-        });
-    };
-
-    rsx! {
-        AuthShell {
-            title: "Create your Bunyip account",
-            subtitle: "Get the team onboarded. We'll set up your organization automatically.",
-            form { class: "space-y-4", onsubmit: submit,
-                AuthInput { name: "name", label: "Full name", input_type: "text", placeholder: "Ada Lovelace", value: name() , oninput: move |v| name.set(v) }
-                AuthInput { name: "email", label: "Work email", input_type: "email", placeholder: "you@example.com", value: email(), oninput: move |v| email.set(v) }
-                AuthInput { name: "password", label: "Password", input_type: "password", placeholder: "demo", value: password(), oninput: move |v| password.set(v) }
-                AuthInput { name: "org", label: "Organization name", input_type: "text", placeholder: "Example MSP", value: org_name(), oninput: move |v| org_name.set(v) }
-                SubmitButton { busy: submitting(), label: "Create account" }
-                p { class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 text-center",
-                    "Already have an account? "
-                    Link { to: Route::LoginPage {}, class: "underline", "Sign in" }
-                }
-            }
-        }
+fn write_trust_token(token: &str) {
+    if let Some(Ok(Some(s))) = web_sys::window().map(|w| w.local_storage()) {
+        let _ = s.set_item(TRUST_TOKEN_KEY, token);
     }
+}
+
+#[derive(Default, Clone, PartialEq)]
+struct LoginState {
+    email: String,
+    password: String,
+    submitting: bool,
+    error: Option<String>,
+    mfa_challenge: Option<String>,
+    mfa_code: String,
+    remember_device: bool,
+}
+
+/// Read `?return_to=<percent-encoded authorize query>` from the URL.
+/// Strict-validated: the value must look like an OIDC authorize query
+/// (`response_type=...` somewhere in it). Anything else returns
+/// `None` so this cannot be used as an open-redirect oracle.
+fn read_safe_return_to() -> Option<String> {
+    let search = web_sys::window()?.location().search().ok()?;
+    let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
+    let raw = params.get("return_to")?;
+    if !raw.starts_with("response_type=") && !raw.contains("&response_type=") {
+        return None;
+    }
+    Some(raw)
 }
 
 #[component]
@@ -71,100 +65,218 @@ pub fn LoginPage() -> Element {
     let toast = use_toast();
     let auth = use_auth();
 
-    let mut email = use_signal(String::new);
-    let mut password = use_signal(String::new);
-    let mut submitting = use_signal(|| false);
+    let mut state = use_signal(LoginState::default);
+    let return_to = use_memo(read_safe_return_to);
 
-    let submit = move |evt: Event<FormData>| {
+    let after_login = move |tokens: Tokens| {
+        save_tokens(&tokens);
+        let rt = return_to.read().clone();
+        spawn(async move {
+            refresh_auth(auth).await;
+            if let Some(rt) = rt {
+                let cfg = OidcConfig::from_env();
+                let url = format!("{}/oauth2/authorize?{}", cfg.issuer_trimmed(), rt);
+                if let Some(win) = web_sys::window() {
+                    let _ = win.location().set_href(&url);
+                }
+            } else {
+                nav.replace(Route::DashboardPage {});
+            }
+        });
+    };
+
+    let submit_password = move |evt: Event<FormData>| {
         evt.prevent_default();
-        if submitting() {
+        if state.read().submitting {
             return;
         }
-        let req = LoginRequest {
-            email: email(),
-            password: password(),
-        };
+        let email = state.read().email.clone();
+        let password = state.read().password.clone();
         spawn(async move {
-            submitting.set(true);
-            match api::auth::login(&req).await {
-                Ok(resp) if resp.requires_mfa => {
-                    toast.info("Enter your 6-digit code to continue.");
-                    nav.push(Route::LoginTotpPage {});
+            state.with_mut(|s| {
+                s.submitting = true;
+                s.error = None;
+            });
+            let cfg = OidcConfig::from_env();
+            let trust = read_trust_token();
+            match oidc::password_login(&cfg, &email, &password, trust.as_deref()).await {
+                Ok(LoginOutcome::Success(tokens)) => after_login(tokens),
+                Ok(LoginOutcome::MfaRequired { challenge, .. }) => {
+                    state.with_mut(|s| {
+                        s.submitting = false;
+                        s.mfa_challenge = Some(challenge);
+                        s.mfa_code.clear();
+                    });
                 }
-                Ok(_) => {
-                    toast.success("Welcome back.");
-                    refresh_auth(auth).await;
-                    nav.replace(Route::DashboardPage {});
+                Err(e) => {
+                    let msg = friendly_login_error(&e);
+                    state.with_mut(|s| {
+                        s.submitting = false;
+                        s.error = Some(msg.clone());
+                    });
+                    toast.error(msg);
                 }
-                Err(e) => toast.error(e.user_message()),
             }
-            submitting.set(false);
         });
+    };
+
+    let submit_mfa = move || {
+        if state.read().submitting {
+            return;
+        }
+        let challenge = match state.read().mfa_challenge.clone() {
+            Some(c) => c,
+            None => return,
+        };
+        let code = state.read().mfa_code.trim().to_string();
+        let remember = state.read().remember_device;
+        spawn(async move {
+            state.with_mut(|s| {
+                s.submitting = true;
+                s.error = None;
+            });
+            let cfg = OidcConfig::from_env();
+            match oidc::mfa_verify(&cfg, &challenge, &code, remember).await {
+                Ok(ok) => {
+                    if let Some(t) = ok.trust_token.as_deref() {
+                        write_trust_token(t);
+                    }
+                    after_login(ok.tokens);
+                }
+                Err(FlowError::TokenEndpoint { error, .. }) if error == "challenge_not_found" => {
+                    state.with_mut(|s| {
+                        s.submitting = false;
+                        s.error = Some("Your code prompt expired. Sign in again.".into());
+                        s.mfa_challenge = None;
+                        s.mfa_code.clear();
+                    });
+                }
+                Err(FlowError::TokenEndpoint { error, .. }) if error == "rate_limited" => {
+                    state.with_mut(|s| {
+                        s.submitting = false;
+                        s.mfa_code.clear();
+                        s.error = Some("Too many attempts. Wait a few minutes.".into());
+                    });
+                }
+                Err(_) => {
+                    state.with_mut(|s| {
+                        s.submitting = false;
+                        s.mfa_code.clear();
+                        s.error = Some("That code didn't match. Try again.".into());
+                    });
+                }
+            }
+        });
+    };
+
+    let submit_mfa_form = move |evt: Event<FormData>| {
+        evt.prevent_default();
+        submit_mfa();
     };
 
     rsx! {
         AuthShell {
             title: "Welcome back",
             subtitle: "Sign in to your Bunyip account.",
-            form { class: "space-y-4", onsubmit: submit,
-                AuthInput { name: "email", label: "Email", input_type: "email", placeholder: "owner@example.com", value: email(), oninput: move |v| email.set(v) }
-                AuthInput { name: "password", label: "Password", input_type: "password", placeholder: "demo", value: password(), oninput: move |v| password.set(v) }
-                SubmitButton { busy: submitting(), label: "Sign in" }
-                div { class: "flex justify-between text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
-                    Link { to: Route::MagicLinkPage {}, class: "underline", "Email me a magic link" }
-                    Link { to: Route::ForgotPasswordPage {}, class: "underline", "Forgot password?" }
+            if state.read().mfa_challenge.is_some() {
+                form { class: "space-y-4", onsubmit: submit_mfa_form,
+                    p { class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
+                        "Enter the 6-digit code from your authenticator app, or paste a recovery code."
+                    }
+                    if let Some(err) = state.read().error.clone() {
+                        InlineError { message: err }
+                    }
+                    AuthInput {
+                        name: "mfa_code",
+                        label: "Authenticator code",
+                        input_type: "text",
+                        placeholder: "123456",
+                        value: state.read().mfa_code.clone(),
+                        oninput: move |v: String| {
+                            state.write().mfa_code = v.clone();
+                            let trimmed = v.trim();
+                            if trimmed.len() == 6
+                                && trimmed.chars().all(|c| c.is_ascii_digit())
+                                && !state.read().submitting
+                            {
+                                submit_mfa();
+                            }
+                        },
+                    }
+                    label { class: "flex items-center gap-2 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
+                        input {
+                            r#type: "checkbox",
+                            class: "h-4 w-4",
+                            checked: state.read().remember_device,
+                            onchange: move |e: Event<FormData>| {
+                                state.write().remember_device = e.value() == "true";
+                            },
+                        }
+                        "Trust this browser for 7 days"
+                    }
+                    SubmitButton { busy: state.read().submitting, label: "Verify" }
+                    button {
+                        r#type: "button",
+                        class: "block w-full text-center text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300 hover:text-bunyip-reed-800",
+                        onclick: move |_| {
+                            state.with_mut(|s| {
+                                s.mfa_challenge = None;
+                                s.mfa_code.clear();
+                                s.error = None;
+                            });
+                        },
+                        "Cancel and sign in again"
+                    }
                 }
-                p { class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 text-center",
-                    "No account? "
-                    Link { to: Route::SignupPage {}, class: "underline", "Sign up" }
+            } else {
+                form { class: "space-y-4", onsubmit: submit_password,
+                    if let Some(err) = state.read().error.clone() {
+                        InlineError { message: err }
+                    }
+                    AuthInput {
+                        name: "email",
+                        label: "Email",
+                        input_type: "email",
+                        placeholder: "you@example.com",
+                        value: state.read().email.clone(),
+                        oninput: move |v: String| { state.write().email = v; },
+                    }
+                    AuthInput {
+                        name: "password",
+                        label: "Password",
+                        input_type: "password",
+                        placeholder: "",
+                        value: state.read().password.clone(),
+                        oninput: move |v: String| { state.write().password = v; },
+                    }
+                    SubmitButton { busy: state.read().submitting, label: "Sign in" }
+                    div { class: "flex justify-between text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
+                        Link { to: Route::ForgotPasswordPage {}, class: "underline", "Forgot password?" }
+                        Link { to: Route::SignupPage {}, class: "underline", "Create account" }
+                    }
                 }
             }
         }
     }
 }
 
-#[component]
-pub fn LoginTotpPage() -> Element {
-    let nav = navigator();
-    let toast = use_toast();
-    let auth = use_auth();
-    let mut code = use_signal(String::new);
-    let mut submitting = use_signal(|| false);
-
-    let submit = move |evt: Event<FormData>| {
-        evt.prevent_default();
-        if submitting() {
-            return;
-        }
-        let value = code();
-        spawn(async move {
-            submitting.set(true);
-            match totp_verify(value).await {
-                Ok(user) => {
-                    toast.success(format!("Welcome back, {}.", user.name));
-                    refresh_auth(auth).await;
-                    nav.replace(Route::DashboardPage {});
-                }
-                Err(e) => toast.error(e.user_message()),
+fn friendly_login_error(e: &FlowError) -> String {
+    match e {
+        FlowError::TokenEndpoint { error, description } => match error.as_str() {
+            "rate_limited" => "Too many attempts. Wait a few minutes.".into(),
+            "access_denied" | "invalid_grant" | "login_failed" => {
+                "Email or password didn't match.".into()
             }
-            submitting.set(false);
-        });
-    };
-
-    rsx! {
-        AuthShell {
-            title: "Two-factor code",
-            subtitle: "Enter the 6-digit code from your authenticator app. (Dev: any 6 digits work.)",
-            form { class: "space-y-4", onsubmit: submit,
-                AuthInput { name: "code", label: "Code", input_type: "text", placeholder: "000000", value: code(), oninput: move |v| code.set(v) }
-                SubmitButton { busy: submitting(), label: "Verify" }
-            }
-        }
+            _ if !description.is_empty() => description.clone(),
+            _ => "Could not sign in. Please try again.".into(),
+        },
+        FlowError::Network(_) => "Network error. Check your connection.".into(),
+        _ => "Could not sign in. Please try again.".into(),
     }
 }
 
 #[component]
-pub fn MagicLinkPage() -> Element {
+pub fn SignupPage() -> Element {
     let toast = use_toast();
     let mut email = use_signal(String::new);
     let mut submitting = use_signal(|| false);
@@ -175,13 +287,13 @@ pub fn MagicLinkPage() -> Element {
         if submitting() {
             return;
         }
-        let value = email();
+        let value = email().trim().to_string();
         spawn(async move {
             submitting.set(true);
-            match magic_link_request(value).await {
+            match api::auth::signup_start(value).await {
                 Ok(()) => {
                     sent.set(true);
-                    toast.info("Magic link sent. Check the dev log for the click-through URL.");
+                    toast.info("Check your email for a confirmation link.");
                 }
                 Err(e) => toast.error(e.user_message()),
             }
@@ -191,92 +303,142 @@ pub fn MagicLinkPage() -> Element {
 
     rsx! {
         AuthShell {
-            title: "Sign in with magic link",
-            subtitle: "We'll email you a one-time link.",
+            title: "Create your account",
+            subtitle: "Enter your email; we'll send a confirmation link.",
             if sent() {
-                div { class: "text-sm text-bunyip-reed-800 dark:text-bunyip-reed-100",
-                    p { "Check the dev container logs:" }
-                    pre { class: "mt-2 p-3 rounded bg-bunyip-reed-50 dark:bg-bunyip-reed-900 text-xs overflow-x-auto",
-                        "docker logs dev-bunyip-api-$USER | grep magic-link"
-                    }
-                    p { class: "mt-3",
-                        "Click the printed URL to sign in."
-                    }
+                p { class: "text-sm text-bunyip-reed-800 dark:text-bunyip-reed-100",
+                    "If that email is registerable, we've sent a confirmation link. Click it to set your password."
                 }
             } else {
                 form { class: "space-y-4", onsubmit: submit,
-                    AuthInput { name: "email", label: "Email", input_type: "email", placeholder: "owner@example.com", value: email(), oninput: move |v| email.set(v) }
+                    AuthInput {
+                        name: "email",
+                        label: "Email",
+                        input_type: "email",
+                        placeholder: "you@example.com",
+                        value: email(),
+                        oninput: move |v: String| email.set(v),
+                    }
                     SubmitButton { busy: submitting(), label: "Send link" }
                     p { class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 text-center",
-                        Link { to: Route::LoginPage {}, class: "underline", "Back to sign in" }
+                        "Already have an account? "
+                        Link { to: Route::LoginPage {}, class: "underline", "Sign in" }
                     }
                 }
             }
         }
     }
+}
+
+#[derive(Default, Clone, PartialEq)]
+struct SignupCompleteState {
+    first_name: String,
+    last_name: String,
+    password: String,
+    submitting: bool,
+    preview_loaded: bool,
+    preview_email: Option<String>,
+    error: Option<String>,
 }
 
 #[component]
-pub fn VerifyEmailPage() -> Element {
+pub fn SignupCompletePage(token: String) -> Element {
+    let nav = navigator();
     let toast = use_toast();
-    let mut state = use_signal(|| VerifyState::Idle);
+    let mut state = use_signal(SignupCompleteState::default);
 
-    let token = use_memo(|| {
-        web_sys::window()
-            .and_then(|w| w.location().search().ok())
-            .and_then(|s| {
-                let qs = s.trim_start_matches('?').to_string();
-                qs.split('&')
-                    .find_map(|p| p.strip_prefix("token=").map(|t| t.to_string()))
-            })
-    });
-
-    use_effect(move || {
-        let t = token();
-        if let Some(t) = t {
-            spawn(async move {
-                state.set(VerifyState::Working);
-                match verify_email(t).await {
-                    Ok(()) => {
-                        state.set(VerifyState::Verified);
-                        toast.success("Email verified.");
-                    }
-                    Err(e) => {
-                        state.set(VerifyState::Failed(e.user_message()));
-                    }
-                }
-            });
-        } else {
-            state.set(VerifyState::NoToken);
+    let preview_token = token.clone();
+    use_future(move || {
+        let token = preview_token.clone();
+        async move {
+            match api::auth::signup_preview(&token).await {
+                Ok(p) => state.with_mut(|s| {
+                    s.preview_loaded = true;
+                    s.preview_email = Some(p.email);
+                }),
+                Err(_) => state.with_mut(|s| {
+                    s.preview_loaded = true;
+                    s.error = Some("This link is invalid or has expired.".into());
+                }),
+            }
         }
     });
 
+    let submit_token = token.clone();
+    let submit = move |evt: Event<FormData>| {
+        evt.prevent_default();
+        if state.read().submitting {
+            return;
+        }
+        let req = SignupCompleteRequest {
+            password: state.read().password.clone(),
+            first_name: Some(state.read().first_name.clone())
+                .filter(|s| !s.trim().is_empty()),
+            last_name: Some(state.read().last_name.clone())
+                .filter(|s| !s.trim().is_empty()),
+        };
+        let token = submit_token.clone();
+        spawn(async move {
+            state.with_mut(|s| {
+                s.submitting = true;
+                s.error = None;
+            });
+            match api::auth::signup_complete(&token, &req).await {
+                Ok(_) => {
+                    toast.success("Account created. Sign in to continue.");
+                    nav.replace(Route::LoginPage {});
+                }
+                Err(e) => state.with_mut(|s| {
+                    s.submitting = false;
+                    s.error = Some(e.user_message());
+                }),
+            }
+        });
+    };
+
+    let subtitle = state.read().preview_email.clone().unwrap_or_default();
     rsx! {
         AuthShell {
-            title: "Verify your email",
-            subtitle: "We're confirming the link you clicked.",
-            div { class: "text-sm text-bunyip-reed-800 dark:text-bunyip-reed-100",
-                match state() {
-                    VerifyState::Idle | VerifyState::Working => rsx! { p { "Verifying…" } },
-                    VerifyState::Verified => rsx! {
-                        p { "Your email is verified. " }
-                        Link { to: Route::DashboardPage {}, class: "underline mt-2 inline-block", "Continue to dashboard" }
-                    },
-                    VerifyState::NoToken => rsx! { p { class: "text-bunyip-reed-900 dark:text-bunyip-reed-100", "Missing or invalid verification link." } },
-                    VerifyState::Failed(msg) => rsx! { p { class: "text-red-700", "{msg}" } },
-                }
+            title: "Finish creating your account",
+            subtitle: subtitle,
+            match (state.read().preview_loaded, state.read().error.clone(), state.read().preview_email.is_some()) {
+                (false, _, _) => rsx! { p { "Verifying link..." } },
+                (true, Some(err), false) => rsx! { InlineError { message: err } },
+                _ => rsx! {
+                    form { class: "space-y-4", onsubmit: submit,
+                        if let Some(err) = state.read().error.clone() {
+                            InlineError { message: err }
+                        }
+                        AuthInput {
+                            name: "first_name",
+                            label: "First name",
+                            input_type: "text",
+                            placeholder: "",
+                            value: state.read().first_name.clone(),
+                            oninput: move |v: String| { state.write().first_name = v; },
+                        }
+                        AuthInput {
+                            name: "last_name",
+                            label: "Last name",
+                            input_type: "text",
+                            placeholder: "",
+                            value: state.read().last_name.clone(),
+                            oninput: move |v: String| { state.write().last_name = v; },
+                        }
+                        AuthInput {
+                            name: "password",
+                            label: "Password",
+                            input_type: "password",
+                            placeholder: "",
+                            value: state.read().password.clone(),
+                            oninput: move |v: String| { state.write().password = v; },
+                        }
+                        SubmitButton { busy: state.read().submitting, label: "Create account" }
+                    }
+                },
             }
         }
     }
-}
-
-#[derive(Clone, PartialEq)]
-enum VerifyState {
-    Idle,
-    Working,
-    Verified,
-    NoToken,
-    Failed(String),
 }
 
 #[component]
@@ -291,13 +453,13 @@ pub fn ForgotPasswordPage() -> Element {
         if submitting() {
             return;
         }
-        let value = email();
+        let value = email().trim().to_string();
         spawn(async move {
             submitting.set(true);
-            match forgot_password(value).await {
+            match api::auth::forgot_password(value).await {
                 Ok(()) => {
                     sent.set(true);
-                    toast.info("If an account exists for that email, we've sent reset instructions.");
+                    toast.info("If that email is registered, we've sent reset instructions.");
                 }
                 Err(e) => toast.error(e.user_message()),
             }
@@ -311,35 +473,167 @@ pub fn ForgotPasswordPage() -> Element {
             subtitle: "Tell us your email and we'll send a reset link.",
             if sent() {
                 p { class: "text-sm text-bunyip-reed-800 dark:text-bunyip-reed-100",
-                    "Check the dev logs for the reset link if you used a seeded email."
+                    "Check your email for the reset link."
                 }
             } else {
                 form { class: "space-y-4", onsubmit: submit,
-                    AuthInput { name: "email", label: "Email", input_type: "email", placeholder: "owner@example.com", value: email(), oninput: move |v| email.set(v) }
+                    AuthInput {
+                        name: "email",
+                        label: "Email",
+                        input_type: "email",
+                        placeholder: "you@example.com",
+                        value: email(),
+                        oninput: move |v: String| email.set(v),
+                    }
                     SubmitButton { busy: submitting(), label: "Send reset link" }
+                    p { class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 text-center",
+                        Link { to: Route::LoginPage {}, class: "underline", "Back to sign in" }
+                    }
                 }
             }
         }
     }
 }
 
+#[derive(Default, Clone, PartialEq)]
+struct ResetState {
+    password: String,
+    confirm: String,
+    submitting: bool,
+    preview_loaded: bool,
+    preview_email: Option<String>,
+    error: Option<String>,
+}
+
 #[component]
-pub fn ResetPasswordPage() -> Element {
+pub fn ResetPasswordPage(token: String) -> Element {
+    let nav = navigator();
+    let toast = use_toast();
+    let mut state = use_signal(ResetState::default);
+
+    let preview_token = token.clone();
+    use_future(move || {
+        let token = preview_token.clone();
+        async move {
+            match api::auth::reset_preview(&token).await {
+                Ok(p) => state.with_mut(|s| {
+                    s.preview_loaded = true;
+                    s.preview_email = Some(p.email);
+                }),
+                Err(_) => state.with_mut(|s| {
+                    s.preview_loaded = true;
+                    s.error = Some("This link is invalid or has expired.".into());
+                }),
+            }
+        }
+    });
+
+    let submit_token = token.clone();
+    let submit = move |evt: Event<FormData>| {
+        evt.prevent_default();
+        if state.read().submitting {
+            return;
+        }
+        if state.read().password != state.read().confirm {
+            state.write().error = Some("Passwords do not match.".into());
+            return;
+        }
+        let req = ResetCompleteRequest {
+            password: state.read().password.clone(),
+            password_confirmation: state.read().confirm.clone(),
+        };
+        let token = submit_token.clone();
+        spawn(async move {
+            state.with_mut(|s| {
+                s.submitting = true;
+                s.error = None;
+            });
+            match api::auth::reset_complete(&token, &req).await {
+                Ok(_) => {
+                    toast.success("Password updated. Sign in with your new password.");
+                    nav.replace(Route::LoginPage {});
+                }
+                Err(e) => state.with_mut(|s| {
+                    s.submitting = false;
+                    s.error = Some(e.user_message());
+                }),
+            }
+        });
+    };
+
+    let subtitle = state.read().preview_email.clone().unwrap_or_default();
     rsx! {
         AuthShell {
             title: "Choose a new password",
-            subtitle: "Pick something strong.",
-            form { class: "space-y-4",
-                AuthInput { name: "password", label: "New password", input_type: "password", placeholder: "", value: String::new(), oninput: move |_| {} }
-                AuthInput { name: "confirm", label: "Confirm password", input_type: "password", placeholder: "", value: String::new(), oninput: move |_| {} }
-                SubmitButton { busy: false, label: "Save password" }
-                p { class: "text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300",
-                    "(Phase 3c wires this up to the mock backend.)"
-                }
+            subtitle: subtitle,
+            match (state.read().preview_loaded, state.read().preview_email.is_some()) {
+                (false, _) => rsx! { p { "Verifying link..." } },
+                (true, false) => rsx! {
+                    InlineError {
+                        message: state.read().error.clone().unwrap_or_else(|| "This link is invalid or has expired.".into())
+                    }
+                },
+                _ => rsx! {
+                    form { class: "space-y-4", onsubmit: submit,
+                        if let Some(err) = state.read().error.clone() {
+                            InlineError { message: err }
+                        }
+                        AuthInput {
+                            name: "password",
+                            label: "New password",
+                            input_type: "password",
+                            placeholder: "",
+                            value: state.read().password.clone(),
+                            oninput: move |v: String| { state.write().password = v; },
+                        }
+                        AuthInput {
+                            name: "confirm",
+                            label: "Confirm password",
+                            input_type: "password",
+                            placeholder: "",
+                            value: state.read().confirm.clone(),
+                            oninput: move |v: String| { state.write().confirm = v; },
+                        }
+                        SubmitButton { busy: state.read().submitting, label: "Save password" }
+                    }
+                },
             }
         }
     }
 }
+
+// --- Compat shims so the existing routes/login-totp etc. still compile.
+//   The route components themselves get pruned in routes.rs below to
+//   one-line redirects.
+
+#[component]
+pub fn LoginTotpPage() -> Element {
+    let nav = navigator();
+    use_effect(move || {
+        nav.replace(Route::LoginPage {});
+    });
+    rsx! { p { class: "p-8 text-sm text-bunyip-reed-500", "Redirecting to sign in..." } }
+}
+
+#[component]
+pub fn MagicLinkPage() -> Element {
+    let nav = navigator();
+    use_effect(move || {
+        nav.replace(Route::LoginPage {});
+    });
+    rsx! { p { class: "p-8 text-sm text-bunyip-reed-500", "Redirecting to sign in..." } }
+}
+
+#[component]
+pub fn VerifyEmailPage() -> Element {
+    let nav = navigator();
+    use_effect(move || {
+        nav.replace(Route::LoginPage {});
+    });
+    rsx! { p { class: "p-8 text-sm text-bunyip-reed-500", "Redirecting to sign in..." } }
+}
+
+// --- Components -----------------------------------------------------
 
 #[component]
 fn AuthInput(
@@ -373,7 +667,16 @@ fn SubmitButton(busy: bool, label: &'static str) -> Element {
             class: "w-full px-4 py-2.5 rounded-lg bg-bunyip-reed-700 text-white font-medium hover:bg-bunyip-reed-800 disabled:opacity-60 disabled:cursor-not-allowed transition-colors",
             r#type: "submit",
             disabled: busy,
-            if busy { "Working…" } else { "{label}" }
+            if busy { "Working..." } else { "{label}" }
+        }
+    }
+}
+
+#[component]
+fn InlineError(message: String) -> Element {
+    rsx! {
+        div { class: "rounded p-3 text-sm bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-200",
+            "{message}"
         }
     }
 }

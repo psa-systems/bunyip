@@ -27,4 +27,15 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 gloo-net = { version = "0.6", features = ["http"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "DomTokenList", "Storage", "Location", "Navigator", "MediaQueryList"] }
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "DomTokenList", "Storage", "Location", "Navigator", "MediaQueryList", "UrlSearchParams"] }
+
+# Error trait (used by OIDC flow's FlowError)
+thiserror = { workspace = true }
+
+# OIDC code+PKCE primitives. rand 0.9 to match the getrandom 0.3 wasm
+# story (rand 0.8 pulls getrandom 0.2 which needs separate feature
+# config for the wasm32-unknown-unknown target).
+base64 = "0.22"
+sha2 = { workspace = true }
+rand = "0.9"

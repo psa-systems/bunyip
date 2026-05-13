@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod auth;
+pub mod auth_callback;
 pub mod billing;
 pub mod dashboard;
 pub mod errors;
