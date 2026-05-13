@@ -14,7 +14,7 @@ use crate::api::{self, auth::*};
 use crate::components::layout::AuthShell;
 use crate::modules::oidc::{self, FlowError, LoginOutcome};
 use crate::routes::Route;
-use crate::stores::auth::{refresh_auth, use_auth};
+use crate::stores::auth::{refresh_auth, use_auth, AuthState};
 use crate::stores::config::OidcConfig;
 use crate::stores::toast::use_toast;
 use crate::stores::tokens::{save_tokens, Tokens};
@@ -88,6 +88,34 @@ pub fn LoginPage() -> Element {
 
     let mut state = use_signal(LoginState::default);
     let return_to = use_memo(read_safe_return_to);
+
+    // Single-sign-on shortcut. If the user is already signed in
+    // (either with an active session or a still-valid refresh chain
+    // that use_auth_provider just exchanged for fresh tokens) and
+    // they hit /login - typically via the SSO bridge from another
+    // first-party RP - skip the form entirely and complete whatever
+    // they were trying to do:
+    //
+    //   - return_to set → top-level navigate to ${issuer}/oauth2/authorize?<return_to>
+    //     so mokosh-server can mint a code for the originating RP
+    //     and 302 the user back there.
+    //   - return_to absent → push them at the hub dashboard.
+    //
+    // While auth is still Loading we render the form's placeholder
+    // (the use_effect re-fires on the next signal change).
+    use_effect(move || {
+        if matches!(*auth.read(), AuthState::SignedIn(_)) {
+            if let Some(rt) = return_to.read().clone() {
+                let cfg = OidcConfig::from_env();
+                let url = format!("{}/oauth2/authorize?{}", cfg.issuer_trimmed(), rt);
+                if let Some(win) = web_sys::window() {
+                    let _ = win.location().replace(&url);
+                }
+            } else {
+                nav.replace(Route::DashboardPage {});
+            }
+        }
+    });
 
     let after_login = move |tokens: Tokens| {
         save_tokens(&tokens);
