@@ -135,6 +135,15 @@ down:
         docker compose --file {{ compose_file }} --file compose.dev-sso.yml down --remove-orphans
     }
 
+# Bring the SSO dev stack down and back up. Useful after pulling a
+# code change or editing compose env vars: `down` waits for containers
+# to fully terminate before `dev-sso` starts the fresh ones, so the
+# rebuild picks up the new state. `down` is synchronous (docker
+# compose down blocks until removal completes) and `dev-sso` uses
+# `--detach`, so this returns once the new stack is up.
+[doc("Stop the dev stack and start dev-sso fresh.")]
+restart: down dev-sso
+
 # Stop the LAN-IP dev stack. Volumes preserved.
 [doc("Stop the LAN-IP dev stack (volumes preserved)")]
 dev-down: ensure-env
