@@ -18,6 +18,7 @@ pub mod billing;
 pub mod feedback;
 pub mod me;
 pub mod orgs;
+pub mod tenants;
 pub mod types;
 
 use gloo_net::http::{Request, RequestBuilder};

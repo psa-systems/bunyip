@@ -142,6 +142,11 @@ pub fn AppShell(title: String, children: Element) -> Element {
                     }
                     nav { class: "flex items-center gap-2 text-sm",
                         Link {
+                            to: Route::SettingsPage {},
+                            class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:bg-bunyip-reed-50 dark:hover:bg-bunyip-reed-900",
+                            "Settings"
+                        }
+                        Link {
                             to: Route::OrgListPage {},
                             class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:bg-bunyip-reed-50 dark:hover:bg-bunyip-reed-900",
                             "Orgs"

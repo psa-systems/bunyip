@@ -1,3 +1,4 @@
+pub mod active_tenant;
 pub mod admin;
 pub mod audit_logs;
 pub mod auth;
@@ -16,4 +17,5 @@ pub mod pricing;
 pub mod profile;
 pub mod security;
 pub mod sessions;
+pub mod settings;
 pub mod user_management;

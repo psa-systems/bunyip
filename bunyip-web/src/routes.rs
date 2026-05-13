@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::pages::{
+    active_tenant::ActiveTenantPage,
     admin::AdminFeedbackPage,
     audit_logs::AuditLogsPage,
     auth::{
@@ -22,6 +23,7 @@ use crate::pages::{
     profile::ProfilePage,
     security::SecurityPage,
     sessions::SessionsPage,
+    settings::SettingsPage,
     user_management::UserManagementPage,
 };
 
@@ -69,6 +71,12 @@ pub enum Route {
     // Authenticated
     #[route("/dashboard")]
     DashboardPage {},
+
+    #[route("/settings")]
+    SettingsPage {},
+
+    #[route("/settings/active-tenant")]
+    ActiveTenantPage {},
 
     #[route("/settings/profile")]
     ProfilePage {},
