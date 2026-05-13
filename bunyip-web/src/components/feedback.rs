@@ -23,9 +23,9 @@ pub fn FeedbackLauncher() -> Element {
         div { class: "pointer-events-none fixed bottom-4 right-4 z-40 sm:bottom-6 sm:right-6",
             a {
                 href: "/feedback",
-                class: "pointer-events-auto group flex h-14 items-center overflow-hidden rounded-2xl border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800/90 text-bunyip-reed-700 dark:text-bunyip-reed-200 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-bunyip-reed-400 hover:bg-white",
+                class: "pointer-events-auto group flex h-14 items-center overflow-hidden rounded-2xl border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white/90 dark:bg-bunyip-reed-800/90 text-bunyip-reed-700 dark:text-bunyip-reed-100 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-bunyip-reed-400 dark:hover:border-bunyip-reed-500 hover:bg-white dark:hover:bg-bunyip-reed-800",
                 span { class: "relative inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl",
-                    span { class: "absolute inset-0 rounded-2xl bg-gradient-to-br from-bunyip-reed-100 to-bunyip-water-100 opacity-80" }
+                    span { class: "absolute inset-0 rounded-2xl bg-gradient-to-br from-bunyip-reed-100 to-bunyip-water-100 dark:from-bunyip-reed-700 dark:to-bunyip-water-700 opacity-80" }
                     SmileIcon {}
                 }
                 span { class: "max-w-0 whitespace-nowrap pl-0 pr-0 text-sm font-medium text-bunyip-reed-900 dark:text-bunyip-reed-50 opacity-0 transition-all duration-300 group-hover:max-w-[160px] group-hover:pl-3 group-hover:pr-4 group-hover:opacity-100",
@@ -40,7 +40,7 @@ pub fn FeedbackLauncher() -> Element {
 fn SmileIcon() -> Element {
     rsx! {
         svg {
-            class: "relative z-10 h-7 w-7 text-bunyip-reed-700 dark:text-bunyip-reed-200",
+            class: "relative z-10 h-7 w-7 text-bunyip-reed-700 dark:text-bunyip-reed-100",
             view_box: "0 0 24 24",
             fill: "none",
             stroke: "currentColor",
