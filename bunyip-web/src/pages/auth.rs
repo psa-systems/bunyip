@@ -46,17 +46,38 @@ struct LoginState {
 }
 
 /// Read `?return_to=<percent-encoded authorize query>` from the URL.
-/// Strict-validated: the value must look like an OIDC authorize query
-/// (`response_type=...` somewhere in it). Anything else returns
-/// `None` so this cannot be used as an open-redirect oracle.
+/// Strict-validated: the value must look like the serialized OIDC
+/// authorize query that mokosh-server's `/oauth2/authorize` produces on
+/// a 302-to-login. Anything else returns `None` so this cannot be
+/// abused as an open-redirect oracle.
+///
+/// The guard is intentionally narrow:
+///   - the decoded value MUST begin with `response_type=`
+///   - it MUST NOT contain CR or LF (header-splitting paranoia)
+///   - it MUST contain `&client_id=` (so the downstream bounce has
+///     somewhere to go)
+///
+/// We deliberately do not try to verify the client_id or redirect_uri
+/// from the SPA: mokosh-server's authorize endpoint runs its own ACL
+/// against the registered redirect_uris on the next hop, and replaying
+/// that check client-side would need a synchronous client registry. The
+/// SPA's job is to keep the value structurally sane; defense in depth
+/// happens on the server.
 fn read_safe_return_to() -> Option<String> {
     let search = web_sys::window()?.location().search().ok()?;
     let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
     let raw = params.get("return_to")?;
-    if !raw.starts_with("response_type=") && !raw.contains("&response_type=") {
+    if !is_safe_return_to(&raw) {
         return None;
     }
     Some(raw)
+}
+
+fn is_safe_return_to(s: &str) -> bool {
+    if s.is_empty() || s.contains('\n') || s.contains('\r') {
+        return false;
+    }
+    s.starts_with("response_type=") && s.contains("client_id=")
 }
 
 #[component]
