@@ -11,6 +11,7 @@ pub mod invitations;
 pub mod invite_create;
 pub mod invite_list;
 pub mod landing;
+pub mod logout;
 pub mod orgs;
 pub mod placeholder;
 pub mod pricing;

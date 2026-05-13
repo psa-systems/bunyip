@@ -17,6 +17,7 @@ use crate::pages::{
     invite_create::InviteCreatePage,
     invite_list::InviteListPage,
     landing::LandingPage,
+    logout::LogoutPage,
     orgs::{OrgListPage, OrgMembersPage},
     placeholder::PlaceholderPage,
     pricing::PricingPage,
@@ -46,6 +47,9 @@ pub enum Route {
 
     #[route("/login")]
     LoginPage {},
+
+    #[route("/logout")]
+    LogoutPage {},
 
     #[route("/login/totp")]
     LoginTotpPage {},
