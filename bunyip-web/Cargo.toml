@@ -25,6 +25,8 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 
 # HTTP client (wasm). Used for /v1/* API calls.
 gloo-net = { version = "0.6", features = ["http"] }
+# Async setTimeout for the background access-token refresh loop.
+gloo-timers = { version = "0.3", features = ["futures"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"

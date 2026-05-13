@@ -250,6 +250,7 @@ dependencies = [
  "dioxus",
  "getrandom 0.3.4",
  "gloo-net",
+ "gloo-timers",
  "js-sys",
  "rand 0.9.4",
  "serde",

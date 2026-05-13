@@ -81,20 +81,28 @@ pub fn use_auth_provider() -> AuthSignal {
         //    before giving up - covers the case where the access
         //    token was rejected for a reason other than expiry
         //    (server-side revocation, clock skew, ...).
-        match crate::api::me::fetch_me().await {
-            Ok(me) => sig.set(AuthState::SignedIn(me)),
+        let signed_in = match crate::api::me::fetch_me().await {
+            Ok(me) => {
+                sig.set(AuthState::SignedIn(me));
+                true
+            }
             Err(ApiError::Status { status: 401, .. }) => {
                 if let Some(_new) = force_refresh(&tokens).await {
                     match crate::api::me::fetch_me().await {
-                        Ok(me) => sig.set(AuthState::SignedIn(me)),
+                        Ok(me) => {
+                            sig.set(AuthState::SignedIn(me));
+                            true
+                        }
                         Err(_) => {
                             tokens::clear_tokens();
                             sig.set(AuthState::SignedOut);
+                            false
                         }
                     }
                 } else {
                     tokens::clear_tokens();
                     sig.set(AuthState::SignedOut);
+                    false
                 }
             }
             Err(_) => {
@@ -104,10 +112,70 @@ pub fn use_auth_provider() -> AuthSignal {
                 // gated pages bounce to /login, but the stored
                 // tokens remain available for the next attempt.
                 sig.set(AuthState::SignedOut);
+                false
             }
+        };
+
+        // 4. As long as we are signed in, run the background refresh
+        //    loop forever. It sleeps until ~30s before the access
+        //    token expires, refreshes silently, and reschedules.
+        //    When refresh ultimately fails (refresh token expired or
+        //    revoked) it signs the user out and the loop returns -
+        //    nav.replace to /login is driven by the bounce-on-
+        //    SignedOut effect on every protected page.
+        if signed_in {
+            run_token_refresh_loop(sig).await;
         }
     });
     signal
+}
+
+/// Background loop: sleep until the current access token is about to
+/// expire, refresh it, repeat. Exits the moment a refresh fails (or
+/// there is no refresh token to use), having already cleared local
+/// storage + dropped the signal to SignedOut.
+///
+/// This is what turns "JWT expired" into "you are back on /login"
+/// without the user having to click anything: the loop wakes up at
+/// the right moment regardless of whether the user is making
+/// requests.
+async fn run_token_refresh_loop(mut sig: Signal<AuthState>) {
+    loop {
+        let current = match tokens::load_tokens() {
+            Some(t) => t,
+            None => {
+                sig.set(AuthState::SignedOut);
+                return;
+            }
+        };
+
+        // Wake up REFRESH_LEAD_SECONDS before expiry. Clamp to a
+        // minimum of 1s so a token that is already past expiry
+        // (clock skew, paused tab) refreshes immediately rather
+        // than wedging the loop in a negative-duration sleep.
+        const REFRESH_LEAD_SECONDS: i64 = 30;
+        let wait_for = (current.expires_at - Utc::now() - Duration::seconds(REFRESH_LEAD_SECONDS))
+            .num_milliseconds()
+            .max(1) as u32;
+        gloo_timers::future::TimeoutFuture::new(wait_for).await;
+
+        // Refresh. On failure, this is the moment we hand the user
+        // back to /login: clear tokens + flip the signal. Every
+        // protected page has a use_effect watching SignedOut that
+        // calls nav.replace(LoginPage), so the redirect is
+        // automatic.
+        match force_refresh(&current).await {
+            Some(_new) => {
+                // Loop again; the new tokens are already persisted
+                // by force_refresh.
+            }
+            None => {
+                tokens::clear_tokens();
+                sig.set(AuthState::SignedOut);
+                return;
+            }
+        }
+    }
 }
 
 /// If `tokens.access_token` is expired or about to expire, attempt to
