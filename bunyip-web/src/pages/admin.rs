@@ -24,8 +24,8 @@ pub fn AdminFeedbackPage() -> Element {
     rsx! {
         AppShell { title: "Admin · Feedback".to_string(),
             div { class: "max-w-5xl mx-auto",
-                h1 { class: "text-2xl font-bold tracking-tight text-bunyip-reed-900", "Feedback inbox" }
-                p { class: "mt-1 text-sm text-bunyip-reed-700",
+                h1 { class: "text-2xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50", "Feedback inbox" }
+                p { class: "mt-1 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
                     "Triage and close in-app feedback. Requires admin role."
                 }
 
@@ -36,13 +36,13 @@ pub fn AdminFeedbackPage() -> Element {
                     FilterChip { current: filter(), value: "closed", label: "Closed", onpick: move |s| filter.set(s) }
                 }
 
-                div { class: "mt-6 rounded-xl border border-bunyip-reed-100 bg-white",
+                div { class: "mt-6 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800",
                     match &*feedback_resource.read_unchecked() {
-                        None => rsx! { p { class: "p-6 text-sm text-bunyip-reed-700", "Loading…" } },
+                        None => rsx! { p { class: "p-6 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "Loading…" } },
                         Some(Err(e)) => rsx! { p { class: "p-6 text-sm text-red-700", "{e.user_message()}" } },
-                        Some(Ok(list)) if list.is_empty() => rsx! { p { class: "p-6 text-sm text-bunyip-reed-600", "Nothing here yet." } },
+                        Some(Ok(list)) if list.is_empty() => rsx! { p { class: "p-6 text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300", "Nothing here yet." } },
                         Some(Ok(list)) => rsx! {
-                            ul { class: "divide-y divide-bunyip-reed-50",
+                            ul { class: "divide-y divide-bunyip-reed-50 dark:divide-bunyip-reed-700",
                                 for entry in list.iter() {
                                     FeedbackRow { entry: entry.clone(), refresh_key: refresh_key, toast: toast }
                                 }
@@ -66,7 +66,7 @@ fn FilterChip(
     let class = if active {
         "px-3 py-1.5 rounded-full bg-bunyip-reed-700 text-white text-xs font-medium"
     } else {
-        "px-3 py-1.5 rounded-full border border-bunyip-reed-200 text-bunyip-reed-800 text-xs hover:bg-bunyip-reed-50"
+        "px-3 py-1.5 rounded-full border border-bunyip-reed-200 dark:border-bunyip-reed-700 text-bunyip-reed-800 dark:text-bunyip-reed-100 text-xs hover:bg-bunyip-reed-50"
     };
     rsx! {
         button {
@@ -114,8 +114,8 @@ fn FeedbackRow(entry: Feedback, refresh_key: Signal<u64>, toast: crate::stores::
 
     let (status_label, status_class) = match entry.status {
         FeedbackStatus::New => ("New", "bg-bunyip-water-700 text-white"),
-        FeedbackStatus::Triaged => ("Triaged", "bg-bunyip-reed-100 text-bunyip-reed-800"),
-        FeedbackStatus::Closed => ("Closed", "bg-bunyip-reed-50 text-bunyip-reed-700"),
+        FeedbackStatus::Triaged => ("Triaged", "bg-bunyip-reed-100 dark:bg-bunyip-reed-800 text-bunyip-reed-800 dark:text-bunyip-reed-100"),
+        FeedbackStatus::Closed => ("Closed", "bg-bunyip-reed-50 dark:bg-bunyip-reed-900 text-bunyip-reed-700 dark:text-bunyip-reed-200"),
     };
     let tags_view = entry.tags.clone();
 
@@ -125,18 +125,18 @@ fn FeedbackRow(entry: Feedback, refresh_key: Signal<u64>, toast: crate::stores::
                 div { class: "flex-1 min-w-0",
                     div { class: "flex flex-wrap items-center gap-2",
                         for t in tags_view.iter() {
-                            span { class: "px-2 py-0.5 rounded-full text-xs font-medium uppercase tracking-wide bg-bunyip-reed-50 border border-bunyip-reed-100 text-bunyip-reed-700",
+                            span { class: "px-2 py-0.5 rounded-full text-xs font-medium uppercase tracking-wide bg-bunyip-reed-50 dark:bg-bunyip-reed-900 border border-bunyip-reed-100 dark:border-bunyip-reed-700 text-bunyip-reed-700 dark:text-bunyip-reed-200",
                                 "{t}"
                             }
                         }
                         if let Some(s) = &entry.subject {
-                            span { class: "text-sm font-semibold text-bunyip-reed-900", "{s}" }
+                            span { class: "text-sm font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50", "{s}" }
                         }
                     }
-                    p { class: "mt-2 text-sm text-bunyip-reed-900 whitespace-pre-wrap",
+                    p { class: "mt-2 text-sm text-bunyip-reed-900 dark:text-bunyip-reed-50 whitespace-pre-wrap",
                         "{entry.message}"
                     }
-                    p { class: "mt-2 text-xs text-bunyip-reed-600",
+                    p { class: "mt-2 text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300",
                         if let Some(name) = &entry.name {
                             "{name}"
                             if let Some(e) = &entry.email { " <" "{e}" "> · " }
@@ -158,14 +158,14 @@ fn FeedbackRow(entry: Feedback, refresh_key: Signal<u64>, toast: crate::stores::
             div { class: "mt-3 flex gap-2 justify-end",
                 match entry.status {
                     FeedbackStatus::New => rsx! {
-                        button { class: "px-3 py-1.5 rounded border border-bunyip-reed-200 text-sm hover:bg-bunyip-reed-50", onclick: triage, "Mark triaged" }
-                        button { class: "px-3 py-1.5 rounded border border-bunyip-reed-200 text-sm hover:bg-bunyip-reed-50", onclick: close, "Close" }
+                        button { class: "px-3 py-1.5 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 text-sm hover:bg-bunyip-reed-50", onclick: triage, "Mark triaged" }
+                        button { class: "px-3 py-1.5 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 text-sm hover:bg-bunyip-reed-50", onclick: close, "Close" }
                     },
                     FeedbackStatus::Triaged => rsx! {
-                        button { class: "px-3 py-1.5 rounded border border-bunyip-reed-200 text-sm hover:bg-bunyip-reed-50", onclick: close, "Close" }
+                        button { class: "px-3 py-1.5 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 text-sm hover:bg-bunyip-reed-50", onclick: close, "Close" }
                     },
                     FeedbackStatus::Closed => rsx! {
-                        button { class: "px-3 py-1.5 rounded border border-bunyip-reed-200 text-sm hover:bg-bunyip-reed-50", onclick: reopen, "Reopen" }
+                        button { class: "px-3 py-1.5 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 text-sm hover:bg-bunyip-reed-50", onclick: reopen, "Reopen" }
                     },
                 }
             }

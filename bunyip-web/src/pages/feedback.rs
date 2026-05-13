@@ -17,7 +17,7 @@ const TAGS: &[(&str, &str, &str)] = &[
     ("Bug", "border-red-300 text-red-700", "bg-red-50 border-red-500 text-red-800"),
     ("Feature", "border-bunyip-water-300 text-bunyip-water-700", "bg-bunyip-water-100 border-bunyip-water-500 text-bunyip-water-700"),
     ("Flow", "border-amber-300 text-amber-700", "bg-amber-50 border-amber-500 text-amber-800"),
-    ("Idea", "border-bunyip-reed-300 text-bunyip-reed-700", "bg-bunyip-reed-100 border-bunyip-reed-500 text-bunyip-reed-800"),
+    ("Idea", "border-bunyip-reed-300 text-bunyip-reed-700 dark:text-bunyip-reed-200", "bg-bunyip-reed-100 dark:bg-bunyip-reed-800 border-bunyip-reed-500 text-bunyip-reed-800 dark:text-bunyip-reed-100"),
 ];
 
 #[component]
@@ -97,42 +97,42 @@ pub fn FeedbackPage() -> Element {
     };
 
     rsx! {
-        div { class: "min-h-screen flex flex-col bg-gradient-to-b from-bunyip-reed-50 to-white",
+        div { class: "min-h-screen flex flex-col bg-gradient-to-b from-bunyip-reed-50 to-white dark:from-bunyip-reed-900 dark:to-bunyip-reed-800",
             PublicNav {}
 
             section { class: "relative overflow-hidden flex-1 px-6 py-16",
                 // Decorative gradient blobs.
                 div { class: "pointer-events-none absolute -top-32 -right-24 w-96 h-96 rounded-full bg-bunyip-water-100 blur-3xl opacity-60" }
-                div { class: "pointer-events-none absolute -bottom-32 -left-24 w-96 h-96 rounded-full bg-bunyip-reed-100 blur-3xl opacity-70" }
+                div { class: "pointer-events-none absolute -bottom-32 -left-24 w-96 h-96 rounded-full bg-bunyip-reed-100 dark:bg-bunyip-reed-800 blur-3xl opacity-70" }
 
                 div { class: "relative max-w-3xl mx-auto",
                     div { class: "text-center",
-                        span { class: "inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-bunyip-reed-200 bg-bunyip-reed-50 text-bunyip-reed-700 text-sm",
+                        span { class: "inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-bunyip-reed-50 dark:bg-bunyip-reed-900 text-bunyip-reed-700 dark:text-bunyip-reed-200 text-sm",
                             HeartIcon {}
                             "Help shape what ships next"
                         }
-                        h1 { class: "mt-6 text-4xl sm:text-5xl font-bold tracking-tight text-bunyip-reed-900",
+                        h1 { class: "mt-6 text-4xl sm:text-5xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50",
                             "Tell us what would make "
                             span { class: "bg-gradient-to-r from-bunyip-reed-700 via-bunyip-water-700 to-bunyip-water-500 bg-clip-text text-transparent",
                                 "Bunyip"
                             }
                             " better."
                         }
-                        p { class: "mt-4 text-lg text-bunyip-reed-700",
+                        p { class: "mt-4 text-lg text-bunyip-reed-700 dark:text-bunyip-reed-200",
                             "Share bugs, missing features, rough edges, or ideas. We read everything."
                         }
                     }
 
-                    div { class: "mt-10 rounded-2xl border border-bunyip-reed-100 bg-white shadow-lg shadow-bunyip-reed-100/40 p-6 md:p-8",
-                        h2 { class: "text-xl font-semibold text-bunyip-reed-900", "Send feedback" }
-                        p { class: "mt-1 text-sm text-bunyip-reed-700",
+                    div { class: "mt-10 rounded-2xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 shadow-lg shadow-bunyip-reed-100/40 p-6 md:p-8",
+                        h2 { class: "text-xl font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50", "Send feedback" }
+                        p { class: "mt-1 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
                             "Leave your email if you would like a follow-up. We kept this form simple so it is easy to share what is on your mind."
                         }
 
                         if submitted() {
-                            div { class: "mt-6 p-4 rounded-lg border border-bunyip-reed-200 bg-bunyip-reed-50",
-                                p { class: "font-semibold text-bunyip-reed-900", "Feedback sent" }
-                                p { class: "mt-1 text-sm text-bunyip-reed-700",
+                            div { class: "mt-6 p-4 rounded-lg border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-bunyip-reed-50 dark:bg-bunyip-reed-900",
+                                p { class: "font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50", "Feedback sent" }
+                                p { class: "mt-1 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
                                     "Thanks for sharing. Your feedback has been sent to the team. "
                                     Link { to: Route::LandingPage {}, class: "underline", "Back to home" }
                                     " · "
@@ -170,8 +170,8 @@ pub fn FeedbackPage() -> Element {
                             }
 
                             div {
-                                p { class: "text-sm font-medium text-bunyip-reed-800", "Tags" }
-                                p { class: "mt-1 text-xs text-bunyip-reed-600", "Pick any that apply." }
+                                p { class: "text-sm font-medium text-bunyip-reed-800 dark:text-bunyip-reed-100", "Tags" }
+                                p { class: "mt-1 text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300", "Pick any that apply." }
                                 div { class: "mt-2 flex flex-wrap gap-2",
                                     for (tag, idle_class, selected_class) in TAGS.iter() {
                                         {
@@ -194,9 +194,9 @@ pub fn FeedbackPage() -> Element {
 
                             div {
                                 label { class: "block",
-                                    span { class: "text-sm font-medium text-bunyip-reed-800", "Message" }
+                                    span { class: "text-sm font-medium text-bunyip-reed-800 dark:text-bunyip-reed-100", "Message" }
                                     textarea {
-                                        class: "mt-1 w-full min-h-[140px] px-3 py-2 rounded border border-bunyip-reed-200 bg-white focus:outline-none focus:ring-2 focus:ring-bunyip-reed-600",
+                                        class: "mt-1 w-full min-h-[140px] px-3 py-2 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 focus:outline-none focus:ring-2 focus:ring-bunyip-reed-600",
                                         placeholder: "What happened? What did you want to do? What surprised you?",
                                         value: "{message()}",
                                         oninput: move |evt| message.set(evt.value()),
@@ -247,9 +247,9 @@ fn Field(
 ) -> Element {
     rsx! {
         label { class: "block",
-            span { class: "text-sm font-medium text-bunyip-reed-800", "{label}" }
+            span { class: "text-sm font-medium text-bunyip-reed-800 dark:text-bunyip-reed-100", "{label}" }
             input {
-                class: "mt-1 w-full px-3 py-2 rounded border border-bunyip-reed-200 bg-white focus:outline-none focus:ring-2 focus:ring-bunyip-reed-600",
+                class: "mt-1 w-full px-3 py-2 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 focus:outline-none focus:ring-2 focus:ring-bunyip-reed-600",
                 r#type: "{input_type}",
                 placeholder: "{placeholder}",
                 value: "{value}",

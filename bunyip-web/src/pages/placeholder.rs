@@ -10,13 +10,13 @@ pub fn PlaceholderPage(segments: Vec<String>) -> Element {
     rsx! {
         div { class: "min-h-screen flex items-center justify-center px-6",
             div { class: "max-w-lg text-center",
-                p { class: "text-sm uppercase tracking-wide text-bunyip-reed-600 font-semibold",
+                p { class: "text-sm uppercase tracking-wide text-bunyip-reed-600 dark:text-bunyip-reed-300 font-semibold",
                     "Coming soon"
                 }
                 h1 { class: "mt-2 text-3xl font-bold",
                     "{path}"
                 }
-                p { class: "mt-4 text-bunyip-reed-700",
+                p { class: "mt-4 text-bunyip-reed-700 dark:text-bunyip-reed-200",
                     "This route is scaffolded and will be wired up in a later phase. See ",
                     span { class: "font-mono",
                         "For AI/bunyip-progress.md"

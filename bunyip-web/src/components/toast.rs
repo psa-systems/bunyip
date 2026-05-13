@@ -27,13 +27,13 @@ fn ToastItem(id: u64, kind: ToastKind, message: String) -> Element {
     };
 
     rsx! {
-        div { class: "flex items-stretch overflow-hidden rounded-lg border border-bunyip-reed-100 bg-white shadow-md",
+        div { class: "flex items-stretch overflow-hidden rounded-lg border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 shadow-md",
             div { class: "w-1.5 {bar_color}" }
             div { class: "flex-1 px-4 py-3 flex items-start gap-3",
                 span { class: "shrink-0 w-6 h-6 rounded-full {bar_color} text-white flex items-center justify-center text-sm font-bold",
                     "{icon}"
                 }
-                p { class: "flex-1 text-sm text-bunyip-reed-900",
+                p { class: "flex-1 text-sm text-bunyip-reed-900 dark:text-bunyip-reed-50",
                     "{message}"
                 }
                 button {

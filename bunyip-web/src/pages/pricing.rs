@@ -6,21 +6,21 @@ use crate::routes::Route;
 #[component]
 pub fn PricingPage() -> Element {
     rsx! {
-        div { class: "min-h-screen flex flex-col bg-gradient-to-b from-bunyip-reed-50 to-white",
+        div { class: "min-h-screen flex flex-col bg-gradient-to-b from-bunyip-reed-50 to-white dark:from-bunyip-reed-900 dark:to-bunyip-reed-800",
             PublicNav {}
 
             section { class: "px-6 pt-16 pb-20",
                 div { class: "max-w-5xl mx-auto",
                     div { class: "text-center max-w-2xl mx-auto",
-                        span { class: "inline-flex items-center gap-2 px-3 py-1 rounded-full bg-bunyip-reed-100 text-bunyip-reed-800 text-xs font-medium tracking-wide uppercase",
+                        span { class: "inline-flex items-center gap-2 px-3 py-1 rounded-full bg-bunyip-reed-100 dark:bg-bunyip-reed-800 text-bunyip-reed-800 dark:text-bunyip-reed-100 text-xs font-medium tracking-wide uppercase",
                             "Pricing"
                         }
-                        h1 { class: "mt-4 text-4xl md:text-5xl font-bold tracking-tight text-bunyip-reed-900",
+                        h1 { class: "mt-4 text-4xl md:text-5xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50",
                             "Simple. Honest. Done."
                         }
-                        p { class: "mt-4 text-bunyip-reed-700",
+                        p { class: "mt-4 text-bunyip-reed-700 dark:text-bunyip-reed-200",
                             "All plans include unlimited members, every SSO feature, and the admin console. Phase 5 will load these from the live ",
-                            span { class: "font-mono text-bunyip-reed-800",
+                            span { class: "font-mono text-bunyip-reed-800 dark:text-bunyip-reed-100",
                                 "/v1/billing/tiers"
                             },
                             " endpoint."
@@ -73,10 +73,10 @@ pub fn PricingPage() -> Element {
                     }
 
                     div { class: "mt-16",
-                        h2 { class: "text-2xl font-bold text-bunyip-reed-900",
+                        h2 { class: "text-2xl font-bold text-bunyip-reed-900 dark:text-bunyip-reed-50",
                             "Questions"
                         }
-                        div { class: "mt-6 divide-y divide-bunyip-reed-100 rounded-xl border border-bunyip-reed-100 bg-white",
+                        div { class: "mt-6 divide-y divide-bunyip-reed-100 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800",
                             Faq {
                                 q: "Can I bring my own Stripe?",
                                 a: "Yes - in the admin console, point Bunyip at your Stripe account and Bunyip will create the customer / subscription on your behalf.",
@@ -94,8 +94,8 @@ pub fn PricingPage() -> Element {
                 }
             }
 
-            footer { class: "px-6 py-10 border-t border-bunyip-reed-100 bg-white",
-                div { class: "max-w-6xl mx-auto text-sm text-bunyip-reed-700",
+            footer { class: "px-6 py-10 border-t border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800",
+                div { class: "max-w-6xl mx-auto text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
                     Link { to: Route::LandingPage {}, class: "underline",
                         "← Back to home"
                     }
@@ -116,14 +116,14 @@ fn PricingCard(
     tag: Option<&'static str>,
 ) -> Element {
     let card_class = if highlighted {
-        "relative p-7 rounded-2xl border-2 border-bunyip-reed-700 bg-white shadow-lg"
+        "relative p-7 rounded-2xl border-2 border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 shadow-lg"
     } else {
-        "relative p-7 rounded-2xl border border-bunyip-reed-100 bg-white"
+        "relative p-7 rounded-2xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800"
     };
     let button_class = if highlighted {
         "w-full px-4 py-2.5 rounded-lg bg-bunyip-reed-700 text-white font-medium hover:bg-bunyip-reed-800 transition-colors"
     } else {
-        "w-full px-4 py-2.5 rounded-lg border border-bunyip-reed-300 text-bunyip-reed-800 font-medium hover:bg-bunyip-reed-50 transition-colors"
+        "w-full px-4 py-2.5 rounded-lg border border-bunyip-reed-300 text-bunyip-reed-800 dark:text-bunyip-reed-100 font-medium hover:bg-bunyip-reed-50 transition-colors"
     };
     rsx! {
         div { class: "{card_class}",
@@ -132,14 +132,14 @@ fn PricingCard(
                     "{tag}"
                 }
             }
-            h3 { class: "text-lg font-semibold text-bunyip-reed-900",
+            h3 { class: "text-lg font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50",
                 "{name}"
             }
             div { class: "mt-4 flex items-baseline gap-2",
-                span { class: "text-4xl font-bold tracking-tight text-bunyip-reed-900",
+                span { class: "text-4xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50",
                     "{price}"
                 }
-                span { class: "text-sm text-bunyip-reed-700",
+                span { class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
                     "{period}"
                 }
             }
@@ -147,7 +147,7 @@ fn PricingCard(
                 for feature in features {
                     li { class: "flex items-start gap-2",
                         svg {
-                            class: "w-4 h-4 mt-0.5 text-bunyip-reed-600 shrink-0",
+                            class: "w-4 h-4 mt-0.5 text-bunyip-reed-600 dark:text-bunyip-reed-300 shrink-0",
                             view_box: "0 0 20 20",
                             fill: "currentColor",
                             path {
@@ -156,7 +156,7 @@ fn PricingCard(
                                 d: "M16.7 5.3a1 1 0 010 1.4l-7.3 7.3a1 1 0 01-1.4 0L3.3 9.3a1 1 0 011.4-1.4l3.6 3.6 6.6-6.6a1 1 0 011.4 0z",
                             }
                         }
-                        span { class: "text-bunyip-reed-800", "{feature}" }
+                        span { class: "text-bunyip-reed-800 dark:text-bunyip-reed-100", "{feature}" }
                     }
                 }
             }
@@ -171,10 +171,10 @@ fn PricingCard(
 fn Faq(q: &'static str, a: &'static str) -> Element {
     rsx! {
         div { class: "p-5",
-            p { class: "font-semibold text-bunyip-reed-900",
+            p { class: "font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50",
                 "{q}"
             }
-            p { class: "mt-2 text-sm text-bunyip-reed-700 leading-relaxed",
+            p { class: "mt-2 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 leading-relaxed",
                 "{a}"
             }
         }

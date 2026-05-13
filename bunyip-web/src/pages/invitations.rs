@@ -55,7 +55,7 @@ pub fn AcceptInvitationPage() -> Element {
             title: "Join an organization",
             subtitle: "Review the invitation, then accept to join the org.",
             match &*lookup.read_unchecked() {
-                None => rsx! { p { class: "text-sm text-bunyip-reed-700", "Loading invitation…" } },
+                None => rsx! { p { class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "Loading invitation…" } },
                 Some(None) => rsx! { p { class: "text-sm text-red-700", "Missing or invalid invitation link." } },
                 Some(Some(Err(e))) => rsx! { p { class: "text-sm text-red-700", "{e.user_message()}" } },
                 Some(Some(Ok(lookup))) => rsx! { LookupCard { lookup: lookup.clone(), submitting: submitting(), onaccept: accept } },
@@ -73,25 +73,25 @@ fn LookupCard(lookup: InvitationLookup, submitting: bool, onaccept: EventHandler
     };
     rsx! {
         div {
-            p { class: "text-sm text-bunyip-reed-700",
+            p { class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
                 if let Some(name) = &lookup.inviter_name {
                     "{name} invited you to join"
                 } else {
                     "You've been invited to join"
                 }
             }
-            p { class: "mt-1 text-2xl font-bold text-bunyip-reed-900",
+            p { class: "mt-1 text-2xl font-bold text-bunyip-reed-900 dark:text-bunyip-reed-50",
                 "{lookup.org.name}"
             }
-            p { class: "mt-1 text-xs text-bunyip-reed-600 font-mono",
+            p { class: "mt-1 text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300 font-mono",
                 "{lookup.org.slug}"
             }
-            p { class: "mt-4 text-sm text-bunyip-reed-700",
+            p { class: "mt-4 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
                 "Email: ",
-                span { class: "text-bunyip-reed-900", "{lookup.email}" }
+                span { class: "text-bunyip-reed-900 dark:text-bunyip-reed-50", "{lookup.email}" }
                 br {}
                 "Role: ",
-                span { class: "text-bunyip-reed-900", "{role_text}" }
+                span { class: "text-bunyip-reed-900 dark:text-bunyip-reed-50", "{role_text}" }
             }
             if lookup.expired {
                 p { class: "mt-4 text-sm text-red-700",
@@ -104,7 +104,7 @@ fn LookupCard(lookup: InvitationLookup, submitting: bool, onaccept: EventHandler
                     disabled: submitting,
                     if submitting { "Joining…" } else { "Accept invitation" }
                 }
-                p { class: "mt-3 text-xs text-bunyip-reed-600",
+                p { class: "mt-3 text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300",
                     "You must be signed in for this to work. If you aren't, the request will fail."
                 }
             }

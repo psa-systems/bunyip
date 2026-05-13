@@ -23,21 +23,21 @@ pub fn OrgBillingPage(slug: String) -> Element {
     rsx! {
         AppShell { title: format!("Billing · {slug}"),
             div { class: "max-w-4xl mx-auto",
-                Link { to: Route::OrgListPage {}, class: "text-sm text-bunyip-reed-700 underline",
+                Link { to: Route::OrgListPage {}, class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 underline",
                     "← All organizations"
                 }
-                h1 { class: "mt-3 text-2xl font-bold tracking-tight text-bunyip-reed-900",
+                h1 { class: "mt-3 text-2xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50",
                     "Billing"
                 }
 
                 match &*view.read_unchecked() {
-                    None => rsx! { div { class: "mt-6 p-6 rounded-xl border border-bunyip-reed-100 bg-white text-sm text-bunyip-reed-700", "Loading…" } },
+                    None => rsx! { div { class: "mt-6 p-6 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "Loading…" } },
                     Some(Err(e)) => rsx! { div { class: "mt-6 p-6 rounded-xl border border-red-200 bg-red-50 text-sm text-red-800", "{e.user_message()}" } },
                     Some(Ok(view)) => rsx! { CurrentPlan { view: view.clone(), slug: slug.clone(), refresh_key: refresh_key, toast: toast } },
                 }
 
                 match &*tiers.read_unchecked() {
-                    None => rsx! { div { class: "mt-6 text-sm text-bunyip-reed-700", "Loading tiers…" } },
+                    None => rsx! { div { class: "mt-6 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "Loading tiers…" } },
                     Some(Err(_)) => rsx! { },
                     Some(Ok(list)) => rsx! { TierPicker { tiers: list.clone(), slug: slug.clone(), refresh_key: refresh_key, toast: toast } },
                 }
@@ -81,18 +81,18 @@ fn CurrentPlan(view: BillingView, slug: String, refresh_key: Signal<u64>, toast:
         .subscription
         .as_ref()
         .map(|s| status_pill(&s.status))
-        .unwrap_or(("No subscription", "bg-bunyip-reed-50 text-bunyip-reed-700"));
+        .unwrap_or(("No subscription", "bg-bunyip-reed-50 dark:bg-bunyip-reed-900 text-bunyip-reed-700 dark:text-bunyip-reed-200"));
 
     rsx! {
-        div { class: "mt-6 p-6 rounded-xl border border-bunyip-reed-100 bg-white",
+        div { class: "mt-6 p-6 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800",
             div { class: "flex items-center justify-between",
                 div {
-                    p { class: "text-sm text-bunyip-reed-700", "Current plan" }
-                    p { class: "mt-1 text-3xl font-bold tracking-tight text-bunyip-reed-900",
+                    p { class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "Current plan" }
+                    p { class: "mt-1 text-3xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50",
                         if let Some(t) = &view.tier { "{t.display_name}" } else { "None" }
                     }
                     if let Some(t) = &view.tier {
-                        p { class: "mt-1 text-sm text-bunyip-reed-600",
+                        p { class: "mt-1 text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300",
                             "{price_label(t)}"
                         }
                     }
@@ -138,8 +138,8 @@ fn CurrentPlan(view: BillingView, slug: String, refresh_key: Signal<u64>, toast:
 fn InfoRow(label: String, value: String) -> Element {
     rsx! {
         div {
-            p { class: "text-xs uppercase tracking-wide text-bunyip-reed-600 font-semibold", "{label}" }
-            p { class: "mt-1 text-bunyip-reed-900", "{value}" }
+            p { class: "text-xs uppercase tracking-wide text-bunyip-reed-600 dark:text-bunyip-reed-300 font-semibold", "{label}" }
+            p { class: "mt-1 text-bunyip-reed-900 dark:text-bunyip-reed-50", "{value}" }
         }
     }
 }
@@ -147,9 +147,9 @@ fn InfoRow(label: String, value: String) -> Element {
 fn status_pill(status: &SubscriptionStatus) -> (&'static str, &'static str) {
     match status {
         SubscriptionStatus::Trialing => ("Trial", "bg-bunyip-water-50 text-bunyip-water-700"),
-        SubscriptionStatus::Active => ("Active", "bg-bunyip-reed-50 text-bunyip-reed-700"),
+        SubscriptionStatus::Active => ("Active", "bg-bunyip-reed-50 dark:bg-bunyip-reed-900 text-bunyip-reed-700 dark:text-bunyip-reed-200"),
         SubscriptionStatus::PastDue => ("Past due", "bg-red-50 text-red-700"),
-        SubscriptionStatus::Canceled => ("Canceled", "bg-bunyip-reed-50 text-bunyip-reed-700"),
+        SubscriptionStatus::Canceled => ("Canceled", "bg-bunyip-reed-50 dark:bg-bunyip-reed-900 text-bunyip-reed-700 dark:text-bunyip-reed-200"),
         SubscriptionStatus::Lifetime => ("Lifetime", "bg-bunyip-reed-700 text-white"),
     }
 }
@@ -175,20 +175,20 @@ fn TierPicker(tiers: Vec<TierConfig>, slug: String, refresh_key: Signal<u64>, to
     let slug = std::rc::Rc::new(slug);
 
     rsx! {
-        h2 { class: "mt-10 text-lg font-semibold text-bunyip-reed-900", "Change plan" }
+        h2 { class: "mt-10 text-lg font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50", "Change plan" }
         div { class: "mt-3 grid md:grid-cols-3 gap-4",
             for tier in tiers.iter() {
                 {
                     let tier_key = tier.tier_key.clone();
                     let slug = slug.clone();
                     rsx! {
-                        div { class: "p-5 rounded-xl border border-bunyip-reed-100 bg-white",
-                            p { class: "font-semibold text-bunyip-reed-900", "{tier.display_name}" }
-                            p { class: "mt-1 text-sm text-bunyip-reed-700", "{price_label(tier)}" }
-                            ul { class: "mt-3 space-y-1 text-sm text-bunyip-reed-700",
+                        div { class: "p-5 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800",
+                            p { class: "font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50", "{tier.display_name}" }
+                            p { class: "mt-1 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "{price_label(tier)}" }
+                            ul { class: "mt-3 space-y-1 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
                                 for f in tier.features.iter() {
                                     li { class: "flex gap-2",
-                                        span { class: "text-bunyip-reed-600", "✓" }
+                                        span { class: "text-bunyip-reed-600 dark:text-bunyip-reed-300", "✓" }
                                         span { "{f}" }
                                     }
                                 }
