@@ -58,5 +58,13 @@ volumes:
     name: dev-bunyip-web-node-modules-${USER}
 
 networks:
+  # Pre-created by `just dev-sso` (the recipe runs `docker network
+  # inspect || docker network create` before invoking compose) so the
+  # SSO overlay can attach it to traefik-public AND to this private net
+  # without compose trying to re-label it. Marking it external means
+  # compose will NOT attempt to create or relabel the network; it just
+  # uses what is already there. `just dev` (LAN-IP) relies on the same
+  # pre-create step inside the recipe.
   private:
+    external: true
     name: dev-bunyip-private-${USER}

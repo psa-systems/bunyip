@@ -75,6 +75,14 @@ dev *args: ensure-env
     let uid = (^id --user | str trim)
     let gid = (^id --group | str trim)
     let user_name = (^whoami | str trim)
+    # The base compose.yml declares the per-developer private network
+    # as `external: true`, so compose will NOT create it. Ensure it
+    # exists (idempotent: inspect returns 0 when present, otherwise
+    # create). Same pre-create step exists in `dev-sso` further down.
+    let net = $"dev-bunyip-private-($user_name)"
+    if (do { ^docker network inspect $net } | complete | get exit_code) != 0 {
+        ^docker network create $net out> /dev/null
+    }
     print $"Binding bunyip dev stack to ($host_ip) as ($user_name) \(uid ($uid):($gid)\)"
     with-env { BUNYIP_HOST_BIND_IP: $host_ip, HOST_UID: $uid, HOST_GID: $gid, USER: $user_name } {
         docker compose --file {{ compose_file }} up {{ args }}
