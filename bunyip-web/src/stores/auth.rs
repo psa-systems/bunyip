@@ -6,12 +6,15 @@
 //! state. If no tokens or the /me fetch 401s, the state collapses to
 //! SignedOut.
 
+use chrono::{Duration, Utc};
 use dioxus::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
 use crate::api::types::{MeResponse, UserRole};
-use crate::stores::tokens;
+use crate::api::ApiError;
+use crate::stores::config::OidcConfig;
+use crate::stores::tokens::{self, Tokens};
 
 #[derive(Clone, Copy)]
 pub struct AuthSignal(pub Signal<AuthState>);
@@ -38,23 +41,102 @@ impl AuthState {
 
 /// Mount this once at the top of the tree so all descendants can read
 /// auth. Hydrates the in-memory access_token from localStorage on
-/// boot, then fetches /me.
+/// boot, refreshes the access token if it has expired, then fetches
+/// /me.
+///
+/// Error handling matters here: an over-eager clear_tokens turns any
+/// transient /me failure (CORS preflight blip, momentary network
+/// glitch) into a forced logout that survives a reload. Only a true
+/// 401 from /me - meaning the server is rejecting this Bearer token -
+/// clears the bundle. Everything else leaves the tokens in place so
+/// the next reload can retry.
 pub fn use_auth_provider() -> AuthSignal {
     let signal = use_context_provider(|| AuthSignal(Signal::new(AuthState::Loading)));
     let mut sig = signal.0;
     use_future(move || async move {
-        // Hydrate the in-memory access_token from localStorage so the
-        // first /me fetch carries a Bearer header.
-        let _ = tokens::load_tokens();
+        // 1. Hydrate from localStorage.
+        let tokens = match tokens::load_tokens() {
+            Some(t) => t,
+            None => {
+                sig.set(AuthState::SignedOut);
+                return;
+            }
+        };
+
+        // 2. Refresh the access token if it has already expired (or
+        //    is within 30s of expiry). Saves an extra round-trip
+        //    later when /me would have 401'd.
+        let tokens = maybe_refresh(tokens).await;
+        let tokens = match tokens {
+            Some(t) => t,
+            None => {
+                // refresh failed; tokens already cleared inside
+                // maybe_refresh.
+                sig.set(AuthState::SignedOut);
+                return;
+            }
+        };
+
+        // 3. Fetch /me. On 401, attempt one more refresh-and-retry
+        //    before giving up - covers the case where the access
+        //    token was rejected for a reason other than expiry
+        //    (server-side revocation, clock skew, ...).
         match crate::api::me::fetch_me().await {
             Ok(me) => sig.set(AuthState::SignedIn(me)),
+            Err(ApiError::Status { status: 401, .. }) => {
+                if let Some(_new) = force_refresh(&tokens).await {
+                    match crate::api::me::fetch_me().await {
+                        Ok(me) => sig.set(AuthState::SignedIn(me)),
+                        Err(_) => {
+                            tokens::clear_tokens();
+                            sig.set(AuthState::SignedOut);
+                        }
+                    }
+                } else {
+                    tokens::clear_tokens();
+                    sig.set(AuthState::SignedOut);
+                }
+            }
             Err(_) => {
-                tokens::clear_tokens();
+                // Transient: network, CORS preflight, decode, etc.
+                // Do NOT clear localStorage - a reload should retry
+                // cleanly. The signal goes to SignedOut so the
+                // gated pages bounce to /login, but the stored
+                // tokens remain available for the next attempt.
                 sig.set(AuthState::SignedOut);
             }
         }
     });
     signal
+}
+
+/// If `tokens.access_token` is expired or about to expire, attempt to
+/// refresh it. Returns the (possibly-rotated) tokens to use going
+/// forward, or `None` if refresh failed irrecoverably (cleared
+/// localStorage as a side effect). If the token is still fresh, just
+/// returns it unchanged.
+async fn maybe_refresh(tokens: Tokens) -> Option<Tokens> {
+    let near_expiry = tokens.expires_at < Utc::now() + Duration::seconds(30);
+    if !near_expiry {
+        return Some(tokens);
+    }
+    force_refresh(&tokens).await.or_else(|| {
+        tokens::clear_tokens();
+        None
+    })
+}
+
+/// Always attempt a refresh against the token endpoint regardless of
+/// the current access_token's expiry. Returns the new tokens (already
+/// saved to localStorage + the in-memory holder) or `None` on failure.
+async fn force_refresh(tokens: &Tokens) -> Option<Tokens> {
+    let refresh_token = tokens.refresh_token.as_deref()?;
+    let cfg = OidcConfig::from_env();
+    let new_tokens = crate::modules::oidc::refresh_tokens(&cfg, refresh_token, &tokens.id_token)
+        .await
+        .ok()?;
+    tokens::save_tokens(&new_tokens);
+    Some(new_tokens)
 }
 
 pub fn use_auth() -> Signal<AuthState> {
