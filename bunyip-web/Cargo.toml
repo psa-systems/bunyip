@@ -1,0 +1,30 @@
+[package]
+name = "bunyip-web"
+description = "Dioxus frontend for Bunyip - the SaaS / business platform UI for the Mokosh PSA product."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "bunyip-web"
+path = "src/main.rs"
+
+[dependencies]
+dioxus = { version = "0.7", features = ["router", "web"] }
+
+serde.workspace = true
+serde_json.workspace = true
+uuid = { workspace = true }
+chrono = { workspace = true }
+validator.workspace = true
+
+# WASM-friendly randomness for client-side IDs
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+# HTTP client (wasm). Used for /v1/* API calls.
+gloo-net = { version = "0.6", features = ["http"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Document", "Storage", "Location", "Navigator"] }

@@ -1,0 +1,57 @@
+[
+  {
+    "id": "fffffff1-ffff-4fff-8fff-ffffffffffff",
+    "actor_user_id": "11111111-1111-4111-8111-111111111111",
+    "org_id": null,
+    "action": "admin.tier_config.update",
+    "target": "early_adopter",
+    "ip": "10.0.0.42",
+    "user_agent": "Mozilla/5.0",
+    "is_admin_action": true,
+    "ts": "2026-05-11T14:22:00Z"
+  },
+  {
+    "id": "fffffff2-ffff-4fff-8fff-ffffffffffff",
+    "actor_user_id": "22222222-2222-4222-8222-222222222222",
+    "org_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "action": "org.invite.send",
+    "target": "newhire@example.com",
+    "ip": "192.168.1.10",
+    "user_agent": "Mozilla/5.0",
+    "is_admin_action": false,
+    "ts": "2026-05-12T09:15:00Z"
+  },
+  {
+    "id": "fffffff3-ffff-4fff-8fff-ffffffffffff",
+    "actor_user_id": "11111111-1111-4111-8111-111111111111",
+    "org_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    "action": "admin.subscription.override",
+    "target": "lifetime",
+    "ip": "10.0.0.42",
+    "user_agent": "Mozilla/5.0",
+    "is_admin_action": true,
+    "ts": "2025-10-05T11:05:00Z"
+  },
+  {
+    "id": "fffffff4-ffff-4fff-8fff-ffffffffffff",
+    "actor_user_id": "33333333-3333-4333-8333-333333333333",
+    "org_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    "action": "billing.invoice.payment_failed",
+    "target": "in_mock_acme_2026_04",
+    "ip": null,
+    "user_agent": "stripe-webhook",
+    "is_admin_action": false,
+    "ts": "2026-04-24T08:05:00Z"
+  },
+  {
+    "id": "fffffff5-ffff-4fff-8fff-ffffffffffff",
+    "actor_user_id": "44444444-4444-4444-8444-444444444444",
+    "org_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "action": "auth.login.success",
+    "target": null,
+    "ip": "192.168.1.22",
+    "user_agent": "Mozilla/5.0",
+    "is_admin_action": false,
+    "ts": "2026-05-12T20:00:00Z"
+  }
+]

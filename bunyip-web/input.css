@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bunyip-reed-50: #f3f7f3;
+  --color-bunyip-reed-100: #e3ecde;
+  --color-bunyip-reed-200: #c6d8bd;
+  --color-bunyip-reed-300: #99bb8e;
+  --color-bunyip-reed-400: #6e9c64;
+  --color-bunyip-reed-500: #4f7e48;
+  --color-bunyip-reed-600: #3c6438;
+  --color-bunyip-reed-700: #2f4e2e;
+  --color-bunyip-reed-800: #283e27;
+  --color-bunyip-reed-900: #1f311f;
+
+  --color-bunyip-water-50: #eaf3f4;
+  --color-bunyip-water-100: #cce0e3;
+  --color-bunyip-water-300: #84afb6;
+  --color-bunyip-water-500: #2b6273;
+  --color-bunyip-water-700: #1d4351;
+  --color-bunyip-water-900: #0e2730;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, "Noto Sans", Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+@layer base {
+  html,
+  body {
+    @apply h-full bg-bunyip-reed-50 text-bunyip-reed-900 antialiased;
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01", "ss03";
+  }
+
+  /* Better default focus rings for keyboard users. */
+  *:focus-visible {
+    outline: 2px solid var(--color-bunyip-reed-600);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Smooth-scroll for in-page anchors. */
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* Subtle selection color matching the theme. */
+  ::selection {
+    background-color: var(--color-bunyip-reed-200);
+    color: var(--color-bunyip-reed-900);
+  }
+}
