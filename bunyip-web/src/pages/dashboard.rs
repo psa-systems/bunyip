@@ -10,10 +10,22 @@ use crate::api::apps::{self, AppView};
 use crate::api::types::MeResponse;
 use crate::components::layout::BrandMark;
 use crate::components::theme::ThemeToggle;
-use crate::modules::oidc::{self, OidcConfig};
+use crate::modules::oidc::OidcConfig;
 use crate::routes::Route;
 use crate::stores::auth::{refresh_auth, use_auth, AuthState};
 use crate::stores::toast::use_toast;
+
+/// Given an OAuth client's registered redirect_uri (e.g.
+/// `https://a contributor-mokosh.a8n.run/auth/callback`), derive the URL the
+/// launcher tile should send the browser to. We keep the origin and
+/// append `/dashboard` - the conventional protected landing page that
+/// every first-party Mokosh app exposes under its AuthGuard. The
+/// AuthGuard then runs start_login locally to set up PKCE for this
+/// origin.
+fn launch_url(redirect_uri: &str) -> Option<String> {
+    let url = web_sys::Url::new(redirect_uri).ok()?;
+    Some(format!("{}//{}/dashboard", url.protocol(), url.host()))
+}
 
 #[component]
 pub fn DashboardPage() -> Element {
@@ -80,10 +92,30 @@ fn Authenticated(me: MeResponse) -> Element {
 
     let toast = use_toast();
     let launch = use_callback(move |app: AppView| {
-        let cfg = OidcConfig::from_env();
-        match oidc::start_login_for(&cfg, &app.client_id, &app.redirect_uri) {
-            Ok(()) => {}
-            Err(e) => toast.error(format!("Could not launch app: {e}")),
+        // The launcher does NOT drive an OIDC dance on behalf of the
+        // target. PKCE requires the code_verifier to live on the same
+        // origin as the /auth/callback page that exchanges the code,
+        // and the verifier cannot cross origins. So we just navigate
+        // the browser to the target's entry URL and let the target's
+        // own AuthGuard call start_login - storing the PendingFlow
+        // (verifier + state + nonce) on the target's sessionStorage.
+        // Authorize then 302s back to the target's /auth/callback
+        // with the OP cookie that was set when the user signed in
+        // here on the hub.
+        //
+        // Entry URL = the redirect_uri's origin + /dashboard. The
+        // /dashboard path is the conventional protected landing page;
+        // it is under the target's AuthGuard, so the un-authed visit
+        // immediately kicks off start_login.
+        let entry_url = match launch_url(&app.redirect_uri) {
+            Some(u) => u,
+            None => {
+                toast.error(format!("Could not derive launch URL for {}.", app.name));
+                return;
+            }
+        };
+        if let Some(win) = web_sys::window() {
+            let _ = win.location().set_href(&entry_url);
         }
     });
 
