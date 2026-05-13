@@ -7,6 +7,8 @@
 //! SignedOut.
 
 use dioxus::prelude::*;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::JsCast;
 
 use crate::api::types::{MeResponse, UserRole};
 use crate::stores::tokens;
@@ -78,6 +80,41 @@ pub async fn refresh_auth(mut sig: Signal<AuthState>) {
 pub fn sign_out(mut sig: Signal<AuthState>) {
     tokens::clear_tokens();
     sig.set(AuthState::SignedOut);
+}
+
+/// Mount once at app root so a back-button after logout (or after
+/// any auth-state transition) does not show a stale dashboard from
+/// the browser's bfcache.
+///
+/// Modern browsers cache the entire JS-process state of pages so the
+/// back/forward buttons restore them instantly. That means after a
+/// user signs out and presses Back, the browser bypasses our
+/// `use_auth_provider` future entirely and shows the rendered
+/// "SignedIn" DOM that existed before the sign-out. The `pageshow`
+/// event fires with `persisted=true` exactly in that case; we listen
+/// for it and force a full reload, which re-runs `use_auth_provider`
+/// from scratch, finds no tokens in localStorage, and lands the user
+/// on /login.
+pub fn use_bfcache_invalidator() {
+    use_effect(|| {
+        let Some(win) = web_sys::window() else {
+            return;
+        };
+        let closure = Closure::<dyn FnMut(web_sys::PageTransitionEvent)>::new(
+            move |evt: web_sys::PageTransitionEvent| {
+                if evt.persisted() {
+                    if let Some(w) = web_sys::window() {
+                        let _ = w.location().reload();
+                    }
+                }
+            },
+        );
+        let _ = win.add_event_listener_with_callback("pageshow", closure.as_ref().unchecked_ref());
+        // Forget the closure: the listener stays attached for the
+        // lifetime of the document, which is precisely what we want.
+        // The SPA never tears this down, so leaking it is correct.
+        closure.forget();
+    });
 }
 
 /// Redirect away from the current page if the signed-in user doesn't

@@ -11,6 +11,7 @@
 use chrono::{Duration, Utc};
 use gloo_net::http::Request;
 use serde::Deserialize;
+use web_sys::RequestCredentials;
 
 use crate::stores::config::OidcConfig;
 use crate::stores::tokens::{current_access_token, Tokens};
@@ -323,7 +324,14 @@ pub async fn password_login(
         "scope": cfg.scopes,
         "trust_token": trust_token,
     });
+    // `credentials: include` so the browser accepts the Set-Cookie on
+    // the OP session that mokosh-server sets in this response. Without
+    // it, the cross-origin Set-Cookie is silently dropped and the
+    // launcher's later top-level navigation to /oauth2/authorize finds
+    // no OP session and bounces the user back to /login. See
+    // docs/bunyip/06-app-launcher.md + 07-sso-redirect-bridge.md.
     let resp = Request::post(&url)
+        .credentials(RequestCredentials::Include)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .json(&body)
@@ -400,7 +408,11 @@ pub async fn mfa_verify(
         "code": code,
         "remember_device": remember_device,
     });
+    // `credentials: include` so the OP session cookie set on the
+    // successful verify lands in the browser. Same reason as
+    // password_login above.
     let resp = Request::post(&url)
+        .credentials(RequestCredentials::Include)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .json(&body)

@@ -23,6 +23,7 @@ pub mod types;
 use gloo_net::http::{Request, RequestBuilder};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use web_sys::RequestCredentials;
 
 use crate::stores::config::OidcConfig;
 use crate::stores::tokens::current_access_token;
@@ -48,7 +49,16 @@ fn base_builder(method: &str, path: &str) -> RequestBuilder {
         "DELETE" => Request::delete(&url),
         _ => Request::get(&url),
     };
-    b.header("Accept", "application/json")
+    // `credentials: include` so the cross-origin OP session cookie
+    // mokosh-server sets on /v1/auth/login (and clears on
+    // /v1/auth/logout, /v1/auth/mfa/verify) actually lands in the
+    // browser. mokosh-server's CORS layer matches with
+    // `allow_credentials(true) + AllowOrigin::mirror_request()` so the
+    // Set-Cookie + Allow-Origin pair satisfy the browser's
+    // credentialed-CORS rules. Bearer-token-on-fetch still authorises
+    // the request; the cookie just tags along where it is meaningful.
+    b.credentials(RequestCredentials::Include)
+        .header("Accept", "application/json")
 }
 
 fn authed(builder: RequestBuilder) -> Result<RequestBuilder, ApiError> {

@@ -18,11 +18,24 @@ use crate::stores::toast::use_toast;
 #[component]
 pub fn DashboardPage() -> Element {
     let auth = use_auth();
+    let nav = navigator();
+    // Bounce signed-out users to /login synchronously rather than
+    // sitting on a "You're signed out" notice - the dashboard is
+    // gated content, not an entry point. Pair with
+    // use_bfcache_invalidator (mounted at app root) so a back-button
+    // press after logout reloads + lands here in Loading → SignedOut
+    // → /login.
+    use_effect(move || {
+        if matches!(*auth.read(), AuthState::SignedOut) {
+            nav.replace(Route::LoginPage {});
+        }
+    });
     let state = auth.read().clone();
 
     match state {
-        AuthState::Loading => rsx! { Splash { message: "Loading your dashboard…" } },
-        AuthState::SignedOut => rsx! { SignedOutNotice {} },
+        AuthState::Loading | AuthState::SignedOut => {
+            rsx! { Splash { message: "Loading your dashboard…" } }
+        }
         AuthState::SignedIn(me) => rsx! { Authenticated { me: me } },
     }
 }
@@ -32,23 +45,6 @@ fn Splash(message: &'static str) -> Element {
     rsx! {
         div { class: "min-h-screen flex items-center justify-center text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
             "{message}"
-        }
-    }
-}
-
-#[component]
-fn SignedOutNotice() -> Element {
-    rsx! {
-        div { class: "min-h-screen flex items-center justify-center px-6",
-            div { class: "max-w-md text-center",
-                h1 { class: "text-2xl font-bold text-bunyip-reed-900 dark:text-bunyip-reed-50", "You're signed out" }
-                p { class: "mt-2 text-bunyip-reed-700 dark:text-bunyip-reed-200", "Sign in to see your dashboard." }
-                Link {
-                    to: Route::LoginPage {},
-                    class: "mt-6 inline-block px-4 py-2 rounded bg-bunyip-reed-700 text-white hover:bg-bunyip-reed-800",
-                    "Go to sign in"
-                }
-            }
         }
     }
 }
@@ -64,7 +60,21 @@ fn Authenticated(me: MeResponse) -> Element {
     let mut apps: Signal<Option<Result<Vec<AppView>, String>>> = use_signal(|| None);
 
     use_future(move || async move {
-        let r = apps::list_apps().await.map_err(|e| e.user_message());
+        // The launcher only shows OTHER apps. Bunyip is the hub the
+        // user is already inside, so a tile that "launches" it would
+        // be a no-op at best and a confusing re-auth round-trip at
+        // worst. Filter our own client_id out of the list before
+        // splitting first-party / third-party.
+        let cfg = OidcConfig::from_env();
+        let own_client_id = cfg.client_id.clone();
+        let r = apps::list_apps()
+            .await
+            .map(|list| {
+                list.into_iter()
+                    .filter(|a| a.client_id != own_client_id)
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|e| e.user_message());
         apps.set(Some(r));
     });
 

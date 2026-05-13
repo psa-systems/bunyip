@@ -10,7 +10,7 @@ mod stores;
 use components::feedback::FeedbackLauncher;
 use components::toast::ToastViewport;
 use routes::Route;
-use stores::auth::use_auth_provider;
+use stores::auth::{use_auth_provider, use_bfcache_invalidator};
 use stores::toast::use_toast_provider;
 
 const STYLES_CSS: Asset = asset!("/assets/styles.css");
@@ -29,6 +29,7 @@ fn main() {
 fn App() -> Element {
     use_toast_provider();
     use_auth_provider();
+    use_bfcache_invalidator();
 
     rsx! {
         document::Stylesheet { href: STYLES_CSS }
