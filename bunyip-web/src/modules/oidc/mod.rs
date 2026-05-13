@@ -27,7 +27,7 @@ pub mod tokens;
 pub use flow::{
     complete_login, issuer_get, issuer_get_authed, issuer_post, issuer_post_authed,
     issuer_post_authed_empty, mfa_verify, password_login, refresh_tokens, revoke_refresh_token,
-    snapshot_initial_search, start_login, FlowError, LoginOutcome, MfaVerifyOk,
+    snapshot_initial_search, start_login, start_login_for, FlowError, LoginOutcome, MfaVerifyOk,
 };
 pub use tokens::IdTokenClaims;
 

@@ -12,6 +12,7 @@
 //! origins.
 
 pub mod admin;
+pub mod apps;
 pub mod auth;
 pub mod billing;
 pub mod feedback;

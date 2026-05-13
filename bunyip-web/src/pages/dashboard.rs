@@ -1,9 +1,16 @@
+//! `/dashboard` - the App Launcher. One tile per OAuth client the
+//! signed-in user can launch; clicking a tile kicks off an OIDC
+//! code+PKCE flow against mokosh-server with that tile's client_id +
+//! redirect_uri, landing the user on the target app.
+
 use dioxus::prelude::*;
 
 use crate::api;
+use crate::api::apps::{self, AppView};
 use crate::api::types::MeResponse;
 use crate::components::layout::BrandMark;
 use crate::components::theme::ThemeToggle;
+use crate::modules::oidc::{self, OidcConfig};
 use crate::routes::Route;
 use crate::stores::auth::{refresh_auth, use_auth, AuthState};
 use crate::stores::toast::use_toast;
@@ -54,91 +61,80 @@ fn Authenticated(me: MeResponse) -> Element {
         .map(|m| m.org.name.clone())
         .unwrap_or_else(|| "Personal".to_string());
 
+    let mut apps: Signal<Option<Result<Vec<AppView>, String>>> = use_signal(|| None);
+
+    use_future(move || async move {
+        let r = apps::list_apps().await.map_err(|e| e.user_message());
+        apps.set(Some(r));
+    });
+
+    let toast = use_toast();
+    let launch = use_callback(move |app: AppView| {
+        let cfg = OidcConfig::from_env();
+        match oidc::start_login_for(&cfg, &app.client_id, &app.redirect_uri) {
+            Ok(()) => {}
+            Err(e) => toast.error(format!("Could not launch app: {e}")),
+        }
+    });
+
     rsx! {
         div { class: "min-h-screen flex flex-col bg-bunyip-reed-50 dark:bg-bunyip-reed-900",
             DashboardHeader { user_name: me.user.name.clone(), org_name: org_name.clone() }
 
             main { class: "flex-1 px-6 py-10",
-                div { class: "max-w-6xl mx-auto",
-                    div { class: "rounded-2xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-gradient-to-br from-white via-bunyip-reed-50 to-bunyip-reed-100 dark:from-bunyip-reed-800 dark:via-bunyip-reed-800 dark:to-bunyip-reed-700 p-8 md:p-10 shadow-sm",
-                        div { class: "flex flex-col md:flex-row gap-6 md:items-center md:justify-between",
-                            div {
-                                p { class: "text-sm uppercase tracking-wide text-bunyip-reed-600 dark:text-bunyip-reed-300 font-semibold",
-                                    "Welcome back, {me.user.name}"
-                                }
-                                h2 { class: "mt-2 text-3xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50",
-                                    "Bunyip handles the business. Mokosh does the work."
-                                }
-                                p { class: "mt-3 text-bunyip-reed-700 dark:text-bunyip-reed-200 max-w-2xl",
-                                    "Account, billing, members, and identity live here. Tickets, calendar, and contacts live in Mokosh."
-                                }
-                            }
-                            div { class: "flex flex-wrap gap-3",
-                                a {
-                                    class: "px-5 py-2.5 rounded-lg bg-bunyip-reed-700 text-white font-medium shadow-sm hover:bg-bunyip-reed-800 transition-colors whitespace-nowrap",
-                                    href: "https://msp.a8n.systems",
-                                    "Open Mokosh →"
-                                }
-                                {
-                                    let invite_target: Option<String> = primary_org.as_ref().map(|m| m.org.slug.clone());
-                                    rsx! {
-                                        if let Some(slug) = invite_target {
-                                            Link {
-                                                to: Route::OrgMembersPage { slug: slug.clone() },
-                                                class: "px-5 py-2.5 rounded-lg border border-bunyip-reed-300 dark:border-bunyip-reed-600 text-bunyip-reed-800 dark:text-bunyip-reed-100 hover:bg-bunyip-reed-100 dark:hover:bg-bunyip-reed-700 transition-colors",
-                                                "Invite a teammate"
-                                            }
-                                        } else {
-                                            Link {
-                                                to: Route::OrgListPage {},
-                                                class: "px-5 py-2.5 rounded-lg border border-bunyip-reed-300 dark:border-bunyip-reed-600 text-bunyip-reed-800 dark:text-bunyip-reed-100 hover:bg-bunyip-reed-100 dark:hover:bg-bunyip-reed-700 transition-colors",
-                                                "Manage orgs"
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                div { class: "max-w-6xl mx-auto space-y-8",
+                    div {
+                        p { class: "text-sm uppercase tracking-wide text-bunyip-reed-600 dark:text-bunyip-reed-300 font-semibold",
+                            "Welcome back, {me.user.name}"
+                        }
+                        h1 { class: "mt-1 text-3xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50",
+                            "Your apps"
+                        }
+                        p { class: "mt-2 text-bunyip-reed-700 dark:text-bunyip-reed-200 max-w-2xl",
+                            "Pick a tool to sign in to. Account, billing, and members live here in Bunyip; everything else lives in the launched app."
                         }
                     }
 
-                    div { class: "mt-6 grid md:grid-cols-3 gap-4",
-                        StatCard {
-                            label: "Email",
-                            value: me.user.email.clone(),
-                            sub: if me.user.email_verified_at.is_some() { "Verified".to_string() } else { "Pending verification".to_string() },
-                            accent: "reed",
-                        }
-                        StatCard {
-                            label: "Organizations",
-                            value: me.memberships.len().to_string(),
-                            sub: org_name.clone(),
-                            accent: "water",
-                        }
-                        StatCard {
-                            label: "MFA",
-                            value: if me.user.mfa_enabled { "Enabled".to_string() } else { "Off".to_string() },
-                            sub: if me.user.mfa_enabled { "Sign-ins require a code".to_string() } else { "Add TOTP from Settings".to_string() },
-                            accent: "reed",
-                        }
-                    }
-
-                    if !me.memberships.is_empty() {
-                        div { class: "mt-8 p-6 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 shadow-sm",
-                            h3 { class: "font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50", "Your organizations" }
-                            ul { class: "mt-4 divide-y divide-bunyip-reed-50 dark:divide-bunyip-reed-700",
-                                for m in me.memberships.iter() {
-                                    li { class: "py-3 flex items-center justify-between",
-                                        div {
-                                            p { class: "font-medium text-bunyip-reed-900 dark:text-bunyip-reed-50", "{m.org.name}" }
-                                            p { class: "text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300", "{m.org.slug}" }
-                                        }
-                                        span { class: "px-2 py-0.5 rounded-full bg-bunyip-reed-50 dark:bg-bunyip-reed-900 border border-bunyip-reed-100 dark:border-bunyip-reed-700 text-xs uppercase tracking-wide text-bunyip-reed-700 dark:text-bunyip-reed-200",
-                                            "{role_label(&m.role)}"
-                                        }
+                    match &*apps.read() {
+                        None => rsx! {
+                            p { class: "text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300",
+                                "Loading your apps..."
+                            }
+                        },
+                        Some(Err(e)) => rsx! {
+                            div { class: "rounded-md bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-4",
+                                p { class: "text-sm text-red-700 dark:text-red-300",
+                                    "Could not load apps: {e}"
+                                }
+                            }
+                        },
+                        Some(Ok(list)) if list.is_empty() => rsx! {
+                            div { class: "rounded-xl border border-dashed border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 p-8 text-center",
+                                p { class: "text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300",
+                                    "You do not have any apps yet. Ask an administrator to invite you."
+                                }
+                            }
+                        },
+                        Some(Ok(list)) => {
+                            let (first_party, third_party): (Vec<_>, Vec<_>) =
+                                list.iter().cloned().partition(|a| a.is_first_party);
+                            rsx! {
+                                if !first_party.is_empty() {
+                                    AppGroup {
+                                        title: "Your apps",
+                                        apps: first_party,
+                                        on_launch: move |a: AppView| launch.call(a),
+                                    }
+                                }
+                                if !third_party.is_empty() {
+                                    AppGroup {
+                                        title: "Connected third-party apps",
+                                        apps: third_party,
+                                        on_launch: move |a: AppView| launch.call(a),
                                     }
                                 }
                             }
-                        }
+                        },
                     }
                 }
             }
@@ -146,12 +142,85 @@ fn Authenticated(me: MeResponse) -> Element {
     }
 }
 
-fn role_label(role: &crate::api::types::MembershipRole) -> &'static str {
-    use crate::api::types::MembershipRole::*;
-    match role {
-        Owner => "Owner",
-        Admin => "Admin",
-        Member => "Member",
+#[derive(Props, Clone, PartialEq)]
+struct AppGroupProps {
+    title: &'static str,
+    apps: Vec<AppView>,
+    on_launch: EventHandler<AppView>,
+}
+
+#[component]
+fn AppGroup(props: AppGroupProps) -> Element {
+    rsx! {
+        section {
+            h2 { class: "text-lg font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50",
+                "{props.title}"
+            }
+            div { class: "mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
+                for app in props.apps.iter().cloned() {
+                    AppTile {
+                        key: "{app.client_id}",
+                        app: app.clone(),
+                        on_launch: move |_| props.on_launch.call(app.clone()),
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Props, Clone, PartialEq)]
+struct AppTileProps {
+    app: AppView,
+    on_launch: EventHandler<()>,
+}
+
+#[component]
+fn AppTile(props: AppTileProps) -> Element {
+    let a = &props.app;
+    let initial = a
+        .name
+        .chars()
+        .next()
+        .map(|c| c.to_string().to_uppercase())
+        .unwrap_or_default();
+
+    rsx! {
+        button {
+            r#type: "button",
+            class: "group text-left p-5 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 hover:border-bunyip-reed-300 dark:hover:border-bunyip-reed-500 hover:shadow-md transition-all",
+            onclick: move |_| props.on_launch.call(()),
+            div { class: "flex items-start gap-4",
+                div { class: "shrink-0 w-12 h-12 rounded-lg bg-bunyip-reed-100 dark:bg-bunyip-reed-700 flex items-center justify-center overflow-hidden",
+                    if let Some(url) = a.icon_url.as_deref().filter(|s| !s.is_empty()) {
+                        img {
+                            src: "{url}",
+                            alt: "{a.name}",
+                            class: "w-12 h-12 object-cover",
+                        }
+                    } else {
+                        span { class: "text-lg font-semibold text-bunyip-reed-700 dark:text-bunyip-reed-200",
+                            "{initial}"
+                        }
+                    }
+                }
+                div { class: "min-w-0 flex-1",
+                    div { class: "flex items-center gap-2",
+                        h3 { class: "text-base font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50 group-hover:text-bunyip-reed-700 dark:group-hover:text-white truncate",
+                            "{a.name}"
+                        }
+                    }
+                    if let Some(d) = a.description.as_deref().filter(|s| !s.is_empty()) {
+                        p { class: "mt-1 text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300 line-clamp-2",
+                            "{d}"
+                        }
+                    }
+                    p { class: "mt-2 text-xs text-bunyip-reed-500 dark:text-bunyip-reed-400 group-hover:text-bunyip-reed-700 dark:group-hover:text-bunyip-reed-200",
+                        "Launch →"
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -185,6 +254,11 @@ fn DashboardHeader(user_name: String, org_name: String) -> Element {
                     }
                 }
                 nav { class: "flex items-center gap-2 text-sm",
+                    Link {
+                        to: Route::OrgListPage {},
+                        class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:bg-bunyip-reed-50 dark:hover:bg-bunyip-reed-900",
+                        "Orgs"
+                    }
                     span { class: "text-bunyip-reed-700 dark:text-bunyip-reed-200", "{user_name}" }
                     button {
                         class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:text-bunyip-reed-900 hover:bg-bunyip-reed-50 dark:hover:text-white dark:hover:bg-bunyip-reed-900 transition-colors",
@@ -193,26 +267,6 @@ fn DashboardHeader(user_name: String, org_name: String) -> Element {
                     }
                     ThemeToggle {}
                 }
-            }
-        }
-    }
-}
-
-#[component]
-fn StatCard(label: &'static str, value: String, sub: String, accent: &'static str) -> Element {
-    let bar = match accent {
-        "water" => "bg-bunyip-water-500",
-        _ => "bg-bunyip-reed-600",
-    };
-    rsx! {
-        div { class: "relative p-5 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 shadow-sm overflow-hidden",
-            span { class: "absolute left-0 top-0 bottom-0 w-1 {bar}" }
-            div { class: "pl-2",
-                div { class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "{label}" }
-                div { class: "mt-1 text-2xl font-bold text-bunyip-reed-900 dark:text-bunyip-reed-50 tracking-tight",
-                    "{value}"
-                }
-                div { class: "mt-1 text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300", "{sub}" }
             }
         }
     }

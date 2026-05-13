@@ -85,6 +85,50 @@ pub fn start_login(cfg: &OidcConfig, return_to: impl Into<String>) -> Result<(),
         .map_err(|_| FlowError::Redirect("set_href failed".into()))
 }
 
+/// Begin an OIDC code+PKCE flow against the configured issuer but with
+/// a different `client_id` + `redirect_uri` than the hub's own. Powers
+/// the app launcher: each tile is a (client_id, redirect_uri) pair, and
+/// clicking it kicks off a fresh flow that lands the user on the target
+/// app. No `PendingFlow` is stored locally; the target app owns the
+/// callback half of the dance.
+pub fn start_login_for(
+    cfg: &OidcConfig,
+    client_id: &str,
+    redirect_uri: &str,
+) -> Result<(), FlowError> {
+    let verifier = generate_code_verifier();
+    let challenge = s256_challenge(&verifier);
+    let state = random_opaque();
+    let nonce = random_opaque();
+
+    let issuer = cfg.issuer_trimmed();
+    let mut url = format!("{issuer}/oauth2/authorize");
+    url.push('?');
+    let q: [(&str, &str); 8] = [
+        ("response_type", "code"),
+        ("client_id", client_id),
+        ("redirect_uri", redirect_uri),
+        ("scope", &cfg.scopes),
+        ("state", &state),
+        ("nonce", &nonce),
+        ("code_challenge", &challenge),
+        ("code_challenge_method", "S256"),
+    ];
+    for (i, (k, v)) in q.iter().enumerate() {
+        if i > 0 {
+            url.push('&');
+        }
+        url.push_str(k);
+        url.push('=');
+        url.push_str(&urlencode(v));
+    }
+
+    let win = web_sys::window().ok_or_else(|| FlowError::Redirect("no window".into()))?;
+    win.location()
+        .set_href(&url)
+        .map_err(|_| FlowError::Redirect("set_href failed".into()))
+}
+
 /// Snapshot of `?code=...&state=...` taken before the Dioxus router
 /// mounts. Dioxus 0.7 calls `history.replaceState()` during router
 /// initialisation to normalise the URL to its declared route shape (no
