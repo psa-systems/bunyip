@@ -23,7 +23,7 @@ pub fn DashboardPage() -> Element {
 #[component]
 fn Splash(message: &'static str) -> Element {
     rsx! {
-        div { class: "min-h-screen flex items-center justify-center text-sm text-bunyip-reed-700",
+        div { class: "min-h-screen flex items-center justify-center text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
             "{message}"
         }
     }
@@ -34,8 +34,8 @@ fn SignedOutNotice() -> Element {
     rsx! {
         div { class: "min-h-screen flex items-center justify-center px-6",
             div { class: "max-w-md text-center",
-                h1 { class: "text-2xl font-bold text-bunyip-reed-900", "You're signed out" }
-                p { class: "mt-2 text-bunyip-reed-700", "Sign in to see your dashboard." }
+                h1 { class: "text-2xl font-bold text-bunyip-reed-900 dark:text-bunyip-reed-50", "You're signed out" }
+                p { class: "mt-2 text-bunyip-reed-700 dark:text-bunyip-reed-200", "Sign in to see your dashboard." }
                 Link {
                     to: Route::LoginPage {},
                     class: "mt-6 inline-block px-4 py-2 rounded bg-bunyip-reed-700 text-white hover:bg-bunyip-reed-800",

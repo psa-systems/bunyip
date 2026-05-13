@@ -20,10 +20,10 @@ pub fn LandingPage() -> Element {
                         h1 { class: "mt-6 text-4xl md:text-6xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50 leading-[1.05]",
                             "The SaaS layer for your "
                             span { class: "relative inline-block",
-                                span { class: "relative z-10 text-bunyip-water-500",
+                                span { class: "relative z-10 text-bunyip-water-700 dark:text-bunyip-water-100",
                                     "PSA"
                                 }
-                                span { class: "absolute left-0 right-0 bottom-1 h-3 bg-bunyip-water-100 -z-0" }
+                                span { class: "absolute left-0 right-0 bottom-1 h-3 bg-bunyip-water-100 dark:bg-bunyip-water-700/60 -z-0" }
                             }
                             "."
                         }
@@ -38,7 +38,7 @@ pub fn LandingPage() -> Element {
                             }
                             Link {
                                 to: Route::PricingPage {},
-                                class: "px-6 py-3 rounded-lg border border-bunyip-reed-300 text-bunyip-reed-800 font-medium hover:bg-bunyip-reed-100 transition-colors",
+                                class: "px-6 py-3 rounded-lg border border-bunyip-reed-300 dark:border-bunyip-reed-600 text-bunyip-reed-800 dark:text-bunyip-reed-100 font-medium hover:bg-bunyip-reed-100 transition-colors",
                                 "See pricing"
                             }
                         }
@@ -104,7 +104,7 @@ pub fn LandingPage() -> Element {
 
             // CTA strip
             section { class: "px-6 py-16",
-                div { class: "max-w-4xl mx-auto rounded-2xl border border-bunyip-reed-200 bg-gradient-to-br from-bunyip-reed-700 to-bunyip-water-700 p-10 md:p-12 text-white shadow-lg",
+                div { class: "max-w-4xl mx-auto rounded-2xl border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-gradient-to-br from-bunyip-reed-700 to-bunyip-water-700 p-10 md:p-12 text-white shadow-lg",
                     div { class: "flex flex-col md:flex-row gap-6 md:items-center md:justify-between",
                         div {
                             h3 { class: "text-2xl md:text-3xl font-bold tracking-tight",
@@ -116,7 +116,7 @@ pub fn LandingPage() -> Element {
                         }
                         Link {
                             to: Route::SignupPage {},
-                            class: "px-6 py-3 rounded-lg bg-white text-bunyip-reed-800 font-medium shadow-sm hover:shadow-md transition-shadow whitespace-nowrap",
+                            class: "px-6 py-3 rounded-lg bg-white dark:bg-bunyip-reed-800 text-bunyip-reed-800 dark:text-bunyip-reed-100 font-medium shadow-sm hover:shadow-md transition-shadow whitespace-nowrap",
                             "Create your account →"
                         }
                     }
@@ -150,7 +150,7 @@ fn Bullet(text: &'static str) -> Element {
     rsx! {
         div { class: "flex items-center gap-2",
             svg {
-                class: "w-4 h-4 text-bunyip-reed-600",
+                class: "w-4 h-4 text-bunyip-reed-600 dark:text-bunyip-reed-300",
                 view_box: "0 0 20 20",
                 fill: "currentColor",
                 path {
@@ -193,7 +193,7 @@ fn Footer() -> Element {
 fn BunyipMark() -> Element {
     rsx! {
         svg {
-            class: "w-7 h-7 text-bunyip-reed-700",
+            class: "w-7 h-7 text-bunyip-reed-700 dark:text-bunyip-reed-200",
             view_box: "0 0 32 32",
             fill: "none",
             // Stylized reed-and-eyes mark.
@@ -248,7 +248,7 @@ fn BunyipMascot() -> Element {
                 ellipse { cx: "296", cy: "160", rx: "5", ry: "14", fill: "#283e27" }
                 ellipse { cx: "348", cy: "200", rx: "5", ry: "12", fill: "#283e27" }
             }
-            p { class: "absolute -bottom-2 right-2 px-3 py-1 rounded-full bg-white border border-bunyip-reed-100 text-xs italic text-bunyip-reed-700 shadow-sm",
+            p { class: "absolute -bottom-2 right-2 px-3 py-1 rounded-full bg-white dark:bg-bunyip-reed-800 border border-bunyip-reed-100 dark:border-bunyip-reed-700 text-xs italic text-bunyip-reed-700 dark:text-bunyip-reed-200 shadow-sm",
                 "Surfaces what matters."
             }
         }

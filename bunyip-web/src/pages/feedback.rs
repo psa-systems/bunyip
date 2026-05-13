@@ -14,10 +14,26 @@ use crate::stores::auth::{use_auth, AuthState};
 use crate::stores::toast::use_toast;
 
 const TAGS: &[(&str, &str, &str)] = &[
-    ("Bug", "border-red-300 text-red-700", "bg-red-50 border-red-500 text-red-800"),
-    ("Feature", "border-bunyip-water-300 text-bunyip-water-700", "bg-bunyip-water-100 border-bunyip-water-500 text-bunyip-water-700"),
-    ("Flow", "border-amber-300 text-amber-700", "bg-amber-50 border-amber-500 text-amber-800"),
-    ("Idea", "border-bunyip-reed-300 text-bunyip-reed-700 dark:text-bunyip-reed-200", "bg-bunyip-reed-100 dark:bg-bunyip-reed-800 border-bunyip-reed-500 text-bunyip-reed-800 dark:text-bunyip-reed-100"),
+    (
+        "Bug",
+        "border-red-300 text-red-700 dark:border-red-500 dark:text-red-300",
+        "bg-red-50 border-red-500 text-red-800 dark:bg-red-900/40 dark:border-red-400 dark:text-red-100",
+    ),
+    (
+        "Feature",
+        "border-bunyip-water-300 text-bunyip-water-700 dark:border-bunyip-water-500 dark:text-bunyip-water-300",
+        "bg-bunyip-water-100 border-bunyip-water-500 text-bunyip-water-700 dark:bg-bunyip-water-900/50 dark:border-bunyip-water-400 dark:text-bunyip-water-100",
+    ),
+    (
+        "Flow",
+        "border-amber-300 text-amber-700 dark:border-amber-400 dark:text-amber-300",
+        "bg-amber-50 border-amber-500 text-amber-800 dark:bg-amber-900/40 dark:border-amber-400 dark:text-amber-100",
+    ),
+    (
+        "Idea",
+        "border-bunyip-reed-300 text-bunyip-reed-700 dark:border-bunyip-reed-400 dark:text-bunyip-reed-200",
+        "bg-bunyip-reed-100 dark:bg-bunyip-reed-700 border-bunyip-reed-500 dark:border-bunyip-reed-300 text-bunyip-reed-800 dark:text-bunyip-reed-50",
+    ),
 ];
 
 #[component]
@@ -101,9 +117,10 @@ pub fn FeedbackPage() -> Element {
             PublicNav {}
 
             section { class: "relative overflow-hidden flex-1 px-6 py-16",
-                // Decorative gradient blobs.
-                div { class: "pointer-events-none absolute -top-32 -right-24 w-96 h-96 rounded-full bg-bunyip-water-100 blur-3xl opacity-60" }
-                div { class: "pointer-events-none absolute -bottom-32 -left-24 w-96 h-96 rounded-full bg-bunyip-reed-100 dark:bg-bunyip-reed-800 blur-3xl opacity-70" }
+                // Decorative gradient blobs. Subtle in light mode; pulled down to a
+                // soft tint in dark mode so they don't read as a bright spotlight.
+                div { class: "pointer-events-none absolute -top-32 -right-24 w-96 h-96 rounded-full bg-bunyip-water-100 dark:bg-bunyip-water-700/30 blur-3xl opacity-60 dark:opacity-40" }
+                div { class: "pointer-events-none absolute -bottom-32 -left-24 w-96 h-96 rounded-full bg-bunyip-reed-100 dark:bg-bunyip-reed-700/30 blur-3xl opacity-70 dark:opacity-40" }
 
                 div { class: "relative max-w-3xl mx-auto",
                     div { class: "text-center",

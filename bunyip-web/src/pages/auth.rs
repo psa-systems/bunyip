@@ -194,9 +194,9 @@ pub fn MagicLinkPage() -> Element {
             title: "Sign in with magic link",
             subtitle: "We'll email you a one-time link.",
             if sent() {
-                div { class: "text-sm text-bunyip-reed-800",
+                div { class: "text-sm text-bunyip-reed-800 dark:text-bunyip-reed-100",
                     p { "Check the dev container logs:" }
-                    pre { class: "mt-2 p-3 rounded bg-bunyip-reed-50 text-xs overflow-x-auto",
+                    pre { class: "mt-2 p-3 rounded bg-bunyip-reed-50 dark:bg-bunyip-reed-900 text-xs overflow-x-auto",
                         "docker logs dev-bunyip-api-$USER | grep magic-link"
                     }
                     p { class: "mt-3",
@@ -255,14 +255,14 @@ pub fn VerifyEmailPage() -> Element {
         AuthShell {
             title: "Verify your email",
             subtitle: "We're confirming the link you clicked.",
-            div { class: "text-sm text-bunyip-reed-800",
+            div { class: "text-sm text-bunyip-reed-800 dark:text-bunyip-reed-100",
                 match state() {
                     VerifyState::Idle | VerifyState::Working => rsx! { p { "Verifying…" } },
                     VerifyState::Verified => rsx! {
                         p { "Your email is verified. " }
                         Link { to: Route::DashboardPage {}, class: "underline mt-2 inline-block", "Continue to dashboard" }
                     },
-                    VerifyState::NoToken => rsx! { p { "Missing or invalid verification link." } },
+                    VerifyState::NoToken => rsx! { p { class: "text-bunyip-reed-900 dark:text-bunyip-reed-100", "Missing or invalid verification link." } },
                     VerifyState::Failed(msg) => rsx! { p { class: "text-red-700", "{msg}" } },
                 }
             }
@@ -310,7 +310,7 @@ pub fn ForgotPasswordPage() -> Element {
             title: "Reset your password",
             subtitle: "Tell us your email and we'll send a reset link.",
             if sent() {
-                p { class: "text-sm text-bunyip-reed-800",
+                p { class: "text-sm text-bunyip-reed-800 dark:text-bunyip-reed-100",
                     "Check the dev logs for the reset link if you used a seeded email."
                 }
             } else {
@@ -333,7 +333,7 @@ pub fn ResetPasswordPage() -> Element {
                 AuthInput { name: "password", label: "New password", input_type: "password", placeholder: "", value: String::new(), oninput: move |_| {} }
                 AuthInput { name: "confirm", label: "Confirm password", input_type: "password", placeholder: "", value: String::new(), oninput: move |_| {} }
                 SubmitButton { busy: false, label: "Save password" }
-                p { class: "text-xs text-bunyip-reed-600",
+                p { class: "text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300",
                     "(Phase 3c wires this up to the mock backend.)"
                 }
             }
