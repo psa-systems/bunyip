@@ -11,6 +11,7 @@
 //! credentials. The Bearer-token-on-fetch model is what crosses
 //! origins.
 
+pub mod admin;
 pub mod auth;
 pub mod billing;
 pub mod feedback;

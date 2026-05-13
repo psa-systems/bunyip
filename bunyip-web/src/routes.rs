@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 use crate::pages::{
     admin::AdminFeedbackPage,
+    audit_logs::AuditLogsPage,
     auth::{
         ForgotPasswordPage, LoginPage, LoginTotpPage, MagicLinkPage, ResetPasswordPage,
         SignupCompletePage, SignupPage, VerifyEmailPage,
@@ -12,6 +13,8 @@ use crate::pages::{
     errors::NotFoundPage,
     feedback::FeedbackPage,
     invitations::AcceptInvitationPage,
+    invite_create::InviteCreatePage,
+    invite_list::InviteListPage,
     landing::LandingPage,
     orgs::{OrgListPage, OrgMembersPage},
     placeholder::PlaceholderPage,
@@ -19,6 +22,7 @@ use crate::pages::{
     profile::ProfilePage,
     security::SecurityPage,
     sessions::SessionsPage,
+    user_management::UserManagementPage,
 };
 
 #[derive(Routable, Clone, Debug, PartialEq)]
@@ -89,6 +93,18 @@ pub enum Route {
 
     #[route("/admin/feedback")]
     AdminFeedbackPage {},
+
+    #[route("/admin/users")]
+    UserManagementPage {},
+
+    #[route("/admin/users/invite")]
+    InviteCreatePage {},
+
+    #[route("/admin/users/invites")]
+    InviteListPage {},
+
+    #[route("/admin/audit-logs")]
+    AuditLogsPage {},
 
     // Catch-all placeholder for the many settings / admin / billing / etc. routes
     // that Phase 5-6 will wire up.

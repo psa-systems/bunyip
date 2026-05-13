@@ -8,7 +8,7 @@
 
 use dioxus::prelude::*;
 
-use crate::api::types::MeResponse;
+use crate::api::types::{MeResponse, UserRole};
 use crate::stores::tokens;
 
 #[derive(Clone, Copy)]
@@ -78,4 +78,26 @@ pub async fn refresh_auth(mut sig: Signal<AuthState>) {
 pub fn sign_out(mut sig: Signal<AuthState>) {
     tokens::clear_tokens();
     sig.set(AuthState::SignedOut);
+}
+
+/// Redirect away from the current page if the signed-in user doesn't
+/// hold `required_role`. Used by admin pages to bounce non-admins to
+/// the dashboard. While auth is still `Loading` we do nothing (so the
+/// page renders its own loading state); once we resolve to SignedOut or
+/// a non-matching role, navigate away.
+pub fn use_require_role(required: &'static str) {
+    let auth = use_auth();
+    let nav = navigator();
+    use_effect(move || match &*auth.read() {
+        AuthState::Loading => {}
+        AuthState::SignedOut => {
+            nav.replace(crate::routes::Route::LoginPage {});
+        }
+        AuthState::SignedIn(me) => {
+            let required_role = UserRole::from_wire(required);
+            if me.user.role != required_role {
+                nav.replace(crate::routes::Route::DashboardPage {});
+            }
+        }
+    });
 }
