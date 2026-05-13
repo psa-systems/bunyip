@@ -1,9 +1,15 @@
-//! Auth state signal. Provider lives at the App root; reading components
-//! call `use_auth()` to subscribe to the current user / loading state.
+//! Auth state signal.
+//!
+//! Boots once via `use_auth_provider`: reads the persisted token bundle
+//! from `localStorage` (key `bunyip.tokens`), hydrates the in-memory
+//! access_token, then fetches `/v1/auth/me` to materialize the SignedIn
+//! state. If no tokens or the /me fetch 401s, the state collapses to
+//! SignedOut.
 
 use dioxus::prelude::*;
 
 use crate::api::types::MeResponse;
+use crate::stores::tokens;
 
 #[derive(Clone, Copy)]
 pub struct AuthSignal(pub Signal<AuthState>);
@@ -28,14 +34,22 @@ impl AuthState {
     }
 }
 
-/// Mount this once at the top of the tree so all descendants can read auth.
+/// Mount this once at the top of the tree so all descendants can read
+/// auth. Hydrates the in-memory access_token from localStorage on
+/// boot, then fetches /me.
 pub fn use_auth_provider() -> AuthSignal {
     let signal = use_context_provider(|| AuthSignal(Signal::new(AuthState::Loading)));
     let mut sig = signal.0;
     use_future(move || async move {
+        // Hydrate the in-memory access_token from localStorage so the
+        // first /me fetch carries a Bearer header.
+        let _ = tokens::load_tokens();
         match crate::api::me::fetch_me().await {
             Ok(me) => sig.set(AuthState::SignedIn(me)),
-            Err(_) => sig.set(AuthState::SignedOut),
+            Err(_) => {
+                tokens::clear_tokens();
+                sig.set(AuthState::SignedOut);
+            }
         }
     });
     signal
@@ -45,11 +59,23 @@ pub fn use_auth() -> Signal<AuthState> {
     use_context::<AuthSignal>().0
 }
 
-/// Replace the auth signal with a fresh `/v1/me` fetch.
+/// Replace the auth signal with a fresh `/v1/auth/me` fetch.
 pub async fn refresh_auth(mut sig: Signal<AuthState>) {
     sig.set(AuthState::Loading);
     match crate::api::me::fetch_me().await {
         Ok(me) => sig.set(AuthState::SignedIn(me)),
-        Err(_) => sig.set(AuthState::SignedOut),
+        Err(_) => {
+            tokens::clear_tokens();
+            sig.set(AuthState::SignedOut);
+        }
     }
+}
+
+/// Clear the persisted token bundle + in-memory access_token, drop the
+/// AuthContext to SignedOut. Phase 03 wires the actual server-side
+/// `/v1/auth/logout` POST; this helper is what the SPA components call
+/// after a successful logout response.
+pub fn sign_out(mut sig: Signal<AuthState>) {
+    tokens::clear_tokens();
+    sig.set(AuthState::SignedOut);
 }

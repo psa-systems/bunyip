@@ -23,20 +23,9 @@ index_html = "index.html"
 
 [web.resource.dev]
 
-# Reverse-proxy /v1/* and /oidc/* and /healthz to the bunyip-api container so
-# the SPA and the API share a single browser-visible origin in dev. The
-# in-network DNS name `api` is the compose service name.
-[[web.proxy]]
-backend = "http://api:8080/v1/"
-
-[[web.proxy]]
-backend = "http://api:8080/oidc/"
-
-[[web.proxy]]
-backend = "http://api:8080/.well-known/"
-
-[[web.proxy]]
-backend = "http://api:8080/healthz"
+# No dev proxy: the SPA hits mokosh-server directly at the absolute URL
+# configured via BUNYIP_OIDC_ISSUER at build time. Bearer-token-on-fetch
+# crosses origins; mokosh-server's CORS allow_origin(Any) accepts it.
 
 [build]
 target_dir = "target"

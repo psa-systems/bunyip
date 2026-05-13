@@ -45,6 +45,41 @@ dev *args: ensure-env
     mv .env.new .env
     docker compose --file {{ compose_file }} up {{ args }}
 
+# Start the SSO-mode dev stack: bunyip-web behind Traefik on
+# https://${USER}-bunyip.a8n.run. Joins the shared
+# `network-traefik-public` network. The OIDC env vars MUST be set in
+# .env (run `just register-bunyip-client` in mokosh-server first to
+# get the client_id).
+[doc("Start the dev stack via Traefik at https://${USER}-bunyip.a8n.run")]
+dev-sso *args: ensure-env
+    #!/usr/bin/env nu
+    let user_name = (^whoami | str trim)
+    let uid = (^id --user | str trim)
+    let gid = (^id --group | str trim)
+    let updated = (
+        open .env --raw
+        | lines
+        | where not ($it | str starts-with 'USER=')
+        | where not ($it | str starts-with 'HOST_UID=')
+        | where not ($it | str starts-with 'HOST_GID=')
+        | append $"USER=($user_name)"
+        | append $"HOST_UID=($uid)"
+        | append $"HOST_GID=($gid)"
+        | str join "\n"
+    )
+    if ('.env.new' | path exists) { rm .env.new }
+    $"($updated)\n" | save .env.new
+    mv .env.new .env
+    docker compose --file {{ compose_file }} --file compose.dev-sso.yml up {{ args }}
+    print ""
+    print $"Bunyip hub:"
+    print $"  https://($user_name)-bunyip.a8n.run"
+
+# Stop the SSO-mode dev stack.
+[doc("Stop the SSO-mode dev stack")]
+dev-sso-down: ensure-env
+    docker compose --file {{ compose_file }} --file compose.dev-sso.yml down
+
 # Stop the dev stack. Volumes are preserved.
 [doc("Stop the dev stack (volumes preserved)")]
 dev-down: ensure-env

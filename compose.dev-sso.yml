@@ -1,0 +1,40 @@
+# Layered ON TOP of compose.dev.yml:
+#   docker compose -f compose.dev.yml -f compose.dev-sso.yml up --build --detach
+#
+# `just dev-sso` is the supported entry point (added alongside this file).
+#
+# What this overlay changes:
+#   - bunyip-web stops binding to the host LAN IP (Traefik does the
+#     publishing).
+#   - bunyip-web gets Traefik labels for ${USER}-bunyip.a8n.run.
+#   - The shared `network-traefik-public` network is joined.
+#   - BUNYIP_OIDC_* env vars are surfaced to the build environment so
+#     `option_env!` picks them up at `dx build` time.
+#
+# bunyip-api is internal-only in dev-sso mode (Traefik does not
+# route to it). The SPA hits mokosh-server's API directly, not
+# bunyip-api, so this is intentional.
+
+services:
+  web:
+    ports: !reset []
+    environment:
+      BUNYIP_OIDC_ISSUER: ${BUNYIP_OIDC_ISSUER:?BUNYIP_OIDC_ISSUER missing - copy .env.example to .env and fill in}
+      BUNYIP_OIDC_CLIENT_ID: ${BUNYIP_OIDC_CLIENT_ID:?BUNYIP_OIDC_CLIENT_ID missing - run `just register-bunyip-client` in mokosh-server and paste the UUID into .env}
+      BUNYIP_OIDC_REDIRECT_URI: ${BUNYIP_OIDC_REDIRECT_URI:?BUNYIP_OIDC_REDIRECT_URI missing - copy .env.example to .env}
+      BUNYIP_OIDC_SCOPES: ${BUNYIP_OIDC_SCOPES:-openid email offline_access}
+    networks:
+      - private
+      - traefik-public
+    labels:
+      traefik.enable: true
+      traefik.docker.network: network-traefik-public
+      traefik.http.routers.bunyip-${USER}.rule: Host(`${USER}-bunyip.a8n.run`)
+      traefik.http.routers.bunyip-${USER}.entrypoints: web-secure
+      traefik.http.routers.bunyip-${USER}.tls.certresolver: cert-cloudflare
+      traefik.http.services.bunyip-${USER}.loadbalancer.server.port: "4400"
+
+networks:
+  traefik-public:
+    name: network-traefik-public
+    external: true
