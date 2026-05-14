@@ -115,6 +115,18 @@ fn Authenticated(me: MeResponse) -> Element {
                 return;
             }
         };
+        // Audit the hand-off before navigating. Fire-and-forget: the
+        // row may not land on a flaky network (the browser navigates
+        // away as soon as set_href fires), but the loss is bounded to
+        // a single click. Doc 07 #9.
+        let client_id_for_audit = app.client_id.clone();
+        spawn(async move {
+            let _ = crate::api::post_authed_empty::<_>(
+                "/v1/auth/audit/launched-app",
+                &serde_json::json!({ "client_id": client_id_for_audit }),
+            )
+            .await;
+        });
         if let Some(win) = web_sys::window() {
             let _ = win.location().set_href(&entry_url);
         }
