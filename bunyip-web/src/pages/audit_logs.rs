@@ -4,6 +4,7 @@ use dioxus::prelude::*;
 
 use crate::api::admin::{self, AuditListBody, AUDIT_EVENT_KINDS};
 use crate::components::layout::AppShell;
+use crate::routes::Route;
 use crate::stores::auth::use_require_role;
 
 fn severity_class(s: &str) -> &'static str {
@@ -66,7 +67,10 @@ pub fn AuditLogsPage() -> Element {
     });
 
     rsx! {
-        AppShell { title: "Audit logs".to_string(),
+        AppShell {
+            title: "Audit logs".to_string(),
+            back_to: Some(Route::SettingsPage {}),
+            back_label: "Settings".to_string(),
             div { class: "max-w-6xl mx-auto px-6 space-y-6",
                 div {
                     h1 { class: "text-3xl font-bold text-bunyip-reed-900 dark:text-bunyip-reed-50",

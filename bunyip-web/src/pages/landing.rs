@@ -67,7 +67,7 @@ pub fn LandingPage() -> Element {
                             "Bunyip is the business shell that wraps Mokosh. We do the boring infrastructure so you can ship the PSA."
                         }
                     }
-                    div { class: "mt-12 grid md:grid-cols-3 gap-6",
+                    div { class: "mt-12 grid md:grid-cols-3 gap-6 auto-rows-fr",
                         FeatureCard {
                             icon: rsx! { IconKey {} },
                             title: "Single sign-on",
@@ -131,7 +131,7 @@ pub fn LandingPage() -> Element {
 #[component]
 fn FeatureCard(icon: Element, title: &'static str, body: &'static str) -> Element {
     rsx! {
-        div { class: "p-6 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-bunyip-reed-50 dark:bg-bunyip-reed-900 hover:border-bunyip-reed-300 dark:hover:border-bunyip-reed-500 hover:bg-white dark:hover:bg-bunyip-reed-800 transition-colors",
+        div { class: "h-full flex flex-col p-6 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-bunyip-reed-50 dark:bg-bunyip-reed-900 hover:border-bunyip-reed-300 dark:hover:border-bunyip-reed-500 hover:bg-white dark:hover:bg-bunyip-reed-800 transition-colors",
             div { class: "w-10 h-10 rounded-lg bg-white dark:bg-bunyip-reed-800 border border-bunyip-reed-200 dark:border-bunyip-reed-700 flex items-center justify-center text-bunyip-reed-700 dark:text-bunyip-reed-100",
                 {icon}
             }
@@ -223,21 +223,26 @@ fn BunyipMascot() -> Element {
                 class: "relative w-full h-full",
                 view_box: "0 0 400 400",
                 fill: "none",
+                // Composition shifted up ~30 units so the bunyip face sits
+                // near the geometric center of the 400x400 viewBox instead
+                // of crowding the bottom third. Reeds still anchor at the
+                // floor; water surface and face all moved together.
                 // Water ripples on top of the disc.
-                ellipse { cx: "200", cy: "270", rx: "120", ry: "8", fill: "#ffffff", opacity: "0.35" }
-                ellipse { cx: "200", cy: "300", rx: "150", ry: "6", fill: "#ffffff", opacity: "0.25" }
-                ellipse { cx: "200", cy: "320", rx: "100", ry: "5", fill: "#ffffff", opacity: "0.20" }
+                ellipse { cx: "200", cy: "240", rx: "120", ry: "8", fill: "#ffffff", opacity: "0.35" }
+                ellipse { cx: "200", cy: "270", rx: "150", ry: "6", fill: "#ffffff", opacity: "0.25" }
+                ellipse { cx: "200", cy: "290", rx: "100", ry: "5", fill: "#ffffff", opacity: "0.20" }
                 // Bunyip head silhouette (peeking out of the water).
-                ellipse { cx: "200", cy: "220", rx: "75", ry: "55", fill: "#1f311f" }
-                ellipse { cx: "200", cy: "260", rx: "85", ry: "20", fill: "#1f311f" }
+                ellipse { cx: "200", cy: "190", rx: "75", ry: "55", fill: "#1f311f" }
+                ellipse { cx: "200", cy: "230", rx: "85", ry: "20", fill: "#1f311f" }
                 // Friendly eyes.
-                circle { cx: "172", cy: "210", r: "16", fill: "#ffffff" }
-                circle { cx: "228", cy: "210", r: "16", fill: "#ffffff" }
-                circle { cx: "175", cy: "212", r: "8", fill: "#1f311f" }
-                circle { cx: "231", cy: "212", r: "8", fill: "#1f311f" }
-                circle { cx: "177", cy: "210", r: "2.5", fill: "#ffffff" }
-                circle { cx: "233", cy: "210", r: "2.5", fill: "#ffffff" }
-                // Reeds in the foreground.
+                circle { cx: "172", cy: "180", r: "16", fill: "#ffffff" }
+                circle { cx: "228", cy: "180", r: "16", fill: "#ffffff" }
+                circle { cx: "175", cy: "182", r: "8", fill: "#1f311f" }
+                circle { cx: "231", cy: "182", r: "8", fill: "#1f311f" }
+                circle { cx: "177", cy: "180", r: "2.5", fill: "#ffffff" }
+                circle { cx: "233", cy: "180", r: "2.5", fill: "#ffffff" }
+                // Reeds in the foreground. Anchored at y=400; the curve
+                // intermediate points moved up to match the new water line.
                 path { fill: "#3c6438", d: "M60 400 Q56 240 78 180 Q86 240 90 400 Z" }
                 path { fill: "#2f4e2e", d: "M100 400 Q96 200 120 140 Q128 220 130 400 Z" }
                 path { fill: "#2f4e2e", d: "M280 400 Q276 220 296 160 Q306 220 310 400 Z" }
@@ -248,7 +253,9 @@ fn BunyipMascot() -> Element {
                 ellipse { cx: "296", cy: "160", rx: "5", ry: "14", fill: "#283e27" }
                 ellipse { cx: "348", cy: "200", rx: "5", ry: "12", fill: "#283e27" }
             }
-            p { class: "absolute -bottom-2 right-2 px-3 py-1 rounded-full bg-white dark:bg-bunyip-reed-800 border border-bunyip-reed-100 dark:border-bunyip-reed-700 text-xs italic text-bunyip-reed-700 dark:text-bunyip-reed-200 shadow-sm",
+            // Centered horizontally on the disc, replaces the previous
+            // bottom-right anchor that made the composition look off-axis.
+            p { class: "absolute -bottom-2 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-white dark:bg-bunyip-reed-800 border border-bunyip-reed-100 dark:border-bunyip-reed-700 text-xs italic text-bunyip-reed-700 dark:text-bunyip-reed-200 shadow-sm whitespace-nowrap",
                 "Surfaces what matters."
             }
         }

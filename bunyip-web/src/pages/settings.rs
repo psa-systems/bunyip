@@ -133,7 +133,11 @@ fn HubSection(props: HubSectionProps) -> Element {
             h2 { class: "text-sm font-semibold uppercase tracking-wide text-bunyip-reed-600 dark:text-bunyip-reed-300",
                 "{props.title}"
             }
-            div { class: "mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
+            // auto-rows-fr makes every grid row sized identically to the
+            // tallest card across the whole grid. Combined with h-full on
+            // each card, all cards match the tallest card's height even
+            // when descriptions differ in length.
+            div { class: "mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 auto-rows-fr",
                 {props.children}
             }
         }
@@ -152,12 +156,17 @@ fn HubCard(props: HubCardProps) -> Element {
     rsx! {
         Link {
             to: props.to,
-            class: "block p-5 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 hover:border-bunyip-reed-300 dark:hover:border-bunyip-reed-500 hover:shadow-md transition-all",
+            class: "group h-full flex flex-col p-5 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 hover:border-bunyip-reed-300 dark:hover:border-bunyip-reed-500 hover:shadow-md transition-all",
             h3 { class: "text-base font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50",
                 "{props.title}"
             }
             p { class: "mt-1 text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300",
                 "{props.description}"
+            }
+            // Pinned to the bottom regardless of description length so the
+            // affordance lines up across cards in the same row.
+            span { class: "mt-auto pt-3 text-xs text-bunyip-reed-500 dark:text-bunyip-reed-400 group-hover:text-bunyip-reed-700 dark:group-hover:text-bunyip-reed-200",
+                "Open →"
             }
         }
     }

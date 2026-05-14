@@ -13,7 +13,10 @@ pub fn OrgListPage() -> Element {
     let orgs = use_resource(|| async { orgs::list_my_orgs().await });
 
     rsx! {
-        AppShell { title: "Organizations".to_string(),
+        AppShell {
+            title: "Organizations".to_string(),
+            back_to: Some(Route::SettingsPage {}),
+            back_label: "Settings".to_string(),
             div { class: "max-w-4xl mx-auto",
                 div { class: "flex items-center justify-between",
                     div {
@@ -22,7 +25,15 @@ pub fn OrgListPage() -> Element {
                             "Switch between orgs and manage members."
                         }
                     }
-                    button { class: "px-4 py-2 rounded-lg bg-bunyip-reed-700 text-white text-sm font-medium hover:bg-bunyip-reed-800",
+                    // TODO(orgs-api): wire to a create-org modal once
+                    // the backend supports it. Stub with disabled state
+                    // so users see it as a roadmap signal, not silent
+                    // breakage.
+                    button {
+                        r#type: "button",
+                        disabled: true,
+                        title: "Coming soon - org creation API not wired yet",
+                        class: "px-4 py-2 rounded-lg bg-bunyip-reed-700 text-white text-sm font-medium hover:bg-bunyip-reed-800 disabled:opacity-50 disabled:cursor-not-allowed",
                         "+ New org"
                     }
                 }
@@ -127,12 +138,12 @@ pub fn OrgMembersPage(slug: String) -> Element {
     };
 
     rsx! {
-        AppShell { title: format!("Members · {slug}"),
+        AppShell {
+            title: format!("Members · {slug}"),
+            back_to: Some(Route::OrgListPage {}),
+            back_label: "Organizations".to_string(),
             div { class: "max-w-4xl mx-auto",
-                Link { to: Route::OrgListPage {}, class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 underline",
-                    "← All organizations"
-                }
-                h1 { class: "mt-3 text-2xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50",
+                h1 { class: "text-2xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50",
                     "Members"
                 }
                 p { class: "mt-1 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",

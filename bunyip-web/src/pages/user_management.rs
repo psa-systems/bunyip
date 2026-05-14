@@ -128,7 +128,10 @@ pub fn UserManagementPage() -> Element {
     });
 
     rsx! {
-        AppShell { title: "User management".to_string(),
+        AppShell {
+            title: "User management".to_string(),
+            back_to: Some(Route::SettingsPage {}),
+            back_label: "Settings".to_string(),
             div { class: "max-w-6xl mx-auto px-6 space-y-6",
                 div { class: "flex items-start justify-between gap-4 flex-wrap",
                     div {

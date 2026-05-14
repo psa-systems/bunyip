@@ -99,15 +99,11 @@ pub fn InviteCreatePage() -> Element {
     });
 
     rsx! {
-        AppShell { title: "Invite user".to_string(),
+        AppShell {
+            title: "Invite user".to_string(),
+            back_to: Some(Route::UserManagementPage {}),
+            back_label: "User management".to_string(),
             div { class: "max-w-2xl mx-auto px-6 space-y-6",
-                div {
-                    Link {
-                        to: Route::UserManagementPage {},
-                        class: "text-sm text-bunyip-reed-600 hover:text-bunyip-reed-900 dark:text-bunyip-reed-300 dark:hover:text-bunyip-reed-50",
-                        "← Back to user management"
-                    }
-                }
                 if let Some(s) = success.read().clone() {
                     InviteSuccessCard {
                         invite_email: s.invite.email.clone(),

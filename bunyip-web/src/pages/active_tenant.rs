@@ -66,7 +66,10 @@ pub fn ActiveTenantPage() -> Element {
     });
 
     rsx! {
-        AppShell { title: "Switch tenant".to_string(),
+        AppShell {
+            title: "Switch tenant".to_string(),
+            back_to: Some(Route::SettingsPage {}),
+            back_label: "Settings".to_string(),
             div { class: "max-w-2xl mx-auto px-6 space-y-6",
                 div {
                     h1 { class: "text-3xl font-bold text-bunyip-reed-900 dark:text-bunyip-reed-50",

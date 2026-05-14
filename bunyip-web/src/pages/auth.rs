@@ -12,6 +12,7 @@ use dioxus::prelude::*;
 
 use crate::api::{self, auth::*};
 use crate::components::layout::AuthShell;
+use crate::components::password_checklist::{password_meets_policy, PasswordChecklist};
 use crate::modules::oidc::{self, FlowError, LoginOutcome};
 use crate::routes::Route;
 use crate::stores::auth::{refresh_auth, use_auth, AuthState};
@@ -451,36 +452,47 @@ pub fn SignupCompletePage(token: String) -> Element {
             match (state.read().preview_loaded, state.read().error.clone(), state.read().preview_email.is_some()) {
                 (false, _, _) => rsx! { p { "Verifying link..." } },
                 (true, Some(err), false) => rsx! { InlineError { message: err } },
-                _ => rsx! {
-                    form { class: "space-y-4", onsubmit: submit,
-                        if let Some(err) = state.read().error.clone() {
-                            InlineError { message: err }
+                _ => {
+                    let password = state.read().password.clone();
+                    let email = state.read().preview_email.clone().unwrap_or_default();
+                    let policy_ok = password_meets_policy(&password, &email);
+                    let submitting = state.read().submitting;
+                    rsx! {
+                        form { class: "space-y-4", onsubmit: submit,
+                            if let Some(err) = state.read().error.clone() {
+                                InlineError { message: err }
+                            }
+                            AuthInput {
+                                name: "first_name",
+                                label: "First name",
+                                input_type: "text",
+                                placeholder: "",
+                                value: state.read().first_name.clone(),
+                                oninput: move |v: String| { state.write().first_name = v; },
+                            }
+                            AuthInput {
+                                name: "last_name",
+                                label: "Last name",
+                                input_type: "text",
+                                placeholder: "",
+                                value: state.read().last_name.clone(),
+                                oninput: move |v: String| { state.write().last_name = v; },
+                            }
+                            AuthInput {
+                                name: "password",
+                                label: "Password",
+                                input_type: "password",
+                                placeholder: "",
+                                value: password.clone(),
+                                oninput: move |v: String| { state.write().password = v; },
+                            }
+                            PasswordChecklist { password: password, email: email }
+                            SubmitButton {
+                                busy: submitting,
+                                disabled: !policy_ok,
+                                label: "Create account",
+                            }
                         }
-                        AuthInput {
-                            name: "first_name",
-                            label: "First name",
-                            input_type: "text",
-                            placeholder: "",
-                            value: state.read().first_name.clone(),
-                            oninput: move |v: String| { state.write().first_name = v; },
-                        }
-                        AuthInput {
-                            name: "last_name",
-                            label: "Last name",
-                            input_type: "text",
-                            placeholder: "",
-                            value: state.read().last_name.clone(),
-                            oninput: move |v: String| { state.write().last_name = v; },
-                        }
-                        AuthInput {
-                            name: "password",
-                            label: "Password",
-                            input_type: "password",
-                            placeholder: "",
-                            value: state.read().password.clone(),
-                            oninput: move |v: String| { state.write().password = v; },
-                        }
-                        SubmitButton { busy: state.read().submitting, label: "Create account" }
                     }
                 },
             }
@@ -620,28 +632,41 @@ pub fn ResetPasswordPage(token: String) -> Element {
                         message: state.read().error.clone().unwrap_or_else(|| "This link is invalid or has expired.".into())
                     }
                 },
-                _ => rsx! {
-                    form { class: "space-y-4", onsubmit: submit,
-                        if let Some(err) = state.read().error.clone() {
-                            InlineError { message: err }
+                _ => {
+                    let password = state.read().password.clone();
+                    let confirm = state.read().confirm.clone();
+                    let email = state.read().preview_email.clone().unwrap_or_default();
+                    let policy_ok = password_meets_policy(&password, &email);
+                    let confirm_matches = !confirm.is_empty() && password == confirm;
+                    let submitting = state.read().submitting;
+                    rsx! {
+                        form { class: "space-y-4", onsubmit: submit,
+                            if let Some(err) = state.read().error.clone() {
+                                InlineError { message: err }
+                            }
+                            AuthInput {
+                                name: "password",
+                                label: "New password",
+                                input_type: "password",
+                                placeholder: "",
+                                value: password.clone(),
+                                oninput: move |v: String| { state.write().password = v; },
+                            }
+                            AuthInput {
+                                name: "confirm",
+                                label: "Confirm password",
+                                input_type: "password",
+                                placeholder: "",
+                                value: confirm.clone(),
+                                oninput: move |v: String| { state.write().confirm = v; },
+                            }
+                            PasswordChecklist { password: password, email: email }
+                            SubmitButton {
+                                busy: submitting,
+                                disabled: !(policy_ok && confirm_matches),
+                                label: "Save password",
+                            }
                         }
-                        AuthInput {
-                            name: "password",
-                            label: "New password",
-                            input_type: "password",
-                            placeholder: "",
-                            value: state.read().password.clone(),
-                            oninput: move |v: String| { state.write().password = v; },
-                        }
-                        AuthInput {
-                            name: "confirm",
-                            label: "Confirm password",
-                            input_type: "password",
-                            placeholder: "",
-                            value: state.read().confirm.clone(),
-                            oninput: move |v: String| { state.write().confirm = v; },
-                        }
-                        SubmitButton { busy: state.read().submitting, label: "Save password" }
                     }
                 },
             }
@@ -708,12 +733,16 @@ fn AuthInput(
 }
 
 #[component]
-fn SubmitButton(busy: bool, label: &'static str) -> Element {
+fn SubmitButton(
+    busy: bool,
+    label: &'static str,
+    #[props(default = false)] disabled: bool,
+) -> Element {
     rsx! {
         button {
             class: "w-full px-4 py-2.5 rounded-lg bg-bunyip-reed-700 text-white font-medium hover:bg-bunyip-reed-800 disabled:opacity-60 disabled:cursor-not-allowed transition-colors",
             r#type: "submit",
-            disabled: busy,
+            disabled: busy || disabled,
             if busy { "Working..." } else { "{label}" }
         }
     }

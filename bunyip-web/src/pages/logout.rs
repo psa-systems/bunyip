@@ -18,10 +18,17 @@
 //! not survive to silently sign them back in on the next visit.
 
 use dioxus::prelude::*;
+use wasm_bindgen::JsValue;
 
 use crate::api;
 use crate::routes::Route;
 use crate::stores::auth::{self, use_auth};
+
+/// Mirrors the sign-out flow into the browser's DevTools console so a
+/// stuck logout is visible without rebuilding with extra tracing.
+fn log(msg: &str) {
+    web_sys::console::log_1(&JsValue::from_str(msg));
+}
 
 #[component]
 pub fn LogoutPage() -> Element {
@@ -29,10 +36,13 @@ pub fn LogoutPage() -> Element {
     let nav = navigator();
 
     use_future(move || async move {
+        log("sign-out: entering /logout, posting /v1/auth/logout");
         // Best-effort server logout (clears the OP cookie). Ignored
         // on failure: we always tear down local state below.
         let _ = api::auth::logout().await;
+        log("sign-out: clearing local tokens + auth signal");
         auth::sign_out(auth_sig);
+        log("sign-out: redirecting to /login");
         nav.replace(Route::LoginPage {});
     });
 

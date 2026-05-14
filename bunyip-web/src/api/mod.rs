@@ -118,6 +118,18 @@ struct ErrorBody {
     error: Option<String>,
     #[serde(default)]
     error_description: Option<String>,
+    /// Field-level errors emitted by `mokosh-auth-http` (e.g. password
+    /// policy reject on signup-by-token returns
+    /// `{ "error": "invalid_request", "details": { "password": "..." } }`).
+    /// Surfaced to the user when present.
+    #[serde(default)]
+    details: Option<ErrorDetails>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ErrorDetails {
+    #[serde(default)]
+    password: Option<String>,
 }
 
 pub async fn post_json<T: Serialize, R: DeserializeOwned>(
@@ -240,7 +252,10 @@ async fn error_from_response(resp: gloo_net::http::Response) -> ApiError {
     // we now talk to mokosh-server so accept the new shape.
     let message = match resp.json::<ErrorBody>().await {
         Ok(b) => b
-            .error_description
+            .details
+            .as_ref()
+            .and_then(|d| d.password.clone())
+            .or(b.error_description)
             .or(b.error)
             .unwrap_or_else(|| format!("Request failed ({status})")),
         Err(_) => format!("Request failed ({status})"),

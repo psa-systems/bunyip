@@ -43,7 +43,9 @@ pub fn PublicNav() -> Element {
 pub fn BrandMark() -> Element {
     rsx! {
         svg {
-            class: "w-7 h-7 text-bunyip-reed-700",
+            // Dark variant added so the reed icon doesn't disappear
+            // against dark backgrounds in AuthShell / AppShell.
+            class: "w-7 h-7 text-bunyip-reed-700 dark:text-bunyip-reed-200",
             view_box: "0 0 32 32",
             fill: "none",
             path {
@@ -92,24 +94,29 @@ pub fn AuthShell(title: String, subtitle: String, children: Element) -> Element 
 }
 
 /// Authenticated app shell: header with org badge + sign-out, page body padded.
+///
+/// `back_to` (optional): renders a "← Back" link in the title bar that
+/// navigates to the supplied parent route. Use it on nested pages
+/// (everything under /settings/* and /admin/*) so users aren't trapped
+/// when entering a sub-page directly. The link is a real `<Link>`, so
+/// browser back/forward keeps working.
 #[component]
-pub fn AppShell(title: String, children: Element) -> Element {
-    use crate::api;
-    use crate::stores::auth::{refresh_auth, use_auth, AuthState};
-    use crate::stores::toast::use_toast;
+pub fn AppShell(
+    title: String,
+    children: Element,
+    #[props(default = None)] back_to: Option<Route>,
+    #[props(default = String::new())] back_label: String,
+) -> Element {
+    use crate::stores::auth::{use_auth, AuthState};
 
     let auth = use_auth();
     let state = auth.read().clone();
-    let toast = use_toast();
     let nav = navigator();
 
+    // All sign-out paths converge on /logout (pages/logout.rs) so the
+    // OP cookie + localStorage tokens + auth signal die in one place.
     let sign_out = move |_| {
-        spawn(async move {
-            let _ = api::auth::logout().await;
-            refresh_auth(auth).await;
-            toast.info("Signed out.");
-            nav.replace(Route::LoginPage {});
-        });
+        nav.replace(Route::LogoutPage {});
     };
 
     let (user_name, org_name) = match &state {
@@ -164,53 +171,26 @@ pub fn AppShell(title: String, children: Element) -> Element {
                 }
             }
             main { class: "px-6 py-10",
-                if !title.is_empty() {
-                    div { class: "max-w-7xl mx-auto",
-                        // Title is set in the page itself for now - this slot is
-                        // available for future breadcrumbs / utility nav.
+                if let Some(parent) = back_to.clone() {
+                    div { class: "max-w-7xl mx-auto mb-4",
+                        Link {
+                            to: parent,
+                            class: "inline-flex items-center gap-1 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:text-bunyip-reed-900 dark:hover:text-white hover:underline focus:outline-none focus:ring-2 focus:ring-bunyip-reed-600 dark:focus:ring-bunyip-reed-400 rounded",
+                            aria_label: if back_label.is_empty() { "Back".to_string() } else { format!("Back to {back_label}") },
+                            span { aria_hidden: "true", "←" }
+                            if !back_label.is_empty() {
+                                span { "Back to {back_label}" }
+                            } else {
+                                span { "Back" }
+                            }
+                        }
                     }
+                }
+                if !title.is_empty() {
+                    // Title slot reserved for future breadcrumbs / utility nav.
+                    div { class: "sr-only", "{title}" }
                 }
                 {children}
-            }
-        }
-    }
-}
-
-/// Header used by authenticated app pages.
-#[component]
-pub fn AppHeader(current_org: &'static str) -> Element {
-    rsx! {
-        header { class: "px-6 py-3 bg-white border-b border-bunyip-reed-100 sticky top-0 z-10",
-            div { class: "max-w-7xl mx-auto flex items-center justify-between",
-                div { class: "flex items-center gap-4",
-                    Link { to: Route::DashboardPage {}, class: "flex items-center gap-2 group",
-                        BrandMark {}
-                        span { class: "text-lg font-semibold text-bunyip-reed-900",
-                            "Bunyip"
-                        }
-                    }
-                    span { class: "h-5 w-px bg-bunyip-reed-200" }
-                    button { class: "flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-bunyip-reed-50 transition-colors",
-                        span { class: "w-2 h-2 rounded-full bg-bunyip-reed-600" }
-                        span { class: "text-sm font-medium text-bunyip-reed-900",
-                            "{current_org}"
-                        }
-                        svg {
-                            class: "w-3.5 h-3.5 text-bunyip-reed-600",
-                            view_box: "0 0 12 12",
-                            fill: "currentColor",
-                            path { d: "M6 8L2.5 4h7L6 8z" }
-                        }
-                    }
-                }
-                nav { class: "flex items-center gap-1 text-sm",
-                    button { class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 hover:text-bunyip-reed-900 hover:bg-bunyip-reed-50 transition-colors",
-                        "Settings"
-                    }
-                    button { class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 hover:text-bunyip-reed-900 hover:bg-bunyip-reed-50 transition-colors",
-                        "Sign out"
-                    }
-                }
             }
         }
     }

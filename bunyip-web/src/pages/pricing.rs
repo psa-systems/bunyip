@@ -160,7 +160,9 @@ fn PricingCard(
                     }
                 }
             }
-            button { class: "mt-7 {button_class}",
+            Link {
+                to: Route::SignupPage {},
+                class: "mt-7 inline-block text-center {button_class}",
                 "{cta}"
             }
         }

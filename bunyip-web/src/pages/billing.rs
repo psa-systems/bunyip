@@ -21,12 +21,12 @@ pub fn OrgBillingPage(slug: String) -> Element {
     let tiers = use_resource(|| async { billing::list_tiers().await });
 
     rsx! {
-        AppShell { title: format!("Billing · {slug}"),
+        AppShell {
+            title: format!("Billing · {slug}"),
+            back_to: Some(Route::OrgListPage {}),
+            back_label: "Organizations".to_string(),
             div { class: "max-w-4xl mx-auto",
-                Link { to: Route::OrgListPage {}, class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 underline",
-                    "← All organizations"
-                }
-                h1 { class: "mt-3 text-2xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50",
+                h1 { class: "text-2xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50",
                     "Billing"
                 }
 

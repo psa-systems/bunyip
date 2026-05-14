@@ -5,14 +5,14 @@
 
 use dioxus::prelude::*;
 
-use crate::api;
 use crate::api::apps::{self, AppView};
 use crate::api::types::MeResponse;
+use crate::components::image::SafeImage;
 use crate::components::layout::BrandMark;
 use crate::components::theme::ThemeToggle;
 use crate::modules::oidc::OidcConfig;
 use crate::routes::Route;
-use crate::stores::auth::{self, use_auth, AuthState};
+use crate::stores::auth::{use_auth, AuthState};
 use crate::stores::toast::use_toast;
 
 /// Given an OAuth client's registered redirect_uri (e.g.
@@ -198,7 +198,7 @@ fn AppGroup(props: AppGroupProps) -> Element {
             h2 { class: "text-lg font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50",
                 "{props.title}"
             }
-            div { class: "mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
+            div { class: "mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 auto-rows-fr",
                 for app in props.apps.iter().cloned() {
                     AppTile {
                         key: "{app.client_id}",
@@ -230,23 +230,22 @@ fn AppTile(props: AppTileProps) -> Element {
     rsx! {
         button {
             r#type: "button",
-            class: "group text-left p-5 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 hover:border-bunyip-reed-300 dark:hover:border-bunyip-reed-500 hover:shadow-md transition-all",
+            class: "group h-full flex flex-col text-left p-5 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 hover:border-bunyip-reed-300 dark:hover:border-bunyip-reed-500 hover:shadow-md transition-all",
             onclick: move |_| props.on_launch.call(()),
-            div { class: "flex items-start gap-4",
+            div { class: "flex items-start gap-4 flex-1",
                 div { class: "shrink-0 w-12 h-12 rounded-lg bg-bunyip-reed-100 dark:bg-bunyip-reed-700 flex items-center justify-center overflow-hidden",
-                    if let Some(url) = a.icon_url.as_deref().filter(|s| !s.is_empty()) {
-                        img {
-                            src: "{url}",
-                            alt: "{a.name}",
-                            class: "w-12 h-12 object-cover",
-                        }
-                    } else {
+                    SafeImage {
+                        src: a.icon_url.clone().unwrap_or_default(),
+                        alt: a.name.clone(),
+                        class: "w-12 h-12 object-cover",
+                        // Fallback: the app's first letter, same look as
+                        // when no icon_url was registered at all.
                         span { class: "text-lg font-semibold text-bunyip-reed-700 dark:text-bunyip-reed-200",
                             "{initial}"
                         }
                     }
                 }
-                div { class: "min-w-0 flex-1",
+                div { class: "min-w-0 flex-1 flex flex-col",
                     div { class: "flex items-center gap-2",
                         h3 { class: "text-base font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50 group-hover:text-bunyip-reed-700 dark:group-hover:text-white truncate",
                             "{a.name}"
@@ -257,7 +256,9 @@ fn AppTile(props: AppTileProps) -> Element {
                             "{d}"
                         }
                     }
-                    p { class: "mt-2 text-xs text-bunyip-reed-500 dark:text-bunyip-reed-400 group-hover:text-bunyip-reed-700 dark:group-hover:text-bunyip-reed-200",
+                    // mt-auto pins "Launch →" to the bottom of the tile so
+                    // it aligns across the row regardless of name/description.
+                    p { class: "mt-auto pt-2 text-xs text-bunyip-reed-500 dark:text-bunyip-reed-400 group-hover:text-bunyip-reed-700 dark:group-hover:text-bunyip-reed-200",
                         "Launch →"
                     }
                 }
@@ -268,25 +269,12 @@ fn AppTile(props: AppTileProps) -> Element {
 
 #[component]
 fn DashboardHeader(user_name: String, org_name: String) -> Element {
-    let auth = use_auth();
-    let toast = use_toast();
     let nav = navigator();
 
+    // All sign-out paths converge on /logout (pages/logout.rs) so the
+    // OP cookie + localStorage tokens + auth signal die in one place.
     let sign_out = move |_| {
-        spawn(async move {
-            // Best-effort server-side logout (clears the OP session
-            // cookie on mokosh-server). Ignored on failure - we always
-            // tear down the local session below.
-            let _ = api::auth::logout().await;
-            // The Bearer token in localStorage is a stateless JWT and
-            // is NOT invalidated by /v1/auth/logout, so we cannot
-            // verify "signed out" by re-fetching /me - that would
-            // succeed and bounce the user right back into the
-            // dashboard. Clear local state explicitly instead.
-            auth::sign_out(auth);
-            toast.info("Signed out.");
-            nav.replace(Route::LoginPage {});
-        });
+        nav.replace(Route::LogoutPage {});
     };
 
     rsx! {

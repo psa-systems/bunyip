@@ -5,6 +5,7 @@ use dioxus::prelude::*;
 
 use crate::api::feedback::{self, Feedback, FeedbackStatus};
 use crate::components::layout::AppShell;
+use crate::routes::Route;
 use crate::stores::toast::use_toast;
 
 #[component]
@@ -20,7 +21,10 @@ pub fn AdminFeedbackPage() -> Element {
     });
 
     rsx! {
-        AppShell { title: "Admin · Feedback".to_string(),
+        AppShell {
+            title: "Admin · Feedback".to_string(),
+            back_to: Some(Route::SettingsPage {}),
+            back_label: "Settings".to_string(),
             div { class: "max-w-5xl mx-auto",
                 h1 { class: "text-2xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50", "Feedback inbox" }
                 p { class: "mt-1 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",

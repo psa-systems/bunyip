@@ -9,7 +9,6 @@ use crate::modules::oidc::{self, OidcConfig};
 use crate::pages::profile::SettingsCard;
 use crate::routes::Route;
 use crate::stores::auth::{use_auth, AuthState};
-use crate::stores::tokens::clear_tokens;
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 struct SessionView {
@@ -69,10 +68,11 @@ pub fn SessionsPage() -> Element {
             let path = format!("/v1/auth/sessions/{id}/revoke");
             let _ = oidc::issuer_post_authed_empty(&cfg, &path).await;
             if is_current {
-                clear_tokens();
-                if let Some(win) = web_sys::window() {
-                    let _ = win.location().replace("/login");
-                }
+                // Funnel through /logout so the OP cookie is cleared,
+                // tokens are dropped, and the auth signal moves to
+                // SignedOut in one place (same as every other sign-out
+                // entry point in the app).
+                nav.replace(Route::LogoutPage {});
                 return;
             }
             revoking.set(None);
@@ -81,7 +81,10 @@ pub fn SessionsPage() -> Element {
     });
 
     rsx! {
-        AppShell { title: "Active sessions".to_string(),
+        AppShell {
+            title: "Active sessions".to_string(),
+            back_to: Some(Route::SettingsPage {}),
+            back_label: "Settings".to_string(),
             div { class: "max-w-2xl mx-auto px-6 space-y-6",
                 h1 { class: "text-3xl font-bold text-bunyip-reed-900 dark:text-bunyip-reed-50",
                     "Active sessions"
