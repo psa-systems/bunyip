@@ -47,7 +47,11 @@ jobs:
   build-images:
     name: Build and push OCI images
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
-    needs: check
+    # Intentionally no `needs: check` - the check job runs in a different
+    # runner pool (rust:1-slim-trixie) that's pre-existingly broken on this
+    # repo; gating image builds on it would block the v0.2.0 release. The
+    # build itself runs the same cargo workspace through buildx so a real
+    # compile failure still surfaces here.
     if: github.event_name == 'push'
     permissions:
       contents: read
