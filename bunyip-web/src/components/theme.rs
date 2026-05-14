@@ -1,5 +1,5 @@
 //! Light/dark theme toggle. The initial theme is set by the early script in
-//! `index.html` (so the page renders in the right colour scheme before WASM
+//! `index.html` (so the page renders in the right color scheme before WASM
 //! mounts). After WASM is alive, this component reads + flips the `dark`
 //! class on `<html>` and persists the choice to localStorage.
 

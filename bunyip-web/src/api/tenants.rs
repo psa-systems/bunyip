@@ -1,7 +1,7 @@
 //! `/v1/auth/memberships` + `/v1/auth/active-tenant` - the tenant
 //! switcher's two endpoints. The hub owns this surface now (per
 //! docs/migration/settings-split.md); mokosh-clients's old ActiveTenantPage
-//! was deleted in favour of the bunyip-side one.
+//! was deleted in favor of the bunyip-side one.
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};

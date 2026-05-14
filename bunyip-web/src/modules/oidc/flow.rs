@@ -132,7 +132,7 @@ pub fn start_login_for(
 
 /// Snapshot of `?code=...&state=...` taken before the Dioxus router
 /// mounts. Dioxus 0.7 calls `history.replaceState()` during router
-/// initialisation to normalise the URL to its declared route shape (no
+/// initialization to normalize the URL to its declared route shape (no
 /// query params), which would erase the OAuth response before
 /// `AuthCallbackPage` ever reads it. Capture once from `main()` before
 /// `dioxus::launch(App)` so the snapshot survives.
