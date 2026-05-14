@@ -19,11 +19,7 @@ pub fn PricingPage() -> Element {
                             "Simple. Honest. Done."
                         }
                         p { class: "mt-4 text-bunyip-reed-700 dark:text-bunyip-reed-200",
-                            "All plans include unlimited members, every SSO feature, and the admin console. Phase 5 will load these from the live ",
-                            span { class: "font-mono text-bunyip-reed-800 dark:text-bunyip-reed-100",
-                                "/v1/billing/tiers"
-                            },
-                            " endpoint."
+                            "All plans include unlimited members, every SSO feature, and the admin console."
                         }
                     }
 

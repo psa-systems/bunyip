@@ -74,34 +74,12 @@ fn CurrentPlan(
     refresh_key: Signal<u64>,
     toast: crate::stores::toast::ToastStore,
 ) -> Element {
-    let slug_for_cancel = slug.clone();
-    let mut refresh_key = refresh_key;
-
-    let cancel = move |_| {
-        let slug = slug_for_cancel.clone();
-        spawn(async move {
-            match billing::cancel_subscription(&slug).await {
-                Ok(()) => {
-                    toast.info("Subscription will end at the period boundary.");
-                    refresh_key.set(refresh_key() + 1);
-                }
-                Err(e) => toast.error(e.user_message()),
-            }
-        });
-    };
-    let slug_for_uncancel = slug.clone();
-    let uncancel = move |_| {
-        let slug = slug_for_uncancel.clone();
-        spawn(async move {
-            match billing::uncancel_subscription(&slug).await {
-                Ok(()) => {
-                    toast.success("Subscription will continue.");
-                    refresh_key.set(refresh_key() + 1);
-                }
-                Err(e) => toast.error(e.user_message()),
-            }
-        });
-    };
+    let _ = (slug.clone(), toast);
+    let refresh_key = refresh_key;
+    // Stripe write integration is deferred (see docs/mokosh-fixes/05-billing.md).
+    // The cancel / uncancel handlers were here; they'll be rewritten
+    // against the new endpoints when that surface ships. Today the
+    // buttons render as disabled-with-tooltip.
 
     let (status_label, status_class) = view
         .subscription
@@ -143,17 +121,26 @@ fn CurrentPlan(
                     }
                 }
 
+                // Stripe write integration is deferred; the cancel /
+                // uncancel handlers exist on the SPA but the server
+                // endpoints stay 404 today. Render the buttons as
+                // disabled with a tooltip so the surface looks complete
+                // without misleading users.
                 div { class: "mt-6 flex flex-wrap gap-3",
                     if sub.cancel_at_period_end {
                         button {
-                            class: "px-4 py-2 rounded-lg bg-bunyip-reed-700 text-white text-sm hover:bg-bunyip-reed-800",
-                            onclick: uncancel,
+                            r#type: "button",
+                            disabled: true,
+                            title: "Coming soon - Stripe integration not wired yet",
+                            class: "px-4 py-2 rounded-lg bg-bunyip-reed-700 text-white text-sm disabled:opacity-50 disabled:cursor-not-allowed",
                             "Keep my plan"
                         }
                     } else if !matches!(sub.status, SubscriptionStatus::Lifetime) {
                         button {
-                            class: "px-4 py-2 rounded-lg border border-red-200 text-red-700 text-sm hover:bg-red-50",
-                            onclick: cancel,
+                            r#type: "button",
+                            disabled: true,
+                            title: "Coming soon - Stripe integration not wired yet",
+                            class: "px-4 py-2 rounded-lg border border-red-200 text-red-700 text-sm disabled:opacity-50 disabled:cursor-not-allowed",
                             "Cancel subscription"
                         }
                     }
@@ -228,7 +215,10 @@ fn TierPicker(
                                 }
                             }
                             button {
-                                class: "mt-4 w-full px-3 py-2 rounded-lg border border-bunyip-reed-300 text-sm hover:bg-bunyip-reed-50",
+                                r#type: "button",
+                                disabled: true,
+                                title: "Coming soon - Stripe integration not wired yet",
+                                class: "mt-4 w-full px-3 py-2 rounded-lg border border-bunyip-reed-300 text-sm disabled:opacity-50 disabled:cursor-not-allowed",
                                 onclick: move |_| {
                                     let tier_key = tier_key.clone();
                                     let slug = (*slug).clone();
