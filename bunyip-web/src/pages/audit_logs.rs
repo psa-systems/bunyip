@@ -15,6 +15,158 @@ fn severity_class(s: &str) -> &'static str {
     }
 }
 
+/// Map `event_kind` (snake_case canonical string from
+/// `mokosh-auth-storage::audit::event_kind`) to a human-readable label.
+/// Falls back to a title-cased version of the raw kind when unknown so
+/// new event kinds are still readable while we wait for the table to
+/// catch up.
+fn event_label(kind: &str) -> String {
+    match kind {
+        "login_success" => "Signed in".into(),
+        "login_failed" => "Sign-in failed".into(),
+        "logout_success" => "Signed out".into(),
+        "password_changed" => "Password changed".into(),
+        "password_reset_requested" => "Password-reset requested".into(),
+        "password_reset_completed" => "Password reset".into(),
+        "password_reset_attempt_failed" => "Password-reset failed".into(),
+        "magic_link_requested" => "Magic-link requested".into(),
+        "magic_link_used" => "Magic-link used".into(),
+        "token_issued" => "Token issued".into(),
+        "token_refreshed" => "Token refreshed".into(),
+        "refresh_reuse_detected" => "Refresh token reuse detected".into(),
+        "session_revoked" => "Session revoked".into(),
+        "client_created" => "OAuth client created".into(),
+        "client_disabled" => "OAuth client disabled".into(),
+        "key_rotated" => "Signing key rotated".into(),
+        "suspicious_activity" => "Suspicious activity".into(),
+        "admin_action" => "Admin action".into(),
+        "invite_issued" => "Invite issued".into(),
+        "invite_revoked" => "Invite revoked".into(),
+        "invite_accepted" => "Invite accepted".into(),
+        "invite_attempt_failed" => "Invite acceptance failed".into(),
+        "signup_requested" => "Signup requested".into(),
+        "signup_completed" => "Account created".into(),
+        "signup_attempt_failed" => "Signup failed".into(),
+        "totp_enrollment_started" => "MFA setup started".into(),
+        "totp_enrolled" => "MFA enabled".into(),
+        "totp_disenrolled" => "MFA disabled".into(),
+        "mfa_challenge_issued" => "MFA code requested".into(),
+        "mfa_challenge_consumed" => "MFA code verified".into(),
+        "mfa_verify_failed" => "MFA code failed".into(),
+        "step_up_issued" => "Step-up challenge issued".into(),
+        "step_up_consumed" => "Step-up challenge passed".into(),
+        "recovery_codes_issued" => "Recovery codes issued".into(),
+        "recovery_codes_regenerated" => "Recovery codes regenerated".into(),
+        "recovery_code_used" => "Recovery code used".into(),
+        "account_lockout_hit" => "Account-lockout threshold hit".into(),
+        "account_locked" => "Account locked".into(),
+        other => {
+            // Title-case the snake_case form so unknown kinds still read
+            // as English. e.g. "new_thing_happened" -> "New thing happened".
+            let mut s = String::with_capacity(other.len());
+            let mut first = true;
+            for ch in other.chars() {
+                if ch == '_' {
+                    s.push(' ');
+                } else if first {
+                    s.extend(ch.to_uppercase());
+                    first = false;
+                } else {
+                    s.push(ch);
+                }
+            }
+            s
+        }
+    }
+}
+
+/// Extract a one-line "details" string from the event's metadata. Each
+/// event_kind tucks different fields in here; this helper pulls the
+/// ones a human cares about and joins them with " · ". Empty when the
+/// metadata is null or no relevant fields are present.
+fn event_details(kind: &str, metadata: &serde_json::Value) -> String {
+    let s = |k: &str| -> Option<String> {
+        metadata
+            .get(k)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
+    let n = |k: &str| -> Option<String> {
+        metadata
+            .get(k)
+            .and_then(|v| v.as_i64())
+            .map(|n| n.to_string())
+    };
+
+    let mut parts: Vec<String> = Vec::new();
+    match kind {
+        "login_failed" => {
+            if let Some(r) = s("reason") {
+                parts.push(format!("reason: {r}"));
+            }
+            if let Some(e) = s("email") {
+                parts.push(format!("email: {e}"));
+            }
+        }
+        "login_success" => {
+            if let Some(method) = s("amr").or_else(|| s("method")) {
+                parts.push(format!("method: {method}"));
+            }
+        }
+        "signup_requested" | "password_reset_requested" => {
+            if let Some(e) = s("email") {
+                parts.push(format!("email: {e}"));
+            }
+        }
+        "invite_issued" | "invite_accepted" | "invite_revoked" => {
+            if let Some(e) = s("email") {
+                parts.push(format!("email: {e}"));
+            }
+            if let Some(r) = s("role") {
+                parts.push(format!("role: {r}"));
+            }
+        }
+        "mfa_verify_failed" => {
+            if let Some(r) = s("reason") {
+                parts.push(format!("reason: {r}"));
+            }
+        }
+        "mfa_challenge_consumed" => {
+            if let Some(m) = s("method") {
+                parts.push(format!("method: {m}"));
+            }
+        }
+        "totp_disenrolled" => {
+            if let Some(by) = s("disenrolled_by") {
+                parts.push(format!("by: {by}"));
+            }
+            if let Some(reason) = s("reason") {
+                parts.push(format!("reason: {reason}"));
+            }
+        }
+        "session_revoked" => {
+            if let Some(reason) = s("reason") {
+                parts.push(format!("reason: {reason}"));
+            }
+        }
+        "recovery_codes_issued" | "recovery_codes_regenerated" => {
+            if let Some(c) = n("count") {
+                parts.push(format!("count: {c}"));
+            }
+        }
+        _ => {}
+    }
+
+    parts.join(" · ")
+}
+
+/// Render an actor UUID as the first 8 characters in monospace; the
+/// full UUID is in the `title` attribute for hover-to-reveal. Empty
+/// string when no actor (the dash is rendered by the caller).
+fn short_actor(actor_id: &str) -> String {
+    actor_id.chars().take(8).collect()
+}
+
 const PAGE_SIZE: i64 = 50;
 
 #[component]
@@ -145,6 +297,7 @@ pub fn AuditLogsPage() -> Element {
                                             th { class: "px-6 py-3 text-left text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 uppercase tracking-wide", "When" }
                                             th { class: "px-6 py-3 text-left text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 uppercase tracking-wide", "Event" }
                                             th { class: "px-6 py-3 text-left text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 uppercase tracking-wide", "Severity" }
+                                            th { class: "px-6 py-3 text-left text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 uppercase tracking-wide", "Details" }
                                             th { class: "px-6 py-3 text-left text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 uppercase tracking-wide", "Actor" }
                                             th { class: "px-6 py-3 text-left text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 uppercase tracking-wide", "IP" }
                                         }
@@ -152,7 +305,7 @@ pub fn AuditLogsPage() -> Element {
                                     tbody { class: "bg-white dark:bg-bunyip-reed-800 divide-y divide-bunyip-reed-100 dark:divide-bunyip-reed-700",
                                         if body.entries.is_empty() {
                                             tr {
-                                                td { colspan: "5", class: "px-6 py-8 text-center text-sm text-bunyip-reed-500 dark:text-bunyip-reed-400",
+                                                td { colspan: "6", class: "px-6 py-8 text-center text-sm text-bunyip-reed-500 dark:text-bunyip-reed-400",
                                                     "No entries"
                                                 }
                                             }
@@ -160,22 +313,40 @@ pub fn AuditLogsPage() -> Element {
                                             for row in body.entries.iter() {
                                                 {
                                                     let ts = row.created_at.format("%Y-%m-%d %H:%M:%S").to_string();
+                                                    let label = event_label(&row.event_kind);
+                                                    let details = event_details(&row.event_kind, &row.metadata);
                                                     rsx! {
                                                 tr { key: "{row.id}",
                                                     td { class: "px-6 py-3 whitespace-nowrap text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300 font-mono",
                                                         "{ts}"
                                                     }
                                                     td { class: "px-6 py-3 whitespace-nowrap text-sm text-bunyip-reed-900 dark:text-bunyip-reed-50",
-                                                        "{row.event_kind}"
+                                                        // Human-readable label, with the raw event_kind
+                                                        // tucked into the title attribute for engineers
+                                                        // who want the canonical string.
+                                                        span { title: "{row.event_kind}", "{label}" }
                                                     }
                                                     td { class: "px-6 py-3 whitespace-nowrap",
                                                         span { class: "inline-flex px-2 py-0.5 rounded-full text-xs font-medium {severity_class(&row.severity)}",
                                                             "{row.severity}"
                                                         }
                                                     }
+                                                    td { class: "px-6 py-3 text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300",
+                                                        if details.is_empty() {
+                                                            span { class: "text-bunyip-reed-400", "-" }
+                                                        } else {
+                                                            "{details}"
+                                                        }
+                                                    }
                                                     td { class: "px-6 py-3 whitespace-nowrap text-xs font-mono text-bunyip-reed-600 dark:text-bunyip-reed-300",
                                                         match &row.actor_id {
-                                                            Some(a) => rsx! { "{a}" },
+                                                            // Show the first 8 hex chars; full UUID is
+                                                            // in the title attribute on hover. Saves
+                                                            // a column-of-noise in the table.
+                                                            Some(a) => {
+                                                                let short = short_actor(a);
+                                                                rsx! { span { title: "{a}", "{short}" } }
+                                                            },
                                                             None => rsx! { span { class: "text-bunyip-reed-400", "-" } },
                                                         }
                                                     }

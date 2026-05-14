@@ -7,12 +7,13 @@ use dioxus::prelude::*;
 
 use crate::api::apps::{self, AppView};
 use crate::api::types::MeResponse;
+use crate::api::{self};
 use crate::components::image::SafeImage;
 use crate::components::layout::BrandMark;
 use crate::components::theme::ThemeToggle;
 use crate::modules::oidc::OidcConfig;
 use crate::routes::Route;
-use crate::stores::auth::{use_auth, AuthState};
+use crate::stores::auth::{self, use_auth, AuthState};
 use crate::stores::toast::use_toast;
 
 /// Given an OAuth client's registered redirect_uri (e.g.
@@ -270,11 +271,19 @@ fn AppTile(props: AppTileProps) -> Element {
 #[component]
 fn DashboardHeader(user_name: String, org_name: String) -> Element {
     let nav = navigator();
+    let auth_sig = use_auth();
 
-    // All sign-out paths converge on /logout (pages/logout.rs) so the
-    // OP cookie + localStorage tokens + auth signal die in one place.
+    // In-app sign-out runs the teardown DIRECTLY in the click handler
+    // rather than nav.replace'ing to /logout. Same reasoning as the
+    // AppShell sign-out (components/layout.rs): the indirection
+    // through a route + use_future was flaky. /logout still exists
+    // for the cross-origin path (mokosh-clients -> bunyip).
     let sign_out = move |_| {
-        nav.replace(Route::LogoutPage {});
+        auth::sign_out(auth_sig);
+        nav.replace(Route::LoginPage {});
+        spawn(async move {
+            let _ = api::auth::logout().await;
+        });
     };
 
     rsx! {

@@ -113,10 +113,30 @@ pub fn AppShell(
     let state = auth.read().clone();
     let nav = navigator();
 
-    // All sign-out paths converge on /logout (pages/logout.rs) so the
-    // OP cookie + localStorage tokens + auth signal die in one place.
+    // In-app sign-out runs the teardown DIRECTLY in the click handler
+    // rather than nav.replace'ing to /logout. The /logout route still
+    // exists for cross-origin sign-out from mokosh-clients (its
+    // LogoutPage uses `use_future` to coordinate the network call +
+    // signal flip), but inside bunyip the indirection was flaky:
+    // nav.replace + a freshly-mounted page's `use_future` racing
+    // against router transitions left the user stranded on
+    // "Signing you out..." until they clicked again.
+    //
+    // Teardown order:
+    //   1. Clear tokens + drop the auth signal to SignedOut. Synchronous
+    //      and instantaneous so the UI reflects sign-out immediately.
+    //   2. nav.replace to /login. The protected page's bounce-on-
+    //      SignedOut effect would do this anyway; doing it here makes
+    //      the transition deterministic.
+    //   3. Fire POST /v1/auth/logout in the background. The OP cookie
+    //      is HttpOnly + Set-Cookie-cleared on the response, so this
+    //      MUST happen, but the UI does not need to wait for it.
     let sign_out = move |_| {
-        nav.replace(Route::LogoutPage {});
+        crate::stores::auth::sign_out(auth);
+        nav.replace(Route::LoginPage {});
+        spawn(async move {
+            let _ = crate::api::auth::logout().await;
+        });
     };
 
     let (user_name, org_name) = match &state {
