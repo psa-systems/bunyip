@@ -105,34 +105,49 @@ pub fn UserManagementPage() -> Element {
     let mut busy: Signal<Option<String>> = use_signal(|| None);
     let mut disenroll_for: Signal<Option<UserView>> = use_signal(|| None);
 
-    use_future(move || async move {
+    // use_future tracks signals read SYNCHRONOUSLY in the outer
+    // closure body - reads inside the async block are too late
+    // because the future runs later. Snapshot every filter signal up
+    // top, then capture the snapshot into the async block.
+    use_future(move || {
+        let search_v = search.read().clone();
+        let role_v = role_filter.read().clone();
+        let status_v = status_filter.read().clone();
+        let mfa_v = mfa_filter.read().clone();
+        let offset_v = *offset.read();
         let _ = bump.read();
-        page.set(None);
-        let filter = UserListFilter {
-            search: Some(search.read().trim().to_string()).filter(|s| !s.is_empty()),
-            role: Some(role_filter.read().trim().to_string()).filter(|s| !s.is_empty()),
-            status: Some(status_filter.read().trim().to_string()).filter(|s| !s.is_empty()),
-            mfa_enrolled: match mfa_filter.read().as_str() {
-                "yes" => Some(true),
-                "no" => Some(false),
-                _ => None,
-            },
-            limit: PAGE_SIZE,
-            offset: *offset.read(),
-        };
-        let r = admin::list_users(&filter)
-            .await
-            .map_err(|e| e.user_message());
-        page.set(Some(r));
-        invites_count.set(admin::list_invites().await.ok().map(|v| v.len()));
+        async move {
+            page.set(None);
+            let filter = UserListFilter {
+                search: Some(search_v.trim().to_string()).filter(|s| !s.is_empty()),
+                role: Some(role_v.trim().to_string()).filter(|s| !s.is_empty()),
+                status: Some(status_v.trim().to_string()).filter(|s| !s.is_empty()),
+                mfa_enrolled: match mfa_v.as_str() {
+                    "yes" => Some(true),
+                    "no" => Some(false),
+                    _ => None,
+                },
+                limit: PAGE_SIZE,
+                offset: offset_v,
+            };
+            let r = admin::list_users(&filter)
+                .await
+                .map_err(|e| e.user_message());
+            page.set(Some(r));
+            invites_count.set(admin::list_invites().await.ok().map(|v| v.len()));
+        }
     });
 
+    // bump is the explicit "refetch" trigger used by action handlers
+    // (suspend/reactivate/MFA disenroll) that mutate the user and
+    // want the list re-read. Filter signals already trigger their
+    // own use_future re-run via the synchronous reads above, so
+    // changing a filter does NOT need to bump.
     let refetch = use_callback(move |_| {
         bump.with_mut(|n| *n += 1);
     });
-    let refetch_first_page = use_callback(move |_| {
+    let reset_offset = use_callback(move |_| {
         offset.set(0);
-        bump.with_mut(|n| *n += 1);
     });
 
     let toggle_status = use_callback(move |(id, currently_active): (String, bool)| {
@@ -203,7 +218,7 @@ pub fn UserManagementPage() -> Element {
                                 value: "{search.read()}",
                                 oninput: move |e: Event<FormData>| {
                                     search.set(e.value());
-                                    refetch_first_page.call(());
+                                    reset_offset.call(());
                                 },
                             }
                         }
@@ -216,7 +231,7 @@ pub fn UserManagementPage() -> Element {
                                 value: "{role_filter.read()}",
                                 onchange: move |e: Event<FormData>| {
                                     role_filter.set(e.value());
-                                    refetch_first_page.call(());
+                                    reset_offset.call(());
                                 },
                                 option { value: "", "All roles" }
                                 option { value: "admin", "Admin" }
@@ -235,7 +250,7 @@ pub fn UserManagementPage() -> Element {
                                 value: "{status_filter.read()}",
                                 onchange: move |e: Event<FormData>| {
                                     status_filter.set(e.value());
-                                    refetch_first_page.call(());
+                                    reset_offset.call(());
                                 },
                                 option { value: "", "All statuses" }
                                 option { value: "active", "Active" }
@@ -252,7 +267,7 @@ pub fn UserManagementPage() -> Element {
                                 value: "{mfa_filter.read()}",
                                 onchange: move |e: Event<FormData>| {
                                     mfa_filter.set(e.value());
-                                    refetch_first_page.call(());
+                                    reset_offset.call(());
                                 },
                                 option { value: "", "Any" }
                                 option { value: "yes", "Enrolled" }
@@ -267,7 +282,7 @@ pub fn UserManagementPage() -> Element {
                                 role_filter.set(String::new());
                                 status_filter.set(String::new());
                                 mfa_filter.set(String::new());
-                                refetch_first_page.call(());
+                                reset_offset.call(());
                             },
                             "Reset"
                         }
