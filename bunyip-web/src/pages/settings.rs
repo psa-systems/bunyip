@@ -99,11 +99,6 @@ pub fn SettingsPage() -> Element {
                             to: Route::UserManagementPage {},
                         }
                         HubCard {
-                            title: "Pending invites",
-                            description: "Outstanding invitations - resend or revoke.",
-                            to: Route::InviteListPage {},
-                        }
-                        HubCard {
                             title: "Audit logs",
                             description: "Security events recorded by the auth subsystem.",
                             to: Route::AuditLogsPage {},

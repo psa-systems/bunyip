@@ -77,8 +77,8 @@ pub fn InviteListPage() -> Element {
     rsx! {
         AppShell {
             title: "Pending invites".to_string(),
-            back_to: Some(Route::SettingsPage {}),
-            back_label: "Settings".to_string(),
+            back_to: Some(Route::UserManagementPage {}),
+            back_label: "User management".to_string(),
             div { class: "max-w-5xl mx-auto px-6 space-y-6",
                 div { class: "flex items-start justify-between gap-4",
                     div {
