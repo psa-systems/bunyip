@@ -9,6 +9,40 @@ use crate::modules::oidc::{self, OidcConfig};
 use crate::routes::Route;
 use crate::stores::auth::{use_auth, AuthState};
 
+/// Short curated IANA timezone list. Covers the major continents at a
+/// granularity that fits a single dropdown without pulling chrono-tz.
+/// Power users with niche zones can paste-and-edit via the underlying
+/// `<select>` (the server accepts any string the user-update endpoint
+/// validates server-side).
+const TIMEZONES: &[&str] = &[
+    "UTC",
+    "America/Los_Angeles",
+    "America/Denver",
+    "America/Chicago",
+    "America/New_York",
+    "America/Toronto",
+    "America/Mexico_City",
+    "America/Sao_Paulo",
+    "Europe/London",
+    "Europe/Paris",
+    "Europe/Berlin",
+    "Europe/Madrid",
+    "Europe/Moscow",
+    "Africa/Cairo",
+    "Africa/Johannesburg",
+    "Asia/Dubai",
+    "Asia/Kolkata",
+    "Asia/Bangkok",
+    "Asia/Singapore",
+    "Asia/Shanghai",
+    "Asia/Tokyo",
+    "Asia/Seoul",
+    "Australia/Sydney",
+    "Australia/Perth",
+    "Pacific/Auckland",
+    "Pacific/Honolulu",
+];
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 struct MeBody {
     email: String,
@@ -210,13 +244,26 @@ pub fn ProfilePage() -> Element {
                                     value: profile.read().last_name.clone(),
                                     oninput: move |v: String| { profile.write().last_name = v; },
                                 }
-                                FieldInput {
-                                    name: "timezone",
-                                    label: "Timezone",
-                                    input_type: "text",
-                                    placeholder: "UTC",
-                                    value: profile.read().timezone.clone(),
-                                    oninput: move |v: String| { profile.write().timezone = v; },
+                                {
+                                    let current_tz = profile.read().timezone.clone();
+                                    rsx! {
+                                        label { class: "block",
+                                            span { class: "text-xs font-medium text-bunyip-reed-800 dark:text-bunyip-reed-100", "Timezone" }
+                                            select {
+                                                class: "mt-1 w-full px-3 py-2 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 focus-visible:ring-2 focus-visible:ring-bunyip-reed-600",
+                                                value: "{current_tz}",
+                                                onchange: move |e| { profile.write().timezone = e.value(); },
+                                                option { value: "", "(use browser default)" }
+                                                for tz in TIMEZONES.iter() {
+                                                    option {
+                                                        value: "{tz}",
+                                                        selected: current_tz == *tz,
+                                                        "{tz}"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                                 FieldInput {
                                     name: "avatar_url",

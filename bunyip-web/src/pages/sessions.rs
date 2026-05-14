@@ -94,6 +94,30 @@ pub fn SessionsPage() -> Element {
                 }
 
                 SettingsCard { title: "Sessions",
+                    {
+                        let mut revoking_others = use_signal(|| false);
+                        let on_revoke_others = move |_| {
+                            if revoking_others() { return; }
+                            revoking_others.set(true);
+                            spawn(async move {
+                                let cfg = OidcConfig::from_env();
+                                let _ = oidc::issuer_post_authed_empty(&cfg, "/v1/auth/sessions/revoke-others").await;
+                                revoking_others.set(false);
+                                load.call(());
+                            });
+                        };
+                        rsx! {
+                            div { class: "mb-4 flex justify-end",
+                                button {
+                                    r#type: "button",
+                                    class: "px-3 py-1.5 rounded-lg border border-bunyip-reed-300 dark:border-bunyip-reed-600 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:bg-bunyip-reed-50 dark:hover:bg-bunyip-reed-900 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-bunyip-reed-600",
+                                    disabled: revoking_others(),
+                                    onclick: on_revoke_others,
+                                    if revoking_others() { "Signing out..." } else { "Sign out of all other sessions" }
+                                }
+                            }
+                        }
+                    }
                     match sessions.read().clone() {
                         None => rsx! {
                             p { class: "text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300", "Loading..." }
@@ -132,6 +156,31 @@ struct SessionRowProps {
     session: SessionView,
     revoking_id: Option<String>,
     on_revoke: EventHandler<()>,
+}
+
+/// Bucket an IP address into a human-readable location hint. Anything
+/// in RFC1918 / loopback gets a friendly label; otherwise we surface
+/// nothing (IP-to-geo lookup is out of scope; even MaxMind GeoLite is a
+/// per-deploy decision). Doc 06 polish item #1.
+fn friendly_ip(addr: &str) -> &'static str {
+    if matches!(addr, "127.0.0.1" | "::1") {
+        "This device"
+    } else if addr.starts_with("10.")
+        || addr.starts_with("192.168.")
+        || addr.starts_with("169.254.")
+        || (addr.starts_with("172.")
+            && addr
+                .get(4..6)
+                .and_then(|s| s.parse::<u8>().ok())
+                .map(|n| (16..=31).contains(&n))
+                .unwrap_or(false))
+        || addr.starts_with("fc")
+        || addr.starts_with("fd")
+    {
+        "Local network"
+    } else {
+        ""
+    }
 }
 
 /// Best-effort short label for a UA string. We do not pull a parser
@@ -251,7 +300,11 @@ fn SessionRow(props: SessionRowProps) -> Element {
                     }
                 }
                 p { class: "mt-1 text-xs text-bunyip-reed-500 dark:text-bunyip-reed-400",
-                    "{default_label} - IP {ip} - last active {last_active}"
+                    "{default_label} - {ip}",
+                    if !friendly_ip(&ip).is_empty() {
+                        span { " ({friendly_ip(&ip)})" }
+                    }
+                    " - last active {last_active}"
                 }
                 p { class: "text-xs text-bunyip-reed-500 dark:text-bunyip-reed-400",
                     "Signed in {signed_in}"
