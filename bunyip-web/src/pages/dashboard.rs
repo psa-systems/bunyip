@@ -298,6 +298,17 @@ fn DashboardHeader(user_name: String, org_name: String) -> Element {
                     div { class: "flex items-center gap-2 px-3 py-1.5 rounded-md bg-bunyip-reed-50 dark:bg-bunyip-reed-900",
                         span { class: "w-2 h-2 rounded-full bg-bunyip-reed-600 dark:bg-bunyip-reed-400" }
                         span { class: "text-sm font-medium text-bunyip-reed-900 dark:text-bunyip-reed-100", "{org_name}" }
+                        if !user_name.is_empty() {
+                            // Signed-in identity sits inside the
+                            // org-context pill so it reads as "where
+                            // am I + who am I", not as a nav item.
+                            span { class: "h-3 w-px bg-bunyip-reed-200 dark:bg-bunyip-reed-700" }
+                            span {
+                                class: "text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300 cursor-default select-text",
+                                title: "Signed in",
+                                "{user_name}"
+                            }
+                        }
                     }
                 }
                 nav { class: "flex items-center gap-2 text-sm",
@@ -311,14 +322,8 @@ fn DashboardHeader(user_name: String, org_name: String) -> Element {
                         class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:bg-bunyip-reed-50 dark:hover:bg-bunyip-reed-900",
                         "Orgs"
                     }
-                    // Signed-in identity, NOT a nav item. Muted colour
-                    // + cursor-default so the user does not read it as
-                    // a link. See components/layout.rs AppShell.
-                    span {
-                        class: "px-2 text-xs text-bunyip-reed-500 dark:text-bunyip-reed-400 cursor-default select-text",
-                        title: "Signed in",
-                        "{user_name}"
-                    }
+                    // user_name moved into the org-context pill on
+                    // the left.
                     button {
                         class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:text-bunyip-reed-900 hover:bg-bunyip-reed-50 dark:hover:text-white dark:hover:bg-bunyip-reed-900 transition-colors",
                         onclick: sign_out,

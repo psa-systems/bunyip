@@ -164,6 +164,19 @@ pub fn AppShell(
                             div { class: "flex items-center gap-2 px-3 py-1.5 rounded-md bg-bunyip-reed-50 dark:bg-bunyip-reed-900",
                                 span { class: "w-2 h-2 rounded-full bg-bunyip-reed-600 dark:bg-bunyip-reed-400" }
                                 span { class: "text-sm font-medium text-bunyip-reed-900 dark:text-bunyip-reed-100", "{org_name}" }
+                                if !user_name.is_empty() {
+                                    // Signed-in identity sits inside the
+                                    // org-context pill so it reads as
+                                    // "where am I + who am I", not as a
+                                    // nav item. Thin divider + muted
+                                    // colour so the org name still leads.
+                                    span { class: "h-3 w-px bg-bunyip-reed-200 dark:bg-bunyip-reed-700" }
+                                    span {
+                                        class: "text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300 cursor-default select-text",
+                                        title: "Signed in",
+                                        "{user_name}"
+                                    }
+                                }
                             }
                         }
                     }
@@ -179,15 +192,11 @@ pub fn AppShell(
                             "Orgs"
                         }
                         if !user_name.is_empty() {
-                            // Signed-in identity, NOT a nav item. Muted
-                            // colour + `cursor-default` so the user does
-                            // not read it as a link. Same text-sm as the
-                            // surrounding nav row so it still aligns.
-                            span {
-                                class: "px-2 text-xs text-bunyip-reed-500 dark:text-bunyip-reed-400 cursor-default select-text",
-                                title: "Signed in",
-                                "{user_name}"
-                            }
+                            // user_name moved into the org-context pill
+                            // on the left; nothing rendered here. Keep
+                            // the conditional so a future identity-related
+                            // control (avatar dropdown, etc.) has an
+                            // obvious anchor.
                             button {
                                 class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:text-bunyip-reed-900 hover:bg-bunyip-reed-50 dark:hover:text-white dark:hover:bg-bunyip-reed-900 transition-colors",
                                 onclick: sign_out,
