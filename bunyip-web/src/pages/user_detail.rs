@@ -78,17 +78,14 @@ pub fn UserDetailPage(user_id: String) -> Element {
         .unwrap_or_default();
     let is_self = my_id == user_id;
 
-    let mut detail: Signal<Option<Result<UserDetail, String>>> = use_signal(|| None);
-    let mut bump = use_signal(|| 0u32);
+    // `use_resource` is reactive: rerun on signal change AND via
+    // explicit `.restart()` after mutations. `use_future` would only
+    // fire on first mount, so a role change wouldn't refresh the
+    // page without a hard reload.
     let id_for_fetch = user_id.clone();
-    use_future(move || {
+    let mut detail = use_resource(move || {
         let id = id_for_fetch.clone();
-        async move {
-            let _ = bump.read();
-            detail.set(None);
-            let r = admin::get_user(&id).await.map_err(|e| e.user_message());
-            detail.set(Some(r));
-        }
+        async move { admin::get_user(&id).await.map_err(|e| e.user_message()) }
     });
 
     let mut role_modal: Signal<Option<String>> = use_signal(|| None);
@@ -97,7 +94,7 @@ pub fn UserDetailPage(user_id: String) -> Element {
     let mut busy_action: Signal<Option<&'static str>> = use_signal(|| None);
 
     let id_for_actions = user_id.clone();
-    let refetch = use_callback(move |_| bump.with_mut(|n| *n += 1));
+    let refetch = use_callback(move |_| detail.restart());
 
     let toggle_status = {
         let id = id_for_actions.clone();
@@ -230,15 +227,16 @@ pub fn UserDetailPage(user_id: String) -> Element {
                             }
 
                             // --- Role + status -----------------------
-                            section { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 p-6 space-y-4",
-                                h2 { class: "text-base font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50",
-                                    "Role and status"
-                                }
-                                if is_self {
-                                    p { class: "text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300",
-                                        "You cannot change your own role or status. Ask another admin."
+                            // Hidden entirely when viewing own profile:
+                            // admins can't mutate their own role or
+                            // status, and the empty "ask another admin"
+                            // panel just adds noise. Self-view shows
+                            // the profile + security + audit sections.
+                            if !is_self {
+                                section { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 p-6 space-y-4",
+                                    h2 { class: "text-base font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50",
+                                        "Role and status"
                                     }
-                                } else {
                                     div { class: "flex items-center gap-2 flex-wrap",
                                         p { class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 mr-2",
                                             "Change role:"

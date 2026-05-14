@@ -99,52 +99,42 @@ pub fn UserManagementPage() -> Element {
     let mut mfa_filter = use_signal(String::new);
     let mut offset = use_signal(|| 0u32);
 
-    let mut page: Signal<Option<Result<admin::UserListPage, String>>> = use_signal(|| None);
     let mut invites_count: Signal<Option<usize>> = use_signal(|| None);
-    let mut bump = use_signal(|| 0u32);
     let mut busy: Signal<Option<String>> = use_signal(|| None);
     let mut disenroll_for: Signal<Option<UserView>> = use_signal(|| None);
 
-    // use_future tracks signals read SYNCHRONOUSLY in the outer
-    // closure body - reads inside the async block are too late
-    // because the future runs later. Snapshot every filter signal up
-    // top, then capture the snapshot into the async block.
-    use_future(move || {
-        let search_v = search.read().clone();
-        let role_v = role_filter.read().clone();
-        let status_v = status_filter.read().clone();
-        let mfa_v = mfa_filter.read().clone();
-        let offset_v = *offset.read();
-        let _ = bump.read();
-        async move {
-            page.set(None);
-            let filter = UserListFilter {
-                search: Some(search_v.trim().to_string()).filter(|s| !s.is_empty()),
-                role: Some(role_v.trim().to_string()).filter(|s| !s.is_empty()),
-                status: Some(status_v.trim().to_string()).filter(|s| !s.is_empty()),
-                mfa_enrolled: match mfa_v.as_str() {
-                    "yes" => Some(true),
-                    "no" => Some(false),
-                    _ => None,
-                },
-                limit: PAGE_SIZE,
-                offset: offset_v,
-            };
-            let r = admin::list_users(&filter)
-                .await
-                .map_err(|e| e.user_message());
-            page.set(Some(r));
-            invites_count.set(admin::list_invites().await.ok().map(|v| v.len()));
-        }
+    // `use_resource` is the reactive variant of `use_future`: it tracks
+    // every signal read inside its closure via a ReactiveContext and
+    // re-runs the future whenever any of them changes. `use_future`
+    // would run ONCE on mount and never react to filter input - that's
+    // the bug we hit pre-refactor where the search box did nothing.
+    let mut page = use_resource(move || async move {
+        let filter = UserListFilter {
+            search: Some(search.read().trim().to_string()).filter(|s| !s.is_empty()),
+            role: Some(role_filter.read().trim().to_string()).filter(|s| !s.is_empty()),
+            status: Some(status_filter.read().trim().to_string()).filter(|s| !s.is_empty()),
+            mfa_enrolled: match mfa_filter.read().as_str() {
+                "yes" => Some(true),
+                "no" => Some(false),
+                _ => None,
+            },
+            limit: PAGE_SIZE,
+            offset: *offset.read(),
+        };
+        let r = admin::list_users(&filter)
+            .await
+            .map_err(|e| e.user_message());
+        // Side-fetch the pending-invites count; failures are
+        // non-fatal and we just leave the badge blank.
+        invites_count.set(admin::list_invites().await.ok().map(|v| v.len()));
+        r
     });
 
-    // bump is the explicit "refetch" trigger used by action handlers
-    // (suspend/reactivate/MFA disenroll) that mutate the user and
-    // want the list re-read. Filter signals already trigger their
-    // own use_future re-run via the synchronous reads above, so
-    // changing a filter does NOT need to bump.
     let refetch = use_callback(move |_| {
-        bump.with_mut(|n| *n += 1);
+        // restart() re-fires the resource's future with the current
+        // signal values. Used by mutation handlers (suspend, etc.)
+        // that need a fresh list AFTER they wrote to the server.
+        page.restart();
     });
     let reset_offset = use_callback(move |_| {
         offset.set(0);
@@ -359,7 +349,6 @@ pub fn UserManagementPage() -> Element {
                                             onclick: move |_| {
                                                 let cur = *offset.read();
                                                 offset.set(cur.saturating_sub(PAGE_SIZE));
-                                                bump.with_mut(|n| *n += 1);
                                             },
                                             "Previous"
                                         }
@@ -369,7 +358,6 @@ pub fn UserManagementPage() -> Element {
                                             disabled: off + shown >= total,
                                             onclick: move |_| {
                                                 offset.with_mut(|o| *o += limit as u32);
-                                                bump.with_mut(|n| *n += 1);
                                             },
                                             "Next"
                                         }
