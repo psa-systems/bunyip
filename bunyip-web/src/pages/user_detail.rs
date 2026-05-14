@@ -572,7 +572,20 @@ fn StepUpVerifyForm(props: StepUpVerifyFormProps) -> Element {
                 }
                 Err(e) => {
                     submitting.set(false);
-                    props.on_error.call(format!("step-up start: {e}"));
+                    let msg = e.to_string();
+                    // The server returns `{"error": "not_enrolled"}` when
+                    // the calling admin doesn't have MFA on their own
+                    // account; without translating, that body shows up
+                    // verbatim. Surface the actual problem.
+                    let friendly = if msg.contains("not_enrolled") {
+                        "You need to enable MFA on your own account before performing this action. Set it up under Settings -> Security."
+                            .to_string()
+                    } else if msg.contains("rate_limited") {
+                        "Too many attempts. Wait a moment and try again.".to_string()
+                    } else {
+                        format!("Could not start step-up: {e}")
+                    };
+                    props.on_error.call(friendly);
                 }
             }
         });
