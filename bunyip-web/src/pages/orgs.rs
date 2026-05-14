@@ -4,13 +4,44 @@ use dioxus::prelude::*;
 
 use crate::api::orgs::{self, MemberBrief, OrgMembershipBrief};
 use crate::api::types::MembershipRole;
+use crate::api::ApiError;
+use crate::components::error_card::{ErrorCard, ErrorVariant};
 use crate::components::layout::AppShell;
 use crate::routes::Route;
 use crate::stores::toast::use_toast;
 
+fn org_error_card(e: &ApiError, surface: &str, on_retry: EventHandler<()>) -> Element {
+    let variant = e.variant();
+    let (title, message) = match variant {
+        ErrorVariant::ComingSoon => (
+            format!("{surface} are on the roadmap"),
+            match surface {
+                "Organizations" => {
+                    "You can manage your default org from your profile for now.".to_string()
+                }
+                "Member management" => {
+                    "Member management isn't wired up yet. Check back soon.".to_string()
+                }
+                _ => "This surface isn't wired up yet.".to_string(),
+            },
+        ),
+        ErrorVariant::Retryable => (
+            "We hit a snag".to_string(),
+            format!("We couldn't load {surface}. The server might be having a momentary issue."),
+        ),
+        ErrorVariant::HardError => ("Something's not right".to_string(), e.user_message()),
+    };
+    let retry = if matches!(variant, ErrorVariant::Retryable) {
+        Some(on_retry)
+    } else {
+        None
+    };
+    rsx! { ErrorCard { variant, title, message, on_retry: retry } }
+}
+
 #[component]
 pub fn OrgListPage() -> Element {
-    let orgs = use_resource(|| async { orgs::list_my_orgs().await });
+    let mut orgs = use_resource(|| async { orgs::list_my_orgs().await });
 
     rsx! {
         AppShell {
@@ -37,14 +68,16 @@ pub fn OrgListPage() -> Element {
                         "+ New org"
                     }
                 }
-                div { class: "mt-6 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 divide-y divide-bunyip-reed-50 dark:divide-bunyip-reed-700",
+                div { class: "mt-6",
                     match &*orgs.read_unchecked() {
-                        None => rsx! { p { class: "p-6 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "Loading…" } },
-                        Some(Err(e)) => rsx! { p { class: "p-6 text-sm text-red-700", "{e.user_message()}" } },
-                        Some(Ok(list)) if list.is_empty() => rsx! { p { class: "p-6 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "You're not in any organizations yet." } },
+                        None => rsx! { div { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 p-6 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "Loading…" } },
+                        Some(Err(e)) => org_error_card(e, "Organizations", EventHandler::new(move |_| orgs.restart())),
+                        Some(Ok(list)) if list.is_empty() => rsx! { div { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 p-6 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "You're not in any organizations yet." } },
                         Some(Ok(list)) => rsx! {
-                            for membership in list.iter() {
-                                OrgRow { membership: membership.clone() }
+                            div { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 divide-y divide-bunyip-reed-50 dark:divide-bunyip-reed-700",
+                                for membership in list.iter() {
+                                    OrgRow { membership: membership.clone() }
+                                }
                             }
                         }
                     }
@@ -96,13 +129,13 @@ pub fn OrgMembersPage(slug: String) -> Element {
     let slug_for_resource = slug.clone();
     let mut refresh_key = use_signal(|| 0u64);
 
-    let members = use_resource(move || {
+    let mut members = use_resource(move || {
         let slug = slug_for_resource.clone();
         let _ = refresh_key.read(); // re-fetch when refresh_key changes
         async move { orgs::list_members(&slug).await }
     });
     let invites_slug = slug.clone();
-    let invites = use_resource(move || {
+    let mut invites = use_resource(move || {
         let slug = invites_slug.clone();
         let _ = refresh_key.read();
         async move { orgs::list_invitations(&slug).await }
@@ -188,7 +221,7 @@ pub fn OrgMembersPage(slug: String) -> Element {
                     div { class: "mt-4 divide-y divide-bunyip-reed-50 dark:divide-bunyip-reed-700",
                         match &*invites.read_unchecked() {
                             None => rsx! { p { class: "py-3 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "Loading…" } },
-                            Some(Err(e)) => rsx! { p { class: "py-3 text-sm text-red-700", "{e.user_message()}" } },
+                            Some(Err(e)) => org_error_card(e, "Member management", EventHandler::new(move |_| invites.restart())),
                             Some(Ok(list)) if list.is_empty() => rsx! { p { class: "py-3 text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300", "None pending." } },
                             Some(Ok(list)) => {
                                 let slug = slug.clone();
@@ -207,7 +240,7 @@ pub fn OrgMembersPage(slug: String) -> Element {
                     div { class: "divide-y divide-bunyip-reed-50 dark:divide-bunyip-reed-700",
                         match &*members.read_unchecked() {
                             None => rsx! { p { class: "p-6 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "Loading…" } },
-                            Some(Err(e)) => rsx! { p { class: "p-6 text-sm text-red-700", "{e.user_message()}" } },
+                            Some(Err(e)) => org_error_card(e, "Member management", EventHandler::new(move |_| members.restart())),
                             Some(Ok(list)) if list.is_empty() => rsx! { p { class: "p-6 text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300", "No members yet." } },
                             Some(Ok(list)) => {
                                 let slug = slug.clone();

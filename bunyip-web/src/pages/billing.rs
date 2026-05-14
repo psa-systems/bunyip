@@ -3,6 +3,7 @@
 use dioxus::prelude::*;
 
 use crate::api::billing::{self, BillingView, SubscriptionStatus, TierConfig};
+use crate::components::error_card::{ErrorCard, ErrorVariant};
 use crate::components::layout::AppShell;
 use crate::routes::Route;
 use crate::stores::toast::use_toast;
@@ -13,7 +14,7 @@ pub fn OrgBillingPage(slug: String) -> Element {
     let mut refresh_key = use_signal(|| 0u64);
 
     let slug_for_view = slug.clone();
-    let view = use_resource(move || {
+    let mut view = use_resource(move || {
         let slug = slug_for_view.clone();
         let _ = refresh_key.read();
         async move { billing::get_billing(&slug).await }
@@ -32,7 +33,27 @@ pub fn OrgBillingPage(slug: String) -> Element {
 
                 match &*view.read_unchecked() {
                     None => rsx! { div { class: "mt-6 p-6 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "Loading…" } },
-                    Some(Err(e)) => rsx! { div { class: "mt-6 p-6 rounded-xl border border-red-200 bg-red-50 text-sm text-red-800", "{e.user_message()}" } },
+                    Some(Err(e)) => {
+                        let variant = e.variant();
+                        let (title, message) = match variant {
+                            ErrorVariant::ComingSoon => (
+                                "Billing is on the roadmap".to_string(),
+                                "Subscription management isn't wired up yet. We'll surface plan + invoices here when it ships.".to_string(),
+                            ),
+                            ErrorVariant::Retryable => (
+                                "We hit a snag".to_string(),
+                                "We couldn't load your billing info. The server might be having a momentary issue.".to_string(),
+                            ),
+                            ErrorVariant::HardError => ("Something's not right".to_string(), e.user_message()),
+                        };
+                        let retry = matches!(variant, ErrorVariant::Retryable)
+                            .then(|| EventHandler::new(move |_| view.restart()));
+                        rsx! {
+                            div { class: "mt-6",
+                                ErrorCard { variant, title, message, on_retry: retry }
+                            }
+                        }
+                    },
                     Some(Ok(view)) => rsx! { CurrentPlan { view: view.clone(), slug: slug.clone(), refresh_key: refresh_key, toast: toast } },
                 }
 

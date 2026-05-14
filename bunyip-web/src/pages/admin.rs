@@ -4,6 +4,7 @@
 use dioxus::prelude::*;
 
 use crate::api::feedback::{self, Feedback, FeedbackStatus};
+use crate::components::error_card::{ErrorCard, ErrorVariant};
 use crate::components::layout::AppShell;
 use crate::routes::Route;
 use crate::stores::toast::use_toast;
@@ -14,7 +15,7 @@ pub fn AdminFeedbackPage() -> Element {
     let mut filter = use_signal(|| "all".to_string());
     let mut refresh_key = use_signal(|| 0u64);
 
-    let feedback_resource = use_resource(move || {
+    let mut feedback_resource = use_resource(move || {
         let filter = filter();
         let _ = refresh_key.read();
         async move { feedback::list_admin(if filter == "all" { None } else { Some(&filter) }).await }
@@ -38,15 +39,33 @@ pub fn AdminFeedbackPage() -> Element {
                     FilterChip { current: filter(), value: "closed", label: "Closed", onpick: move |s| filter.set(s) }
                 }
 
-                div { class: "mt-6 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800",
+                div { class: "mt-6",
                     match &*feedback_resource.read_unchecked() {
-                        None => rsx! { p { class: "p-6 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "Loading…" } },
-                        Some(Err(e)) => rsx! { p { class: "p-6 text-sm text-red-700", "{e.user_message()}" } },
-                        Some(Ok(list)) if list.is_empty() => rsx! { p { class: "p-6 text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300", "Nothing here yet." } },
+                        None => rsx! { div { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 p-6 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "Loading…" } },
+                        Some(Err(e)) => {
+                            let variant = e.variant();
+                            let (title, message) = match variant {
+                                ErrorVariant::ComingSoon => (
+                                    "Feedback triage is on the roadmap".to_string(),
+                                    "Public submissions are still being captured. The admin inbox will land in a follow-up release.".to_string(),
+                                ),
+                                ErrorVariant::Retryable => (
+                                    "We hit a snag".to_string(),
+                                    "We couldn't load the feedback inbox. The server might be having a momentary issue.".to_string(),
+                                ),
+                                ErrorVariant::HardError => ("Something's not right".to_string(), e.user_message()),
+                            };
+                            let retry = matches!(variant, ErrorVariant::Retryable)
+                                .then(|| EventHandler::new(move |_| feedback_resource.restart()));
+                            rsx! { ErrorCard { variant, title, message, on_retry: retry } }
+                        },
+                        Some(Ok(list)) if list.is_empty() => rsx! { div { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 p-6 text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300", "Nothing here yet." } },
                         Some(Ok(list)) => rsx! {
-                            ul { class: "divide-y divide-bunyip-reed-50 dark:divide-bunyip-reed-700",
-                                for entry in list.iter() {
-                                    FeedbackRow { entry: entry.clone(), refresh_key: refresh_key, toast: toast }
+                            div { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800",
+                                ul { class: "divide-y divide-bunyip-reed-50 dark:divide-bunyip-reed-700",
+                                    for entry in list.iter() {
+                                        FeedbackRow { entry: entry.clone(), refresh_key: refresh_key, toast: toast }
+                                    }
                                 }
                             }
                         }

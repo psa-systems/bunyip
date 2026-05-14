@@ -93,6 +93,20 @@ pub enum ApiError {
 }
 
 impl ApiError {
+    /// Bucket an `ApiError` into an `ErrorVariant` for `ErrorCard`.
+    /// 404 means the surface exists but the endpoint isn't wired yet
+    /// (ComingSoon); 5xx + network blips are transient (Retryable);
+    /// everything else is terminal (HardError).
+    pub fn variant(&self) -> crate::components::error_card::ErrorVariant {
+        use crate::components::error_card::ErrorVariant;
+        match self {
+            ApiError::Status { status: 404, .. } => ErrorVariant::ComingSoon,
+            ApiError::Status { status, .. } if *status >= 500 => ErrorVariant::Retryable,
+            ApiError::Network(_) => ErrorVariant::Retryable,
+            _ => ErrorVariant::HardError,
+        }
+    }
+
     pub fn user_message(&self) -> String {
         match self {
             ApiError::Network(_) => "Network error - check your connection.".into(),

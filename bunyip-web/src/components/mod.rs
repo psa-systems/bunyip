@@ -1,3 +1,4 @@
+pub mod error_card;
 pub mod feedback;
 pub mod image;
 pub mod layout;
