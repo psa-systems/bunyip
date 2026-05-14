@@ -25,6 +25,7 @@ use crate::pages::{
     security::SecurityPage,
     sessions::SessionsPage,
     settings::SettingsPage,
+    user_detail::UserDetailPage,
     user_management::UserManagementPage,
 };
 
@@ -114,6 +115,11 @@ pub enum Route {
 
     #[route("/admin/users/invites")]
     InviteListPage {},
+
+    // Detail route AFTER the two literal subpaths so dioxus picks
+    // `/admin/users/invite` and `/admin/users/invites` first.
+    #[route("/admin/users/:user_id")]
+    UserDetailPage { user_id: String },
 
     #[route("/admin/audit-logs")]
     AuditLogsPage {},

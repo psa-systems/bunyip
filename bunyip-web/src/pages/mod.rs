@@ -19,4 +19,5 @@ pub mod profile;
 pub mod security;
 pub mod sessions;
 pub mod settings;
+pub mod user_detail;
 pub mod user_management;

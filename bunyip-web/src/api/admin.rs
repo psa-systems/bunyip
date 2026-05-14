@@ -30,15 +30,77 @@ pub struct UserView {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-struct UserListEnvelope {
-    users: Vec<UserView>,
+/// Filter inputs for the admin user-management list endpoint. All
+/// fields are optional; default = no filter, default paging.
+#[derive(Clone, Debug, Default)]
+pub struct UserListFilter {
+    pub search: Option<String>,
+    pub role: Option<String>,
+    pub status: Option<String>,
+    /// `Some(true)` -> only mfa-enrolled. `Some(false)` -> only not
+    /// enrolled. `None` -> no filter.
+    pub mfa_enrolled: Option<bool>,
+    pub limit: u32,
+    pub offset: u32,
 }
 
-pub async fn list_users() -> Result<Vec<UserView>, ApiError> {
-    get_authed::<UserListEnvelope>("/v1/auth/users")
-        .await
-        .map(|e| e.users)
+impl UserListFilter {
+    /// Encode as query-string. Empty fields drop out so the URL stays
+    /// readable when no filter is active.
+    fn to_query(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(s) = self.search.as_deref().filter(|s| !s.is_empty()) {
+            parts.push(format!("search={}", urlencode(s)));
+        }
+        if let Some(s) = self.role.as_deref().filter(|s| !s.is_empty()) {
+            parts.push(format!("role={}", urlencode(s)));
+        }
+        if let Some(s) = self.status.as_deref().filter(|s| !s.is_empty()) {
+            parts.push(format!("status={}", urlencode(s)));
+        }
+        if let Some(b) = self.mfa_enrolled {
+            parts.push(format!("mfa={}", if b { "yes" } else { "no" }));
+        }
+        parts.push(format!("limit={}", self.limit));
+        parts.push(format!("offset={}", self.offset));
+        parts.join("&")
+    }
+}
+
+fn urlencode(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+            _ => format!("%{:02X}", c as u32),
+        })
+        .collect()
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct UserListPage {
+    pub users: Vec<UserView>,
+    #[serde(default)]
+    pub total: u64,
+    #[serde(default)]
+    pub limit: u32,
+    #[serde(default)]
+    pub offset: u32,
+}
+
+pub async fn list_users(filter: &UserListFilter) -> Result<UserListPage, ApiError> {
+    let path = format!("/v1/auth/users?{}", filter.to_query());
+    get_authed::<UserListPage>(&path).await
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct UserDetail {
+    pub user: UserView,
+    #[serde(default)]
+    pub available_role_transitions: Vec<String>,
+}
+
+pub async fn get_user(user_id: &str) -> Result<UserDetail, ApiError> {
+    get_authed::<UserDetail>(&format!("/v1/auth/users/{user_id}")).await
 }
 
 pub async fn suspend_user(user_id: &str) -> Result<(), ApiError> {
@@ -68,6 +130,65 @@ pub async fn force_disenroll_mfa(user_id: &str, reason: &str) -> Result<(), ApiE
         &DisenrollMfaBody {
             reason: reason.to_string(),
         },
+    )
+    .await
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ChangeRoleBody<'a> {
+    role: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    step_up_token: Option<String>,
+}
+
+pub async fn change_user_role(
+    user_id: &str,
+    role: &str,
+    reason: Option<String>,
+    step_up_token: Option<String>,
+) -> Result<(), ApiError> {
+    post_authed_empty(
+        &format!("/v1/auth/users/{user_id}/role"),
+        &ChangeRoleBody {
+            role,
+            reason,
+            step_up_token,
+        },
+    )
+    .await
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DeleteUserBody {
+    reason: String,
+    step_up_token: String,
+}
+
+pub async fn delete_user(user_id: &str, reason: &str, step_up_token: &str) -> Result<(), ApiError> {
+    post_authed_empty(
+        &format!("/v1/auth/users/{user_id}/delete"),
+        &DeleteUserBody {
+            reason: reason.to_string(),
+            step_up_token: step_up_token.to_string(),
+        },
+    )
+    .await
+}
+
+pub async fn resend_verify(user_id: &str) -> Result<(), ApiError> {
+    post_authed_empty(
+        &format!("/v1/auth/users/{user_id}/resend-verify"),
+        &serde_json::json!({}),
+    )
+    .await
+}
+
+pub async fn admin_trigger_password_reset(user_id: &str) -> Result<(), ApiError> {
+    post_authed_empty(
+        &format!("/v1/auth/users/{user_id}/password-reset"),
+        &serde_json::json!({}),
     )
     .await
 }

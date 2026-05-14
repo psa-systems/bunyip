@@ -1,13 +1,19 @@
-//! `/admin/users` - list users, suspend/reactivate, admin-force MFA disenroll.
+//! `/admin/users` - list users with search + filters + pagination,
+//! suspend/reactivate, admin-force MFA disenroll. Click a row to open
+//! the detail page (`/admin/users/:id`).
+//!
+//! See docs/bunyip-settings/04-ui.md for the design.
 
 use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
 
-use crate::api::admin::{self, UserView};
+use crate::api::admin::{self, UserListFilter, UserView};
 use crate::components::layout::AppShell;
 use crate::routes::Route;
 use crate::stores::auth::{use_auth, use_require_role};
 use crate::stores::toast::use_toast;
+
+const PAGE_SIZE: u32 = 50;
 
 fn role_label(role: &str) -> &'static str {
     match role {
@@ -46,6 +52,7 @@ fn status_badge_class(s: &str) -> &'static str {
             "bg-bunyip-reed-100 text-bunyip-reed-800 dark:bg-bunyip-reed-700 dark:text-bunyip-reed-200"
         }
         "pending" => "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
+        "deleted" => "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
         _ => "bg-bunyip-reed-100 text-bunyip-reed-800 dark:bg-bunyip-reed-700 dark:text-bunyip-reed-200",
     }
 }
@@ -86,7 +93,13 @@ pub fn UserManagementPage() -> Element {
         .map(|me| me.user.id.clone())
         .unwrap_or_default();
 
-    let mut users: Signal<Option<Result<Vec<UserView>, String>>> = use_signal(|| None);
+    let mut search = use_signal(String::new);
+    let mut role_filter = use_signal(String::new);
+    let mut status_filter = use_signal(String::new);
+    let mut mfa_filter = use_signal(String::new);
+    let mut offset = use_signal(|| 0u32);
+
+    let mut page: Signal<Option<Result<admin::UserListPage, String>>> = use_signal(|| None);
     let mut invites_count: Signal<Option<usize>> = use_signal(|| None);
     let mut bump = use_signal(|| 0u32);
     let mut busy: Signal<Option<String>> = use_signal(|| None);
@@ -94,13 +107,31 @@ pub fn UserManagementPage() -> Element {
 
     use_future(move || async move {
         let _ = bump.read();
-        users.set(None);
-        let r = admin::list_users().await.map_err(|e| e.user_message());
-        users.set(Some(r));
+        page.set(None);
+        let filter = UserListFilter {
+            search: Some(search.read().trim().to_string()).filter(|s| !s.is_empty()),
+            role: Some(role_filter.read().trim().to_string()).filter(|s| !s.is_empty()),
+            status: Some(status_filter.read().trim().to_string()).filter(|s| !s.is_empty()),
+            mfa_enrolled: match mfa_filter.read().as_str() {
+                "yes" => Some(true),
+                "no" => Some(false),
+                _ => None,
+            },
+            limit: PAGE_SIZE,
+            offset: *offset.read(),
+        };
+        let r = admin::list_users(&filter)
+            .await
+            .map_err(|e| e.user_message());
+        page.set(Some(r));
         invites_count.set(admin::list_invites().await.ok().map(|v| v.len()));
     });
 
     let refetch = use_callback(move |_| {
+        bump.with_mut(|n| *n += 1);
+    });
+    let refetch_first_page = use_callback(move |_| {
+        offset.set(0);
         bump.with_mut(|n| *n += 1);
     });
 
@@ -128,10 +159,7 @@ pub fn UserManagementPage() -> Element {
     });
 
     rsx! {
-        AppShell {
-            title: "User management".to_string(),
-            back_to: Some(Route::SettingsPage {}),
-            back_label: "Settings".to_string(),
+        AppShell { title: "User management".to_string(),
             div { class: "max-w-6xl mx-auto px-6 space-y-6",
                 div { class: "flex items-start justify-between gap-4 flex-wrap",
                     div {
@@ -139,7 +167,7 @@ pub fn UserManagementPage() -> Element {
                             "User management"
                         }
                         p { class: "mt-1 text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300",
-                            "Active accounts in your organization. Use \"Invite user\" to add a new teammate."
+                            "Click a row to open the user's detail page."
                         }
                     }
                     div { class: "flex gap-2",
@@ -162,8 +190,92 @@ pub fn UserManagementPage() -> Element {
                     }
                 }
 
+                div { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 p-4",
+                    div { class: "flex gap-2 items-end flex-wrap",
+                        div { class: "flex-1 min-w-[16rem]",
+                            label { class: "block text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 mb-1",
+                                "Search"
+                            }
+                            input {
+                                r#type: "text",
+                                placeholder: "name or email",
+                                class: "block w-full rounded-md border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-900 text-bunyip-reed-900 dark:text-bunyip-reed-50 text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-bunyip-reed-600",
+                                value: "{search.read()}",
+                                oninput: move |e: Event<FormData>| {
+                                    search.set(e.value());
+                                    refetch_first_page.call(());
+                                },
+                            }
+                        }
+                        div {
+                            label { class: "block text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 mb-1",
+                                "Role"
+                            }
+                            select {
+                                class: "block rounded-md border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-900 text-bunyip-reed-900 dark:text-bunyip-reed-50 text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-bunyip-reed-600",
+                                value: "{role_filter.read()}",
+                                onchange: move |e: Event<FormData>| {
+                                    role_filter.set(e.value());
+                                    refetch_first_page.call(());
+                                },
+                                option { value: "", "All roles" }
+                                option { value: "admin", "Admin" }
+                                option { value: "manager", "Manager" }
+                                option { value: "finance", "Finance" }
+                                option { value: "member", "Member" }
+                                option { value: "readonly", "Read only" }
+                            }
+                        }
+                        div {
+                            label { class: "block text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 mb-1",
+                                "Status"
+                            }
+                            select {
+                                class: "block rounded-md border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-900 text-bunyip-reed-900 dark:text-bunyip-reed-50 text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-bunyip-reed-600",
+                                value: "{status_filter.read()}",
+                                onchange: move |e: Event<FormData>| {
+                                    status_filter.set(e.value());
+                                    refetch_first_page.call(());
+                                },
+                                option { value: "", "All statuses" }
+                                option { value: "active", "Active" }
+                                option { value: "suspended", "Suspended" }
+                                option { value: "pending", "Pending" }
+                            }
+                        }
+                        div {
+                            label { class: "block text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 mb-1",
+                                "MFA"
+                            }
+                            select {
+                                class: "block rounded-md border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-900 text-bunyip-reed-900 dark:text-bunyip-reed-50 text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-bunyip-reed-600",
+                                value: "{mfa_filter.read()}",
+                                onchange: move |e: Event<FormData>| {
+                                    mfa_filter.set(e.value());
+                                    refetch_first_page.call(());
+                                },
+                                option { value: "", "Any" }
+                                option { value: "yes", "Enrolled" }
+                                option { value: "no", "Not enrolled" }
+                            }
+                        }
+                        button {
+                            r#type: "button",
+                            class: "px-3 py-1.5 rounded-md border border-bunyip-reed-300 dark:border-bunyip-reed-600 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:bg-bunyip-reed-50 dark:hover:bg-bunyip-reed-900",
+                            onclick: move |_| {
+                                search.set(String::new());
+                                role_filter.set(String::new());
+                                status_filter.set(String::new());
+                                mfa_filter.set(String::new());
+                                refetch_first_page.call(());
+                            },
+                            "Reset"
+                        }
+                    }
+                }
+
                 div { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 overflow-hidden",
-                    match users.read().clone() {
+                    match page.read().clone() {
                         None => rsx! {
                             div { class: "p-8 text-center text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300",
                                 "Loading..."
@@ -174,39 +286,77 @@ pub fn UserManagementPage() -> Element {
                                 p { class: "text-sm text-red-700 dark:text-red-300", "Could not load users: {msg}" }
                             }
                         },
-                        Some(Ok(rows)) if rows.is_empty() => rsx! {
+                        Some(Ok(body)) if body.users.is_empty() => rsx! {
                             div { class: "p-8 text-center text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300",
-                                "No users yet. Invite your first teammate to get started."
+                                "No users match the current filters."
                             }
                         },
-                        Some(Ok(rows)) => rsx! {
-                            table { class: "min-w-full divide-y divide-bunyip-reed-100 dark:divide-bunyip-reed-700",
-                                thead { class: "bg-bunyip-reed-50 dark:bg-bunyip-reed-900",
-                                    tr {
-                                        th { class: "px-6 py-3 text-left text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 uppercase tracking-wide", "User" }
-                                        th { class: "px-6 py-3 text-left text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 uppercase tracking-wide", "Role" }
-                                        th { class: "px-6 py-3 text-left text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 uppercase tracking-wide", "Status" }
-                                        th { class: "px-6 py-3 text-left text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 uppercase tracking-wide", "MFA" }
-                                        th { class: "px-6 py-3 text-left text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 uppercase tracking-wide", "Last login" }
-                                        th { class: "px-6 py-3" }
+                        Some(Ok(body)) => {
+                            let total = body.total;
+                            let limit = body.limit.max(1) as u64;
+                            let off = body.offset as u64;
+                            let shown = body.users.len() as u64;
+                            rsx! {
+                                table { class: "min-w-full divide-y divide-bunyip-reed-100 dark:divide-bunyip-reed-700",
+                                    thead { class: "bg-bunyip-reed-50 dark:bg-bunyip-reed-900",
+                                        tr {
+                                            th { class: "px-6 py-3 text-left text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 uppercase tracking-wide", "User" }
+                                            th { class: "px-6 py-3 text-left text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 uppercase tracking-wide", "Role" }
+                                            th { class: "px-6 py-3 text-left text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 uppercase tracking-wide", "Status" }
+                                            th { class: "px-6 py-3 text-left text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 uppercase tracking-wide", "MFA" }
+                                            th { class: "px-6 py-3 text-left text-xs font-medium text-bunyip-reed-600 dark:text-bunyip-reed-300 uppercase tracking-wide", "Last login" }
+                                            th { class: "px-6 py-3" }
+                                        }
+                                    }
+                                    tbody { class: "bg-white dark:bg-bunyip-reed-800 divide-y divide-bunyip-reed-100 dark:divide-bunyip-reed-700",
+                                        for u in body.users.iter().cloned() {
+                                            UserRow {
+                                                key: "{u.id}",
+                                                user: u.clone(),
+                                                is_self: u.id == my_id,
+                                                busy_id: busy.read().clone(),
+                                                on_toggle: {
+                                                    let id = u.id.clone();
+                                                    let active = u.status == "active";
+                                                    move |_| toggle_status.call((id.clone(), active))
+                                                },
+                                                on_disenroll: {
+                                                    let user = u.clone();
+                                                    move |_| disenroll_for.set(Some(user.clone()))
+                                                },
+                                            }
+                                        }
                                     }
                                 }
-                                tbody { class: "bg-white dark:bg-bunyip-reed-800 divide-y divide-bunyip-reed-100 dark:divide-bunyip-reed-700",
-                                    for u in rows {
-                                        UserRow {
-                                            key: "{u.id}",
-                                            user: u.clone(),
-                                            is_self: u.id == my_id,
-                                            busy_id: busy.read().clone(),
-                                            on_toggle: {
-                                                let id = u.id.clone();
-                                                let active = u.status == "active";
-                                                move |_| toggle_status.call((id.clone(), active))
+                                div { class: "flex items-center justify-between gap-2 px-4 py-3 border-t border-bunyip-reed-100 dark:border-bunyip-reed-700",
+                                    span { class: "text-xs text-bunyip-reed-500 dark:text-bunyip-reed-400",
+                                        if total == 0 {
+                                            "No rows"
+                                        } else {
+                                            "Showing {off + 1}-{off + shown} of {total}"
+                                        }
+                                    }
+                                    div { class: "flex gap-2",
+                                        button {
+                                            r#type: "button",
+                                            class: "px-3 py-1 rounded-md border border-bunyip-reed-300 dark:border-bunyip-reed-600 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:bg-bunyip-reed-50 dark:hover:bg-bunyip-reed-900 disabled:opacity-50",
+                                            disabled: off == 0,
+                                            onclick: move |_| {
+                                                let cur = *offset.read();
+                                                offset.set(cur.saturating_sub(PAGE_SIZE));
+                                                bump.with_mut(|n| *n += 1);
                                             },
-                                            on_disenroll: {
-                                                let user = u.clone();
-                                                move |_| disenroll_for.set(Some(user.clone()))
+                                            "Previous"
+                                        }
+                                        button {
+                                            r#type: "button",
+                                            class: "px-3 py-1 rounded-md border border-bunyip-reed-300 dark:border-bunyip-reed-600 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:bg-bunyip-reed-50 dark:hover:bg-bunyip-reed-900 disabled:opacity-50",
+                                            disabled: off + shown >= total,
+                                            onclick: move |_| {
+                                                offset.with_mut(|o| *o += limit as u32);
+                                                bump.with_mut(|n| *n += 1);
                                             },
+                                            "Next"
                                         }
                                     }
                                 }
@@ -255,18 +405,23 @@ fn UserRow(props: UserRowProps) -> Element {
         .last_login_at
         .map(relative_time)
         .unwrap_or_else(|| "never".to_string());
+    let row_link = Route::UserDetailPage {
+        user_id: u.id.clone(),
+    };
 
     rsx! {
         tr {
             td { class: "px-6 py-4 whitespace-nowrap",
-                div { class: "flex items-center",
+                Link {
+                    to: row_link.clone(),
+                    class: "flex items-center gap-3 group",
                     div { class: "w-10 h-10 rounded-full bg-bunyip-reed-100 dark:bg-bunyip-reed-700 flex items-center justify-center",
                         span { class: "text-sm font-medium text-bunyip-reed-700 dark:text-bunyip-reed-200",
                             "{initial}"
                         }
                     }
-                    div { class: "ml-4",
-                        div { class: "text-sm font-medium text-bunyip-reed-900 dark:text-bunyip-reed-50",
+                    div { class: "ml-1",
+                        div { class: "text-sm font-medium text-bunyip-reed-900 dark:text-bunyip-reed-50 group-hover:text-bunyip-reed-700 dark:group-hover:text-white",
                             "{name}"
                             if props.is_self {
                                 span { class: "ml-2 text-xs text-bunyip-reed-500 dark:text-bunyip-reed-400", "(you)" }
