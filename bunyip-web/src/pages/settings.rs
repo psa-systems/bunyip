@@ -4,7 +4,7 @@
 //! owns. Reaches every page the user could otherwise only find by
 //! typing the URL. Grouped into:
 //!   - Your account (profile, security, sessions, tenant switcher)
-//!   - Organisations
+//!   - Organizations
 //!   - Admin (admin-only)
 //!
 //! See docs/migration/settings-split.md for the partition this hub
@@ -54,7 +54,7 @@ pub fn SettingsPage() -> Element {
                         "Settings"
                     }
                     p { class: "mt-1 text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300",
-                        "Your account, your organisations, and (if you're an admin) the platform."
+                        "Your account, your organizations, and (if you're an admin) the platform."
                     }
                 }
 
@@ -83,9 +83,9 @@ pub fn SettingsPage() -> Element {
                     }
                 }
 
-                HubSection { title: "Organisations",
+                HubSection { title: "Organizations",
                     HubCard {
-                        title: "Organisations",
+                        title: "Organizations",
                         description: "Members, roles, and billing for each org you belong to.",
                         to: Route::OrgListPage {},
                     }
