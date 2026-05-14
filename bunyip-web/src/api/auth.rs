@@ -93,6 +93,46 @@ pub async fn reset_complete(
     .await
 }
 
+// --- Admin-invite accept (the link in invitation emails) -----------------
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct InvitePreview {
+    /// `new_account` (collect password + name) or `join_tenant` (no password).
+    pub kind: String,
+    pub email: String,
+    pub role: String,
+    pub tenant_name: String,
+    pub invited_by_name: String,
+    pub invited_by_email: String,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// GET `/v1/auth/invites/by-token/{token}` - preview the admin invite.
+pub async fn invite_preview(token: &str) -> Result<InvitePreview, ApiError> {
+    super::get_json(&format!("/v1/auth/invites/by-token/{token}")).await
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct InviteAcceptRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_name: Option<String>,
+}
+
+/// POST `/v1/auth/invites/by-token/{token}/accept`. Creates the user in
+/// the `new_account` path; inserts a membership in the `join_tenant`
+/// path. Either way the row is consumed under SERIALIZABLE.
+pub async fn invite_accept(
+    token: &str,
+    req: &InviteAcceptRequest,
+) -> Result<serde_json::Value, ApiError> {
+    post_json(&format!("/v1/auth/invites/by-token/{token}/accept"), req).await
+}
+
 /// POST `/v1/auth/logout` (best-effort). The cookie-based session
 /// revoke does nothing on cross-origin fetches without credentials,
 /// but the endpoint still cleans up internal bookkeeping when reachable.

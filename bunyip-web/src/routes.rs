@@ -14,6 +14,7 @@ use crate::pages::{
     errors::NotFoundPage,
     feedback::FeedbackPage,
     invitations::AcceptInvitationPage,
+    invite_accept::InviteAcceptPage,
     invite_create::InviteCreatePage,
     invite_list::InviteListPage,
     landing::LandingPage,
@@ -103,6 +104,9 @@ pub enum Route {
 
     #[route("/invitations/accept")]
     AcceptInvitationPage {},
+
+    #[route("/invite/:token")]
+    InviteAcceptPage { token: String },
 
     #[route("/admin/feedback")]
     AdminFeedbackPage {},

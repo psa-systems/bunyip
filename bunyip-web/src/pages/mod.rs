@@ -8,6 +8,7 @@ pub mod dashboard;
 pub mod errors;
 pub mod feedback;
 pub mod invitations;
+pub mod invite_accept;
 pub mod invite_create;
 pub mod invite_list;
 pub mod landing;
