@@ -311,7 +311,14 @@ fn DashboardHeader(user_name: String, org_name: String) -> Element {
                         class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:bg-bunyip-reed-50 dark:hover:bg-bunyip-reed-900",
                         "Orgs"
                     }
-                    span { class: "text-bunyip-reed-700 dark:text-bunyip-reed-200", "{user_name}" }
+                    // Signed-in identity, NOT a nav item. Muted colour
+                    // + cursor-default so the user does not read it as
+                    // a link. See components/layout.rs AppShell.
+                    span {
+                        class: "px-2 text-xs text-bunyip-reed-500 dark:text-bunyip-reed-400 cursor-default select-text",
+                        title: "Signed in",
+                        "{user_name}"
+                    }
                     button {
                         class: "px-3 py-1.5 rounded-md text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:text-bunyip-reed-900 hover:bg-bunyip-reed-50 dark:hover:text-white dark:hover:bg-bunyip-reed-900 transition-colors",
                         onclick: sign_out,
