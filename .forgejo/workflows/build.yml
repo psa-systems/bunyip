@@ -13,7 +13,6 @@ name: build
 on:
   push:
     branches:
-      - chore/initial-setup
       - main
     tags:
       - "v*"
