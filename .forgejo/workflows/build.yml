@@ -1,3 +1,13 @@
+---
+
+# Build OCI images and push to Forgejo Container Registry.
+#
+# Triggers:
+# - push to chore/initial-setup or main: builds with :latest tag
+# - push of a tag matching v*: builds with the tag name (e.g. v0.1.0) plus :latest
+#
+# Tag resolution lives in {bunyip-api,bunyip-web}/oci-build/get-tags.nu and
+# mirrors the scheme used by mokosh-server and mokosh-clients.
 name: build
 
 on:
@@ -5,6 +15,8 @@ on:
     branches:
       - chore/initial-setup
       - main
+    tags:
+      - "v*"
   pull_request:
 
 jobs:
@@ -32,41 +44,111 @@ jobs:
       - name: cargo check
         run: cargo check --workspace --all-targets
 
-  build-image:
-    name: Build and push OCI image
-    runs-on: docker
+  build-images:
+    name: Build and push OCI images
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
     needs: check
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/chore/initial-setup' || github.ref == 'refs/heads/main')
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_REGISTRY: ""
+      REGISTRY_PROVIDER: dev.a8n.run
+      REGISTRY_OWNER: ${{ vars.PSA_SYSTEMS_PRIVATE_PACKAGE_OWNER }}
+      REGISTRY_USER: ""
+      REGISTRY_PASSWORD: ${{ secrets.PSA_SYSTEMS_PRIVATE_PACKAGE_PAT }}
     steps:
-      - uses: actions/checkout@v5
-
-      - name: Log in to Forgejo container registry
-        uses: docker/login-action@v3
+      - name: Clone the repository
+        uses: https://code.forgejo.org/actions/checkout@v5
         with:
-          registry: dev.a8n.run
-          username: ${{ secrets.FORGEJO_USERNAME }}
-          password: ${{ secrets.FORGEJO_TOKEN }}
+          fetch-depth: 0
 
-      - name: Build and push api image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: bunyip-api/oci-build/Dockerfile
-          push: true
-          build-args: |
-            GIT_SHA=${{ github.sha }}
-          tags: |
-            dev.a8n.run/psa-systems/bunyip-api:latest
-            dev.a8n.run/psa-systems/bunyip-api:${{ github.sha }}
+      - name: Verify Docker availability
+        run: |
+          docker version
+          docker buildx version
 
-      - name: Build and push web image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: bunyip-web/oci-build/Dockerfile
-          push: true
-          build-args: |
-            GIT_SHA=${{ github.sha }}
-          tags: |
-            dev.a8n.run/psa-systems/bunyip-web:latest
-            dev.a8n.run/psa-systems/bunyip-web:${{ github.sha }}
+      - name: Set up buildx builder
+        run: |
+          docker buildx create --name container-builder --driver docker-container --use
+
+      - name: Set environment variables
+        shell: nu {0}
+        run: |
+          let owner = $env.REGISTRY_OWNER
+          $"REGISTRY_USER=($owner)\n" | save --append $env.GITHUB_ENV
+          $"IMAGE_REGISTRY=($env.REGISTRY_PROVIDER)/($owner)\n" | save --append $env.GITHUB_ENV
+
+      - name: Get image tags
+        id: get-tags
+        shell: nu {0}
+        run: |
+          let tags = (^nu bunyip-api/oci-build/get-tags.nu --joined)
+          $"tags=($tags)\n" | save --append $env.GITHUB_OUTPUT
+
+      - name: Log in to container registry
+        shell: nu {0}
+        run: |
+          ^docker login --username $env.REGISTRY_USER --password $env.REGISTRY_PASSWORD $env.REGISTRY_PROVIDER
+
+      - name: Build and push bunyip-api image
+        shell: nu {0}
+        run: |
+          let tags_str = "${{ steps.get-tags.outputs.tags }}"
+          let tags = ($tags_str | split row ",")
+          let image = "bunyip-api"
+          let registry = $env.IMAGE_REGISTRY
+          let tag_args = ($tags | each {|tag| [-t $"($registry)/($image):($tag)"]} | flatten)
+          let cache_ref = $"($registry)/($image):buildcache"
+          let cache_from = $"type=registry,ref=($cache_ref)"
+          let cache_to = $"type=registry,ref=($cache_ref),mode=max,ignore-error=true"
+          let jobs = (sys cpu | length)
+          print $"Building and pushing ($image) with tags: ($tags_str)"
+          (
+            ^docker buildx build
+              --push
+              --cache-from $cache_from
+              --cache-to $cache_to
+              --build-arg $"GIT_SHA=($env.GITHUB_SHA)"
+              ...$tag_args
+              -f bunyip-api/oci-build/Dockerfile
+              .
+          )
+
+      - name: Build and push bunyip-web image
+        shell: nu {0}
+        run: |
+          let tags_str = "${{ steps.get-tags.outputs.tags }}"
+          let tags = ($tags_str | split row ",")
+          let image = "bunyip-web"
+          let registry = $env.IMAGE_REGISTRY
+          let tag_args = ($tags | each {|tag| [-t $"($registry)/($image):($tag)"]} | flatten)
+          let cache_ref = $"($registry)/($image):buildcache"
+          let cache_from = $"type=registry,ref=($cache_ref)"
+          let cache_to = $"type=registry,ref=($cache_ref),mode=max,ignore-error=true"
+          let jobs = (sys cpu | length)
+          print $"Building and pushing ($image) with tags: ($tags_str)"
+          (
+            ^docker buildx build
+              --push
+              --cache-from $cache_from
+              --cache-to $cache_to
+              --build-arg $"GIT_SHA=($env.GITHUB_SHA)"
+              --build-arg $"CARGO_BUILD_JOBS=($jobs)"
+              ...$tag_args
+              -f bunyip-web/oci-build/Dockerfile
+              .
+          )
+
+      - name: Print image URLs
+        shell: nu {0}
+        run: |
+          let tags_str = "${{ steps.get-tags.outputs.tags }}"
+          let tags = ($tags_str | split row ",")
+          let registry = $env.IMAGE_REGISTRY
+          for image in ["bunyip-api", "bunyip-web"] {
+            for tag in $tags {
+              print $"Image pushed to ($registry)/($image):($tag)"
+            }
+          }
