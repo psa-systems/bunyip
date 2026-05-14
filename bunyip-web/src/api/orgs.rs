@@ -13,6 +13,17 @@ pub async fn list_my_orgs() -> Result<Vec<OrgMembershipBrief>, ApiError> {
     get_json("/v1/orgs").await
 }
 
+#[derive(Debug, Serialize)]
+pub struct CreateOrgRequest {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+}
+
+pub async fn create_org(req: &CreateOrgRequest) -> Result<Org, ApiError> {
+    super::post_authed("/v1/orgs", req).await
+}
+
 pub async fn get_org(slug: &str) -> Result<Org, ApiError> {
     get_json(&format!("/v1/orgs/{slug}")).await
 }

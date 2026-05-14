@@ -42,6 +42,7 @@ fn org_error_card(e: &ApiError, surface: &str, on_retry: EventHandler<()>) -> El
 #[component]
 pub fn OrgListPage() -> Element {
     let mut orgs = use_resource(|| async { orgs::list_my_orgs().await });
+    let mut show_create = use_signal(|| false);
 
     rsx! {
         AppShell {
@@ -56,16 +57,20 @@ pub fn OrgListPage() -> Element {
                             "Switch between orgs and manage members."
                         }
                     }
-                    // TODO(orgs-api): wire to a create-org modal once
-                    // the backend supports it. Stub with disabled state
-                    // so users see it as a roadmap signal, not silent
-                    // breakage.
                     button {
                         r#type: "button",
-                        disabled: true,
-                        title: "Coming soon - org creation API not wired yet",
-                        class: "px-4 py-2 rounded-lg bg-bunyip-reed-700 text-white text-sm font-medium hover:bg-bunyip-reed-800 disabled:opacity-50 disabled:cursor-not-allowed",
+                        class: "px-4 py-2 rounded-lg bg-bunyip-reed-700 text-white text-sm font-medium hover:bg-bunyip-reed-800",
+                        onclick: move |_| show_create.set(true),
                         "+ New org"
+                    }
+                }
+                if show_create() {
+                    CreateOrgModal {
+                        on_close: move |_| show_create.set(false),
+                        on_created: move |_| {
+                            show_create.set(false);
+                            orgs.restart();
+                        },
                     }
                 }
                 div { class: "mt-6",
@@ -398,5 +403,100 @@ fn str_to_role(s: &str) -> MembershipRole {
         "owner" => MembershipRole::Owner,
         "admin" => MembershipRole::Admin,
         _ => MembershipRole::Member,
+    }
+}
+
+#[component]
+fn CreateOrgModal(
+    on_close: EventHandler<()>,
+    on_created: EventHandler<crate::api::types::Org>,
+) -> Element {
+    let toast = use_toast();
+    let mut name = use_signal(String::new);
+    let mut slug = use_signal(String::new);
+    let mut submitting = use_signal(|| false);
+    let nav = navigator();
+
+    let on_submit = move |evt: Event<FormData>| {
+        evt.prevent_default();
+        let n = name().trim().to_string();
+        if n.is_empty() || submitting() {
+            return;
+        }
+        let s = slug().trim().to_string();
+        let req = orgs::CreateOrgRequest {
+            name: n,
+            slug: if s.is_empty() { None } else { Some(s) },
+        };
+        spawn(async move {
+            submitting.set(true);
+            match orgs::create_org(&req).await {
+                Ok(org) => {
+                    toast.success(format!("Created \"{}\".", org.name));
+                    let created_slug = org.slug.clone();
+                    on_created.call(org);
+                    nav.push(Route::OrgMembersPage { slug: created_slug });
+                }
+                Err(e) => toast.error(e.user_message()),
+            }
+            submitting.set(false);
+        });
+    };
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4",
+            onclick: move |_| on_close.call(()),
+            div {
+                class: "max-w-md w-full rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                form { onsubmit: on_submit,
+                    div { class: "p-6",
+                        h2 { class: "text-lg font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50",
+                            "New organization"
+                        }
+                        p { class: "mt-1 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
+                            "You'll become the owner. Invite teammates after creating."
+                        }
+                        label { class: "block mt-4",
+                            span { class: "text-xs font-medium text-bunyip-reed-800 dark:text-bunyip-reed-100", "Name" }
+                            input {
+                                class: "mt-1 w-full px-3 py-2 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 focus-visible:ring-2 focus-visible:ring-bunyip-reed-600",
+                                r#type: "text",
+                                placeholder: "Acme Corp",
+                                required: true,
+                                value: "{name()}",
+                                oninput: move |e| name.set(e.value()),
+                            }
+                        }
+                        label { class: "block mt-4",
+                            span { class: "text-xs font-medium text-bunyip-reed-800 dark:text-bunyip-reed-100", "Slug" }
+                            span { class: "ml-2 text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300", "(optional - derived from name)" }
+                            input {
+                                class: "mt-1 w-full px-3 py-2 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 font-mono text-sm focus-visible:ring-2 focus-visible:ring-bunyip-reed-600",
+                                r#type: "text",
+                                placeholder: "acme-corp",
+                                value: "{slug()}",
+                                oninput: move |e| slug.set(e.value()),
+                            }
+                        }
+                    }
+                    div { class: "px-6 pb-6 flex items-center justify-end gap-2",
+                        button {
+                            r#type: "button",
+                            class: "px-3 py-2 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 text-sm hover:bg-bunyip-reed-50",
+                            onclick: move |_| on_close.call(()),
+                            "Cancel"
+                        }
+                        button {
+                            r#type: "submit",
+                            disabled: submitting() || name().trim().is_empty(),
+                            class: "px-4 py-2 rounded-lg bg-bunyip-reed-700 text-white text-sm font-medium hover:bg-bunyip-reed-800 disabled:opacity-60",
+                            if submitting() { "Creating…" } else { "Create" }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

@@ -161,22 +161,9 @@ pub fn AppShell(
                         }
                         if !org_name.is_empty() {
                             span { class: "h-5 w-px bg-bunyip-reed-200 dark:bg-bunyip-reed-700" }
-                            div { class: "flex items-center gap-2 px-3 py-1.5 rounded-md bg-bunyip-reed-50 dark:bg-bunyip-reed-900",
-                                span { class: "w-2 h-2 rounded-full bg-bunyip-reed-600 dark:bg-bunyip-reed-400" }
-                                span { class: "text-sm font-medium text-bunyip-reed-900 dark:text-bunyip-reed-100", "{org_name}" }
-                                if !user_name.is_empty() {
-                                    // Signed-in identity sits inside the
-                                    // org-context pill so it reads as
-                                    // "where am I + who am I", not as a
-                                    // nav item. Thin divider + muted
-                                    // colour so the org name still leads.
-                                    span { class: "h-3 w-px bg-bunyip-reed-200 dark:bg-bunyip-reed-700" }
-                                    span {
-                                        class: "text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300 cursor-default select-text",
-                                        title: "Signed in",
-                                        "{user_name}"
-                                    }
-                                }
+                            crate::components::org_switcher::OrgSwitcher {
+                                current_label: org_name.clone(),
+                                user_name: if user_name.is_empty() { None } else { Some(user_name.clone()) },
                             }
                         }
                     }
