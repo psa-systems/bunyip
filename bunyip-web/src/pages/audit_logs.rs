@@ -172,50 +172,49 @@ const PAGE_SIZE: i64 = 50;
 #[component]
 pub fn AuditLogsPage() -> Element {
     use_require_role("admin");
-    let mut data: Signal<Option<Result<AuditListBody, String>>> = use_signal(|| None);
     let mut offset = use_signal(|| 0i64);
     // Dropdown selection: "" = "All kinds", or one of AUDIT_EVENT_KINDS,
     // or "__custom__" to enable the free-text fallback.
     let mut kind_select = use_signal(String::new);
     let mut kind_custom = use_signal(String::new);
-    let mut bump = use_signal(|| 0u32);
 
-    use_future(move || async move {
-        let _ = bump.read();
-        data.set(None);
+    // `use_resource` is the reactive variant of `use_future`:
+    // signals read inside its closure auto-subscribe via a
+    // ReactiveContext and re-run the future on any change. The
+    // previous `use_future` + bump approach was a single-shot run
+    // on mount that silently ignored filter changes - the `kind`
+    // query param was being dropped because the future never
+    // re-evaluated after the dropdown change. See
+    // docs/mokosh-fixes/01-audit-log-kind-filter.md.
+    let data = use_resource(move || async move {
         let off = *offset.read();
         let sel = kind_select.read().clone();
         let kind: Option<String> = if sel == "__custom__" {
             let v = kind_custom.read().trim().to_string();
-            if v.is_empty() {
-                None
-            } else {
-                Some(v)
-            }
+            (!v.is_empty()).then_some(v)
         } else if sel.is_empty() {
             None
         } else {
             Some(sel)
         };
-        let r = admin::list_audit_logs(PAGE_SIZE, off, kind.as_deref())
+        admin::list_audit_logs(PAGE_SIZE, off, kind.as_deref())
             .await
-            .map_err(|e| e.user_message());
-        data.set(Some(r));
+            .map_err(|e| e.user_message())
     });
 
+    // Reset to the first page when the kind filter changes. The
+    // resource re-runs on its own once offset (or any filter) is
+    // mutated, so we don't need an explicit refetch trigger.
     let on_filter = use_callback(move |_| {
         offset.set(0);
-        bump.with_mut(|n| *n += 1);
     });
     let prev = use_callback(move |_| {
         let off = *offset.read();
         offset.set((off - PAGE_SIZE).max(0));
-        bump.with_mut(|n| *n += 1);
     });
     let next = use_callback(move |_| {
         let off = *offset.read();
         offset.set(off + PAGE_SIZE);
-        bump.with_mut(|n| *n += 1);
     });
 
     rsx! {
