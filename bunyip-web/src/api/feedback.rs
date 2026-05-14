@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{get_json, post_json, ApiError};
+use super::{get_authed, post_json, ApiError};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -57,7 +57,7 @@ pub async fn list_admin(status: Option<&str>) -> Result<Vec<Feedback>, ApiError>
         Some(s) => format!("/v1/admin/feedback?status={s}"),
         None => "/v1/admin/feedback".to_string(),
     };
-    get_json(&path).await
+    get_authed(&path).await
 }
 
 #[derive(Debug, Serialize)]

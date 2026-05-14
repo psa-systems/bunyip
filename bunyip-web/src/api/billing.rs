@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{get_json, post_empty, post_json, ApiError};
+use super::{get_authed, get_json, post_empty, post_json, ApiError};
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct TierConfig {
@@ -45,7 +45,7 @@ pub struct BillingView {
 }
 
 pub async fn get_billing(slug: &str) -> Result<BillingView, ApiError> {
-    get_json(&format!("/v1/orgs/{slug}/billing")).await
+    get_authed(&format!("/v1/orgs/{slug}/billing")).await
 }
 
 #[derive(Debug, Serialize)]

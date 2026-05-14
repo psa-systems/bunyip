@@ -111,7 +111,9 @@ impl ApiError {
         match self {
             ApiError::Network(_) => "Network error - check your connection.".into(),
             ApiError::NotAuthenticated => "You are signed out.".into(),
-            ApiError::Status { status: 401, .. } => "Email or password didn't match.".into(),
+            ApiError::Status { status: 401, .. } => {
+                "Your session expired. Please sign in again.".into()
+            }
             ApiError::Status {
                 status: 409,
                 message,

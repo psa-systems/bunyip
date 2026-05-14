@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::types::{MembershipRole, Org, User};
-use super::{get_json, post_empty, post_json, post_json_empty, ApiError};
+use super::{
+    get_authed, get_json, post_authed, post_authed_empty, post_empty, post_json, ApiError,
+};
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct OrgMembershipBrief {
@@ -10,7 +12,7 @@ pub struct OrgMembershipBrief {
 }
 
 pub async fn list_my_orgs() -> Result<Vec<OrgMembershipBrief>, ApiError> {
-    get_json("/v1/orgs").await
+    get_authed("/v1/orgs").await
 }
 
 #[derive(Debug, Serialize)]
@@ -25,7 +27,7 @@ pub async fn create_org(req: &CreateOrgRequest) -> Result<Org, ApiError> {
 }
 
 pub async fn get_org(slug: &str) -> Result<Org, ApiError> {
-    get_json(&format!("/v1/orgs/{slug}")).await
+    get_authed(&format!("/v1/orgs/{slug}")).await
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -35,7 +37,7 @@ pub struct MemberBrief {
 }
 
 pub async fn list_members(slug: &str) -> Result<Vec<MemberBrief>, ApiError> {
-    get_json(&format!("/v1/orgs/{slug}/members")).await
+    get_authed(&format!("/v1/orgs/{slug}/members")).await
 }
 
 #[derive(Debug, Serialize)]
@@ -55,14 +57,14 @@ pub struct Invitation {
 }
 
 pub async fn list_invitations(slug: &str) -> Result<Vec<Invitation>, ApiError> {
-    get_json(&format!("/v1/orgs/{slug}/invitations")).await
+    get_authed(&format!("/v1/orgs/{slug}/invitations")).await
 }
 
 pub async fn create_invitation(
     slug: &str,
     req: &CreateInvitationRequest,
 ) -> Result<Invitation, ApiError> {
-    post_json(&format!("/v1/orgs/{slug}/invitations"), req).await
+    post_authed(&format!("/v1/orgs/{slug}/invitations"), req).await
 }
 
 pub async fn revoke_invitation(slug: &str, invite_id: &str) -> Result<(), ApiError> {
@@ -102,7 +104,7 @@ pub async fn change_member_role(
     user_id: &str,
     role: MembershipRole,
 ) -> Result<(), ApiError> {
-    post_json_empty(
+    post_authed_empty(
         &format!("/v1/orgs/{slug}/members/{user_id}/role"),
         &ChangeRoleRequest { role },
     )
@@ -128,10 +130,10 @@ pub struct AcceptInvitationRequest {
 }
 
 pub async fn accept_invitation(token: String) -> Result<Org, ApiError> {
-    post_json("/v1/invitations/accept", &AcceptInvitationRequest { token }).await
+    post_authed("/v1/invitations/accept", &AcceptInvitationRequest { token }).await
 }
 
 #[allow(dead_code)]
 pub async fn leave_org(slug: &str) -> Result<(), ApiError> {
-    post_empty(&format!("/v1/orgs/{slug}/leave")).await
+    post_authed_empty(&format!("/v1/orgs/{slug}/leave"), &serde_json::json!({})).await
 }
