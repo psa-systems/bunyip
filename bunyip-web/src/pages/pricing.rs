@@ -117,10 +117,13 @@ pub fn PricingPage() -> Element {
 }
 
 /// Bucket a tier's monthly price into a (display, period) pair.
-/// 0 cents -> ("Free", "forever"); huge -> ("Contact us", "for select partners");
-/// everything else -> ("$N", "per month").
+/// Enterprise is a "contact us" tier: even though its monthly_price_cents
+/// is 0 in the catalogue (the schema's NOT NULL default), we render
+/// "Custom / contact us" instead of "Free / forever".
 fn price_and_period(tier: &TierConfig) -> (String, &'static str) {
-    if tier.monthly_price_cents == 0 {
+    if tier.tier_key == "enterprise" {
+        ("Custom".to_string(), "contact us")
+    } else if tier.monthly_price_cents == 0 {
         ("Free".to_string(), "forever")
     } else {
         let dollars = tier.monthly_price_cents / 100;
