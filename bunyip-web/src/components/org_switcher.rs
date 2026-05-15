@@ -36,12 +36,22 @@ pub fn OrgSwitcher(props: OrgSwitcherProps) -> Element {
     // (see api/types.rs:78) so the parent often passes "Personal" by
     // default. The memberships endpoint carries `is_active` so we can
     // pick the actual active row.
+    // Personal tenants are user-private namespaces; the server names
+    // them "<email>'s account" which reads awkwardly in a header
+    // pill. Collapse to the literal "Personal" instead. Org tenants
+    // use their real name.
     let live_label: Option<String> = memberships
         .read_unchecked()
         .as_ref()
         .and_then(|r| r.as_ref().ok())
         .and_then(|list| list.iter().find(|m| m.is_active))
-        .map(|m| m.tenant_name.clone());
+        .map(|m| {
+            if m.tenant_kind == "personal" {
+                "Personal".to_string()
+            } else {
+                m.tenant_name.clone()
+            }
+        });
     let display_label = live_label.unwrap_or_else(|| props.current_label.clone());
 
     let switch = move |tenant_id: String| {
@@ -126,6 +136,13 @@ fn TenantRow(membership: MembershipView, on_pick: Callback<String>) -> Element {
     } else {
         "Org"
     };
+    // Same collapse as the header pill: personal tenants display as
+    // "Personal", not the email-derived server-side name.
+    let display_name = if kind == "personal" {
+        "Personal".to_string()
+    } else {
+        membership.tenant_name.clone()
+    };
     rsx! {
         li {
             button {
@@ -138,7 +155,7 @@ fn TenantRow(membership: MembershipView, on_pick: Callback<String>) -> Element {
                 },
                 div { class: "min-w-0 flex-1",
                     p { class: "truncate text-bunyip-reed-900 dark:text-bunyip-reed-50",
-                        "{membership.tenant_name}"
+                        "{display_name}"
                     }
                     p { class: "text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300",
                         "{pill} · {membership.role}"
