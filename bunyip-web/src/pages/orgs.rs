@@ -77,7 +77,25 @@ pub fn OrgListPage() -> Element {
                     match &*orgs.read_unchecked() {
                         None => rsx! { div { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 p-6 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "Loading…" } },
                         Some(Err(e)) => org_error_card(e, "Organizations", EventHandler::new(move |_| orgs.restart())),
-                        Some(Ok(list)) if list.is_empty() => rsx! { div { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 p-6 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "You're not in any organizations yet." } },
+                        Some(Ok(list)) if list.is_empty() => rsx! {
+                            div { class: "rounded-xl border border-dashed border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 p-10 text-center",
+                                div { class: "mx-auto w-12 h-12 rounded-full bg-bunyip-reed-50 dark:bg-bunyip-reed-900 flex items-center justify-center text-bunyip-reed-600 dark:text-bunyip-reed-300 text-xl font-semibold",
+                                    "+"
+                                }
+                                h2 { class: "mt-4 text-base font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50",
+                                    "No organizations yet"
+                                }
+                                p { class: "mt-1 text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300 max-w-md mx-auto",
+                                    "Create one to invite teammates, share access to launched apps, and manage billing in one place. You'll be the founding owner."
+                                }
+                                button {
+                                    r#type: "button",
+                                    class: "mt-5 px-4 py-2 rounded-lg bg-bunyip-reed-700 text-white text-sm font-medium hover:bg-bunyip-reed-800",
+                                    onclick: move |_| show_create.set(true),
+                                    "+ Create your first organization"
+                                }
+                            }
+                        },
                         Some(Ok(list)) => rsx! {
                             div { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 divide-y divide-bunyip-reed-50 dark:divide-bunyip-reed-700",
                                 for membership in list.iter() {
