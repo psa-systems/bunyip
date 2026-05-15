@@ -56,6 +56,27 @@ fn window_host_and_scheme() -> Option<(String, String)> {
     Some((host, scheme))
 }
 
+/// Derive the mokosh-api host from the bunyip-web host. Two patterns
+/// are supported:
+///
+/// 1. **Dev** (`<user>-bunyip.<rest>`): rewrite the first label to
+///    `<user>-mokosh-api`. So `a contributor-bunyip.a8n.run` ->
+///    `a contributor-mokosh-api.a8n.run`. Used by per-user dev environments
+///    on a8n.run.
+///
+/// 2. **Apex** (everything else): prefix `msp-api.` to the host. So
+///    `a8n.systems` -> `msp-api.a8n.systems`, `psa.systems` ->
+///    `msp-api.psa.systems`. The production / staging topology where
+///    bunyip-web carries the apex and mokosh-api sits on a subdomain.
+fn derive_api_host(host: &str) -> String {
+    if let Some((first, rest)) = host.split_once('.') {
+        if let Some(user) = first.strip_suffix("-bunyip") {
+            return format!("{user}-mokosh-api.{rest}");
+        }
+    }
+    format!("msp-api.{host}")
+}
+
 impl OidcConfig {
     /// Build the config by combining browser-runtime values (host +
     /// origin) with build-time `option_env!` fallbacks. Cheap; safe to
@@ -73,8 +94,10 @@ impl OidcConfig {
                     // dev mokosh-server (typically https://${USER}-mokosh-api.a8n.run).
                     (None, None)
                 } else {
-                    // Production: derive issuer + redirect from host.
-                    let issuer = format!("{scheme}//msp-api.{host}");
+                    // Production/dev cloud: derive issuer from host
+                    // using the apex-or-dev pattern.
+                    let api_host = derive_api_host(&host);
+                    let issuer = format!("{scheme}//{api_host}");
                     let origin = format!("{scheme}//{host}");
                     let redirect = format!("{origin}/auth/callback");
                     (Some(issuer), Some(redirect))
@@ -135,5 +158,26 @@ mod tests {
         assert!(!is_local_host("a8n.systems"));
         assert!(!is_local_host("psa.systems"));
         assert!(!is_local_host("a contributor-bunyip.a8n.run"));
+    }
+
+    #[test]
+    fn api_host_derivation() {
+        // Apex: bunyip-web at the apex -> mokosh-api on msp-api.<apex>.
+        assert_eq!(derive_api_host("a8n.systems"), "msp-api.a8n.systems");
+        assert_eq!(derive_api_host("psa.systems"), "msp-api.psa.systems");
+        // Dev: <user>-bunyip.<rest> -> <user>-mokosh-api.<rest>.
+        assert_eq!(
+            derive_api_host("a contributor-bunyip.a8n.run"),
+            "a contributor-mokosh-api.a8n.run"
+        );
+        assert_eq!(
+            derive_api_host("alice-bunyip.example.com"),
+            "alice-mokosh-api.example.com"
+        );
+        // Subdomain without `-bunyip` suffix falls back to apex rule.
+        assert_eq!(
+            derive_api_host("app.psa.systems"),
+            "msp-api.app.psa.systems"
+        );
     }
 }
