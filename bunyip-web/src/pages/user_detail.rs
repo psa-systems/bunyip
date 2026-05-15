@@ -61,7 +61,10 @@ fn display_name(u: &UserView) -> String {
 }
 
 fn fmt_ts(ts: DateTime<Utc>) -> String {
-    ts.format("%Y-%m-%d %H:%M UTC").to_string()
+    // Render in the browser's local timezone via chrono+wasmbind.
+    ts.with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M")
+        .to_string()
 }
 
 #[component]

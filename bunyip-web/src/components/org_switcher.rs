@@ -13,8 +13,10 @@ use crate::stores::toast::use_toast;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct OrgSwitcherProps {
-    /// What to display before the user opens the dropdown - typically
-    /// the current tenant's display name.
+    /// Fallback label rendered before the memberships fetch resolves
+    /// or when no active membership can be matched (e.g. anonymous).
+    /// Typically "Personal" or the user's email - just so the pill
+    /// isn't blank during the first paint.
     pub current_label: String,
     /// Trailing user name shown after a thin divider inside the pill
     /// (the "where am I + who am I" pattern from the static version).
@@ -27,6 +29,20 @@ pub fn OrgSwitcher(props: OrgSwitcherProps) -> Element {
     let toast = use_toast();
     let mut open = use_signal(|| false);
     let memberships = use_resource(|| async { tenants::list_memberships().await });
+
+    // Derive the live current-tenant label from the memberships fetch.
+    // The parent's `current_label` prop is only used as a fallback
+    // until the fetch resolves: me.memberships is populated lazily
+    // (see api/types.rs:78) so the parent often passes "Personal" by
+    // default. The memberships endpoint carries `is_active` so we can
+    // pick the actual active row.
+    let live_label: Option<String> = memberships
+        .read_unchecked()
+        .as_ref()
+        .and_then(|r| r.as_ref().ok())
+        .and_then(|list| list.iter().find(|m| m.is_active))
+        .map(|m| m.tenant_name.clone());
+    let display_label = live_label.unwrap_or_else(|| props.current_label.clone());
 
     let switch = move |tenant_id: String| {
         spawn(async move {
@@ -52,7 +68,7 @@ pub fn OrgSwitcher(props: OrgSwitcherProps) -> Element {
                 onclick: move |_| open.set(!open()),
                 span { class: "w-2 h-2 rounded-full bg-bunyip-reed-600 dark:bg-bunyip-reed-400" }
                 span { class: "text-sm font-medium text-bunyip-reed-900 dark:text-bunyip-reed-100",
-                    "{props.current_label}"
+                    "{display_label}"
                 }
                 if let Some(name) = &props.user_name {
                     if !name.is_empty() {

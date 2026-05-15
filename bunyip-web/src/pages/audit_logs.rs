@@ -440,7 +440,14 @@ pub fn AuditLogsPage() -> Element {
                                         } else {
                                             for row in body.entries.iter() {
                                                 {
-                                                    let ts = row.created_at.format("%Y-%m-%d %H:%M:%S").to_string();
+                                                    // Render in the browser's local timezone (chrono's
+                                                    // `Local` is wired through wasmbind -> JS Date).
+                                                    // Server returns UTC; this converts on display.
+                                                    let ts = row
+                                                        .created_at
+                                                        .with_timezone(&chrono::Local)
+                                                        .format("%Y-%m-%d %H:%M:%S")
+                                                        .to_string();
                                                     let label = event_label(&row.event_kind);
                                                     let details = event_details(&row.event_kind, &row.metadata);
                                                     rsx! {
