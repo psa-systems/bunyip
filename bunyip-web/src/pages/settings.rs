@@ -12,6 +12,7 @@
 
 use dioxus::prelude::*;
 
+use crate::api::orgs::{self as orgs_api, OrgMembershipBrief};
 use crate::api::tenants::{self, MembershipView};
 use crate::api::types::UserRole;
 use crate::components::layout::AppShell;
@@ -45,6 +46,32 @@ pub fn SettingsPage() -> Element {
         .as_ref()
         .map(|m| m.len() >= 2)
         .unwrap_or(false);
+
+    // Org memberships drive the Billing card: pick the org matching
+    // the active tenant if possible, otherwise the first org the
+    // user belongs to. Personal-tenant-only users don't see the card.
+    let mut my_orgs: Signal<Option<Vec<OrgMembershipBrief>>> = use_signal(|| None);
+    use_future(move || async move {
+        my_orgs.set(orgs_api::list_my_orgs().await.ok());
+    });
+    let billing_slug: Option<String> = {
+        let orgs = my_orgs.read();
+        let mems = memberships.read();
+        orgs.as_ref().and_then(|orgs| {
+            if orgs.is_empty() {
+                return None;
+            }
+            // Prefer the org matching the user's active tenant id.
+            let active_id = mems
+                .as_ref()
+                .and_then(|m| m.iter().find(|x| x.is_active).map(|x| x.tenant_id.clone()));
+            let preferred = active_id
+                .as_ref()
+                .and_then(|id| orgs.iter().find(|o| &o.org.id == id))
+                .or_else(|| orgs.first());
+            preferred.map(|o| o.org.slug.clone())
+        })
+    };
 
     rsx! {
         AppShell { title: "Settings".to_string(),
@@ -88,6 +115,13 @@ pub fn SettingsPage() -> Element {
                         title: "Organizations",
                         description: "Members, roles, and billing for each org you belong to.",
                         to: Route::OrgListPage {},
+                    }
+                    if let Some(slug) = billing_slug.clone() {
+                        HubCard {
+                            title: "Billing",
+                            description: "Plan, trial countdown, and invoices for your active organization.",
+                            to: Route::OrgBillingPage { slug },
+                        }
                     }
                 }
 
