@@ -346,6 +346,11 @@ pub fn UserDetailPage(user_id: String) -> Element {
                                 }
                             }
 
+                            // --- Sessions ----------------------------
+                            if !is_self {
+                                UserSessionsSection { user_id: user_id.clone() }
+                            }
+
                             // --- Audit cross-link --------------------
                             section { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 p-6 space-y-2",
                                 h2 { class: "text-base font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50",
@@ -841,4 +846,131 @@ fn DeleteUserConfirm(props: DeleteUserConfirmProps) -> Element {
             }
         }
     }
+}
+
+#[component]
+fn UserSessionsSection(user_id: String) -> Element {
+    let toast = use_toast();
+    let id_for_fetch = user_id.clone();
+    let mut sessions = use_resource(move || {
+        let id = id_for_fetch.clone();
+        async move {
+            admin::list_user_sessions(&id)
+                .await
+                .map_err(|e| e.user_message())
+        }
+    });
+
+    let mut revoking: Signal<Option<String>> = use_signal(|| None);
+
+    rsx! {
+        section { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 p-6 space-y-3",
+            h2 { class: "text-base font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50",
+                "Active sessions"
+            }
+            p { class: "text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300",
+                "Devices currently signed in as this user. Force-revoking kills the session and any refresh tokens issued from it."
+            }
+            match &*sessions.read_unchecked() {
+                None => rsx! {
+                    p { class: "text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300", "Loading..." }
+                },
+                Some(Err(e)) => rsx! {
+                    p { class: "text-sm text-red-700 dark:text-red-300", "{e}" }
+                },
+                Some(Ok(list)) if list.is_empty() => rsx! {
+                    p { class: "text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300", "No active sessions." }
+                },
+                Some(Ok(list)) => rsx! {
+                    ul { class: "divide-y divide-bunyip-reed-100 dark:divide-bunyip-reed-700",
+                        for s in list.iter() {
+                            {
+                                let s = s.clone();
+                                let device = ua_short_label(s.user_agent.as_deref());
+                                let ip = s.ip.clone().unwrap_or_else(|| "unknown".into());
+                                let last = format_dt(&s.last_active_at);
+                                let busy = revoking.read().as_deref() == Some(s.id.as_str());
+                                let sid = s.id.clone();
+                                let user_id_for_revoke = user_id.clone();
+                                let on_revoke = move |_| {
+                                    if busy { return; }
+                                    let sid = sid.clone();
+                                    let user_id = user_id_for_revoke.clone();
+                                    revoking.set(Some(sid.clone()));
+                                    spawn(async move {
+                                        match admin::revoke_user_session(&user_id, &sid).await {
+                                            Ok(()) => {
+                                                toast.info("Session revoked.");
+                                                sessions.restart();
+                                            }
+                                            Err(e) => toast.error(e.user_message()),
+                                        }
+                                        revoking.set(None);
+                                    });
+                                };
+                                rsx! {
+                                    li { class: "py-3 flex items-center justify-between gap-3",
+                                        div { class: "min-w-0",
+                                            p { class: "text-sm font-medium text-bunyip-reed-900 dark:text-bunyip-reed-50 truncate",
+                                                "{device}"
+                                            }
+                                            p { class: "text-xs text-bunyip-reed-500 dark:text-bunyip-reed-400",
+                                                "{ip} - last active {last}"
+                                            }
+                                        }
+                                        button {
+                                            r#type: "button",
+                                            class: "px-3 py-1.5 rounded-md border border-red-300 dark:border-red-700 text-xs text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/30 disabled:opacity-60",
+                                            disabled: busy,
+                                            onclick: on_revoke,
+                                            if busy { "Revoking..." } else { "Revoke" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Best-effort UA -> "Browser on OS" label. Mirror of the helper in
+/// pages/sessions.rs so the detail page can render the same shape
+/// without coupling the two modules.
+fn ua_short_label(ua: Option<&str>) -> String {
+    let Some(ua) = ua else {
+        return "Unknown device".into();
+    };
+    let browser = if ua.contains("Edg/") {
+        "Edge"
+    } else if ua.contains("Chrome/") && !ua.contains("Chromium/") {
+        "Chrome"
+    } else if ua.contains("Firefox/") {
+        "Firefox"
+    } else if ua.contains("Safari/") && !ua.contains("Chrome/") {
+        "Safari"
+    } else {
+        "Browser"
+    };
+    let os = if ua.contains("Windows") {
+        "Windows"
+    } else if ua.contains("Mac OS X") || ua.contains("Macintosh") {
+        "macOS"
+    } else if ua.contains("Android") {
+        "Android"
+    } else if ua.contains("iPhone") || ua.contains("iPad") {
+        "iOS"
+    } else if ua.contains("Linux") {
+        "Linux"
+    } else {
+        "device"
+    };
+    format!("{browser} on {os}")
+}
+
+fn format_dt(s: &str) -> String {
+    // ISO-8601 (e.g. "2026-05-15T13:42:01.123456Z"); trim subseconds + 'Z'.
+    s.split('.').next().unwrap_or(s).replace('T', " ")
 }

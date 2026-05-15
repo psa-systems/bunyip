@@ -193,6 +193,42 @@ pub async fn admin_trigger_password_reset(user_id: &str) -> Result<(), ApiError>
     .await
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct UserSessionView {
+    pub id: String,
+    pub created_at: String,
+    pub last_active_at: String,
+    #[serde(default)]
+    pub user_agent: Option<String>,
+    #[serde(default)]
+    pub ip: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub is_current: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct UserSessionsBody {
+    sessions: Vec<UserSessionView>,
+}
+
+/// GET /v1/auth/users/:id/sessions - admin lists target user's active sessions.
+pub async fn list_user_sessions(user_id: &str) -> Result<Vec<UserSessionView>, ApiError> {
+    super::get_authed::<UserSessionsBody>(&format!("/v1/auth/users/{user_id}/sessions"))
+        .await
+        .map(|b| b.sessions)
+}
+
+/// POST /v1/auth/users/:id/sessions/:sid/revoke - admin force-revoke.
+pub async fn revoke_user_session(user_id: &str, session_id: &str) -> Result<(), ApiError> {
+    post_authed_empty(
+        &format!("/v1/auth/users/{user_id}/sessions/{session_id}/revoke"),
+        &serde_json::json!({}),
+    )
+    .await
+}
+
 // ---------------------------------------------------------------------------
 // Invites
 // ---------------------------------------------------------------------------
