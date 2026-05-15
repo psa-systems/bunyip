@@ -441,6 +441,12 @@ fn UserRow(props: UserRowProps) -> Element {
                 span { class: "inline-flex px-2 py-0.5 rounded-full text-xs font-medium {role_badge_class(&u.role)}",
                     "{role_label(&u.role)}"
                 }
+                if u.is_owner {
+                    span { class: "ml-2 inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200",
+                        title: "Tenant owner - immutable by other admins",
+                        "Owner"
+                    }
+                }
             }
             td { class: "px-6 py-4 whitespace-nowrap",
                 span { class: "inline-flex px-2 py-0.5 rounded-full text-xs font-medium {status_badge_class(&u.status)}",
@@ -459,7 +465,11 @@ fn UserRow(props: UserRowProps) -> Element {
             }
             td { class: "px-6 py-4 whitespace-nowrap text-right text-sm",
                 div { class: "flex gap-2 justify-end",
-                    if u.mfa_enrolled && !props.is_self {
+                    // Disenroll-MFA is destructive (forces re-enrollment);
+                    // Suspend / Reactivate gates the user's access. Owners
+                    // are immovable from this surface; server will 403
+                    // anyway, but hiding the buttons keeps the UI honest.
+                    if u.mfa_enrolled && !props.is_self && !u.is_owner {
                         button {
                             r#type: "button",
                             class: "px-3 py-1.5 rounded-md border border-red-300 dark:border-red-700 text-xs text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/30",
@@ -467,7 +477,7 @@ fn UserRow(props: UserRowProps) -> Element {
                             "Disenroll MFA"
                         }
                     }
-                    if !props.is_self {
+                    if !props.is_self && !u.is_owner {
                         button {
                             r#type: "button",
                             class: if active {

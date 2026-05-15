@@ -213,6 +213,13 @@ pub fn UserDetailPage(user_id: String) -> Element {
                                             span { class: "inline-flex px-2 py-0.5 rounded-full text-xs font-medium {status_badge_class(&u.status)}",
                                                 "{u.status}"
                                             }
+                                            if u.is_owner {
+                                                span {
+                                                    class: "inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200",
+                                                    title: "Tenant owner - immutable by other admins",
+                                                    "Owner"
+                                                }
+                                            }
                                         }
                                         p { class: "mt-1 text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300",
                                             "{u.email}"
@@ -230,12 +237,11 @@ pub fn UserDetailPage(user_id: String) -> Element {
                             }
 
                             // --- Role + status -----------------------
-                            // Hidden entirely when viewing own profile:
-                            // admins can't mutate their own role or
-                            // status, and the empty "ask another admin"
-                            // panel just adds noise. Self-view shows
-                            // the profile + security + audit sections.
-                            if !is_self {
+                            // Hidden when viewing own profile (admins
+                            // can't mutate themselves here) or when the
+                            // target is the Owner (server refuses; UI
+                            // hides to keep state honest).
+                            if !is_self && !u.is_owner {
                                 section { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 p-6 space-y-4",
                                     h2 { class: "text-base font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50",
                                         "Role and status"
@@ -301,7 +307,7 @@ pub fn UserDetailPage(user_id: String) -> Element {
                                             }
                                         }
                                     }
-                                    if u.mfa_enrolled && !is_self {
+                                    if u.mfa_enrolled && !is_self && !u.is_owner {
                                         button {
                                             r#type: "button",
                                             class: "px-3 py-1.5 rounded-md border border-red-300 dark:border-red-700 text-xs text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/30",
@@ -370,7 +376,9 @@ pub fn UserDetailPage(user_id: String) -> Element {
                             }
 
                             // --- Danger zone -------------------------
-                            if !is_self {
+                            // Hidden for self (you can't delete yourself
+                            // from this surface) and for Owners (immovable).
+                            if !is_self && !u.is_owner {
                                 section { class: "rounded-xl border-2 border-red-300 dark:border-red-800 bg-white dark:bg-bunyip-reed-800 p-6 space-y-3",
                                     h2 { class: "text-base font-semibold text-red-700 dark:text-red-300",
                                         "Danger zone"

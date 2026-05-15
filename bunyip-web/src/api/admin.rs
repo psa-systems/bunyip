@@ -25,6 +25,11 @@ pub struct UserView {
     pub email_verified: bool,
     #[serde(default)]
     pub mfa_enrolled: bool,
+    /// True when the user is the Owner of the current tenant's
+    /// membership. Owners are immovable from this surface; the SPA
+    /// hides per-row action buttons and shows an Owner badge.
+    #[serde(default)]
+    pub is_owner: bool,
     #[serde(default)]
     pub last_login_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
