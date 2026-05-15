@@ -47,17 +47,49 @@ pub fn DashboardPage() -> Element {
 
     match state {
         AuthState::Loading | AuthState::SignedOut => {
-            rsx! { Splash { message: "Loading your dashboard…" } }
+            // Keep the page chrome (header + skeleton tile grid) mounted
+            // during Loading so a reload doesn't blank the page. The
+            // SignedOut branch only sees this for ~1 frame before the
+            // use_effect above redirects to /login.
+            rsx! { DashboardSkeleton {} }
         }
         AuthState::SignedIn(me) => rsx! { Authenticated { me: me } },
     }
 }
 
 #[component]
-fn Splash(message: &'static str) -> Element {
+fn DashboardSkeleton() -> Element {
     rsx! {
-        div { class: "min-h-screen flex items-center justify-center text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
-            "{message}"
+        div { class: "min-h-screen bg-bunyip-reed-50 dark:bg-bunyip-reed-900",
+            // Header skeleton: brand on the left, ghost pill where the
+            // org-switcher will land, ghost nav links on the right.
+            header { class: "px-6 py-3 bg-white dark:bg-bunyip-reed-800 border-b border-bunyip-reed-100 dark:border-bunyip-reed-700 sticky top-0 z-10",
+                div { class: "max-w-7xl mx-auto flex items-center justify-between",
+                    div { class: "flex items-center gap-4",
+                        div { class: "flex items-center gap-2",
+                            BrandMark {}
+                            span { class: "text-lg font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50", "Bunyip" }
+                        }
+                        span { class: "h-5 w-px bg-bunyip-reed-200 dark:bg-bunyip-reed-700" }
+                        div { class: "h-7 w-40 rounded-md bg-bunyip-reed-100 dark:bg-bunyip-reed-900 animate-pulse" }
+                    }
+                    nav { class: "flex items-center gap-2",
+                        div { class: "h-6 w-16 rounded-md bg-bunyip-reed-100 dark:bg-bunyip-reed-900 animate-pulse" }
+                        div { class: "h-6 w-12 rounded-md bg-bunyip-reed-100 dark:bg-bunyip-reed-900 animate-pulse" }
+                        div { class: "h-6 w-20 rounded-md bg-bunyip-reed-100 dark:bg-bunyip-reed-900 animate-pulse" }
+                    }
+                }
+            }
+            // Content skeleton: 6 tile placeholders matching the launcher grid.
+            main { class: "max-w-7xl mx-auto px-6 py-10",
+                div { class: "h-7 w-48 rounded-md bg-bunyip-reed-100 dark:bg-bunyip-reed-900 animate-pulse" }
+                div { class: "mt-2 h-4 w-72 rounded-md bg-bunyip-reed-100 dark:bg-bunyip-reed-900 animate-pulse" }
+                div { class: "mt-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
+                    for _ in 0..6 {
+                        div { class: "h-32 rounded-xl bg-bunyip-reed-100 dark:bg-bunyip-reed-900 animate-pulse" }
+                    }
+                }
+            }
         }
     }
 }
