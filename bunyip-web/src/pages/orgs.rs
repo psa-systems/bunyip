@@ -1,0 +1,502 @@
+//! Org list + member-management pages.
+
+use dioxus::prelude::*;
+
+use crate::api::orgs::{self, MemberBrief, OrgMembershipBrief};
+use crate::api::types::MembershipRole;
+use crate::api::ApiError;
+use crate::components::error_card::{ErrorCard, ErrorVariant};
+use crate::components::layout::AppShell;
+use crate::routes::Route;
+use crate::stores::toast::use_toast;
+
+fn org_error_card(e: &ApiError, surface: &str, on_retry: EventHandler<()>) -> Element {
+    let variant = e.variant();
+    let (title, message) = match variant {
+        ErrorVariant::ComingSoon => (
+            format!("{surface} are on the roadmap"),
+            match surface {
+                "Organizations" => {
+                    "You can manage your default org from your profile for now.".to_string()
+                }
+                "Member management" => {
+                    "Member management isn't wired up yet. Check back soon.".to_string()
+                }
+                _ => "This surface isn't wired up yet.".to_string(),
+            },
+        ),
+        ErrorVariant::Retryable => (
+            "We hit a snag".to_string(),
+            format!("We couldn't load {surface}. The server might be having a momentary issue."),
+        ),
+        ErrorVariant::HardError => ("Something's not right".to_string(), e.user_message()),
+    };
+    let retry = if matches!(variant, ErrorVariant::Retryable) {
+        Some(on_retry)
+    } else {
+        None
+    };
+    rsx! { ErrorCard { variant, title, message, on_retry: retry } }
+}
+
+#[component]
+pub fn OrgListPage() -> Element {
+    let mut orgs = use_resource(|| async { orgs::list_my_orgs().await });
+    let mut show_create = use_signal(|| false);
+
+    rsx! {
+        AppShell {
+            title: "Organizations".to_string(),
+            back_to: Some(Route::SettingsPage {}),
+            back_label: "Settings".to_string(),
+            div { class: "max-w-4xl mx-auto",
+                div { class: "flex items-center justify-between",
+                    div {
+                        h1 { class: "text-2xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50", "Your organizations" }
+                        p { class: "mt-1 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
+                            "Switch between orgs and manage members."
+                        }
+                    }
+                    button {
+                        r#type: "button",
+                        class: "px-4 py-2 rounded-lg bg-bunyip-reed-700 text-white text-sm font-medium hover:bg-bunyip-reed-800",
+                        onclick: move |_| show_create.set(true),
+                        "+ New org"
+                    }
+                }
+                if show_create() {
+                    CreateOrgModal {
+                        on_close: move |_| show_create.set(false),
+                        on_created: move |_| {
+                            show_create.set(false);
+                            orgs.restart();
+                        },
+                    }
+                }
+                div { class: "mt-6",
+                    match &*orgs.read_unchecked() {
+                        None => rsx! { div { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 p-6 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "Loading…" } },
+                        Some(Err(e)) => org_error_card(e, "Organizations", EventHandler::new(move |_| orgs.restart())),
+                        Some(Ok(list)) if list.is_empty() => rsx! { div { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 p-6 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "You're not in any organizations yet." } },
+                        Some(Ok(list)) => rsx! {
+                            div { class: "rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 divide-y divide-bunyip-reed-50 dark:divide-bunyip-reed-700",
+                                for membership in list.iter() {
+                                    OrgRow { membership: membership.clone() }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn OrgRow(membership: OrgMembershipBrief) -> Element {
+    let slug = membership.org.slug.clone();
+    rsx! {
+        div { class: "p-5 flex items-center justify-between gap-4",
+            div {
+                p { class: "font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50", "{membership.org.name}" }
+                p { class: "text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300 font-mono", "{membership.org.slug}" }
+            }
+            div { class: "flex items-center gap-3",
+                span { class: "px-2 py-0.5 rounded-full bg-bunyip-reed-50 dark:bg-bunyip-reed-900 border border-bunyip-reed-100 dark:border-bunyip-reed-700 text-xs uppercase tracking-wide text-bunyip-reed-700 dark:text-bunyip-reed-200",
+                    "{role_label(&membership.role)}"
+                }
+                Link {
+                    to: Route::OrgMembersPage { slug: slug.clone() },
+                    class: "px-3 py-1.5 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 text-sm hover:bg-bunyip-reed-50",
+                    "Members"
+                }
+                Link {
+                    to: Route::OrgBillingPage { slug: slug.clone() },
+                    class: "px-3 py-1.5 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 text-sm hover:bg-bunyip-reed-50",
+                    "Billing"
+                }
+            }
+        }
+    }
+}
+
+fn role_label(role: &MembershipRole) -> &'static str {
+    match role {
+        MembershipRole::Owner => "Owner",
+        MembershipRole::Admin => "Admin",
+        MembershipRole::Member => "Member",
+    }
+}
+
+#[component]
+pub fn OrgMembersPage(slug: String) -> Element {
+    let toast = use_toast();
+    let slug_for_resource = slug.clone();
+    let mut refresh_key = use_signal(|| 0u64);
+
+    let mut members = use_resource(move || {
+        let slug = slug_for_resource.clone();
+        let _ = refresh_key.read(); // re-fetch when refresh_key changes
+        async move { orgs::list_members(&slug).await }
+    });
+    let invites_slug = slug.clone();
+    let mut invites = use_resource(move || {
+        let slug = invites_slug.clone();
+        let _ = refresh_key.read();
+        async move { orgs::list_invitations(&slug).await }
+    });
+
+    let mut invite_email = use_signal(String::new);
+    let mut invite_role = use_signal(|| MembershipRole::Member);
+    let mut submitting = use_signal(|| false);
+
+    let slug_for_submit = slug.clone();
+    let submit_invite = move |evt: Event<FormData>| {
+        evt.prevent_default();
+        if submitting() || invite_email().is_empty() {
+            return;
+        }
+        let slug = slug_for_submit.clone();
+        let req = orgs::CreateInvitationRequest {
+            email: invite_email(),
+            role: invite_role(),
+        };
+        spawn(async move {
+            submitting.set(true);
+            match orgs::create_invitation(&slug, &req).await {
+                Ok(_) => {
+                    toast.success("Invitation sent. The accept link is in the dev log.");
+                    invite_email.set(String::new());
+                    refresh_key.set(refresh_key() + 1);
+                }
+                Err(e) => toast.error(e.user_message()),
+            }
+            submitting.set(false);
+        });
+    };
+
+    rsx! {
+        AppShell {
+            title: format!("Members · {slug}"),
+            back_to: Some(Route::OrgListPage {}),
+            back_label: "Organizations".to_string(),
+            div { class: "max-w-4xl mx-auto",
+                h1 { class: "text-2xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50",
+                    "Members"
+                }
+                p { class: "mt-1 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
+                    "Invite teammates and manage their roles."
+                }
+
+                section { class: "mt-6 p-6 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800",
+                    h2 { class: "font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50", "Invite a teammate" }
+                    form { class: "mt-4 grid md:grid-cols-[1fr_140px_auto] gap-3 items-end", onsubmit: submit_invite,
+                        label { class: "block",
+                            span { class: "text-xs font-medium text-bunyip-reed-800 dark:text-bunyip-reed-100", "Email" }
+                            input {
+                                class: "mt-1 w-full px-3 py-2 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 focus:outline-none focus:ring-2 focus:ring-bunyip-reed-600",
+                                r#type: "email",
+                                placeholder: "teammate@example.com",
+                                value: "{invite_email()}",
+                                oninput: move |e| invite_email.set(e.value()),
+                            }
+                        }
+                        label { class: "block",
+                            span { class: "text-xs font-medium text-bunyip-reed-800 dark:text-bunyip-reed-100", "Role" }
+                            select {
+                                class: "mt-1 w-full px-3 py-2 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800",
+                                value: "{role_to_str(&invite_role())}",
+                                onchange: move |e| invite_role.set(str_to_role(&e.value())),
+                                option { value: "member", "Member" }
+                                option { value: "admin", "Admin" }
+                                option { value: "owner", "Owner" }
+                            }
+                        }
+                        button {
+                            class: "px-4 py-2 rounded-lg bg-bunyip-reed-700 text-white font-medium hover:bg-bunyip-reed-800 disabled:opacity-60",
+                            r#type: "submit",
+                            disabled: submitting(),
+                            if submitting() { "Sending…" } else { "Invite" }
+                        }
+                    }
+                }
+
+                section { class: "mt-6 p-6 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800",
+                    h2 { class: "font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50", "Pending invitations" }
+                    div { class: "mt-4 divide-y divide-bunyip-reed-50 dark:divide-bunyip-reed-700",
+                        match &*invites.read_unchecked() {
+                            None => rsx! { p { class: "py-3 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "Loading…" } },
+                            Some(Err(e)) => org_error_card(e, "Member management", EventHandler::new(move |_| invites.restart())),
+                            Some(Ok(list)) if list.is_empty() => rsx! { p { class: "py-3 text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300", "None pending." } },
+                            Some(Ok(list)) => {
+                                let slug = slug.clone();
+                                rsx! {
+                                    for inv in list.iter() {
+                                        InvitationRow { invite: inv.clone(), slug: slug.clone(), refresh_key: refresh_key, toast: toast }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                section { class: "mt-6 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800",
+                    h2 { class: "p-6 pb-3 font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50", "All members" }
+                    div { class: "divide-y divide-bunyip-reed-50 dark:divide-bunyip-reed-700",
+                        match &*members.read_unchecked() {
+                            None => rsx! { p { class: "p-6 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200", "Loading…" } },
+                            Some(Err(e)) => org_error_card(e, "Member management", EventHandler::new(move |_| members.restart())),
+                            Some(Ok(list)) if list.is_empty() => rsx! { p { class: "p-6 text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300", "No members yet." } },
+                            Some(Ok(list)) => {
+                                let slug = slug.clone();
+                                rsx! {
+                                    for m in list.iter() {
+                                        MemberRow { member: m.clone(), slug: slug.clone(), refresh_key: refresh_key, toast: toast }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn InvitationRow(
+    invite: crate::api::orgs::Invitation,
+    slug: String,
+    refresh_key: Signal<u64>,
+    toast: crate::stores::toast::ToastStore,
+) -> Element {
+    let invite_id = invite.id.clone();
+    let slug_for_revoke = slug.clone();
+    let mut refresh_key = refresh_key;
+
+    let revoke = move |_| {
+        let id = invite_id.clone();
+        let slug = slug_for_revoke.clone();
+        spawn(async move {
+            match orgs::revoke_invitation(&slug, &id).await {
+                Ok(()) => {
+                    toast.info("Invitation revoked.");
+                    refresh_key.set(refresh_key() + 1);
+                }
+                Err(e) => toast.error(e.user_message()),
+            }
+        });
+    };
+
+    rsx! {
+        div { class: "py-3 flex items-center justify-between gap-4",
+            div {
+                p { class: "text-sm text-bunyip-reed-900 dark:text-bunyip-reed-50", "{invite.email}" }
+                p { class: "text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300",
+                    "Role: {role_label(&invite.role)} · token "
+                    span { class: "font-mono", "{short_token(&invite.token)}" }
+                }
+            }
+            button {
+                class: "px-3 py-1.5 rounded border border-red-200 text-red-700 text-sm hover:bg-red-50",
+                onclick: revoke,
+                "Revoke"
+            }
+        }
+    }
+}
+
+fn short_token(token: &str) -> String {
+    if token.len() > 14 {
+        format!("{}…{}", &token[..6], &token[token.len() - 4..])
+    } else {
+        token.to_string()
+    }
+}
+
+#[component]
+fn MemberRow(
+    member: MemberBrief,
+    slug: String,
+    refresh_key: Signal<u64>,
+    toast: crate::stores::toast::ToastStore,
+) -> Element {
+    let user_id = member.user.id.clone();
+    let slug_for_remove = slug.clone();
+    let slug_for_role = slug.clone();
+    let mut refresh_key = refresh_key;
+    let role = member.role;
+    let user_id_for_role = user_id.clone();
+
+    let remove = move |_| {
+        let id = user_id.clone();
+        let slug = slug_for_remove.clone();
+        spawn(async move {
+            match orgs::remove_member(&slug, &id).await {
+                Ok(()) => {
+                    toast.info("Member removed.");
+                    refresh_key.set(refresh_key() + 1);
+                }
+                Err(e) => toast.error(e.user_message()),
+            }
+        });
+    };
+
+    let change_role = move |evt: Event<FormData>| {
+        let value = evt.value();
+        let new_role = str_to_role(&value);
+        let id = user_id_for_role.clone();
+        let slug = slug_for_role.clone();
+        spawn(async move {
+            match orgs::change_member_role(&slug, &id, new_role).await {
+                Ok(()) => {
+                    toast.success("Role updated.");
+                    refresh_key.set(refresh_key() + 1);
+                }
+                Err(e) => toast.error(e.user_message()),
+            }
+        });
+    };
+
+    let is_owner_row = matches!(role, MembershipRole::Owner);
+
+    rsx! {
+        div { class: "px-6 py-4 flex items-center justify-between gap-4",
+            div { class: "min-w-0",
+                p { class: "text-sm font-medium text-bunyip-reed-900 dark:text-bunyip-reed-50 truncate", "{member.user.name}" }
+                p { class: "text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300 truncate", "{member.user.email}" }
+            }
+            div { class: "flex items-center gap-3",
+                if is_owner_row {
+                    span { class: "px-2 py-0.5 rounded-full bg-bunyip-reed-50 dark:bg-bunyip-reed-900 border border-bunyip-reed-100 dark:border-bunyip-reed-700 text-xs uppercase tracking-wide text-bunyip-reed-700 dark:text-bunyip-reed-200",
+                        "Owner"
+                    }
+                } else {
+                    select {
+                        class: "px-2 py-1.5 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 text-sm",
+                        value: "{role_to_str(&role)}",
+                        onchange: change_role,
+                        option { value: "member", "Member" }
+                        option { value: "admin", "Admin" }
+                    }
+                    button {
+                        class: "px-3 py-1.5 rounded border border-red-200 text-red-700 text-sm hover:bg-red-50",
+                        onclick: remove,
+                        "Remove"
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn role_to_str(r: &MembershipRole) -> &'static str {
+    match r {
+        MembershipRole::Owner => "owner",
+        MembershipRole::Admin => "admin",
+        MembershipRole::Member => "member",
+    }
+}
+
+fn str_to_role(s: &str) -> MembershipRole {
+    match s {
+        "owner" => MembershipRole::Owner,
+        "admin" => MembershipRole::Admin,
+        _ => MembershipRole::Member,
+    }
+}
+
+#[component]
+fn CreateOrgModal(
+    on_close: EventHandler<()>,
+    on_created: EventHandler<crate::api::types::Org>,
+) -> Element {
+    let toast = use_toast();
+    let mut name = use_signal(String::new);
+    let mut slug = use_signal(String::new);
+    let mut submitting = use_signal(|| false);
+    let nav = navigator();
+
+    let on_submit = move |evt: Event<FormData>| {
+        evt.prevent_default();
+        let n = name().trim().to_string();
+        if n.is_empty() || submitting() {
+            return;
+        }
+        let s = slug().trim().to_string();
+        let req = orgs::CreateOrgRequest {
+            name: n,
+            slug: if s.is_empty() { None } else { Some(s) },
+        };
+        spawn(async move {
+            submitting.set(true);
+            match orgs::create_org(&req).await {
+                Ok(org) => {
+                    toast.success(format!("Created \"{}\".", org.name));
+                    let created_slug = org.slug.clone();
+                    on_created.call(org);
+                    nav.push(Route::OrgMembersPage { slug: created_slug });
+                }
+                Err(e) => toast.error(e.user_message()),
+            }
+            submitting.set(false);
+        });
+    };
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4",
+            onclick: move |_| on_close.call(()),
+            div {
+                class: "max-w-md w-full rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 shadow-xl",
+                onclick: move |evt| evt.stop_propagation(),
+                form { onsubmit: on_submit,
+                    div { class: "p-6",
+                        h2 { class: "text-lg font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50",
+                            "New organization"
+                        }
+                        p { class: "mt-1 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
+                            "You'll become the owner. Invite teammates after creating."
+                        }
+                        label { class: "block mt-4",
+                            span { class: "text-xs font-medium text-bunyip-reed-800 dark:text-bunyip-reed-100", "Name" }
+                            input {
+                                class: "mt-1 w-full px-3 py-2 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 focus-visible:ring-2 focus-visible:ring-bunyip-reed-600",
+                                r#type: "text",
+                                placeholder: "Acme Corp",
+                                required: true,
+                                value: "{name()}",
+                                oninput: move |e| name.set(e.value()),
+                            }
+                        }
+                        label { class: "block mt-4",
+                            span { class: "text-xs font-medium text-bunyip-reed-800 dark:text-bunyip-reed-100", "Slug" }
+                            span { class: "ml-2 text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300", "(optional - derived from name)" }
+                            input {
+                                class: "mt-1 w-full px-3 py-2 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 font-mono text-sm focus-visible:ring-2 focus-visible:ring-bunyip-reed-600",
+                                r#type: "text",
+                                placeholder: "acme-corp",
+                                value: "{slug()}",
+                                oninput: move |e| slug.set(e.value()),
+                            }
+                        }
+                    }
+                    div { class: "px-6 pb-6 flex items-center justify-end gap-2",
+                        button {
+                            r#type: "button",
+                            class: "px-3 py-2 rounded border border-bunyip-reed-200 dark:border-bunyip-reed-700 text-sm hover:bg-bunyip-reed-50",
+                            onclick: move |_| on_close.call(()),
+                            "Cancel"
+                        }
+                        button {
+                            r#type: "submit",
+                            disabled: submitting() || name().trim().is_empty(),
+                            class: "px-4 py-2 rounded-lg bg-bunyip-reed-700 text-white text-sm font-medium hover:bg-bunyip-reed-800 disabled:opacity-60",
+                            if submitting() { "Creating…" } else { "Create" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

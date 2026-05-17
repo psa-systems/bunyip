@@ -1,0 +1,22 @@
+[
+  {
+    "id": "ddddddd1-dddd-4ddd-8ddd-dddddddddddd",
+    "org_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "email": "newhire@example.com",
+    "role": "member",
+    "token": "inv_pending_newhire_demo",
+    "invited_by_user_id": "22222222-2222-4222-8222-222222222222",
+    "expires_at": "2026-05-20T12:00:00Z",
+    "accepted_at": null
+  },
+  {
+    "id": "ddddddd2-dddd-4ddd-8ddd-dddddddddddd",
+    "org_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "email": "consultant@example.com",
+    "role": "admin",
+    "token": "inv_pending_consultant_demo",
+    "invited_by_user_id": "22222222-2222-4222-8222-222222222222",
+    "expires_at": "2026-05-19T09:00:00Z",
+    "accepted_at": null
+  }
+]

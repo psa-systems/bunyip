@@ -1,0 +1,44 @@
+[workspace]
+members = [
+    "bunyip-api",
+    "bunyip-web",
+    "crates/bunyip-mocks",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Bunyip Team"]
+license = "Proprietary"
+repository = "https://dev.a8n.run/psa-systems/bunyip"
+
+[workspace.dependencies]
+# Shared runtime
+tokio = { version = "1", features = ["full"] }
+parking_lot = "0.12"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# IDs and time
+uuid = { version = "1.11", features = ["v4", "v7", "serde", "js"] }
+chrono = { version = "0.4", features = ["serde", "wasmbind"] }
+
+# Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Errors
+thiserror = "1"
+anyhow = "1"
+
+# Validation
+validator = { version = "0.19", features = ["derive"] }
+
+# Random for mock tokens
+rand = "0.8"
+
+# Hashing (PKCE S256 challenge in bunyip-web)
+sha2 = "0.10"

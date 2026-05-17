@@ -1,0 +1,70 @@
+name: bunyip-${USER:?USER missing - run via just dev}
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: bunyip-api/Dockerfile
+      args:
+        UID: ${HOST_UID:-1000}
+        GID: ${HOST_GID:-1000}
+    container_name: dev-bunyip-api-${USER}
+    user: ${HOST_UID:-1000}:${HOST_GID:-1000}
+    restart: unless-stopped
+    environment:
+      BUNYIP_API_BIND: 0.0.0.0:8080
+      BUNYIP_PUBLIC_BASE_URL: ${BUNYIP_PUBLIC_BASE_URL:-http://localhost:4400}
+      BUNYIP_SEEDS_DIR: /app/seeds
+      COOKIE_SECRET: ${COOKIE_SECRET:-dev-only-do-not-use-in-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
+      MOCK_PASSWORD: ${MOCK_PASSWORD:-demo}
+      MOCK_TOTP_CODE: ${MOCK_TOTP_CODE:-000000}
+      FEEDBACK_FORGEJO_REPO: ${FEEDBACK_FORGEJO_REPO:-}
+      RUST_LOG: ${RUST_LOG:-info,bunyip_api=debug}
+    volumes:
+      - .:/app
+      - cargo-target:/app/target
+    ports:
+      - "${BUNYIP_API_PORT:-4401}:8080"
+    networks:
+      - private
+
+  web:
+    build:
+      context: .
+      dockerfile: bunyip-web/Dockerfile
+      args:
+        UID: ${HOST_UID:-1000}
+        GID: ${HOST_GID:-1000}
+    container_name: dev-bunyip-web-${USER}
+    user: ${HOST_UID:-1000}:${HOST_GID:-1000}
+    restart: unless-stopped
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - .:/app
+      - cargo-target:/app/target
+      - web-node-modules:/app/bunyip-web/node_modules
+    ports:
+      - "${BUNYIP_WEB_PORT:-4400}:4400"
+    depends_on:
+      - api
+    networks:
+      - private
+
+volumes:
+  cargo-target:
+    name: dev-bunyip-cargo-target-${USER}
+  web-node-modules:
+    name: dev-bunyip-web-node-modules-${USER}
+
+networks:
+  # Pre-created by `just dev-sso` (the recipe runs `docker network
+  # inspect || docker network create` before invoking compose) so the
+  # SSO overlay can attach it to traefik-public AND to this private net
+  # without compose trying to re-label it. Marking it external means
+  # compose will NOT attempt to create or relabel the network; it just
+  # uses what is already there. `just dev` (LAN-IP) relies on the same
+  # pre-create step inside the recipe.
+  private:
+    external: true
+    name: dev-bunyip-private-${USER}

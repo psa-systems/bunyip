@@ -1,0 +1,21 @@
+{
+    auto_https off
+    admin off
+}
+
+:{$PORT} {
+    root * /usr/share/caddy
+    encode gzip zstd
+
+    # SPA fallback: serve index.html for missing files (client-side routing).
+    try_files {path} /index.html
+
+    file_server
+
+    header {
+        # Cache hashed assets (wasm/js/css) aggressively.
+        ?Cache-Control "public, max-age=31536000, immutable"
+    }
+    @html path *.html
+    header @html Cache-Control "no-cache, no-store, must-revalidate"
+}

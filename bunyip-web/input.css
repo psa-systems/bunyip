@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+/* Class-based dark mode: any descendant of `.dark` gets the dark variants.
+   The class is set on <html> by the early script in index.html. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-bunyip-reed-50: #f3f7f3;
+  --color-bunyip-reed-100: #e3ecde;
+  --color-bunyip-reed-200: #c6d8bd;
+  --color-bunyip-reed-300: #99bb8e;
+  --color-bunyip-reed-400: #6e9c64;
+  --color-bunyip-reed-500: #4f7e48;
+  --color-bunyip-reed-600: #3c6438;
+  --color-bunyip-reed-700: #2f4e2e;
+  --color-bunyip-reed-800: #283e27;
+  --color-bunyip-reed-900: #1f311f;
+
+  --color-bunyip-water-50: #eaf3f4;
+  --color-bunyip-water-100: #cce0e3;
+  --color-bunyip-water-300: #84afb6;
+  --color-bunyip-water-500: #2b6273;
+  --color-bunyip-water-700: #1d4351;
+  --color-bunyip-water-900: #0e2730;
+
+  /* Semantic surface tokens. These flip in dark mode below; components that
+     use `bg-surface` / `text-on-surface` will reverse automatically. */
+  --color-surface: #ffffff;
+  --color-surface-muted: #f3f7f3;
+  --color-surface-elevated: #ffffff;
+  --color-border-subtle: #e3ecde;
+  --color-text-strong: #1f311f;
+  --color-text: #2f4e2e;
+  --color-text-muted: #4f7e48;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, "Noto Sans", Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+/* Dark mode: invert the semantic tokens. Components keep using the same
+   utility class names; the underlying colour just changes. */
+.dark {
+  --color-surface: #161a16;
+  --color-surface-muted: #1f2620;
+  --color-surface-elevated: #283129;
+  --color-border-subtle: #2f4e2e;
+  --color-text-strong: #f3f7f3;
+  --color-text: #c6d8bd;
+  --color-text-muted: #99bb8e;
+}
+
+@layer base {
+  html,
+  body {
+    @apply h-full antialiased;
+    background-color: var(--color-surface-muted);
+    color: var(--color-text-strong);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01", "ss03";
+  }
+
+  *:focus-visible {
+    outline: 2px solid var(--color-bunyip-reed-600);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  ::selection {
+    background-color: var(--color-bunyip-reed-200);
+    color: var(--color-bunyip-reed-900);
+  }
+
+  .dark ::selection {
+    background-color: var(--color-bunyip-reed-700);
+    color: var(--color-bunyip-reed-50);
+  }
+}

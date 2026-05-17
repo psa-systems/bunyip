@@ -1,0 +1,13 @@
+{
+  "name": "bunyip-web",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "build:css": "bunx @tailwindcss/cli --input input.css --output assets/styles.css --minify",
+    "watch:css": "bunx @tailwindcss/cli --input input.css --output assets/styles.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.0.0",
+    "tailwindcss": "^4.0.0"
+  }
+}
