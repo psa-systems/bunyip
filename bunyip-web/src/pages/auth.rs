@@ -65,7 +65,14 @@ struct LoginState {
 /// SPA's job is to keep the value structurally sane; defense in depth
 /// happens on the server.
 fn read_safe_return_to() -> Option<String> {
-    let search = web_sys::window()?.location().search().ok()?;
+    // Read from the search-string snapshot taken at program entry, NOT
+    // from `window.location.search()` directly. The Dioxus router runs
+    // `history.replaceState()` on mount to normalise the URL to its
+    // declared route shape (no query params), which would erase
+    // `?return_to=...` before this memo reads it. Without the snapshot
+    // we'd silently treat every cross-RP /login arrival as a no-op
+    // landing → bunyip dashboard instead of resuming the OIDC flow.
+    let search = crate::modules::oidc::current_search();
     let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
     let raw = params.get("return_to")?;
     if !is_safe_return_to(&raw) {

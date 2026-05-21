@@ -148,7 +148,7 @@ pub fn snapshot_initial_search() {
     INITIAL_SEARCH.with(|cell| *cell.borrow_mut() = Some(s));
 }
 
-fn current_search() -> String {
+pub fn current_search() -> String {
     INITIAL_SEARCH
         .with(|cell| cell.borrow().clone())
         .filter(|s| !s.is_empty())
