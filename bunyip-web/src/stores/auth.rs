@@ -194,6 +194,17 @@ async fn maybe_refresh(tokens: Tokens) -> Option<Tokens> {
     })
 }
 
+/// On-demand single-shot refresh callable from the API client when a
+/// request unexpectedly returns 401 (background loop missed expiry due
+/// to tab suspend / system sleep / clock skew). Returns the new access
+/// token; on failure, clears tokens + leaves the auth signal alone
+/// (caller surfaces the 401 to the user normally).
+pub(crate) async fn try_refresh_access_token() -> Option<String> {
+    let current = tokens::load_tokens()?;
+    let new = force_refresh(&current).await?;
+    Some(new.access_token)
+}
+
 /// Always attempt a refresh against the token endpoint regardless of
 /// the current access_token's expiry. Returns the new tokens (already
 /// saved to localStorage + the in-memory holder) or `None` on failure.
