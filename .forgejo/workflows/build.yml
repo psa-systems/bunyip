@@ -19,27 +19,43 @@ on:
 jobs:
   check:
     name: Lint and type-check
-    runs-on: docker
-    container:
-      image: rust:1-slim-trixie
-    steps:
-      - uses: actions/checkout@v5
+    # Same OpenSUSE runner pool the build-images job uses. The previous
+    # `runs-on: docker` + `container: rust:1-slim-trixie` setup broke
+    # actions/checkout@v5 because that JS action needs node in $PATH,
+    # which the slim rust image does not ship. The OpenSUSE runner has
+    # rust + node baked in, so checkout + cargo both work.
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
 
-      - name: Install build deps
+    steps:
+      - name: Clone the repository
+        uses: https://code.forgejo.org/actions/checkout@v5
+
+      - name: Cache Rust build
+        uses: https://github.com/Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Ensure wasm32 target + clippy/rustfmt components
+        # The runner image already ships rustup; these are cheap no-ops
+        # when the toolchain is current.
         run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends pkg-config libssl-dev curl ca-certificates
           rustup component add clippy rustfmt
           rustup target add wasm32-unknown-unknown
 
       - name: cargo fmt
         run: cargo fmt --all --check
 
-      - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: cargo clippy (native, excluding bunyip-web)
+        run: cargo clippy --workspace --exclude bunyip-web --all-targets -- -D warnings
 
-      - name: cargo check
-        run: cargo check --workspace --all-targets
+      - name: cargo clippy (bunyip-web on wasm32)
+        run: cargo clippy --package bunyip-web --target wasm32-unknown-unknown -- -D warnings
+
+      - name: cargo check (native, excluding bunyip-web)
+        run: cargo check --workspace --exclude bunyip-web --all-targets
+
+      - name: cargo check (bunyip-web on wasm32)
+        run: cargo check --package bunyip-web --target wasm32-unknown-unknown
 
   build-images:
     name: Build and push OCI images

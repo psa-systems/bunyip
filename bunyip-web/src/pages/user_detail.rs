@@ -15,7 +15,7 @@
 use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
 
-use crate::api::admin::{self, UserDetail, UserView};
+use crate::api::admin::{self, UserView};
 use crate::components::layout::AppShell;
 use crate::modules::oidc::{self, OidcConfig};
 use crate::routes::Route;
@@ -187,7 +187,7 @@ pub fn UserDetailPage(user_id: String) -> Element {
                         let initial = name.chars().next().unwrap_or('?').to_string().to_uppercase();
                         let active = u.status == "active";
                         let pending = u.status == "pending";
-                        let busy_label = busy_action.read().clone();
+                        let busy_label = *busy_action.read();
                         let available_roles = d.available_role_transitions.clone();
                         let target_email_for_delete = u.email.clone();
                         rsx! {
@@ -455,7 +455,7 @@ fn ChangeRoleModal(props: ChangeRoleModalProps) -> Element {
     let mut submitting = use_signal(|| false);
     let mut error: Signal<Option<String>> = use_signal(|| None);
     let mut step_up_token: Signal<Option<String>> = use_signal(|| None);
-    let mut step_up_in_progress = use_signal(|| false);
+    let step_up_in_progress = use_signal(|| false);
 
     let needs_step_up = props.new_role == "admin" && props.user.role != "admin";
 

@@ -106,7 +106,7 @@ pub fn OrgSwitcher(props: OrgSwitcherProps) -> Element {
                                 for m in list.iter() {
                                     {
                                         let m = m.clone();
-                                        rsx! { TenantRow { membership: m, on_pick: switch.clone() } }
+                                        rsx! { TenantRow { membership: m, on_pick: switch } }
                                     }
                                 }
                             }
