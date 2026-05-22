@@ -17,12 +17,14 @@ default:
 
 # Create .env from .env.example if missing.
 [private]
+[group: 'hooks']
 ensure-env:
     @test -f .env || cp .env.example .env
 
 # Install the git pre-commit hook (run once per fresh clone). Writes a
 # stub at .git/hooks/pre-commit that execs `just pre-commit`. Bypass
 # with `git commit --no-verify`.
+[group: 'hooks']
 install-hooks:
     #!/usr/bin/env nu
     let hook = ".git/hooks/pre-commit"
@@ -37,6 +39,7 @@ install-hooks:
 # Run the same checks the Forgejo `check.yml` job runs, inside the
 # rust-builder-glibc image so the toolchain matches CI. Native (api +
 # mocks) AND wasm (bunyip-web) targets covered.
+[group: 'hooks']
 pre-commit:
     #!/usr/bin/env nu
     let img = "{{ dev_image }}"
@@ -54,14 +57,17 @@ pre-commit:
 
 # Install JS dependencies for the Tailwind build.
 [private]
+[group: 'hooks']
 ensure-npm:
     @test -d bunyip-web/node_modules || (cd bunyip-web && bun install)
 
 # Build Tailwind CSS once
+[group: 'css']
 css-build: ensure-npm
     cd bunyip-web && bun x @tailwindcss/cli --input input.css --output assets/styles.css
 
 # Watch and rebuild Tailwind CSS on changes
+[group: 'css']
 css-watch: ensure-npm
     cd bunyip-web && bun x @tailwindcss/cli --input input.css --output assets/styles.css --watch
 
@@ -69,6 +75,7 @@ css-watch: ensure-npm
 # LAN IP. Trailing args go to `docker compose up` (e.g. --detach,
 # --build).
 [doc("Start the dev stack in Docker. Trailing args go to `docker compose up` (e.g. --detach, --build).")]
+[group: 'dev']
 dev *args: ensure-env
     #!/usr/bin/env nu
     let host_ip = (sys net | where name =~ 'eth0|br0' | get ip | flatten | where protocol == 'ipv4' and loop == false | get 0.address)
@@ -95,6 +102,7 @@ dev *args: ensure-env
 # `just register-bunyip-client` in mokosh-server. The compose file
 # fails loud if it's missing.
 [doc("Start the SSO dev stack (Traefik-routed at https://{USER}-bunyip.a8n.run)")]
+[group: 'dev']
 dev-sso:
     #!/usr/bin/env nu
     let uid = (^id --user | str trim)
@@ -124,6 +132,7 @@ dev-sso:
 # layout. BUNYIP_HOST_BIND_IP is set defensively so the base compose's
 # port substitution does not warn during teardown.
 [doc("Stop the dev stack (LAN-IP and SSO modes). Volumes preserved.")]
+[group: 'dev']
 down:
     #!/usr/bin/env nu
     let user_name = (^whoami | str trim)
@@ -142,66 +151,81 @@ down:
 # compose down blocks until removal completes) and `dev-sso` uses
 # `--detach`, so this returns once the new stack is up.
 [doc("Stop the dev stack and start dev-sso fresh.")]
+[group: 'dev']
 restart: down dev-sso
 
 # Stop the LAN-IP dev stack. Volumes preserved.
 [doc("Stop the LAN-IP dev stack (volumes preserved)")]
+[group: 'dev']
 dev-down: ensure-env
     docker compose --file {{ compose_file }} down
 
 # Stop the SSO dev stack. Volumes preserved.
 [doc("Stop the SSO dev stack (volumes preserved)")]
+[group: 'dev']
 dev-sso-down:
     docker compose --file {{ compose_file }} --file compose.dev-sso.yml down
 
 # Wipe the dev stack: stop, remove volumes (cargo cache included). Use
 # sparingly.
 [doc("Wipe dev volumes (cargo cache + named volumes).")]
+[group: 'dev']
 dev-clean: ensure-env
     docker compose --file {{ compose_file }} down --volumes
 
 # Tail logs from the dev stack. Trailing args go to `docker compose
 # logs` (e.g. --follow, api).
 [doc("Tail logs from the dev stack. Trailing args go to `docker compose logs` (e.g. api, --follow).")]
+[group: 'dev']
 dev-logs *args:
     docker compose --file {{ compose_file }} logs {{ args }}
 
 # Run all checks (compile, web/wasm, clippy, fmt)
+[group: 'check']
 check: check-compile check-web check-clippy check-fmt
 
 # Check native compilation (bunyip-api + bunyip-mocks)
+[group: 'check']
 check-compile:
     cargo check --workspace --exclude bunyip-web --all-targets
 
 # Check web/WASM compilation
+[group: 'check']
 check-web:
     cargo check --package bunyip-web --target wasm32-unknown-unknown
 
 # Run clippy lints
+[group: 'check']
 check-clippy:
     cargo clippy --workspace --all-targets -- -D warnings
 
 # Check formatting
+[group: 'check']
 check-fmt:
     cargo fmt --all --check
 
 # Format code
+[group: 'format']
 fmt:
     cargo fmt --all
 
 # Run tests (native only; wasm tests need a separate harness)
+[group: 'test']
 test:
     cargo test --workspace --exclude bunyip-web
 
 # Build native release binaries (api + mocks)
+[group: 'build']
 build:
     cargo build --release --workspace --exclude bunyip-web
 
 # Build the wasm SPA release bundle
+[group: 'build']
 build-web: css-build
     cd bunyip-web && dx build --release
 
 # Validate seed JSON files parse
+[group: 'check']
 check-seeds:
     #!/usr/bin/env nu
     for f in (ls seeds/*.json | get name) {
@@ -209,17 +233,21 @@ check-seeds:
     }
 
 # Build production OCI image for validation (api)
+[group: 'check']
 check-docker-api:
     docker buildx build --tag bunyip-api:check --file bunyip-api/oci-build/Dockerfile .
 
 # Build production OCI image for validation (web)
+[group: 'check']
 check-docker-web:
     docker buildx build --tag bunyip-web:check --file bunyip-web/oci-build/Dockerfile .
 
 # Build both production OCI images
+[group: 'build']
 build-docker: check-docker-api check-docker-web
 
 # Create a release: bump version, push branch, print PR link
+[group: 'release']
 create-release bump:
     #!/usr/bin/env nu
     let bump = "{{ bump }}"
@@ -257,12 +285,41 @@ create-release bump:
 
     git push --set-upstream origin $release_branch
 
-    let remote = git remote get-url origin
+    # Open the release PR via fj. Body lives in a tempfile so the
+    # changelog can grow later without inline escaping pain.
+    let body_file = (mktemp --tmpdir --suffix .md)
+    [
+        $"Automated release PR for ($tag)."
+        ""
+        $"After merge, `.forgejo/workflows/create-release.yml` tags and publishes ($tag) to the Generic Packages registry."
+    ] | str join "\n" | save --force $body_file
+    let fj_result = (^fj --host dev.a8n.run pr create $"Release ($tag)" --body-file $body_file | complete)
+    rm $body_file
+    if $fj_result.exit_code != 0 {
+        print $"(ansi red)fj pr create failed(ansi reset)"
+        print $fj_result.stderr
+        exit 1
+    }
+
+    # `fj pr create` prints `created pull request #N: <title>` on success.
+    # Parse the number out and build the PR URL from `origin`.
+    let pr_num = (
+        $fj_result.stdout
+        | str trim
+        | parse --regex 'created pull request #(?P<num>\d+)'
+        | get num.0?
+    )
+    let remote = (git remote get-url origin | str trim)
     let base_url = if ($remote | str starts-with "ssh://") {
         $remote | str replace "ssh://git@" "https://" | str replace "git.a8n.run" "dev.a8n.run" | str replace ".git" ""
     } else {
         $remote | str replace --regex "git@([^:]+):" "https://$1/" | str replace "git.a8n.run" "dev.a8n.run" | str replace ".git" ""
     }
     print $"(ansi green)Pushed ($release_branch)(ansi reset)"
-    print $"Create PR: ($base_url)/compare/($default_branch)...($release_branch)"
+    if ($pr_num | is-not-empty) {
+        print $"PR: ($base_url)/pulls/($pr_num)"
+    } else {
+        # fj output format drifted; fall back to whatever it said.
+        print $"fj output: ($fj_result.stdout | str trim)"
+    }
     print $"After merging, the create-release workflow will tag and release ($tag) automatically."
