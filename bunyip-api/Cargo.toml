@@ -33,3 +33,7 @@ rand.workspace = true
 validator.workspace = true
 
 dotenvy = "0.15"
+
+# Update-check polling. rustls (not native-tls) so the static musl
+# Alpine build needs no OpenSSL at runtime.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

@@ -3,17 +3,30 @@
 # Build OCI images and push to Forgejo Container Registry.
 #
 # Triggers:
-# - push to chore/initial-setup or main: builds with :latest tag
+# - push to main: builds with :latest tag
 # - push of a tag matching v*: builds with the tag name (e.g. v0.1.0) plus :latest
+#
+# Tag policy (per Vas's "only main creates packages" call): humans never
+# push v* tags by hand. The v* trigger exists solely for the automated
+# release flow - create-release.yml pushes the tag after a version bump
+# merges to main, and that is the only path that produces a v* tag. So in
+# practice packages are still only produced from main-driven events.
 #
 # Tag resolution lives in {bunyip-api,bunyip-web}/oci-build/get-tags.nu and
 # mirrors the scheme used by mokosh-server and mokosh-clients.
+#
+# Architectures: set the repo/org variable BUNYIP_BUILD_PLATFORMS to a
+# buildx platform list (e.g. "linux/amd64,linux/arm64") to publish a
+# multi-arch manifest. Defaults to linux/amd64 so the current single
+# amd64 runner is not forced into slow emulated arm64 Rust builds.
 name: build
 
 on:
   push:
     branches:
       - main
+    tags:
+      - "v*"
   pull_request:
 
 jobs:
@@ -95,6 +108,12 @@ jobs:
           docker version
           docker buildx version
 
+      - name: Enable multi-arch emulation
+        # Only needed when publishing a non-native arch; skipped for the
+        # default amd64-only build to avoid the privileged binfmt install.
+        if: ${{ vars.BUNYIP_BUILD_PLATFORMS != '' && vars.BUNYIP_BUILD_PLATFORMS != 'linux/amd64' }}
+        run: docker run --privileged --rm tonistiigi/binfmt --install all
+
       - name: Set up buildx builder
         run: |
           docker buildx create --name container-builder --driver docker-container --use
@@ -126,14 +145,17 @@ jobs:
           let image = "bunyip-api"
           let registry = $env.IMAGE_REGISTRY
           let tag_args = ($tags | each {|tag| [-t $"($registry)/($image):($tag)"]} | flatten)
+          let platforms = ("${{ vars.BUNYIP_BUILD_PLATFORMS }}" | str trim)
+          let platform_args = if ($platforms | is-empty) { [--platform linux/amd64] } else { [--platform $platforms] }
           let cache_ref = $"($registry)/($image):buildcache"
           let cache_from = $"type=registry,ref=($cache_ref)"
           let cache_to = $"type=registry,ref=($cache_ref),mode=max,ignore-error=true"
           let jobs = (sys cpu | length)
-          print $"Building and pushing ($image) with tags: ($tags_str)"
+          print $"Building and pushing ($image) with tags: ($tags_str) for ($platform_args)"
           (
             ^docker buildx build
               --push
+              ...$platform_args
               --cache-from $cache_from
               --cache-to $cache_to
               --build-arg $"GIT_SHA=($env.GITHUB_SHA)"
@@ -150,14 +172,17 @@ jobs:
           let image = "bunyip-web"
           let registry = $env.IMAGE_REGISTRY
           let tag_args = ($tags | each {|tag| [-t $"($registry)/($image):($tag)"]} | flatten)
+          let platforms = ("${{ vars.BUNYIP_BUILD_PLATFORMS }}" | str trim)
+          let platform_args = if ($platforms | is-empty) { [--platform linux/amd64] } else { [--platform $platforms] }
           let cache_ref = $"($registry)/($image):buildcache"
           let cache_from = $"type=registry,ref=($cache_ref)"
           let cache_to = $"type=registry,ref=($cache_ref),mode=max,ignore-error=true"
           let jobs = (sys cpu | length)
-          print $"Building and pushing ($image) with tags: ($tags_str)"
+          print $"Building and pushing ($image) with tags: ($tags_str) for ($platform_args)"
           (
             ^docker buildx build
               --push
+              ...$platform_args
               --cache-from $cache_from
               --cache-to $cache_to
               --build-arg $"GIT_SHA=($env.GITHUB_SHA)"
