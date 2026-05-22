@@ -13,6 +13,11 @@
 # token) on purpose: tags pushed with the auto token do NOT trigger
 # downstream workflows. The PAT must have repository content read/write
 # scope.
+#
+# This workflow is the ONLY producer of v* tags - humans never push them
+# by hand. That keeps the "only main creates packages" policy intact: the
+# v* trigger in build.yml only ever fires off a tag this automation pushed
+# after a version bump landed on main.
 name: create-release
 
 on:

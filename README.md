@@ -131,6 +131,7 @@ Project context, plans, audits, and architecture decisions live in [`For AI/`](F
 
 ## Contributing
 
-- Work happens in `migrate/<short-descriptive-name>` branches.
-- Merge target is `chore/initial-setup` (no `main` exists yet).
-- Container naming follows `dev-bunyip-<service>-${USER}` and network `dev-bunyip-private-${USER}`.
+- Work happens in `feat/` / `fix/` / `chore/<short-descriptive-name>` branches off `main`.
+- Merge target is `main` (via PR).
+- Dev container naming follows `dev-bunyip-<service>-${USER}` and network `dev-bunyip-private-${USER}`; the production stack (`compose.yml`) drops the `dev-` prefix.
+- Releases: `just create-release <major|minor|hotfix>` bumps the workspace version and opens a release PR; merging it tags `vX.Y.Z` and publishes the images (see [`.forgejo/workflows/create-release.yml`](.forgejo/workflows/create-release.yml)).

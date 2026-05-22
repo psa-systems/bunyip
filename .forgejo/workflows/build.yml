@@ -6,6 +6,12 @@
 # - push to main: builds with :latest tag
 # - push of a tag matching v*: builds with the tag name (e.g. v0.1.0) plus :latest
 #
+# Tag policy (per Vas's "only main creates packages" call): humans never
+# push v* tags by hand. The v* trigger exists solely for the automated
+# release flow - create-release.yml pushes the tag after a version bump
+# merges to main, and that is the only path that produces a v* tag. So in
+# practice packages are still only produced from main-driven events.
+#
 # Tag resolution lives in {bunyip-api,bunyip-web}/oci-build/get-tags.nu and
 # mirrors the scheme used by mokosh-server and mokosh-clients.
 #
