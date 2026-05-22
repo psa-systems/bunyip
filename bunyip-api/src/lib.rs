@@ -11,3 +11,4 @@ pub mod errors;
 pub mod responses;
 pub mod routes;
 pub mod state;
+pub mod version;

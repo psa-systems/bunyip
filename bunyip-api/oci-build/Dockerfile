@@ -55,6 +55,8 @@ LABEL org.opencontainers.image.revision="${GIT_SHA}"
 
 ENV BUNYIP_API_BIND=0.0.0.0:8080
 ENV BUNYIP_SEEDS_DIR=/app/seeds
+# Surfaced by the /version endpoint so operators can see the exact build.
+ENV BUNYIP_GIT_SHA=${GIT_SHA}
 
 EXPOSE 8080
 

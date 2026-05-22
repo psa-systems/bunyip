@@ -1,0 +1,82 @@
+# Bunyip - production / self-host reference deployment.
+#
+# Runs the published OCI images (no build-from-source). For local dev use
+# compose.dev.yml instead; this file is what an operator or self-hosting
+# MSP deploys.
+#
+# Quick start:
+#   1. cp .env.example .env  and fill in the BUNYIP_HOST / COOKIE_SECRET /
+#      CADDY_ACME_EMAIL values (see the "Self-host" section in README.md).
+#   2. docker compose up --detach
+#
+# Both ${BUNYIP_HOST} and msp-api.${BUNYIP_HOST} must point at this host so
+# the SPA can reach the API at the runtime-derived `msp-api.<host>` origin
+# and Caddy can issue TLS certs.
+#
+# Applying an update is a deliberate operator action:
+#   docker compose pull && docker compose up --detach
+# The running instance reports whether a newer release exists at
+#   https://msp-api.${BUNYIP_HOST}/version
+
+name: bunyip
+
+services:
+  api:
+    image: ${BUNYIP_API_IMAGE:-dev.a8n.run/psa-systems/bunyip-api:latest}
+    container_name: bunyip-api
+    restart: unless-stopped
+    environment:
+      BUNYIP_API_BIND: 0.0.0.0:8080
+      BUNYIP_PUBLIC_BASE_URL: https://${BUNYIP_HOST:?BUNYIP_HOST missing - see README Self-host section}
+      COOKIE_SECRET: ${COOKIE_SECRET:?COOKIE_SECRET missing - generate 48+ random chars}
+      BUNYIP_SEEDS_DIR: /app/seeds
+      FEEDBACK_FORGEJO_REPO: ${FEEDBACK_FORGEJO_REPO:-}
+      # Update checking: poll the Forgejo releases/latest endpoint. Leave
+      # BUNYIP_UPDATE_CHECK_URL empty to disable.
+      BUNYIP_UPDATE_CHECK_URL: ${BUNYIP_UPDATE_CHECK_URL:-https://dev.a8n.run/api/v1/repos/psa-systems/bunyip/releases/latest}
+      BUNYIP_UPDATE_CHECK_TOKEN: ${BUNYIP_UPDATE_CHECK_TOKEN:-}
+      RUST_LOG: ${RUST_LOG:-info}
+    networks:
+      private:
+
+  web:
+    image: ${BUNYIP_WEB_IMAGE:-dev.a8n.run/psa-systems/bunyip-web:latest}
+    container_name: bunyip-web
+    restart: unless-stopped
+    environment:
+      PORT: 8080
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      private:
+
+  edge:
+    image: caddy:alpine
+    container_name: bunyip-edge
+    restart: unless-stopped
+    environment:
+      BUNYIP_HOST: ${BUNYIP_HOST:?BUNYIP_HOST missing - see README Self-host section}
+      CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:?CADDY_ACME_EMAIL missing - email for Let's Encrypt}
+    ports:
+      - "${BUNYIP_HTTP_PORT:-80}:80"
+      - "${BUNYIP_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./oci-build/Caddyfile:/etc/caddy/Caddyfile:ro
+      - edge-data:/data
+      - edge-config:/config
+    depends_on:
+      - web
+      - api
+    networks:
+      private:
+
+volumes:
+  edge-data:
+    name: bunyip-edge-data
+  edge-config:
+    name: bunyip-edge-config
+
+networks:
+  private:
+    name: bunyip-private

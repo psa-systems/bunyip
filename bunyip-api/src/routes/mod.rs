@@ -6,3 +6,4 @@ pub mod health;
 pub mod me;
 pub mod oidc;
 pub mod orgs;
+pub mod version;

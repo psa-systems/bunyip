@@ -17,9 +17,18 @@ RUN curl --location --silent --show-error --fail https://bun.sh/install \
     | env BUN_INSTALL=/usr/local bash
 
 # Install cargo-binstall, then use it to fetch the pre-built dioxus-cli.
-RUN curl --location --silent --show-error \
-    https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-x86_64-unknown-linux-gnu.tgz \
-    | tar --extract --gzip --directory /usr/local/cargo/bin
+# TARGETARCH is provided automatically by buildx; map it to the binstall
+# release naming so the image builds for both amd64 and arm64.
+ARG TARGETARCH
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) binstall_arch=x86_64 ;; \
+      arm64) binstall_arch=aarch64 ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl --location --silent --show-error \
+      "https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-${binstall_arch}-unknown-linux-gnu.tgz" \
+      | tar --extract --gzip --directory /usr/local/cargo/bin
 RUN cargo binstall dioxus-cli --no-confirm
 
 # Install WASM target for client build

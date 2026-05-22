@@ -40,6 +40,68 @@ Then visit:
 
 State resets on container restart. This is intentional for the MVP demo loop.
 
+## Self-host (production)
+
+`compose.yml` is the reference deployment. It runs the published OCI images (no build-from-source) behind an edge Caddy that terminates TLS and routes traffic.
+
+### Topology
+
+The Dioxus SPA resolves its backend at runtime as `msp-api.<window.location.host>` (see [`bunyip-web/src/stores/config.rs`](bunyip-web/src/stores/config.rs)). So a deployment needs two DNS names pointing at the host:
+
+- `${BUNYIP_HOST}` - serves the SPA (e.g. `bunyip.example.com`)
+- `msp-api.${BUNYIP_HOST}` - serves the API / OIDC issuer (e.g. `msp-api.bunyip.example.com`)
+
+The edge Caddy ([`oci-build/Caddyfile`](oci-build/Caddyfile)) issues Let's Encrypt certs for both, proxying the apex to the `web` container and the `msp-api.` subdomain to the `api` container.
+
+### Deploy
+
+```nu
+cp .env.example .env
+# Edit .env: set BUNYIP_HOST, COOKIE_SECRET (48+ random chars), CADDY_ACME_EMAIL.
+docker compose up --detach
+```
+
+Pin a specific release instead of `:latest` by setting `BUNYIP_API_IMAGE` / `BUNYIP_WEB_IMAGE` to a tagged image (e.g. `dev.a8n.run/psa-systems/bunyip-api:v0.2.0`).
+
+### Update checking
+
+The instance reports its version and whether a newer release is published:
+
+```nu
+http get https://msp-api.${BUNYIP_HOST}/version
+```
+
+```json
+{
+  "version": "0.1.0",
+  "revision": "<git sha>",
+  "update": {
+    "enabled": true,
+    "current": "0.1.0",
+    "latest": "0.2.0",
+    "update_available": true,
+    "checked_at": "2026-05-22T12:00:00+00:00"
+  }
+}
+```
+
+The check polls `BUNYIP_UPDATE_CHECK_URL` (defaults to the public Forgejo `releases/latest` endpoint) at most once an hour and caches the result. Set the URL to an empty string to disable checking (`update.enabled` becomes `false`).
+
+### Applying an update
+
+Updates are never automatic; the operator decides when to apply one:
+
+```nu
+docker compose pull
+docker compose up --detach
+```
+
+Pinned-tag deployments bump the tag in `.env` first, then run the same two commands.
+
+### Architectures
+
+Images publish for `linux/amd64` by default. To publish a multi-arch manifest, set the CI variable `BUNYIP_BUILD_PLATFORMS` to `linux/amd64,linux/arm64`. Both Dockerfiles are arch-portable; arm64 builds run under emulation unless a native arm64 runner is available.
+
 ## Seeded demo accounts
 
 All accounts accept `MOCK_PASSWORD` (default `demo`). When MFA is enabled, TOTP step accepts `MOCK_TOTP_CODE` (default `000000`) or any 6-digit code.

@@ -24,6 +24,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/healthz", get(routes::health::healthz))
+        .merge(routes::version::router())
         .merge(routes::auth::router())
         .merge(routes::me::router())
         .merge(routes::orgs::router())

@@ -17,6 +17,13 @@ pub struct Config {
     pub mock_password: String,
     pub mock_totp_code: String,
     pub feedback_forgejo_repo: Option<String>,
+    /// Endpoint the update checker polls for the latest published release.
+    /// Expected to return JSON containing a `tag_name` field (the Forgejo /
+    /// Gitea `releases/latest` shape). When unset, update checking is
+    /// disabled and `/version` reports `update.enabled = false`.
+    pub update_check_url: Option<String>,
+    /// Optional bearer token for the update-check endpoint (private repos).
+    pub update_check_token: Option<String>,
 }
 
 impl Config {
@@ -41,6 +48,12 @@ impl Config {
             mock_totp_code: std::env::var("MOCK_TOTP_CODE")
                 .unwrap_or_else(|_| "000000".to_string()),
             feedback_forgejo_repo: std::env::var("FEEDBACK_FORGEJO_REPO")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            update_check_url: std::env::var("BUNYIP_UPDATE_CHECK_URL")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            update_check_token: std::env::var("BUNYIP_UPDATE_CHECK_TOKEN")
                 .ok()
                 .filter(|s| !s.is_empty()),
         })
