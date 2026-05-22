@@ -55,13 +55,16 @@ The edge Caddy ([`oci-build/Caddyfile`](oci-build/Caddyfile)) issues Let's Encry
 
 ### Deploy
 
+The images live in the private `dev.a8n.run/psa-systems-private` registry, so authenticate before pulling:
+
 ```nu
+docker login dev.a8n.run
 cp .env.example .env
-# Edit .env: set BUNYIP_HOST, COOKIE_SECRET (48+ random chars), CADDY_ACME_EMAIL.
+# Edit .env: set BUNYIP_HOST, COOKIE_SECRET (64+ random chars), CADDY_ACME_EMAIL.
 docker compose up --detach
 ```
 
-Pin a specific release instead of `:latest` by setting `BUNYIP_API_IMAGE` / `BUNYIP_WEB_IMAGE` to a tagged image (e.g. `dev.a8n.run/psa-systems/bunyip-api:v0.2.0`).
+Pin a specific release instead of `:latest` by setting `BUNYIP_API_IMAGE` / `BUNYIP_WEB_IMAGE` to a tagged image (e.g. `dev.a8n.run/psa-systems-private/bunyip-api:v0.2.0`).
 
 ### Update checking
 

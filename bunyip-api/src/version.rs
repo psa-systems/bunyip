@@ -10,10 +10,14 @@ use std::time::{Duration, Instant};
 use parking_lot::RwLock;
 use serde::Serialize;
 
-/// How long a successful (or failed) upstream check is cached before the
-/// next `/version` request triggers a fresh poll. Keeps the registry /
-/// release API from being hit on every page load.
+/// How long a successful upstream check is cached before the next
+/// `/version` request triggers a fresh poll. Keeps the registry / release
+/// API from being hit on every page load.
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+
+/// Shorter cache for a failed check so a transient blip (timeout, 5xx)
+/// doesn't suppress rechecks for the full hour.
+const ERROR_CACHE_TTL: Duration = Duration::from_secs(60);
 
 /// Per-request HTTP timeout for the upstream release lookup.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -72,20 +76,28 @@ struct Cached {
 pub struct UpdateChecker {
     url: Option<String>,
     token: Option<String>,
+    client: reqwest::Client,
     cache: RwLock<Option<Cached>>,
 }
 
 impl UpdateChecker {
     pub fn new(url: Option<String>, token: Option<String>) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(FETCH_TIMEOUT)
+            .user_agent(concat!("bunyip-api/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             url,
             token,
+            client,
             cache: RwLock::new(None),
         }
     }
 
-    /// Return the current update status, serving a cached result when it
-    /// is still within `CACHE_TTL`.
+    /// Return the current update status, serving a cached result while it
+    /// is fresh (`CACHE_TTL` for a success, `ERROR_CACHE_TTL` for a prior
+    /// failure).
     pub async fn status(&self) -> UpdateStatus {
         let current = current_version().to_string();
 
@@ -94,7 +106,12 @@ impl UpdateChecker {
         };
 
         if let Some(cached) = self.cache.read().as_ref() {
-            if cached.fetched.elapsed() < CACHE_TTL {
+            let ttl = if cached.status.error.is_some() {
+                ERROR_CACHE_TTL
+            } else {
+                CACHE_TTL
+            };
+            if cached.fetched.elapsed() < ttl {
                 return cached.status.clone();
             }
         }
@@ -119,12 +136,7 @@ impl UpdateChecker {
             error: Some(msg),
         };
 
-        let client = match reqwest::Client::builder().timeout(FETCH_TIMEOUT).build() {
-            Ok(c) => c,
-            Err(e) => return err(format!("http client init failed: {e}")),
-        };
-
-        let mut req = client.get(url);
+        let mut req = self.client.get(url);
         if let Some(token) = &self.token {
             req = req.bearer_auth(token);
         }

@@ -62,17 +62,31 @@ jobs:
           ^git push origin $tag
 
       - name: Publish Forgejo release
-        if: steps.resolve.outputs.exists == 'false'
+        # Always run (not gated on the tag being new) so a previous run
+        # that pushed the tag but failed before creating the release can
+        # recover on re-run. Idempotent: skips when the release exists.
         shell: nu {0}
         run: |
           let tag = "${{ steps.resolve.outputs.tag }}"
           let api = $"${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases"
-          let payload = {tag_name: $tag, name: $tag, draft: false, prerelease: false}
-          (
-            http post
-              --content-type application/json
-              --headers {Authorization: $"token ${{ secrets.PSA_SYSTEMS_PRIVATE_PACKAGE_PAT }}"}
-              $api
-              ($payload | to json)
-          )
-          print $"Published release ($tag)."
+          let auth = {Authorization: $"token ${{ secrets.PSA_SYSTEMS_PRIVATE_PACKAGE_PAT }}"}
+
+          let existing = (http get --allow-errors --full --headers $auth $"($api)/tags/($tag)")
+          if $existing.status == 200 {
+            print $"Release ($tag) already exists; nothing to do."
+          } else {
+            let payload = {tag_name: $tag, name: $tag, draft: false, prerelease: false}
+            let resp = (
+              http post --allow-errors --full
+                --content-type application/json
+                --headers $auth
+                $api
+                ($payload | to json)
+            )
+            if $resp.status >= 300 {
+              print $"(ansi red)Release create failed: HTTP ($resp.status)(ansi reset)"
+              print $resp.body
+              exit 1
+            }
+            print $"Published release ($tag)."
+          }

@@ -22,13 +22,13 @@ name: bunyip
 
 services:
   api:
-    image: ${BUNYIP_API_IMAGE:-dev.a8n.run/psa-systems/bunyip-api:latest}
+    image: ${BUNYIP_API_IMAGE:-dev.a8n.run/psa-systems-private/bunyip-api:latest}
     container_name: bunyip-api
     restart: unless-stopped
     environment:
       BUNYIP_API_BIND: 0.0.0.0:8080
       BUNYIP_PUBLIC_BASE_URL: https://${BUNYIP_HOST:?BUNYIP_HOST missing - see README Self-host section}
-      COOKIE_SECRET: ${COOKIE_SECRET:?COOKIE_SECRET missing - generate 48+ random chars}
+      COOKIE_SECRET: ${COOKIE_SECRET:?COOKIE_SECRET missing - generate 64+ random chars}
       BUNYIP_SEEDS_DIR: /app/seeds
       FEEDBACK_FORGEJO_REPO: ${FEEDBACK_FORGEJO_REPO:-}
       # Update checking: poll the Forgejo releases/latest endpoint. Leave
@@ -40,7 +40,7 @@ services:
       private:
 
   web:
-    image: ${BUNYIP_WEB_IMAGE:-dev.a8n.run/psa-systems/bunyip-web:latest}
+    image: ${BUNYIP_WEB_IMAGE:-dev.a8n.run/psa-systems-private/bunyip-web:latest}
     container_name: bunyip-web
     restart: unless-stopped
     environment:
