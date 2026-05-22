@@ -13,7 +13,7 @@ use crate::stores::toast::use_toast;
 pub fn AdminFeedbackPage() -> Element {
     let toast = use_toast();
     let mut filter = use_signal(|| "all".to_string());
-    let mut refresh_key = use_signal(|| 0u64);
+    let refresh_key = use_signal(|| 0u64);
 
     let mut feedback_resource = use_resource(move || {
         let filter = filter();

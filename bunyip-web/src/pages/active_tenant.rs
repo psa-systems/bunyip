@@ -32,7 +32,7 @@ pub fn ActiveTenantPage() -> Element {
     let mut memberships: Signal<Option<Result<Vec<MembershipView>, String>>> = use_signal(|| None);
     let mut busy: Signal<Option<String>> = use_signal(|| None);
     let mut error: Signal<Option<String>> = use_signal(|| None);
-    let mut bump = use_signal(|| 0u32);
+    let bump = use_signal(|| 0u32);
 
     use_future(move || async move {
         let _ = bump.read();

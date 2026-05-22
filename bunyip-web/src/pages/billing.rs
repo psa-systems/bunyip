@@ -11,7 +11,7 @@ use crate::stores::toast::use_toast;
 #[component]
 pub fn OrgBillingPage(slug: String) -> Element {
     let toast = use_toast();
-    let mut refresh_key = use_signal(|| 0u64);
+    let refresh_key = use_signal(|| 0u64);
 
     let slug_for_view = slug.clone();
     let mut view = use_resource(move || {
@@ -75,7 +75,7 @@ fn CurrentPlan(
     toast: crate::stores::toast::ToastStore,
 ) -> Element {
     let _ = (slug.clone(), toast);
-    let refresh_key = refresh_key;
+    let _refresh_key = refresh_key;
     // Stripe write integration is deferred (see docs/mokosh-fixes/05-billing.md).
     // The cancel / uncancel handlers were here; they'll be rewritten
     // against the new endpoints when that surface ships. Today the

@@ -163,9 +163,10 @@ async fn run_token_refresh_loop(mut sig: Signal<AuthState>) {
         //     no need to cap the wait, just the floor.
         const REFRESH_LEAD_SECONDS: i64 = 30;
         const MIN_LOOP_INTERVAL_MS: i64 = 5_000;
-        let wait_for_ms = (current.expires_at - Utc::now() - Duration::seconds(REFRESH_LEAD_SECONDS))
-            .num_milliseconds()
-            .max(MIN_LOOP_INTERVAL_MS) as u32;
+        let wait_for_ms =
+            (current.expires_at - Utc::now() - Duration::seconds(REFRESH_LEAD_SECONDS))
+                .num_milliseconds()
+                .max(MIN_LOOP_INTERVAL_MS) as u32;
         gloo_timers::future::TimeoutFuture::new(wait_for_ms).await;
 
         // Refresh. On failure, this is the moment we hand the user
@@ -264,10 +265,7 @@ fn try_acquire_refresh() -> Option<RefreshGuard> {
 
 async fn wait_for_in_flight_refresh() {
     loop {
-        let busy = REFRESH_IN_FLIGHT
-            .lock()
-            .map(|g| *g)
-            .unwrap_or(false);
+        let busy = REFRESH_IN_FLIGHT.lock().map(|g| *g).unwrap_or(false);
         if !busy {
             return;
         }
@@ -383,10 +381,7 @@ pub fn use_bfcache_invalidator() {
                 // restarted page lands on /login cleanly and re-auths
                 // through the OP rather than gambling with a possibly-
                 // used refresh_token.
-                let was_refreshing = REFRESH_IN_FLIGHT
-                    .lock()
-                    .map(|g| *g)
-                    .unwrap_or(false);
+                let was_refreshing = REFRESH_IN_FLIGHT.lock().map(|g| *g).unwrap_or(false);
                 if was_refreshing {
                     tokens::clear_tokens();
                 }

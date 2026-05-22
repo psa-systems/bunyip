@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::types::{MembershipRole, Org, User};
-use super::{
-    get_authed, get_json, post_authed, post_authed_empty, post_empty, post_json, ApiError,
-};
+use super::{get_authed, get_json, post_authed, post_authed_empty, ApiError};
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct OrgMembershipBrief {
