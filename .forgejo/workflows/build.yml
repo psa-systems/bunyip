@@ -35,6 +35,15 @@ jobs:
         with:
           cache-on-failure: true
 
+      # `bunyip-web/assets/styles.css` is a gitignored Tailwind build
+      # artifact, so a clean CI checkout doesn't have it. This workflow
+      # only compile-validates and never renders CSS, so an empty file
+      # is enough to satisfy the `asset!("/assets/styles.css")` macro in
+      # bunyip-web/src/main.rs. The real CSS build still happens in
+      # bunyip-web/oci-build/Dockerfile for deployment.
+      - name: Stub generated CSS asset
+        run: mkdir -p bunyip-web/assets && touch bunyip-web/assets/styles.css
+
       - name: Ensure wasm32 target + clippy/rustfmt components
         # The runner image already ships rustup; these are cheap no-ops
         # when the toolchain is current.
