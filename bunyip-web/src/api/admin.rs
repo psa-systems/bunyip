@@ -25,6 +25,11 @@ pub struct UserView {
     pub email_verified: bool,
     #[serde(default)]
     pub mfa_enrolled: bool,
+    /// True when the user is the Owner of the current tenant's
+    /// membership. Owners are immovable from this surface; the SPA
+    /// hides per-row action buttons and shows an Owner badge.
+    #[serde(default)]
+    pub is_owner: bool,
     #[serde(default)]
     pub last_login_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
@@ -193,6 +198,42 @@ pub async fn admin_trigger_password_reset(user_id: &str) -> Result<(), ApiError>
     .await
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct UserSessionView {
+    pub id: String,
+    pub created_at: String,
+    pub last_active_at: String,
+    #[serde(default)]
+    pub user_agent: Option<String>,
+    #[serde(default)]
+    pub ip: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub is_current: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct UserSessionsBody {
+    sessions: Vec<UserSessionView>,
+}
+
+/// GET /v1/auth/users/:id/sessions - admin lists target user's active sessions.
+pub async fn list_user_sessions(user_id: &str) -> Result<Vec<UserSessionView>, ApiError> {
+    super::get_authed::<UserSessionsBody>(&format!("/v1/auth/users/{user_id}/sessions"))
+        .await
+        .map(|b| b.sessions)
+}
+
+/// POST /v1/auth/users/:id/sessions/:sid/revoke - admin force-revoke.
+pub async fn revoke_user_session(user_id: &str, session_id: &str) -> Result<(), ApiError> {
+    post_authed_empty(
+        &format!("/v1/auth/users/{user_id}/sessions/{session_id}/revoke"),
+        &serde_json::json!({}),
+    )
+    .await
+}
+
 // ---------------------------------------------------------------------------
 // Invites
 // ---------------------------------------------------------------------------
@@ -280,6 +321,8 @@ pub struct AuditView {
     pub id: String,
     #[serde(default)]
     pub actor_id: Option<String>,
+    #[serde(default)]
+    pub actor_email: Option<String>,
     pub event_kind: String,
     pub severity: String,
     #[serde(default)]
@@ -296,23 +339,63 @@ pub struct AuditListBody {
     pub offset: i64,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct AuditFilter {
+    pub kind: Option<String>,
+    pub search: Option<String>,
+    pub severity: Option<String>,
+    pub from: Option<String>,
+    pub to: Option<String>,
+}
+
+fn url_encode(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '_' | '-' | '.' | '~' => c.to_string(),
+            _ => format!("%{:02X}", c as u32),
+        })
+        .collect()
+}
+
+impl AuditFilter {
+    /// Append the filter's non-empty fields to `path` as `&k=v` pairs.
+    /// Caller has already emitted the leading `?` (with limit/offset).
+    pub fn append_to(&self, path: &mut String) {
+        if let Some(k) = self.kind.as_deref().filter(|s| !s.is_empty()) {
+            path.push_str(&format!("&kind={}", url_encode(k)));
+        }
+        if let Some(s) = self.search.as_deref().filter(|s| !s.is_empty()) {
+            path.push_str(&format!("&search={}", url_encode(s)));
+        }
+        if let Some(s) = self.severity.as_deref().filter(|s| !s.is_empty()) {
+            path.push_str(&format!("&severity={}", url_encode(s)));
+        }
+        if let Some(s) = self.from.as_deref().filter(|s| !s.is_empty()) {
+            path.push_str(&format!("&from={}", url_encode(s)));
+        }
+        if let Some(s) = self.to.as_deref().filter(|s| !s.is_empty()) {
+            path.push_str(&format!("&to={}", url_encode(s)));
+        }
+    }
+}
+
 pub async fn list_audit_logs(
     limit: i64,
     offset: i64,
-    kind: Option<&str>,
+    filter: &AuditFilter,
 ) -> Result<AuditListBody, ApiError> {
     let mut path = format!("/v1/auth/audit-logs?limit={limit}&offset={offset}");
-    if let Some(k) = kind.filter(|s| !s.is_empty()) {
-        let encoded: String = k
-            .chars()
-            .map(|c| match c {
-                'A'..='Z' | 'a'..='z' | '0'..='9' | '_' | '-' | '.' => c.to_string(),
-                _ => format!("%{:02X}", c as u32),
-            })
-            .collect();
-        path.push_str(&format!("&kind={encoded}"));
-    }
+    filter.append_to(&mut path);
     get_authed::<AuditListBody>(&path).await
+}
+
+/// Build a fully-qualified URL the browser can navigate to (with the
+/// Authorization header injected via fetch + blob download in the page).
+/// Returns the relative path; the page wraps with `issuer_url`.
+pub fn audit_csv_path(filter: &AuditFilter) -> String {
+    let mut path = "/v1/auth/audit-logs.csv?limit=10000&offset=0".to_string();
+    filter.append_to(&mut path);
+    path
 }
 
 /// Canonical event_kind values surfaced by mokosh-server, mirrored from

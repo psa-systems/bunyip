@@ -85,7 +85,7 @@ pub fn SessionsPage() -> Element {
             title: "Active sessions".to_string(),
             back_to: Some(Route::SettingsPage {}),
             back_label: "Settings".to_string(),
-            div { class: "max-w-2xl mx-auto px-6 space-y-6",
+            div { class: "max-w-4xl mx-auto px-6 space-y-6",
                 h1 { class: "text-3xl font-bold text-bunyip-reed-900 dark:text-bunyip-reed-50",
                     "Active sessions"
                 }
@@ -227,8 +227,16 @@ fn SessionRow(props: SessionRowProps) -> Element {
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| default_label.clone());
     let ip = s.ip.clone().unwrap_or_else(|| "unknown".into());
-    let last_active = s.last_active_at.format("%Y-%m-%d %H:%M UTC").to_string();
-    let signed_in = s.created_at.format("%Y-%m-%d %H:%M UTC").to_string();
+    let last_active = s
+        .last_active_at
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M")
+        .to_string();
+    let signed_in = s
+        .created_at
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M")
+        .to_string();
 
     let mut editing = use_signal(|| false);
     let mut draft = use_signal(|| s.display_name.clone().unwrap_or_default());

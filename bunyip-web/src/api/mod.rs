@@ -63,7 +63,16 @@ fn base_builder(method: &str, path: &str) -> RequestBuilder {
 }
 
 fn authed(builder: RequestBuilder) -> Result<RequestBuilder, ApiError> {
-    let token = current_access_token().ok_or(ApiError::NotAuthenticated)?;
+    // Reject empty strings as not-authenticated. Without this guard a
+    // `Some("")` access token (e.g. transient corruption of localStorage
+    // or a race where save_tokens stored a partially-populated value)
+    // produces the literal header `Bearer ` which mokosh rejects with
+    // 401, triggering the retry path to call try_refresh_access_token,
+    // which loads the same empty token, and so on - a churn loop that
+    // burns refresh tokens and logs the user out for no real reason.
+    let token = current_access_token()
+        .filter(|t| !t.is_empty())
+        .ok_or(ApiError::NotAuthenticated)?;
     Ok(builder.header("Authorization", &format!("Bearer {token}")))
 }
 
@@ -174,6 +183,22 @@ pub async fn get_authed<R: DeserializeOwned>(path: &str) -> Result<R, ApiError> 
         .send()
         .await
         .map_err(|e| ApiError::Network(e.to_string()))?;
+    // If the access token went stale (background refresh loop missed
+    // expiry due to tab suspend / system sleep / clock skew), attempt
+    // a single refresh + retry transparently before surfacing 401 to
+    // the user. authed() picks up the rotated token via
+    // current_access_token() after force_refresh saved it.
+    if resp.status() == 401
+        && crate::stores::auth::try_refresh_access_token()
+            .await
+            .is_some()
+    {
+        let retry = authed(base_builder("GET", path))?
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+        return handle_response(retry).await;
+    }
     handle_response(resp).await
 }
 
@@ -187,6 +212,19 @@ pub async fn post_authed<T: Serialize, R: DeserializeOwned>(
         .send()
         .await
         .map_err(|e| ApiError::Network(e.to_string()))?;
+    if resp.status() == 401
+        && crate::stores::auth::try_refresh_access_token()
+            .await
+            .is_some()
+    {
+        let retry = authed(base_builder("POST", path))?
+            .json(body)
+            .map_err(|e| ApiError::Decode(e.to_string()))?
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+        return handle_response(retry).await;
+    }
     handle_response(resp).await
 }
 
@@ -200,6 +238,19 @@ pub async fn put_authed<T: Serialize, R: DeserializeOwned>(
         .send()
         .await
         .map_err(|e| ApiError::Network(e.to_string()))?;
+    if resp.status() == 401
+        && crate::stores::auth::try_refresh_access_token()
+            .await
+            .is_some()
+    {
+        let retry = authed(base_builder("PUT", path))?
+            .json(body)
+            .map_err(|e| ApiError::Decode(e.to_string()))?
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+        return handle_response(retry).await;
+    }
     handle_response(resp).await
 }
 

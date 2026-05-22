@@ -6,6 +6,8 @@
 //! state. If no tokens or the /me fetch 401s, the state collapses to
 //! SignedOut.
 
+use std::sync::Mutex;
+
 use chrono::{Duration, Utc};
 use dioxus::prelude::*;
 use wasm_bindgen::closure::Closure;
@@ -149,15 +151,22 @@ async fn run_token_refresh_loop(mut sig: Signal<AuthState>) {
             }
         };
 
-        // Wake up REFRESH_LEAD_SECONDS before expiry. Clamp to a
-        // minimum of 1s so a token that is already past expiry
-        // (clock skew, paused tab) refreshes immediately rather
-        // than wedging the loop in a negative-duration sleep.
+        // Wake up REFRESH_LEAD_SECONDS before expiry. Two clamps:
+        //   - lower bound `MIN_LOOP_INTERVAL`: prevents the loop from
+        //     busy-cycling if expires_at is already in the past (clock
+        //     jumped backward, tab was suspended, server issued a token
+        //     with a stale exp). Without this the loop would fire every
+        //     ~1 ms, burning refresh-token rotations as fast as Mokosh
+        //     could mint them. The singleflight gate stops reuse
+        //     detection from triggering, but it still hammers the OP.
+        //   - upper bound is implicit (token TTL ~hour minus 30 s);
+        //     no need to cap the wait, just the floor.
         const REFRESH_LEAD_SECONDS: i64 = 30;
-        let wait_for = (current.expires_at - Utc::now() - Duration::seconds(REFRESH_LEAD_SECONDS))
+        const MIN_LOOP_INTERVAL_MS: i64 = 5_000;
+        let wait_for_ms = (current.expires_at - Utc::now() - Duration::seconds(REFRESH_LEAD_SECONDS))
             .num_milliseconds()
-            .max(1) as u32;
-        gloo_timers::future::TimeoutFuture::new(wait_for).await;
+            .max(MIN_LOOP_INTERVAL_MS) as u32;
+        gloo_timers::future::TimeoutFuture::new(wait_for_ms).await;
 
         // Refresh. On failure, this is the moment we hand the user
         // back to /login: clear tokens + flip the signal. Every
@@ -166,8 +175,20 @@ async fn run_token_refresh_loop(mut sig: Signal<AuthState>) {
         // automatic.
         match force_refresh(&current).await {
             Some(_new) => {
-                // Loop again; the new tokens are already persisted
-                // by force_refresh.
+                // On a successful rotation, also re-fetch /v1/auth/me
+                // so any server-side change to the user (role, name,
+                // primary org) propagates to the UI within one refresh
+                // window instead of waiting for a page reload. This
+                // matters because mokosh-server is RFC-compliant and
+                // may omit `id_token` on refresh-grant responses, so
+                // the cached id_token's claims (role, etc.) can be
+                // stale; fetch_me bypasses the id_token and reads
+                // current state. Failures here are silent: the user
+                // continues with the previous me snapshot rather than
+                // being signed out.
+                if let Ok(me) = crate::api::me::fetch_me().await {
+                    sig.set(AuthState::SignedIn(me));
+                }
             }
             None => {
                 tokens::clear_tokens();
@@ -194,17 +215,109 @@ async fn maybe_refresh(tokens: Tokens) -> Option<Tokens> {
     })
 }
 
+/// On-demand single-shot refresh callable from the API client when a
+/// request unexpectedly returns 401 (background loop missed expiry due
+/// to tab suspend / system sleep / clock skew). Returns the new access
+/// token; on failure, clears tokens + leaves the auth signal alone
+/// (caller surfaces the 401 to the user normally).
+pub(crate) async fn try_refresh_access_token() -> Option<String> {
+    let current = tokens::load_tokens()?;
+    let new = force_refresh(&current).await?;
+    Some(new.access_token)
+}
+
+/// Single-flight gate. mokosh-server enforces single-use refresh tokens
+/// with family-wide reuse detection: presenting an already-rotated
+/// refresh_token revokes the whole family and silently signs the user
+/// out on the next call. WASM is single-threaded but futures interleave
+/// at .await boundaries, so the background loop + the api/mod.rs 401
+/// retry can both enter force_refresh holding the same refresh_token.
+/// This flag serializes them so only one refresh hits the wire per
+/// rotation.
+static REFRESH_IN_FLIGHT: Mutex<bool> = Mutex::new(false);
+
+/// RAII guard: clears `REFRESH_IN_FLIGHT` on drop, including when the
+/// holding future is cancelled mid-await (the dx-renderer can drop a
+/// future at any await point - navigation, hot-reload, panic). Without
+/// this, a cancelled `force_refresh` left the gate locked permanently
+/// and every subsequent refresh attempt got stuck in the wait loop
+/// until the user reloaded the tab.
+struct RefreshGuard;
+
+impl Drop for RefreshGuard {
+    fn drop(&mut self) {
+        if let Ok(mut g) = REFRESH_IN_FLIGHT.lock() {
+            *g = false;
+        }
+    }
+}
+
+fn try_acquire_refresh() -> Option<RefreshGuard> {
+    match REFRESH_IN_FLIGHT.lock() {
+        Ok(mut g) if !*g => {
+            *g = true;
+            Some(RefreshGuard)
+        }
+        _ => None,
+    }
+}
+
+async fn wait_for_in_flight_refresh() {
+    loop {
+        let busy = REFRESH_IN_FLIGHT
+            .lock()
+            .map(|g| *g)
+            .unwrap_or(false);
+        if !busy {
+            return;
+        }
+        gloo_timers::future::TimeoutFuture::new(25).await;
+    }
+}
+
 /// Always attempt a refresh against the token endpoint regardless of
 /// the current access_token's expiry. Returns the new tokens (already
 /// saved to localStorage + the in-memory holder) or `None` on failure.
+///
+/// Two callers racing into this function with the same stored
+/// refresh_token would both present it to mokosh-server; the second
+/// presentation trips reuse detection and revokes the family. To avoid
+/// that we (1) serialize via REFRESH_IN_FLIGHT so a second caller waits
+/// for the first to land, and (2) re-read storage on the way in so a
+/// caller whose `tokens` view is stale (the background loop already
+/// rotated while they were waiting) returns the newly-stored tokens
+/// instead of replaying their own already-used refresh_token.
 async fn force_refresh(tokens: &Tokens) -> Option<Tokens> {
+    let _guard = match try_acquire_refresh() {
+        Some(g) => g,
+        None => {
+            wait_for_in_flight_refresh().await;
+            let current = tokens::load_tokens()?;
+            if current.access_token != tokens.access_token {
+                return Some(current);
+            }
+            // Other refresh ran but did not advance storage (it failed).
+            // Replaying our refresh_token would trip reuse detection.
+            return None;
+        }
+    };
+    // Holding the gate via `_guard`. The guard drops at every return path
+    // below (including future cancellation at the await on
+    // refresh_tokens), so the gate cannot leak.
+    if let Some(latest) = tokens::load_tokens() {
+        if latest.access_token != tokens.access_token {
+            return Some(latest);
+        }
+    }
     let refresh_token = tokens.refresh_token.as_deref()?;
     let cfg = OidcConfig::from_env();
-    let new_tokens = crate::modules::oidc::refresh_tokens(&cfg, refresh_token, &tokens.id_token)
-        .await
-        .ok()?;
-    tokens::save_tokens(&new_tokens);
-    Some(new_tokens)
+    match crate::modules::oidc::refresh_tokens(&cfg, refresh_token, &tokens.id_token).await {
+        Ok(new_tokens) => {
+            tokens::save_tokens(&new_tokens);
+            Some(new_tokens)
+        }
+        Err(_) => None,
+    }
 }
 
 pub fn use_auth() -> Signal<AuthState> {
@@ -252,10 +365,33 @@ pub fn use_bfcache_invalidator() {
         };
         let closure = Closure::<dyn FnMut(web_sys::PageTransitionEvent)>::new(
             move |evt: web_sys::PageTransitionEvent| {
-                if evt.persisted() {
-                    if let Some(w) = web_sys::window() {
-                        let _ = w.location().reload();
-                    }
+                if !evt.persisted() {
+                    return;
+                }
+                // bfcache snapshots the entire JS heap including
+                // REFRESH_IN_FLIGHT. If the page was frozen mid-refresh,
+                // we cannot tell whether the server-side rotation
+                // completed (and our locally-stored refresh_token is
+                // now invalid) or whether the request never landed.
+                // Either way, blindly reloading would race: the new
+                // page would hydrate from localStorage and present the
+                // same refresh_token, which can trip Mokosh's family-
+                // reuse detection and silently sign the user out of
+                // EVERY app sharing this OP session.
+                //
+                // Safe action: clear local tokens before reload so the
+                // restarted page lands on /login cleanly and re-auths
+                // through the OP rather than gambling with a possibly-
+                // used refresh_token.
+                let was_refreshing = REFRESH_IN_FLIGHT
+                    .lock()
+                    .map(|g| *g)
+                    .unwrap_or(false);
+                if was_refreshing {
+                    tokens::clear_tokens();
+                }
+                if let Some(w) = web_sys::window() {
+                    let _ = w.location().reload();
                 }
             },
         );

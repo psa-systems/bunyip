@@ -1,10 +1,13 @@
 use dioxus::prelude::*;
 
+use crate::api::billing::{self, TierConfig};
 use crate::components::layout::PublicNav;
 use crate::routes::Route;
 
 #[component]
 pub fn PricingPage() -> Element {
+    let tiers = use_resource(|| async { billing::list_tiers().await });
+
     rsx! {
         div { class: "min-h-screen flex flex-col bg-gradient-to-b from-bunyip-reed-50 to-white dark:from-bunyip-reed-900 dark:to-bunyip-reed-800",
             PublicNav {}
@@ -23,48 +26,60 @@ pub fn PricingPage() -> Element {
                         }
                     }
 
-                    div { class: "mt-12 grid md:grid-cols-3 gap-4 md:gap-6",
-                        PricingCard {
-                            name: "Early adopter",
-                            price: "$0",
-                            period: "for the first 20 orgs",
-                            features: vec![
-                                "All Standard features",
-                                "Locked-in pricing forever",
-                                "Priority support",
-                                "90-day trial",
-                            ],
-                            cta: "Claim a slot",
-                            highlighted: true,
-                            tag: Some("Limited"),
-                        }
-                        PricingCard {
-                            name: "Standard",
-                            price: "$49",
-                            period: "per org / month",
-                            features: vec![
-                                "Unlimited members",
-                                "OIDC SSO + MFA",
-                                "Stripe billing & invoices",
-                                "Audit log",
-                            ],
-                            cta: "Start free trial",
-                            highlighted: false,
-                            tag: None,
-                        }
-                        PricingCard {
-                            name: "Lifetime",
-                            price: "Custom",
-                            period: "for select partners",
-                            features: vec![
-                                "Everything in Standard",
-                                "Bespoke onboarding",
-                                "Direct line to the team",
-                                "Pay once, forever",
-                            ],
-                            cta: "Talk to us",
-                            highlighted: false,
-                            tag: None,
+                    div { class: "mt-12",
+                        match &*tiers.read_unchecked() {
+                            None => rsx! {
+                                p { class: "text-center text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300",
+                                    "Loading plans..."
+                                }
+                            },
+                            Some(Err(_)) => rsx! {
+                                // Fall back to a compact "talk to us" card if
+                                // the catalogue endpoint is unreachable. Pricing
+                                // is informational; a 5xx shouldn't block the
+                                // page entirely.
+                                div { class: "max-w-md mx-auto p-6 rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 text-center",
+                                    p { class: "text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200",
+                                        "Our pricing page is taking a moment. In the meantime, "
+                                        Link { to: Route::SignupPage {}, class: "underline font-medium",
+                                            "sign up"
+                                        }
+                                        " and we'll match you to the right plan."
+                                    }
+                                }
+                            },
+                            Some(Ok(list)) if list.is_empty() => rsx! {
+                                p { class: "text-center text-sm text-bunyip-reed-600 dark:text-bunyip-reed-300",
+                                    "Plans are being finalised. Check back soon."
+                                }
+                            },
+                            Some(Ok(list)) => {
+                                // Highlight a "middle" tier so the eye lands
+                                // somewhere. Picks the tier closest to (but
+                                // not past) the middle index; for 4 tiers
+                                // that's index 1 (Starter), for 3 it's the
+                                // middle one, for 1 it's the only card.
+                                let highlight_idx = list.len() / 2;
+                                let cols_class = if list.len() >= 4 {
+                                    "grid md:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6"
+                                } else if list.len() == 3 {
+                                    "grid md:grid-cols-3 gap-4 md:gap-6"
+                                } else if list.len() == 2 {
+                                    "grid md:grid-cols-2 gap-4 md:gap-6 max-w-3xl mx-auto"
+                                } else {
+                                    "max-w-md mx-auto"
+                                };
+                                rsx! {
+                                    div { class: "{cols_class}",
+                                        for (i, tier) in list.iter().enumerate() {
+                                            PricingCard {
+                                                tier: tier.clone(),
+                                                highlighted: i == highlight_idx && list.len() > 1,
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -101,16 +116,33 @@ pub fn PricingPage() -> Element {
     }
 }
 
+/// Bucket a tier's monthly price into a (display, period) pair.
+/// Enterprise is a "contact us" tier: even though its monthly_price_cents
+/// is 0 in the catalogue (the schema's NOT NULL default), we render
+/// "Custom / contact us" instead of "Free / forever".
+fn price_and_period(tier: &TierConfig) -> (String, &'static str) {
+    if tier.tier_key == "enterprise" {
+        ("Custom".to_string(), "contact us")
+    } else if tier.monthly_price_cents == 0 {
+        ("Free".to_string(), "forever")
+    } else {
+        let dollars = tier.monthly_price_cents / 100;
+        (format!("${dollars}"), "per month")
+    }
+}
+
+fn cta_for(tier: &TierConfig) -> &'static str {
+    if tier.monthly_price_cents == 0 {
+        "Start free"
+    } else if tier.tier_key == "enterprise" {
+        "Talk to us"
+    } else {
+        "Start free trial"
+    }
+}
+
 #[component]
-fn PricingCard(
-    name: &'static str,
-    price: &'static str,
-    period: &'static str,
-    features: Vec<&'static str>,
-    cta: &'static str,
-    highlighted: bool,
-    tag: Option<&'static str>,
-) -> Element {
+fn PricingCard(tier: TierConfig, highlighted: bool) -> Element {
     let card_class = if highlighted {
         "relative p-7 rounded-2xl border-2 border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 shadow-lg"
     } else {
@@ -121,15 +153,18 @@ fn PricingCard(
     } else {
         "w-full px-4 py-2.5 rounded-lg border border-bunyip-reed-300 text-bunyip-reed-800 dark:text-bunyip-reed-100 font-medium hover:bg-bunyip-reed-50 transition-colors"
     };
+    let (price, period) = price_and_period(&tier);
+    let cta = cta_for(&tier);
+
     rsx! {
         div { class: "{card_class}",
-            if let Some(tag) = tag {
+            if highlighted {
                 span { class: "absolute -top-3 left-7 px-2.5 py-0.5 rounded-full bg-bunyip-reed-700 text-white text-xs font-semibold tracking-wide uppercase",
-                    "{tag}"
+                    "Popular"
                 }
             }
             h3 { class: "text-lg font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50",
-                "{name}"
+                "{tier.display_name}"
             }
             div { class: "mt-4 flex items-baseline gap-2",
                 span { class: "text-4xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50",
@@ -139,8 +174,13 @@ fn PricingCard(
                     "{period}"
                 }
             }
+            if tier.trial_days > 0 && tier.monthly_price_cents > 0 {
+                p { class: "mt-1 text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300",
+                    "Includes a {tier.trial_days}-day free trial"
+                }
+            }
             ul { class: "mt-6 space-y-2.5 text-sm",
-                for feature in features {
+                for feature in tier.features.iter() {
                     li { class: "flex items-start gap-2",
                         svg {
                             class: "w-4 h-4 mt-0.5 text-bunyip-reed-600 dark:text-bunyip-reed-300 shrink-0",

@@ -2,10 +2,13 @@
 
 use dioxus::prelude::*;
 
-use crate::api::admin::{self, AuditListBody, AUDIT_EVENT_KINDS};
+use crate::api::admin::{self, AUDIT_EVENT_KINDS};
+use crate::api::issuer_url;
 use crate::components::layout::AppShell;
 use crate::routes::Route;
 use crate::stores::auth::use_require_role;
+use crate::stores::toast::use_toast;
+use crate::stores::tokens::current_access_token;
 
 fn severity_class(s: &str) -> &'static str {
     match s {
@@ -172,22 +175,26 @@ const PAGE_SIZE: i64 = 50;
 #[component]
 pub fn AuditLogsPage() -> Element {
     use_require_role("admin");
+    let toast = use_toast();
     let mut offset = use_signal(|| 0i64);
     // Dropdown selection: "" = "All kinds", or one of AUDIT_EVENT_KINDS,
     // or "__custom__" to enable the free-text fallback.
     let mut kind_select = use_signal(String::new);
     let mut kind_custom = use_signal(String::new);
+    let mut search = use_signal(String::new);
+    let mut severity = use_signal(String::new);
+    let mut date_from = use_signal(String::new);
+    let mut date_to = use_signal(String::new);
+    let mut downloading = use_signal(|| false);
 
-    // `use_resource` is the reactive variant of `use_future`:
-    // signals read inside its closure auto-subscribe via a
-    // ReactiveContext and re-run the future on any change. The
-    // previous `use_future` + bump approach was a single-shot run
-    // on mount that silently ignored filter changes - the `kind`
-    // query param was being dropped because the future never
-    // re-evaluated after the dropdown change. See
-    // docs/mokosh-fixes/01-audit-log-kind-filter.md.
-    let data = use_resource(move || async move {
-        let off = *offset.read();
+    fn build_filter(
+        kind_select: &Signal<String>,
+        kind_custom: &Signal<String>,
+        search: &Signal<String>,
+        severity: &Signal<String>,
+        date_from: &Signal<String>,
+        date_to: &Signal<String>,
+    ) -> admin::AuditFilter {
         let sel = kind_select.read().clone();
         let kind: Option<String> = if sel == "__custom__" {
             let v = kind_custom.read().trim().to_string();
@@ -197,14 +204,59 @@ pub fn AuditLogsPage() -> Element {
         } else {
             Some(sel)
         };
-        admin::list_audit_logs(PAGE_SIZE, off, kind.as_deref())
+        // <input type="date"> emits `YYYY-MM-DD`; widen to a full-day
+        // bound so the server sees it as RFC 3339. From-date floors to
+        // 00:00:00Z, to-date ceils to 23:59:59Z.
+        let from = date_from
+            .read()
+            .trim()
+            .to_string()
+            .as_str()
+            .strip_prefix("")
+            .map(|s| {
+                if s.is_empty() {
+                    String::new()
+                } else {
+                    format!("{s}T00:00:00Z")
+                }
+            })
+            .unwrap_or_default();
+        let to = {
+            let v = date_to.read().trim().to_string();
+            if v.is_empty() {
+                String::new()
+            } else {
+                format!("{v}T23:59:59Z")
+            }
+        };
+        admin::AuditFilter {
+            kind,
+            search: Some(search.read().trim().to_string()).filter(|s| !s.is_empty()),
+            severity: Some(severity.read().clone()).filter(|s| !s.is_empty()),
+            from: Some(from).filter(|s| !s.is_empty()),
+            to: Some(to).filter(|s| !s.is_empty()),
+        }
+    }
+
+    // `use_resource` is the reactive variant of `use_future`:
+    // signals read inside its closure auto-subscribe via a
+    // ReactiveContext and re-run the future on any change.
+    let data = use_resource(move || async move {
+        let off = *offset.read();
+        let filter = build_filter(
+            &kind_select,
+            &kind_custom,
+            &search,
+            &severity,
+            &date_from,
+            &date_to,
+        );
+        admin::list_audit_logs(PAGE_SIZE, off, &filter)
             .await
             .map_err(|e| e.user_message())
     });
 
-    // Reset to the first page when the kind filter changes. The
-    // resource re-runs on its own once offset (or any filter) is
-    // mutated, so we don't need an explicit refetch trigger.
+    // Reset to the first page when any filter changes.
     let on_filter = use_callback(move |_| {
         offset.set(0);
     });
@@ -215,6 +267,28 @@ pub fn AuditLogsPage() -> Element {
     let next = use_callback(move |_| {
         let off = *offset.read();
         offset.set(off + PAGE_SIZE);
+    });
+
+    let on_csv = use_callback(move |_| {
+        if downloading() {
+            return;
+        }
+        downloading.set(true);
+        let filter = build_filter(
+            &kind_select,
+            &kind_custom,
+            &search,
+            &severity,
+            &date_from,
+            &date_to,
+        );
+        spawn(async move {
+            match download_audit_csv(&filter).await {
+                Ok(()) => {}
+                Err(e) => toast.error(format!("CSV download failed: {e}")),
+            }
+            downloading.set(false);
+        });
     });
 
     rsx! {
@@ -268,10 +342,65 @@ pub fn AuditLogsPage() -> Element {
                                 }
                             }
                         }
+                        div { class: "flex-1 min-w-[14rem]",
+                            label { class: "block text-sm font-medium text-bunyip-reed-700 dark:text-bunyip-reed-200 mb-1",
+                                "Search"
+                            }
+                            input {
+                                r#type: "text",
+                                placeholder: "Metadata substring (case-insensitive)",
+                                class: "block w-full rounded-md border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-900 text-bunyip-reed-900 dark:text-bunyip-reed-50 text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-bunyip-reed-600",
+                                value: "{search.read()}",
+                                oninput: move |e: Event<FormData>| search.set(e.value()),
+                            }
+                        }
+                        div { class: "min-w-[10rem]",
+                            label { class: "block text-sm font-medium text-bunyip-reed-700 dark:text-bunyip-reed-200 mb-1",
+                                "Severity"
+                            }
+                            select {
+                                class: "block w-full rounded-md border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-900 text-bunyip-reed-900 dark:text-bunyip-reed-50 text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-bunyip-reed-600",
+                                value: "{severity.read()}",
+                                onchange: move |e: Event<FormData>| severity.set(e.value()),
+                                option { value: "", "Any" }
+                                option { value: "info", "info" }
+                                option { value: "warning", "warning" }
+                                option { value: "critical", "critical" }
+                            }
+                        }
+                        div { class: "min-w-[10rem]",
+                            label { class: "block text-sm font-medium text-bunyip-reed-700 dark:text-bunyip-reed-200 mb-1",
+                                "From"
+                            }
+                            input {
+                                r#type: "date",
+                                class: "block w-full rounded-md border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-900 text-bunyip-reed-900 dark:text-bunyip-reed-50 text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-bunyip-reed-600",
+                                value: "{date_from.read()}",
+                                oninput: move |e: Event<FormData>| date_from.set(e.value()),
+                            }
+                        }
+                        div { class: "min-w-[10rem]",
+                            label { class: "block text-sm font-medium text-bunyip-reed-700 dark:text-bunyip-reed-200 mb-1",
+                                "To"
+                            }
+                            input {
+                                r#type: "date",
+                                class: "block w-full rounded-md border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-900 text-bunyip-reed-900 dark:text-bunyip-reed-50 text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-bunyip-reed-600",
+                                value: "{date_to.read()}",
+                                oninput: move |e: Event<FormData>| date_to.set(e.value()),
+                            }
+                        }
                         button {
                             r#type: "submit",
                             class: "px-4 py-2 rounded-md bg-bunyip-reed-700 text-white text-sm font-medium hover:bg-bunyip-reed-800",
                             "Filter"
+                        }
+                        button {
+                            r#type: "button",
+                            class: "px-4 py-2 rounded-md border border-bunyip-reed-300 dark:border-bunyip-reed-600 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:bg-bunyip-reed-50 dark:hover:bg-bunyip-reed-900 disabled:opacity-60",
+                            disabled: downloading(),
+                            onclick: move |_| on_csv.call(()),
+                            if downloading() { "Downloading..." } else { "Download CSV" }
                         }
                     }
                 }
@@ -311,7 +440,14 @@ pub fn AuditLogsPage() -> Element {
                                         } else {
                                             for row in body.entries.iter() {
                                                 {
-                                                    let ts = row.created_at.format("%Y-%m-%d %H:%M:%S").to_string();
+                                                    // Render in the browser's local timezone (chrono's
+                                                    // `Local` is wired through wasmbind -> JS Date).
+                                                    // Server returns UTC; this converts on display.
+                                                    let ts = row
+                                                        .created_at
+                                                        .with_timezone(&chrono::Local)
+                                                        .format("%Y-%m-%d %H:%M:%S")
+                                                        .to_string();
                                                     let label = event_label(&row.event_kind);
                                                     let details = event_details(&row.event_kind, &row.metadata);
                                                     rsx! {
@@ -337,16 +473,18 @@ pub fn AuditLogsPage() -> Element {
                                                             "{details}"
                                                         }
                                                     }
-                                                    td { class: "px-6 py-3 whitespace-nowrap text-xs font-mono text-bunyip-reed-600 dark:text-bunyip-reed-300",
-                                                        match &row.actor_id {
-                                                            // Show the first 8 hex chars; full UUID is
-                                                            // in the title attribute on hover. Saves
-                                                            // a column-of-noise in the table.
-                                                            Some(a) => {
+                                                    td { class: "px-6 py-3 whitespace-nowrap text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300",
+                                                        match (&row.actor_email, &row.actor_id) {
+                                                            // Server-side LEFT JOIN populates actor_email
+                                                            // when the actor row still exists. Fall back
+                                                            // to a short UUID with the full id in the
+                                                            // title attribute for engineers.
+                                                            (Some(email), _) => rsx! { span { title: row.actor_id.clone().unwrap_or_default(), "{email}" } },
+                                                            (None, Some(a)) => {
                                                                 let short = short_actor(a);
-                                                                rsx! { span { title: "{a}", "{short}" } }
+                                                                rsx! { span { class: "font-mono", title: "{a}", "{short}" } }
                                                             },
-                                                            None => rsx! { span { class: "text-bunyip-reed-400", "-" } },
+                                                            (None, None) => rsx! { span { class: "text-bunyip-reed-400", "-" } },
                                                         }
                                                     }
                                                     td { class: "px-6 py-3 whitespace-nowrap text-xs text-bunyip-reed-600 dark:text-bunyip-reed-300",
@@ -392,4 +530,53 @@ pub fn AuditLogsPage() -> Element {
             }
         }
     }
+}
+
+/// Fetch the CSV from mokosh-server with the caller's Bearer token,
+/// then trigger a Blob-based browser download. Bearer can't be set on
+/// a plain `<a download>` so we route through fetch + Blob URL.
+async fn download_audit_csv(filter: &admin::AuditFilter) -> Result<(), String> {
+    use wasm_bindgen::JsCast;
+
+    let path = admin::audit_csv_path(filter);
+    let url = issuer_url(&path);
+    let token = current_access_token().ok_or_else(|| "not signed in".to_string())?;
+
+    let resp = gloo_net::http::Request::get(&url)
+        .header("Authorization", &format!("Bearer {token}"))
+        .header("Accept", "text/csv")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.ok() {
+        return Err(format!("server returned {}", resp.status()));
+    }
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+
+    // Wrap the CSV body in a Blob and trigger a download by clicking a
+    // synthesized anchor with the `download` attribute set. Standard
+    // SPA pattern; no library involved beyond web-sys.
+    let win = web_sys::window().ok_or("no window")?;
+    let doc = win.document().ok_or("no document")?;
+    let array = js_sys::Array::new();
+    array.push(&wasm_bindgen::JsValue::from_str(&text));
+    let mut opts = web_sys::BlobPropertyBag::new();
+    opts.type_("text/csv;charset=utf-8");
+    let blob = web_sys::Blob::new_with_str_sequence_and_options(&array, &opts)
+        .map_err(|_| "blob construction failed".to_string())?;
+    let blob_url = web_sys::Url::create_object_url_with_blob(&blob)
+        .map_err(|_| "blob url failed".to_string())?;
+
+    let anchor = doc
+        .create_element("a")
+        .map_err(|_| "create_element failed".to_string())?;
+    let anchor: web_sys::HtmlAnchorElement = anchor
+        .dyn_into()
+        .map_err(|_| "dyn_into HtmlAnchorElement failed".to_string())?;
+    anchor.set_href(&blob_url);
+    let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
+    anchor.set_download(&format!("audit-logs-{stamp}.csv"));
+    anchor.click();
+    let _ = web_sys::Url::revoke_object_url(&blob_url);
+    Ok(())
 }
