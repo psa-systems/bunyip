@@ -27,7 +27,7 @@ pub mod tokens;
 pub use flow::{
     complete_login, current_search, issuer_get_authed, issuer_post_authed,
     issuer_post_authed_empty, mfa_verify, password_login, refresh_tokens, snapshot_initial_search,
-    FlowError, LoginOutcome,
+    start_login, start_login_with_idp_hint, FlowError, LoginOutcome,
 };
 
 // Re-export `OidcConfig` from the existing `stores::config` so the

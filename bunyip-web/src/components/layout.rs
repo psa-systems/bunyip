@@ -142,6 +142,14 @@ pub fn AppShell(
     let (user_name, org_name) = match &state {
         AuthState::SignedIn(me) => (
             me.user.name.clone(),
+            // TODO(m1-vas): MeResponse does not yet carry an active-tenant
+            // marker. `memberships.first()` may show the wrong org for
+            // users in multiple orgs. The OrgSwitcher dropdown still
+            // works (server-side switch reissues tokens with the new
+            // mokosh_active_tenant claim) but the chip label can lag.
+            // Fix path: have stores/auth surface the active-tenant from
+            // the JWT claim (see modules/oidc/tokens.rs::parse_unverified)
+            // or extend MeResponse server-side with active_org_id.
             me.memberships
                 .first()
                 .map(|m| m.org.name.clone())

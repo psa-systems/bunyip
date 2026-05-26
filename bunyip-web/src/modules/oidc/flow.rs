@@ -40,11 +40,33 @@ pub enum FlowError {
 /// endpoint. This function does not return on success: the page is
 /// replaced.
 pub fn start_login(cfg: &OidcConfig, return_to: impl Into<String>) -> Result<(), FlowError> {
+    start_login_inner(cfg, return_to.into(), None)
+}
+
+/// Begin the login flow with a federated-IdP hint (e.g. `"google"`).
+/// The hint is sent as `&idp_hint=...` on the authorize URL so the IdP
+/// UI on mokosh-server can skip the chooser and go straight to the
+/// requested provider. Honoring the hint is opt-in on the IdP side; if
+/// mokosh-server's IdP UI ignores the param, the user simply sees the
+/// chooser and picks Google there. End-to-end auth still completes
+/// because the OIDC code-exchange flow is identical.
+pub fn start_login_with_idp_hint(
+    cfg: &OidcConfig,
+    return_to: impl Into<String>,
+    idp_hint: &str,
+) -> Result<(), FlowError> {
+    start_login_inner(cfg, return_to.into(), Some(idp_hint))
+}
+
+fn start_login_inner(
+    cfg: &OidcConfig,
+    return_to: String,
+    idp_hint: Option<&str>,
+) -> Result<(), FlowError> {
     let verifier = generate_code_verifier();
     let challenge = s256_challenge(&verifier);
     let state = random_opaque();
     let nonce = random_opaque();
-    let return_to = return_to.into();
     let redirect_uri = cfg
         .resolve_redirect_uri()
         .map_err(|e| FlowError::Config(e.to_string()))?;
@@ -61,7 +83,7 @@ pub fn start_login(cfg: &OidcConfig, return_to: impl Into<String>) -> Result<(),
     let issuer = cfg.issuer_trimmed();
     let mut url = format!("{issuer}/oauth2/authorize");
     url.push('?');
-    let q: [(&str, &str); 8] = [
+    let mut params: Vec<(&str, &str)> = vec![
         ("response_type", "code"),
         ("client_id", &cfg.client_id),
         ("redirect_uri", &redirect_uri),
@@ -71,7 +93,10 @@ pub fn start_login(cfg: &OidcConfig, return_to: impl Into<String>) -> Result<(),
         ("code_challenge", &challenge),
         ("code_challenge_method", "S256"),
     ];
-    for (i, (k, v)) in q.iter().enumerate() {
+    if let Some(hint) = idp_hint {
+        params.push(("idp_hint", hint));
+    }
+    for (i, (k, v)) in params.iter().enumerate() {
         if i > 0 {
             url.push('&');
         }
