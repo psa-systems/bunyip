@@ -64,6 +64,9 @@ RUN cd bunyip-web && dx build --release
 # Runtime stage - serve static assets via Caddy
 FROM alpine:3.21
 
+# jq generates /config.json from env at startup (see entrypoint.sh).
+RUN apk add --no-cache jq
+
 # Copy Caddy from the official image.
 COPY --from=caddy:alpine /usr/bin/caddy /usr/bin/caddy
 
@@ -71,6 +74,8 @@ COPY --from=caddy:alpine /usr/bin/caddy /usr/bin/caddy
 COPY --from=builder /build/target/dx/bunyip-web/release/web/public /usr/share/caddy
 
 COPY bunyip-web/oci-build/Caddyfile /etc/caddy/Caddyfile
+COPY bunyip-web/oci-build/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 RUN adduser --disabled-password --uid 1001 appuser \
     && chown --recursive appuser:appuser /usr/share/caddy
@@ -84,4 +89,6 @@ LABEL org.opencontainers.image.source=https://dev.a8n.run/psa-systems/bunyip
 LABEL org.opencontainers.image.description="Bunyip Dioxus client"
 LABEL org.opencontainers.image.revision="${GIT_SHA}"
 
-CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
+# entrypoint.sh writes /usr/share/caddy/config.json from BUNYIP_OIDC_* env,
+# then execs caddy. appuser owns /usr/share/caddy so the write succeeds.
+CMD ["/entrypoint.sh"]

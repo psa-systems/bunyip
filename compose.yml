@@ -45,6 +45,16 @@ services:
     restart: unless-stopped
     environment:
       PORT: 8080
+      # OIDC client config, written to a same-origin /config.json at startup
+      # (entrypoint.sh) and fetched by the SPA at boot. issuer + redirect_uri
+      # are optional: when empty the SPA derives them from the host
+      # (msp-api.${BUNYIP_HOST} for the issuer). Set BUNYIP_OIDC_CLIENT_ID to
+      # the UUID registered in mokosh-server. Change a value + restart the
+      # container to reconfigure with no rebuild.
+      BUNYIP_OIDC_ISSUER: ${BUNYIP_OIDC_ISSUER:-}
+      BUNYIP_OIDC_CLIENT_ID: ${BUNYIP_OIDC_CLIENT_ID:-}
+      BUNYIP_OIDC_REDIRECT_URI: ${BUNYIP_OIDC_REDIRECT_URI:-}
+      BUNYIP_OIDC_SCOPES: ${BUNYIP_OIDC_SCOPES:-openid email offline_access}
     depends_on:
       api:
         condition: service_healthy

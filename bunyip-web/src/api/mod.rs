@@ -1,7 +1,7 @@
 //! Typed API client for the Mokosh-server identity backend.
 //!
-//! Every call hits the absolute mokosh-server URL configured at build
-//! time via `BUNYIP_OIDC_ISSUER`. Bearer auth on every authed call:
+//! Every call hits the absolute mokosh-server URL resolved at runtime from
+//! `/config.json`'s `issuer` (see `stores::config`). Bearer auth on every authed call:
 //! the access_token lives in memory (`stores::tokens::CURRENT_ACCESS_TOKEN`)
 //! and is mirrored to localStorage under `bunyip.tokens` for refresh
 //! on reload.

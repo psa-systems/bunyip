@@ -11,6 +11,7 @@ use components::feedback::FeedbackLauncher;
 use components::toast::ToastViewport;
 use routes::Route;
 use stores::auth::{use_auth_provider, use_bfcache_invalidator};
+use stores::config::OidcConfig;
 use stores::toast::use_toast_provider;
 
 const STYLES_CSS: Asset = asset!("/assets/styles.css");
@@ -27,12 +28,28 @@ fn main() {
 
 #[component]
 fn App() -> Element {
+    // Fetch the same-origin `/config.json` once before any auth-dependent
+    // UI mounts. `OidcConfig::from_env()` is synchronous and read all over
+    // the tree, so the real app (providers + Router) only mounts once the
+    // config is loaded. The static `index.html` splash stays visible until
+    // then because `#main` has no children while this resource is pending.
+    let config = use_resource(|| async { OidcConfig::load().await });
+
+    rsx! {
+        document::Stylesheet { href: STYLES_CSS }
+        if config.read().is_some() {
+            AppShell {}
+        }
+    }
+}
+
+#[component]
+fn AppShell() -> Element {
     use_toast_provider();
     use_auth_provider();
     use_bfcache_invalidator();
 
     rsx! {
-        document::Stylesheet { href: STYLES_CSS }
         Router::<Route> {}
         FeedbackLauncher {}
         ToastViewport {}
