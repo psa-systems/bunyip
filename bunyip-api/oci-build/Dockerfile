@@ -33,6 +33,16 @@ COPY crates ./crates
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --bin bunyip-api
 
+# Export stage - lets `docker buildx build --target export --output
+# type=local,dest=<dir>` extract just the compiled binary + bundled seeds
+# for release-artifact tarballs without dragging in the rest of the
+# builder filesystem. Keep this above the runtime stage so the runtime
+# remains the default (last) stage and existing image builds are
+# unchanged.
+FROM scratch AS export
+COPY --from=builder /build/target/release/bunyip-api /bunyip-api
+COPY seeds /seeds
+
 # Runtime stage
 FROM alpine:3.21
 

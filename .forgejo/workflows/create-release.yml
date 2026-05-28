@@ -33,6 +33,10 @@ jobs:
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
     permissions:
       contents: write
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      exists: ${{ steps.resolve.outputs.exists }}
     steps:
       - name: Clone the repository
         uses: https://code.forgejo.org/actions/checkout@v5
@@ -94,4 +98,138 @@ jobs:
               exit 1
             }
             print $"Published release ($tag)."
+          }
+
+  binaries:
+    name: Build and attach release binaries
+    needs: tag-and-release
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.tag-and-release.outputs.tag }}
+      VERSION: ${{ needs.tag-and-release.outputs.version }}
+    steps:
+      - name: Clone the repository
+        uses: https://code.forgejo.org/actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Verify Docker availability
+        run: |
+          docker version
+          docker buildx version
+
+      - name: Set up buildx builder
+        # docker-container driver is required for --output type=local; the
+        # default driver only supports loading into the local image store.
+        run: docker buildx create --name release-bin-builder --driver docker-container --use
+
+      - name: Build bunyip-api binary
+        # `--target export` is the scratch stage in bunyip-api/oci-build/
+        # Dockerfile that bundles the compiled binary + seeds/. The
+        # rust:1-alpine builder produces a statically-linked musl binary
+        # (musl-dev + openssl-libs-static + lld), so it runs on any Linux
+        # without further dependencies.
+        run: |
+          mkdir --parents out-api
+          docker buildx build \
+            --target export \
+            --output type=local,dest=out-api \
+            --platform linux/amd64 \
+            --file bunyip-api/oci-build/Dockerfile \
+            .
+
+      - name: Build bunyip-web static bundle
+        # `--target export` is the scratch stage in bunyip-web/oci-build/
+        # Dockerfile that surfaces the dx-built public/ dir (WASM +
+        # assets). Arch-independent.
+        run: |
+          mkdir --parents out-web
+          docker buildx build \
+            --target export \
+            --output type=local,dest=out-web \
+            --platform linux/amd64 \
+            --file bunyip-web/oci-build/Dockerfile \
+            .
+
+      - name: Package tarballs and checksums
+        id: package
+        shell: nu {0}
+        run: |
+          let tag = $env.TAG
+          let api_dir = $"bunyip-api-($tag)-x86_64-linux-musl"
+          let web_dir = $"bunyip-web-($tag)-static"
+          let api_tar = $"($api_dir).tar.gz"
+          let web_tar = $"($web_dir).tar.gz"
+
+          mkdir $"staging/($api_dir)"
+          mkdir $"staging/($web_dir)"
+
+          # API: binary + seeds at the top of the wrapper dir.
+          cp out-api/bunyip-api $"staging/($api_dir)/bunyip-api"
+          ^chmod +x $"staging/($api_dir)/bunyip-api"
+          ^cp --recursive out-api/seeds $"staging/($api_dir)/seeds"
+
+          # Web: public/ at the top of the wrapper dir.
+          ^cp --recursive out-web/web $"staging/($web_dir)/public"
+
+          mkdir dist
+          ^tar --create --gzip --file $"dist/($api_tar)" --directory staging $api_dir
+          ^tar --create --gzip --file $"dist/($web_tar)" --directory staging $web_dir
+
+          cd dist
+          ^sha256sum $api_tar $web_tar | save --force SHA256SUMS
+          print (open SHA256SUMS)
+          cd ..
+
+          $"api_tar=($api_tar)\n" | save --append $env.GITHUB_OUTPUT
+          $"web_tar=($web_tar)\n" | save --append $env.GITHUB_OUTPUT
+
+      - name: Upload artifacts to Forgejo release
+        # Idempotent: each asset upload is skipped if an asset with that
+        # name already exists on the release. Lets a failed previous run
+        # be safely rerun without producing duplicate attachments.
+        shell: nu {0}
+        run: |
+          let tag = $env.TAG
+          let api = $"${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases"
+          let pat = "${{ secrets.PSA_SYSTEMS_PRIVATE_PACKAGE_PAT }}"
+          let auth = {Authorization: $"token ($pat)"}
+
+          let release = (http get --full --headers $auth $"($api)/tags/($tag)")
+          if $release.status != 200 {
+            print $"(ansi red)Could not look up release for tag ($tag): HTTP ($release.status)(ansi reset)"
+            print $release.body
+            exit 1
+          }
+          let release_id = $release.body.id
+          print $"Found release id ($release_id) for tag ($tag)."
+
+          let existing_assets = (http get --headers $auth $"($api)/($release_id)/assets")
+          let existing_names = ($existing_assets | get name)
+
+          let artifacts = [
+            "${{ steps.package.outputs.api_tar }}"
+            "${{ steps.package.outputs.web_tar }}"
+            "SHA256SUMS"
+          ]
+
+          for name in $artifacts {
+            if ($name in $existing_names) {
+              print $"Asset ($name) already attached; skipping."
+              continue
+            }
+            let path = $"dist/($name)"
+            let url = $"($api)/($release_id)/assets?name=($name)"
+            print $"Uploading ($name) -> ($url)"
+            (
+              ^curl --fail-with-body --silent --show-error
+                --request POST
+                --header $"Authorization: token ($pat)"
+                --form $"attachment=@($path)"
+                $url
+            )
+            print $"\nUploaded ($name)."
           }
