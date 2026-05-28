@@ -193,28 +193,23 @@ jobs:
           $"api_tar=($api_tar)\n" | save --append $env.GITHUB_OUTPUT
           $"web_tar=($web_tar)\n" | save --append $env.GITHUB_OUTPUT
 
-      - name: Upload artifacts to Forgejo release
-        # Idempotent: each asset upload is skipped if an asset with that
-        # name already exists on the release. Lets a failed previous run
-        # be safely rerun without producing duplicate attachments.
+      - name: Upload artifacts to Generic Packages registry
+        # Publishes to the same `psa-systems-private` org that hosts the
+        # OCI images, via Forgejo's Generic Packages API:
+        #   PUT /api/packages/{owner}/generic/{package}/{version}/{file}
+        # https://forgejo.org/docs/latest/user/packages/generic/
+        #
+        # Idempotent: a 201 means newly uploaded, a 409 means an upload
+        # with that name+version already exists, anything else is a real
+        # error. Lets a failed previous run be safely rerun.
         shell: nu {0}
+        env:
+          PACKAGE_OWNER: psa-systems-private
+          PACKAGE_NAME: bunyip
         run: |
           let tag = $env.TAG
-          let api = $"${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases"
+          let base = $"${{ github.server_url }}/api/packages/($env.PACKAGE_OWNER)/generic/($env.PACKAGE_NAME)/($tag)"
           let pat = "${{ secrets.PSA_SYSTEMS_PRIVATE_PACKAGE_PAT }}"
-          let auth = {Authorization: $"token ($pat)"}
-
-          let release = (http get --full --headers $auth $"($api)/tags/($tag)")
-          if $release.status != 200 {
-            print $"(ansi red)Could not look up release for tag ($tag): HTTP ($release.status)(ansi reset)"
-            print $release.body
-            exit 1
-          }
-          let release_id = $release.body.id
-          print $"Found release id ($release_id) for tag ($tag)."
-
-          let existing_assets = (http get --headers $auth $"($api)/($release_id)/assets")
-          let existing_names = ($existing_assets | get name)
 
           let artifacts = [
             "${{ steps.package.outputs.api_tar }}"
@@ -223,19 +218,22 @@ jobs:
           ]
 
           for name in $artifacts {
-            if ($name in $existing_names) {
-              print $"Asset ($name) already attached; skipping."
-              continue
-            }
             let path = $"dist/($name)"
-            let url = $"($api)/($release_id)/assets?name=($name)"
+            let url = $"($base)/($name)"
             print $"Uploading ($name) -> ($url)"
-            (
-              ^curl --fail-with-body --silent --show-error
-                --request POST
+            let status = (
+              ^curl --silent --show-error --output /dev/null --write-out '%{http_code}'
+                --request PUT
+                --upload-file $path
                 --header $"Authorization: token ($pat)"
-                --form $"attachment=@($path)"
                 $url
             )
-            print $"\nUploaded ($name)."
+            if $status == "201" {
+              print $"Uploaded ($name)."
+            } else if $status == "409" {
+              print $"($name) already exists at version ($tag); skipping."
+            } else {
+              print $"(ansi red)Upload of ($name) failed: HTTP ($status)(ansi reset)"
+              exit 1
+            }
           }
