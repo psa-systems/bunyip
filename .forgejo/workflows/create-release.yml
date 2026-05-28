@@ -26,6 +26,12 @@ on:
       - main
     paths:
       - Cargo.toml
+  # Manual trigger lets an operator re-run the release flow against the
+  # current Cargo.toml version - useful for backfilling binaries against
+  # an already-tagged release, or recovering from a partial run. All steps
+  # are idempotent (tag-and-release skips when the tag/release exists,
+  # binaries skips per-asset when already attached) so re-runs are safe.
+  workflow_dispatch:
 
 jobs:
   tag-and-release:
