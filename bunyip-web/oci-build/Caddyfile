@@ -18,4 +18,9 @@
     }
     @html path *.html
     header @html Cache-Control "no-cache, no-store, must-revalidate"
+
+    # Runtime OIDC config (written from env by entrypoint.sh). Never cache,
+    # so changing BUNYIP_OIDC_* + restart takes effect on the next load.
+    @config path /config.json
+    header @config Cache-Control "no-store"
 }

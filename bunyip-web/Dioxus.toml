@@ -23,9 +23,9 @@ index_html = "index.html"
 
 [web.resource.dev]
 
-# No dev proxy: the SPA hits mokosh-server directly at the absolute URL
-# configured via BUNYIP_OIDC_ISSUER at build time. Bearer-token-on-fetch
-# crosses origins; mokosh-server's CORS allow_origin(Any) accepts it.
+# No dev proxy: the SPA hits mokosh-server directly at the absolute issuer
+# URL resolved at runtime from /config.json (see src/stores/config.rs).
+# Bearer-token-on-fetch crosses origins; mokosh-server's CORS allow_origin(Any) accepts it.
 
 [build]
 target_dir = "target"

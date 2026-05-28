@@ -46,12 +46,37 @@ State resets on container restart. This is intentional for the MVP demo loop.
 
 ### Topology
 
-The Dioxus SPA resolves its backend at runtime as `msp-api.<window.location.host>` (see [`bunyip-web/src/stores/config.rs`](bunyip-web/src/stores/config.rs)). So a deployment needs two DNS names pointing at the host:
+The Dioxus SPA loads its OIDC config at runtime from a same-origin `/config.json` (see [OIDC runtime config](#oidc-runtime-config) below) and, when the issuer is left unset, derives it from the host as `msp-api.<window.location.host>` (see [`bunyip-web/src/stores/config.rs`](bunyip-web/src/stores/config.rs)). So a deployment needs two DNS names pointing at the host:
 
 - `${BUNYIP_HOST}` - serves the SPA (e.g. `bunyip.example.com`)
 - `msp-api.${BUNYIP_HOST}` - serves the API / OIDC issuer (e.g. `msp-api.bunyip.example.com`)
 
 The edge Caddy ([`oci-build/Caddyfile`](oci-build/Caddyfile)) issues Let's Encrypt certs for both, proxying the apex to the `web` container and the `msp-api.` subdomain to the `api` container.
+
+### OIDC runtime config
+
+The `bunyip-web` SPA is environment-agnostic: one image serves any deployment. At container start its entrypoint ([`bunyip-web/oci-build/entrypoint.sh`](bunyip-web/oci-build/entrypoint.sh)) writes a same-origin `/config.json` from the container's environment, and Caddy serves it with `Cache-Control: no-store`. The SPA fetches it once at boot before any auth UI renders. Changing a value and restarting the container reconfigures OIDC with **no rebuild**.
+
+Set these on the `web` service (all OIDC values are public by design - a public client + PKCE):
+
+| Env var | Required | Fallback when unset |
+| --- | --- | --- |
+| `BUNYIP_OIDC_CLIENT_ID` | yes (for SSO) | none |
+| `BUNYIP_OIDC_ISSUER` | no | host-derived `https://msp-api.<host>` |
+| `BUNYIP_OIDC_REDIRECT_URI` | no | `<window.location.origin>/auth/callback` |
+| `BUNYIP_OIDC_SCOPES` | no | `openid email offline_access` |
+
+```json
+// GET /config.json
+{
+  "issuer": "https://msp-api.bunyip.example.com",
+  "client_id": "00000000-0000-0000-0000-000000000000",
+  "redirect_uri": "",
+  "scopes": "openid email offline_access"
+}
+```
+
+The `dx serve` dev loop (`just dev-sso`) runs a different dev server that cannot serve a root `/config.json`, so under hot-reload the SPA uses the host-derived issuer/redirect and does not receive `client_id`. For end-to-end SSO testing locally, run the production image.
 
 ### Deploy
 
