@@ -132,18 +132,22 @@ Images publish for `linux/amd64` by default. To publish a multi-arch manifest, s
 
 ### Without Docker (Linux x86_64)
 
-Every release attaches binary tarballs to its [Forgejo release page](https://dev.a8n.run/psa-systems/bunyip/releases) for operators who want to run Bunyip without Docker:
+Every release publishes binary tarballs to the `psa-systems-private/bunyip` [Generic Packages registry](https://dev.a8n.run/psa-systems-private/-/packages) (same org as the OCI images) for operators who want to run Bunyip without Docker:
 
 - `bunyip-api-vX.Y.Z-x86_64-linux-musl.tar.gz` - statically-linked `bunyip-api` + `seeds/`. Runs on any Linux distribution (musl-static, no glibc dependency).
 - `bunyip-web-vX.Y.Z-static.tar.gz` - the built `public/` directory (WASM bundle + assets). Serve with any static web server.
 - `SHA256SUMS` - checksums for the two tarballs.
 
+The registry is private, so download requires a Forgejo token with `read:package` scope (the same kind of token you already use for `docker login dev.a8n.run`):
+
 ```nu
-let tag = "v0.2.0"
-let base = $"https://dev.a8n.run/psa-systems/bunyip/releases/download/($tag)"
-http get $"($base)/SHA256SUMS" | save SHA256SUMS
-http get $"($base)/bunyip-api-($tag)-x86_64-linux-musl.tar.gz" | save $"bunyip-api-($tag)-x86_64-linux-musl.tar.gz"
-http get $"($base)/bunyip-web-($tag)-static.tar.gz" | save $"bunyip-web-($tag)-static.tar.gz"
+let tag = "v0.1.1"
+let base = $"https://dev.a8n.run/api/packages/psa-systems-private/generic/bunyip/($tag)"
+let token = "<forgejo token, read:package scope>"
+let auth = {Authorization: $"token ($token)"}
+http get --headers $auth $"($base)/SHA256SUMS" | save SHA256SUMS
+http get --headers $auth $"($base)/bunyip-api-($tag)-x86_64-linux-musl.tar.gz" | save $"bunyip-api-($tag)-x86_64-linux-musl.tar.gz"
+http get --headers $auth $"($base)/bunyip-web-($tag)-static.tar.gz" | save $"bunyip-web-($tag)-static.tar.gz"
 sha256sum --check SHA256SUMS
 tar --extract --gzip --file $"bunyip-api-($tag)-x86_64-linux-musl.tar.gz"
 tar --extract --gzip --file $"bunyip-web-($tag)-static.tar.gz"
