@@ -130,6 +130,39 @@ Pinned-tag deployments bump the tag in `.env` first, then run the same two comma
 
 Images publish for `linux/amd64` by default. To publish a multi-arch manifest, set the CI variable `BUNYIP_BUILD_PLATFORMS` to `linux/amd64,linux/arm64`. Both Dockerfiles are arch-portable; arm64 builds run under emulation unless a native arm64 runner is available.
 
+### Without Docker (Linux x86_64)
+
+Every release attaches binary tarballs to its [Forgejo release page](https://dev.a8n.run/psa-systems/bunyip/releases) for operators who want to run Bunyip without Docker:
+
+- `bunyip-api-vX.Y.Z-x86_64-linux-musl.tar.gz` - statically-linked `bunyip-api` + `seeds/`. Runs on any Linux distribution (musl-static, no glibc dependency).
+- `bunyip-web-vX.Y.Z-static.tar.gz` - the built `public/` directory (WASM bundle + assets). Serve with any static web server.
+- `SHA256SUMS` - checksums for the two tarballs.
+
+```nu
+let tag = "v0.2.0"
+let base = $"https://dev.a8n.run/psa-systems/bunyip/releases/download/($tag)"
+http get $"($base)/SHA256SUMS" | save SHA256SUMS
+http get $"($base)/bunyip-api-($tag)-x86_64-linux-musl.tar.gz" | save $"bunyip-api-($tag)-x86_64-linux-musl.tar.gz"
+http get $"($base)/bunyip-web-($tag)-static.tar.gz" | save $"bunyip-web-($tag)-static.tar.gz"
+sha256sum --check SHA256SUMS
+tar --extract --gzip --file $"bunyip-api-($tag)-x86_64-linux-musl.tar.gz"
+tar --extract --gzip --file $"bunyip-web-($tag)-static.tar.gz"
+```
+
+Run the API directly; configure it with the same env vars used in `compose.yml` (`BUNYIP_PUBLIC_BASE_URL`, `COOKIE_SECRET`, `BUNYIP_SEEDS_DIR`, etc.):
+
+```nu
+cd $"bunyip-api-($tag)-x86_64-linux-musl"
+$env.COOKIE_SECRET = "<64+ random chars>"
+$env.BUNYIP_PUBLIC_BASE_URL = "https://bunyip.example.com"
+$env.BUNYIP_SEEDS_DIR = "./seeds"
+./bunyip-api
+```
+
+Serve the SPA bundle from any static host (Caddy, nginx, GitHub Pages, etc.). The entrypoint that writes `/config.json` from env is Docker-only, so for the binary path either set `BUNYIP_OIDC_*` via a hand-written `public/config.json` before serving, or rely on the host-derived defaults documented in [OIDC runtime config](#oidc-runtime-config).
+
+Only `x86_64-linux-musl` ships today. ARM64 binaries are gated on the same native runner that gates multi-arch OCI images (see [Architectures](#architectures)).
+
 ## Seeded demo accounts
 
 All accounts accept `MOCK_PASSWORD` (default `demo`). When MFA is enabled, TOTP step accepts `MOCK_TOTP_CODE` (default `000000`) or any 6-digit code.

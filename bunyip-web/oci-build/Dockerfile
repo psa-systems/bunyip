@@ -61,6 +61,14 @@ RUN cd bunyip-web && bun run build:css
 # Build the WASM bundle + static assets.
 RUN cd bunyip-web && dx build --release
 
+# Export stage - lets `docker buildx build --target export --output
+# type=local,dest=<dir>` extract just the static web bundle for the
+# release-artifact tarball. Kept above the runtime stage so the runtime
+# remains the default (last) stage and existing image builds are
+# unchanged.
+FROM scratch AS export
+COPY --from=builder /build/target/dx/bunyip-web/release/web/public /web
+
 # Runtime stage - serve static assets via Caddy
 FROM alpine:3.21
 
