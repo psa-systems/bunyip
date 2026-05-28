@@ -24,6 +24,12 @@ pub struct Config {
     pub update_check_url: Option<String>,
     /// Optional bearer token for the update-check endpoint (private repos).
     pub update_check_token: Option<String>,
+    /// All origins permitted to make credentialed CORS requests against the
+    /// API. Set via the `CORS_ORIGIN` env var as a comma-separated list
+    /// (e.g. `https://a8n.tools,https://pugtsurani.net`). Defaults to the
+    /// `public_base_url` so local dev works without explicit config. See
+    /// docs/cors.md in the docker repo.
+    pub cors_origins: Vec<String>,
 }
 
 impl Config {
@@ -34,10 +40,23 @@ impl Config {
             .parse::<SocketAddr>()
             .map_err(|e| ConfigError::InvalidBindAddr(bind_addr_str.clone(), e))?;
 
+        let public_base_url = std::env::var("BUNYIP_PUBLIC_BASE_URL")
+            .unwrap_or_else(|_| "http://localhost:4400".to_string());
+
+        let cors_origins = std::env::var("CORS_ORIGIN")
+            .ok()
+            .map(|raw| {
+                raw.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| vec![public_base_url.clone()]);
+
         Ok(Self {
             bind_addr,
-            public_base_url: std::env::var("BUNYIP_PUBLIC_BASE_URL")
-                .unwrap_or_else(|_| "http://localhost:4400".to_string()),
+            public_base_url,
             seeds_dir: PathBuf::from(
                 std::env::var("BUNYIP_SEEDS_DIR").unwrap_or_else(|_| "./seeds".to_string()),
             ),
@@ -56,6 +75,7 @@ impl Config {
             update_check_token: std::env::var("BUNYIP_UPDATE_CHECK_TOKEN")
                 .ok()
                 .filter(|s| !s.is_empty()),
+            cors_origins,
         })
     }
 }
