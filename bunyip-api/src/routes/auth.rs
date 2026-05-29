@@ -148,14 +148,18 @@ async fn signup(
 
     store.log_audit(audit("auth.signup", Some(user.id), Some(&body.email)));
 
-    // Mock "verification email": print a clickable link to dev logs. The token
-    // is the user_id - good enough for the demo loop, but never use this shape
-    // for real signups.
+    // Mock "verification email": the token is the user_id - good enough
+    // for the demo loop, but never use this shape for real signups. The
+    // link is returned in the response (dev convenience) but NOT logged:
+    // the verification link and the email address are sensitive (the link
+    // is effectively a bearer credential) and must not land in info-level
+    // logs. The token is gated behind debug! and scrubbed of the email.
     let verification_link = format!(
         "{}/verify-email?token={}",
         state.config.public_base_url, user.id
     );
-    info!(email = %body.email, link = %verification_link, "mock verification email sent");
+    info!(user_id = %user.id, "mock verification email sent");
+    tracing::debug!(user_id = %user.id, "verification link generated (scrubbed)");
 
     cookies.add(session_cookie(user.id.to_string()));
 
@@ -288,7 +292,9 @@ async fn resend_verification(
         "{}/verify-email?token={}",
         state.config.public_base_url, user.id
     );
-    info!(email = %body.email, link = %link, "mock verification email resent");
+    // Do not log the link URL or email address: the link is a bearer
+    // credential. Keep a non-sensitive event line keyed on user id.
+    info!(user_id = %user.id, "mock verification email resent");
     Ok(Json(serde_json::json!({ "verification_link": link })))
 }
 
@@ -304,11 +310,13 @@ async fn forgot_password(
     Json(body): Json<ForgotPasswordRequest>,
 ) -> Json<serde_json::Value> {
     if let Some(user) = state.store.read().find_user_by_email(&body.email) {
-        let link = format!(
+        let _link = format!(
             "{}/reset-password?token={}",
             state.config.public_base_url, user.id
         );
-        info!(email = %body.email, link = %link, "mock password reset email sent");
+        // Do not log the reset link URL or the email address: the link
+        // is a bearer credential. Keep a non-sensitive event line.
+        info!(user_id = %user.id, "mock password reset email sent");
     }
     // Always return success; don't reveal account existence.
     Json(serde_json::json!({ "status": "sent" }))
@@ -347,11 +355,13 @@ async fn magic_link_request(
     Json(body): Json<MagicLinkRequest>,
 ) -> Json<serde_json::Value> {
     if let Some(user) = state.store.read().find_user_by_email(&body.email) {
-        let link = format!(
+        let _link = format!(
             "{}/v1/auth/magic-link/consume?token={}",
             state.config.public_base_url, user.id
         );
-        info!(email = %body.email, link = %link, "mock magic-link email sent");
+        // Do not log the magic-link URL or the email address: the link
+        // is a bearer credential. Keep a non-sensitive event line.
+        info!(user_id = %user.id, "mock magic-link email sent");
     }
     Json(serde_json::json!({ "status": "sent" }))
 }

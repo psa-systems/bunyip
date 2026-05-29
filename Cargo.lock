@@ -205,7 +205,7 @@ checksum = "5d20789868f4b01b2f2caec9f5c4e0213b41e3e5702a50157d699ae31ced2fcb"
 
 [[package]]
 name = "bunyip-api"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -214,6 +214,7 @@ dependencies = [
  "dotenvy",
  "parking_lot",
  "rand 0.8.6",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -229,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "bunyip-mocks"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "parking_lot",
@@ -243,7 +244,7 @@ dependencies = [
 
 [[package]]
 name = "bunyip-web"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "chrono",

@@ -18,6 +18,7 @@ use crate::stores::tokens::{current_access_token, Tokens};
 
 use super::pkce::{generate_code_verifier, random_opaque, s256_challenge};
 use super::storage::{save_pending, take_pending, PendingFlow};
+use super::tokens::IdTokenClaims;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FlowError {
@@ -31,6 +32,8 @@ pub enum FlowError {
     TokenEndpoint { error: String, description: String },
     #[error("state mismatch (possible CSRF)")]
     StateMismatch,
+    #[error("nonce mismatch (possible token injection)")]
+    NonceMismatch,
     #[error("redirect failed: {0}")]
     Redirect(String),
 }
@@ -250,6 +253,21 @@ pub async fn complete_login(cfg: &OidcConfig) -> Result<(Tokens, String), FlowEr
         error: "invalid_response".into(),
         description: "id_token missing from authorization_code response".into(),
     })?;
+
+    // Bind the id_token to this browser's flow: the `nonce` claim MUST
+    // match the one we generated in `start_login` and stashed in the
+    // PendingFlow. State already defends against CSRF on the redirect;
+    // the nonce check defends against id_token injection / replay (an
+    // attacker swapping in an id_token minted for a different authorize
+    // request). The parse is unverified (intentional WASM tradeoff, see
+    // tokens::parse_unverified) but the nonce comparison still binds the
+    // token to a value only this client could have chosen.
+    let claims = IdTokenClaims::parse_unverified(&id_token)
+        .map_err(|e| FlowError::Network(format!("id_token claims: {e}")))?;
+    match claims.nonce.as_deref() {
+        Some(n) if n == pending.nonce => {}
+        _ => return Err(FlowError::NonceMismatch),
+    }
 
     let tokens = Tokens {
         access_token: body.access_token,

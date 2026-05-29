@@ -9,6 +9,13 @@ use crate::stores::tokens::Tokens;
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct IdTokenClaims {
     pub sub: String,
+    /// OIDC `nonce` echoed back from the authorize request. Compared
+    /// against the stored `PendingFlow.nonce` in `complete_login` to
+    /// bind the id_token to this browser's flow (replay / token-
+    /// injection defense). Optional because refresh-grant id_tokens
+    /// legitimately omit it.
+    #[serde(default)]
+    pub nonce: Option<String>,
     #[serde(default)]
     pub email: Option<String>,
     #[serde(default)]
