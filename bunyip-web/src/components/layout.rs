@@ -142,10 +142,19 @@ pub fn AppShell(
     let (user_name, org_name) = match &state {
         AuthState::SignedIn(me) => (
             me.user.name.clone(),
-            me.memberships
-                .first()
-                .map(|m| m.org.name.clone())
-                .unwrap_or_else(|| "Personal".to_string()),
+            // Show the ACTIVE org, not blindly the first membership. The
+            // active tenant is carried in the id_token's
+            // `mokosh_active_tenant` claim (see
+            // modules/oidc/tokens.rs::IdTokenClaims.active_tenant_id);
+            // read it from the stored token bundle and match it against
+            // the membership list so a multi-org user sees the org they
+            // actually switched to. The OrgSwitcher reissues tokens with
+            // an updated claim on switch + reloads, so this stays in
+            // sync. Falls back to the first membership only when no
+            // active-tenant claim is present (or it does not match a
+            // known membership), then to "Personal" when there are no
+            // memberships at all.
+            active_org_name(me),
         ),
         _ => (String::new(), String::new()),
     };
@@ -218,4 +227,33 @@ pub fn AppShell(
             }
         }
     }
+}
+
+/// Resolve the caption shown in the AppShell org pill: the user's ACTIVE
+/// org, derived from the `mokosh_active_tenant` id_token claim, matched
+/// against the membership list. Falls back to the first membership when
+/// no active-tenant claim is available or it does not name a known
+/// membership, and to "Personal" when there are no memberships.
+fn active_org_name(me: &crate::api::types::MeResponse) -> String {
+    use crate::modules::oidc::tokens::TokensExt;
+    use crate::stores::tokens::load_tokens;
+
+    // Read the active tenant id from the stored id_token claims. The
+    // parse is unverified (the SPA cannot hold the OP's signing key, an
+    // intentional WASM tradeoff) but this is a display-only caption, not
+    // an authorization decision.
+    let active_tenant = load_tokens()
+        .and_then(|t| t.id_claims().ok())
+        .and_then(|c| c.active_tenant_id.or(c.tenant_id));
+
+    if let Some(tenant_id) = active_tenant {
+        if let Some(m) = me.memberships.iter().find(|m| m.org.id == tenant_id) {
+            return m.org.name.clone();
+        }
+    }
+
+    me.memberships
+        .first()
+        .map(|m| m.org.name.clone())
+        .unwrap_or_else(|| "Personal".to_string())
 }

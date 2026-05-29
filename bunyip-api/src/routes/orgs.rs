@@ -273,11 +273,14 @@ async fn create_invitation(
         return Err(AppError::Forbidden);
     }
     let inv = store.create_invitation(org.id, body.email.clone(), body.role, actor);
-    let link = format!(
+    let _link = format!(
         "{}/invitations/accept?token={}",
         state.config.public_base_url, inv.token
     );
-    tracing::info!(email = %body.email, link = %link, "mock invitation email sent");
+    // Do not log the invitation link URL or the invitee email address:
+    // the link carries an accept token (a bearer credential). Keep a
+    // non-sensitive event line keyed on the invitation + org id.
+    tracing::info!(invitation_id = %inv.id, org_id = %org.id, "mock invitation email sent");
     store.log_audit(audit(
         "org.invite.send",
         Some(actor),

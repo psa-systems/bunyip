@@ -100,17 +100,19 @@ fn window_host_and_scheme() -> Option<(String, String)> {
 ///    `a contributor-mokosh-api.a8n.run`. Used by per-user dev environments
 ///    on a8n.run.
 ///
-/// 2. **Apex** (everything else): prefix `msp-api.` to the host. So
-///    `a8n.systems` -> `msp-api.a8n.systems`, `psa.systems` ->
-///    `msp-api.psa.systems`. The production / staging topology where
-///    bunyip-web carries the apex and mokosh-api sits on a subdomain.
+/// 2. **Apex** (everything else): return the host unchanged so the API
+///    base is same-origin. So `a8n.systems` -> `a8n.systems`,
+///    `psa.systems` -> `psa.systems`. The apex c-01 deployment
+///    co-locates bunyip-api and bunyip-web behind the same hostname
+///    (replacing the old cross-origin `msp-api.<tld>` topology), so the
+///    SPA reaches the API at the same origin it was loaded from.
 fn derive_api_host(host: &str) -> String {
     if let Some((first, rest)) = host.split_once('.') {
         if let Some(user) = first.strip_suffix("-bunyip") {
             return format!("{user}-mokosh-api.{rest}");
         }
     }
-    format!("msp-api.{host}")
+    host.to_string()
 }
 
 /// Fetch and parse the same-origin `/config.json`. Returns `None` on any
@@ -251,9 +253,9 @@ mod tests {
 
     #[test]
     fn api_host_derivation() {
-        // Apex: bunyip-web at the apex -> mokosh-api on msp-api.<apex>.
-        assert_eq!(derive_api_host("a8n.systems"), "msp-api.a8n.systems");
-        assert_eq!(derive_api_host("psa.systems"), "msp-api.psa.systems");
+        // Apex: bunyip-api co-resident with bunyip-web -> same-origin host.
+        assert_eq!(derive_api_host("a8n.systems"), "a8n.systems");
+        assert_eq!(derive_api_host("psa.systems"), "psa.systems");
         // Dev: <user>-bunyip.<rest> -> <user>-mokosh-api.<rest>.
         assert_eq!(
             derive_api_host("a contributor-bunyip.a8n.run"),
@@ -263,10 +265,7 @@ mod tests {
             derive_api_host("alice-bunyip.example.com"),
             "alice-mokosh-api.example.com"
         );
-        // Subdomain without `-bunyip` suffix falls back to apex rule.
-        assert_eq!(
-            derive_api_host("app.psa.systems"),
-            "msp-api.app.psa.systems"
-        );
+        // Subdomain without `-bunyip` suffix falls back to same-origin.
+        assert_eq!(derive_api_host("app.psa.systems"), "app.psa.systems");
     }
 }

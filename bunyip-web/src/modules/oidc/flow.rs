@@ -18,6 +18,7 @@ use crate::stores::tokens::{current_access_token, Tokens};
 
 use super::pkce::{generate_code_verifier, random_opaque, s256_challenge};
 use super::storage::{save_pending, take_pending, PendingFlow};
+use super::tokens::IdTokenClaims;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FlowError {
@@ -31,6 +32,8 @@ pub enum FlowError {
     TokenEndpoint { error: String, description: String },
     #[error("state mismatch (possible CSRF)")]
     StateMismatch,
+    #[error("nonce mismatch (possible token injection)")]
+    NonceMismatch,
     #[error("redirect failed: {0}")]
     Redirect(String),
 }
@@ -40,11 +43,33 @@ pub enum FlowError {
 /// endpoint. This function does not return on success: the page is
 /// replaced.
 pub fn start_login(cfg: &OidcConfig, return_to: impl Into<String>) -> Result<(), FlowError> {
+    start_login_inner(cfg, return_to.into(), None)
+}
+
+/// Begin the login flow with a federated-IdP hint (e.g. `"google"`).
+/// The hint is sent as `&idp_hint=...` on the authorize URL so the IdP
+/// UI on mokosh-server can skip the chooser and go straight to the
+/// requested provider. Honoring the hint is opt-in on the IdP side; if
+/// mokosh-server's IdP UI ignores the param, the user simply sees the
+/// chooser and picks Google there. End-to-end auth still completes
+/// because the OIDC code-exchange flow is identical.
+pub fn start_login_with_idp_hint(
+    cfg: &OidcConfig,
+    return_to: impl Into<String>,
+    idp_hint: &str,
+) -> Result<(), FlowError> {
+    start_login_inner(cfg, return_to.into(), Some(idp_hint))
+}
+
+fn start_login_inner(
+    cfg: &OidcConfig,
+    return_to: String,
+    idp_hint: Option<&str>,
+) -> Result<(), FlowError> {
     let verifier = generate_code_verifier();
     let challenge = s256_challenge(&verifier);
     let state = random_opaque();
     let nonce = random_opaque();
-    let return_to = return_to.into();
     let redirect_uri = cfg
         .resolve_redirect_uri()
         .map_err(|e| FlowError::Config(e.to_string()))?;
@@ -61,7 +86,7 @@ pub fn start_login(cfg: &OidcConfig, return_to: impl Into<String>) -> Result<(),
     let issuer = cfg.issuer_trimmed();
     let mut url = format!("{issuer}/oauth2/authorize");
     url.push('?');
-    let q: [(&str, &str); 8] = [
+    let mut params: Vec<(&str, &str)> = vec![
         ("response_type", "code"),
         ("client_id", &cfg.client_id),
         ("redirect_uri", &redirect_uri),
@@ -71,7 +96,10 @@ pub fn start_login(cfg: &OidcConfig, return_to: impl Into<String>) -> Result<(),
         ("code_challenge", &challenge),
         ("code_challenge_method", "S256"),
     ];
-    for (i, (k, v)) in q.iter().enumerate() {
+    if let Some(hint) = idp_hint {
+        params.push(("idp_hint", hint));
+    }
+    for (i, (k, v)) in params.iter().enumerate() {
         if i > 0 {
             url.push('&');
         }
@@ -225,6 +253,21 @@ pub async fn complete_login(cfg: &OidcConfig) -> Result<(Tokens, String), FlowEr
         error: "invalid_response".into(),
         description: "id_token missing from authorization_code response".into(),
     })?;
+
+    // Bind the id_token to this browser's flow: the `nonce` claim MUST
+    // match the one we generated in `start_login` and stashed in the
+    // PendingFlow. State already defends against CSRF on the redirect;
+    // the nonce check defends against id_token injection / replay (an
+    // attacker swapping in an id_token minted for a different authorize
+    // request). The parse is unverified (intentional WASM tradeoff, see
+    // tokens::parse_unverified) but the nonce comparison still binds the
+    // token to a value only this client could have chosen.
+    let claims = IdTokenClaims::parse_unverified(&id_token)
+        .map_err(|e| FlowError::Network(format!("id_token claims: {e}")))?;
+    match claims.nonce.as_deref() {
+        Some(n) if n == pending.nonce => {}
+        _ => return Err(FlowError::NonceMismatch),
+    }
 
     let tokens = Tokens {
         access_token: body.access_token,
