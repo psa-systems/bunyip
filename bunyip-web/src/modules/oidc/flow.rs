@@ -317,13 +317,26 @@ pub async fn password_login(
     trust_token: Option<&str>,
 ) -> Result<LoginOutcome, FlowError> {
     let url = format!("{}/v1/auth/login", cfg.issuer_trimmed());
-    let body = serde_json::json!({
+    // mokosh-server's LoginRequest types `client_id` as
+    // `Option<uuid::Uuid>`. Serde fails the whole request with
+    // 422 Unprocessable Content when the field is present but holds
+    // the empty string (`""` is neither a valid UUID nor null). The
+    // SPA carries `cfg.client_id = ""` whenever the image was built
+    // without `BUNYIP_OIDC_CLIENT_ID` (the common case for
+    // staging-style deploys that mint a session cookie but do not
+    // also want tokens minted for a specific RP). Omit the field in
+    // that case so the request body deserialises as
+    // `client_id: None` server-side; only attach a value when it is
+    // actually a non-empty UUID string.
+    let mut body = serde_json::json!({
         "email": email,
         "password": password,
-        "client_id": cfg.client_id,
         "scope": cfg.scopes,
         "trust_token": trust_token,
     });
+    if !cfg.client_id.is_empty() {
+        body["client_id"] = serde_json::Value::String(cfg.client_id.clone());
+    }
     // `credentials: include` so the browser accepts the Set-Cookie on
     // the OP session that mokosh-server sets in this response. Without
     // it, the cross-origin Set-Cookie is silently dropped and the
