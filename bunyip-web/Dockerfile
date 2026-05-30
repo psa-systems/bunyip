@@ -33,4 +33,7 @@ ENV BUNYIP_BIND_ADDR=0.0.0.0:4400
 EXPOSE 4400
 
 # Build CSS once, watch it in the background, and run the web binary with reload.
-CMD ["sh", "-c", "cd /app/bunyip-web && bun run build:css && (bun run watch:css &) && cd /app && cargo watch -w bunyip-web -x 'run -p bunyip-web'"]
+# Stay in /app/bunyip-web so the server's CWD-relative ServeDir("assets") resolves
+# to the crate's assets/ (where build:css writes styles.css). cargo finds the
+# workspace by walking up to /app.
+CMD ["sh", "-c", "cd /app/bunyip-web && bun run build:css && (bun run watch:css &) && cargo watch -w . -x 'run -p bunyip-web'"]

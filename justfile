@@ -121,10 +121,10 @@ db-shell: ensure-env
 run:
     cargo run -p bunyip-api
 
-# Run the web frontend locally.
+# Run the web frontend locally (from the crate dir so ServeDir("assets") resolves).
 [group: 'local']
 run-web:
-    cargo run -p bunyip-web
+    cd bunyip-web && cargo run -p bunyip-web
 
 # Build the whole workspace.
 [group: 'local']
