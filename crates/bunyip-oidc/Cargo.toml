@@ -10,4 +10,4 @@ repository.workspace = true
 [dependencies]
 bunyip-core = { path = "../bunyip-core" }
 # Generic OIDC key/JWKS helpers (Ed25519 PEM loading + JWKS publishing).
-dunite-oidc = { path = "../../../dunite/crates/dunite-oidc" }
+dunite-oidc = { git = "https://dev.a8n.run/psa-systems/dunite", branch = "main" }

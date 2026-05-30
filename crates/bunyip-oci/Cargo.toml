@@ -10,4 +10,4 @@ repository.workspace = true
 [dependencies]
 bunyip-core = { path = "../bunyip-core" }
 # Generic read-through OCI registry engine (consumer provides store traits + HTTP wiring).
-dunite-oci = { path = "../../../dunite/crates/dunite-oci" }
+dunite-oci = { git = "https://dev.a8n.run/psa-systems/dunite", branch = "main" }

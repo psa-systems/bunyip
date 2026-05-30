@@ -9,7 +9,7 @@ repository.workspace = true
 
 [dependencies]
 # Generic kernel (errors, responses, validation, middleware, primitive services).
-dunite-core = { path = "../../../dunite/crates/dunite-core" }
+dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", branch = "main" }
 
 # Web framework + multipart.
 actix-web = "4"

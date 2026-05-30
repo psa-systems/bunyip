@@ -1987,6 +1987,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 [[package]]
 name = "dunite-core"
 version = "0.1.0"
+source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#6036383c3335c9f4398bc5743aedcdfc8aaeba93"
 dependencies = [
  "actix-web",
  "aes-gcm",
@@ -2006,6 +2007,7 @@ dependencies = [
 [[package]]
 name = "dunite-oci"
 version = "0.1.0"
+source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#6036383c3335c9f4398bc5743aedcdfc8aaeba93"
 dependencies = [
  "actix-web",
  "async-trait",
@@ -2032,6 +2034,7 @@ dependencies = [
 [[package]]
 name = "dunite-oidc"
 version = "0.1.0"
+source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#6036383c3335c9f4398bc5743aedcdfc8aaeba93"
 dependencies = [
  "base64 0.21.7",
  "dunite-core",
