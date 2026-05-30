@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO refresh_tokens_v2\n                (token_hash, family_id, parent_id, client_id, user_id, scope,\n                 issued_at, idle_expires_at, absolute_expires_at, ip, user_agent)\n            VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9::inet, $10)\n            RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "TextArray",
+        "Timestamptz",
+        "Timestamptz",
+        "Inet",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1a48f615a9c11a4afe334f40490c2dd886e07165253a88a7122439a33ddb9f6b"
+}

@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO op_sessions\n                (id, sid, user_id, created_at, last_active_at, expires_at,\n                 user_agent, ip, acr, amr)\n            VALUES\n                (gen_random_uuid(), $1, $2, NOW(), NOW(), $3, $4, $5::inet, $6, $7)\n            RETURNING\n                id, sid, user_id, created_at, last_active_at, expires_at,\n                revoked_at, user_agent,\n                ip::TEXT as \"ip: String\",\n                acr, amr\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "sid",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "last_active_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "expires_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "revoked_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "user_agent",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "ip: String",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "acr",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "amr",
+        "type_info": "TextArray"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Timestamptz",
+        "Text",
+        "Inet",
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      null,
+      true,
+      true
+    ]
+  },
+  "hash": "3054249db4f467aa0b6a3dd8edff7fd15dc5b5da761d830f7fe15d7e4e94da84"
+}

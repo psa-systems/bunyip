@@ -4,3 +4,9 @@
 # libgit2 may fail to authenticate against the private Forgejo repo.
 [net]
 git-fetch-with-cli = true
+
+# Build the compile-time sqlx::query! macros (in the bunyip-oidc vertical)
+# against the committed offline cache in .sqlx/ instead of a live database.
+# Regenerate the cache with `cargo sqlx prepare` after changing any query.
+[env]
+SQLX_OFFLINE = "true"
