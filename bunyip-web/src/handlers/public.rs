@@ -28,6 +28,41 @@ const FEATURES: [Feature; 6] = [
     Feature { icon: "fa-solid fa-comment-dots", title: "In-app feedback", desc: "A floating widget lets your team report bugs and ideas without leaving the app. Optionally pipes to Forgejo." },
 ];
 
+/// The Bunyip mascot: a stylized creature peering through reeds over a water
+/// disc, with the "Surfaces what matters." caption. Ported from the original
+/// Dioxus frontend's hero illustration.
+fn bunyip_mascot() -> maud::Markup {
+    maud::html! {
+        div class="relative aspect-square w-full max-w-md mx-auto" {
+            div class="absolute inset-0 rounded-full bg-gradient-to-b from-bunyip-water-100 via-bunyip-water-500 to-bunyip-water-900 shadow-xl" {}
+            svg class="relative w-full h-full" viewBox="0 0 400 400" fill="none" {
+                ellipse cx="200" cy="240" rx="120" ry="8" fill="#ffffff" opacity="0.35" {}
+                ellipse cx="200" cy="270" rx="150" ry="6" fill="#ffffff" opacity="0.25" {}
+                ellipse cx="200" cy="290" rx="100" ry="5" fill="#ffffff" opacity="0.20" {}
+                ellipse cx="200" cy="190" rx="75" ry="55" fill="#1f311f" {}
+                ellipse cx="200" cy="230" rx="85" ry="20" fill="#1f311f" {}
+                circle cx="172" cy="180" r="16" fill="#ffffff" {}
+                circle cx="228" cy="180" r="16" fill="#ffffff" {}
+                circle cx="175" cy="182" r="8" fill="#1f311f" {}
+                circle cx="231" cy="182" r="8" fill="#1f311f" {}
+                circle cx="177" cy="180" r="2.5" fill="#ffffff" {}
+                circle cx="233" cy="180" r="2.5" fill="#ffffff" {}
+                path fill="#3c6438" d="M60 400 Q56 240 78 180 Q86 240 90 400 Z" {}
+                path fill="#2f4e2e" d="M100 400 Q96 200 120 140 Q128 220 130 400 Z" {}
+                path fill="#2f4e2e" d="M280 400 Q276 220 296 160 Q306 220 310 400 Z" {}
+                path fill="#3c6438" d="M330 400 Q326 250 348 200 Q356 260 358 400 Z" {}
+                ellipse cx="78" cy="180" rx="5" ry="12" fill="#283e27" {}
+                ellipse cx="120" cy="140" rx="5" ry="14" fill="#283e27" {}
+                ellipse cx="296" cy="160" rx="5" ry="14" fill="#283e27" {}
+                ellipse cx="348" cy="200" rx="5" ry="12" fill="#283e27" {}
+            }
+            p class="absolute -bottom-2 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-white dark:bg-bunyip-reed-800 border border-bunyip-reed-100 dark:border-bunyip-reed-700 text-xs italic text-bunyip-reed-700 dark:text-bunyip-reed-200 shadow-sm whitespace-nowrap" {
+                "Surfaces what matters."
+            }
+        }
+    }
+}
+
 pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (c, fwd) = ctx(&st, &headers).await;
     let apps = calls::applications(&st.api, fwd.as_deref()).await.unwrap_or_default();
@@ -38,7 +73,8 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
         div {
             // Hero
             section class="relative overflow-hidden py-20 md:py-32" {
-                div class="container relative flex flex-col items-center text-center" {
+                div class="container relative grid items-center gap-12 md:grid-cols-2" {
+                  div class="flex flex-col items-center text-center md:items-start md:text-left" {
                     span class="mb-6 inline-flex items-center gap-2 rounded-full bg-bunyip-reed-100 dark:bg-bunyip-reed-800 px-3 py-1 text-xs font-medium uppercase tracking-wide text-bunyip-reed-800 dark:text-bunyip-reed-100 hero-fade-up" {
                         span class="h-1.5 w-1.5 rounded-full bg-bunyip-reed-600 dark:bg-bunyip-reed-300" {}
                         "Now in early access"
@@ -60,11 +96,13 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                         }
                         a href="/pricing" class=(button_class("outline", "lg", "w-full sm:w-auto")) { "See pricing" }
                     }
-                    div class="mt-10 flex flex-wrap items-center justify-center gap-x-8 gap-y-2 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-300" {
+                    div class="mt-10 flex flex-wrap items-center justify-center md:justify-start gap-x-8 gap-y-2 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-300" {
                         @for t in ["No credit card required", "14-day trial", "Cancel anytime"] {
                             span class="flex items-center gap-2" { (icon("check", "h-4 w-4 text-bunyip-reed-600 dark:text-bunyip-reed-300")) (t) }
                         }
                     }
+                  }
+                  (bunyip_mascot())
                 }
             }
             // Features
