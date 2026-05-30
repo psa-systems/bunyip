@@ -760,8 +760,27 @@ dependencies = [
 name = "bunyip-oci"
 version = "0.1.1"
 dependencies = [
+ "actix-rt",
+ "actix-web",
+ "async-trait",
+ "base64 0.21.7",
  "bunyip-core",
+ "bytes",
+ "chrono",
  "dunite-oci",
+ "futures-util",
+ "hex",
+ "ipnetwork",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid 1.23.1",
+ "wiremock",
 ]
 
 [[package]]
