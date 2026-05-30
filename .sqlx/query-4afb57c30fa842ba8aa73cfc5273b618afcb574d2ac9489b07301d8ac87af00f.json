@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT DISTINCT\n                oc.client_id,\n                oc.backchannel_logout_uri AS \"backchannel_logout_uri!\",\n                ops.sid\n            FROM op_sessions ops\n            JOIN refresh_token_families rtf\n                ON rtf.op_session_id = ops.id AND rtf.revoked_at IS NULL\n            JOIN oauth_clients oc\n                ON oc.client_id = rtf.client_id\n            WHERE ops.user_id = $1\n              AND ops.revoked_at IS NULL\n              AND oc.backchannel_logout_uri IS NOT NULL\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "client_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "backchannel_logout_uri!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "sid",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "4afb57c30fa842ba8aa73cfc5273b618afcb574d2ac9489b07301d8ac87af00f"
+}

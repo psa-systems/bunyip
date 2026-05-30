@@ -1,0 +1,12 @@
+{% extends "base.txt" %}
+{% block content %}
+Your Email Address Has Been Changed
+
+This is a confirmation that the email address for your {{ app_name }} account was changed to {{ new_email }}.
+
+If you did not make this change, please contact us immediately by replying to this email so we can secure your account.
+
+Go to Dashboard: {{ dashboard_url }}
+
+If you made this change, no further action is needed.
+{% endblock %}

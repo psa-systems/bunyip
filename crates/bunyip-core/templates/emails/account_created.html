@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Welcome to {{ app_name }}!{% endblock %}
+{% block content %}
+<h1>Welcome to {{ app_name }}!</h1>
+<p>Thanks for creating your account! We're excited to have you on board.</p>
+
+<h2 style="font-size: 18px; margin-top: 24px;">What's next?</h2>
+<p>To access our developer tools, you'll need to subscribe to one of our plans:</p>
+
+<ul>
+  <li><strong>Personal</strong> &mdash; <span class="highlight">$3/month</span> &mdash; Perfect for individual developers</li>
+  <li><strong>Business</strong> &mdash; <span class="highlight">$15/month</span> &mdash; For teams with priority support</li>
+</ul>
+
+<p>Subscribe now and your price is <strong>locked for life</strong>. Early adopters keep their rate forever.</p>
+
+<hr class="divider">
+
+<h2 style="font-size: 18px; margin-top: 24px; color: #e0e0e8;">Available tools:</h2>
+<ul>
+  <li><strong>RUS</strong> &mdash; Fast URL shortening with QR codes</li>
+  <li><strong>Rusty Links</strong> &mdash; Bookmark management</li>
+  <li>All future applications at no extra cost</li>
+</ul>
+
+<div class="button-container">
+  <a href="{{ base_url }}/dashboard" class="button">Go to Dashboard</a>
+</div>
+
+<p class="muted">Questions? Just reply to this email.</p>
+{% endblock %}

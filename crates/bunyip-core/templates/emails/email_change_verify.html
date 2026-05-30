@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Verify Your New Email{% endblock %}
+{% block content %}
+<h1>Verify your new email address</h1>
+<p>We received a request to change your {{ app_name }} account email to this address. Click below to confirm the change.</p>
+
+<div class="button-container">
+  <a href="{{ verify_url }}" class="button">Verify Email Address</a>
+</div>
+
+<p class="muted">This link expires in <span class="highlight">1 hour</span>. If you didn't request this change, you can safely ignore this email.</p>
+
+<hr class="divider">
+
+<p class="link-fallback">Or copy this link: {{ verify_url }}</p>
+{% endblock %}

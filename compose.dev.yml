@@ -51,11 +51,36 @@ services:
     networks:
       - private
 
+  # SCAFFOLD: Postgres for the dunite-based rebuild. Idle today (the axum mock
+  # api does not use it) - present so the stack is ready once bunyip-api is
+  # converted to the actix backend. See dev-docs/bunyip-on-dunite-scaffold.md.
+  postgres:
+    image: postgres:16-alpine
+    container_name: dev-bunyip-postgres-${USER}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bunyip}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_DB: ${POSTGRES_DB:-bunyip}
+    expose:
+      - "5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username ${POSTGRES_USER:-bunyip} --dbname ${POSTGRES_DB:-bunyip}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - private
+
 volumes:
   cargo-target:
     name: dev-bunyip-cargo-target-${USER}
   web-node-modules:
     name: dev-bunyip-web-node-modules-${USER}
+  postgres-data:
+    name: dev-bunyip-postgres-${USER}
 
 networks:
   # Pre-created by `just dev-sso` (the recipe runs `docker network

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE oauth_authorization_codes SET consumed_at = NOW() WHERE code_hash = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f17c3fc5ce6d1ab7aab9869df12764559aa07f64506e59cdf873c692cbdf5747"
+}

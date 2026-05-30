@@ -1,0 +1,18 @@
+{% extends "base.txt" %}
+{% block content %}
+Welcome to {{ app_name }}!
+---------------------
+
+Thanks for subscribing! You now have access to all our developer tools.
+
+What's included:
+- RUS - Fast URL shortening with QR codes
+- Rusty Links - Bookmark management
+- All future applications at no extra cost
+
+Your price of ${{ price }}/month is locked forever.
+
+Go to your dashboard: {{ dashboard_url }}
+
+If you have any questions, just reply to this email and we'll be happy to help.
+{% endblock %}

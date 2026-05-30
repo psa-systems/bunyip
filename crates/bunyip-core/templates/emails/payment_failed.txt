@@ -1,0 +1,13 @@
+{% extends "base.txt" %}
+{% block content %}
+Payment Failed
+--------------
+
+We couldn't process your payment for your {{ app_name }} subscription.
+
+Don't worry - you still have access for the next {{ days_remaining }} days while you update your payment method.
+
+Update your payment method: {{ billing_url }}
+
+If you have questions or need help, just reply to this email and we'll assist you.
+{% endblock %}

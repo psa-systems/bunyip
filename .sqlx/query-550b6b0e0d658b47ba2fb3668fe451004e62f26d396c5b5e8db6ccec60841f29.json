@@ -1,0 +1,136 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                id, client_id, client_secret_hash, client_type, name,\n                redirect_uris, post_logout_redirect_uris,\n                backchannel_logout_uri, lifecycle_event_uri,\n                allowed_scopes, allowed_grant_types,\n                token_endpoint_auth_method, require_pkce,\n                access_token_ttl_seconds, refresh_token_ttl_seconds,\n                refresh_idle_ttl_seconds, audience,\n                dpop_bound, created_at, disabled_at\n            FROM oauth_clients\n            WHERE client_id = $1 AND disabled_at IS NULL\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "client_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "client_secret_hash",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "client_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "redirect_uris",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 6,
+        "name": "post_logout_redirect_uris",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 7,
+        "name": "backchannel_logout_uri",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "lifecycle_event_uri",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "allowed_scopes",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 10,
+        "name": "allowed_grant_types",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 11,
+        "name": "token_endpoint_auth_method",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "require_pkce",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 13,
+        "name": "access_token_ttl_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 14,
+        "name": "refresh_token_ttl_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 15,
+        "name": "refresh_idle_ttl_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 16,
+        "name": "audience",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 17,
+        "name": "dpop_bound",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 18,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 19,
+        "name": "disabled_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "550b6b0e0d658b47ba2fb3668fe451004e62f26d396c5b5e8db6ccec60841f29"
+}

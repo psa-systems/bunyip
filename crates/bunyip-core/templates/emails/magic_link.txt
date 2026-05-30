@@ -1,0 +1,11 @@
+{% extends "base.txt" %}
+{% block content %}
+Sign in to {{ app_name }}
+--------------------
+
+Click the link below to sign in to your account. This link expires in 15 minutes.
+
+{{ magic_link_url }}
+
+If you didn't request this link, you can safely ignore this email.
+{% endblock %}

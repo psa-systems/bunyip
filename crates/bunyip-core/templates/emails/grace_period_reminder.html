@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}{{ days_remaining }} days left{% endblock %}
+{% block content %}
+<h1>Only {{ days_remaining }} days left to update payment</h1>
+<p>Your {{ app_name }} subscription payment is still failing. To avoid losing access to your tools, please update your payment method.</p>
+
+{% if days_remaining <= 7 %}
+<p style="color: #f87171; font-weight: 600;">Access will be suspended in {{ days_remaining }} days if payment is not received.</p>
+{% endif %}
+
+<div class="button-container">
+  <a href="{{ base_url }}/membership" class="button">Update Payment Method</a>
+</div>
+
+<p class="muted">Already updated? You can ignore this. Questions? Reply to this email.</p>
+{% endblock %}

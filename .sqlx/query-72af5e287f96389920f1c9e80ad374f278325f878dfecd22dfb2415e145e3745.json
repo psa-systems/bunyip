@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE refresh_token_families\n               SET revoked_at = NOW(), revoke_reason = 'logout'\n             WHERE user_id = $1 AND revoked_at IS NULL\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "72af5e287f96389920f1c9e80ad374f278325f878dfecd22dfb2415e145e3745"
+}

@@ -1,0 +1,11 @@
+{% extends "base.txt" %}
+{% block content %}
+Verify Your Email Address
+-------------------------
+
+Click the link below to verify your {{ app_name }} account email address.
+
+{{ verify_url }}
+
+This link expires in 1 hour. If you didn't request this, you can safely ignore this email.
+{% endblock %}

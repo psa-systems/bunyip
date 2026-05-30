@@ -1,0 +1,13 @@
+{% extends "base.txt" %}
+{% block content %}
+Payment Received
+----------------
+
+Thank you! We've received your payment of ${{ amount }} for your {{ app_name }} subscription.
+
+Your subscription is active and you have full access to all {{ app_name }} applications.
+
+Go to your dashboard: {{ dashboard_url }}
+
+This email serves as your receipt. If you need a formal invoice, you can access it from your subscription settings.
+{% endblock %}

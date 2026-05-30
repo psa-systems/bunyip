@@ -2,7 +2,11 @@
 members = [
     "bunyip-api",
     "bunyip-web",
-    "crates/bunyip-mocks",
+    # Domain layer + verticals built on the generic dunite crates
+    # (https://dev.a8n.run/psa-systems/dunite). See dev-docs/bunyip-on-dunite-scaffold.md.
+    "crates/bunyip-core",
+    "crates/bunyip-oci",
+    "crates/bunyip-oidc",
 ]
 resolver = "2"
 

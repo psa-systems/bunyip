@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Thanks for your feedback</h2>
+<p>We reviewed your message and sent a response.</p>
+<p><strong>Subject:</strong> {{ subject_line }}</p>
+<p><strong>Your message:</strong></p>
+<p>{{ original_message }}</p>
+<p><strong>Our response:</strong></p>
+<p>{{ response_message }}</p>
+{% endblock content %}

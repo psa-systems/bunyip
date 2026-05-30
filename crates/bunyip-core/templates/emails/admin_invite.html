@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}You've been invited to {{ app_name }}{% endblock %}
+{% block content %}
+<h1>You've been invited!</h1>
+<p>You've been invited to join <strong>{{ app_name }}</strong> as an admin. Click the button below to accept the invitation.</p>
+<div class="button-container">
+  <a href="{{ invite_url }}" class="button">Accept Invitation</a>
+</div>
+
+<p class="muted">This invitation expires in 7 days. If you didn't expect this, you can safely ignore this email.</p>
+
+<hr class="divider">
+
+<p class="link-fallback">Or copy this link: {{ invite_url }}</p>
+{% endblock %}

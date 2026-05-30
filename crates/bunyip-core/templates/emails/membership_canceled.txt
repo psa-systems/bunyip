@@ -1,0 +1,13 @@
+{% extends "base.txt" %}
+{% block content %}
+Your membership has been canceled
+---------------------------------
+
+We're sorry to see you go. Your {{ app_name }} membership has been canceled and your access will end on {{ end_date }}.
+
+If you change your mind, you can rejoin at any time. However, please note that your original locked price may no longer be available.
+
+Rejoin: {{ resubscribe_url }}
+
+We'd love to hear why you're leaving. Reply to this email with any feedback - it helps us improve.
+{% endblock %}
