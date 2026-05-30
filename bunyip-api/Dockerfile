@@ -1,31 +1,40 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.6
 #
-# Development Dockerfile for bunyip-api.
-# Source is bind-mounted at runtime; cargo-watch hot-reloads.
+# Development image for bunyip-api: the actix-web backend with hot reload
+# (cargo-watch, bundled in the builder image). Source is bind-mounted at runtime
+# (see compose.dev.yml); the dunite-core kernel is a git dependency
+# (https://dev.a8n.run/psa-systems/dunite). The repo is anonymously readable so
+# the build needs no credentials, but an optional DUNITE_GIT_TOKEN (passed
+# through by compose.dev.yml) is honoured for mirrors that require auth.
 
-FROM rust:1-slim-trixie
+FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.0-rust1.94-trixie
 
-ARG UID=1000
-ARG GID=1000
+# nproc/2 concurrency cap (per governance CI.md); default keeps small hosts sane.
+ARG CARGO_BUILD_JOBS=2
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
-RUN apt-get update && apt-get install --yes --no-install-recommends \
-        pkg-config libssl-dev curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# Fetch the dunite git dep with the git CLI (honours the optional injected
+# token) and resolve the bunyip-oidc sqlx::query! macros against the committed
+# .sqlx cache instead of a live DB.
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true \
+    SQLX_OFFLINE=true
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo install cargo-watch
-
-# Non-root user matching host UID/GID so bind-mounted files stay host-owned.
-RUN groupadd --gid ${GID} dev \
-    && useradd --uid ${UID} --gid ${GID} --create-home --shell /bin/bash dev \
-    && mkdir --parents /app/target \
-    && chown --recursive ${UID}:${GID} /app /usr/local/cargo \
-    && chmod --recursive 777 /app/target
-
-USER dev
+# Run as the host user (per governance CHECKLIST) so bind-mounted source and the
+# target volume stay writable. CARGO_HOME moves to the user's home so the
+# registry cache is writable without chowning the whole base image.
+ARG HOST_UID=1000
+ARG HOST_GID=1000
+ENV CARGO_HOME=/home/app/.cargo
+RUN groupadd --gid ${HOST_GID} app 2>/dev/null || true \
+ && useradd --uid ${HOST_UID} --gid ${HOST_GID} --create-home app 2>/dev/null || true \
+ && mkdir -p /app/target \
+ && chown -R ${HOST_UID}:${HOST_GID} /app /home/app
 WORKDIR /app
+USER ${HOST_UID}:${HOST_GID}
 
-# Source code is mounted via the compose volume.
-EXPOSE 8080
+EXPOSE 4401
 
-CMD ["cargo", "watch", "-x", "run --bin bunyip-api"]
+# working_dir is /app (the workspace root) in compose. Configure git auth to the
+# dunite repo when a token is provided, then rebuild on changes to the api crate
+# and the library crates. cargo-watch ships in the builder image.
+CMD ["sh", "-c", "if [ -n \"$DUNITE_GIT_TOKEN\" ]; then git config --global url.\"https://oauth2:${DUNITE_GIT_TOKEN}@dev.a8n.run/\".insteadOf \"https://dev.a8n.run/\"; fi; exec cargo watch -w bunyip-api -w crates -x 'run -p bunyip-api'"]

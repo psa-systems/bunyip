@@ -16,6 +16,7 @@ export def main [
     let describe = (^git describe --tags --always | str trim)
     log info $"[get-tags] git describe: ($describe)"
 
+    # Try to parse as <tag>-<N>-g<hash> format (commits after a tag)
     let parts = ($describe | parse --regex '^(?<tag>.+)-\d+-g[0-9a-f]+$')
 
     let tags = if ($parts | is-not-empty) {
@@ -23,9 +24,11 @@ export def main [
         log info $"[get-tags] Resolved tags: [($tag), latest]"
         [$tag, "latest"]
     } else if ($describe | str starts-with "v") {
+        # Exact tag match (no commits after tag)
         log info $"[get-tags] Exact tag. Resolved tags: [($describe), latest]"
         [$describe, "latest"]
     } else {
+        # No tag - just latest
         log info $"[get-tags] No tag. Resolved tags: [latest]"
         ["latest"]
     }

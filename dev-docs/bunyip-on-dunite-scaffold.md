@@ -35,23 +35,23 @@ generic; all domain-specific logic lives in bunyip"). But the reference example
 `menkent-core` and cutting dunite loose. So the consumption boundary is
 genuinely undecided:
 
-- **Consume dunite** (the stated directive): `bunyip-core` re-exports the
+- **Consume dunite** (the stated directive): `bunyip-domain` re-exports the
   generic `dunite-core` kernel and owns only Bunyip's domain specifics. Robust
   to dunite's domain-code removal *iff* we depend only on the slimmed kernel.
-- **Own wholesale** (menkent's current trajectory): `bunyip-core` forks the
+- **Own wholesale** (menkent's current trajectory): `bunyip-domain` forks the
   layers, no dunite dependency. More code, zero coupling.
 
 Resolve this once dunite finishes steps 3/4 and menkent commits `menkent-core`.
 
 ## What the scaffold sets up (this PR)
 
-- `crates/bunyip-core` - empty domain-layer skeleton (mirrors `menkent-core`).
+- `crates/bunyip-domain` - empty domain-layer skeleton (mirrors `menkent-core`).
 - `crates/bunyip-oci` - empty OCI vertical skeleton (mirrors `menkent-oci`).
 - `crates/bunyip-oidc` - empty OIDC provider skeleton (mirrors `menkent-oidc`).
 - All three added to the workspace `members`.
 - `dunite-*` wired as **optional path deps** behind a `dunite` feature
   (off by default) so the workspace compiles independently of upstream churn.
-  `cargo check -p bunyip-core -p bunyip-oci -p bunyip-oidc` is green.
+  `cargo check -p bunyip-domain -p bunyip-oci -p bunyip-oidc` is green.
 - `bunyip-api/migrations/` - the 53 SQL migrations vendored from
   `menkent/api/migrations` (dunite no longer ships migrations). Unpruned.
 - `compose.dev.yml` - added an idle `postgres:16-alpine` service
@@ -65,7 +65,7 @@ still builds and runs as before.
 
 1. Decide the consumption boundary (above). Flip on the `dunite` feature or
    commit to wholesale ownership.
-2. Fill `bunyip-core` (config/models/repositories/services), then `bunyip-oci`
+2. Fill `bunyip-domain` (config/models/repositories/services), then `bunyip-oci`
    and `bunyip-oidc` verticals, porting from menkent and stripping a8n.tools
    branding.
 3. Convert `bunyip-api` from the axum mock to a thin actix binary: `lib.rs`

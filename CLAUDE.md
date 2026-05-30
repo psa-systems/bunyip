@@ -1,0 +1,55 @@
+# CLAUDE.md
+
+Guidance for AI agents working in this repository.
+
+## What this is
+
+bunyip is the PSA Systems SaaS platform: a Cargo **workspace** with two server
+apps plus the domain it owns.
+
+```
+bunyip/
+├── bunyip-web/             bunyip-web - Axum SSR frontend (Maud + htmx). The browser-facing BFF.
+├── bunyip-api/             bunyip-api - actix-web backend binary (wiring + main.rs + migrations).
+└── crates/
+    ├── bunyip-domain         models, repositories, business services, app Config, email templates.
+    ├── bunyip-oci          OCI registry vertical.        (depends on bunyip-domain)
+    └── bunyip-oidc         OIDC / OAuth 2.1 vertical.    (depends on bunyip-domain)
+```
+
+bunyip **owns all domain-specific code**. The generic, domain-free kernel
+(errors, responses, validation, request_id/security_headers middleware, and the
+generic jwt/encryption/password services) is `dunite-core`, consumed as a
+**git dependency** from the Forgejo repo
+`https://dev.a8n.run/psa-systems/dunite`. The dunite repo is anonymously
+readable, so builds need no token (an optional `DUNITE_GIT_TOKEN` / buildkit
+secret `dunite_token` is honoured for mirrors that require auth). Nothing in
+dunite is bunyip-specific; nothing domain-specific lives in dunite.
+
+Dependency direction (strictly downward): `bunyip-api -> bunyip-oci/oidc -> bunyip-domain -> dunite-core (git)`. `bunyip-web` is a standalone binary (talks to bunyip-api over /v1).
+
+Ports: bunyip-api listens on `APP_PORT=4401`; bunyip-web on `4400`. bunyip-api
+is also bunyip's OIDC issuer (it serves `/.well-known/*` + `/oauth2/*`).
+
+## Build / dev
+
+`just` drives everything (see `justfile`):
+
+- `just dev` / `just dev-detach` - full local stack (postgres + api + web) via `compose.dev.yml`.
+- `just dev-sso` - Traefik-routed stack on `*.a8n.run` (layers `compose.dev-sso.yml` on top).
+- `just check` - fmt + clippy + build + docker builder stage. `just test`, `just typecheck`, `just lint`, `just fmt`.
+- `just build-docker` - both production images (`build-docker-export` extracts the api static binary). `just migrate` / `migrate-revert`.
+- `just create-release <major|minor|hotfix>` - bump `[workspace.package].version`, push the branch, open the release PR.
+
+Production runs the published images via `compose.yml` (api + web + postgres,
+images under `dev.a8n.run/psa-systems-private/{bunyip-api,bunyip-web}`).
+
+## Critical conventions
+
+- **sqlx**: only `bunyip-oidc` uses compile-time `sqlx::query!` macros. They resolve against the workspace-root `.sqlx/` offline cache; build with `SQLX_OFFLINE=true` (the justfile/Dockerfiles set it). After changing those queries, regenerate `.sqlx/` and commit it.
+- **Migrations** live in `bunyip-api/migrations/` and run on api startup.
+- **Email templates** are `include_str!`-compiled into `bunyip-domain`; branding is config-driven (`APP_NAME`, `BASE_URL`).
+- **Images**: bunyip-api is a musl-static build (`rust-builder-musl` base, governance `Dockerfile.oci-musl` pattern); bunyip-web is glibc (`rust-builder-glibc` base, needs bun + tailwind), governance `Dockerfile.oci-glibc` pattern. Both pass `GIT_COMMIT` / `GIT_TAG` / `BUILD_DATE` build args; tags come from `oci-build/get-tags.nu`.
+- **Conformance**: this repo follows the governance standard at `../governance/` (CHECKLIST.md, BUILD.md, CI.md), mirroring `menkent`. Keep the version metadata as `version + hash + date` (`GIT_COMMIT` / `GIT_TAG` / `BUILD_DATE`).
+- **Forgejo org**: this repo lives in `psa-systems`; images publish to `psa-systems-private`.
+- **No em-dashes** in any output or artifact; use a hyphen, colon, parentheses, or a new sentence.

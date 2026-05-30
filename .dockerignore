@@ -1,0 +1,18 @@
+# Keep the prod build context lean and free of host-only / secret material.
+target/
+**/target/
+.git/
+.github/
+secrets/
+.env
+.env.*
+**/.env
+*.log
+.idea/
+.vscode/
+node_modules/
+**/node_modules/
+dev-docs/
+# Generated Tailwind output; rebuilt inside the web image.
+bunyip-web/assets/styles.css
+*.rs.bk

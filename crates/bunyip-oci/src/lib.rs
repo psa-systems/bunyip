@@ -15,35 +15,35 @@
 //!
 //! The internal layout mirrors the layered domain crate (`errors`, `models`,
 //! `repositories`, `services`, `middleware`, `handlers`). Each module
-//! glob-re-exports its `bunyip_core` counterpart (the domain) AND the matching
+//! glob-re-exports its `bunyip_domain` counterpart (the domain) AND the matching
 //! pieces of the `dunite_oci` engine, so the ported OCI sources keep using
 //! `crate::errors::{AppError, OciError}`, `crate::models::oci::*`,
 //! `crate::services::{BlobCache, OciTokenService, ...}`, etc. unchanged.
 
-pub use bunyip_core::{config, responses};
+pub use bunyip_domain::{config, responses};
 
 pub mod errors {
-    //! Domain errors (`AppError`) from bunyip-core plus the OCI-wire-format
+    //! Domain errors (`AppError`) from bunyip-domain plus the OCI-wire-format
     //! `OciError` from the dunite-oci engine.
-    pub use bunyip_core::errors::*;
+    pub use bunyip_domain::errors::*;
 
     pub use dunite_oci::errors::oci;
     pub use dunite_oci::errors::oci::OciError;
 }
 
 pub mod models {
-    //! Domain models from bunyip-core plus the OCI wire/cache types from the
+    //! Domain models from bunyip-domain plus the OCI wire/cache types from the
     //! dunite-oci engine (under `models::oci`).
-    pub use bunyip_core::models::*;
+    pub use bunyip_domain::models::*;
 
     pub use dunite_oci::models::oci;
 }
 
 pub mod services {
-    //! Domain services from bunyip-core plus the generic OCI registry engine
+    //! Domain services from bunyip-domain plus the generic OCI registry engine
     //! services from dunite-oci (BlobCache, ManifestCache, OciLimiter,
     //! OciTokenService, ForgejoRegistryClient).
-    pub use bunyip_core::services::*;
+    pub use bunyip_domain::services::*;
 
     pub use dunite_oci::services::{
         BlobCache, BlobHandle, ForgejoRegistryClient, ManifestCache, OciLimitDenial, OciLimiter,
@@ -52,9 +52,9 @@ pub mod services {
 }
 
 pub mod repositories {
-    //! Domain repositories from bunyip-core plus the OCI persistence adapters
+    //! Domain repositories from bunyip-domain plus the OCI persistence adapters
     //! that implement the dunite-oci `store` traits against Bunyip's schema.
-    pub use bunyip_core::repositories::*;
+    pub use bunyip_domain::repositories::*;
 
     pub mod oci_blob_cache;
     pub mod oci_pull_daily_counts;
@@ -64,9 +64,9 @@ pub mod repositories {
 }
 
 pub mod middleware {
-    //! Domain middleware from bunyip-core plus the OCI bearer-token extractor
+    //! Domain middleware from bunyip-domain plus the OCI bearer-token extractor
     //! and the `WWW-Authenticate` response middleware.
-    pub use bunyip_core::middleware::*;
+    pub use bunyip_domain::middleware::*;
 
     pub mod oci_auth;
     pub mod oci_www_authenticate;
