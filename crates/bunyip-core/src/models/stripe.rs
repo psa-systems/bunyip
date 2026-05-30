@@ -185,7 +185,7 @@ impl StripeConfigResponse {
         std::env::var("STRIPE_APP_TAG")
             .ok()
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "a8n-tools".to_string())
+            .unwrap_or_else(|| "bunyip".to_string())
     }
 }
 
