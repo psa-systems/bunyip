@@ -48,6 +48,7 @@ pub struct User {
     pub locked_price_id: Option<String>,
     pub locked_price_amount: Option<i64>,
     pub created_at: String,
+    #[serde(default)]
     pub updated_at: String,
     pub subscription_tier: SubscriptionTier,
     pub trial_ends_at: Option<String>,
@@ -297,6 +298,7 @@ pub struct AdminApplication {
     pub source_code_url: Option<String>,
     pub sort_order: i64,
     pub created_at: String,
+    #[serde(default)]
     pub updated_at: String,
 }
 
@@ -357,6 +359,7 @@ pub struct TierConfigResponse {
     pub source: String,
     pub lifetime_slots_used: i64,
     pub early_adopter_slots_used: i64,
+    #[serde(default)]
     pub updated_at: String,
     pub updated_by: Option<String>,
 }
