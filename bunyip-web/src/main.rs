@@ -25,6 +25,7 @@ async fn main() {
     let cfg = config::Config::from_env();
     let api = api::Api::new(&cfg.api_url);
     let bind_addr = cfg.bind_addr.clone();
+    let api_url = cfg.api_url.clone();
     let state = web::AppState { api, cfg: Arc::new(cfg) };
 
     use handlers::{auth_pages as ap, content, dashboard as dash, public};
@@ -89,6 +90,16 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
         .expect("bind");
+
+    // Startup banner (the listener is already bound at this point).
+    println!();
+    println!("  ===================================================");
+    println!("   bunyip-web  (PSA Systems)");
+    println!("   Web listening on  http://{bind_addr}");
+    println!("   API backend       {api_url}");
+    println!("  ===================================================");
+    println!();
+
     tracing::info!("bunyip-web listening on {bind_addr}");
     axum::serve(listener, app).await.expect("serve");
 }

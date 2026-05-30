@@ -532,10 +532,27 @@ async fn main() -> anyhow::Result<()> {
     let oci_ready = config.oci.enabled && forgejo_registry_client_oci.is_some();
     if config.oci.enabled && forgejo_registry_client_oci.is_none() {
         tracing::warn!(
-            "OCI_REGISTRY_ENABLED=true but FORGEJO_BASE_URL / FORGEJO_API_TOKEN are unset — \
+            "OCI_REGISTRY_ENABLED=true but FORGEJO_BASE_URL / FORGEJO_API_TOKEN are unset - \
              OCI registry server will NOT be started"
         );
     }
+
+    // Startup banner (the primary listener is already bound at this point).
+    println!();
+    println!("  ===================================================");
+    println!("   bunyip-api  (PSA Systems)");
+    println!("   API listening on  http://{server_addr}");
+    if let Some(issuer) = config.oidc.issuer.as_deref() {
+        println!("   OIDC issuer       {issuer}");
+    }
+    if oci_ready {
+        println!(
+            "   OCI registry on   http://{}:{}",
+            config.host, config.oci.port
+        );
+    }
+    println!("  ===================================================");
+    println!();
 
     if oci_ready {
         let oci_addr = format!("{}:{}", config.host, config.oci.port);

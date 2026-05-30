@@ -24,16 +24,36 @@ compose_sso := "docker compose -f compose.dev.yml -f compose.dev-sso.yml "
 
 # ── Dev ───────────────────────────────────────────────────────────────────────
 
-# Create .env from the example if it does not exist yet.
+# Create .env from the example if missing, generating the dev secrets that would
+# otherwise be empty (the encryption keys must be 32-byte hex or the api panics
+# at startup). Existing .env is left untouched.
 [private]
 ensure-env:
-    @test -f .env || cp .env.example .env
+    #!/usr/bin/env nu
+    if (".env" | path exists) { return }
+    print "Creating .env with generated dev credentials..."
+    open .env.example
+    | lines
+    | where $it !~ '^#'
+    | where ($it | is-not-empty)
+    | parse '{name}={value}'
+    | transpose --header-row --as-record
+    | update TOTP_ENCRYPTION_KEY (random binary 32 | encode hex --lower)
+    | update STRIPE_ENCRYPTION_KEY (random binary 32 | encode hex --lower)
+    | update JWT_SECRET (random binary 32 | encode hex --lower)
+    | items {|name, value| $"($name)=($value)" }
+    | str join "\n"
+    | $"($in)\n"
+    | save .env
+    print "Wrote .env (generated TOTP_ENCRYPTION_KEY, STRIPE_ENCRYPTION_KEY, JWT_SECRET)."
 
 # Start the full dev stack (postgres + api + web) in the foreground.
+[group: 'dev']
 dev: ensure-env
     {{ compose }}up --build
 
 # Start the full dev stack detached.
+[group: 'dev']
 dev-detach: ensure-env
     {{ compose }}up --build --detach
     @echo ""
@@ -41,6 +61,7 @@ dev-detach: ensure-env
     @echo "  api (backend):  http://localhost:4401"
 
 # Start the Traefik-routed stack on *.a8n.run (detached, for SSO/remote testing).
+[group: 'dev']
 dev-sso: ensure-env
     #!/usr/bin/env nu
     let user_name = (^whoami | str trim)
@@ -56,100 +77,126 @@ dev-sso: ensure-env
     print $"  bunyip hub: https://($user_name)-bunyip.a8n.run"
 
 # Stop the dev stack.
+[group: 'dev']
 dev-stop: ensure-env
     {{ compose }}down
 
 # Stop the Traefik-routed stack.
+[group: 'dev']
 dev-stop-sso: ensure-env
     {{ compose_sso }}down --remove-orphans
 
-# Stop the stack and remove its named volumes (per-user suffixed on shared hosts).
-dev-clean: ensure-env
+# Stop the stack, remove its named volumes, and delete the generated dev .env.
+[group: 'dev']
+dev-clean:
+    #!/usr/bin/env nu
+    # Named volumes are per-user suffixed on shared hosts; ensure-env recreates .env.
     {{ compose }}down --volumes
+    [".env"] | where ($it | path exists) | each {|f| rm $f; print $"Removed ($f)" } | ignore
 
 # Tail all logs.
+[group: 'dev']
 dev-logs: ensure-env
     {{ compose }}logs --follow
 
 # Tail api logs only.
+[group: 'dev']
 logs-api: ensure-env
     {{ compose }}logs --follow api
 
 # Tail web logs only.
+[group: 'dev']
 logs-web: ensure-env
     {{ compose }}logs --follow web
 
 # PostgreSQL shell.
+[group: 'dev']
 db-shell: ensure-env
     {{ compose }}exec postgres psql --username bunyip --dbname bunyip
 
 # ── Local (cargo, no Docker) ───────────────────────────────────────────────────
 
 # Run the api backend locally.
+[group: 'local']
 run:
     cargo run -p bunyip-api
 
 # Run the web frontend locally.
+[group: 'local']
 run-web:
     cargo run -p bunyip-web
 
 # Build the whole workspace.
+[group: 'local']
 build:
     cargo build --workspace
 
 # ── Checks ──────────────────────────────────────────────────────────────────────
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
+[group: 'checks']
 check: check-build check-clippy check-fmt check-docker
 
 # Build every target in the workspace.
+[group: 'checks']
 check-build:
     cargo build --workspace --all-targets
 
 # Clippy across the workspace with warnings denied.
+[group: 'checks']
 check-clippy:
     cargo clippy --workspace --all-targets -- -D warnings
 
 # Formatting check.
+[group: 'checks']
 check-fmt:
     cargo fmt --all --check
 
 # Build the api image's builder stage only - catches Docker-build drift cheaply.
+[group: 'checks']
 check-docker:
     docker build --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .
 
 # Type-check the workspace.
+[group: 'checks']
 typecheck:
     cargo check --workspace
 
 # Lint the workspace (clippy).
+[group: 'checks']
 lint:
     cargo clippy --workspace --all-targets -- -D warnings
 
 # Format the workspace.
+[group: 'checks']
 fmt:
     cargo fmt --all
 
 # Run unit tests.
+[group: 'checks']
 test:
     cargo test --workspace --lib
 
 # ── Database ────────────────────────────────────────────────────────────────────
 
 # Run pending migrations (also applied automatically on api startup).
+[group: 'database']
 migrate: ensure-env
     {{ compose }}exec api cargo sqlx migrate run --source bunyip-api/migrations
 
 # Revert the last applied migration.
+[group: 'database']
 migrate-revert: ensure-env
     {{ compose }}exec api cargo sqlx migrate revert --source bunyip-api/migrations
 
 # ── Images ──────────────────────────────────────────────────────────────────────
 
 # Build both production images.
+[group: 'images']
 build-docker: build-api-image build-web-image
 
 # Build the production api image (dunite is anonymous; DUNITE_GIT_TOKEN optional).
+[group: 'images']
 build-api-image tag="latest":
     docker build \
         --file bunyip-api/oci-build/Dockerfile \
@@ -160,6 +207,7 @@ build-api-image tag="latest":
         .
 
 # Build the production web image (context = repo root).
+[group: 'images']
 build-web-image tag="latest":
     docker build \
         --file bunyip-web/oci-build/Dockerfile \
@@ -167,6 +215,7 @@ build-web-image tag="latest":
         .
 
 # Export the api static binary to ./dist via the Dockerfile's `export` stage.
+[group: 'images']
 build-docker-export:
     docker buildx build \
         --file bunyip-api/oci-build/Dockerfile \
