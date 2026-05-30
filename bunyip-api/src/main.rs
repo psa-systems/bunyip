@@ -41,6 +41,10 @@ use bunyip_oidc::services::{oidc_keys::OidcKeySet, oidc_provider::OidcProvider};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Load a local .env if present (dev convenience; no-op in containers that
+    // inject real environment). Must run before Config::from_env().
+    let _ = dotenvy::dotenv();
+
     // Load configuration
     let config = Config::from_env()?;
 
