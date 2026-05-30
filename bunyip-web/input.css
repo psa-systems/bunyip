@@ -7,71 +7,82 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ---------------------------------------------------------------------------
-   shadcn HSL design tokens, ported verbatim from src/styles/globals.css.
-   The raw `H S% L%` triples live on :root / .dark / .high-contrast and are
-   consumed through `hsl(var(--token))` in the @theme inline block below, so
-   toggling the class on <html> reskins every semantic utility at runtime.
+   Bunyip reed/water design tokens. The shadcn semantic token names are kept
+   (so every existing `bg-background` / `text-foreground` / `from-primary`
+   utility keeps resolving), but the raw `H S% L%` triples are remapped to
+   Bunyip's reed (green) + water (teal) palette. Consumed through
+   `hsl(var(--token))` in the @theme inline block below, so toggling the
+   class on <html> reskins every semantic utility at runtime.
+
+   HSL conversions of the Bunyip hex scale (see @theme bunyip-reed-* / water-*):
+     reed-50  #f3f7f3 -> 120 21% 96%   reed-600 #3c6438 -> 116 28% 31%
+     reed-100 #e3ecde -> 95 26% 90%    reed-700 #2f4e2e -> 117 26% 24%
+     reed-200 #c6d8bd -> 95 30% 79%    reed-900 #1f311f -> 120 22% 16%
+     reed-400 #6e9c64 -> 110 23% 50%   water-700 #1d4351 -> 196 47% 22%
+     reed-500 #4f7e48 -> 113 27% 39%   water-100 #cce0e3 -> 188 30% 84%
+     dark surfaces: #161a16 -> 120 8% 9%, #1f2620 -> 120 10% 14%,
+     #283129 -> 120 10% 17%, border #2f4e2e -> 117 26% 24%
    --------------------------------------------------------------------------- */
 :root {
-  --background: 240 20% 98%;
-  --foreground: 240 24% 10%;
+  --background: 120 21% 96%;
+  --foreground: 120 22% 16%;
 
-  --card: 240 25% 100%;
-  --card-foreground: 240 24% 10%;
+  --card: 0 0% 100%;
+  --card-foreground: 120 22% 16%;
 
   --popover: 0 0% 100%;
-  --popover-foreground: 240 24% 10%;
+  --popover-foreground: 120 22% 16%;
 
-  --primary: 24.6 95% 53.1%;
+  --primary: 117 26% 24%;
   --primary-foreground: 0 0% 100%;
 
-  --secondary: 240 20% 95%;
-  --secondary-foreground: 240 24% 10%;
+  --secondary: 120 21% 96%;
+  --secondary-foreground: 117 26% 24%;
 
-  --muted: 240 20% 95%;
-  --muted-foreground: 240 10% 46%;
+  --muted: 95 26% 90%;
+  --muted-foreground: 113 27% 39%;
 
-  --accent: 240 20% 95%;
-  --accent-foreground: 240 24% 10%;
+  --accent: 95 26% 90%;
+  --accent-foreground: 117 26% 24%;
 
-  --destructive: 0 84.2% 60.2%;
-  --destructive-foreground: 210 40% 98%;
+  --destructive: 0 72% 45%;
+  --destructive-foreground: 0 0% 100%;
 
-  --border: 240 15% 90%;
-  --input: 240 15% 90%;
-  --ring: 24.6 95% 53.1%;
+  --border: 95 26% 90%;
+  --input: 95 26% 90%;
+  --ring: 116 28% 31%;
 
   --radius: 0.5rem;
 }
 
 .dark {
-  --background: 246 30% 7%;
-  --foreground: 240 20% 92%;
+  --background: 120 8% 9%;
+  --foreground: 120 21% 96%;
 
-  --card: 246 28% 10%;
-  --card-foreground: 240 20% 92%;
+  --card: 120 10% 14%;
+  --card-foreground: 120 21% 96%;
 
-  --popover: 246 28% 10%;
-  --popover-foreground: 240 20% 92%;
+  --popover: 120 10% 14%;
+  --popover-foreground: 120 21% 96%;
 
-  --primary: 24.6 95% 53.1%;
+  --primary: 116 28% 31%;
   --primary-foreground: 0 0% 100%;
 
-  --secondary: 246 25% 15%;
-  --secondary-foreground: 240 20% 92%;
+  --secondary: 120 10% 17%;
+  --secondary-foreground: 120 21% 96%;
 
-  --muted: 246 25% 15%;
-  --muted-foreground: 240 12% 70%;
+  --muted: 120 10% 17%;
+  --muted-foreground: 95 30% 79%;
 
-  --accent: 246 25% 15%;
-  --accent-foreground: 240 20% 92%;
+  --accent: 120 10% 17%;
+  --accent-foreground: 120 21% 96%;
 
-  --destructive: 0 62.8% 45%;
-  --destructive-foreground: 210 40% 98%;
+  --destructive: 0 62% 45%;
+  --destructive-foreground: 0 0% 100%;
 
-  --border: 246 25% 16%;
-  --input: 246 25% 16%;
-  --ring: 24.6 95% 53.1%;
+  --border: 117 26% 24%;
+  --input: 117 26% 24%;
+  --ring: 110 23% 50%;
 }
 
 .high-contrast {
@@ -84,7 +95,7 @@
   --popover: 0 0% 100%;
   --popover-foreground: 0 0% 0%;
 
-  --primary: 24.6 100% 45%;
+  --primary: 117 30% 18%;
   --primary-foreground: 0 0% 100%;
 
   --secondary: 0 0% 92%;
@@ -96,12 +107,12 @@
   --accent: 0 0% 92%;
   --accent-foreground: 0 0% 0%;
 
-  --destructive: 0 100% 40%;
+  --destructive: 0 100% 35%;
   --destructive-foreground: 0 0% 100%;
 
   --border: 0 0% 0%;
   --input: 0 0% 0%;
-  --ring: 24.6 100% 45%;
+  --ring: 117 30% 18%;
 }
 
 .dark.high-contrast {
@@ -114,7 +125,7 @@
   --popover: 0 0% 5%;
   --popover-foreground: 0 0% 100%;
 
-  --primary: 24.6 100% 55%;
+  --primary: 110 35% 65%;
   --primary-foreground: 0 0% 0%;
 
   --secondary: 0 0% 12%;
@@ -126,12 +137,12 @@
   --accent: 0 0% 12%;
   --accent-foreground: 0 0% 100%;
 
-  --destructive: 0 100% 55%;
+  --destructive: 0 100% 60%;
   --destructive-foreground: 0 0% 0%;
 
   --border: 0 0% 100%;
   --input: 0 0% 100%;
-  --ring: 24.6 100% 55%;
+  --ring: 110 35% 65%;
 }
 
 /* ---------------------------------------------------------------------------
@@ -147,46 +158,82 @@
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
 
-  --color-primary: #f97316;
+  /* Bunyip reed (primary green) scale. Verbatim from the original input.css. */
+  --color-bunyip-reed-50: #f3f7f3;
+  --color-bunyip-reed-100: #e3ecde;
+  --color-bunyip-reed-200: #c6d8bd;
+  --color-bunyip-reed-300: #99bb8e;
+  --color-bunyip-reed-400: #6e9c64;
+  --color-bunyip-reed-500: #4f7e48;
+  --color-bunyip-reed-600: #3c6438;
+  --color-bunyip-reed-700: #2f4e2e;
+  --color-bunyip-reed-800: #283e27;
+  --color-bunyip-reed-900: #1f311f;
+
+  /* Bunyip water (accent teal) scale. */
+  --color-bunyip-water-50: #eaf3f4;
+  --color-bunyip-water-100: #cce0e3;
+  --color-bunyip-water-300: #84afb6;
+  --color-bunyip-water-500: #2b6273;
+  --color-bunyip-water-700: #1d4351;
+  --color-bunyip-water-900: #0e2730;
+
+  /* Semantic surface tokens (flip in dark mode below). */
+  --color-surface: #ffffff;
+  --color-surface-muted: #f3f7f3;
+  --color-surface-elevated: #ffffff;
+  --color-border-subtle: #e3ecde;
+  --color-text-strong: #1f311f;
+  --color-text: #2f4e2e;
+  --color-text-muted: #4f7e48;
+
+  /* `primary` -> reed-700; the *-50..900 ramp mirrors the reed scale so any
+     legacy `from-primary-600` style utility lands in Bunyip green. */
+  --color-primary: #2f4e2e;
   --color-primary-foreground: #ffffff;
-  --color-primary-50: #fff7ed;
-  --color-primary-100: #ffedd5;
-  --color-primary-200: #fed7aa;
-  --color-primary-300: #fdba74;
-  --color-primary-400: #fb923c;
-  --color-primary-500: #f97316;
-  --color-primary-600: #ea580c;
-  --color-primary-700: #c2410c;
-  --color-primary-800: #9a3412;
-  --color-primary-900: #7c2d12;
+  --color-primary-50: #f3f7f3;
+  --color-primary-100: #e3ecde;
+  --color-primary-200: #c6d8bd;
+  --color-primary-300: #99bb8e;
+  --color-primary-400: #6e9c64;
+  --color-primary-500: #4f7e48;
+  --color-primary-600: #3c6438;
+  --color-primary-700: #2f4e2e;
+  --color-primary-800: #283e27;
+  --color-primary-900: #1f311f;
 
-  --color-rust: #b7410e;
-  --color-rust-light: #d4652d;
-  --color-rust-dark: #8a3009;
+  /* Legacy menkent brand scales repointed to Bunyip so existing
+     `from-indigo-500` / `to-teal-500` gradient utilities render in
+     reed/water tones instead of indigo/orange. `indigo` -> reed,
+     `teal` -> water, `rust`/`violet` -> reed/water. */
+  --color-rust: #2f4e2e;
+  --color-rust-light: #3c6438;
+  --color-rust-dark: #283e27;
 
-  --color-indigo-50: #eef2ff;
-  --color-indigo-100: #e0e7ff;
-  --color-indigo-200: #c7d2fe;
-  --color-indigo-300: #a5b4fc;
-  --color-indigo-400: #818cf8;
-  --color-indigo-500: #6366f1;
-  --color-indigo-600: #4f46e5;
-  --color-indigo-700: #4338ca;
-  --color-indigo-800: #3730a3;
-  --color-indigo-900: #312e81;
+  --color-indigo-50: #f3f7f3;
+  --color-indigo-100: #e3ecde;
+  --color-indigo-200: #c6d8bd;
+  --color-indigo-300: #99bb8e;
+  --color-indigo-400: #6e9c64;
+  --color-indigo-500: #4f7e48;
+  --color-indigo-600: #3c6438;
+  --color-indigo-700: #2f4e2e;
+  --color-indigo-800: #283e27;
+  --color-indigo-900: #1f311f;
+  --color-indigo-950: #1f311f;
 
-  --color-teal-50: #ecfeff;
-  --color-teal-100: #cffafe;
-  --color-teal-200: #a5f3fc;
-  --color-teal-300: #67e8f9;
-  --color-teal-400: #22d3ee;
-  --color-teal-500: #06b6d4;
-  --color-teal-600: #0891b2;
-  --color-teal-700: #0e7490;
-  --color-teal-800: #155e75;
-  --color-teal-900: #164e63;
+  --color-teal-50: #eaf3f4;
+  --color-teal-100: #cce0e3;
+  --color-teal-200: #cce0e3;
+  --color-teal-300: #84afb6;
+  --color-teal-400: #84afb6;
+  --color-teal-500: #2b6273;
+  --color-teal-600: #2b6273;
+  --color-teal-700: #1d4351;
+  --color-teal-800: #1d4351;
+  --color-teal-900: #0e2730;
 
-  --color-violet-500: #8b5cf6;
+  --color-violet-500: #2b6273;
 
   --color-secondary: hsl(var(--secondary));
   --color-secondary-foreground: hsl(var(--secondary-foreground));
@@ -207,6 +254,20 @@
 
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
     Roboto, "Noto Sans", Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+/* Dark mode: invert the semantic surface tokens (bunyip-reed/water utilities
+   are static; only `surface`/`text` flip). */
+.dark {
+  --color-surface: #161a16;
+  --color-surface-muted: #1f2620;
+  --color-surface-elevated: #283129;
+  --color-border-subtle: #2f4e2e;
+  --color-text-strong: #f3f7f3;
+  --color-text: #c6d8bd;
+  --color-text-muted: #99bb8e;
 }
 
 /* Default border + body colours (globals.css `@layer base`). */
@@ -217,7 +278,28 @@
   body {
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
-    font-feature-settings: "rlig" 1, "calt" 1;
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01", "ss03", "rlig" 1, "calt" 1;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  *:focus-visible {
+    outline: 2px solid var(--color-bunyip-reed-600);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background-color: var(--color-bunyip-reed-200);
+    color: var(--color-bunyip-reed-900);
+  }
+
+  .dark ::selection {
+    background-color: var(--color-bunyip-reed-700);
+    color: var(--color-bunyip-reed-50);
   }
 }
 

@@ -16,20 +16,20 @@ use crate::web::AppState;
 // --- pricing ----------------------------------------------------------------
 
 const PERSONAL: [&str; 6] = [
-    "Access to all current applications",
-    "Access to all future applications",
-    "Community support",
-    "Price locked for life",
-    "No hidden fees",
+    "Single sign-on into Mokosh",
+    "Stripe-backed billing and trials",
+    "Up to 5 members per org",
+    "MFA, magic links, password reset",
+    "In-app feedback widget",
     "Cancel anytime",
 ];
 const BUSINESS: [&str; 6] = [
-    "Everything in Personal",
+    "Everything in Starter",
+    "Unlimited members and orgs",
+    "Org switching and role management",
+    "Admin console and audit logs",
     "Priority support",
-    "Team management (coming soon)",
-    "Usage analytics (coming soon)",
     "Invoice billing",
-    "Dedicated account manager",
 ];
 
 fn pricing_card(title: &str, desc: &str, price: &str, features: &[&str], highlight: bool, stripe: bool, cta_href: &str, cta_label: &str) -> Markup {
@@ -76,19 +76,19 @@ pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response
         div class="py-20" {
             div class="container" {
                 div class="text-center" {
-                    h1 class="text-4xl font-bold" { "Simple, Transparent Pricing" }
-                    p class="mt-4 text-lg text-muted-foreground" { "Choose the plan that fits your needs. All prices locked for life." }
+                    h1 class="text-4xl font-bold" { "Simple, transparent pricing" }
+                    p class="mt-4 text-lg text-muted-foreground" { "The business layer for your PSA. Start free for 14 days, no credit card required." }
                 }
                 div class={ "mt-16 grid gap-8 mx-auto " (grid) } {
-                    (pricing_card("Personal", "Perfect for individual developers", "$3", &PERSONAL, false, stripe, cta_href, cta_label))
+                    (pricing_card("Starter", "For a single team getting set up", "$3", &PERSONAL, false, stripe, cta_href, cta_label))
                     @if show_business {
-                        (pricing_card("Business", "Built for teams and organizations", "$15", &BUSINESS, true, stripe, cta_href, cta_label))
+                        (pricing_card("Business", "For MSPs running multiple orgs", "$15", &BUSINESS, true, stripe, cta_href, cta_label))
                     }
                 }
             }
         }
     };
-    public_response(&st, &c, &apps, "Pricing · PSA Systems", true, content)
+    public_response(&st, &c, &apps, "Pricing · Bunyip", true, content)
 }
 
 // --- our story --------------------------------------------------------------
@@ -100,24 +100,24 @@ pub async fn our_story(State(st): State<AppState>, headers: HeaderMap) -> Respon
             h1 class="text-4xl font-bold mb-8" { "Our Story" }
             div class="max-w-none space-y-8" {
                 section {
-                    h2 class="text-2xl font-semibold mb-4" { "Why now?" }
+                    h2 class="text-2xl font-semibold mb-4" { "Why Bunyip?" }
                     div class="space-y-4 text-muted-foreground" {
-                        p { "The constant churn of companies changing their license from open source to open core/enterprise edition is too much. Every year, another project that developers relied on pulls the rug, re-licensing under restrictive terms and leaving the community scrambling for alternatives." }
-                        p { "AI and search engines can consume the documentation without giving back to the developers. The people who write the code, maintain the projects, and answer the questions see none of the value extracted from their work." }
-                        p { "People expect \"FOSS\" to provide everything, when it doesn't need to provide everything for \"free\". There's a middle ground between fully open and fully closed - we need to make that clearer." }
+                        p { "Mokosh is a focused PSA: the product your MSP actually uses to run service delivery. But every product needs a business layer around it - signup, billing, members, invitations, single sign-on - and that layer is the same boring infrastructure everyone reinvents." }
+                        p { "We pulled that layer out into its own surface so the PSA never has to carry it. Bunyip owns identity, subscriptions, and orgs; Mokosh owns the work. Each does one thing well." }
+                        p { "The name is the lake cryptid that surfaces what matters. That is the job: lift the business-y bits up out of the product and keep them out of the way." }
                     }
                 }
                 section {
-                    h2 class="text-2xl font-semibold mb-4" { "A different model" }
+                    h2 class="text-2xl font-semibold mb-4" { "The business shell" }
                     div class="space-y-4 text-muted-foreground" {
-                        p { "Most open source businesses follow the same playbook: release a free \"community edition\" and gate the best features behind an enterprise paywall. The community gets free support through GitHub issues and forums while the business monetises the software itself." }
-                        p { "PSA Systems flips that model 90°. Every feature ships free, to everyone, forever. What you pay for is the community - the maintenance, the support, the people behind the project." }
+                        p { "Bunyip is the business shell that wraps Mokosh. It is the OIDC entry point, the Stripe-backed billing engine, the org and membership directory, and the admin console - everything around the product, nothing in it." }
+                        p { "Your team logs in once through Bunyip and lands in Mokosh. Billing, trials, dunning, MFA, magic links, and trusted devices come out of the box, so the PSA stays focused on what makes your MSP tick." }
                     }
                 }
             }
         }
     };
-    public_response(&st, &c, &apps, "Our Story · PSA Systems", true, content)
+    public_response(&st, &c, &apps, "Our Story · Bunyip", true, content)
 }
 
 // --- legal ------------------------------------------------------------------
@@ -164,7 +164,7 @@ pub async fn terms(State(st): State<AppState>, headers: HeaderMap) -> Response {
             }
         }
     };
-    public_response(&st, &c, &apps, "Terms of Service · PSA Systems", true, content)
+    public_response(&st, &c, &apps, "Terms of Service · Bunyip", true, content)
 }
 
 pub async fn privacy(State(st): State<AppState>, headers: HeaderMap) -> Response {
@@ -200,7 +200,7 @@ pub async fn privacy(State(st): State<AppState>, headers: HeaderMap) -> Response
             }
         }
     };
-    public_response(&st, &c, &apps, "Privacy Policy · PSA Systems", true, content)
+    public_response(&st, &c, &apps, "Privacy Policy · Bunyip", true, content)
 }
 
 // --- feedback ---------------------------------------------------------------
@@ -216,7 +216,7 @@ fn feedback_form(submitted: bool, error: Option<&str>) -> Markup {
                         (icon("smile-plus", "h-4 w-4")) "Help shape what ships next"
                     }
                     h1 class="mt-6 text-4xl font-bold tracking-tight sm:text-5xl" {
-                        "Tell us what would make " span class="text-gradient bg-gradient-to-r from-primary via-indigo-500 to-teal-400" { "PSA Systems" } " better."
+                        "Tell us what would make " span class="text-gradient bg-gradient-to-r from-primary via-indigo-500 to-teal-400" { "Bunyip" } " better."
                     }
                     p class="mx-auto mt-4 max-w-2xl text-lg text-muted-foreground" { "Share bugs, missing features, rough edges, or ideas. We read everything." }
                 }
@@ -266,7 +266,7 @@ fn feedback_form(submitted: bool, error: Option<&str>) -> Markup {
 
 pub async fn feedback_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (c, apps) = public_ctx(&st, &headers).await;
-    public_response(&st, &c, &apps, "Feedback · PSA Systems", false, feedback_form(false, None))
+    public_response(&st, &c, &apps, "Feedback · Bunyip", false, feedback_form(false, None))
 }
 
 #[derive(Deserialize)]
@@ -305,5 +305,5 @@ pub async fn feedback_post(State(st): State<AppState>, headers: HeaderMap, Form(
             Err(e) => (false, Some(e.user_message())),
         }
     };
-    public_response(&st, &c, &apps, "Feedback · PSA Systems", false, feedback_form(submitted, error.as_deref()))
+    public_response(&st, &c, &apps, "Feedback · Bunyip", false, feedback_form(submitted, error.as_deref()))
 }

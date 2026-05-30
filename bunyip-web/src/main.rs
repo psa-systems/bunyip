@@ -94,7 +94,7 @@ async fn main() {
     // Startup banner (the listener is already bound at this point).
     println!();
     println!("  ===================================================");
-    println!("   bunyip-web  (PSA Systems)");
+    println!("   bunyip-web  (Bunyip · Surfaces what matters.)");
     println!("   Web listening on  http://{bind_addr}");
     println!("   API backend       {api_url}");
     println!("  ===================================================");

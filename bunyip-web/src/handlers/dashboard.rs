@@ -127,7 +127,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
         }
     };
 
-    dashboard_response(&c, &user, "/dashboard", "Dashboard · PSA Systems", content)
+    dashboard_response(&c, &user, "/dashboard", "Dashboard · Bunyip", content)
 }
 
 pub fn membership_badge(user: &User) -> Markup {
@@ -256,7 +256,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
             }
         }
     };
-    dashboard_response(&c, &user, "/applications", "Applications · PSA Systems", content)
+    dashboard_response(&c, &user, "/applications", "Applications · Bunyip", content)
 }
 
 // ===========================================================================
@@ -302,7 +302,7 @@ pub async fn downloads(State(st): State<AppState>, headers: HeaderMap) -> Respon
             }
         }
     };
-    dashboard_response(&c, &user, "/downloads", "Downloads · PSA Systems", content)
+    dashboard_response(&c, &user, "/downloads", "Downloads · Bunyip", content)
 }
 
 // ===========================================================================
@@ -348,7 +348,7 @@ pub async fn billing(State(st): State<AppState>, headers: HeaderMap) -> Response
             }
         }
     };
-    dashboard_response(&c, &user, "/billing", "Billing · PSA Systems", content)
+    dashboard_response(&c, &user, "/billing", "Billing · Bunyip", content)
 }
 
 // ===========================================================================
@@ -383,7 +383,7 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
             }
         }
     };
-    dashboard_response(&c, &user, "/membership", "Welcome · PSA Systems", content)
+    dashboard_response(&c, &user, "/membership", "Welcome · Bunyip", content)
 }
 
 // ===========================================================================
@@ -410,7 +410,7 @@ pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap)
             }
         }
     };
-    dashboard_response(&c, &user, "/dashboard", "Membership required · PSA Systems", content)
+    dashboard_response(&c, &user, "/dashboard", "Membership required · Bunyip", content)
 }
 
 // ===========================================================================
@@ -513,7 +513,7 @@ pub async fn membership(State(st): State<AppState>, headers: HeaderMap) -> Respo
             }
         }
     };
-    dashboard_response(&c, &user, "/membership", "Membership · PSA Systems", content)
+    dashboard_response(&c, &user, "/membership", "Membership · Bunyip", content)
 }
 
 pub async fn membership_subscribe(State(st): State<AppState>, headers: HeaderMap) -> Response {
@@ -630,7 +630,7 @@ pub async fn settings(State(st): State<AppState>, headers: HeaderMap, Query(q): 
             }
         }
     };
-    dashboard_response(&c, &user, "/settings", "Settings · PSA Systems", content)
+    dashboard_response(&c, &user, "/settings", "Settings · Bunyip", content)
 }
 
 fn settings_card(icon_name: &str, gradient: &str, title: &str, body: Markup) -> Markup {
@@ -734,7 +734,7 @@ pub async fn twofa_setup_get(State(st): State<AppState>, headers: HeaderMap) -> 
         },
         Err(e) => html! { div class="mx-auto max-w-lg" { (error_box(&e.user_message())) } },
     };
-    dashboard_response(&c, &user, "/settings", "Two-factor setup · PSA Systems", content)
+    dashboard_response(&c, &user, "/settings", "Two-factor setup · Bunyip", content)
 }
 
 #[derive(Deserialize)]
@@ -757,5 +757,5 @@ pub async fn twofa_setup_post(State(st): State<AppState>, headers: HeaderMap, Fo
         },
         Err(e) => html! { div class="mx-auto max-w-lg space-y-4" { (error_box(&e.user_message())) a href="/settings/2fa/setup" class=(button_class("outline","default","")) { "Try again" } } },
     };
-    dashboard_response(&c, &user, "/settings", "Two-factor setup · PSA Systems", content)
+    dashboard_response(&c, &user, "/settings", "Two-factor setup · Bunyip", content)
 }

@@ -24,11 +24,13 @@ pub fn document(title: &str, body: Markup) -> Markup {
             head {
                 meta charset="UTF-8";
                 meta name="viewport" content="width=device-width, initial-scale=1.0";
-                meta name="description" content="PSA Systems - managed tools for service providers. $3/month for all apps.";
+                meta name="description" content="Bunyip - the SaaS layer for your PSA. Auth, billing, members, and identity for Mokosh.";
+                meta name="theme-color" media="(prefers-color-scheme: light)" content="#2f4e2e";
+                meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161a16";
                 title { (title) }
                 link rel="preconnect" href="https://fonts.googleapis.com";
                 link rel="preconnect" href="https://fonts.gstatic.com" crossorigin;
-                link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet";
+                link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet";
                 script src="https://kit.fontawesome.com/6ab760c0b1.js" crossorigin="anonymous" {}
                 script src="https://unpkg.com/htmx.org@2.0.3" {}
                 link rel="stylesheet" href="/assets/styles.css";
@@ -42,11 +44,22 @@ pub fn document(title: &str, body: Markup) -> Markup {
     }
 }
 
+/// Reed-and-eyes brand mark, ported from the Dioxus `BrandMark` component.
+fn brand_mark() -> Markup {
+    html! {
+        svg class="w-7 h-7 text-bunyip-reed-700 dark:text-bunyip-reed-200" viewBox="0 0 32 32" fill="none" {
+            path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M8 28 V14 M16 28 V8 M24 28 V14" {}
+            circle cx="12.5" cy="18" r="2" fill="currentColor" {}
+            circle cx="19.5" cy="18" r="2" fill="currentColor" {}
+        }
+    }
+}
+
 fn brand() -> Markup {
     html! {
-        a href="/" class="flex items-center space-x-2" {
-            span class="text-2xl font-bold text-gradient bg-gradient-to-r from-primary to-indigo-500" { "PSA" }
-            span class="text-2xl font-light" { " Systems" }
+        a href="/" class="flex items-center gap-2 group" {
+            (brand_mark())
+            span class="text-2xl font-semibold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50 group-hover:text-bunyip-reed-700 dark:group-hover:text-bunyip-reed-200 transition-colors" { "Bunyip" }
         }
     }
 }
@@ -99,7 +112,8 @@ fn footer(cfg: &Config, apps: &[Application]) -> Markup {
                 div class="grid grid-cols-2 gap-8 md:grid-cols-4" {
                     div class="col-span-2 md:col-span-1" {
                         (brand())
-                        p class="mt-4 text-sm text-muted-foreground" { "Ship more. Manage less." }
+                        p class="mt-4 text-sm text-muted-foreground" { "Surfaces what matters." }
+                        p class="mt-1 text-xs text-muted-foreground" { "Bunyip · a8n.systems" }
                     }
                     div {
                         h3 class="text-sm font-semibold" { "Product" }

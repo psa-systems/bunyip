@@ -111,7 +111,7 @@ pub async fn login_get(State(st): State<AppState>, headers: HeaderMap, Query(q):
     let apps = calls::applications(&st.api, fwd.as_deref()).await.unwrap_or_default();
     let content = login_content(None, q.redirect.as_deref().unwrap_or("/dashboard"));
     let body = public_shell(&st.cfg, None, &apps, false, content);
-    html(document("Sign in · PSA Systems", body))
+    html(document("Sign in · Bunyip", body))
 }
 
 #[derive(Deserialize)]
@@ -137,7 +137,7 @@ pub async fn login_post(State(st): State<AppState>, headers: HeaderMap, Form(f):
             let apps = calls::applications(&st.api, None).await.unwrap_or_default();
             let content = login_content(Some(&e.user_message()), &target);
             let body = public_shell(&st.cfg, None, &apps, false, content);
-            html(document("Sign in · PSA Systems", body))
+            html(document("Sign in · Bunyip", body))
         }
     }
 }
@@ -194,7 +194,7 @@ pub async fn register_get(State(st): State<AppState>, headers: HeaderMap) -> Res
     if c.is_signed_in() {
         return redirect("/dashboard");
     }
-    auth_page(&st, &headers, "Create account · PSA Systems", register_card(None)).await
+    auth_page(&st, &headers, "Create account · Bunyip", register_card(None)).await
 }
 
 pub async fn register_post(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<RegisterForm>) -> Response {
@@ -208,11 +208,11 @@ pub async fn register_post(State(st): State<AppState>, headers: HeaderMap, Form(
         None
     };
     if let Some(e) = err {
-        return auth_page(&st, &headers, "Create account · PSA Systems", register_card(Some(&e))).await;
+        return auth_page(&st, &headers, "Create account · Bunyip", register_card(Some(&e))).await;
     }
     match auth_api::register(&st.api, f.email.trim(), &f.password).await {
         Ok((_, cookies)) => redirect_cookies("/dashboard", &cookies),
-        Err(e) => auth_page(&st, &headers, "Create account · PSA Systems", register_card(Some(&e.user_message()))).await,
+        Err(e) => auth_page(&st, &headers, "Create account · Bunyip", register_card(Some(&e.user_message()))).await,
     }
 }
 
@@ -262,11 +262,11 @@ pub async fn magic_link_get(State(st): State<AppState>, headers: HeaderMap, Quer
                 let card = auth_card("alert-circle", "bg-destructive/10 text-destructive", "Verification Failed", &e.user_message(), html! {
                     a href="/magic-link" class=(button_class("default", "default", "w-full")) { "Request New Magic Link" }
                 });
-                auth_page(&st, &headers, "Magic link · PSA Systems", card).await
+                auth_page(&st, &headers, "Magic link · Bunyip", card).await
             }
         };
     }
-    auth_page(&st, &headers, "Magic link · PSA Systems", magic_form(None, false)).await
+    auth_page(&st, &headers, "Magic link · Bunyip", magic_form(None, false)).await
 }
 
 pub async fn magic_link_post(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<EmailForm>) -> Response {
@@ -274,7 +274,7 @@ pub async fn magic_link_post(State(st): State<AppState>, headers: HeaderMap, For
         Ok(()) => magic_form(None, true),
         Err(e) => magic_form(Some(&e.user_message()), false),
     };
-    auth_page(&st, &headers, "Magic link · PSA Systems", card).await
+    auth_page(&st, &headers, "Magic link · Bunyip", card).await
 }
 
 // ===========================================================================
@@ -301,7 +301,7 @@ fn reset_form(error: Option<&str>, success: bool) -> Markup {
 }
 
 pub async fn password_reset_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    auth_page(&st, &headers, "Reset password · PSA Systems", reset_form(None, false)).await
+    auth_page(&st, &headers, "Reset password · Bunyip", reset_form(None, false)).await
 }
 
 pub async fn password_reset_post(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<EmailForm>) -> Response {
@@ -309,7 +309,7 @@ pub async fn password_reset_post(State(st): State<AppState>, headers: HeaderMap,
         Ok(()) => reset_form(None, true),
         Err(e) => reset_form(Some(&e.user_message()), false),
     };
-    auth_page(&st, &headers, "Reset password · PSA Systems", card).await
+    auth_page(&st, &headers, "Reset password · Bunyip", card).await
 }
 
 // ===========================================================================
@@ -338,12 +338,12 @@ fn reset_confirm_card(token: &str, error: Option<&str>) -> Markup {
 
 pub async fn password_reset_confirm_get(State(st): State<AppState>, headers: HeaderMap, Query(q): Query<TokenQuery>) -> Response {
     match q.token {
-        Some(token) => auth_page(&st, &headers, "Reset password · PSA Systems", reset_confirm_card(&token, None)).await,
+        Some(token) => auth_page(&st, &headers, "Reset password · Bunyip", reset_confirm_card(&token, None)).await,
         None => {
             let card = auth_card("alert-circle", "bg-destructive/10 text-destructive", "Invalid Reset Link", "This password reset link is invalid or has expired.", html! {
                 a href="/password-reset" class=(button_class("default", "default", "w-full")) { "Request New Reset Link" }
             });
-            auth_page(&st, &headers, "Reset password · PSA Systems", card).await
+            auth_page(&st, &headers, "Reset password · Bunyip", card).await
         }
     }
 }
@@ -357,11 +357,11 @@ pub async fn password_reset_confirm_post(State(st): State<AppState>, headers: He
         None
     };
     if let Some(e) = err {
-        return auth_page(&st, &headers, "Reset password · PSA Systems", reset_confirm_card(&f.token, Some(&e))).await;
+        return auth_page(&st, &headers, "Reset password · Bunyip", reset_confirm_card(&f.token, Some(&e))).await;
     }
     match auth_api::confirm_password_reset(&st.api, &f.token, &f.password).await {
         Ok(()) => redirect("/login"),
-        Err(e) => auth_page(&st, &headers, "Reset password · PSA Systems", reset_confirm_card(&f.token, Some(&e.user_message()))).await,
+        Err(e) => auth_page(&st, &headers, "Reset password · Bunyip", reset_confirm_card(&f.token, Some(&e.user_message()))).await,
     }
 }
 
@@ -395,9 +395,9 @@ pub async fn twofa_verify_get(State(st): State<AppState>, headers: HeaderMap) ->
         let card = auth_card("shield", "bg-primary/10 text-primary", "No pending verification", "Please log in first.", html! {
             a href="/login" class=(button_class("default", "default", "w-full")) { "Go to Login" }
         });
-        return auth_page(&st, &headers, "Two-factor · PSA Systems", card).await;
+        return auth_page(&st, &headers, "Two-factor · Bunyip", card).await;
     }
-    auth_page(&st, &headers, "Two-factor · PSA Systems", twofa_card(None)).await
+    auth_page(&st, &headers, "Two-factor · Bunyip", twofa_card(None)).await
 }
 
 pub async fn twofa_verify_post(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<TwoFactorForm>) -> Response {
@@ -410,7 +410,7 @@ pub async fn twofa_verify_post(State(st): State<AppState>, headers: HeaderMap, F
             cookies.push("bunyip_2fa=; Path=/; Max-Age=0".to_string());
             redirect_cookies("/dashboard", &cookies)
         }
-        Err(e) => auth_page(&st, &headers, "Two-factor · PSA Systems", twofa_card(Some(&e.user_message()))).await,
+        Err(e) => auth_page(&st, &headers, "Two-factor · Bunyip", twofa_card(Some(&e.user_message()))).await,
     }
 }
 
@@ -443,17 +443,17 @@ pub async fn invite_accept_get(State(st): State<AppState>, headers: HeaderMap, Q
         let card = auth_card("alert-circle", "bg-destructive/10 text-destructive", "Invitation Failed", "No invite token provided.", html! {
             a href="/login" class=(button_class("default", "default", "w-full")) { "Go to Login" }
         });
-        return auth_page(&st, &headers, "Accept invite · PSA Systems", card).await;
+        return auth_page(&st, &headers, "Accept invite · Bunyip", card).await;
     };
     match auth_api::accept_invite(&st.api, &token, None).await {
-        Ok((Some(email), _, _)) => auth_page(&st, &headers, "Accept invite · PSA Systems", invite_password_card(&token, &email, None)).await,
+        Ok((Some(email), _, _)) => auth_page(&st, &headers, "Accept invite · Bunyip", invite_password_card(&token, &email, None)).await,
         Ok((None, Some(_), cookies)) => redirect_cookies("/dashboard", &cookies),
-        Ok(_) => auth_page(&st, &headers, "Accept invite · PSA Systems", invite_password_card(&token, "your account", None)).await,
+        Ok(_) => auth_page(&st, &headers, "Accept invite · Bunyip", invite_password_card(&token, "your account", None)).await,
         Err(e) => {
             let card = auth_card("alert-circle", "bg-destructive/10 text-destructive", "Invitation Failed", &e.user_message(), html! {
                 a href="/login" class=(button_class("default", "default", "w-full")) { "Go to Login" }
             });
-            auth_page(&st, &headers, "Accept invite · PSA Systems", card).await
+            auth_page(&st, &headers, "Accept invite · Bunyip", card).await
         }
     }
 }
@@ -461,12 +461,12 @@ pub async fn invite_accept_get(State(st): State<AppState>, headers: HeaderMap, Q
 pub async fn invite_accept_post(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<InviteForm>) -> Response {
     if !password_ok(&f.password) || f.password != f.confirm {
         let e = if f.password != f.confirm { "Passwords do not match" } else { "Password does not meet the requirements" };
-        return auth_page(&st, &headers, "Accept invite · PSA Systems", invite_password_card(&f.token, "your account", Some(e))).await;
+        return auth_page(&st, &headers, "Accept invite · Bunyip", invite_password_card(&f.token, "your account", Some(e))).await;
     }
     match auth_api::accept_invite(&st.api, &f.token, Some(&f.password)).await {
         Ok((_, Some(_), cookies)) => redirect_cookies("/dashboard", &cookies),
-        Ok(_) => auth_page(&st, &headers, "Accept invite · PSA Systems", invite_password_card(&f.token, "your account", Some("Failed to accept invite"))).await,
-        Err(e) => auth_page(&st, &headers, "Accept invite · PSA Systems", invite_password_card(&f.token, "your account", Some(&e.user_message()))).await,
+        Ok(_) => auth_page(&st, &headers, "Accept invite · Bunyip", invite_password_card(&f.token, "your account", Some("Failed to accept invite"))).await,
+        Err(e) => auth_page(&st, &headers, "Accept invite · Bunyip", invite_password_card(&f.token, "your account", Some(&e.user_message()))).await,
     }
 }
 
@@ -495,7 +495,7 @@ fn setup_card(error: Option<&str>) -> Markup {
 }
 
 pub async fn setup_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    auth_page(&st, &headers, "Setup · PSA Systems", setup_card(None)).await
+    auth_page(&st, &headers, "Setup · Bunyip", setup_card(None)).await
 }
 
 pub async fn setup_post(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<SetupForm>) -> Response {
@@ -509,11 +509,11 @@ pub async fn setup_post(State(st): State<AppState>, headers: HeaderMap, Form(f):
         None
     };
     if let Some(e) = err {
-        return auth_page(&st, &headers, "Setup · PSA Systems", setup_card(Some(&e))).await;
+        return auth_page(&st, &headers, "Setup · Bunyip", setup_card(Some(&e))).await;
     }
     match auth_api::setup(&st.api, f.email.trim(), &f.password).await {
         Ok((_, cookies)) => redirect_cookies("/dashboard", &cookies),
-        Err(e) => auth_page(&st, &headers, "Setup · PSA Systems", setup_card(Some(&e.user_message()))).await,
+        Err(e) => auth_page(&st, &headers, "Setup · Bunyip", setup_card(Some(&e.user_message()))).await,
     }
 }
 
@@ -536,7 +536,7 @@ pub async fn confirm_email(State(st): State<AppState>, headers: HeaderMap, Query
         },
     };
     // Clear any local session cookie too (the API revoked sessions on email change).
-    let resp = auth_page(&st, &headers, "Confirm email · PSA Systems", card).await;
+    let resp = auth_page(&st, &headers, "Confirm email · Bunyip", card).await;
     resp
 }
 
@@ -562,5 +562,5 @@ pub async fn verify_email(State(st): State<AppState>, headers: HeaderMap, Query(
             }),
         },
     };
-    auth_page(&st, &headers, "Verify email · PSA Systems", card).await
+    auth_page(&st, &headers, "Verify email · Bunyip", card).await
 }

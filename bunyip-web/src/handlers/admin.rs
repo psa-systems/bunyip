@@ -92,7 +92,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
             }
         }
     };
-    admin_response(&c, &user, "/admin", "Admin · PSA Systems", content)
+    admin_response(&c, &user, "/admin", "Admin · Bunyip", content)
 }
 
 // ===========================================================================
@@ -164,7 +164,7 @@ pub async fn audit_logs(State(st): State<AppState>, headers: HeaderMap, Query(q)
             }
         }
     };
-    admin_response(&c, &user, "/admin/audit-logs", "Audit Logs · PSA Systems", content)
+    admin_response(&c, &user, "/admin/audit-logs", "Audit Logs · Bunyip", content)
 }
 
 // ===========================================================================
@@ -220,7 +220,7 @@ pub async fn users(State(st): State<AppState>, headers: HeaderMap, Query(q): Que
             }
         }
     };
-    admin_response(&c, &user, "/admin/users", "Users · PSA Systems", content)
+    admin_response(&c, &user, "/admin/users", "Users · Bunyip", content)
 }
 
 #[derive(Deserialize)]
@@ -270,7 +270,7 @@ pub async fn memberships(State(st): State<AppState>, headers: HeaderMap, Query(q
             }
         }
     };
-    admin_response(&c, &user, "/admin/memberships", "Memberships · PSA Systems", content)
+    admin_response(&c, &user, "/admin/memberships", "Memberships · Bunyip", content)
 }
 
 // ===========================================================================
@@ -312,7 +312,7 @@ pub async fn feedback(State(st): State<AppState>, headers: HeaderMap, Query(q): 
             }
         }
     };
-    admin_response(&c, &user, "/admin/feedback", "Feedback · PSA Systems", content)
+    admin_response(&c, &user, "/admin/feedback", "Feedback · Bunyip", content)
 }
 
 #[derive(Deserialize)]
@@ -369,7 +369,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
             }
         }
     };
-    admin_response(&c, &user, "/admin/applications", "Applications · PSA Systems", content)
+    admin_response(&c, &user, "/admin/applications", "Applications · Bunyip", content)
 }
 
 #[derive(Deserialize)]
@@ -412,7 +412,7 @@ pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Re
             }
         }
     };
-    admin_response(&c, &user, "/admin/tier-settings", "Tier settings · PSA Systems", content)
+    admin_response(&c, &user, "/admin/tier-settings", "Tier settings · Bunyip", content)
 }
 
 #[derive(Deserialize)]
@@ -451,7 +451,7 @@ pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response 
             }
         }
     };
-    admin_response(&c, &user, "/admin/stripe", "Stripe · PSA Systems", content)
+    admin_response(&c, &user, "/admin/stripe", "Stripe · Bunyip", content)
 }
 
 #[derive(Deserialize)]
