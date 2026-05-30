@@ -41,54 +41,6 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
 CREATE INDEX IF NOT EXISTS oauth_clients_active ON oauth_clients(client_id)
     WHERE disabled_at IS NULL;
 
--- Seed initial clients for SaaS web and DMARC BFF.
--- client_secret_hash is NULL here; set via admin CLI before first use in production.
--- dmarc-web-bff uses client_secret_basic; the hash is inserted separately.
-INSERT INTO oauth_clients (
-    client_id, client_type, name,
-    redirect_uris, post_logout_redirect_uris, backchannel_logout_uri, lifecycle_event_uri,
-    allowed_scopes, allowed_grant_types,
-    token_endpoint_auth_method, require_pkce,
-    audience
-) VALUES
--- SaaS own BFF
-(
-    'a8000000-0000-0000-0000-000000000001',
-    'confidential',
-    'a8n-saas-web',
-    ARRAY['https://app.a8n.tools/oauth2/callback', 'http://localhost:5173/oauth2/callback'],
-    ARRAY['https://app.a8n.tools/', 'http://localhost:5173/'],
-    NULL, NULL,
-    ARRAY['openid', 'email', 'offline_access'],
-    ARRAY['authorization_code', 'refresh_token'],
-    'client_secret_basic', TRUE,
-    'https://api.a8n.tools'
-),
--- DMARC Reporter BFF
-(
-    'a8000000-0000-0000-0000-000000000002',
-    'confidential',
-    'dmarc-web-bff',
-    ARRAY['https://dmarc.a8n.tools/oauth2/callback', 'http://localhost:8080/oauth2/callback'],
-    ARRAY['https://dmarc.a8n.tools/', 'http://localhost:8080/'],
-    'https://dmarc.a8n.tools/oauth2/backchannel-logout',
-    'https://dmarc.a8n.tools/oauth2/lifecycle-event',
-    ARRAY['openid', 'email', 'offline_access', 'dmarc:read', 'dmarc:write'],
-    ARRAY['authorization_code', 'refresh_token'],
-    'client_secret_basic', TRUE,
-    'https://dmarc.a8n.tools/api'
-),
--- DMARC desktop (public, PKCE-only)
-(
-    'a8000000-0000-0000-0000-000000000003',
-    'public',
-    'dmarc-desktop',
-    ARRAY['http://127.0.0.1'],
-    ARRAY['http://127.0.0.1/'],
-    NULL, NULL,
-    ARRAY['openid', 'email', 'offline_access', 'dmarc:read', 'dmarc:write'],
-    ARRAY['authorization_code', 'refresh_token'],
-    'none', TRUE,
-    'https://dmarc.a8n.tools/api'
-)
-ON CONFLICT (client_id) DO NOTHING;
+-- No client seeds here. Bunyip registers its own relying parties (the
+-- bunyip-web SPA, mokosh-server, etc.) via a separate seed migration once their
+-- client_ids / redirect_uris / secrets are known. See BUNYIP-26.
