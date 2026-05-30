@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Payment Failed{% endblock %}
+{% block content %}
+<h1>Payment Failed</h1>
+<p>We couldn't process your payment for your {{ app_name }} subscription.</p>
+<p>Don't worry - you still have access for the next <strong>{{ days_remaining }} days</strong> while you update your payment method.</p>
+
+<div class="button-container">
+  <a href="{{ base_url }}/membership" class="button">Update Payment Method</a>
+</div>
+
+<p class="muted">Need help? Just reply to this email.</p>
+{% endblock %}

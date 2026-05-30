@@ -1,0 +1,9 @@
+{{ app_name }}
+=========
+
+{% block content %}{% endblock %}
+
+---
+(c) {{ year }} {{ app_name }}
+Privacy: {{ base_url }}/privacy
+Terms: {{ base_url }}/terms

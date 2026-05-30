@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Membership Canceled{% endblock %}
+{% block content %}
+<h1>Your membership has been canceled</h1>
+<p>We're sorry to see you go. Your {{ app_name }} membership has been canceled and your access will end on <strong>{{ end_date }}</strong>.</p>
+
+<p>Changed your mind? You can rejoin anytime &mdash; but your original locked price may no longer be available.</p>
+
+<div class="button-container">
+  <a href="{{ base_url }}/membership" class="button">Rejoin</a>
+</div>
+
+<p class="muted">We'd love to hear why you're leaving. Reply with any feedback &mdash; it helps us improve.</p>
+{% endblock %}

@@ -1,0 +1,15 @@
+{% extends "base.txt" %}
+{% block content %}
+Only {{ days_remaining }} days left to update payment
+-----------------------------------------------------
+
+Your {{ app_name }} subscription payment is still failing. To avoid losing access to your tools, please update your payment method.
+
+{% if days_remaining <= 7 %}
+WARNING: Your access will be suspended in {{ days_remaining }} days if payment is not received.
+{% endif %}
+
+Update your payment method: {{ billing_url }}
+
+If you've already updated your payment information, you can ignore this email. If you have questions, reply to this email.
+{% endblock %}

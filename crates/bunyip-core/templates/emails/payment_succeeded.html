@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Payment Received{% endblock %}
+{% block content %}
+<h1>Payment Received</h1>
+<p>Thank you! We've received your payment of <strong>${{ amount }}</strong> for your {{ app_name }} subscription.</p>
+
+<p>Your subscription is active and you have full access to all {{ app_name }} applications.</p>
+
+<div class="button-container">
+  <a href="{{ base_url }}/dashboard" class="button">Go to Dashboard</a>
+</div>
+
+<p class="muted">This serves as your receipt. Need a formal invoice? Access it from your subscription settings.</p>
+{% endblock %}

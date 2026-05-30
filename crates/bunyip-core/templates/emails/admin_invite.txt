@@ -1,0 +1,11 @@
+{% extends "base.txt" %}
+{% block content %}
+You've been invited to {{ app_name }}!
+--------------------
+
+You've been invited to join {{ app_name }} as an admin. Click the link below to accept the invitation.
+
+{{ invite_url }}
+
+This invitation expires in 7 days. If you didn't expect this, you can safely ignore this email.
+{% endblock %}

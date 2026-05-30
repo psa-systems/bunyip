@@ -1,18 +1,13 @@
 [package]
 name = "bunyip-oci"
-description = "OCI registry vertical for Bunyip (PSA Systems). SCAFFOLD - empty, to be filled mirroring menkent-oci. Builds on bunyip-core; optionally wires the generic, storage-agnostic dunite-oci engine (feature `dunite`, off by default)."
+description = "OCI registry vertical for Bunyip (PSA Systems). Builds on bunyip-core; wires the generic, storage-agnostic dunite-oci engine to Bunyip's database + actix-web handlers/routes. (Port in progress - mirrors menkent-oci.)"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[features]
-default = []
-# Enables the generic dunite-oci registry engine + bunyip-core's dunite kernel.
-dunite = ["dep:dunite-oci", "bunyip-core/dunite"]
-
 [dependencies]
 bunyip-core = { path = "../bunyip-core" }
 # Generic read-through OCI registry engine (consumer provides store traits + HTTP wiring).
-dunite-oci = { path = "../../../dunite/crates/dunite-oci", optional = true }
+dunite-oci = { path = "../../../dunite/crates/dunite-oci" }

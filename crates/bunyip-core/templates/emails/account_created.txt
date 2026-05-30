@@ -1,0 +1,25 @@
+{% extends "base.txt" %}
+{% block content %}
+Welcome to {{ app_name }}!
+
+Thanks for creating your account! We're excited to have you on board.
+
+WHAT'S NEXT?
+
+To access our developer tools, you'll need to subscribe to one of our plans:
+
+- Personal - $3/month - Perfect for individual developers
+- Business - $15/month - For teams with priority support
+
+Your subscription price is locked for life - early adopters keep their rate forever!
+
+AVAILABLE TOOLS:
+
+- RUS - Fast URL shortening with QR codes
+- Rusty Links - Bookmark management
+- All future applications at no extra cost
+
+Get started: {{ dashboard_url }}
+
+If you have any questions, just reply to this email and we'll be happy to help.
+{% endblock %}

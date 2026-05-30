@@ -1,0 +1,11 @@
+{% extends "base.txt" %}
+{% block content %}
+Verify Your New Email Address
+-----------------------------
+
+We received a request to change your {{ app_name }} account email to this address. Click the link below to confirm the change.
+
+{{ verify_url }}
+
+This link expires in 1 hour. If you didn't request this change, you can safely ignore this email.
+{% endblock %}

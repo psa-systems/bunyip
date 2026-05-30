@@ -1,0 +1,14 @@
+{% extends "base.txt" %}
+{% block content %}
+Thanks for your feedback
+
+We reviewed your message and sent a response.
+
+Subject: {{ subject_line }}
+
+Your message:
+{{ original_message }}
+
+Our response:
+{{ response_message }}
+{% endblock %}

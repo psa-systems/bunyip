@@ -1,19 +1,74 @@
 [package]
 name = "bunyip-core"
-description = "Bunyip (PSA Systems) core domain layer: config, errors, responses, validation, middleware, models, repositories, business services. SCAFFOLD - empty, to be filled mirroring menkent-core once the dunite/menkent refactor settles. The generic dunite-core kernel is wired as an OPTIONAL dependency (feature `dunite`, off by default) so this workspace compiles independently of dunite's in-progress library refactor."
+description = "Bunyip (PSA Systems) core domain layer: config, models, repositories, business services, and domain middleware (auth, auto-ban). Builds on the generic dunite-core kernel (errors, responses, validation, request-id/security-headers middleware, encryption/password/JWT-config services), re-exported under their original module names so domain sources keep using crate::errors, crate::responses, crate::services::{jwt,password,encryption}, etc."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[features]
-default = []
-# Flip on once dunite's library-only refactor (steps 3/4: slim dunite-core to a
-# generic kernel) lands and its API is stable. See dev-docs/bunyip-on-dunite-scaffold.md.
-dunite = ["dep:dunite-core"]
-
 [dependencies]
-# Generic kernel. Path dep to the sibling dunite workspace. Optional + decoupled
-# while dunite is mid-refactor (currently still ships fat domain code).
-dunite-core = { path = "../../../dunite/crates/dunite-core", optional = true }
+# Generic kernel (errors, responses, validation, middleware, primitive services).
+dunite-core = { path = "../../../dunite/crates/dunite-core" }
+
+# Web framework + multipart.
+actix-web = "4"
+actix-cors = "0.7"
+actix-multipart = "0.7"
+futures-util = "0.3"
+
+# Serialization.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Config / logging.
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-actix-web = "0.7"
+
+# Errors.
+thiserror = "1"
+anyhow = "1"
+
+# Auth / crypto / encoding (JwtService + token hashing live here; the primitive
+# encryption/password services come from dunite-core).
+jsonwebtoken = "9"
+argon2 = "0.5"
+password-hash = "0.5"
+aes-gcm = "0.10"
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.21"
+ipnetwork = "0.20"
+hmac = "0.12"
+hex = "0.4"
+data-encoding = "2"
+
+# Templating + static init (email templates).
+tera = "1"
+lazy_static = "1.4"
+
+# HTTP client / IO.
+reqwest = { version = "0.11", features = ["json", "stream"] }
+tempfile = "3"
+url = "2"
+urlencoding = "2"
+tokio = { version = "1", features = ["full", "signal"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+bytes = "1"
+moka = { version = "0.12", features = ["future"] }
+
+# Database.
+sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "uuid", "chrono", "ipnetwork", "migrate"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+validator = { version = "0.18", features = ["derive"] }
+
+# Billing / 2FA / email.
+async-stripe = { version = "0.37", features = ["runtime-tokio-hyper", "checkout", "billing", "webhook-events"] }
+totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
+lettre = { version = "0.11", features = ["tokio1-native-tls", "builder"] }
+
+[dev-dependencies]
+actix-rt = "2"
+wiremock = "0.6"
