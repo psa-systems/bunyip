@@ -1,0 +1,19 @@
+[package]
+name = "bunyip-core"
+description = "Bunyip (PSA Systems) core domain layer: config, errors, responses, validation, middleware, models, repositories, business services. SCAFFOLD - empty, to be filled mirroring menkent-core once the dunite/menkent refactor settles. The generic dunite-core kernel is wired as an OPTIONAL dependency (feature `dunite`, off by default) so this workspace compiles independently of dunite's in-progress library refactor."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# Flip on once dunite's library-only refactor (steps 3/4: slim dunite-core to a
+# generic kernel) lands and its API is stable. See dev-docs/bunyip-on-dunite-scaffold.md.
+dunite = ["dep:dunite-core"]
+
+[dependencies]
+# Generic kernel. Path dep to the sibling dunite workspace. Optional + decoupled
+# while dunite is mid-refactor (currently still ships fat domain code).
+dunite-core = { path = "../../../dunite/crates/dunite-core", optional = true }

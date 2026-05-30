@@ -1,0 +1,18 @@
+[package]
+name = "bunyip-oidc"
+description = "OIDC / OAuth 2.1 provider vertical for Bunyip (PSA Systems) - Bunyip is the OpenID Provider; mokosh-server and other relying parties are clients. SCAFFOLD - empty, to be filled mirroring menkent-oidc. Builds on bunyip-core; optionally wires the generic dunite-oidc engine (feature `dunite`, off by default). Will hold the compile-time sqlx::query! macros (offline cache in .sqlx/)."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+dunite = ["dep:dunite-oidc", "bunyip-core/dunite"]
+
+[dependencies]
+bunyip-core = { path = "../bunyip-core" }
+# Generic OIDC / OAuth 2.1 provider engine (discovery, JWKS, authorize, token,
+# userinfo, revoke, RP-initiated logout) backed by the oauth_*/oidc_* tables.
+dunite-oidc = { path = "../../../dunite/crates/dunite-oidc", optional = true }

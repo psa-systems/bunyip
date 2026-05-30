@@ -3,6 +3,12 @@ members = [
     "bunyip-api",
     "bunyip-web",
     "crates/bunyip-mocks",
+    # SCAFFOLD for the dunite-based rebuild (empty skeletons; see
+    # dev-docs/bunyip-on-dunite-scaffold.md). bunyip-api still runs the axum
+    # mock and is unchanged until these are filled.
+    "crates/bunyip-core",
+    "crates/bunyip-oci",
+    "crates/bunyip-oidc",
 ]
 resolver = "2"
 
