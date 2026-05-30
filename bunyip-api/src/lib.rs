@@ -1,14 +1,20 @@
-//! Thin Axum backend for Bunyip's MVP.
+//! bunyip-api - backend API binary crate.
 //!
-//! - Serves the Dioxus SPA static output (in production builds).
-//! - Exposes mock JSON endpoints under `/v1/*` backed by `bunyip-mocks`.
-//! - All routes are scaffolded stubs in the MVP; the goal is to wire the
-//!   frontend against realistic shapes. Real implementations move to Mokosh
-//!   Server post-MVP (see `For AI/bunyip-feature-sso-port-notes.md`).
+//! The shared layers live in [`bunyip_core`]; the OCI and OIDC subsystems live
+//! in [`bunyip_oci`] and [`bunyip_oidc`]. This crate re-exports the core layers
+//! under their original module names so the main-app handlers and routes keep
+//! using `crate::models`, `crate::services`, `crate::errors`, etc. unchanged,
+//! and hosts the main-app `handlers` and `routes` themselves.
 
-pub mod config;
-pub mod errors;
-pub mod responses;
+pub use bunyip_core::{
+    config, errors, middleware, models, repositories, responses, services, validation,
+};
+
+pub mod handlers;
 pub mod routes;
-pub mod state;
 pub mod version;
+
+// Re-export commonly used types
+pub use config::Config;
+pub use errors::AppError;
+pub use responses::{ApiResponse, ResponseMeta};

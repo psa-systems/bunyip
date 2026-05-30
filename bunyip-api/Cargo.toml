@@ -1,6 +1,6 @@
 [package]
 name = "bunyip-api"
-description = "Thin Axum backend for Bunyip's MVP - serves the Dioxus SPA and mock JSON endpoints. Replaced by Mokosh Server post-MVP."
+description = "Backend API for Bunyip (PSA Systems)"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -11,29 +11,62 @@ repository.workspace = true
 name = "bunyip-api"
 path = "src/main.rs"
 
+# bunyip owns the domain (bunyip-core) and the verticals (bunyip-oci,
+# bunyip-oidc). The generic kernel comes from dunite-core, which bunyip-core
+# pulls from the dunite framework repo on Forgejo.
 [dependencies]
-bunyip-mocks = { path = "../crates/bunyip-mocks" }
+bunyip-core = { path = "../crates/bunyip-core" }
+bunyip-oci = { path = "../crates/bunyip-oci" }
+bunyip-oidc = { path = "../crates/bunyip-oidc" }
 
-axum = { version = "0.8", features = ["macros"] }
-tower = { version = "0.5", features = ["full"] }
-tower-http = { version = "0.6", features = ["cors", "trace", "fs", "compression-gzip"] }
-tower-cookies = { version = "0.11", features = ["signed"] }
+# Web framework.
+actix-web = "4"
+actix-cors = "0.7"
+actix-rt = "2"
+actix-multipart = "0.7"
+futures-util = "0.3"
 
-tokio.workspace = true
-parking_lot.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-uuid.workspace = true
-chrono.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-thiserror.workspace = true
-anyhow.workspace = true
-rand.workspace = true
-validator.workspace = true
+# Serialization.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
+# Config / logging.
 dotenvy = "0.15"
+tracing = "0.1"
+tracing-actix-web = "0.7"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-# Update-check polling. rustls (not native-tls) so the static musl
-# Alpine build needs no OpenSSL at runtime.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# Errors.
+thiserror = "1"
+anyhow = "1"
+
+# Auth / crypto / encoding.
+jsonwebtoken = "9"
+base64 = "0.21"
+bytes = "1"
+ipnetwork = "0.20"
+
+# HTTP client / IO. rustls (not native-tls) so the static musl Alpine build
+# needs no OpenSSL at runtime.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+tempfile = "3"
+url = "2"
+urlencoding = "2"
+tokio = { version = "1", features = ["full", "signal"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+
+# Update-check polling cache.
+parking_lot = "0.12"
+
+# Database.
+sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "uuid", "chrono", "ipnetwork", "migrate"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+validator = { version = "0.18", features = ["derive"] }
+
+# Billing.
+async-stripe = { version = "0.37", features = ["runtime-tokio-hyper", "checkout", "billing", "webhook-events"] }
+
+[dev-dependencies]
+actix-rt = "2"
+wiremock = "0.6"
