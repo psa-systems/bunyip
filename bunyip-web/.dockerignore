@@ -1,0 +1,6 @@
+target
+dist
+node_modules
+.git
+.env
+assets/styles.css

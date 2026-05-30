@@ -1,57 +1,94 @@
-use dioxus::prelude::*;
-
 mod api;
-mod components;
-mod modules;
-mod pages;
-mod routes;
-mod stores;
+mod auth;
+mod config;
+mod handlers;
+mod util;
+mod views;
+mod web;
 
-use components::feedback::FeedbackLauncher;
-use components::toast::ToastViewport;
-use routes::Route;
-use stores::auth::{use_auth_provider, use_bfcache_invalidator};
-use stores::config::OidcConfig;
-use stores::toast::use_toast_provider;
+use std::sync::Arc;
 
-const STYLES_CSS: Asset = asset!("/assets/styles.css");
+use axum::routing::get;
+use axum::Router;
+use tower_http::compression::CompressionLayer;
+use tower_http::services::ServeDir;
 
-fn main() {
-    // The OIDC code-flow callback arrives at `/auth/callback?code=...
-    // &state=...`. Dioxus's router calls `history.replaceState()` on
-    // mount and would erase the query string before `AuthCallbackPage`
-    // can read it. Snapshot once here so the page can still find the
-    // values when it runs.
-    modules::oidc::snapshot_initial_search();
-    dioxus::launch(App);
-}
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info".into()),
+        )
+        .init();
 
-#[component]
-fn App() -> Element {
-    // Fetch the same-origin `/config.json` once before any auth-dependent
-    // UI mounts. `OidcConfig::from_env()` is synchronous and read all over
-    // the tree, so the real app (providers + Router) only mounts once the
-    // config is loaded. The static `index.html` splash stays visible until
-    // then because `#main` has no children while this resource is pending.
-    let config = use_resource(|| async { OidcConfig::load().await });
+    let cfg = config::Config::from_env();
+    let api = api::Api::new(&cfg.api_url);
+    let bind_addr = cfg.bind_addr.clone();
+    let state = web::AppState { api, cfg: Arc::new(cfg) };
 
-    rsx! {
-        document::Stylesheet { href: STYLES_CSS }
-        if config.read().is_some() {
-            AppShell {}
-        }
-    }
-}
+    use handlers::{auth_pages as ap, content, dashboard as dash, public};
 
-#[component]
-fn AppShell() -> Element {
-    use_toast_provider();
-    use_auth_provider();
-    use_bfcache_invalidator();
+    let app = Router::new()
+        // Public / marketing
+        .route("/", get(public::landing))
+        .route("/pricing", get(content::pricing))
+        .route("/our-story", get(content::our_story))
+        .route("/terms", get(content::terms))
+        .route("/privacy", get(content::privacy))
+        .route("/feedback", get(content::feedback_get).post(content::feedback_post))
+        // Auth
+        .route("/login", get(ap::login_get).post(ap::login_post))
+        .route("/login/2fa", get(ap::twofa_verify_get).post(ap::twofa_verify_post))
+        .route("/logout", get(ap::logout))
+        .route("/register", get(ap::register_get).post(ap::register_post))
+        .route("/magic-link", get(ap::magic_link_get).post(ap::magic_link_post))
+        .route("/password-reset", get(ap::password_reset_get).post(ap::password_reset_post))
+        .route("/password-reset/confirm", get(ap::password_reset_confirm_get).post(ap::password_reset_confirm_post))
+        .route("/invite/accept", get(ap::invite_accept_get).post(ap::invite_accept_post))
+        .route("/setup", get(ap::setup_get).post(ap::setup_post))
+        .route("/settings/confirm-email", get(ap::confirm_email))
+        .route("/settings/verify-email", get(ap::verify_email))
+        // Dashboard
+        .route("/dashboard", get(dash::dashboard))
+        .route("/applications", get(dash::applications))
+        .route("/downloads", get(dash::downloads))
+        .route("/billing", get(dash::billing))
+        .route("/checkout/success", get(dash::checkout_success))
+        .route("/membership-required", get(dash::membership_required))
+        .route("/membership", get(dash::membership))
+        .route("/membership/subscribe", axum::routing::post(dash::membership_subscribe))
+        .route("/membership/cancel", axum::routing::post(dash::membership_cancel))
+        .route("/membership/cancel-now", axum::routing::post(dash::membership_cancel_now))
+        .route("/membership/reactivate", axum::routing::post(dash::membership_reactivate))
+        .route("/settings", get(dash::settings))
+        .route("/settings/email", axum::routing::post(dash::settings_email))
+        .route("/settings/password", axum::routing::post(dash::settings_password))
+        .route("/settings/2fa/disable", axum::routing::post(dash::settings_disable_2fa))
+        .route("/settings/account/delete", axum::routing::post(dash::settings_delete))
+        .route("/settings/2fa/setup", get(dash::twofa_setup_get).post(dash::twofa_setup_post))
+        // Admin
+        .route("/admin", get(handlers::admin::dashboard))
+        .route("/admin/audit-logs", get(handlers::admin::audit_logs))
+        .route("/admin/users", get(handlers::admin::users))
+        .route("/admin/users/{id}/role", axum::routing::post(handlers::admin::user_role))
+        .route("/admin/users/{id}/delete", axum::routing::post(handlers::admin::user_delete))
+        .route("/admin/memberships", get(handlers::admin::memberships))
+        .route("/admin/feedback", get(handlers::admin::feedback))
+        .route("/admin/feedback/{id}/status", axum::routing::post(handlers::admin::feedback_status))
+        .route("/admin/applications", get(handlers::admin::applications))
+        .route("/admin/applications/{id}/field", axum::routing::post(handlers::admin::application_field))
+        .route("/admin/tier-settings", get(handlers::admin::tier_settings).post(handlers::admin::tier_settings_save))
+        .route("/admin/stripe", get(handlers::admin::stripe).post(handlers::admin::stripe_save))
+        // Static + fallback
+        .nest_service("/assets", ServeDir::new("assets"))
+        .fallback(public::not_found)
+        .layer(CompressionLayer::new())
+        .with_state(state);
 
-    rsx! {
-        Router::<Route> {}
-        FeedbackLauncher {}
-        ToastViewport {}
-    }
+    let listener = tokio::net::TcpListener::bind(&bind_addr)
+        .await
+        .expect("bind");
+    tracing::info!("bunyip-web listening on {bind_addr}");
+    axum::serve(listener, app).await.expect("serve");
 }

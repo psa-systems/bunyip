@@ -1,102 +1,51 @@
-# Bunyip Web - production OCI image (Dioxus WASM bundle served by Caddy)
+# syntax=docker/dockerfile:1.6
 #
-# Build context is the repo root. Compose / CI invocation:
-#   docker buildx build --tag bunyip-web:local --file bunyip-web/oci-build/Dockerfile .
+# Production image for bunyip-web: build the release binary + minified CSS, then
+# run the Axum SSR server. This ships a running process (not static files), so
+# there is no Caddy/entrypoint - the server serves its own pages and the
+# /assets/ directory, and reads config from env.
+#
+# BUILD CONTEXT: the bunyip repo root. Unlike menkent's web crate, bunyip-web
+# inherits `[workspace.package]` + workspace dependencies from the root
+# Cargo.toml, so it is built as part of the workspace. The build uses the glibc
+# builder image because bun + tailwind are needed for the CSS step. Build it:
+#
+#   docker build -f bunyip-web/oci-build/Dockerfile -t bunyip-web:latest .
 
-# Build stage (trixie for glibc 2.41, required by pre-built dioxus-cli binary)
-FROM rust:1-slim-trixie AS builder
+# ---- Stage 1: build ---------------------------------------------------------
+# bun + cargo ship in the builder image; nothing to install.
+FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.0-rust1.94-trixie AS build
 
-WORKDIR /build
+# nproc/2 concurrency cap (per governance CI.md).
+ARG CARGO_BUILD_JOBS=2
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
-RUN apt-get update && apt-get install --yes --no-install-recommends \
-        curl pkg-config libssl-dev unzip ca-certificates \
+WORKDIR /app
+
+# Cache JS deps (tailwindcss). bunyip-web/package.json declares the tailwind CLI.
+COPY bunyip-web/package.json /app/bunyip-web/package.json
+RUN cd bunyip-web && bun install
+
+# Copy the whole workspace and build only the web binary + its CSS.
+COPY . /app
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cd bunyip-web && bun run build:css \
+    && cd /app && cargo build --locked --release --bin bunyip-web
+
+# ---- Stage 2: run -----------------------------------------------------------
+FROM debian:trixie-slim
+
+# ca-certificates so reqwest (rustls) can validate the API's TLS cert.
+RUN apt-get update && apt-get install --yes --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Bun (Tailwind v4 CSS build)
-RUN curl --location --silent --show-error --fail https://bun.sh/install \
-    | env BUN_INSTALL=/usr/local bash
+WORKDIR /app
+COPY --from=build /app/target/release/bunyip-web /app/bunyip-web
+COPY --from=build /app/bunyip-web/assets /app/assets
 
-# Install cargo-binstall, then use it to fetch the pre-built dioxus-cli.
-# TARGETARCH is provided automatically by buildx; map it to the binstall
-# release naming so the image builds for both amd64 and arm64.
-ARG TARGETARCH
-RUN set -eux; \
-    case "${TARGETARCH}" in \
-      amd64) binstall_arch=x86_64 ;; \
-      arm64) binstall_arch=aarch64 ;; \
-      *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
-    esac; \
-    curl --location --silent --show-error \
-      "https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-${binstall_arch}-unknown-linux-gnu.tgz" \
-      | tar --extract --gzip --directory /usr/local/cargo/bin
-RUN cargo binstall dioxus-cli --no-confirm
+ENV BUNYIP_BIND_ADDR=0.0.0.0:4400
+EXPOSE 4400
 
-# Install WASM target for client build
-RUN rustup target add wasm32-unknown-unknown
-
-# --- Dependency caching (no source) ---
-# Copy every workspace manifest so cargo can resolve the workspace.
-COPY Cargo.toml Cargo.lock* ./
-COPY bunyip-api/Cargo.toml ./bunyip-api/
-COPY bunyip-web/Cargo.toml ./bunyip-web/
-COPY crates/bunyip-mocks/Cargo.toml ./crates/bunyip-mocks/
-
-RUN mkdir -p bunyip-api/src bunyip-web/src crates/bunyip-mocks/src \
-    && echo 'fn main() {}' > bunyip-api/src/main.rs \
-    && echo '' > bunyip-api/src/lib.rs \
-    && echo 'fn main() {}' > bunyip-web/src/main.rs \
-    && echo '' > crates/bunyip-mocks/src/lib.rs \
-    && cargo build --release --target wasm32-unknown-unknown --package bunyip-web 2>/dev/null || true \
-    && rm -rf bunyip-api/src bunyip-web/src crates/bunyip-mocks/src
-
-# --- Tailwind / Bun deps ---
-COPY bunyip-web/package.json bunyip-web/bun.lock* ./bunyip-web/
-RUN cd bunyip-web && bun install --frozen-lockfile
-
-# --- Full source ---
-COPY . .
-
-RUN cd bunyip-web && bun run build:css
-
-# Build the WASM bundle + static assets.
-RUN cd bunyip-web && dx build --release
-
-# Export stage - lets `docker buildx build --target export --output
-# type=local,dest=<dir>` extract just the static web bundle for the
-# release-artifact tarball. Kept above the runtime stage so the runtime
-# remains the default (last) stage and existing image builds are
-# unchanged.
-FROM scratch AS export
-COPY --from=builder /build/target/dx/bunyip-web/release/web/public /web
-
-# Runtime stage - serve static assets via Caddy
-FROM alpine:3.21
-
-# jq generates /config.json from env at startup (see entrypoint.sh).
-RUN apk add --no-cache jq
-
-# Copy Caddy from the official image.
-COPY --from=caddy:alpine /usr/bin/caddy /usr/bin/caddy
-
-# Copy static bundle. Adjust the source path if Dioxus changes its output layout.
-COPY --from=builder /build/target/dx/bunyip-web/release/web/public /usr/share/caddy
-
-COPY bunyip-web/oci-build/Caddyfile /etc/caddy/Caddyfile
-COPY bunyip-web/oci-build/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-RUN adduser --disabled-password --uid 1001 appuser \
-    && chown --recursive appuser:appuser /usr/share/caddy
-USER appuser
-
-ENV PORT=8080
-EXPOSE 8080
-
-ARG GIT_SHA=""
-LABEL org.opencontainers.image.source=https://dev.a8n.run/psa-systems/bunyip
-LABEL org.opencontainers.image.description="Bunyip Dioxus client"
-LABEL org.opencontainers.image.revision="${GIT_SHA}"
-
-# entrypoint.sh writes /usr/share/caddy/config.json from BUNYIP_OIDC_* env,
-# then execs caddy. appuser owns /usr/share/caddy so the write succeeds.
-CMD ["/entrypoint.sh"]
+# WORKDIR is /app so the server's ServeDir("assets") resolves to /app/assets.
+CMD ["/app/bunyip-web"]

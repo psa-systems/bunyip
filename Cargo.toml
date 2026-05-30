@@ -4,7 +4,7 @@ members = [
     "bunyip-web",
     # Domain layer + verticals built on the generic dunite crates
     # (https://dev.a8n.run/psa-systems/dunite). See dev-docs/bunyip-on-dunite-scaffold.md.
-    "crates/bunyip-core",
+    "crates/bunyip-domain",
     "crates/bunyip-oci",
     "crates/bunyip-oidc",
 ]
@@ -13,7 +13,7 @@ resolver = "2"
 [workspace.package]
 version = "0.1.1"
 edition = "2021"
-authors = ["Bunyip Team"]
+authors = ["PSA Systems"]
 license = "Proprietary"
 repository = "https://dev.a8n.run/psa-systems/bunyip"
 

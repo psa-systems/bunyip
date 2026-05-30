@@ -1,92 +1,116 @@
-# Bunyip - production / self-host reference deployment.
+---
+# Bunyip (PSA Systems) - production / self-host reference deployment.
 #
-# Runs the published OCI images (no build-from-source). For local dev use
-# compose.dev.yml instead; this file is what an operator or self-hosting
-# MSP deploys.
+# Runs the published OCI images (no build-from-source) plus PostgreSQL. For
+# local development use compose.dev.yml instead (via `just dev`); this file is
+# what an operator or self-hosting MSP deploys.
 #
 # Quick start:
-#   1. cp .env.example .env  and fill in the BUNYIP_HOST / COOKIE_SECRET /
-#      CADDY_ACME_EMAIL values (see the "Self-host" section in README.md).
-#   2. docker compose up --detach
-#
-# Both ${BUNYIP_HOST} and msp-api.${BUNYIP_HOST} must point at this host so
-# the SPA can reach the API at the runtime-derived `msp-api.<host>` origin
-# and Caddy can issue TLS certs.
+#   1. cp .env.example .env  and fill in the production values (POSTGRES_PASSWORD,
+#      JWT_SECRET, the OIDC keys under ./secrets, BUNYIP_API_URL, etc.).
+#   2. docker login dev.a8n.run   (the images live in the private registry).
+#   3. docker compose up --detach
 #
 # Applying an update is a deliberate operator action:
 #   docker compose pull && docker compose up --detach
-# The running instance reports whether a newer release exists at
-#   https://msp-api.${BUNYIP_HOST}/version
-
+#
+# Resource naming follows the governance convention: bunyip-{service} for
+# containers/volumes/network (no dev- prefix in production).
 name: bunyip
 
 services:
+
+  # PostgreSQL database. The api runs migrations against it on startup.
+  postgres:
+    image: postgres:16-alpine
+    container_name: bunyip-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bunyip}
+      # Set a strong value in .env for any real deployment.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-bunyip}
+    expose:
+      - "5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username ${POSTGRES_USER:-bunyip} --dbname ${POSTGRES_DB:-bunyip}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - private
+
+  # actix-web backend (bunyip-api). Published musl-static image; binds on
+  # HOST_IP:APP_PORT inside the container and IS the OIDC issuer (Ed25519 keys
+  # mounted from ./secrets).
   api:
     image: ${BUNYIP_API_IMAGE:-dev.a8n.run/psa-systems-private/bunyip-api:latest}
     container_name: bunyip-api
     restart: unless-stopped
     environment:
-      BUNYIP_API_BIND: 0.0.0.0:8080
-      BUNYIP_PUBLIC_BASE_URL: https://${BUNYIP_HOST:?BUNYIP_HOST missing - see README Self-host section}
-      COOKIE_SECRET: ${COOKIE_SECRET:?COOKIE_SECRET missing - generate 64+ random chars}
-      BUNYIP_SEEDS_DIR: /app/seeds
-      FEEDBACK_FORGEJO_REPO: ${FEEDBACK_FORGEJO_REPO:-}
-      # Update checking: poll the Forgejo releases/latest endpoint. Leave
-      # BUNYIP_UPDATE_CHECK_URL empty to disable.
-      BUNYIP_UPDATE_CHECK_URL: ${BUNYIP_UPDATE_CHECK_URL:-https://dev.a8n.run/api/v1/repos/psa-systems/bunyip/releases/latest}
-      BUNYIP_UPDATE_CHECK_TOKEN: ${BUNYIP_UPDATE_CHECK_TOKEN:-}
+      SQLX_OFFLINE: "true"
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-bunyip}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-bunyip}}
+      HOST_IP: 0.0.0.0
+      APP_PORT: "4401"
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      APP_NAME: ${APP_NAME:-PSA Systems}
+      # Set to the public bunyip-web origin for any real deployment.
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4400}
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
       RUST_LOG: ${RUST_LOG:-info}
+      # Generate 32+ random chars for any real deployment.
+      JWT_SECRET: ${JWT_SECRET:-changeme-set-a-real-32char-jwt-secret-000000}
+      TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:-}
+      STRIPE_ENCRYPTION_KEY: ${STRIPE_ENCRYPTION_KEY:-}
+      SETUP_DEFAULT_ADMIN: ${SETUP_DEFAULT_ADMIN:-}
+      EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_JWT_PRIVATE_KEY_PATH: /run/secrets/oidc/dev-2026.pem
+      OIDC_JWT_ACTIVE_KID: ${OIDC_JWT_ACTIVE_KID:-dev-2026}
+      OIDC_JWT_PUBLIC_KEYS_DIR: /run/secrets/oidc
+    expose:
+      - "4401"
+    ports:
+      - "${HOST_IP:-127.0.0.1}:${BUNYIP_API_PORT:-4401}:4401"
+    volumes:
+      - ./secrets:/run/secrets/oidc:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
-      private:
+      - private
 
+  # Axum SSR frontend (bunyip-web). Published image; reaches the api over the
+  # internal network and serves the browser-facing pages + /assets.
   web:
     image: ${BUNYIP_WEB_IMAGE:-dev.a8n.run/psa-systems-private/bunyip-web:latest}
     container_name: bunyip-web
     restart: unless-stopped
     environment:
-      PORT: 8080
-      # OIDC client config, written to a same-origin /config.json at startup
-      # (entrypoint.sh) and fetched by the SPA at boot. issuer + redirect_uri
-      # are optional: when empty the SPA derives them from the host
-      # (msp-api.${BUNYIP_HOST} for the issuer). Set BUNYIP_OIDC_CLIENT_ID to
-      # the UUID registered in mokosh-server. Change a value + restart the
-      # container to reconfigure with no rebuild.
+      BUNYIP_BIND_ADDR: 0.0.0.0:4400
+      BUNYIP_API_URL: ${BUNYIP_API_URL:-http://api:4401}
       BUNYIP_OIDC_ISSUER: ${BUNYIP_OIDC_ISSUER:-}
-      BUNYIP_OIDC_CLIENT_ID: ${BUNYIP_OIDC_CLIENT_ID:-}
-      BUNYIP_OIDC_REDIRECT_URI: ${BUNYIP_OIDC_REDIRECT_URI:-}
-      BUNYIP_OIDC_SCOPES: ${BUNYIP_OIDC_SCOPES:-openid email offline_access}
-    depends_on:
-      api:
-        condition: service_healthy
-    networks:
-      private:
-
-  edge:
-    image: caddy:alpine
-    container_name: bunyip-edge
-    restart: unless-stopped
-    environment:
-      BUNYIP_HOST: ${BUNYIP_HOST:?BUNYIP_HOST missing - see README Self-host section}
-      CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:?CADDY_ACME_EMAIL missing - email for Let's Encrypt}
+      BUNYIP_APP_DOMAIN: ${BUNYIP_APP_DOMAIN:-}
+      BUNYIP_SHOW_BUSINESS_PRICING: ${BUNYIP_SHOW_BUSINESS_PRICING:-false}
+      RUST_LOG: ${RUST_LOG:-info}
+    expose:
+      - "4400"
     ports:
-      - "${BUNYIP_HTTP_PORT:-80}:80"
-      - "${BUNYIP_HTTPS_PORT:-443}:443"
-    volumes:
-      - ./oci-build/Caddyfile:/etc/caddy/Caddyfile:ro
-      - edge-data:/data
-      - edge-config:/config
+      - "${HOST_IP:-127.0.0.1}:${BUNYIP_WEB_PORT:-4400}:4400"
     depends_on:
-      - web
       - api
     networks:
-      private:
+      - private
+
 
 volumes:
-  edge-data:
-    name: bunyip-edge-data
-  edge-config:
-    name: bunyip-edge-config
+  postgres-data:
+    name: bunyip-postgres-data
 
 networks:
   private:
     name: bunyip-private
+    driver: bridge

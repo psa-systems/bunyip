@@ -1,141 +1,246 @@
-//! Auth requests against mokosh-server.
-//!
-//! `password_login` is the single most-used entry point; it lives in
-//! `crate::modules::oidc::flow` because it produces a `Tokens` bundle
-//! that the AuthContext consumes. The helpers in THIS file are the
-//! thinner POST-and-go shapes: signup, password-reset start, signup
-//! complete via token. They all return `()` (or echo a small response
-//! struct).
+//! Typed auth/account calls. Endpoints that establish or clear a session return
+//! the captured `Set-Cookie` strings (`Vec<String>`) so the handler can relay
+//! them to the browser.
 
-use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
-use super::{post_json, post_json_empty, ApiError};
+use super::types::{
+    AuthResponse, RecoveryCodesResponse, SetupStatus, TwoFactorSetupResponse,
+    TwoFactorStatusResponse, User,
+};
+use super::{ok_data, parse, Api, ApiError};
 
-#[derive(Debug, Serialize)]
-pub struct SignupStartRequest {
-    pub email: String,
+pub enum LoginOutcome {
+    SignedIn(User),
+    TwoFactorRequired { challenge_token: String },
 }
 
-/// POST `/v1/auth/signup`. Always 200; the response copy is
-/// enumeration-resistant (same regardless of whether the email is
-/// already in use). The bunyip SPA shows "We've sent a confirmation
-/// link if that email is registerable."
-pub async fn signup_start(email: String) -> Result<(), ApiError> {
-    post_json_empty("/v1/auth/signup", &SignupStartRequest { email }).await
+fn parse_login(value: Value) -> Result<LoginOutcome, ApiError> {
+    if value.get("requires_2fa").and_then(|v| v.as_bool()).unwrap_or(false) {
+        let challenge_token = value
+            .get("challenge_token")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        return Ok(LoginOutcome::TwoFactorRequired { challenge_token });
+    }
+    let auth: AuthResponse = serde_json::from_value(value).map_err(|e| ApiError {
+        status: 0,
+        code: "DECODE_ERROR".into(),
+        message: e.to_string(),
+    })?;
+    Ok(LoginOutcome::SignedIn(auth.user))
 }
 
-#[derive(Debug, Deserialize)]
-pub struct SignupTokenPreview {
-    pub email: String,
+// --- session / boot ---------------------------------------------------------
+
+pub async fn setup_status(api: &Api) -> Result<SetupStatus, ApiError> {
+    parse(api.get("/auth/setup/status", None).await?)
 }
 
-/// GET `/v1/auth/signup/by-token/{token}` - preview the token. 404
-/// when the token is unknown / expired / used.
-pub async fn signup_preview(token: &str) -> Result<SignupTokenPreview, ApiError> {
-    super::get_json(&format!("/v1/auth/signup/by-token/{token}")).await
+pub async fn me(api: &Api, cookie: Option<&str>) -> Result<User, ApiError> {
+    parse(api.get("/users/me", cookie).await?)
 }
 
-#[derive(Debug, Serialize)]
-pub struct SignupCompleteRequest {
-    pub password: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub first_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_name: Option<String>,
+/// Returns the rotated `Set-Cookie`s on success.
+pub async fn refresh(api: &Api, cookie: Option<&str>) -> Result<Vec<String>, ApiError> {
+    let r = api.post("/auth/refresh", cookie, None).await?;
+    if r.ok() {
+        Ok(r.set_cookies)
+    } else {
+        Err(super::error_from(&r))
+    }
 }
 
-/// POST `/v1/auth/signup/by-token/{token}/complete`. Creates the user
-/// + the personal tenant + the owner membership in one SERIALIZABLE
-/// tx; future logins go through `password_login` like anyone else.
-pub async fn signup_complete(
+pub async fn logout(api: &Api, cookie: Option<&str>) -> Result<Vec<String>, ApiError> {
+    let r = api.post("/auth/logout", cookie, None).await?;
+    Ok(r.set_cookies)
+}
+
+// --- login / passwordless ---------------------------------------------------
+
+pub async fn login(
+    api: &Api,
+    cookie: Option<&str>,
+    email: &str,
+    password: &str,
+    remember: bool,
+) -> Result<(LoginOutcome, Vec<String>), ApiError> {
+    let r = api
+        .post("/auth/login", cookie, Some(json!({ "email": email, "password": password, "remember": remember })))
+        .await?;
+    let cookies = r.set_cookies.clone();
+    let data = ok_data(&r)?.clone();
+    Ok((parse_login(data)?, cookies))
+}
+
+pub async fn verify_2fa(
+    api: &Api,
+    cookie: Option<&str>,
+    challenge_token: &str,
+    code: &str,
+) -> Result<(User, Vec<String>), ApiError> {
+    let r = api
+        .post("/auth/2fa/verify", cookie, Some(json!({ "challenge_token": challenge_token, "code": code })))
+        .await?;
+    let cookies = r.set_cookies.clone();
+    let data = ok_data(&r)?.clone();
+    let auth: AuthResponse = serde_json::from_value(data).map_err(|e| ApiError {
+        status: 0,
+        code: "DECODE_ERROR".into(),
+        message: e.to_string(),
+    })?;
+    Ok((auth.user, cookies))
+}
+
+pub async fn request_magic_link(api: &Api, email: &str) -> Result<(), ApiError> {
+    let r = api.post("/auth/magic-link", None, Some(json!({ "email": email }))).await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn verify_magic_link(
+    api: &Api,
     token: &str,
-    req: &SignupCompleteRequest,
-) -> Result<serde_json::Value, ApiError> {
-    post_json(&format!("/v1/auth/signup/by-token/{token}/complete"), req).await
+) -> Result<(LoginOutcome, Vec<String>), ApiError> {
+    let r = api.post("/auth/magic-link/verify", None, Some(json!({ "token": token }))).await?;
+    let cookies = r.set_cookies.clone();
+    let data = ok_data(&r)?.clone();
+    Ok((parse_login(data)?, cookies))
 }
 
-#[derive(Debug, Serialize)]
-struct ForgotPasswordRequest {
-    email: String,
+pub async fn request_password_reset(api: &Api, email: &str) -> Result<(), ApiError> {
+    let r = api.post("/auth/password-reset", None, Some(json!({ "email": email }))).await?;
+    ok_data(&r).map(|_| ())
 }
 
-/// POST `/v1/auth/password-reset`. Enumeration-resistant; always 200.
-pub async fn forgot_password(email: String) -> Result<(), ApiError> {
-    post_json_empty("/v1/auth/password-reset", &ForgotPasswordRequest { email }).await
+pub async fn confirm_password_reset(api: &Api, token: &str, new_password: &str) -> Result<(), ApiError> {
+    let r = api
+        .post("/auth/password-reset/confirm", None, Some(json!({ "token": token, "new_password": new_password })))
+        .await?;
+    ok_data(&r).map(|_| ())
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ResetPreview {
-    pub email: String,
+// --- registration / setup / invite -----------------------------------------
+
+pub async fn register(
+    api: &Api,
+    email: &str,
+    password: &str,
+) -> Result<(User, Vec<String>), ApiError> {
+    let r = api.post("/auth/register", None, Some(json!({ "email": email, "password": password }))).await?;
+    let cookies = r.set_cookies.clone();
+    let auth: AuthResponse = parse(r)?;
+    Ok((auth.user, cookies))
 }
 
-/// GET `/v1/auth/password-reset/by-token/{token}`. 404 when bad.
-pub async fn reset_preview(token: &str) -> Result<ResetPreview, ApiError> {
-    super::get_json(&format!("/v1/auth/password-reset/by-token/{token}")).await
+pub async fn setup(api: &Api, email: &str, password: &str) -> Result<(User, Vec<String>), ApiError> {
+    let r = api.post("/auth/setup", None, Some(json!({ "email": email, "password": password }))).await?;
+    let cookies = r.set_cookies.clone();
+    let auth: AuthResponse = parse(r)?;
+    Ok((auth.user, cookies))
 }
 
-#[derive(Debug, Serialize)]
-pub struct ResetCompleteRequest {
-    pub password: String,
-    pub password_confirmation: String,
-}
-
-/// POST `/v1/auth/password-reset/by-token/{token}/complete`. Boots
-/// every active session for the user on success.
-pub async fn reset_complete(
+/// Returns `(maybe needs-password email, user, cookies)`. `Ok((Some(email), None, _))`
+/// means the invite needs a password; `Ok((None, Some(user), cookies))` is a full sign-in.
+pub async fn accept_invite(
+    api: &Api,
     token: &str,
-    req: &ResetCompleteRequest,
-) -> Result<serde_json::Value, ApiError> {
-    post_json(
-        &format!("/v1/auth/password-reset/by-token/{token}/complete"),
-        req,
-    )
-    .await
+    password: Option<&str>,
+) -> Result<(Option<String>, Option<User>, Vec<String>), ApiError> {
+    let body = match password {
+        Some(p) => json!({ "token": token, "password": p }),
+        None => json!({ "token": token }),
+    };
+    let r = api.post("/auth/invite/accept", None, Some(body)).await?;
+    let cookies = r.set_cookies.clone();
+    let data = ok_data(&r)?.clone();
+    if data.get("needs_password").and_then(|b| b.as_bool()).unwrap_or(false) {
+        let email = data.get("email").and_then(|e| e.as_str()).unwrap_or_default().to_string();
+        return Ok((Some(email), None, cookies));
+    }
+    let auth: AuthResponse = serde_json::from_value(data).map_err(|e| ApiError {
+        status: 0,
+        code: "DECODE_ERROR".into(),
+        message: e.to_string(),
+    })?;
+    Ok((None, Some(auth.user), cookies))
 }
 
-// --- Admin-invite accept (the link in invitation emails) -----------------
+// --- account / email / password --------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct InvitePreview {
-    /// `new_account` (collect password + name) or `join_tenant` (no password).
-    pub kind: String,
-    pub email: String,
-    pub role: String,
-    pub tenant_name: String,
-    pub invited_by_name: String,
-    pub invited_by_email: String,
-    #[serde(default)]
-    pub note: Option<String>,
+pub async fn change_password(api: &Api, cookie: Option<&str>, current: &str, new: &str) -> Result<(), ApiError> {
+    let r = api
+        .put("/users/me/password", cookie, Some(json!({ "current_password": current, "new_password": new })))
+        .await?;
+    ok_data(&r).map(|_| ())
 }
 
-/// GET `/v1/auth/invites/by-token/{token}` - preview the admin invite.
-pub async fn invite_preview(token: &str) -> Result<InvitePreview, ApiError> {
-    super::get_json(&format!("/v1/auth/invites/by-token/{token}")).await
+/// Returns whether the API says re-login is required, plus any cleared cookies.
+pub async fn request_email_change(
+    api: &Api,
+    cookie: Option<&str>,
+    new_email: &str,
+    current_password: &str,
+) -> Result<(bool, Vec<String>), ApiError> {
+    let body = if current_password.is_empty() {
+        json!({ "new_email": new_email })
+    } else {
+        json!({ "new_email": new_email, "current_password": current_password })
+    };
+    let r = api.post("/users/me/email", cookie, Some(body)).await?;
+    let cookies = r.set_cookies.clone();
+    let data = ok_data(&r)?;
+    let relogin = data.get("requires_relogin").and_then(|b| b.as_bool()).unwrap_or(false);
+    Ok((relogin, cookies))
 }
 
-#[derive(Debug, Serialize, Default)]
-pub struct InviteAcceptRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub password: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub first_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_name: Option<String>,
+pub async fn confirm_email_change(api: &Api, token: &str) -> Result<(), ApiError> {
+    let r = api.post("/users/me/email/confirm", None, Some(json!({ "token": token }))).await?;
+    ok_data(&r).map(|_| ())
 }
 
-/// POST `/v1/auth/invites/by-token/{token}/accept`. Creates the user in
-/// the `new_account` path; inserts a membership in the `join_tenant`
-/// path. Either way the row is consumed under SERIALIZABLE.
-pub async fn invite_accept(
-    token: &str,
-    req: &InviteAcceptRequest,
-) -> Result<serde_json::Value, ApiError> {
-    post_json(&format!("/v1/auth/invites/by-token/{token}/accept"), req).await
+/// Returns the granted subscription tier string.
+pub async fn confirm_email_verification(api: &Api, token: &str) -> Result<String, ApiError> {
+    let r = api.post("/users/me/email/verify/confirm", None, Some(json!({ "token": token }))).await?;
+    let data = ok_data(&r)?;
+    Ok(data.get("subscription_tier").and_then(|t| t.as_str()).unwrap_or_default().to_string())
 }
 
-/// POST `/v1/auth/logout` (best-effort). The cookie-based session
-/// revoke does nothing on cross-origin fetches without credentials,
-/// but the endpoint still cleans up internal bookkeeping when reachable.
-pub async fn logout() -> Result<(), ApiError> {
-    super::post_authed_empty("/v1/auth/logout", &serde_json::json!({})).await
+pub async fn request_email_verification(api: &Api, cookie: Option<&str>) -> Result<(), ApiError> {
+    let r = api.post("/users/me/email/verify", cookie, None).await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn delete_account(api: &Api, cookie: Option<&str>, password: &str, totp: Option<&str>) -> Result<Vec<String>, ApiError> {
+    let body = match totp {
+        Some(c) => json!({ "password": password, "totp_code": c }),
+        None => json!({ "password": password }),
+    };
+    let r = api.delete("/users/me", cookie, Some(body)).await?;
+    let cookies = r.set_cookies.clone();
+    ok_data(&r)?;
+    Ok(cookies)
+}
+
+// --- 2FA management ---------------------------------------------------------
+
+pub async fn setup_2fa(api: &Api, cookie: Option<&str>) -> Result<TwoFactorSetupResponse, ApiError> {
+    parse(api.post("/auth/2fa/setup", cookie, None).await?)
+}
+
+pub async fn confirm_2fa(api: &Api, cookie: Option<&str>, code: &str) -> Result<RecoveryCodesResponse, ApiError> {
+    parse(api.post("/auth/2fa/confirm", cookie, Some(json!({ "code": code }))).await?)
+}
+
+pub async fn status_2fa(api: &Api, cookie: Option<&str>) -> Result<TwoFactorStatusResponse, ApiError> {
+    parse(api.get("/auth/2fa/status", cookie).await?)
+}
+
+pub async fn disable_2fa(api: &Api, cookie: Option<&str>, password: &str) -> Result<(), ApiError> {
+    let r = api.post("/auth/2fa/disable", cookie, Some(json!({ "password": password }))).await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn regenerate_recovery_codes(api: &Api, cookie: Option<&str>, password: &str) -> Result<RecoveryCodesResponse, ApiError> {
+    parse(api.post("/auth/2fa/recovery-codes", cookie, Some(json!({ "password": password }))).await?)
 }

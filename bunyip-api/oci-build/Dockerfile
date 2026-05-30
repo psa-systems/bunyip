@@ -1,67 +1,128 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.6
 #
-# Bunyip API - production OCI image (actix-web backend on the dunite crates).
+# Production image for bunyip-api (actix-web backend).
 #
-# Build context is the repo root. The dunite crates are a PRIVATE git dependency
-# (https://dev.a8n.run/psa-systems/dunite), so the build needs a Forgejo token
-# passed as a buildkit secret named `dunite_token`:
+# BUILD CONTEXT: the bunyip repo root. bunyip owns the domain (bunyip-core) +
+# the oci/oidc verticals; the generic dunite-core kernel is a git dependency
+# (https://dev.a8n.run/psa-systems/dunite). The repo is anonymously readable,
+# so the builder only needs network access to dev.a8n.run to fetch it - no
+# credentials required. An optional buildkit secret `dunite_token` is honoured
+# if a mirror needs auth. Build it like:
 #
 #   docker buildx build \
+#     -f bunyip-api/oci-build/Dockerfile \
 #     --secret id=dunite_token,env=DUNITE_GIT_TOKEN \
-#     --build-arg GIT_SHA="$(git rev-parse --short HEAD)" \
-#     --tag bunyip-api:local --file bunyip-api/oci-build/Dockerfile .
+#     --build-arg GIT_COMMIT="$(git rev-parse --short HEAD)" \
+#     --build-arg GIT_TAG="$(git describe --tags --always --dirty)" \
+#     -t bunyip-api:latest \
+#     .
 #
 # The binary embeds the SQL migrations (sqlx::migrate!) and email templates
 # (include_str!) at compile time, so the runtime image is just the static binary.
 
-FROM rust:1-alpine AS builder
+# ---- Stage 1: build ---------------------------------------------------------
+FROM ghcr.io/niceguyit/rust-builder-musl:v1.0.0-rust1.94-alpine AS builder
 WORKDIR /build
 
-RUN apk add --no-cache musl-dev pkgconfig openssl-dev openssl-libs-static lld git
+# Build metadata (passed from CI; build.rs reads these env vars instead of git).
+ARG GIT_COMMIT=unknown
+ARG GIT_TAG=unknown
+ARG BUILD_DATE=unknown
+ENV GIT_COMMIT=${GIT_COMMIT} \
+    GIT_TAG=${GIT_TAG} \
+    BUILD_DATE=${BUILD_DATE}
 
-# musl-static link via lld; fetch the private git dep with the git CLI (so the
-# injected token is honoured); resolve sqlx::query! macros against .sqlx offline.
+# nproc/2 concurrency cap (per governance CI.md); CI passes the real value.
+ARG CARGO_BUILD_JOBS=2
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
+
+# musl-dev, pkgconfig, openssl-dev/-static, git and lld already ship in
+# rust-builder-musl. Use lld for faster linking. Fetch the dunite git dep with
+# the git CLI so the optional injected token is honoured. bunyip-oidc uses
+# compile-time sqlx::query! macros; resolve them against the committed .sqlx
+# offline cache instead of a live database.
 ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
     CARGO_NET_GIT_FETCH_WITH_CLI=true \
     SQLX_OFFLINE=true
 
-ARG GIT_SHA=""
-ARG GIT_TAG=""
-ENV GIT_COMMIT=${GIT_SHA} GIT_TAG=${GIT_TAG}
+# ---- Dependency cache layer ----
+# Copy every workspace manifest and stub their sources so the full dependency
+# graph compiles and caches before the real sources are copied. Editing
+# application code then reuses this layer. The dunite git config (from the
+# optional secret) has to be set in the SAME RUN that touches the network.
+COPY Cargo.toml Cargo.lock ./
+COPY .sqlx .sqlx
+COPY bunyip-api/Cargo.toml bunyip-api/build.rs bunyip-api/
+COPY bunyip-web/Cargo.toml bunyip-web/
+COPY crates/bunyip-core/Cargo.toml crates/bunyip-core/
+COPY crates/bunyip-oci/Cargo.toml crates/bunyip-oci/
+COPY crates/bunyip-oidc/Cargo.toml crates/bunyip-oidc/
+# bunyip-core include_str!'s its email templates at compile time.
+COPY crates/bunyip-core/templates crates/bunyip-core/templates
+RUN mkdir -p \
+        bunyip-api/src bunyip-web/src \
+        crates/bunyip-core/src crates/bunyip-oci/src crates/bunyip-oidc/src \
+    && echo "fn main() {}" > bunyip-api/src/main.rs \
+    && echo "fn main() {}" > bunyip-web/src/main.rs \
+    && : > crates/bunyip-core/src/lib.rs \
+    && : > crates/bunyip-oci/src/lib.rs \
+    && : > crates/bunyip-oidc/src/lib.rs
 
-# Whole workspace (a .dockerignore keeps target/, .git, secrets out of context).
-COPY . .
-
-# Configure git auth from the buildkit secret, then build the release binary.
+# Build the api binary's dependency graph only (cached unless a manifest changes).
 RUN --mount=type=secret,id=dunite_token \
     --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
     sh -c 'if [ -s /run/secrets/dunite_token ]; then \
               git config --global url."https://oauth2:$(cat /run/secrets/dunite_token)@dev.a8n.run/".insteadOf "https://dev.a8n.run/"; \
            fi' \
-    && cargo build --release --bin bunyip-api
+    && cargo build --locked --release --bin bunyip-api \
+    && rm -rf bunyip-api/src bunyip-web/src \
+        crates/bunyip-core/src crates/bunyip-oci/src crates/bunyip-oidc/src \
+        target/release/deps/bunyip_api* target/release/deps/bunyip_web* target/release/deps/bunyip_core*
 
-# Export stage: `docker buildx build --target export --output type=local,dest=<dir>`
-# extracts just the static binary for release-artifact tarballs.
+# ---- Real sources ----
+COPY . .
+
+RUN --mount=type=secret,id=dunite_token \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    sh -c 'if [ -s /run/secrets/dunite_token ]; then \
+              git config --global url."https://oauth2:$(cat /run/secrets/dunite_token)@dev.a8n.run/".insteadOf "https://dev.a8n.run/"; \
+           fi' \
+    && cargo build --locked --release --bin bunyip-api
+
+# ---- Export stage -----------------------------------------------------------
+# `docker buildx build --target export --output type=local,dest=<dir>` extracts
+# just the static binary for release-artifact tarballs.
 FROM scratch AS export
 COPY --from=builder /build/target/release/bunyip-api /bunyip-api
 
-# Runtime stage
-FROM alpine:3.21
+# ---- Stage 2: runtime -------------------------------------------------------
+FROM alpine:3.21 AS runtime
+
+ARG GIT_COMMIT=unknown
+ARG GIT_TAG=unknown
+ARG BUILD_DATE=unknown
+
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates tzdata curl \
-    && adduser --disabled-password --uid 1001 appuser
+RUN apk add --no-cache ca-certificates tzdata curl
+RUN adduser -D -u 1001 appuser
 
+# Binary, migrations (run on startup), and the email templates.
 COPY --from=builder /build/target/release/bunyip-api /app/bunyip-api
-RUN chown --recursive appuser:appuser /app
+COPY --from=builder /build/bunyip-api/migrations /app/migrations
+COPY --from=builder /build/crates/bunyip-core/templates /app/templates
+
+RUN chown -R appuser:appuser /app
 USER appuser
 
-ARG GIT_SHA=""
 LABEL org.opencontainers.image.source=https://dev.a8n.run/psa-systems/bunyip \
       org.opencontainers.image.description="Bunyip API (PSA Systems)" \
-      org.opencontainers.image.revision="${GIT_SHA}"
+      org.opencontainers.image.revision=${GIT_COMMIT} \
+      org.opencontainers.image.version=${GIT_TAG} \
+      org.opencontainers.image.created=${BUILD_DATE}
 
-# Listen address comes from HOST_IP/APP_PORT; everything else is injected at run.
 ENV HOST_IP=0.0.0.0 APP_PORT=4401
 EXPOSE 4401
 

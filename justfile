@@ -1,272 +1,210 @@
-# Bunyip - Task Runner
+# Bunyip (PSA Systems) - task runner for the split web + api workspace.
 #
-# Shape mirrors mokosh-clients's justfile; the recipes are adapted for
-# bunyip's workspace (bunyip-api native + bunyip-web wasm32 + the mock
-# bunyip-mocks crate) and `bunyip-web/package.json` for tailwind.
-
-# Image used by the pre-commit hook. Matches `oci-build/Dockerfile` so
-# `just pre-commit` and the Forgejo `check.yml` job run a toolchain
-# compatible with the rust-builder-glibc image bunyip is built against.
-dev_image := "ghcr.io/niceguyit/rust-builder-glibc:v1.0.0-rust1.94-trixie"
-
-compose_file := "compose.dev.yml"
+# Two deployables: bunyip-api (actix backend, musl-static image) and
+# bunyip-web (Axum SSR frontend, glibc image with bun + tailwind). The
+# backend consumes the dunite git dependency
+# (https://dev.a8n.run/psa-systems/dunite); it is anonymously readable, so
+# builds need no token, but an optional DUNITE_GIT_TOKEN is honoured.
 
 # List available recipes
 default:
     @just --list
 
-# Create .env from .env.example if missing.
+# docker compose needs these for the `user:` mapping + dev-image HOST_UID/HOST_GID
+# build args on shared dev hosts.
+export UID := `id -u`
+export GID := `id -g`
+# bunyip-oidc holds the workspace's only compile-time sqlx::query! macros;
+# resolve them against the committed .sqlx cache so local cargo commands need no
+# database.
+export SQLX_OFFLINE := "true"
+
+compose := "docker compose -f compose.dev.yml "
+compose_sso := "docker compose -f compose.dev.yml -f compose.dev-sso.yml "
+
+# ── Dev ───────────────────────────────────────────────────────────────────────
+
+# Create .env from the example if it does not exist yet.
 [private]
-[group: 'hooks']
 ensure-env:
     @test -f .env || cp .env.example .env
 
-# Install the git pre-commit hook (run once per fresh clone). Writes a
-# stub at .git/hooks/pre-commit that execs `just pre-commit`. Bypass
-# with `git commit --no-verify`.
-[group: 'hooks']
-install-hooks:
+# Start the full dev stack (postgres + api + web) in the foreground.
+dev: ensure-env
+    {{ compose }}up --build
+
+# Start the full dev stack detached.
+dev-detach: ensure-env
+    {{ compose }}up --build --detach
+    @echo ""
+    @echo "  web (frontend): http://localhost:4400"
+    @echo "  api (backend):  http://localhost:4401"
+
+# Start the Traefik-routed stack on *.a8n.run (detached, for SSO/remote testing).
+dev-sso: ensure-env
     #!/usr/bin/env nu
-    let hook = ".git/hooks/pre-commit"
-    # Remove first so a leftover symlink from an older install does not
-    # get written through to its target file. `try` swallows the
-    # not-found case.
-    try { rm $hook }
-    "#!/usr/bin/env sh\nexec just pre-commit\n" | save $hook
-    ^chmod +x $hook
-    print $"Wrote ($hook) -> just pre-commit"
-
-# Run the same checks the Forgejo `check.yml` job runs, inside the
-# rust-builder-glibc image so the toolchain matches CI. Native (api +
-# mocks) AND wasm (bunyip-web) targets covered.
-[group: 'hooks']
-pre-commit:
-    #!/usr/bin/env nu
-    let img = "{{ dev_image }}"
-    print "\n[pre-commit] cargo fmt --all --check"
-    ^docker run --rm --volume $"($env.PWD):/build" --workdir /build --volume dev-bunyip-cargo-target:/build/target --volume dev-bunyip-cargo-registry:/usr/local/cargo/registry $img cargo fmt --all --check
-    print "\n[pre-commit] cargo clippy --workspace --all-targets -- -D warnings"
-    ^docker run --rm --volume $"($env.PWD):/build" --workdir /build --volume dev-bunyip-cargo-target:/build/target --volume dev-bunyip-cargo-registry:/usr/local/cargo/registry $img cargo clippy --workspace --all-targets -- -D warnings
-    print "\n[pre-commit] cargo check (native, excluding bunyip-web)"
-    ^docker run --rm --volume $"($env.PWD):/build" --workdir /build --volume dev-bunyip-cargo-target:/build/target --volume dev-bunyip-cargo-registry:/usr/local/cargo/registry $img cargo check --workspace --exclude bunyip-web --all-targets
-    print "\n[pre-commit] cargo check --package bunyip-web --target wasm32-unknown-unknown"
-    ^docker run --rm --volume $"($env.PWD):/build" --workdir /build --volume dev-bunyip-cargo-target:/build/target --volume dev-bunyip-cargo-registry:/usr/local/cargo/registry $img cargo check --package bunyip-web --target wasm32-unknown-unknown
-    print "\n[pre-commit] cargo test --workspace --exclude bunyip-web"
-    ^docker run --rm --volume $"($env.PWD):/build" --workdir /build --volume dev-bunyip-cargo-target:/build/target --volume dev-bunyip-cargo-registry:/usr/local/cargo/registry $img cargo test --workspace --exclude bunyip-web
-    print "\n[pre-commit] all checks passed"
-
-# Install JS dependencies for the Tailwind build.
-[private]
-[group: 'hooks']
-ensure-npm:
-    @test -d bunyip-web/node_modules || (cd bunyip-web && bun install)
-
-# Build Tailwind CSS once
-[group: 'css']
-css-build: ensure-npm
-    cd bunyip-web && bun x @tailwindcss/cli --input input.css --output assets/styles.css
-
-# Watch and rebuild Tailwind CSS on changes
-[group: 'css']
-css-watch: ensure-npm
-    cd bunyip-web && bun x @tailwindcss/cli --input input.css --output assets/styles.css --watch
-
-# Bring up the dev stack (bunyip-api + bunyip-web), bound to the host
-# LAN IP. Trailing args go to `docker compose up` (e.g. --detach,
-# --build).
-[doc("Start the dev stack in Docker. Trailing args go to `docker compose up` (e.g. --detach, --build).")]
-[group: 'dev']
-dev *args: ensure-env
-    #!/usr/bin/env nu
-    let host_ip = (sys net | where name =~ 'eth0|br0' | get ip | flatten | where protocol == 'ipv4' and loop == false | get 0.address)
-    let uid = (^id --user | str trim)
-    let gid = (^id --group | str trim)
     let user_name = (^whoami | str trim)
-    # The base compose.yml declares the per-developer private network
-    # as `external: true`, so compose will NOT create it. Ensure it
-    # exists (idempotent: inspect returns 0 when present, otherwise
-    # create). Same pre-create step exists in `dev-sso` further down.
+    # compose.dev.yml declares the per-developer private network as
+    # `external: true`, so compose will NOT create it. Ensure it exists
+    # (idempotent: inspect returns 0 when present, otherwise create).
     let net = $"dev-bunyip-private-($user_name)"
     if (do { ^docker network inspect $net } | complete | get exit_code) != 0 {
         ^docker network create $net out> /dev/null
     }
-    print $"Binding bunyip dev stack to ($host_ip) as ($user_name) \(uid ($uid):($gid)\)"
-    with-env { BUNYIP_HOST_BIND_IP: $host_ip, HOST_UID: $uid, HOST_GID: $gid, USER: $user_name } {
-        docker compose --file {{ compose_file }} up {{ args }}
-    }
-
-# Per-developer Traefik-routed instance for SSO testing.
-#   Hub: https://{USER}-bunyip.a8n.run
-# Run `just dev-sso` here AND in mokosh-server. The overlay requires
-# BUNYIP_OIDC_CLIENT_ID set in .env (or the shell), which comes from
-# `just register-bunyip-client` in mokosh-server. The compose file
-# fails loud if it's missing.
-[doc("Start the SSO dev stack (Traefik-routed at https://{USER}-bunyip.a8n.run)")]
-[group: 'dev']
-dev-sso:
-    #!/usr/bin/env nu
-    let uid = (^id --user | str trim)
-    let gid = (^id --group | str trim)
-    let user_name = (^whoami | str trim)
-    # The base compose.yml declares the per-developer private network
-    # `dev-bunyip-private-${USER}` as `external: true`, so compose
-    # will NOT create it. Ensure it exists (idempotent: docker network
-    # inspect returns 0 when present, otherwise create).
-    let net = $"dev-bunyip-private-($user_name)"
-    if (do { ^docker network inspect $net } | complete | get exit_code) != 0 {
-        ^docker network create $net out> /dev/null
-    }
-    # BUNYIP_HOST_BIND_IP is referenced by the base compose.yml's port
-    # mapping; the overlay !resets it but the variable still has to
-    # substitute, so we set a harmless placeholder. --detach so the
-    # URL print runs.
-    with-env { BUNYIP_HOST_BIND_IP: "127.0.0.1", HOST_UID: $uid, HOST_GID: $gid, USER: $user_name } {
-        docker compose --file {{ compose_file }} --file compose.dev-sso.yml up --build --detach
-    }
+    {{ compose_sso }}up --build --detach
     print ""
-    print $"Bunyip hub: https://($user_name)-bunyip.a8n.run"
+    print $"  bunyip hub: https://($user_name)-bunyip.a8n.run"
 
-# Stop everything this repo runs (both LAN-IP and SSO modes), regardless
-# of which `just dev*` you started with. Volumes preserved.
-# `--remove-orphans` cleans up containers from either compose-file
-# layout. BUNYIP_HOST_BIND_IP is set defensively so the base compose's
-# port substitution does not warn during teardown.
-[doc("Stop the dev stack (LAN-IP and SSO modes). Volumes preserved.")]
-[group: 'dev']
-down:
-    #!/usr/bin/env nu
-    let user_name = (^whoami | str trim)
-    let net = $"dev-bunyip-private-($user_name)"
-    if (do { ^docker network inspect $net } | complete | get exit_code) != 0 {
-        ^docker network create $net out> /dev/null
-    }
-    with-env { BUNYIP_HOST_BIND_IP: "127.0.0.1", USER: $user_name } {
-        docker compose --file {{ compose_file }} --file compose.dev-sso.yml down --remove-orphans
-    }
+# Stop the dev stack.
+dev-stop: ensure-env
+    {{ compose }}down
 
-# Bring the SSO dev stack down and back up. Useful after pulling a
-# code change or editing compose env vars: `down` waits for containers
-# to fully terminate before `dev-sso` starts the fresh ones, so the
-# rebuild picks up the new state. `down` is synchronous (docker
-# compose down blocks until removal completes) and `dev-sso` uses
-# `--detach`, so this returns once the new stack is up.
-[doc("Stop the dev stack and start dev-sso fresh.")]
-[group: 'dev']
-restart: down dev-sso
+# Stop the Traefik-routed stack.
+dev-stop-sso: ensure-env
+    {{ compose_sso }}down --remove-orphans
 
-# Stop the LAN-IP dev stack. Volumes preserved.
-[doc("Stop the LAN-IP dev stack (volumes preserved)")]
-[group: 'dev']
-dev-down: ensure-env
-    docker compose --file {{ compose_file }} down
-
-# Stop the SSO dev stack. Volumes preserved.
-[doc("Stop the SSO dev stack (volumes preserved)")]
-[group: 'dev']
-dev-sso-down:
-    docker compose --file {{ compose_file }} --file compose.dev-sso.yml down
-
-# Wipe the dev stack: stop, remove volumes (cargo cache included). Use
-# sparingly.
-[doc("Wipe dev volumes (cargo cache + named volumes).")]
-[group: 'dev']
+# Stop the stack and remove its named volumes (per-user suffixed on shared hosts).
 dev-clean: ensure-env
-    docker compose --file {{ compose_file }} down --volumes
+    {{ compose }}down --volumes
 
-# Tail logs from the dev stack. Trailing args go to `docker compose
-# logs` (e.g. --follow, api).
-[doc("Tail logs from the dev stack. Trailing args go to `docker compose logs` (e.g. api, --follow).")]
-[group: 'dev']
-dev-logs *args:
-    docker compose --file {{ compose_file }} logs {{ args }}
+# Tail all logs.
+dev-logs: ensure-env
+    {{ compose }}logs --follow
 
-# Run all checks (compile, web/wasm, clippy, fmt)
-[group: 'check']
-check: check-compile check-web check-clippy check-fmt
+# Tail api logs only.
+logs-api: ensure-env
+    {{ compose }}logs --follow api
 
-# Check native compilation (bunyip-api + bunyip-mocks)
-[group: 'check']
-check-compile:
-    cargo check --workspace --exclude bunyip-web --all-targets
+# Tail web logs only.
+logs-web: ensure-env
+    {{ compose }}logs --follow web
 
-# Check web/WASM compilation
-[group: 'check']
-check-web:
-    cargo check --package bunyip-web --target wasm32-unknown-unknown
+# PostgreSQL shell.
+db-shell: ensure-env
+    {{ compose }}exec postgres psql --username bunyip --dbname bunyip
 
-# Run clippy lints
-[group: 'check']
+# ── Local (cargo, no Docker) ───────────────────────────────────────────────────
+
+# Run the api backend locally.
+run:
+    cargo run -p bunyip-api
+
+# Run the web frontend locally.
+run-web:
+    cargo run -p bunyip-web
+
+# Build the whole workspace.
+build:
+    cargo build --workspace
+
+# ── Checks ──────────────────────────────────────────────────────────────────────
+
+# Umbrella check: build + clippy + fmt + docker builder stage.
+check: check-build check-clippy check-fmt check-docker
+
+# Build every target in the workspace.
+check-build:
+    cargo build --workspace --all-targets
+
+# Clippy across the workspace with warnings denied.
 check-clippy:
     cargo clippy --workspace --all-targets -- -D warnings
 
-# Check formatting
-[group: 'check']
+# Formatting check.
 check-fmt:
     cargo fmt --all --check
 
-# Format code
-[group: 'format']
+# Build the api image's builder stage only - catches Docker-build drift cheaply.
+check-docker:
+    docker build --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .
+
+# Type-check the workspace.
+typecheck:
+    cargo check --workspace
+
+# Lint the workspace (clippy).
+lint:
+    cargo clippy --workspace --all-targets -- -D warnings
+
+# Format the workspace.
 fmt:
     cargo fmt --all
 
-# Run tests (native only; wasm tests need a separate harness)
-[group: 'test']
+# Run unit tests.
 test:
-    cargo test --workspace --exclude bunyip-web
+    cargo test --workspace --lib
 
-# Build native release binaries (api + mocks)
-[group: 'build']
-build:
-    cargo build --release --workspace --exclude bunyip-web
+# ── Database ────────────────────────────────────────────────────────────────────
 
-# Build the wasm SPA release bundle
-[group: 'build']
-build-web: css-build
-    cd bunyip-web && dx build --release
+# Run pending migrations (also applied automatically on api startup).
+migrate: ensure-env
+    {{ compose }}exec api cargo sqlx migrate run --source bunyip-api/migrations
 
-# Validate seed JSON files parse
-[group: 'check']
-check-seeds:
-    #!/usr/bin/env nu
-    for f in (ls seeds/*.json | get name) {
-        try { open $f | ignore; print $"OK: ($f)" } catch { print $"FAIL: ($f)"; exit 1 }
-    }
+# Revert the last applied migration.
+migrate-revert: ensure-env
+    {{ compose }}exec api cargo sqlx migrate revert --source bunyip-api/migrations
 
-# Build production OCI image for validation (api)
-[group: 'check']
-check-docker-api:
-    docker buildx build --tag bunyip-api:check --file bunyip-api/oci-build/Dockerfile .
+# ── Images ──────────────────────────────────────────────────────────────────────
 
-# Build production OCI image for validation (web)
-[group: 'check']
-check-docker-web:
-    docker buildx build --tag bunyip-web:check --file bunyip-web/oci-build/Dockerfile .
+# Build both production images.
+build-docker: build-api-image build-web-image
 
-# Build both production OCI images
-[group: 'build']
-build-docker: check-docker-api check-docker-web
+# Build the production api image (dunite is anonymous; DUNITE_GIT_TOKEN optional).
+build-api-image tag="latest":
+    docker build \
+        --file bunyip-api/oci-build/Dockerfile \
+        --secret id=dunite_token,env=DUNITE_GIT_TOKEN \
+        --build-arg GIT_COMMIT="$(git rev-parse --short HEAD)" \
+        --build-arg GIT_TAG="$(git describe --tags --always --dirty)" \
+        --tag bunyip-api:{{ tag }} \
+        .
 
-# Create a release: bump version, push branch, print PR link
+# Build the production web image (context = repo root).
+build-web-image tag="latest":
+    docker build \
+        --file bunyip-web/oci-build/Dockerfile \
+        --tag bunyip-web:{{ tag }} \
+        .
+
+# Export the api static binary to ./dist via the Dockerfile's `export` stage.
+build-docker-export:
+    docker buildx build \
+        --file bunyip-api/oci-build/Dockerfile \
+        --secret id=dunite_token,env=DUNITE_GIT_TOKEN \
+        --build-arg GIT_COMMIT="$(git rev-parse --short HEAD)" \
+        --build-arg GIT_TAG="$(git describe --tags --always --dirty)" \
+        --target export \
+        --output type=local,dest=dist \
+        .
+
+# ── Release ─────────────────────────────────────────────────────────────────────
+
+# Create a release: bump major (vx.0.0), minor (v0.x.0), or hotfix (v0.0.x), push the branch, and open the PR via fj.
+# After the PR merges, the create-release workflow creates the tag and release automatically.
 [group: 'release']
 create-release bump:
     #!/usr/bin/env nu
     let bump = "{{ bump }}"
 
+    # Abort if there are uncommitted changes
     let status = git status --porcelain | str trim
     if ($status | is-not-empty) {
         print $"(ansi red)Working tree is dirty. Please stash or commit your changes first.(ansi reset)"
         exit 1
     }
 
-    let default_branch = "main"
+    # Switch to main if not already there
     let branch = git branch --show-current | str trim
-    if $branch != $default_branch {
-        print $"Switching from ($branch) to ($default_branch)..."
-        git checkout $default_branch
+    if $branch != "main" {
+        print $"Switching from ($branch) to main..."
+        git checkout main
     }
 
-    git pull --rebase origin $default_branch
+    # Pull latest changes
+    git pull --rebase origin main
 
+    # Calculate next version. bunyip is a workspace, so the single source of
+    # truth is `[workspace.package].version` (not `package.version`).
     let current = (open Cargo.toml | get workspace.package.version | split row "." | each { into int })
     let next = match $bump {
         "major" => [$"($current.0 + 1)" "0" "0"],
@@ -278,20 +216,22 @@ create-release bump:
     let tag = $"v($bare)"
     let release_branch = $"release/($tag)"
 
+    # Create release branch, bump the workspace version, and commit
     git checkout -b $release_branch
     open Cargo.toml | update workspace.package.version $bare | to toml | collect | save --force Cargo.toml
     git add Cargo.toml
     git commit --signoff --message $"Release ($tag)"
 
+    # Push release branch
     git push --set-upstream origin $release_branch
 
-    # Open the release PR via fj. Body lives in a tempfile so the
-    # changelog can grow later without inline escaping pain.
+    # Open the release PR via fj. Body lives in a tempfile so the changelog
+    # can grow later without inline escaping pain.
     let body_file = (mktemp --tmpdir --suffix .md)
     [
         $"Automated release PR for ($tag)."
         ""
-        $"After merge, `.forgejo/workflows/create-release.yml` tags and publishes ($tag) to the Generic Packages registry."
+        $"After merge, `.forgejo/workflows/create-release.yml` tags and publishes ($tag)."
     ] | str join "\n" | save --force $body_file
     let fj_result = (^fj --host dev.a8n.run pr create $"Release ($tag)" --body-file $body_file | complete)
     rm $body_file
@@ -302,7 +242,8 @@ create-release bump:
     }
 
     # `fj pr create` prints `created pull request #N: <title>` on success.
-    # Parse the number out and build the PR URL from `origin`.
+    # Parse the number out and build the PR URL from `origin` so the user
+    # gets a clickable link instead of just the fj line.
     let pr_num = (
         $fj_result.stdout
         | str trim

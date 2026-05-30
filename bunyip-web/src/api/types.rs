@@ -1,133 +1,362 @@
-//! Shared types between the SPA and the mokosh-server identity backend.
+//! Data model ported from `src/types/index.ts`.
 //!
-//! Two layers:
-//! - `MeView` is the wire shape returned by `GET /v1/auth/me`. Mirrors
-//!   `crates/mokosh-auth-http/src/handlers/profile.rs::MeView` field
-//!   for field.
-//! - `MeResponse` is the SPA-facing shape consumed by pages /
-//!   components. `api::me::fetch_me` adapts a `MeView` into it,
-//!   synthesizing fields that mokosh-server does not return today
-//!   (e.g. memberships are fetched separately, lifetime_member is
-//!   not part of the Mokosh data model).
+//! Field names match the backend JSON exactly (snake_case), so these structs
+//! deserialize straight off the `data` envelope. Enums use
+//! `rename_all = "snake_case"` to match the string discriminants. Date/time
+//! fields are kept as `String` (ISO-8601) to mirror the TS `string` typing;
+//! pages parse them with `chrono` where they need arithmetic.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UserRole {
+    Subscriber,
     Admin,
-    Manager,
-    Finance,
-    Member,
-    Readonly,
 }
 
-impl UserRole {
-    pub fn from_wire(s: &str) -> Self {
-        match s {
-            "admin" => UserRole::Admin,
-            "manager" => UserRole::Manager,
-            "finance" => UserRole::Finance,
-            "readonly" => UserRole::Readonly,
-            _ => UserRole::Member,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum MembershipRole {
-    Owner,
-    Admin,
-    Member,
+pub enum MembershipStatus {
+    None,
+    Active,
+    PastDue,
+    Canceled,
+    Incomplete,
+    GracePeriod,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscriptionTier {
+    Lifetime,
+    Free,
+    EarlyAdopter,
+    Standard,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct User {
     pub id: String,
     pub email: String,
-    pub name: String,
     pub role: UserRole,
-    /// mokosh-server does not surface email-verification state on `/me`
-    /// today; we synthesize a `Some(...)` placeholder once the bearer
-    /// extractor accepted the call. Future work can expose the real
-    /// timestamp through `/me`.
-    pub email_verified_at: Option<String>,
+    pub email_verified: bool,
+    pub two_factor_enabled: bool,
+    pub membership_status: MembershipStatus,
+    pub price_locked: bool,
+    pub locked_price_id: Option<String>,
+    pub locked_price_amount: Option<i64>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub subscription_tier: SubscriptionTier,
+    pub trial_ends_at: Option<String>,
     pub lifetime_member: bool,
-    pub mfa_enabled: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Org {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuthResponse {
+    pub user: User,
+    #[serde(default)]
+    pub access_token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetupStatus {
+    pub setup_required: bool,
+    pub email_enabled: bool,
+    pub stripe_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Application {
     pub id: String,
     pub slug: String,
-    pub name: String,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub icon_url: Option<String>,
+    pub version: Option<String>,
+    pub source_code_url: Option<String>,
+    pub subdomain: Option<String>,
+    pub is_accessible: bool,
+    pub maintenance_mode: bool,
+    pub maintenance_message: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct OrgMembership {
-    pub org: Org,
-    pub role: MembershipRole,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Membership {
+    pub status: MembershipStatus,
+    pub price_locked: bool,
+    pub locked_price_amount: Option<i64>,
+    pub current_period_end: Option<String>,
+    pub cancel_at_period_end: bool,
+    pub grace_period_end: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct MeResponse {
-    pub user: User,
-    /// Populated in phase 04 by an additional fetch of
-    /// `/v1/auth/memberships`. Empty until then.
-    pub memberships: Vec<OrgMembership>,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PaginatedResponse<T> {
+    pub items: Vec<T>,
+    pub total: i64,
+    pub page: i64,
+    #[serde(default)]
+    pub page_size: Option<i64>,
+    #[serde(default)]
+    pub per_page: Option<i64>,
+    pub total_pages: i64,
 }
 
-/// Wire shape returned by `GET /v1/auth/me` on mokosh-server.
-#[derive(Debug, Clone, Deserialize)]
-pub struct MeView {
+/// `GET /v1/applications` returns `{ applications: [...] }` inside the data
+/// envelope (see `src/api/applications.ts`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApplicationList {
+    pub applications: Vec<Application>,
+}
+
+// ---------------------------------------------------------------------------
+// Membership / billing
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CheckoutSessionResponse {
+    pub checkout_url: String,
+    pub session_id: String,
+}
+
+/// `GET /v1/memberships/payments`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StripePaymentResponse {
+    pub id: String,
+    pub amount: i64,
+    pub currency: String,
+    pub status: Option<String>,
+    pub created: i64,
+    pub invoice_pdf: Option<String>,
+}
+
+/// `GET /v1/billing/invoices`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StripeInvoice {
+    pub id: String,
+    pub amount_paid: i64,
+    pub currency: String,
+    pub status: Option<String>,
+    pub invoice_pdf: Option<String>,
+    pub hosted_invoice_url: Option<String>,
+    pub created: i64,
+    pub description: Option<String>,
+    pub number: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Feedback
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeedbackStatus {
+    New,
+    Reviewed,
+    Responded,
+    Closed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FeedbackSubmissionResponse {
+    pub id: String,
+    pub message: String,
+}
+
+// ---------------------------------------------------------------------------
+// 2FA
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TwoFactorSetupResponse {
+    pub otpauth_uri: String,
+    pub secret: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecoveryCodesResponse {
+    pub codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TwoFactorStatusResponse {
+    pub enabled: bool,
+    pub recovery_codes_remaining: i64,
+}
+
+// ---------------------------------------------------------------------------
+// Downloads
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DownloadAsset {
+    pub asset_name: String,
+    pub size_bytes: i64,
+    pub content_type: String,
+    pub download_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppDownloadsResponse {
+    pub release_tag: Option<String>,
+    pub assets: Vec<DownloadAsset>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppDownloadGroup {
+    pub app_slug: String,
+    pub app_display_name: String,
+    pub icon_url: Option<String>,
+    pub release_tag: String,
+    pub assets: Vec<DownloadAsset>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DownloadGroups {
+    pub groups: Vec<AppDownloadGroup>,
+}
+
+// ---------------------------------------------------------------------------
+// Admin
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdminStatsResponse {
+    pub total_users: i64,
+    pub active_members: i64,
+    pub past_due_members: i64,
+    pub grace_period_members: i64,
+    pub total_applications: i64,
+    pub active_applications: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdminUser {
     pub id: String,
     pub email: String,
-    #[serde(default)]
-    pub first_name: Option<String>,
-    #[serde(default)]
-    pub last_name: Option<String>,
-    #[serde(default)]
-    pub timezone: Option<String>,
-    #[serde(default)]
-    pub locale: Option<String>,
-    #[serde(default)]
-    pub avatar_url: Option<String>,
-    pub role: String,
-    #[serde(default)]
-    pub mfa_enrolled: bool,
+    pub role: UserRole,
+    pub email_verified: bool,
+    pub two_factor_enabled: bool,
+    pub membership_status: MembershipStatus,
+    pub subscription_tier: SubscriptionTier,
+    pub lifetime_member: bool,
+    pub created_at: String,
+    pub last_login_at: Option<String>,
+    pub grace_period_end: Option<String>,
 }
 
-impl MeView {
-    pub fn display_name(&self) -> String {
-        match (self.first_name.as_deref(), self.last_name.as_deref()) {
-            (Some(f), Some(l)) if !f.is_empty() && !l.is_empty() => format!("{f} {l}"),
-            (Some(f), _) if !f.is_empty() => f.to_string(),
-            (_, Some(l)) if !l.is_empty() => l.to_string(),
-            _ => self.email.clone(),
-        }
-    }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdminMembership {
+    pub user_id: String,
+    pub user_email: String,
+    pub stripe_customer_id: Option<String>,
+    pub status: String,
+    pub subscription_tier: String,
+    pub subscription_override_by: Option<String>,
+    pub created_at: String,
+}
 
-    /// Adapt a wire `MeView` into the SPA's `MeResponse`. Memberships
-    /// are intentionally empty; phase 04 fetches them and merges in.
-    pub fn into_me_response(self) -> MeResponse {
-        let name = self.display_name();
-        let role = UserRole::from_wire(&self.role);
-        let mfa = self.mfa_enrolled;
-        MeResponse {
-            user: User {
-                id: self.id,
-                email: self.email,
-                name,
-                role,
-                // Synthesized "verified" since the bearer extractor
-                // already accepted the call. Replace with a real
-                // timestamp when /me grows the field.
-                email_verified_at: Some("verified".into()),
-                lifetime_member: false,
-                mfa_enabled: mfa,
-            },
-            memberships: Vec::new(),
-        }
-    }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdminAuditLog {
+    pub id: String,
+    pub actor_id: Option<String>,
+    pub actor_email: Option<String>,
+    pub actor_role: Option<String>,
+    pub actor_ip_address: Option<String>,
+    pub action: String,
+    pub resource_type: Option<String>,
+    pub resource_id: Option<String>,
+    #[serde(default)]
+    pub old_values: Option<Value>,
+    #[serde(default)]
+    pub new_values: Option<Value>,
+    #[serde(default)]
+    pub metadata: Option<Value>,
+    pub is_admin_action: bool,
+    pub severity: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdminApplication {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub icon_url: Option<String>,
+    pub is_active: bool,
+    pub maintenance_mode: bool,
+    pub maintenance_message: Option<String>,
+    pub subdomain: Option<String>,
+    pub container_name: String,
+    pub version: Option<String>,
+    pub source_code_url: Option<String>,
+    pub sort_order: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdminApplicationList {
+    pub applications: Vec<AdminApplication>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdminFeedbackSummary {
+    pub id: String,
+    pub name: Option<String>,
+    pub email_masked: Option<String>,
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub message_excerpt: String,
+    pub status: FeedbackStatus,
+    pub created_at: String,
+    pub responded_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdminFeedbackDetail {
+    pub id: String,
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub message: String,
+    pub page_path: Option<String>,
+    pub status: FeedbackStatus,
+    pub admin_response: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StripeConfigResponse {
+    pub secret_key_masked: Option<String>,
+    pub webhook_secret_masked: Option<String>,
+    pub has_secret_key: bool,
+    pub has_webhook_secret: bool,
+    pub app_tag: String,
+    pub updated_at: Option<String>,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TierConfigResponse {
+    pub lifetime_slots: i64,
+    pub early_adopter_slots: i64,
+    pub early_adopter_trial_days: i64,
+    pub standard_trial_days: i64,
+    pub free_price_id: Option<String>,
+    pub early_adopter_price_id: Option<String>,
+    pub standard_price_id: Option<String>,
+    pub source: String,
+    pub lifetime_slots_used: i64,
+    pub early_adopter_slots_used: i64,
+    pub updated_at: String,
+    pub updated_by: Option<String>,
 }

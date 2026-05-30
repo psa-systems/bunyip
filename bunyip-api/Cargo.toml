@@ -11,11 +11,11 @@ repository.workspace = true
 name = "bunyip-api"
 path = "src/main.rs"
 
-# bunyip owns the domain (bunyip-core) and the verticals (bunyip-oci,
-# bunyip-oidc). The generic kernel comes from dunite-core, which bunyip-core
+# bunyip owns the domain (bunyip-domain) and the verticals (bunyip-oci,
+# bunyip-oidc). The generic kernel comes from dunite-core, which bunyip-domain
 # pulls from the dunite framework repo on Forgejo.
 [dependencies]
-bunyip-core = { path = "../crates/bunyip-core" }
+bunyip-domain = { path = "../crates/bunyip-domain" }
 bunyip-oci = { path = "../crates/bunyip-oci" }
 bunyip-oidc = { path = "../crates/bunyip-oidc" }
 

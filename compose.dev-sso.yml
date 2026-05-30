@@ -4,26 +4,15 @@
 # `just dev-sso` is the supported entry point (added alongside this file).
 #
 # What this overlay changes:
-#   - bunyip-web stops binding to the host LAN IP (Traefik does the
-#     publishing).
+#   - bunyip-web stops publishing its host port (Traefik does the publishing).
 #   - bunyip-web gets Traefik labels for ${USER}-bunyip.a8n.run.
 #   - The shared `network-traefik-public` network is joined.
-#   - BUNYIP_OIDC_* are passed as runtime CONTAINER env (not build args).
-#     The production bunyip-web image writes them to a same-origin
-#     /config.json at startup (see bunyip-web/oci-build/entrypoint.sh).
+#   - BUNYIP_OIDC_* are passed as runtime CONTAINER env. bunyip-web is an
+#     Axum SSR server that reads them at startup (see bunyip-web/src/config.rs).
 #
-# DEV CAVEAT: this `web` service runs the dev image (`dx serve`, hot
-# reload), whose dev server is asset-manifest-based and cannot serve a
-# root /config.json - it SPA-falls-back to index.html for that path. So
-# under `dx serve` the SPA derives issuer + redirect_uri from the host
-# (${USER}-bunyip.a8n.run -> ${USER}-mokosh-api.a8n.run) and does NOT
-# receive client_id. For end-to-end SSO testing locally, run the
-# production image (Caddy serves /config.json). The vars below are kept so
-# that path and the host-derivation parity stay configured in one place.
-#
-# bunyip-api is internal-only in dev-sso mode (Traefik does not
-# route to it). The SPA hits mokosh-server's API directly, not
-# bunyip-api, so this is intentional.
+# bunyip-api is internal-only in dev-sso mode (Traefik does not route to it).
+# The frontend reaches the OIDC issuer (mokosh-server) per the BUNYIP_OIDC_*
+# vars below.
 
 services:
   web:

@@ -1,76 +1,19 @@
+---
+# Local development stack for bunyip (PSA Systems): PostgreSQL + the actix-web
+# backend (bunyip-api) + the Axum SSR frontend (bunyip-web). The whole backend
+# is self-contained in this workspace, so the api service just mounts this repo
+# at /app and cargo-watch hot-reloads.
+#
+# Run with:  just dev   (or: USER=$(whoami) docker compose -f compose.dev.yml up --build)
+#
+# The `dev-sso` overlay (compose.dev-sso.yml) layers Traefik routing on top for
+# *.a8n.run SSO testing; `just dev-sso` is the supported entry point.
 name: bunyip-${USER:?USER missing - run via just dev}
 
 services:
-  api:
-    build:
-      context: .
-      dockerfile: bunyip-api/Dockerfile
-      args:
-        UID: ${HOST_UID:-1000}
-        GID: ${HOST_GID:-1000}
-    container_name: dev-bunyip-api-${USER}
-    user: ${HOST_UID:-1000}:${HOST_GID:-1000}
-    restart: unless-stopped
-    environment:
-      # Postgres over the compose network (service name `postgres`).
-      DATABASE_URL: ${DATABASE_URL:-postgres://bunyip:devpassword@postgres:5432/bunyip}
-      HOST_IP: 0.0.0.0
-      APP_PORT: "4401"
-      ENVIRONMENT: ${ENVIRONMENT:-development}
-      APP_NAME: ${APP_NAME:-PSA Systems}
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4400}
-      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
-      JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-at-least-32-characters-long-000000}
-      TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:-}
-      STRIPE_ENCRYPTION_KEY: ${STRIPE_ENCRYPTION_KEY:-}
-      SETUP_DEFAULT_ADMIN: ${SETUP_DEFAULT_ADMIN:-}
-      # Bunyip IS the OIDC issuer; keys mounted from ./secrets (see volumes).
-      OIDC_ISSUER: ${OIDC_ISSUER:-http://localhost:4401}
-      OIDC_JWT_PRIVATE_KEY_PATH: /run/secrets/oidc/dev-2026.pem
-      OIDC_JWT_ACTIVE_KID: ${OIDC_JWT_ACTIVE_KID:-dev-2026}
-      OIDC_JWT_PUBLIC_KEYS_DIR: /run/secrets/oidc
-      EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
-      # Token to fetch the private dunite git dep during in-container builds.
-      DUNITE_GIT_TOKEN: ${DUNITE_GIT_TOKEN:-}
-      SQLX_OFFLINE: "true"
-      RUST_LOG: ${RUST_LOG:-info,bunyip_api=debug}
-    volumes:
-      - .:/app
-      - cargo-target:/app/target
-      - ./secrets:/run/secrets/oidc:ro
-    ports:
-      - "${BUNYIP_API_PORT:-4401}:4401"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - private
 
-  web:
-    build:
-      context: .
-      dockerfile: bunyip-web/Dockerfile
-      args:
-        UID: ${HOST_UID:-1000}
-        GID: ${HOST_GID:-1000}
-    container_name: dev-bunyip-web-${USER}
-    user: ${HOST_UID:-1000}:${HOST_GID:-1000}
-    restart: unless-stopped
-    environment:
-      RUST_LOG: ${RUST_LOG:-info}
-    volumes:
-      - .:/app
-      - cargo-target:/app/target
-      - web-node-modules:/app/bunyip-web/node_modules
-    ports:
-      - "${BUNYIP_WEB_PORT:-4400}:4400"
-    depends_on:
-      - api
-    networks:
-      - private
-
-  # Postgres for the dunite-based backend. The api runs migrations against it
-  # on startup (sqlx::migrate!).
+  # PostgreSQL database (used by the api). The api runs migrations against it on
+  # startup (sqlx::migrate!).
   postgres:
     image: postgres:16-alpine
     container_name: dev-bunyip-postgres-${USER}
@@ -88,25 +31,100 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 5s
     networks:
       - private
 
+  # actix-web backend (bunyip-api). Source is bind-mounted; cargo-watch rebuilds.
+  # The dunite git dep is anonymously readable; DUNITE_GIT_TOKEN is optional.
+  api:
+    build:
+      context: .
+      dockerfile: bunyip-api/Dockerfile
+      args:
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1000}
+        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-2}
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    container_name: dev-bunyip-api-${USER}
+    working_dir: /app
+    restart: unless-stopped
+    environment:
+      # Resolve bunyip-oidc's compile-time query! macros offline.
+      SQLX_OFFLINE: "true"
+      DATABASE_URL: ${DATABASE_URL:-postgres://bunyip:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/bunyip}
+      HOST_IP: 0.0.0.0
+      APP_PORT: "4401"
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      APP_NAME: ${APP_NAME:-PSA Systems}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4400}
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+      RUST_LOG: ${RUST_LOG:-info,bunyip_api=debug,bunyip_core=info}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-at-least-32-characters-long-000000}
+      TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:-}
+      STRIPE_ENCRYPTION_KEY: ${STRIPE_ENCRYPTION_KEY:-}
+      SETUP_DEFAULT_ADMIN: ${SETUP_DEFAULT_ADMIN:-}
+      EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
+      # Bunyip IS the OIDC issuer; Ed25519 keys mounted from ./secrets (volumes).
+      OIDC_ISSUER: ${OIDC_ISSUER:-http://localhost:4401}
+      OIDC_JWT_PRIVATE_KEY_PATH: /run/secrets/oidc/dev-2026.pem
+      OIDC_JWT_ACTIVE_KID: ${OIDC_JWT_ACTIVE_KID:-dev-2026}
+      OIDC_JWT_PUBLIC_KEYS_DIR: /run/secrets/oidc
+      # Optional Forgejo token to fetch the dunite git dep on the first build.
+      DUNITE_GIT_TOKEN: ${DUNITE_GIT_TOKEN:-}
+    volumes:
+      - .:/app
+      - cargo-target:/app/target
+      - ./secrets:/run/secrets/oidc:ro
+    ports:
+      - "${BUNYIP_API_PORT:-4401}:4401"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - private
+
+  # Axum SSR frontend (bunyip-web), the browser-facing BFF. Talks to api over the
+  # internal network. Source bind-mounted; cargo-watch rebuilds, Tailwind watches.
+  web:
+    build:
+      context: .
+      dockerfile: bunyip-web/Dockerfile
+      args:
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1000}
+        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-2}
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    container_name: dev-bunyip-web-${USER}
+    working_dir: /app
+    restart: unless-stopped
+    environment:
+      BUNYIP_BIND_ADDR: 0.0.0.0:4400
+      BUNYIP_API_URL: ${BUNYIP_API_URL:-http://api:4401}
+      BUNYIP_APP_DOMAIN: ${BUNYIP_APP_DOMAIN:-localhost}
+      BUNYIP_SHOW_BUSINESS_PRICING: ${BUNYIP_SHOW_BUSINESS_PRICING:-false}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - .:/app
+      - cargo-target:/app/target
+      - web-node-modules:/app/bunyip-web/node_modules
+    ports:
+      - "${BUNYIP_WEB_PORT:-4400}:4400"
+    depends_on:
+      - api
+    networks:
+      - private
+
+
 volumes:
+  postgres-data:
+    name: dev-bunyip-postgres-${USER}
   cargo-target:
     name: dev-bunyip-cargo-target-${USER}
   web-node-modules:
     name: dev-bunyip-web-node-modules-${USER}
-  postgres-data:
-    name: dev-bunyip-postgres-${USER}
 
 networks:
-  # Pre-created by `just dev-sso` (the recipe runs `docker network
-  # inspect || docker network create` before invoking compose) so the
-  # SSO overlay can attach it to traefik-public AND to this private net
-  # without compose trying to re-label it. Marking it external means
-  # compose will NOT attempt to create or relabel the network; it just
-  # uses what is already there. `just dev` (LAN-IP) relies on the same
-  # pre-create step inside the recipe.
   private:
-    external: true
     name: dev-bunyip-private-${USER}
+    driver: bridge

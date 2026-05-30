@@ -1,6 +1,6 @@
 [package]
 name = "bunyip-oci"
-description = "OCI registry vertical for Bunyip (PSA Systems). Builds on bunyip-core; wires the generic, storage-agnostic dunite-oci engine to Bunyip's database + actix-web handlers/routes. (Port in progress - mirrors menkent-oci.)"
+description = "OCI registry vertical for Bunyip (PSA Systems). Builds on bunyip-domain; wires the generic, storage-agnostic dunite-oci engine to Bunyip's database + actix-web handlers/routes. (Port in progress - mirrors menkent-oci.)"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-bunyip-core = { path = "../bunyip-core" }
+bunyip-domain = { path = "../bunyip-domain" }
 # Generic read-through OCI registry engine (consumer provides store traits + HTTP wiring).
 dunite-oci = { git = "https://dev.a8n.run/psa-systems/dunite", branch = "main" }
 

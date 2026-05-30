@@ -1,6 +1,6 @@
 [package]
 name = "bunyip-web"
-description = "Dioxus frontend for Bunyip - the SaaS / business platform UI for the Mokosh PSA product."
+description = "Axum SSR frontend for PSA Systems (Bunyip) - server-rendered HTML (Maud + htmx) backed by the separate /v1 API."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -12,50 +12,28 @@ name = "bunyip-web"
 path = "src/main.rs"
 
 [dependencies]
-dioxus = { version = "0.7", features = ["router", "web"] }
+# Web server.
+axum = { version = "0.7", features = ["macros"] }
+tokio = { workspace = true }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "compression-gzip", "trace"] }
 
-serde.workspace = true
-serde_json.workspace = true
-uuid = { workspace = true }
+# HTML templating (compile-checked Rust macro) - rendered to String and wrapped
+# in axum::response::Html, so no version coupling with a maud "axum" feature.
+maud = "0.26"
+
+# Server-side HTTP client for the /v1 API. rustls to avoid a native OpenSSL dep.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
 chrono = { workspace = true }
-validator.workspace = true
 
-# WASM-friendly randomness for client-side IDs
-getrandom = { version = "0.3", features = ["wasm_js"] }
+# Server-side QR rendering (otpauth URI -> inline SVG) for 2FA setup.
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
-# HTTP client (wasm). Used for /v1/* API calls.
-gloo-net = { version = "0.6", features = ["http"] }
-# Async setTimeout for the background access-token refresh loop.
-gloo-timers = { version = "0.3", features = ["futures"] }
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlAnchorElement", "DomTokenList", "Storage", "Location", "Navigator", "MediaQueryList", "Url", "UrlSearchParams", "PageTransitionEvent", "RequestCredentials", "Blob", "BlobPropertyBag"] }
+# Logging.
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
-# Error trait (used by OIDC flow's FlowError)
-thiserror = { workspace = true }
-
-# OIDC code+PKCE primitives. rand 0.9 to match the getrandom 0.3 wasm
-# story (rand 0.8 pulls getrandom 0.2 which needs separate feature
-# config for the wasm32-unknown-unknown target).
-base64 = "0.22"
-sha2 = { workspace = true }
-rand = "0.9"
-
-# Silence cosmetic clippy + transitional dead-code lints. CI runs
-# `clippy ... -- -D warnings`, and a long tail of advisory nits + orphan
-# helpers left over from cross-RP work was flipping the gate red without
-# pointing at real bugs. Tighten back up when we have time to chase the
-# dead code; until then keep CI green so feature work can merge.
-[lints.rust]
-dead_code = "allow"
-unused_imports = "allow"
-unused_variables = "allow"
-unused_mut = "allow"
-unused_doc_comments = "allow"
-deprecated = "allow"
-
-[lints.clippy]
-doc_lazy_continuation = "allow"
-doc_overindented_list_items = "allow"
-enum_variant_names = "allow"
+# Release/dev profiles are defined once at the workspace root (../Cargo.toml).

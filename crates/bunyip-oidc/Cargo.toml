@@ -1,6 +1,6 @@
 [package]
 name = "bunyip-oidc"
-description = "OIDC / OAuth 2.1 provider vertical for Bunyip (PSA Systems) - Bunyip is the OpenID Provider; mokosh-server and other relying parties are clients. Builds on bunyip-core; wires the generic dunite-oidc key/JWKS engine plus Bunyip's own provider handlers/persistence. Holds the compile-time sqlx::query! macros (offline cache in .sqlx/). (Port in progress - mirrors menkent-oidc.)"
+description = "OIDC / OAuth 2.1 provider vertical for Bunyip (PSA Systems) - Bunyip is the OpenID Provider; mokosh-server and other relying parties are clients. Builds on bunyip-domain; wires the generic dunite-oidc key/JWKS engine plus Bunyip's own provider handlers/persistence. Holds the compile-time sqlx::query! macros (offline cache in .sqlx/). (Port in progress - mirrors menkent-oidc.)"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-bunyip-core = { path = "../bunyip-core" }
+bunyip-domain = { path = "../bunyip-domain" }
 # Generic OIDC key/JWKS helpers (Ed25519 PEM loading + JWKS publishing).
 dunite-oidc = { git = "https://dev.a8n.run/psa-systems/dunite", branch = "main" }
 

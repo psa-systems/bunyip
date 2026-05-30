@@ -1,0 +1,53 @@
+---
+
+# Check: formatting, clippy, build, and unit tests on every push / PR.
+# Runs on the runner host (not in Docker) so the cargo cache is reused between
+# runs. bunyip-oidc has the only compile-time sqlx::query! macros; SQLX_OFFLINE
+# resolves them against the committed .sqlx cache, so no database is needed. The
+# generic dunite-core kernel is an anonymously-readable Forgejo git dependency
+# (network only, no credentials).
+name: Check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    paths:
+      - "bunyip-api/**"
+      - "bunyip-web/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".sqlx/**"
+      - ".forgejo/workflows/check.yml"
+
+jobs:
+  check:
+    name: fmt / clippy / build / test
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
+    env:
+      SQLX_OFFLINE: "true"
+    steps:
+      - name: Clone the repository
+        uses: https://code.forgejo.org/actions/checkout@v5
+
+      - name: Install Rust toolchain components
+        run: rustup component add clippy rustfmt
+
+      - name: Cache Rust build
+        uses: https://github.com/Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build --all-targets
+
+      - name: Unit tests
+        run: cargo test --lib
