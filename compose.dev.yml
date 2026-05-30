@@ -12,19 +12,37 @@ services:
     user: ${HOST_UID:-1000}:${HOST_GID:-1000}
     restart: unless-stopped
     environment:
-      BUNYIP_API_BIND: 0.0.0.0:8080
-      BUNYIP_PUBLIC_BASE_URL: ${BUNYIP_PUBLIC_BASE_URL:-http://localhost:4400}
-      BUNYIP_SEEDS_DIR: /app/seeds
-      COOKIE_SECRET: ${COOKIE_SECRET:-dev-only-do-not-use-in-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
-      MOCK_PASSWORD: ${MOCK_PASSWORD:-demo}
-      MOCK_TOTP_CODE: ${MOCK_TOTP_CODE:-000000}
-      FEEDBACK_FORGEJO_REPO: ${FEEDBACK_FORGEJO_REPO:-}
+      # Postgres over the compose network (service name `postgres`).
+      DATABASE_URL: ${DATABASE_URL:-postgres://bunyip:devpassword@postgres:5432/bunyip}
+      HOST_IP: 0.0.0.0
+      APP_PORT: "4401"
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      APP_NAME: ${APP_NAME:-PSA Systems}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4400}
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-at-least-32-characters-long-000000}
+      TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:-}
+      STRIPE_ENCRYPTION_KEY: ${STRIPE_ENCRYPTION_KEY:-}
+      SETUP_DEFAULT_ADMIN: ${SETUP_DEFAULT_ADMIN:-}
+      # Bunyip IS the OIDC issuer; keys mounted from ./secrets (see volumes).
+      OIDC_ISSUER: ${OIDC_ISSUER:-http://localhost:4401}
+      OIDC_JWT_PRIVATE_KEY_PATH: /run/secrets/oidc/dev-2026.pem
+      OIDC_JWT_ACTIVE_KID: ${OIDC_JWT_ACTIVE_KID:-dev-2026}
+      OIDC_JWT_PUBLIC_KEYS_DIR: /run/secrets/oidc
+      EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
+      # Token to fetch the private dunite git dep during in-container builds.
+      DUNITE_GIT_TOKEN: ${DUNITE_GIT_TOKEN:-}
+      SQLX_OFFLINE: "true"
       RUST_LOG: ${RUST_LOG:-info,bunyip_api=debug}
     volumes:
       - .:/app
       - cargo-target:/app/target
+      - ./secrets:/run/secrets/oidc:ro
     ports:
-      - "${BUNYIP_API_PORT:-4401}:8080"
+      - "${BUNYIP_API_PORT:-4401}:4401"
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - private
 
@@ -51,9 +69,8 @@ services:
     networks:
       - private
 
-  # SCAFFOLD: Postgres for the dunite-based rebuild. Idle today (the axum mock
-  # api does not use it) - present so the stack is ready once bunyip-api is
-  # converted to the actix backend. See dev-docs/bunyip-on-dunite-scaffold.md.
+  # Postgres for the dunite-based backend. The api runs migrations against it
+  # on startup (sqlx::migrate!).
   postgres:
     image: postgres:16-alpine
     container_name: dev-bunyip-postgres-${USER}

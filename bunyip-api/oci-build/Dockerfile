@@ -1,76 +1,71 @@
-# Bunyip API - production OCI image
+# syntax=docker/dockerfile:1
 #
-# Build context is the repo root. Compose / CI invocation:
-#   docker buildx build --tag bunyip-api:local --file bunyip-api/oci-build/Dockerfile .
+# Bunyip API - production OCI image (actix-web backend on the dunite crates).
+#
+# Build context is the repo root. The dunite crates are a PRIVATE git dependency
+# (https://dev.a8n.run/psa-systems/dunite), so the build needs a Forgejo token
+# passed as a buildkit secret named `dunite_token`:
+#
+#   docker buildx build \
+#     --secret id=dunite_token,env=DUNITE_GIT_TOKEN \
+#     --build-arg GIT_SHA="$(git rev-parse --short HEAD)" \
+#     --tag bunyip-api:local --file bunyip-api/oci-build/Dockerfile .
+#
+# The binary embeds the SQL migrations (sqlx::migrate!) and email templates
+# (include_str!) at compile time, so the runtime image is just the static binary.
 
 FROM rust:1-alpine AS builder
-
 WORKDIR /build
 
-RUN apk add --no-cache musl-dev pkgconfig openssl-dev openssl-libs-static lld
+RUN apk add --no-cache musl-dev pkgconfig openssl-dev openssl-libs-static lld git
 
-ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld"
+# musl-static link via lld; fetch the private git dep with the git CLI (so the
+# injected token is honoured); resolve sqlx::query! macros against .sqlx offline.
+ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
+    CARGO_NET_GIT_FETCH_WITH_CLI=true \
+    SQLX_OFFLINE=true
 
-# Copy workspace manifests + every member's manifest, then create stub source
-# files to let cargo cache the dependency build before copying real sources.
-COPY Cargo.toml Cargo.lock* ./
-COPY bunyip-api/Cargo.toml ./bunyip-api/
-COPY bunyip-web/Cargo.toml ./bunyip-web/
-COPY crates/bunyip-mocks/Cargo.toml ./crates/bunyip-mocks/
+ARG GIT_SHA=""
+ARG GIT_TAG=""
+ENV GIT_COMMIT=${GIT_SHA} GIT_TAG=${GIT_TAG}
 
-RUN mkdir -p bunyip-api/src bunyip-web/src crates/bunyip-mocks/src \
-    && echo 'fn main() {}' > bunyip-api/src/main.rs \
-    && echo '' > bunyip-api/src/lib.rs \
-    && echo 'fn main() {}' > bunyip-web/src/main.rs \
-    && echo '' > crates/bunyip-mocks/src/lib.rs \
-    && cargo build --release --bin bunyip-api 2>/dev/null || true \
-    && rm -rf bunyip-api/src bunyip-web/src crates/bunyip-mocks/src
+# Whole workspace (a .dockerignore keeps target/, .git, secrets out of context).
+COPY . .
 
-# Copy real sources and build.
-COPY bunyip-api ./bunyip-api
-COPY crates ./crates
+# Configure git auth from the buildkit secret, then build the release binary.
+RUN --mount=type=secret,id=dunite_token \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    sh -c 'if [ -s /run/secrets/dunite_token ]; then \
+              git config --global url."https://oauth2:$(cat /run/secrets/dunite_token)@dev.a8n.run/".insteadOf "https://dev.a8n.run/"; \
+           fi' \
+    && cargo build --release --bin bunyip-api
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --release --bin bunyip-api
-
-# Export stage - lets `docker buildx build --target export --output
-# type=local,dest=<dir>` extract just the compiled binary + bundled seeds
-# for release-artifact tarballs without dragging in the rest of the
-# builder filesystem. Keep this above the runtime stage so the runtime
-# remains the default (last) stage and existing image builds are
-# unchanged.
+# Export stage: `docker buildx build --target export --output type=local,dest=<dir>`
+# extracts just the static binary for release-artifact tarballs.
 FROM scratch AS export
 COPY --from=builder /build/target/release/bunyip-api /bunyip-api
-COPY seeds /seeds
 
 # Runtime stage
 FROM alpine:3.21
-
 WORKDIR /app
 
 RUN apk add --no-cache ca-certificates tzdata curl \
     && adduser --disabled-password --uid 1001 appuser
 
 COPY --from=builder /build/target/release/bunyip-api /app/bunyip-api
-COPY seeds /app/seeds
-
 RUN chown --recursive appuser:appuser /app
-
 USER appuser
 
 ARG GIT_SHA=""
-LABEL org.opencontainers.image.source=https://dev.a8n.run/psa-systems/bunyip
-LABEL org.opencontainers.image.description="Bunyip API"
-LABEL org.opencontainers.image.revision="${GIT_SHA}"
+LABEL org.opencontainers.image.source=https://dev.a8n.run/psa-systems/bunyip \
+      org.opencontainers.image.description="Bunyip API (PSA Systems)" \
+      org.opencontainers.image.revision="${GIT_SHA}"
 
-ENV BUNYIP_API_BIND=0.0.0.0:8080
-ENV BUNYIP_SEEDS_DIR=/app/seeds
-# Surfaced by the /version endpoint so operators can see the exact build.
-ENV BUNYIP_GIT_SHA=${GIT_SHA}
-
-EXPOSE 8080
+# Listen address comes from HOST_IP/APP_PORT; everything else is injected at run.
+ENV HOST_IP=0.0.0.0 APP_PORT=4401
+EXPOSE 4401
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl --silent --fail http://localhost:8080/healthz || exit 1
+    CMD curl --silent --fail http://localhost:4401/v1/health || exit 1
 
 ENTRYPOINT ["/app/bunyip-api"]
