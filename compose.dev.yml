@@ -125,6 +125,10 @@ volumes:
     name: dev-bunyip-web-node-modules-${USER}
 
 networks:
+  # Declared external so compose attaches to the per-developer network the
+  # `just dev*` recipes pre-create (docker network create) rather than trying to
+  # own it. Without this, compose expects its own `com.docker.compose.network`
+  # label on the pre-created network and aborts: "incorrect label ... set to ''".
   private:
+    external: true
     name: dev-bunyip-private-${USER}
-    driver: bridge
