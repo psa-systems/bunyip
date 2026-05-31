@@ -50,14 +50,28 @@ ensure-env:
     | save .env
     print "Wrote .env (generated TOTP_ENCRYPTION_KEY, STRIPE_ENCRYPTION_KEY, JWT_SECRET)."
 
+# Generate the dev OIDC signing keypair (Ed25519, kid dev-2026) into ./secrets if
+# missing. bunyip-api IS the OIDC issuer and loads these at startup
+# (OIDC_JWT_PRIVATE_KEY_PATH); without them it fails to boot. ./secrets is mounted
+# into the api container at /run/secrets/oidc (see compose.dev.yml). The keypair is
+# gitignored; this just makes a fresh clone bootable without manual openssl steps.
+[private]
+ensure-oidc-keys:
+    #!/usr/bin/env nu
+    if (("secrets/dev-2026.pem" | path exists) and ("secrets/dev-2026.pub.pem" | path exists)) { return }
+    mkdir secrets
+    ^openssl genpkey --algorithm ed25519 --out secrets/dev-2026.pem
+    ^openssl pkey --in secrets/dev-2026.pem --pubout --out secrets/dev-2026.pub.pem
+    print "Generated secrets/dev-2026.pem (Ed25519 OIDC signing key, kid dev-2026)."
+
 # Start the full dev stack (postgres + api + web) in the foreground.
 [group: 'dev']
-dev: ensure-env
+dev: ensure-env ensure-oidc-keys
     {{ compose }}up --build
 
 # Start the full dev stack detached.
 [group: 'dev']
-dev-detach: ensure-env
+dev-detach: ensure-env ensure-oidc-keys
     {{ compose }}up --build --detach
     @echo ""
     @echo "  web (frontend): http://localhost:4400"
@@ -65,7 +79,7 @@ dev-detach: ensure-env
 
 # Start the Traefik-routed stack on *.a8n.run (detached, for SSO/remote testing).
 [group: 'dev']
-dev-sso: ensure-env
+dev-sso: ensure-env ensure-oidc-keys
     #!/usr/bin/env nu
     let user_name = (^whoami | str trim)
     # compose.dev.yml declares the per-developer private network as
