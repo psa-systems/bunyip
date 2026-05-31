@@ -25,17 +25,21 @@ services:
     networks:
       - private
       - traefik-public
+    # List (sequence) syntax is REQUIRED here, not the usual map syntax.
+    # Docker Compose interpolates ${USER} inside string VALUES but NOT inside
+    # map KEYS (Compose v2.40). The router name lives in the label key, so map
+    # syntax leaves a literal `${USER}` in the router name and the host fails to
+    # route (default cert + 404). List form makes the whole "key=value" one
+    # string value, so ${USER} interpolates. Mirrors mokosh-server's overlay.
+    # `nebula-secure` is the Nebula-published Traefik entrypoint (asDefault), so
+    # ${USER}-bunyip.a8n.run is reachable over the mesh like the other dev apps.
     labels:
-      traefik.enable: true
-      traefik.docker.network: network-traefik-public
-      traefik.http.routers.bunyip-${USER}.rule: Host(`${USER}-bunyip.a8n.run`)
-      # `entrypoints` is overridable via TRAEFIK_ENTRYPOINTS so a node reached over a
-      # different Traefik entrypoint (e.g. a Nebula-published one) can opt in without
-      # editing this file. Default `web-secure` keeps the dev-01 setup unchanged; set
-      # TRAEFIK_ENTRYPOINTS=web-secure,nebula-secure in .env on Nebula-accessed nodes.
-      traefik.http.routers.bunyip-${USER}.entrypoints: ${TRAEFIK_ENTRYPOINTS:-web-secure}
-      traefik.http.routers.bunyip-${USER}.tls.certresolver: cert-cloudflare
-      traefik.http.services.bunyip-${USER}.loadbalancer.server.port: "4400"
+      - traefik.enable=true
+      - traefik.docker.network=network-traefik-public
+      - traefik.http.routers.bunyip-${USER}.rule=Host(`${USER}-bunyip.a8n.run`)
+      - traefik.http.routers.bunyip-${USER}.entrypoints=nebula-secure
+      - traefik.http.routers.bunyip-${USER}.tls.certresolver=cert-cloudflare
+      - traefik.http.services.bunyip-${USER}.loadbalancer.server.port=4400
 
 networks:
   traefik-public:
