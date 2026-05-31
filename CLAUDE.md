@@ -36,7 +36,7 @@ is also bunyip's OIDC issuer (it serves `/.well-known/*` + `/oauth2/*`).
 `just` drives everything (see `justfile`):
 
 - `just dev` / `just dev-detach` - full local stack (postgres + api + web) via `compose.dev.yml`.
-- `just dev-sso` - Traefik-routed stack on `*.a8n.run` (layers `compose.dev-sso.yml` on top).
+- `just dev-sso` - Traefik-routed stack on `*.a8n.run` (layers `compose.dev-sso.yml` on top). Cross-repo (bunyip + mokosh-server + mokosh-apps), Nebula topology, OIDC client registration, and every spin-up obstacle are documented in `dev-docs/dev-sso-three-repo-runbook.md` - read it before touching dev-sso infra or onboarding a dev box.
 - `just check` - fmt + clippy + build + docker builder stage. `just test`, `just typecheck`, `just lint`, `just fmt`.
 - `just build-docker` - both production images (`build-docker-export` extracts the api static binary). `just migrate` / `migrate-revert`.
 - `just create-release <major|minor|hotfix>` - bump `[workspace.package].version`, push the branch, open the release PR.
