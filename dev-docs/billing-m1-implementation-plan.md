@@ -49,13 +49,13 @@ phase 2:
 - Web client: `bunyip-web/src/util.rs:45-46`, `bunyip-web/src/api/types.rs:47-49,90-91`, `bunyip-api/src/handlers/membership.rs:81-82` (MembershipResponse still returns price_locked).
 - Admin comp lever: `grant_lifetime_membership` (`bunyip-api/src/routes/admin.rs:42`, `crates/bunyip-domain/src/repositories/user.rs:586`).
 
-**Unresolved sub-decision to surface (not one of your four):** `lifetime_member`
-is a boolean flag distinct from the deleted `Lifetime` *tier*. Decide whether it
-survives as an admin "free forever / comp" lever (decouple from the tier, keep the
-grant endpoint + the `is_access_allowed` branch) or is removed entirely. Phase 2
-assumes **keep as a decoupled admin comp flag** unless you say otherwise; that is
-the lower-risk default because `is_access_allowed` and the admin endpoint already
-depend on it.
+**RESOLVED sub-decision:** `lifetime_member` is **kept as a decoupled admin comp
+flag** ("comp this MSP / free-forever for a partner"). Decouple it from the deleted
+`Lifetime` *tier*, but keep the boolean, the `is_access_allowed()` branch, and the
+`grant_lifetime_membership` admin endpoint (`bunyip-api/src/routes/admin.rs:42`,
+`crates/bunyip-domain/src/repositories/user.rs:586`). Phase 2c therefore reduces
+`is_access_allowed()` to: `admin OR lifetime_member OR trial-not-expired OR
+membership_status.has_access()`.
 
 ## Phases
 
@@ -75,7 +75,7 @@ with it, the price-lock path and both row-7 bugs.
 
 - **2a - delete the price-lock path (removes row-7 Bug A + Bug B):** drop the `amount`/`price_id`/`lock_price` block in `handle_checkout_completed` (`webhook.rs:~100-118`). Keep the membership-activation + welcome-email + audit. This is the clean part.
 - **2b - de-tier the webhook:** remove `resolve_tier_for_product` (`webhook.rs:493-507`) and the `upgrade_subscription_tier`/`reset_subscription_tier` calls in `handle_subscription_{created,updated,deleted}` (`webhook.rs:181,252,319`). Subscription state no longer mutates a tier; only `membership_status` (and, in phase 4, the `subscriptions` row).
-- **2c - de-tier registration + access + claims:** replace the tier-assignment logic in `services/auth.rs:987-1032` + `repositories/user.rs:521-553` with the single plan (a new user is on the one plan; trial handled in phase 3). Update `handlers/user.rs:290`. Remove `price_locked`/`price_id` from the JWT claims (`services/jwt.rs:112-113`) and the `MembershipResponse` (`handlers/membership.rs:81-82`) + web types (`bunyip-web/src/api/types.rs:47-49,90-91`). Keep `is_access_allowed()` working: it should reduce to admin OR `lifetime_member` (if kept) OR trial-not-expired OR `membership_status.has_access()`.
+- **2c - de-tier registration + access + claims:** replace the tier-assignment logic in `services/auth.rs:987-1032` + `repositories/user.rs:521-553` with the single plan (a new user is on the one plan; trial handled in phase 3). Update `handlers/user.rs:290`. Stop **writing** `price_locked`/`price_id` to the JWT claims (`services/jwt.rs:112-113`), the `MembershipResponse` (`handlers/membership.rs:81-82`), and web types (`bunyip-web/src/api/types.rs:47-49,90-91`). **Do this the non-breaking way (RESOLVED):** keep tolerating the fields' absence on read and let existing tokens age out naturally. Do NOT do a hard removal that assumes the new claim shape, because live sessions carry the old tokens until reissue and `is_access_allowed` is the access gate; serde defaults / `Option` on read are enough, no deprecation-window engineering. Keep `is_access_allowed()` working: it reduces to `admin OR lifetime_member OR trial-not-expired OR membership_status.has_access()`.
 - **2d - migration:** neutralize `tier_config` (drop `lifetime_slots`, `early_adopter_slots`, the trial-day columns; keep/repoint the product/price-id columns to the single plan) and collapse the `subscription_tier`/`lifetime_member` columns per the sub-decision above. DDL only; no `user_id`-shape change.
 - **Files:** `webhook.rs`, `services/auth.rs`, `repositories/user.rs`, `models/user.rs` (`SubscriptionTier` enum), `models/mod.rs`, `handlers/user.rs`, `handlers/membership.rs`, `services/jwt.rs`, `handlers/admin.rs` (reset/grant), `bunyip-web/src/{util.rs,api/types.rs}`, plus the migration + `.sqlx` regen (bunyip-oidc query! cache - see CLAUDE.md sqlx note; here the queries live in bunyip-domain via `query`, confirm whether any `query!` is touched).
 - **Done:** a new signup lands on the single plan; the webhook never resolves a tier or locks a price; `cargo build`/`clippy` green; JWT + MembershipResponse no longer carry price-lock; `is_access_allowed` verified (admin, trial, active, grace, cancelled all gate correctly). End-to-end subscribe verification is `[needs test keys]`.
@@ -124,6 +124,8 @@ GATE: Stripe test keys ── blocks end-to-end verification of 1, 3, 4, 5
 
 ## Open items for you before build
 
-1. **`lifetime_member` keep-or-remove** (phase 2 sub-decision above). Default: keep as a decoupled admin comp flag.
-2. **Stripe test-mode keys + test webhook endpoint** (the gate). Likely source from Vas / secrets.
-3. **Whether `MembershipResponse`/JWT may drop `price_locked`** in a breaking way, or need a deprecation window for existing tokens (phase 2c).
+1. **`lifetime_member`** - RESOLVED: keep as a decoupled admin comp flag (see phase 2c + the blast-radius note above).
+2. **`MembershipResponse`/JWT dropping `price_locked`** - RESOLVED: non-breaking. Stop writing the fields; tolerate their absence on read; let old tokens age out. No deprecation-window engineering (phase 2c).
+3. **Stripe test-mode keys + test webhook endpoint** - STILL OPEN (the gate). Likely source from Vas / secrets. Blocks end-to-end verification in phases 1, 3, 4, 5.
+
+This plan is now decision-complete except for the Stripe-key gate (item 3).
