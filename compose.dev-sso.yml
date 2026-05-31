@@ -29,7 +29,11 @@ services:
       traefik.enable: true
       traefik.docker.network: network-traefik-public
       traefik.http.routers.bunyip-${USER}.rule: Host(`${USER}-bunyip.a8n.run`)
-      traefik.http.routers.bunyip-${USER}.entrypoints: web-secure
+      # `entrypoints` is overridable via TRAEFIK_ENTRYPOINTS so a node reached over a
+      # different Traefik entrypoint (e.g. a Nebula-published one) can opt in without
+      # editing this file. Default `web-secure` keeps the dev-01 setup unchanged; set
+      # TRAEFIK_ENTRYPOINTS=web-secure,nebula-secure in .env on Nebula-accessed nodes.
+      traefik.http.routers.bunyip-${USER}.entrypoints: ${TRAEFIK_ENTRYPOINTS:-web-secure}
       traefik.http.routers.bunyip-${USER}.tls.certresolver: cert-cloudflare
       traefik.http.services.bunyip-${USER}.loadbalancer.server.port: "4400"
 
