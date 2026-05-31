@@ -10,10 +10,13 @@
 default:
     @just --list
 
-# docker compose needs these for the `user:` mapping + dev-image HOST_UID/HOST_GID
-# build args on shared dev hosts.
-export UID := `id -u`
-export GID := `id -g`
+# docker compose reads HOST_UID/HOST_GID for the `user:` mapping + dev-image
+# build args on shared dev hosts (where the developer's uid is not 1000). These
+# MUST be named HOST_UID/HOST_GID - compose.dev.yml interpolates exactly those,
+# and a fallback to 1000 makes the container unable to read the bind-mounted,
+# host-owned (0700) repo, crash-looping with "can't cd to /app/bunyip-web".
+export HOST_UID := `id -u`
+export HOST_GID := `id -g`
 # bunyip-oidc holds the workspace's only compile-time sqlx::query! macros;
 # resolve them against the committed .sqlx cache so local cargo commands need no
 # database.
