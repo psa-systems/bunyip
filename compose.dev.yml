@@ -72,12 +72,29 @@ services:
       OIDC_JWT_PUBLIC_KEYS_DIR: /run/secrets/oidc
       # Optional Forgejo token to fetch the dunite git dep on the first build.
       DUNITE_GIT_TOKEN: ${DUNITE_GIT_TOKEN:-}
+      # ── Distribution proxy (downloads + OCI registry) ─────────────────────
+      # Both verticals stay disabled until FORGEJO_BASE_URL + FORGEJO_API_TOKEN
+      # are set in .env. The token needs the read:package scope (and
+      # read:repository for release-attachment downloads). See .env.example.
+      FORGEJO_BASE_URL: ${FORGEJO_BASE_URL:-}
+      FORGEJO_API_TOKEN: ${FORGEJO_API_TOKEN:-}
+      DOWNLOAD_CACHE_DIR: /var/cache/bunyip-downloads
+      OCI_REGISTRY_ENABLED: ${OCI_REGISTRY_ENABLED:-false}
+      OCI_REGISTRY_PORT: "18081"
+      # Local verification: docker talks to localhost:18081 over plain HTTP, so
+      # the advertised service name and token realm must match that address.
+      OCI_REGISTRY_SERVICE: ${OCI_REGISTRY_SERVICE:-localhost:18081}
+      OCI_REGISTRY_REALM: ${OCI_REGISTRY_REALM:-http://localhost:18081/auth/token}
+      OCI_BLOB_CACHE_DIR: /var/cache/bunyip-oci
     volumes:
       - .:/app
       - cargo-target:/app/target
       - ./secrets:/run/secrets/oidc:ro
+      - dev-bunyip-download-cache:/var/cache/bunyip-downloads
+      - dev-bunyip-oci-cache:/var/cache/bunyip-oci
     ports:
       - "${BUNYIP_API_PORT:-4401}:4401"
+      - "${BUNYIP_OCI_PORT:-18081}:18081"
     depends_on:
       postgres:
         condition: service_healthy
@@ -123,6 +140,10 @@ volumes:
     name: dev-bunyip-cargo-target-${USER}
   web-node-modules:
     name: dev-bunyip-web-node-modules-${USER}
+  dev-bunyip-download-cache:
+    name: dev-bunyip-download-cache-${USER}
+  dev-bunyip-oci-cache:
+    name: dev-bunyip-oci-cache-${USER}
 
 networks:
   # Declared external so compose attaches to the per-developer network the

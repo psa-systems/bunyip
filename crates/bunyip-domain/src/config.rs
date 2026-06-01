@@ -340,6 +340,11 @@ pub struct OciConfig {
     pub enabled: bool,
     pub port: u16,
     pub service: String,
+    /// Full token-endpoint realm URL advertised in `WWW-Authenticate`.
+    /// Defaults to `https://{service}/auth/token`. Override for deployments
+    /// where the registry is not served over HTTPS on the service hostname
+    /// (e.g. local verification: `http://localhost:18081/auth/token`).
+    pub realm: Option<String>,
     pub blob_cache_dir: String,
     pub blob_cache_max_bytes: u64,
     pub manifest_cache_ttl_secs: u64,
@@ -349,6 +354,14 @@ pub struct OciConfig {
 }
 
 impl OciConfig {
+    /// The realm URL Docker clients must hit to exchange credentials for a
+    /// registry bearer token.
+    pub fn realm_url(&self) -> String {
+        self.realm
+            .clone()
+            .unwrap_or_else(|| format!("https://{}/auth/token", self.service))
+    }
+
     pub fn from_env() -> Self {
         Self {
             enabled: env::var("OCI_REGISTRY_ENABLED")
@@ -360,6 +373,9 @@ impl OciConfig {
                 .unwrap_or(18081),
             service: env::var("OCI_REGISTRY_SERVICE")
                 .unwrap_or_else(|_| "oci.example.com".to_string()),
+            realm: env::var("OCI_REGISTRY_REALM")
+                .ok()
+                .filter(|s| !s.is_empty()),
             blob_cache_dir: env::var("OCI_BLOB_CACHE_DIR")
                 .unwrap_or_else(|_| "/var/cache/bunyip-oci".to_string()),
             blob_cache_max_bytes: env::var("OCI_BLOB_CACHE_MAX_BYTES")
@@ -789,6 +805,37 @@ mod tests {
         assert_eq!(cfg.concurrent_manifests_per_user, 2);
         assert_eq!(cfg.pulls_per_user_per_day, 50);
         assert_eq!(cfg.token_ttl_secs, 900);
+    }
+
+    // Realm assertions live in ONE self-contained test (and OCI_REGISTRY_REALM
+    // is touched by no other test) to avoid the parallel env-var races tracked
+    // in BUNYIP-36.
+    #[test]
+    fn oci_config_realm_default_and_override() {
+        // realm_url() falls back to https://{service}/auth/token; computed from
+        // an explicit struct so the assertion cannot race on env vars.
+        let cfg = OciConfig {
+            enabled: false,
+            port: 18081,
+            service: "registry.example.com".to_string(),
+            realm: None,
+            blob_cache_dir: String::new(),
+            blob_cache_max_bytes: 0,
+            manifest_cache_ttl_secs: 0,
+            concurrent_manifests_per_user: 0,
+            pulls_per_user_per_day: 0,
+            token_ttl_secs: 0,
+        };
+        assert_eq!(cfg.realm_url(), "https://registry.example.com/auth/token");
+
+        let with_override = OciConfig {
+            realm: Some("http://localhost:18081/auth/token".to_string()),
+            ..cfg
+        };
+        assert_eq!(
+            with_override.realm_url(),
+            "http://localhost:18081/auth/token"
+        );
     }
 
     #[test]

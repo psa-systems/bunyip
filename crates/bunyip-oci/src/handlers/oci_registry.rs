@@ -274,6 +274,18 @@ pub async fn push_not_supported() -> Result<HttpResponse, OciError> {
 fn map_reg_err(e: &RegistryError) -> OciError {
     match e {
         RegistryError::NotFound => OciError::ManifestUnknown,
+        // 401/403 from Forgejo means OUR service credentials were rejected,
+        // not the member's. Surface a precise operator diagnostic; the member
+        // still sees a generic upstream error.
+        RegistryError::Upstream(status @ (401 | 403)) => {
+            tracing::error!(
+                status,
+                "upstream Forgejo rejected the registry service credentials; \
+                 verify FORGEJO_API_TOKEN is valid and has the read:package scope \
+                 for the configured owner/image"
+            );
+            OciError::Upstream
+        }
         _ => OciError::Upstream,
     }
 }
