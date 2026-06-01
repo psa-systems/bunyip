@@ -19,14 +19,17 @@ use bunyip_api::{
         AutoBanMiddleware, SecurityHeaders,
     },
     models::{CreateUser, UserRole},
-    repositories::{FeedbackRepository, RateLimitRepository, UserRepository},
+    repositories::{
+        DownloadCacheRepository, DownloadDailyCountRepository, FeedbackRepository,
+        RateLimitRepository, UserRepository,
+    },
     routes,
-    version::UpdateChecker,
     services::{
-        AuthService, DownloadCache, DownloadLimiter, EmailService, EncryptionKeySet,
-        ForgejoClient, JwtConfig, JwtService, PasswordService, ReleaseCache, StripeConfig,
+        AppDownloadCache, AuthService, DownloadLimiter, EmailService, EncryptionKeySet,
+        ForgejoAssetClient, JwtConfig, JwtService, PasswordService, ReleaseCache, StripeConfig,
         StripeService, TotpService, WebhookService,
     },
+    version::UpdateChecker,
 };
 use bunyip_oci::{
     middleware::OciWwwAuthenticate,
@@ -200,25 +203,29 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Stripe service initialized");
 
-    // Initialize Forgejo download services (optional — degrade gracefully when unconfigured)
+    // Initialize Forgejo download services (optional — degrade gracefully when unconfigured).
+    // The mechanism comes from the dunite-download engine; bunyip supplies the
+    // Postgres-backed store (DownloadCacheRepository) and counter
+    // (DownloadDailyCountRepository) adapters.
     let forgejo_client = config.download.forgejo_base_url.as_ref().and_then(|base| {
         config
             .download
             .forgejo_api_token
             .as_ref()
-            .map(|token| Arc::new(ForgejoClient::new(base.clone(), token.clone())))
+            .map(|token| Arc::new(ForgejoAssetClient::new(base.clone(), token.clone())))
     });
 
     let release_cache = forgejo_client
         .clone()
         .map(|c| Arc::new(ReleaseCache::new(c, config.download.release_cache_ttl_secs)));
 
-    let download_cache = forgejo_client.clone().map(|c| {
-        Arc::new(DownloadCache::new(
+    let download_cache: Option<Arc<AppDownloadCache>> = forgejo_client.clone().map(|c| {
+        let store = Arc::new(DownloadCacheRepository::new(pool.clone()));
+        Arc::new(AppDownloadCache::new(
             c,
             &config.download.cache_dir,
             config.download.cache_max_bytes,
-            pool.clone(),
+            store,
         ))
     });
 
@@ -227,6 +234,9 @@ async fn main() -> anyhow::Result<()> {
             tracing::warn!(error = %e, "failed to create download cache dir");
         }
     }
+
+    // Durable per-user daily counter used by the download limiter.
+    let download_counter = Arc::new(DownloadDailyCountRepository::new(pool.clone()));
 
     let download_limiter = Arc::new(DownloadLimiter::new(
         config.download.concurrency_per_user,
@@ -509,6 +519,7 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::Data::new(stripe_key_set.clone()))
             .app_data(web::Data::new(config_data.clone()))
             .app_data(web::Data::new(download_limiter.clone()))
+            .app_data(web::Data::new(download_counter.clone()))
             .app_data(web::Data::new(release_cache.clone()))
             .app_data(web::Data::new(download_cache.clone()))
             .app_data(web::Data::new(manifest_cache.clone()))

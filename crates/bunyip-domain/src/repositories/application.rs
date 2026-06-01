@@ -154,11 +154,13 @@ impl ApplicationRepository {
                 forgejo_owner       = COALESCE($13, forgejo_owner),
                 forgejo_repo        = COALESCE($14, forgejo_repo),
                 pinned_release_tag  = COALESCE($15, pinned_release_tag),
-                oci_image_owner     = COALESCE($16, oci_image_owner),
-                oci_image_name      = COALESCE($17, oci_image_name),
-                pinned_image_tag    = COALESCE($18, pinned_image_tag),
+                artifact_source     = COALESCE($16, artifact_source),
+                forgejo_package     = COALESCE($17, forgejo_package),
+                oci_image_owner     = COALESCE($18, oci_image_owner),
+                oci_image_name      = COALESCE($19, oci_image_name),
+                pinned_image_tag    = COALESCE($20, pinned_image_tag),
                 updated_at          = NOW()
-            WHERE id = $19
+            WHERE id = $21
             RETURNING *
             "#,
         )
@@ -177,6 +179,8 @@ impl ApplicationRepository {
         .bind(data.forgejo_owner.as_deref())
         .bind(data.forgejo_repo.as_deref())
         .bind(data.pinned_release_tag.as_deref())
+        .bind(data.artifact_source.as_deref())
+        .bind(data.forgejo_package.as_deref())
         .bind(data.oci_image_owner.as_deref())
         .bind(data.oci_image_name.as_deref())
         .bind(data.pinned_image_tag.as_deref())
@@ -326,6 +330,8 @@ mod tests {
             forgejo_owner: None,
             forgejo_repo: None,
             pinned_release_tag: None,
+            artifact_source: None,
+            forgejo_package: None,
             oci_image_owner: Some("a8n".into()),
             oci_image_name: Some("rus".into()),
             pinned_image_tag: Some("v1".into()),

@@ -25,7 +25,7 @@ use crate::repositories::{
 };
 use crate::responses::{created, get_request_id, paginated, success, success_no_data};
 use crate::services::{
-    AuthService, DownloadCache, EmailService, EncryptionKeySet, JwtService, PasswordService,
+    AppDownloadCache, AuthService, EmailService, EncryptionKeySet, JwtService, PasswordService,
     ReleaseCache, StripeConfig, StripeService, TotpService, WebhookService,
 };
 use crate::validation;
@@ -494,7 +494,7 @@ pub async fn update_application(
     body: web::Json<UpdateApplication>,
     webhook_service: web::Data<Arc<WebhookService>>,
     release_cache: web::Data<Option<Arc<ReleaseCache>>>,
-    download_cache: web::Data<Option<Arc<DownloadCache>>>,
+    download_cache: web::Data<Option<Arc<AppDownloadCache>>>,
     manifest_cache: web::Data<Option<Arc<ManifestCache>>>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -547,20 +547,23 @@ pub async fn update_application(
         ));
     }
 
-    // Capture old tags before update for cache invalidation
-    let old_tag = old_app.pinned_release_tag.clone();
+    // Capture the old artifact source before update for cache invalidation
+    let old_source = old_app.download_source();
     let old_pinned_image_tag = old_app.pinned_image_tag.clone();
 
     let app = ApplicationRepository::update(&pool, app_id, &body).await?;
 
-    // Invalidate caches if the pinned release tag changed
-    if let Some(old_tag_str) = old_tag.as_deref() {
-        if old_tag != app.pinned_release_tag {
+    // Invalidate caches if the download source (owner/repo/package/tag) changed
+    if let Some(old_source) = old_source {
+        if app.download_source().as_ref() != Some(&old_source) {
             if let Some(rc) = release_cache.get_ref().as_ref() {
-                rc.invalidate(app.id, old_tag_str).await;
+                rc.invalidate(app.id, &old_source).await;
             }
             if let Some(dc) = download_cache.get_ref().as_ref() {
-                if let Err(e) = dc.invalidate_app_tag(app.id, old_tag_str).await {
+                if let Err(e) = dc
+                    .invalidate_app_version(app.id, old_source.version())
+                    .await
+                {
                     tracing::warn!(error = %e, "download cache invalidation failed");
                 }
             }
@@ -2052,6 +2055,8 @@ mod tests {
             forgejo_owner: None,
             forgejo_repo: None,
             pinned_release_tag: None,
+            artifact_source: None,
+            forgejo_package: None,
             oci_image_owner: None,
             oci_image_name: None,
             pinned_image_tag: Some("v2.0.0".into()),

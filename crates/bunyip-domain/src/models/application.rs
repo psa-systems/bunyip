@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+use super::download::ArtifactSource;
+
 /// Application database model
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Application {
@@ -26,6 +28,13 @@ pub struct Application {
     pub forgejo_owner: Option<String>,
     pub forgejo_repo: Option<String>,
     pub pinned_release_tag: Option<String>,
+    /// Which Forgejo artifact API serves this application's binaries:
+    /// `"release"` (release attachments) or `"generic_package"` (generic
+    /// package registry).
+    pub artifact_source: String,
+    /// Generic-package name, when `artifact_source` is `"generic_package"`.
+    /// Falls back to `forgejo_repo` when unset.
+    pub forgejo_package: Option<String>,
     pub oci_image_owner: Option<String>,
     pub oci_image_name: Option<String>,
     pub pinned_image_tag: Option<String>,
@@ -75,9 +84,33 @@ impl ApplicationResponse {
 
 impl Application {
     pub fn is_downloadable(&self) -> bool {
-        self.forgejo_owner.is_some()
-            && self.forgejo_repo.is_some()
-            && self.pinned_release_tag.is_some()
+        self.download_source().is_some()
+    }
+
+    /// Build the dunite-download [`ArtifactSource`] for this application, when
+    /// its Forgejo download configuration is complete.
+    ///
+    /// `"release"` sources need `forgejo_owner` + `forgejo_repo` +
+    /// `pinned_release_tag`; `"generic_package"` sources need `forgejo_owner`
+    /// + (`forgejo_package` or `forgejo_repo`) + `pinned_release_tag`.
+    pub fn download_source(&self) -> Option<ArtifactSource> {
+        let owner = self.forgejo_owner.clone()?;
+        let version = self.pinned_release_tag.clone()?;
+        match self.artifact_source.as_str() {
+            "generic_package" => Some(ArtifactSource::GenericPackage {
+                owner,
+                package: self
+                    .forgejo_package
+                    .clone()
+                    .or_else(|| self.forgejo_repo.clone())?,
+                version,
+            }),
+            _ => Some(ArtifactSource::Release {
+                owner,
+                repo: self.forgejo_repo.clone()?,
+                tag: version,
+            }),
+        }
     }
 
     /// True when all three OCI fields are set AND the application is active.
@@ -143,6 +176,8 @@ mod tests {
             forgejo_owner: None,
             forgejo_repo: None,
             pinned_release_tag: None,
+            artifact_source: "release".to_string(),
+            forgejo_package: None,
             oci_image_owner: None,
             oci_image_name: None,
             pinned_image_tag: None,
@@ -197,9 +232,51 @@ mod tests {
         app.forgejo_repo = Some("rus".to_string());
         app.pinned_release_tag = Some("v1.0.0".to_string());
         assert!(app.is_downloadable());
+        assert_eq!(
+            app.download_source(),
+            Some(ArtifactSource::Release {
+                owner: "a8n".into(),
+                repo: "rus".into(),
+                tag: "v1.0.0".into(),
+            })
+        );
 
         app.pinned_release_tag = None;
         assert!(!app.is_downloadable());
+    }
+
+    #[test]
+    fn generic_package_source_uses_package_name_with_repo_fallback() {
+        let mut app = test_app();
+        app.artifact_source = "generic_package".to_string();
+        app.forgejo_owner = Some("psa".to_string());
+        app.forgejo_repo = Some("mokosh-apps".to_string());
+        app.pinned_release_tag = Some("0.3.0".to_string());
+
+        // Falls back to forgejo_repo when forgejo_package is unset.
+        assert_eq!(
+            app.download_source(),
+            Some(ArtifactSource::GenericPackage {
+                owner: "psa".into(),
+                package: "mokosh-apps".into(),
+                version: "0.3.0".into(),
+            })
+        );
+
+        // Explicit package name wins.
+        app.forgejo_package = Some("mokosh".to_string());
+        assert_eq!(
+            app.download_source(),
+            Some(ArtifactSource::GenericPackage {
+                owner: "psa".into(),
+                package: "mokosh".into(),
+                version: "0.3.0".into(),
+            })
+        );
+
+        // Generic packages do not require forgejo_repo when package is set.
+        app.forgejo_repo = None;
+        assert!(app.is_downloadable());
     }
 
     #[test]
@@ -250,6 +327,8 @@ pub struct UpdateApplication {
     pub forgejo_owner: Option<String>,
     pub forgejo_repo: Option<String>,
     pub pinned_release_tag: Option<String>,
+    pub artifact_source: Option<String>,
+    pub forgejo_package: Option<String>,
     pub oci_image_owner: Option<String>,
     pub oci_image_name: Option<String>,
     pub pinned_image_tag: Option<String>,
