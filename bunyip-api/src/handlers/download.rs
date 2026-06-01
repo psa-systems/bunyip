@@ -21,7 +21,9 @@ use crate::repositories::{
     ApplicationRepository, AuditLogRepository, DownloadDailyCountRepository,
 };
 use crate::responses::{get_request_id, success};
-use crate::services::{AppDownloadCache, DownloadLimiter, LimitDenial, ReleaseCache};
+use crate::services::{
+    AppDownloadCache, DownloadCacheError, DownloadLimiter, LimitDenial, ReleaseCache,
+};
 
 fn asset_href(slug: &str, asset_name: &str) -> String {
     format!(
@@ -187,12 +189,32 @@ pub async fn download_asset(
                 .find(|a| a.name == asset_name)
                 .ok_or(AppError::not_found("Asset"))?;
 
+            // Cache rows are keyed by the CONFIGURED version (source.version()),
+            // matching the key used by admin cache invalidation. Keying by the
+            // upstream-returned release.version would diverge when Forgejo
+            // normalizes tag names (e.g. case differences), leaking rows that
+            // invalidation can never match.
             let row = match download_cache
-                .get_or_fetch(app.id, &release.version, asset)
+                .get_or_fetch(app.id, source.version(), asset)
                 .await
             {
                 Ok(row) => row,
                 Err(e) => {
+                    // Integrity failures usually mean the upstream metadata is
+                    // stale (re-uploaded asset, lagging size column); make them
+                    // distinguishable from plain upstream outages in the logs.
+                    if matches!(
+                        e,
+                        DownloadCacheError::ShaMismatch { .. }
+                            | DownloadCacheError::SizeMismatch { .. }
+                    ) {
+                        tracing::warn!(
+                            app = %app.slug,
+                            asset = %asset_name,
+                            error = %e,
+                            "download integrity check failed; upstream Forgejo metadata may be stale"
+                        );
+                    }
                     AuditLogRepository::create(
                         &pool,
                         CreateAuditLog::new(AuditAction::DownloadFailedUpstream)

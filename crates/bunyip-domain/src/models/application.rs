@@ -82,7 +82,23 @@ impl ApplicationResponse {
     }
 }
 
+/// `applications.artifact_source` value: download via the Forgejo Releases API.
+pub const ARTIFACT_SOURCE_RELEASE: &str = "release";
+/// `applications.artifact_source` value: download via the Forgejo generic
+/// package registry.
+pub const ARTIFACT_SOURCE_GENERIC_PACKAGE: &str = "generic_package";
+
 impl Application {
+    /// Whether `value` is an allowed `artifact_source` (mirrors the DB CHECK
+    /// constraint; admin handlers validate against this before writing).
+    pub fn valid_artifact_source(value: &str) -> bool {
+        value == ARTIFACT_SOURCE_RELEASE || value == ARTIFACT_SOURCE_GENERIC_PACKAGE
+    }
+
+    /// Convenience wrapper over [`Application::download_source`]: whether this
+    /// application's Forgejo download configuration is complete. Public API
+    /// surface for admin/UI code (BUNYIP-33/34); handlers that also need the
+    /// source itself call `download_source()` directly.
     pub fn is_downloadable(&self) -> bool {
         self.download_source().is_some()
     }
@@ -97,7 +113,7 @@ impl Application {
         let owner = self.forgejo_owner.clone()?;
         let version = self.pinned_release_tag.clone()?;
         match self.artifact_source.as_str() {
-            "generic_package" => Some(ArtifactSource::GenericPackage {
+            ARTIFACT_SOURCE_GENERIC_PACKAGE => Some(ArtifactSource::GenericPackage {
                 owner,
                 package: self
                     .forgejo_package
@@ -105,11 +121,22 @@ impl Application {
                     .or_else(|| self.forgejo_repo.clone())?,
                 version,
             }),
-            _ => Some(ArtifactSource::Release {
+            ARTIFACT_SOURCE_RELEASE => Some(ArtifactSource::Release {
                 owner,
                 repo: self.forgejo_repo.clone()?,
                 tag: version,
             }),
+            other => {
+                // The DB CHECK constraint should make this unreachable; warn
+                // instead of silently picking a source so misconfiguration is
+                // visible in logs.
+                tracing::warn!(
+                    application = %self.slug,
+                    artifact_source = %other,
+                    "unknown artifact_source; treating application as not downloadable"
+                );
+                None
+            }
         }
     }
 
@@ -280,6 +307,27 @@ mod tests {
     }
 
     #[test]
+    fn unknown_artifact_source_is_not_downloadable() {
+        let mut app = test_app();
+        app.forgejo_owner = Some("a8n".to_string());
+        app.forgejo_repo = Some("rus".to_string());
+        app.pinned_release_tag = Some("v1.0.0".to_string());
+        app.artifact_source = "not-a-real-source".to_string();
+        // Unknown values must not silently behave as a release source.
+        assert_eq!(app.download_source(), None);
+        assert!(!app.is_downloadable());
+    }
+
+    #[test]
+    fn valid_artifact_source_accepts_only_known_values() {
+        assert!(Application::valid_artifact_source("release"));
+        assert!(Application::valid_artifact_source("generic_package"));
+        assert!(!Application::valid_artifact_source("generic-package"));
+        assert!(!Application::valid_artifact_source("RELEASE"));
+        assert!(!Application::valid_artifact_source(""));
+    }
+
+    #[test]
     fn is_pullable_requires_all_three_oci_fields_and_active() {
         let base = Application {
             is_active: true,
@@ -327,7 +375,10 @@ pub struct UpdateApplication {
     pub forgejo_owner: Option<String>,
     pub forgejo_repo: Option<String>,
     pub pinned_release_tag: Option<String>,
+    /// Must be one of [`ARTIFACT_SOURCE_RELEASE`] / [`ARTIFACT_SOURCE_GENERIC_PACKAGE`].
     pub artifact_source: Option<String>,
+    /// Set to `""` (empty string) to clear back to NULL (falling back to
+    /// `forgejo_repo`); `null`/omitted keeps the current value.
     pub forgejo_package: Option<String>,
     pub oci_image_owner: Option<String>,
     pub oci_image_name: Option<String>,

@@ -28,6 +28,12 @@ pub use dunite_download::services::{
 
 /// The concrete download cache: the generic dunite-download `DownloadCache`
 /// engine backed by Bunyip's Postgres `DownloadCacheRepository` store.
+///
+/// Defined here (the one module visible to bunyip-api's handlers, admin
+/// handlers, and main.rs wiring alike) rather than in the binary, so the
+/// engine-over-store binding has exactly one definition. The OCI vertical
+/// predates this convention and still defines its `AppBlobCache` alias
+/// per-module; aligning it is tracked separately.
 pub type AppDownloadCache = DownloadCache<crate::repositories::DownloadCacheRepository>;
 
 // Domain service types.
