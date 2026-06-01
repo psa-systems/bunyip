@@ -2,7 +2,7 @@
 #
 # Production image for bunyip-api (actix-web backend).
 #
-# BUILD CONTEXT: the bunyip repo root. bunyip owns the domain (bunyip-core) +
+# BUILD CONTEXT: the bunyip repo root. bunyip owns the domain (bunyip-domain) +
 # the oci/oidc verticals; the generic dunite-core kernel is a git dependency
 # (https://dev.a8n.run/psa-systems/dunite). The repo is anonymously readable,
 # so the builder only needs network access to dev.a8n.run to fetch it - no
@@ -54,21 +54,27 @@ COPY Cargo.toml Cargo.lock ./
 COPY .sqlx .sqlx
 COPY bunyip-api/Cargo.toml bunyip-api/build.rs bunyip-api/
 COPY bunyip-web/Cargo.toml bunyip-web/
-COPY crates/bunyip-core/Cargo.toml crates/bunyip-core/
+COPY crates/bunyip-domain/Cargo.toml crates/bunyip-domain/
 COPY crates/bunyip-oci/Cargo.toml crates/bunyip-oci/
 COPY crates/bunyip-oidc/Cargo.toml crates/bunyip-oidc/
-# bunyip-core include_str!'s its email templates at compile time.
-COPY crates/bunyip-core/templates crates/bunyip-core/templates
+# bunyip-domain include_str!'s its email templates at compile time.
+COPY crates/bunyip-domain/templates crates/bunyip-domain/templates
 RUN mkdir -p \
         bunyip-api/src bunyip-web/src \
-        crates/bunyip-core/src crates/bunyip-oci/src crates/bunyip-oidc/src \
+        crates/bunyip-domain/src crates/bunyip-oci/src crates/bunyip-oidc/src \
     && echo "fn main() {}" > bunyip-api/src/main.rs \
     && echo "fn main() {}" > bunyip-web/src/main.rs \
-    && : > crates/bunyip-core/src/lib.rs \
+    && : > crates/bunyip-domain/src/lib.rs \
     && : > crates/bunyip-oci/src/lib.rs \
     && : > crates/bunyip-oidc/src/lib.rs
 
 # Build the api binary's dependency graph only (cached unless a manifest changes).
+#
+# After the stub build, every workspace-crate artifact AND its cargo
+# fingerprint must be removed. Removing only the deps/ files is not enough:
+# `COPY . .` preserves host mtimes (older than the stub build), so cargo would
+# consider the stub-built empty libs fresh and link the real bunyip-api against
+# them, failing with unresolved imports.
 RUN --mount=type=secret,id=dunite_token \
     --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
@@ -77,8 +83,10 @@ RUN --mount=type=secret,id=dunite_token \
            fi' \
     && cargo build --locked --release --bin bunyip-api \
     && rm -rf bunyip-api/src bunyip-web/src \
-        crates/bunyip-core/src crates/bunyip-oci/src crates/bunyip-oidc/src \
-        target/release/deps/bunyip_api* target/release/deps/bunyip_web* target/release/deps/bunyip_core*
+        crates/bunyip-domain/src crates/bunyip-oci/src crates/bunyip-oidc/src \
+        target/release/deps/*bunyip* \
+        target/release/.fingerprint/bunyip-* \
+        target/release/bunyip-api*
 
 # ---- Real sources ----
 COPY . .
@@ -112,7 +120,7 @@ RUN adduser -D -u 1001 appuser
 # Binary, migrations (run on startup), and the email templates.
 COPY --from=builder /build/target/release/bunyip-api /app/bunyip-api
 COPY --from=builder /build/bunyip-api/migrations /app/migrations
-COPY --from=builder /build/crates/bunyip-core/templates /app/templates
+COPY --from=builder /build/crates/bunyip-domain/templates /app/templates
 
 RUN chown -R appuser:appuser /app
 USER appuser

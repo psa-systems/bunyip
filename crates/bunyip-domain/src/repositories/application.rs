@@ -154,11 +154,15 @@ impl ApplicationRepository {
                 forgejo_owner       = COALESCE($13, forgejo_owner),
                 forgejo_repo        = COALESCE($14, forgejo_repo),
                 pinned_release_tag  = COALESCE($15, pinned_release_tag),
-                oci_image_owner     = COALESCE($16, oci_image_owner),
-                oci_image_name      = COALESCE($17, oci_image_name),
-                pinned_image_tag    = COALESCE($18, pinned_image_tag),
+                artifact_source     = COALESCE($16, artifact_source),
+                -- Empty string clears forgejo_package back to NULL (= fall back
+                -- to forgejo_repo); NULL/omitted keeps the current value.
+                forgejo_package     = NULLIF(COALESCE($17, forgejo_package), ''),
+                oci_image_owner     = COALESCE($18, oci_image_owner),
+                oci_image_name      = COALESCE($19, oci_image_name),
+                pinned_image_tag    = COALESCE($20, pinned_image_tag),
                 updated_at          = NOW()
-            WHERE id = $19
+            WHERE id = $21
             RETURNING *
             "#,
         )
@@ -177,6 +181,8 @@ impl ApplicationRepository {
         .bind(data.forgejo_owner.as_deref())
         .bind(data.forgejo_repo.as_deref())
         .bind(data.pinned_release_tag.as_deref())
+        .bind(data.artifact_source.as_deref())
+        .bind(data.forgejo_package.as_deref())
         .bind(data.oci_image_owner.as_deref())
         .bind(data.oci_image_name.as_deref())
         .bind(data.pinned_image_tag.as_deref())
@@ -185,16 +191,6 @@ impl ApplicationRepository {
         .await?;
 
         Ok(app)
-    }
-
-    /// Returns the previously-pinned tag for an application (for cache invalidation).
-    pub async fn get_pinned_tag(pool: &PgPool, app_id: Uuid) -> Result<Option<String>, AppError> {
-        let row: Option<(Option<String>,)> =
-            sqlx::query_as("SELECT pinned_release_tag FROM applications WHERE id = $1")
-                .bind(app_id)
-                .fetch_optional(pool)
-                .await?;
-        Ok(row.and_then(|r| r.0))
     }
 
     /// Create a new application (admin)
@@ -326,6 +322,8 @@ mod tests {
             forgejo_owner: None,
             forgejo_repo: None,
             pinned_release_tag: None,
+            artifact_source: None,
+            forgejo_package: None,
             oci_image_owner: Some("a8n".into()),
             oci_image_name: Some("rus".into()),
             pinned_image_tag: Some("v1".into()),

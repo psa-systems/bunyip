@@ -17,7 +17,8 @@ pub mod user;
 // Re-export commonly used types
 pub use application::{
     Application, ApplicationResponse, CreateApplication, DeleteApplicationRequest,
-    SwapApplicationOrderRequest, UpdateApplication,
+    SwapApplicationOrderRequest, UpdateApplication, ARTIFACT_SOURCE_GENERIC_PACKAGE,
+    ARTIFACT_SOURCE_RELEASE,
 };
 pub use audit::{
     AdminNotification, AuditAction, AuditLog, AuditSeverity, CreateAdminNotification,

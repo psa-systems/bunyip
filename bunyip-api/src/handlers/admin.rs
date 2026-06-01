@@ -15,9 +15,9 @@ use crate::errors::AppError;
 use crate::middleware::{AdminUser, AuthenticatedUser};
 use crate::models::stripe::encrypt_secret;
 use crate::models::{
-    AuditAction, CreateApplication, CreateAuditLog, CreatePasswordResetToken, CreateRefreshToken,
-    DeleteApplicationRequest, MembershipStatus, StripeConfigResponse, SwapApplicationOrderRequest,
-    UpdateApplication, UserResponse,
+    Application, AuditAction, CreateApplication, CreateAuditLog, CreatePasswordResetToken,
+    CreateRefreshToken, DeleteApplicationRequest, MembershipStatus, StripeConfigResponse,
+    SwapApplicationOrderRequest, UpdateApplication, UserResponse, ARTIFACT_SOURCE_GENERIC_PACKAGE,
 };
 use crate::repositories::{
     ApplicationRepository, AuditLogRepository, InviteRepository, NotificationRepository,
@@ -25,7 +25,7 @@ use crate::repositories::{
 };
 use crate::responses::{created, get_request_id, paginated, success, success_no_data};
 use crate::services::{
-    AuthService, DownloadCache, EmailService, EncryptionKeySet, JwtService, PasswordService,
+    AppDownloadCache, AuthService, EmailService, EncryptionKeySet, JwtService, PasswordService,
     ReleaseCache, StripeConfig, StripeService, TotpService, WebhookService,
 };
 use crate::validation;
@@ -494,7 +494,7 @@ pub async fn update_application(
     body: web::Json<UpdateApplication>,
     webhook_service: web::Data<Arc<WebhookService>>,
     release_cache: web::Data<Option<Arc<ReleaseCache>>>,
-    download_cache: web::Data<Option<Arc<DownloadCache>>>,
+    download_cache: web::Data<Option<Arc<AppDownloadCache>>>,
     manifest_cache: web::Data<Option<Arc<ManifestCache>>>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -504,22 +504,59 @@ pub async fn update_application(
         .await?
         .ok_or(AppError::not_found("Application"))?;
 
-    // All-or-nothing Forgejo validation on merged values
+    // Validate artifact_source against the allowed set BEFORE the update, so a
+    // bad value is a clean 400 instead of a DB CHECK-constraint 500.
+    if let Some(source) = body.artifact_source.as_deref() {
+        if !Application::valid_artifact_source(source) {
+            return Err(AppError::validation(
+                "artifact_source",
+                "artifact_source must be 'release' or 'generic_package'",
+            ));
+        }
+    }
+
+    // Source-aware Forgejo download validation on merged values:
+    // - release sources need owner + repo + tag
+    // - generic_package sources need owner + (package or repo) + tag
     let merged_owner = body
         .forgejo_owner
         .as_ref()
         .or(old_app.forgejo_owner.as_ref());
     let merged_repo = body.forgejo_repo.as_ref().or(old_app.forgejo_repo.as_ref());
+    let merged_package = body
+        .forgejo_package
+        .as_ref()
+        .filter(|p| !p.is_empty())
+        .or(old_app.forgejo_package.as_ref());
     let merged_tag = body
         .pinned_release_tag
         .as_ref()
         .or(old_app.pinned_release_tag.as_ref());
-    let forgejo_any = merged_owner.is_some() || merged_repo.is_some() || merged_tag.is_some();
-    let forgejo_all = merged_owner.is_some() && merged_repo.is_some() && merged_tag.is_some();
+    let merged_source = body
+        .artifact_source
+        .as_deref()
+        .unwrap_or(old_app.artifact_source.as_str());
+    let is_generic_package = merged_source == ARTIFACT_SOURCE_GENERIC_PACKAGE;
+
+    let forgejo_any = merged_owner.is_some()
+        || merged_repo.is_some()
+        || merged_package.is_some()
+        || merged_tag.is_some();
+    let forgejo_all = merged_owner.is_some()
+        && merged_tag.is_some()
+        && if is_generic_package {
+            merged_package.is_some() || merged_repo.is_some()
+        } else {
+            merged_repo.is_some()
+        };
     if forgejo_any && !forgejo_all {
         return Err(AppError::validation(
             "forgejo",
-            "forgejo_owner, forgejo_repo, and pinned_release_tag must all be set together",
+            if is_generic_package {
+                "generic_package downloads need forgejo_owner, pinned_release_tag, and forgejo_package (or forgejo_repo) set together"
+            } else {
+                "forgejo_owner, forgejo_repo, and pinned_release_tag must all be set together"
+            },
         ));
     }
 
@@ -547,20 +584,23 @@ pub async fn update_application(
         ));
     }
 
-    // Capture old tags before update for cache invalidation
-    let old_tag = old_app.pinned_release_tag.clone();
+    // Capture the old artifact source before update for cache invalidation
+    let old_source = old_app.download_source();
     let old_pinned_image_tag = old_app.pinned_image_tag.clone();
 
     let app = ApplicationRepository::update(&pool, app_id, &body).await?;
 
-    // Invalidate caches if the pinned release tag changed
-    if let Some(old_tag_str) = old_tag.as_deref() {
-        if old_tag != app.pinned_release_tag {
+    // Invalidate caches if the download source (owner/repo/package/tag) changed
+    if let Some(old_source) = old_source {
+        if app.download_source().as_ref() != Some(&old_source) {
             if let Some(rc) = release_cache.get_ref().as_ref() {
-                rc.invalidate(app.id, old_tag_str).await;
+                rc.invalidate(app.id, &old_source).await;
             }
             if let Some(dc) = download_cache.get_ref().as_ref() {
-                if let Err(e) = dc.invalidate_app_tag(app.id, old_tag_str).await {
+                if let Err(e) = dc
+                    .invalidate_app_version(app.id, old_source.version())
+                    .await
+                {
                     tracing::warn!(error = %e, "download cache invalidation failed");
                 }
             }
@@ -2052,6 +2092,8 @@ mod tests {
             forgejo_owner: None,
             forgejo_repo: None,
             pinned_release_tag: None,
+            artifact_source: None,
+            forgejo_package: None,
             oci_image_owner: None,
             oci_image_name: None,
             pinned_image_tag: Some("v2.0.0".into()),

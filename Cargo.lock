@@ -678,12 +678,14 @@ dependencies = [
  "anyhow",
  "argon2",
  "async-stripe",
+ "async-trait",
  "base64 0.21.7",
  "bytes",
  "chrono",
  "data-encoding",
  "dotenvy",
  "dunite-core",
+ "dunite-download",
  "futures-util",
  "hex",
  "hmac",
@@ -691,7 +693,6 @@ dependencies = [
  "jsonwebtoken",
  "lazy_static",
  "lettre",
- "moka",
  "password-hash",
  "rand 0.8.6",
  "reqwest 0.11.27",
@@ -699,11 +700,9 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlx",
- "tempfile",
  "tera",
  "thiserror 1.0.69",
  "tokio",
- "tokio-util",
  "totp-rs",
  "tracing",
  "tracing-actix-web",
@@ -1264,11 +1263,12 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 [[package]]
 name = "dunite-core"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#6036383c3335c9f4398bc5743aedcdfc8aaeba93"
+source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#72c26d34a2224fd216bb14de9c9585e7187c3e57"
 dependencies = [
  "actix-web",
  "aes-gcm",
  "argon2",
+ "async-trait",
  "chrono",
  "jsonwebtoken",
  "rand 0.8.6",
@@ -1277,14 +1277,40 @@ dependencies = [
  "sqlx",
  "thiserror 1.0.69",
  "tracing",
+ "url",
  "uuid 1.23.1",
  "validator",
 ]
 
 [[package]]
+name = "dunite-download"
+version = "0.1.0"
+source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#72c26d34a2224fd216bb14de9c9585e7187c3e57"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "dunite-core",
+ "futures-util",
+ "hex",
+ "moka",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "url",
+ "urlencoding",
+ "uuid 1.23.1",
+]
+
+[[package]]
 name = "dunite-oci"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#6036383c3335c9f4398bc5743aedcdfc8aaeba93"
+source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#72c26d34a2224fd216bb14de9c9585e7187c3e57"
 dependencies = [
  "actix-web",
  "async-trait",
@@ -1311,7 +1337,7 @@ dependencies = [
 [[package]]
 name = "dunite-oidc"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#6036383c3335c9f4398bc5743aedcdfc8aaeba93"
+source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#72c26d34a2224fd216bb14de9c9585e7187c3e57"
 dependencies = [
  "base64 0.21.7",
  "dunite-core",
@@ -1366,7 +1392,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2605,7 +2631,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3447,7 +3473,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3807,7 +3833,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4157,7 +4183,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4907,7 +4933,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

@@ -1,4 +1,9 @@
 //! Member and admin download handlers.
+//!
+//! Built on the dunite-download engine: `ReleaseCache` (artifact metadata),
+//! `AppDownloadCache` (on-disk asset cache over the Postgres
+//! `DownloadCacheRepository`), and `DownloadLimiter` (per-user limits backed
+//! by `DownloadDailyCountRepository`).
 
 use actix_web::{http::header, web, HttpRequest, HttpResponse};
 use futures_util::StreamExt;
@@ -9,13 +14,16 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 use crate::errors::AppError;
 use crate::middleware::{extract_client_ip, AdminUser, MemberUser};
 use crate::models::download::{
-    AppDownloadGroup, AppDownloadsResponse, DownloadAsset, ReleaseMetadata,
+    AppDownloadGroup, AppDownloadsResponse, ArtifactSource, DownloadAsset, ReleaseMetadata,
 };
 use crate::models::{AuditAction, CreateAuditLog};
-use crate::repositories::{ApplicationRepository, AuditLogRepository};
+use crate::repositories::{
+    ApplicationRepository, AuditLogRepository, DownloadDailyCountRepository,
+};
 use crate::responses::{get_request_id, success};
-use crate::services::download_limiter::LimitDenial;
-use crate::services::{DownloadCache, DownloadLimiter, ReleaseCache};
+use crate::services::{
+    AppDownloadCache, DownloadCacheError, DownloadLimiter, LimitDenial, ReleaseCache,
+};
 
 fn asset_href(slug: &str, asset_name: &str) -> String {
     format!(
@@ -52,7 +60,7 @@ pub async fn list_app_downloads(
         .await?
         .ok_or(AppError::not_found("Application"))?;
 
-    if !app.is_downloadable() {
+    let Some(source) = app.download_source() else {
         return Ok(success(
             AppDownloadsResponse {
                 release_tag: None,
@@ -60,12 +68,9 @@ pub async fn list_app_downloads(
             },
             request_id,
         ));
-    }
-    let owner = app.forgejo_owner.as_deref().unwrap();
-    let repo = app.forgejo_repo.as_deref().unwrap();
-    let tag = app.pinned_release_tag.as_deref().unwrap();
+    };
 
-    let release = fetch_release_or_502(&release_cache, app.id, owner, repo, tag).await?;
+    let release = fetch_release_or_502(release_cache, app.id, &source).await?;
     let assets = release
         .assets
         .iter()
@@ -74,7 +79,7 @@ pub async fn list_app_downloads(
 
     Ok(success(
         AppDownloadsResponse {
-            release_tag: Some(release.tag_name.clone()),
+            release_tag: Some(release.version.clone()),
             assets,
         },
         request_id,
@@ -97,15 +102,12 @@ pub async fn list_all_downloads(
 
     let mut groups: Vec<AppDownloadGroup> = Vec::new();
     for app in apps {
-        if !app.is_downloadable() {
+        let Some(source) = app.download_source() else {
             continue;
-        }
-        let owner = app.forgejo_owner.as_deref().unwrap();
-        let repo = app.forgejo_repo.as_deref().unwrap();
-        let tag = app.pinned_release_tag.as_deref().unwrap();
+        };
         // Best-effort: skip apps whose Forgejo call errors so one bad config
         // doesn't break the whole page.
-        let release = match release_cache.get(app.id, owner, repo, tag).await {
+        let release = match release_cache.get(app.id, &source).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(app = %app.slug, error = %e, "release fetch failed");
@@ -116,7 +118,7 @@ pub async fn list_all_downloads(
             app_slug: app.slug.clone(),
             app_display_name: app.display_name.clone(),
             icon_url: app.icon_url.clone(),
-            release_tag: release.tag_name.clone(),
+            release_tag: release.version.clone(),
             assets: release
                 .assets
                 .iter()
@@ -129,13 +131,15 @@ pub async fn list_all_downloads(
 }
 
 /// GET /v1/applications/{slug}/downloads/{asset_name}
+#[allow(clippy::too_many_arguments)]
 pub async fn download_asset(
     req: HttpRequest,
     user: MemberUser,
     pool: web::Data<PgPool>,
     release_cache: web::Data<Option<Arc<ReleaseCache>>>,
-    download_cache: web::Data<Option<Arc<DownloadCache>>>,
+    download_cache: web::Data<Option<Arc<AppDownloadCache>>>,
     limiter: web::Data<Arc<DownloadLimiter>>,
+    download_counter: web::Data<Arc<DownloadDailyCountRepository>>,
     path: web::Path<(String, String)>,
 ) -> Result<HttpResponse, AppError> {
     let release_cache = release_cache
@@ -152,12 +156,16 @@ pub async fn download_asset(
     let app = ApplicationRepository::find_active_by_slug(&pool, &slug)
         .await?
         .ok_or(AppError::not_found("Application"))?;
-    if !app.is_downloadable() {
+    let Some(source) = app.download_source() else {
         return Err(AppError::not_found("Asset"));
-    }
+    };
 
-    // Rate limiting (before any upstream call).
-    match limiter.acquire(&pool, user.0.sub).await? {
+    // Rate limiting (before any upstream call). The durable daily count lives
+    // in Postgres behind the DownloadCounter trait.
+    match limiter
+        .acquire(download_counter.get_ref().as_ref(), user.0.sub)
+        .await?
+    {
         Ok(guard) => {
             // Audit: requested.
             AuditLogRepository::create(
@@ -173,10 +181,7 @@ pub async fn download_asset(
             )
             .await?;
 
-            let owner = app.forgejo_owner.as_deref().unwrap();
-            let repo = app.forgejo_repo.as_deref().unwrap();
-            let tag = app.pinned_release_tag.as_deref().unwrap();
-            let release = fetch_release_or_502(&release_cache, app.id, owner, repo, tag).await?;
+            let release = fetch_release_or_502(release_cache, app.id, &source).await?;
 
             let asset = release
                 .assets
@@ -184,9 +189,32 @@ pub async fn download_asset(
                 .find(|a| a.name == asset_name)
                 .ok_or(AppError::not_found("Asset"))?;
 
-            let row = match download_cache.get_or_fetch(app.id, tag, asset).await {
+            // Cache rows are keyed by the CONFIGURED version (source.version()),
+            // matching the key used by admin cache invalidation. Keying by the
+            // upstream-returned release.version would diverge when Forgejo
+            // normalizes tag names (e.g. case differences), leaking rows that
+            // invalidation can never match.
+            let row = match download_cache
+                .get_or_fetch(app.id, source.version(), asset)
+                .await
+            {
                 Ok(row) => row,
                 Err(e) => {
+                    // Integrity failures usually mean the upstream metadata is
+                    // stale (re-uploaded asset, lagging size column); make them
+                    // distinguishable from plain upstream outages in the logs.
+                    if matches!(
+                        e,
+                        DownloadCacheError::ShaMismatch { .. }
+                            | DownloadCacheError::SizeMismatch { .. }
+                    ) {
+                        tracing::warn!(
+                            app = %app.slug,
+                            asset = %asset_name,
+                            error = %e,
+                            "download integrity check failed; upstream Forgejo metadata may be stale"
+                        );
+                    }
                     AuditLogRepository::create(
                         &pool,
                         CreateAuditLog::new(AuditAction::DownloadFailedUpstream)
@@ -343,11 +371,9 @@ pub async fn download_asset(
 async fn fetch_release_or_502(
     cache: &ReleaseCache,
     app_id: uuid::Uuid,
-    owner: &str,
-    repo: &str,
-    tag: &str,
+    source: &ArtifactSource,
 ) -> Result<Arc<ReleaseMetadata>, AppError> {
-    cache.get(app_id, owner, repo, tag).await.map_err(|e| {
+    cache.get(app_id, source).await.map_err(|e| {
         tracing::warn!(error = %e, "forgejo release fetch failed");
         AppError::upstream("Forgejo upstream error")
     })
@@ -362,6 +388,10 @@ mod integration_tests {
     use std::sync::Arc;
     use wiremock::matchers::{method, path as wm_path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use crate::models::download::ArtifactSource;
+    use crate::repositories::DownloadCacheRepository;
+    use crate::services::{AppDownloadCache, ForgejoAssetClient, ReleaseCache};
 
     async fn maybe_pool() -> Option<PgPool> {
         let url = std::env::var("DATABASE_URL").ok()?;
@@ -408,13 +438,14 @@ mod integration_tests {
                     "id": 1,
                     "name": "rus.bin",
                     "size": payload.len() as i64,
-                    "browser_download_url": format!("{}/download/1", server.uri()),
                 }]
             })))
             .mount(&server)
             .await;
+        // The engine builds release download URLs from the configured base +
+        // the canonical attachment route.
         Mock::given(method("GET"))
-            .and(wm_path("/download/1"))
+            .and(wm_path("/a8n/rus/releases/download/v1.0.0/rus.bin"))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(payload))
             .mount(&server)
             .await;
@@ -426,30 +457,26 @@ mod integration_tests {
             VALUES ($1, $1, $1, $1, 'a8n', 'rus', 'v1.0.0')
         "#).bind(&slug).execute(&pool).await.unwrap();
 
-        let client = Arc::new(crate::services::forgejo::ForgejoClient::new(
-            server.uri(),
-            "tok".into(),
-        ));
-        let release_cache = crate::services::release_cache::ReleaseCache::new(client.clone(), 60);
+        let client = Arc::new(ForgejoAssetClient::new(server.uri(), "tok".into()));
+        let release_cache = ReleaseCache::new(client.clone(), 60);
         let tmp = tempfile::tempdir().unwrap();
-        let download_cache = crate::services::download_cache::DownloadCache::new(
-            client,
-            tmp.path(),
-            1024 * 1024,
-            pool.clone(),
-        );
+        let store = Arc::new(DownloadCacheRepository::new(pool.clone()));
+        let download_cache: AppDownloadCache =
+            AppDownloadCache::new(client, tmp.path(), 1024 * 1024, store);
 
         let app_row: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM applications WHERE slug = $1")
             .bind(&slug)
             .fetch_one(&pool)
             .await
             .unwrap();
-        let release = release_cache
-            .get(app_row.0, "a8n", "rus", "v1.0.0")
-            .await
-            .unwrap();
+        let source = ArtifactSource::Release {
+            owner: "a8n".into(),
+            repo: "rus".into(),
+            tag: "v1.0.0".into(),
+        };
+        let release = release_cache.get(app_row.0, &source).await.unwrap();
         let row = download_cache
-            .get_or_fetch(app_row.0, "v1.0.0", &release.assets[0])
+            .get_or_fetch(app_row.0, &release.version, &release.assets[0])
             .await
             .unwrap();
         assert_eq!(row.size_bytes, payload.len() as i64);
@@ -488,26 +515,17 @@ pub async fn admin_refresh_release(
     let app = ApplicationRepository::find_by_slug(&pool, &slug)
         .await?
         .ok_or(AppError::not_found("Application"))?;
-    if !app.is_downloadable() {
+    let Some(source) = app.download_source() else {
         return Err(AppError::validation(
             "application",
             "Application is not configured for downloads",
         ));
-    }
-    let tag = app.pinned_release_tag.as_deref().unwrap();
-    release_cache.invalidate(app.id, tag).await;
-    let release = release_cache
-        .get(
-            app.id,
-            app.forgejo_owner.as_deref().unwrap(),
-            app.forgejo_repo.as_deref().unwrap(),
-            tag,
-        )
-        .await
-        .map_err(|e| {
-            tracing::warn!(error = %e, "forgejo refresh failed");
-            AppError::upstream("Forgejo upstream error")
-        })?;
+    };
+    release_cache.invalidate(app.id, &source).await;
+    let release = release_cache.get(app.id, &source).await.map_err(|e| {
+        tracing::warn!(error = %e, "forgejo refresh failed");
+        AppError::upstream("Forgejo upstream error")
+    })?;
 
     let assets: Vec<_> = release
         .assets
@@ -516,7 +534,7 @@ pub async fn admin_refresh_release(
         .collect();
     Ok(success(
         AppDownloadsResponse {
-            release_tag: Some(release.tag_name.clone()),
+            release_tag: Some(release.version.clone()),
             assets,
         },
         request_id,
