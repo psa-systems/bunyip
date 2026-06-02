@@ -351,3 +351,158 @@ download proxy rides the api with no extra routing; exercise it via the web UI
 Add the registry hostname to the same `/etc/hosts` line as the other dev
 hostnames (section 4): `<nebula-ip>  <user>-bunyip-registry.a8n.run`. Docker
 Desktop on macOS resolves through the host's `/etc/hosts`.
+
+## 10. Distribution e2e smoke test (BUNYIP-35)
+
+The full customer-flow verification matrix, first executed 2026-06-02 against
+the local dev stack. Full pass/fail results live as a comment on BUNYIP-35.
+
+This section does NOT repeat what is already automated or documented
+elsewhere:
+
+- **OCI basics** (auth challenge, admin docker login, entitled pull,
+  pinned-tag enforcement): run `just verify-oci` - it checks all of them with
+  pass/fail output. The manual procedure behind it is
+  `dev-docs/oci-registry-verification.md` (the BUNYIP-31 runbook).
+- **Traefik-hostname routing**: section 9 above.
+
+What this section adds: the credential matrix (including non-member denials),
+a definitive cache proof, binary download integrity, limit enforcement, and
+Forgejo failure modes.
+
+### Prerequisites
+
+- Stack up via `just dev-detach` (NEVER raw `docker compose`; the justfile
+  owns the HOST_UID/volume wiring).
+- `.env` has a valid `FORGEJO_BASE_URL` + `FORGEJO_API_TOKEN` (read:package
+  scope) and `OCI_REGISTRY_ENABLED=true`.
+- Two dedicated test users. `just verify-oci` uses the admin
+  (`SETUP_DEFAULT_ADMIN`); this matrix needs a separate MEMBER (so results
+  don't depend on admin state) and a NON-MEMBER (for the denial tests, which
+  verify-oci cannot cover). Create them:
+
+```nu
+# Member + non-member accounts (register sets no entitlement).
+^curl --silent --request POST http://localhost:4401/v1/auth/register --header "Content-Type: application/json" --data '{"email": "test-member@bunyip.local", "password": "<pick-a-password>"}'
+^curl --silent --request POST http://localhost:4401/v1/auth/register --header "Content-Type: application/json" --data '{"email": "test-nonmember@bunyip.local", "password": "<pick-a-password>"}'
+
+# Entitle ONLY the member. lifetime_member is one of the access paths checked
+# by has_member_access() (role/lifetime/trial/active|grace all work);
+# oci-registry-verification.md uses membership_status = 'active' instead -
+# either is fine, lifetime_member never expires.
+let user_name = (^whoami | str trim)
+^docker exec $"dev-bunyip-postgres-($user_name)" psql --username bunyip --dbname bunyip --command "UPDATE users SET lifetime_member = TRUE, email_verified = TRUE WHERE email = 'test-member@bunyip.local';" --command "UPDATE users SET email_verified = TRUE WHERE email = 'test-nonmember@bunyip.local';"
+```
+
+- API auth for `/v1/*` is an HttpOnly `access_token` cookie (NOT a bearer
+  header). Capture it with a cookie jar:
+
+```nu
+# Login and store cookies; reuse $jar on every later /v1 request.
+let jar = (^mktemp | str trim)
+^curl --silent --cookie-jar $jar --request POST http://localhost:4401/v1/auth/login --header "Content-Type: application/json" --data '{"email": "test-member@bunyip.local", "password": "<password>"}'
+# Authenticated request:
+^curl --silent --cookie $jar http://localhost:4401/v1/downloads
+```
+
+### Matrix A: functional flows (no restarts)
+
+Run `just verify-oci` first; everything below assumes it passed.
+
+| # | Test | Command sketch | Expected |
+| --- | --- | --- | --- |
+| A1 | Bad password | `docker login localhost:18081` with member email, wrong password | docker: `unauthorized`; HTTP 401 from `/auth/token` |
+| A2 | Non-member docker login | `docker login` with non-member creds | `unauthorized` (entitlement gate; verify-oci only tests the happy path) |
+| A3 | Multi-arch index | `curl --header "Authorization: Bearer <token>" --header "Accept: application/vnd.oci.image.index.v1+json" http://localhost:18081/v2/mokosh-server/manifests/v0.2.0` (token from `/auth/token` with the pull scope) | JSON body `mediaType: application/vnd.oci.image.index.v1+json` with a `linux/amd64` entry |
+| A4 | Nonexistent repo | `docker pull localhost:18081/no-such-product:v1` | HTTP 404; JSON envelope code `NAME_UNKNOWN`; docker CLI prints `name unknown: repository name not known` |
+| A5 | Unpinned tag | `docker pull localhost:18081/mokosh-server:latest` | HTTP 404; JSON envelope code `MANIFEST_UNKNOWN`; docker CLI prints `manifest unknown: manifest not known` |
+| A6 | Cache proof (definitive) | see below | re-pull succeeds with Forgejo unreachable |
+| A7 | Downloads listing | `GET /v1/downloads` with member cookie jar | groups with `assets` and/or `oci` blocks |
+| A8 | Binary integrity | download binary + `.sha256` asset via the proxy; `sha256sum` the binary; also sha256 the same file fetched from Forgejo directly | all three digests identical |
+| A9 | Non-member denial | `GET /v1/downloads` + an asset URL with the NON-member cookie jar | HTTP 403, envelope code `FORBIDDEN`, no asset bytes |
+
+Caveat: space docker operations ~15 s apart or the token endpoint's
+5/min/email rate limit (BUNYIP-40) fires before whatever you are actually
+testing.
+
+**A6 cache proof.** "Grep the logs" does NOT work here: the blob path logs
+nothing on an upstream fetch, so absence of log lines proves nothing. The
+definitive method is a re-pull with the upstream dead - it can only succeed if
+every manifest and blob byte comes from bunyip's caches:
+
+```nu
+let user_name = (^whoami | str trim)
+let api = $"dev-bunyip-api-($user_name)"
+# 1. Warm the caches.
+^docker pull localhost:18081/mokosh-server:v0.2.0
+# 2. Make Forgejo unreachable inside the api container (backup first).
+^docker exec --user root $api sh -c 'cp /etc/hosts /etc/hosts.bak && echo "127.0.0.2 dev.a8n.run" >> /etc/hosts'
+# 3. Re-pull within the manifest-cache TTL (60 s default). Success = proof.
+^docker rmi localhost:18081/mokosh-server:v0.2.0
+^docker pull localhost:18081/mokosh-server:v0.2.0
+# 4. ALWAYS restore, even if step 3 failed.
+^docker exec --user root $api sh -c 'cp /etc/hosts.bak /etc/hosts && rm /etc/hosts.bak'
+```
+
+### Matrix B: limit enforcement
+
+Blocked on BUNYIP-42 for a clean procedure: compose.dev.yml does not pass the
+limit env vars through, so `.env` values are ignored. Until that lands, the
+interim method is a compose override layered on top of the just-managed stack
+(this is the one sanctioned exception to "never raw compose" - it keeps
+compose.dev.yml first so all just-managed wiring stays identical, and HOST_UID
+/ HOST_GID must be exported exactly as the justfile does):
+
+```nu
+# Override file with low limits (save errors if a leftover exists; remove it first).
+if ("/tmp/compose.limits.yml" | path exists) { ^rm /tmp/compose.limits.yml }
+"services:
+  api:
+    environment:
+      OCI_PULLS_PER_USER_PER_DAY: \"3\"
+      DOWNLOAD_DAILY_LIMIT_PER_USER: \"3\"
+      DOWNLOAD_CONCURRENCY_PER_USER: \"1\"
+" | save /tmp/compose.limits.yml
+$env.HOST_UID = (^id --user | str trim); $env.HOST_GID = (^id --group | str trim)
+^docker compose -f compose.dev.yml -f /tmp/compose.limits.yml up --detach api
+# ... run B1-B3 ...
+# Restore the normal stack when done:
+just dev-detach
+^rm /tmp/compose.limits.yml
+```
+
+| # | Test | Expected |
+| --- | --- | --- |
+| B1 | Pull past the daily cap | HTTP 429 on `/v2/{slug}/manifests/...`; the wait time is the `Retry-After` HTTP HEADER (the OCI 429 body has no retry field); value = seconds until midnight UTC. NOTE: one multi-arch docker pull = 3 counted requests (BUNYIP-43), so with cap 3 the SECOND pull is denied |
+| B2 | 4th download with cap 3 | HTTP 429; JSON body code `download_daily_limit` with `details.retry_after` (seconds to midnight UTC) - unlike B1 this one IS in the body |
+| B3 | 3 parallel downloads, concurrency 1 | exactly one 200, rest 429 |
+
+Reset counters between runs:
+
+```nu
+let user_name = (^whoami | str trim)
+^docker exec $"dev-bunyip-postgres-($user_name)" psql --username bunyip --dbname bunyip --command "DELETE FROM oci_pull_daily_counts;" --command "DELETE FROM download_daily_counts;"
+```
+
+### Matrix C: failure modes
+
+| # | Test | Procedure | Expected |
+| --- | --- | --- | --- |
+| C1 | Forgejo unreachable | Same hosts block/restore as A6 steps 2 and 4 (ALWAYS restore) | Warm caches keep serving; after cache expiry/invalidation `/v1/downloads` stays 200 and drops the affected product; asset download = 502 with API envelope code `UPSTREAM_ERROR`; `docker pull` = 502 with OCI envelope code `UNKNOWN`, message `upstream error`; container never crash-loops |
+| C2 | Forgejo token revoked | `cp .env /tmp/env-backup` FIRST. Then swap the token (`sed -i 's/^FORGEJO_API_TOKEN=.*/FORGEJO_API_TOKEN=invalid-test/' .env`), `just dev-detach`, run the checks, then `cp /tmp/env-backup .env && just dev-detach` | Customer sees generic "upstream service temporarily unavailable"; api log carries the actionable line `upstream Forgejo rejected the registry service credentials; verify FORGEJO_API_TOKEN is valid and has the read:package scope`; the token value never appears in any response |
+
+### Known gaps and defects (as of 2026-06-02)
+
+- No live releases-backed product exists (all binaries publish to the Forgejo
+  generic package registry), so the `artifact_source = 'release'` path is
+  covered only by wiremock integration tests in
+  `bunyip-api/src/handlers/download.rs`, not by this live matrix.
+- Blob cache hits/misses are not observable in logs (why A6 needs the
+  dead-upstream method); the only blob-cache log lines are the eviction
+  failures of BUNYIP-41.
+- BUNYIP-40: token endpoint shares the 5/min login rate limit; multi-image
+  pulls can 429.
+- BUNYIP-41: blob cache LRU eviction silently fails (pool exhaustion) during
+  concurrent pulls.
+- BUNYIP-42: compose files missing limit/TTL env passthrough.
+- BUNYIP-43: daily pull counter counts manifest requests (3+ per docker pull).
