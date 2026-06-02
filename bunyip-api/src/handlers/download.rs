@@ -11,12 +11,14 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
+use crate::config::OciConfig;
 use crate::errors::AppError;
 use crate::middleware::{extract_client_ip, AdminUser, MemberUser};
 use crate::models::download::{
-    AppDownloadGroup, AppDownloadsResponse, ArtifactSource, DownloadAsset, ReleaseMetadata,
+    AppDownloadGroup, AppDownloadsResponse, AppOciImage, ArtifactSource, DownloadAsset,
+    ReleaseMetadata,
 };
-use crate::models::{AuditAction, CreateAuditLog};
+use crate::models::{Application, AuditAction, CreateAuditLog};
 use crate::repositories::{
     ApplicationRepository, AuditLogRepository, DownloadDailyCountRepository,
 };
@@ -40,6 +42,23 @@ fn to_public_asset(a: &crate::models::download::ReleaseAsset, slug: &str) -> Dow
         content_type: a.content_type.clone(),
         download_url: asset_href(slug, &a.name),
     }
+}
+
+/// Build the member-facing OCI pull coordinates for an application: `Some`
+/// only when the registry is enabled and the application has a pullable image
+/// (active + all three OCI fields set).
+fn oci_pull_info(app: &Application, oci: &OciConfig) -> Option<AppOciImage> {
+    if !oci.enabled || !app.is_pullable() {
+        return None;
+    }
+    let tag = app.pinned_image_tag.clone()?;
+    let reference = format!("{}/{}:{}", oci.service, app.slug, tag);
+    Some(AppOciImage {
+        registry: oci.service.clone(),
+        repository: app.slug.clone(),
+        tag,
+        reference,
+    })
 }
 
 /// GET /v1/applications/{slug}/downloads
@@ -87,43 +106,62 @@ pub async fn list_app_downloads(
 }
 
 /// GET /v1/downloads
+///
+/// One group per active product that has at least one distribution surface:
+/// binary assets (Forgejo downloads), an OCI image, or both.
 pub async fn list_all_downloads(
     req: HttpRequest,
     _user: MemberUser,
     pool: web::Data<PgPool>,
     release_cache: web::Data<Option<Arc<ReleaseCache>>>,
+    oci_config: web::Data<OciConfig>,
 ) -> Result<HttpResponse, AppError> {
-    let release_cache = release_cache
-        .get_ref()
-        .as_ref()
-        .ok_or_else(|| AppError::not_found("Downloads"))?;
+    let release_cache = release_cache.get_ref().as_ref();
+    // 404 only when BOTH distribution surfaces are disabled server-side.
+    if release_cache.is_none() && !oci_config.enabled {
+        return Err(AppError::not_found("Downloads"));
+    }
     let request_id = get_request_id(&req);
     let apps = ApplicationRepository::list_active(&pool).await?;
 
     let mut groups: Vec<AppDownloadGroup> = Vec::new();
     for app in apps {
-        let Some(source) = app.download_source() else {
+        let oci = oci_pull_info(&app, &oci_config);
+
+        // Binary assets, when the download proxy is enabled and this app has
+        // a complete download config. Best-effort: a failed Forgejo call
+        // degrades to an empty asset list so one bad config doesn't break the
+        // whole page (the OCI block, if any, still renders).
+        let (release_tag, assets) = match (release_cache, app.download_source()) {
+            (Some(cache), Some(source)) => match cache.get(app.id, &source).await {
+                Ok(release) => (
+                    Some(release.version.clone()),
+                    release
+                        .assets
+                        .iter()
+                        .map(|a| to_public_asset(a, &app.slug))
+                        .collect(),
+                ),
+                Err(e) => {
+                    tracing::warn!(app = %app.slug, error = %e, "release fetch failed");
+                    (None, Vec::new())
+                }
+            },
+            _ => (None, Vec::new()),
+        };
+
+        // Nothing to distribute for this app.
+        if release_tag.is_none() && oci.is_none() {
             continue;
-        };
-        // Best-effort: skip apps whose Forgejo call errors so one bad config
-        // doesn't break the whole page.
-        let release = match release_cache.get(app.id, &source).await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(app = %app.slug, error = %e, "release fetch failed");
-                continue;
-            }
-        };
+        }
+
         groups.push(AppDownloadGroup {
             app_slug: app.slug.clone(),
             app_display_name: app.display_name.clone(),
             icon_url: app.icon_url.clone(),
-            release_tag: release.version.clone(),
-            assets: release
-                .assets
-                .iter()
-                .map(|a| to_public_asset(a, &app.slug))
-                .collect(),
+            release_tag,
+            assets,
+            oci,
         });
     }
 
@@ -539,4 +577,82 @@ pub async fn admin_refresh_release(
         },
         request_id,
     ))
+}
+
+#[cfg(test)]
+mod oci_pull_info_tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn oci_config(enabled: bool) -> OciConfig {
+        OciConfig {
+            enabled,
+            port: 18081,
+            service: "oci.example.com".to_string(),
+            realm: None,
+            blob_cache_dir: "/tmp".to_string(),
+            blob_cache_max_bytes: 0,
+            manifest_cache_ttl_secs: 60,
+            concurrent_manifests_per_user: 1,
+            pulls_per_user_per_day: 1,
+            token_ttl_secs: 300,
+        }
+    }
+
+    fn pullable_app() -> Application {
+        Application {
+            id: uuid::Uuid::new_v4(),
+            name: "mokosh-server".into(),
+            slug: "mokosh-server".into(),
+            display_name: "Mokosh Server".into(),
+            description: None,
+            icon_url: None,
+            is_active: true,
+            is_hosted: false,
+            maintenance_mode: false,
+            maintenance_message: None,
+            subdomain: None,
+            container_name: "catalog".into(),
+            health_check_url: None,
+            webhook_url: None,
+            version: None,
+            source_code_url: None,
+            forgejo_owner: None,
+            forgejo_repo: None,
+            pinned_release_tag: None,
+            artifact_source: "release".into(),
+            forgejo_package: None,
+            oci_image_owner: Some("psa-systems-private".into()),
+            oci_image_name: Some("mokosh-server".into()),
+            pinned_image_tag: Some("v0.2.0".into()),
+            sort_order: 0,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn builds_reference_from_service_slug_and_pinned_tag() {
+        let info = oci_pull_info(&pullable_app(), &oci_config(true)).expect("pull info");
+        assert_eq!(info.registry, "oci.example.com");
+        assert_eq!(info.repository, "mokosh-server");
+        assert_eq!(info.tag, "v0.2.0");
+        assert_eq!(info.reference, "oci.example.com/mokosh-server:v0.2.0");
+    }
+
+    #[test]
+    fn none_when_registry_disabled() {
+        assert!(oci_pull_info(&pullable_app(), &oci_config(false)).is_none());
+    }
+
+    #[test]
+    fn none_when_app_not_pullable() {
+        let mut no_tag = pullable_app();
+        no_tag.pinned_image_tag = None;
+        assert!(oci_pull_info(&no_tag, &oci_config(true)).is_none());
+
+        let mut inactive = pullable_app();
+        inactive.is_active = false;
+        assert!(oci_pull_info(&inactive, &oci_config(true)).is_none());
+    }
 }

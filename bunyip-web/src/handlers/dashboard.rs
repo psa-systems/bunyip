@@ -11,7 +11,7 @@ use serde::Deserialize;
 
 use crate::api::auth as auth_api;
 use crate::api::calls;
-use crate::api::types::{Membership, MembershipStatus, SubscriptionTier, User};
+use crate::api::types::{AppDownloadGroup, Membership, MembershipStatus, SubscriptionTier, User};
 use crate::handlers::{dashboard_response, guard, password_ok, rotating_index};
 use crate::util::{app_gradient, days_until, has_active_membership};
 use crate::views::ui::{badge, button_class, error_box, icon};
@@ -297,33 +297,90 @@ pub async fn downloads(State(st): State<AppState>, headers: HeaderMap) -> Respon
                 p class="text-sm text-muted-foreground" { "No downloads available" }
             } @else {
                 @for g in &groups {
-                    section class="border rounded p-4" {
-                        div class="flex items-center gap-2 mb-2" {
-                            @if let Some(ic) = &g.icon_url { img src=(ic) alt="" class="w-6 h-6"; }
-                            h2 class="font-semibold" { (g.app_display_name) }
-                            span class="text-xs text-muted-foreground" { (g.release_tag) }
-                        }
-                        ul class="space-y-2" {
-                            @for a in &g.assets {
-                                li class="flex items-center justify-between" {
-                                    div {
-                                        div class="font-mono text-sm" { (a.asset_name) }
-                                        div class="text-xs text-muted-foreground" { (format_size(a.size_bytes)) }
-                                    }
-                                    @if has_membership {
-                                        a href=(a.download_url) download=(a.asset_name) class="px-3 py-1 rounded bg-primary text-primary-foreground text-sm" { "Download" }
-                                    } @else {
-                                        a href="/membership" class="text-sm text-primary underline" { "Upgrade to access" }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    (download_group(g, has_membership))
                 }
             }
         }
     };
     dashboard_response(&c, &user, "/downloads", "Downloads · Bunyip", content)
+}
+
+/// One product section on the downloads page: header with the (pinned, hence
+/// latest) version, binary assets, and OCI pull instructions.
+fn download_group(g: &AppDownloadGroup, has_membership: bool) -> Markup {
+    // Pinned-version distribution model: exactly one version is available per
+    // product, so the version shown is by definition the latest.
+    let version = g
+        .release_tag
+        .as_deref()
+        .or(g.oci.as_ref().map(|o| o.tag.as_str()));
+    html! {
+        section class="border rounded p-4" {
+            div class="flex items-center gap-2" {
+                @if let Some(ic) = &g.icon_url { img src=(ic) alt="" class="w-6 h-6"; }
+                h2 class="font-semibold" { (g.app_display_name) }
+                @if let Some(v) = version {
+                    span class="font-mono text-xs text-muted-foreground" { (v) }
+                    (badge("success", "Latest"))
+                }
+            }
+
+            // Binary downloads (Forgejo release / package assets)
+            @if !g.assets.is_empty() {
+                h3 class="text-sm font-medium mt-4 mb-2" { "Binary downloads" }
+                ul class="space-y-2" {
+                    @for a in &g.assets {
+                        li class="flex items-center justify-between" {
+                            div {
+                                div class="font-mono text-sm" { (a.asset_name) }
+                                div class="text-xs text-muted-foreground" { (format_size(a.size_bytes)) }
+                            }
+                            @if has_membership {
+                                a href=(a.download_url) download=(a.asset_name) class="px-3 py-1 rounded bg-primary text-primary-foreground text-sm" { "Download" }
+                            } @else {
+                                a href="/membership" class="text-sm text-primary underline" { "Upgrade to access" }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Container image (docker login / pull instructions)
+            @if let Some(oci) = &g.oci {
+                h3 class="text-sm font-medium mt-4 mb-2" { "Container image" }
+                @if has_membership {
+                    div class="space-y-2" {
+                        p class="text-xs text-muted-foreground" {
+                            "Log in to the registry with your account email and password, then pull the image:"
+                        }
+                        (command_block(&format!("docker login {}", oci.registry)))
+                        (command_block(&format!("docker pull {}", oci.reference)))
+                    }
+                } @else {
+                    a href="/membership" class="text-sm text-primary underline" { "Upgrade to access" }
+                }
+            }
+        }
+    }
+}
+
+/// A copy-pasteable shell command with a copy-to-clipboard button.
+fn command_block(cmd: &str) -> Markup {
+    // JSON-encode the command so it is a valid JS string literal inside the
+    // onclick handler (Maud HTML-escapes the attribute value; the browser
+    // un-escapes it before executing).
+    let copy_js = format!(
+        "navigator.clipboard.writeText({})",
+        serde_json::to_string(cmd).unwrap_or_default()
+    );
+    html! {
+        div class="flex items-center gap-2" {
+            code class="flex-1 rounded bg-muted px-3 py-2 font-mono text-sm overflow-x-auto whitespace-nowrap" { (cmd) }
+            button type="button" aria-label="Copy command" class=(button_class("ghost", "icon", "shrink-0")) onclick=(copy_js) {
+                (icon("copy", "h-4 w-4"))
+            }
+        }
+    }
 }
 
 // ===========================================================================

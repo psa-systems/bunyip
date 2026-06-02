@@ -25,8 +25,8 @@ pub use audit::{
     CreateAuditLog, NotificationType,
 };
 pub use download::{
-    AppDownloadGroup, AppDownloadsResponse, DownloadAsset, DownloadCacheRow, ReleaseAsset,
-    ReleaseMetadata,
+    AppDownloadGroup, AppDownloadsResponse, AppOciImage, DownloadAsset, DownloadCacheRow,
+    ReleaseAsset, ReleaseMetadata,
 };
 pub use feedback::{
     AdminFeedbackDetail, AdminFeedbackSummary, ArchivedFeedbackItem, CreateFeedback,

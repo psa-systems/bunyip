@@ -31,12 +31,35 @@ pub struct AppDownloadsResponse {
     pub assets: Vec<DownloadAsset>,
 }
 
+/// OCI pull coordinates for a product in the `/v1/downloads` response, so the
+/// downloads page can render copy-paste `docker login` / `docker pull`
+/// commands against the member-facing registry.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct AppOciImage {
+    /// Public registry hostname Docker clients log in to
+    /// (`OCI_REGISTRY_SERVICE`), e.g. `oci.a8n.run`.
+    pub registry: String,
+    /// Repository inside the registry: the application slug.
+    pub repository: String,
+    /// The pinned image tag: the only tag the registry serves for this
+    /// product (pinned-version distribution model).
+    pub tag: String,
+    /// Full pull reference: `{registry}/{repository}:{tag}`.
+    pub reference: String,
+}
+
 /// A group in the global `/v1/downloads` response.
+///
+/// A product can carry binary assets (Forgejo downloads), an OCI image, or
+/// both; `release_tag` is `None` for OCI-only products.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct AppDownloadGroup {
     pub app_slug: String,
     pub app_display_name: String,
     pub icon_url: Option<String>,
-    pub release_tag: String,
+    pub release_tag: Option<String>,
     pub assets: Vec<DownloadAsset>,
+    /// OCI pull info, when the registry is enabled and the product has a
+    /// pullable image.
+    pub oci: Option<AppOciImage>,
 }
