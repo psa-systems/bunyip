@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use uuid::Uuid;
 
-use crate::errors::{AppError, OciError};
+use crate::errors::OciError;
 use crate::middleware::{extract_client_ip, OciBearerUser};
 use crate::models::oci::CachedManifest;
 use crate::models::{AuditAction, CreateAuditLog};
@@ -17,7 +17,8 @@ use crate::repositories::{
     ApplicationRepository, AuditLogRepository, OciBlobCacheRepository, OciPullDailyCountRepository,
 };
 use crate::services::{
-    BlobCache, ForgejoRegistryClient, ManifestCache, OciLimitDenial, OciLimiter, RegistryError,
+    BlobCache, BlobCacheError, ForgejoRegistryClient, ManifestCache, OciLimitDenial, OciLimiter,
+    RegistryError,
 };
 
 /// The blob cache, parameterised over Bunyip's Postgres blob-cache store.
@@ -224,19 +225,14 @@ pub async fn get_blob(
     let handle = match blob_cache.get_or_fetch(owner, name, &digest).await {
         Ok(h) => h,
         Err(e) => {
-            let mapped = match &e {
-                AppError::NotFound { .. } => OciError::BlobUnknown,
-                AppError::ValidationError { .. } => OciError::BlobUnknown,
-                _ => OciError::Upstream,
-            };
-            if matches!(mapped, OciError::Upstream) {
-                // The engine flattens the underlying cause (upstream status,
-                // filesystem error) into the AppError string; surface it in
-                // the logs so operators do not need the audit table to
-                // diagnose. An Upstream(401)/Upstream(403) in the string
-                // means Forgejo rejected the service credentials; check
-                // FORGEJO_API_TOKEN and its read:package scope. (Typed
-                // errors through the blob path are tracked in PSA-35.)
+            // The OCI status classification (BlobUnknown / Upstream / Internal)
+            // lives in dunite-oci next to the error types (PSA-35); this
+            // handler adds only Bunyip's logging and audit policy.
+            if let BlobCacheError::Registry(RegistryError::Upstream(status @ (401 | 403))) = &e {
+                log_forgejo_credential_rejection(*status);
+            }
+            let mapped = OciError::from(&e);
+            if !matches!(mapped, OciError::BlobUnknown) {
                 tracing::error!(
                     error = ?e,
                     slug = %slug,
@@ -284,19 +280,24 @@ pub async fn push_not_supported() -> Result<HttpResponse, OciError> {
     Err(OciError::Unsupported)
 }
 
+/// 401/403 from Forgejo means OUR service credentials were rejected, not the
+/// member's. Surface a precise operator diagnostic; the member still sees a
+/// generic upstream error. Shared by the manifest and blob paths so the
+/// guidance cannot drift between them.
+fn log_forgejo_credential_rejection(status: u16) {
+    tracing::error!(
+        status,
+        "upstream Forgejo rejected the registry service credentials; \
+         verify FORGEJO_API_TOKEN is valid and has the read:package scope \
+         for the configured owner/image"
+    );
+}
+
 fn map_reg_err(e: &RegistryError) -> OciError {
     match e {
         RegistryError::NotFound => OciError::ManifestUnknown,
-        // 401/403 from Forgejo means OUR service credentials were rejected,
-        // not the member's. Surface a precise operator diagnostic; the member
-        // still sees a generic upstream error.
         RegistryError::Upstream(status @ (401 | 403)) => {
-            tracing::error!(
-                status,
-                "upstream Forgejo rejected the registry service credentials; \
-                 verify FORGEJO_API_TOKEN is valid and has the read:package scope \
-                 for the configured owner/image"
-            );
+            log_forgejo_credential_rejection(*status);
             OciError::Upstream
         }
         _ => OciError::Upstream,

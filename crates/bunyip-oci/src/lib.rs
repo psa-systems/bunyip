@@ -46,8 +46,9 @@ pub mod services {
     pub use bunyip_domain::services::*;
 
     pub use dunite_oci::services::{
-        BlobCache, BlobHandle, ForgejoRegistryClient, ManifestCache, OciLimitDenial, OciLimiter,
-        OciPullGuard, OciTokenService, RegistryError, RegistryTokenClaims, REGISTRY_AUDIENCE,
+        BlobCache, BlobCacheError, BlobHandle, ForgejoRegistryClient, ManifestCache,
+        OciLimitDenial, OciLimiter, OciPullGuard, OciTokenService, RegistryError,
+        RegistryTokenClaims, REGISTRY_AUDIENCE,
     };
 }
 
