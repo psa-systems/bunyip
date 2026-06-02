@@ -16,8 +16,8 @@ use crate::middleware::{AdminUser, AuthenticatedUser};
 use crate::models::stripe::encrypt_secret;
 use crate::models::{
     AuditAction, CreateApplication, CreateAuditLog, CreatePasswordResetToken, CreateRefreshToken,
-    DeleteApplicationRequest, DistributionConfig, MembershipStatus, StripeConfigResponse,
-    SwapApplicationOrderRequest, UpdateApplication, UserResponse,
+    DeleteApplicationRequest, MembershipStatus, StripeConfigResponse, SwapApplicationOrderRequest,
+    UpdateApplication, UserResponse,
 };
 use crate::repositories::{
     ApplicationRepository, AuditLogRepository, InviteRepository, NotificationRepository,
@@ -507,44 +507,7 @@ pub async fn update_application(
     // Validate the MERGED distribution config (body values overlaid on the
     // existing row) using the shared model rules, so a bad value is a clean
     // 400 instead of a DB CHECK-constraint 500 and create/update cannot drift.
-    let merged_package = body
-        .forgejo_package
-        .as_deref()
-        .filter(|p| !p.is_empty())
-        .or(old_app.forgejo_package.as_deref());
-    let distribution = DistributionConfig {
-        artifact_source: Some(
-            body.artifact_source
-                .as_deref()
-                .unwrap_or(old_app.artifact_source.as_str()),
-        ),
-        forgejo_owner: body
-            .forgejo_owner
-            .as_deref()
-            .or(old_app.forgejo_owner.as_deref()),
-        forgejo_repo: body
-            .forgejo_repo
-            .as_deref()
-            .or(old_app.forgejo_repo.as_deref()),
-        forgejo_package: merged_package,
-        pinned_release_tag: body
-            .pinned_release_tag
-            .as_deref()
-            .or(old_app.pinned_release_tag.as_deref()),
-        oci_image_owner: body
-            .oci_image_owner
-            .as_deref()
-            .or(old_app.oci_image_owner.as_deref()),
-        oci_image_name: body
-            .oci_image_name
-            .as_deref()
-            .or(old_app.oci_image_name.as_deref()),
-        pinned_image_tag: body
-            .pinned_image_tag
-            .as_deref()
-            .or(old_app.pinned_image_tag.as_deref()),
-    };
-    if let Err((field, message)) = distribution.validate() {
+    if let Err((field, message)) = body.distribution_merged(&old_app).validate() {
         return Err(AppError::validation(field, &message));
     }
 
@@ -676,17 +639,7 @@ pub async fn create_application(
 
     // Validate the distribution config (Forgejo downloads + OCI image) with
     // the shared model rules, so a product can be fully created in one call.
-    let distribution = DistributionConfig {
-        artifact_source: body.artifact_source.as_deref(),
-        forgejo_owner: body.forgejo_owner.as_deref(),
-        forgejo_repo: body.forgejo_repo.as_deref(),
-        forgejo_package: body.forgejo_package.as_deref(),
-        pinned_release_tag: body.pinned_release_tag.as_deref(),
-        oci_image_owner: body.oci_image_owner.as_deref(),
-        oci_image_name: body.oci_image_name.as_deref(),
-        pinned_image_tag: body.pinned_image_tag.as_deref(),
-    };
-    if let Err((field, message)) = distribution.validate() {
+    if let Err((field, message)) = body.distribution().validate() {
         return Err(AppError::validation(field, &message));
     }
 
@@ -2066,6 +2019,7 @@ mod tests {
             container_name: None,
             health_check_url: None,
             is_active: None,
+            is_hosted: None,
             maintenance_mode: None,
             maintenance_message: None,
             webhook_url: None,

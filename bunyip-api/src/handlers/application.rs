@@ -12,7 +12,9 @@ use crate::repositories::ApplicationRepository;
 use crate::responses::{get_request_id, success};
 
 /// GET /v1/applications
-/// List all active applications
+/// List active HOSTED applications (hub launch tiles). Catalog-only
+/// distribution products are excluded; they surface via /v1/downloads and
+/// the OCI registry instead.
 pub async fn list_applications(
     req: HttpRequest,
     user: OptionalUser,
@@ -26,7 +28,7 @@ pub async fn list_applications(
         .map(|claims| claims.has_member_access())
         .unwrap_or(false);
 
-    let apps = ApplicationRepository::list_active(&pool).await?;
+    let apps = ApplicationRepository::list_active_hosted(&pool).await?;
 
     let apps_response: Vec<ApplicationResponse> = apps
         .into_iter()

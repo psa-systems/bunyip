@@ -24,6 +24,22 @@ impl ApplicationRepository {
         Ok(apps)
     }
 
+    /// List active HOSTED applications (hub launch tiles). Excludes
+    /// catalog-only distribution products (is_hosted = FALSE).
+    pub async fn list_active_hosted(pool: &PgPool) -> Result<Vec<Application>, AppError> {
+        let apps = sqlx::query_as::<_, Application>(
+            r#"
+            SELECT * FROM applications
+            WHERE is_active = TRUE AND is_hosted = TRUE
+            ORDER BY sort_order ASC, display_name ASC
+            "#,
+        )
+        .fetch_all(pool)
+        .await?;
+
+        Ok(apps)
+    }
+
     /// Find application by ID
     pub async fn find_by_id(pool: &PgPool, id: Uuid) -> Result<Option<Application>, AppError> {
         let app = sqlx::query_as::<_, Application>(
@@ -148,21 +164,22 @@ impl ApplicationRepository {
                 container_name      = COALESCE($7, container_name),
                 health_check_url    = COALESCE($8, health_check_url),
                 is_active           = COALESCE($9, is_active),
-                maintenance_mode    = COALESCE($10, maintenance_mode),
-                maintenance_message = COALESCE($11, maintenance_message),
-                webhook_url         = COALESCE($12, webhook_url),
-                forgejo_owner       = COALESCE($13, forgejo_owner),
-                forgejo_repo        = COALESCE($14, forgejo_repo),
-                pinned_release_tag  = COALESCE($15, pinned_release_tag),
-                artifact_source     = COALESCE($16, artifact_source),
+                is_hosted           = COALESCE($10, is_hosted),
+                maintenance_mode    = COALESCE($11, maintenance_mode),
+                maintenance_message = COALESCE($12, maintenance_message),
+                webhook_url         = COALESCE($13, webhook_url),
+                forgejo_owner       = COALESCE($14, forgejo_owner),
+                forgejo_repo        = COALESCE($15, forgejo_repo),
+                pinned_release_tag  = COALESCE($16, pinned_release_tag),
+                artifact_source     = COALESCE($17, artifact_source),
                 -- Empty string clears forgejo_package back to NULL (= fall back
                 -- to forgejo_repo); NULL/omitted keeps the current value.
-                forgejo_package     = NULLIF(COALESCE($17, forgejo_package), ''),
-                oci_image_owner     = COALESCE($18, oci_image_owner),
-                oci_image_name      = COALESCE($19, oci_image_name),
-                pinned_image_tag    = COALESCE($20, pinned_image_tag),
+                forgejo_package     = NULLIF(COALESCE($18, forgejo_package), ''),
+                oci_image_owner     = COALESCE($19, oci_image_owner),
+                oci_image_name      = COALESCE($20, oci_image_name),
+                pinned_image_tag    = COALESCE($21, pinned_image_tag),
                 updated_at          = NOW()
-            WHERE id = $21
+            WHERE id = $22
             RETURNING *
             "#,
         )
@@ -175,6 +192,7 @@ impl ApplicationRepository {
         .bind(data.container_name.as_deref())
         .bind(data.health_check_url.as_deref())
         .bind(data.is_active)
+        .bind(data.is_hosted)
         .bind(data.maintenance_mode)
         .bind(data.maintenance_message.as_deref())
         .bind(data.webhook_url.as_deref())
@@ -202,11 +220,13 @@ impl ApplicationRepository {
             r#"
             INSERT INTO applications (name, slug, display_name, description, icon_url,
                 container_name, health_check_url, subdomain, webhook_url, version, source_code_url,
+                is_hosted,
                 forgejo_owner, forgejo_repo, forgejo_package, pinned_release_tag, artifact_source,
                 oci_image_owner, oci_image_name, pinned_image_tag)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                $12, $13, $14, $15, COALESCE($16, 'release'),
-                $17, $18, $19)
+                COALESCE($12, TRUE),
+                $13, $14, $15, $16, COALESCE($17, 'release'),
+                $18, $19, $20)
             RETURNING *
             "#,
         )
@@ -221,6 +241,7 @@ impl ApplicationRepository {
         .bind(data.webhook_url.as_deref())
         .bind(data.version.as_deref())
         .bind(data.source_code_url.as_deref())
+        .bind(data.is_hosted)
         .bind(data.forgejo_owner.as_deref())
         .bind(data.forgejo_repo.as_deref())
         .bind(data.forgejo_package.as_deref())
@@ -331,6 +352,7 @@ mod tests {
             container_name: None,
             health_check_url: None,
             is_active: None,
+            is_hosted: None,
             maintenance_mode: None,
             maintenance_message: None,
             webhook_url: None,
