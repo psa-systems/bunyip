@@ -50,17 +50,25 @@ fn pager(base: &str, page: u32, total_pages: i64) -> Markup {
 // ===========================================================================
 
 pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let fwd = c.forward.as_deref();
     let stats = admin_api::stats(&st.api, fwd).await.ok();
-    let logs = admin_api::audit_logs(&st.api, fwd, 1, 5, false).await.map(|p| p.items).unwrap_or_default();
+    let logs = admin_api::audit_logs(&st.api, fwd, 1, 5, false)
+        .await
+        .map(|p| p.items)
+        .unwrap_or_default();
 
-    let stat = |label: &str, value: String, sub: &str, ic: &str| html! {
-        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-            div class="flex flex-col space-y-1.5 p-6 flex-row items-center justify-between pb-2" {
-                h3 class="text-sm font-medium" { (label) } (icon(ic, "h-4 w-4 text-muted-foreground"))
+    let stat = |label: &str, value: String, sub: &str, ic: &str| {
+        html! {
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6 flex-row items-center justify-between pb-2" {
+                    h3 class="text-sm font-medium" { (label) } (icon(ic, "h-4 w-4 text-muted-foreground"))
+                }
+                div class="p-6 pt-0" { div class="text-2xl font-bold" { (value) } p class="text-xs text-muted-foreground" { (sub) } }
             }
-            div class="p-6 pt-0" { div class="text-2xl font-bold" { (value) } p class="text-xs text-muted-foreground" { (sub) } }
         }
     };
 
@@ -100,7 +108,10 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
 // ===========================================================================
 
 #[derive(Deserialize)]
-pub struct AuditQuery { pub page: Option<u32>, pub admin_only: Option<String> }
+pub struct AuditQuery {
+    pub page: Option<u32>,
+    pub admin_only: Option<String>,
+}
 
 fn audit_row(log: &AdminAuditLog) -> Markup {
     let ic = match log.action.as_str() {
@@ -134,14 +145,27 @@ fn audit_row(log: &AdminAuditLog) -> Markup {
     }
 }
 
-pub async fn audit_logs(State(st): State<AppState>, headers: HeaderMap, Query(q): Query<AuditQuery>) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+pub async fn audit_logs(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<AuditQuery>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let page = q.page.unwrap_or(1).max(1);
     let admin_only = q.admin_only.as_deref() == Some("true");
-    let data = admin_api::audit_logs(&st.api, c.forward.as_deref(), page, 50, admin_only).await.ok();
+    let data = admin_api::audit_logs(&st.api, c.forward.as_deref(), page, 50, admin_only)
+        .await
+        .ok();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
     let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
-    let base = if admin_only { "/admin/audit-logs?admin_only=true" } else { "/admin/audit-logs" };
+    let base = if admin_only {
+        "/admin/audit-logs?admin_only=true"
+    } else {
+        "/admin/audit-logs"
+    };
 
     let content = html! {
         div class="space-y-6" {
@@ -164,7 +188,13 @@ pub async fn audit_logs(State(st): State<AppState>, headers: HeaderMap, Query(q)
             }
         }
     };
-    admin_response(&c, &user, "/admin/audit-logs", "Audit Logs · Bunyip", content)
+    admin_response(
+        &c,
+        &user,
+        "/admin/audit-logs",
+        "Audit Logs · Bunyip",
+        content,
+    )
 }
 
 // ===========================================================================
@@ -172,16 +202,32 @@ pub async fn audit_logs(State(st): State<AppState>, headers: HeaderMap, Query(q)
 // ===========================================================================
 
 #[derive(Deserialize)]
-pub struct UserQuery { pub page: Option<u32>, pub search: Option<String> }
+pub struct UserQuery {
+    pub page: Option<u32>,
+    pub search: Option<String>,
+}
 
-pub async fn users(State(st): State<AppState>, headers: HeaderMap, Query(q): Query<UserQuery>) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+pub async fn users(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<UserQuery>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let page = q.page.unwrap_or(1).max(1);
     let search = q.search.unwrap_or_default();
-    let data = admin_api::users(&st.api, c.forward.as_deref(), page, 20, &search).await.ok();
+    let data = admin_api::users(&st.api, c.forward.as_deref(), page, 20, &search)
+        .await
+        .ok();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
     let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
-    let base = if search.is_empty() { "/admin/users".to_string() } else { format!("/admin/users?search={}", urlenc(&search)) };
+    let base = if search.is_empty() {
+        "/admin/users".to_string()
+    } else {
+        format!("/admin/users?search={}", urlenc(&search))
+    };
 
     let content = html! {
         div class="space-y-6" {
@@ -224,14 +270,31 @@ pub async fn users(State(st): State<AppState>, headers: HeaderMap, Query(q): Que
 }
 
 #[derive(Deserialize)]
-pub struct RoleForm { pub role: String }
-pub async fn user_role(State(st): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Form(f): Form<RoleForm>) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+pub struct RoleForm {
+    pub role: String,
+}
+pub async fn user_role(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<RoleForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let _ = admin_api::update_user_role(&st.api, c.forward.as_deref(), &id, &f.role).await;
     redirect("/admin/users")
 }
-pub async fn user_delete(State(st): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+pub async fn user_delete(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let _ = admin_api::delete_user(&st.api, c.forward.as_deref(), &id).await;
     redirect("/admin/users")
 }
@@ -241,12 +304,23 @@ pub async fn user_delete(State(st): State<AppState>, headers: HeaderMap, Path(id
 // ===========================================================================
 
 #[derive(Deserialize)]
-pub struct PageQuery { pub page: Option<u32> }
+pub struct PageQuery {
+    pub page: Option<u32>,
+}
 
-pub async fn memberships(State(st): State<AppState>, headers: HeaderMap, Query(q): Query<PageQuery>) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+pub async fn memberships(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<PageQuery>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let page = q.page.unwrap_or(1).max(1);
-    let data = admin_api::memberships(&st.api, c.forward.as_deref(), page, 20, "").await.ok();
+    let data = admin_api::memberships(&st.api, c.forward.as_deref(), page, 20, "")
+        .await
+        .ok();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
     let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
 
@@ -270,17 +344,32 @@ pub async fn memberships(State(st): State<AppState>, headers: HeaderMap, Query(q
             }
         }
     };
-    admin_response(&c, &user, "/admin/memberships", "Memberships · Bunyip", content)
+    admin_response(
+        &c,
+        &user,
+        "/admin/memberships",
+        "Memberships · Bunyip",
+        content,
+    )
 }
 
 // ===========================================================================
 // Feedback
 // ===========================================================================
 
-pub async fn feedback(State(st): State<AppState>, headers: HeaderMap, Query(q): Query<PageQuery>) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+pub async fn feedback(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<PageQuery>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let page = q.page.unwrap_or(1).max(1);
-    let data = admin_api::feedback(&st.api, c.forward.as_deref(), page, 20).await.ok();
+    let data = admin_api::feedback(&st.api, c.forward.as_deref(), page, 20)
+        .await
+        .ok();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
     let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
 
@@ -316,9 +405,19 @@ pub async fn feedback(State(st): State<AppState>, headers: HeaderMap, Query(q): 
 }
 
 #[derive(Deserialize)]
-pub struct StatusForm { pub status: String }
-pub async fn feedback_status(State(st): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Form(f): Form<StatusForm>) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+pub struct StatusForm {
+    pub status: String,
+}
+pub async fn feedback_status(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<StatusForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let status = match f.status.as_str() {
         "reviewed" => FeedbackStatus::Reviewed,
         "responded" => FeedbackStatus::Responded,
@@ -334,8 +433,13 @@ pub async fn feedback_status(State(st): State<AppState>, headers: HeaderMap, Pat
 // ===========================================================================
 
 pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
-    let apps = admin_api::applications(&st.api, c.forward.as_deref()).await.unwrap_or_default();
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let apps = admin_api::applications(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
 
     let content = html! {
         div class="space-y-6" {
@@ -369,13 +473,30 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
             }
         }
     };
-    admin_response(&c, &user, "/admin/applications", "Applications · Bunyip", content)
+    admin_response(
+        &c,
+        &user,
+        "/admin/applications",
+        "Applications · Bunyip",
+        content,
+    )
 }
 
 #[derive(Deserialize)]
-pub struct AppFieldForm { pub field: String, pub value: String }
-pub async fn application_field(State(st): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Form(f): Form<AppFieldForm>) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+pub struct AppFieldForm {
+    pub field: String,
+    pub value: String,
+}
+pub async fn application_field(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<AppFieldForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let val = f.value == "true";
     let mut map = serde_json::Map::new();
     map.insert(f.field.clone(), json!(val));
@@ -389,8 +510,13 @@ pub async fn application_field(State(st): State<AppState>, headers: HeaderMap, P
 // ===========================================================================
 
 pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
-    let cfg = admin_api::tier_config(&st.api, c.forward.as_deref()).await.ok();
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let cfg = admin_api::tier_config(&st.api, c.forward.as_deref())
+        .await
+        .ok();
 
     let content = html! {
         div class="space-y-6" {
@@ -412,13 +538,31 @@ pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Re
             }
         }
     };
-    admin_response(&c, &user, "/admin/tier-settings", "Tier settings · Bunyip", content)
+    admin_response(
+        &c,
+        &user,
+        "/admin/tier-settings",
+        "Tier settings · Bunyip",
+        content,
+    )
 }
 
 #[derive(Deserialize)]
-pub struct TierForm { pub lifetime_slots: i64, pub early_adopter_slots: i64, pub early_adopter_trial_days: i64, pub standard_trial_days: i64 }
-pub async fn tier_settings_save(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<TierForm>) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+pub struct TierForm {
+    pub lifetime_slots: i64,
+    pub early_adopter_slots: i64,
+    pub early_adopter_trial_days: i64,
+    pub standard_trial_days: i64,
+}
+pub async fn tier_settings_save(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<TierForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let body = json!({ "lifetime_slots": f.lifetime_slots, "early_adopter_slots": f.early_adopter_slots, "early_adopter_trial_days": f.early_adopter_trial_days, "standard_trial_days": f.standard_trial_days });
     let _ = admin_api::update_tier_config(&st.api, c.forward.as_deref(), body).await;
     redirect("/admin/tier-settings")
@@ -429,8 +573,13 @@ pub async fn tier_settings_save(State(st): State<AppState>, headers: HeaderMap, 
 // ===========================================================================
 
 pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
-    let cfg = admin_api::stripe_config(&st.api, c.forward.as_deref()).await.ok();
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let cfg = admin_api::stripe_config(&st.api, c.forward.as_deref())
+        .await
+        .ok();
 
     let content = html! {
         div class="space-y-6" {
@@ -455,12 +604,29 @@ pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response 
 }
 
 #[derive(Deserialize)]
-pub struct StripeForm { #[serde(default)] pub secret_key: String, #[serde(default)] pub webhook_secret: String, pub app_tag: String }
-pub async fn stripe_save(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<StripeForm>) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+pub struct StripeForm {
+    #[serde(default)]
+    pub secret_key: String,
+    #[serde(default)]
+    pub webhook_secret: String,
+    pub app_tag: String,
+}
+pub async fn stripe_save(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<StripeForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let mut body = json!({ "app_tag": f.app_tag });
-    if !f.secret_key.is_empty() { body["secret_key"] = json!(f.secret_key); }
-    if !f.webhook_secret.is_empty() { body["webhook_secret"] = json!(f.webhook_secret); }
+    if !f.secret_key.is_empty() {
+        body["secret_key"] = json!(f.secret_key);
+    }
+    if !f.webhook_secret.is_empty() {
+        body["webhook_secret"] = json!(f.webhook_secret);
+    }
     let _ = admin_api::update_stripe_config(&st.api, c.forward.as_deref(), body).await;
     redirect("/admin/stripe")
 }
@@ -468,7 +634,13 @@ pub async fn stripe_save(State(st): State<AppState>, headers: HeaderMap, Form(f)
 fn urlenc(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
-        match b { b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char), b' ' => out.push('+'), _ => out.push_str(&format!("%{b:02X}")) }
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
     }
     out
 }

@@ -163,7 +163,13 @@ fn feedback_launcher() -> Markup {
     }
 }
 
-pub fn public_shell(cfg: &Config, user: Option<&User>, apps: &[Application], launcher: bool, content: Markup) -> Markup {
+pub fn public_shell(
+    cfg: &Config,
+    user: Option<&User>,
+    apps: &[Application],
+    launcher: bool,
+    content: Markup,
+) -> Markup {
     html! {
         div class="flex min-h-screen flex-col" {
             (header(user))
@@ -182,33 +188,94 @@ struct NavItem {
 
 fn dashboard_items() -> Vec<NavItem> {
     vec![
-        NavItem { title: "Dashboard", href: "/dashboard", icon: "layout-dashboard" },
-        NavItem { title: "Applications", href: "/applications", icon: "app-window" },
-        NavItem { title: "Downloads", href: "/downloads", icon: "download" },
-        NavItem { title: "Membership", href: "/membership", icon: "credit-card" },
-        NavItem { title: "Billing", href: "/billing", icon: "receipt" },
-        NavItem { title: "Settings", href: "/settings", icon: "settings" },
+        NavItem {
+            title: "Dashboard",
+            href: "/dashboard",
+            icon: "layout-dashboard",
+        },
+        NavItem {
+            title: "Applications",
+            href: "/applications",
+            icon: "app-window",
+        },
+        NavItem {
+            title: "Downloads",
+            href: "/downloads",
+            icon: "download",
+        },
+        NavItem {
+            title: "Membership",
+            href: "/membership",
+            icon: "credit-card",
+        },
+        NavItem {
+            title: "Billing",
+            href: "/billing",
+            icon: "receipt",
+        },
+        NavItem {
+            title: "Settings",
+            href: "/settings",
+            icon: "settings",
+        },
     ]
 }
 
 fn admin_items() -> Vec<NavItem> {
     vec![
-        NavItem { title: "Overview", href: "/admin", icon: "layout-dashboard" },
-        NavItem { title: "Users", href: "/admin/users", icon: "users" },
-        NavItem { title: "Memberships", href: "/admin/memberships", icon: "credit-card" },
-        NavItem { title: "Applications", href: "/admin/applications", icon: "app-window" },
-        NavItem { title: "Stripe", href: "/admin/stripe", icon: "banknote" },
-        NavItem { title: "Tier Settings", href: "/admin/tier-settings", icon: "settings" },
-        NavItem { title: "Feedback", href: "/admin/feedback", icon: "message-square-quote" },
-        NavItem { title: "Audit Logs", href: "/admin/audit-logs", icon: "file-text" },
+        NavItem {
+            title: "Overview",
+            href: "/admin",
+            icon: "layout-dashboard",
+        },
+        NavItem {
+            title: "Users",
+            href: "/admin/users",
+            icon: "users",
+        },
+        NavItem {
+            title: "Memberships",
+            href: "/admin/memberships",
+            icon: "credit-card",
+        },
+        NavItem {
+            title: "Applications",
+            href: "/admin/applications",
+            icon: "app-window",
+        },
+        NavItem {
+            title: "Stripe",
+            href: "/admin/stripe",
+            icon: "banknote",
+        },
+        NavItem {
+            title: "Tier Settings",
+            href: "/admin/tier-settings",
+            icon: "settings",
+        },
+        NavItem {
+            title: "Feedback",
+            href: "/admin/feedback",
+            icon: "message-square-quote",
+        },
+        NavItem {
+            title: "Audit Logs",
+            href: "/admin/audit-logs",
+            icon: "file-text",
+        },
     ]
 }
 
-const NAV_ACTIVE: &str = "bg-gradient-to-r from-primary to-indigo-500 text-white shadow-md shadow-primary/20";
+const NAV_ACTIVE: &str =
+    "bg-gradient-to-r from-primary to-indigo-500 text-white shadow-md shadow-primary/20";
 const NAV_INACTIVE: &str = "text-muted-foreground hover:bg-accent hover:text-accent-foreground";
 
 fn sidebar(admin: bool, is_admin: bool, active: &str) -> Markup {
-    let items = if admin { admin_items() } else { dashboard_items() };
+    let items = if admin {
+        admin_items()
+    } else {
+        dashboard_items()
+    };
     html! {
         aside class="hidden md:flex w-64 flex-col border-r border-border/50 bg-gradient-to-b from-background via-background to-indigo-950/5 dark:to-indigo-950/20" {
             div class="flex h-16 items-center border-b border-border/50 px-6" {

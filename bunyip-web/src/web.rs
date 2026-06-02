@@ -39,7 +39,10 @@ pub fn html_cookies(markup: Markup, cookies: &[String]) -> Response {
 /// 303 redirect (so a POST -> GET after form submit).
 pub fn redirect(path: &str) -> Response {
     let mut resp = StatusCode::SEE_OTHER.into_response();
-    resp.headers_mut().insert(LOCATION, HeaderValue::from_str(path).unwrap_or(HeaderValue::from_static("/")));
+    resp.headers_mut().insert(
+        LOCATION,
+        HeaderValue::from_str(path).unwrap_or(HeaderValue::from_static("/")),
+    );
     resp
 }
 

@@ -32,8 +32,21 @@ const BUSINESS: [&str; 6] = [
     "Invoice billing",
 ];
 
-fn pricing_card(title: &str, desc: &str, price: &str, features: &[&str], highlight: bool, stripe: bool, cta_href: &str, cta_label: &str) -> Markup {
-    let border = if highlight { "w-full border-2 border-primary relative" } else { "w-full border-primary" };
+fn pricing_card(
+    title: &str,
+    desc: &str,
+    price: &str,
+    features: &[&str],
+    highlight: bool,
+    stripe: bool,
+    cta_href: &str,
+    cta_label: &str,
+) -> Markup {
+    let border = if highlight {
+        "w-full border-2 border-primary relative"
+    } else {
+        "w-full border-primary"
+    };
     html! {
         div class={ "rounded-lg border bg-card text-card-foreground shadow-sm " (border) } {
             div class="flex flex-col space-y-1.5 p-6 text-center" {
@@ -66,11 +79,22 @@ fn pricing_card(title: &str, desc: &str, price: &str, features: &[&str], highlig
 
 pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (c, apps) = public_ctx(&st, &headers).await;
-    let stripe = auth_api::setup_status(&st.api).await.map(|s| s.stripe_enabled).unwrap_or(true);
+    let stripe = auth_api::setup_status(&st.api)
+        .await
+        .map(|s| s.stripe_enabled)
+        .unwrap_or(true);
     let show_business = st.cfg.show_business_pricing;
     let signed_in = c.is_signed_in();
-    let (cta_href, cta_label) = if signed_in { ("/membership", "Go to Membership") } else { ("/register", "Get Started") };
-    let grid = if show_business { "md:grid-cols-2 max-w-4xl" } else { "max-w-md" };
+    let (cta_href, cta_label) = if signed_in {
+        ("/membership", "Go to Membership")
+    } else {
+        ("/register", "Get Started")
+    };
+    let grid = if show_business {
+        "md:grid-cols-2 max-w-4xl"
+    } else {
+        "max-w-md"
+    };
 
     let content = html! {
         div class="py-20" {
@@ -266,7 +290,14 @@ fn feedback_form(submitted: bool, error: Option<&str>) -> Markup {
 
 pub async fn feedback_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (c, apps) = public_ctx(&st, &headers).await;
-    public_response(&st, &c, &apps, "Feedback · Bunyip", false, feedback_form(false, None))
+    public_response(
+        &st,
+        &c,
+        &apps,
+        "Feedback · Bunyip",
+        false,
+        feedback_form(false, None),
+    )
 }
 
 #[derive(Deserialize)]
@@ -285,7 +316,11 @@ pub struct FeedbackForm {
     pub tags: Vec<String>,
 }
 
-pub async fn feedback_post(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<FeedbackForm>) -> Response {
+pub async fn feedback_post(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<FeedbackForm>,
+) -> Response {
     let (c, apps) = public_ctx(&st, &headers).await;
     let cookie = c.forward.clone();
     let input = FeedbackInput {
@@ -305,5 +340,12 @@ pub async fn feedback_post(State(st): State<AppState>, headers: HeaderMap, Form(
             Err(e) => (false, Some(e.user_message())),
         }
     };
-    public_response(&st, &c, &apps, "Feedback · Bunyip", false, feedback_form(submitted, error.as_deref()))
+    public_response(
+        &st,
+        &c,
+        &apps,
+        "Feedback · Bunyip",
+        false,
+        feedback_form(submitted, error.as_deref()),
+    )
 }

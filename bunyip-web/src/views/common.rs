@@ -6,7 +6,13 @@ use crate::views::ui::icon;
 
 /// Centered auth/token card (icon bubble + title + subtitle + body). The caller
 /// wraps this in `public_shell`.
-pub fn auth_card(icon_name: &str, icon_class: &str, title: &str, subtitle: &str, body: Markup) -> Markup {
+pub fn auth_card(
+    icon_name: &str,
+    icon_class: &str,
+    title: &str,
+    subtitle: &str,
+    body: Markup,
+) -> Markup {
     html! {
         div class="flex min-h-[calc(100vh-8rem)] items-center justify-center py-12" {
             div class="w-full max-w-md rounded-lg border bg-card text-card-foreground shadow-sm" {

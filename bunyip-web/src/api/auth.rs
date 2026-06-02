@@ -16,7 +16,11 @@ pub enum LoginOutcome {
 }
 
 fn parse_login(value: Value) -> Result<LoginOutcome, ApiError> {
-    if value.get("requires_2fa").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if value
+        .get("requires_2fa")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         let challenge_token = value
             .get("challenge_token")
             .and_then(|v| v.as_str())
@@ -67,7 +71,11 @@ pub async fn login(
     remember: bool,
 ) -> Result<(LoginOutcome, Vec<String>), ApiError> {
     let r = api
-        .post("/auth/login", cookie, Some(json!({ "email": email, "password": password, "remember": remember })))
+        .post(
+            "/auth/login",
+            cookie,
+            Some(json!({ "email": email, "password": password, "remember": remember })),
+        )
         .await?;
     let cookies = r.set_cookies.clone();
     let data = ok_data(&r)?.clone();
@@ -81,7 +89,11 @@ pub async fn verify_2fa(
     code: &str,
 ) -> Result<(User, Vec<String>), ApiError> {
     let r = api
-        .post("/auth/2fa/verify", cookie, Some(json!({ "challenge_token": challenge_token, "code": code })))
+        .post(
+            "/auth/2fa/verify",
+            cookie,
+            Some(json!({ "challenge_token": challenge_token, "code": code })),
+        )
         .await?;
     let cookies = r.set_cookies.clone();
     let data = ok_data(&r)?.clone();
@@ -94,7 +106,9 @@ pub async fn verify_2fa(
 }
 
 pub async fn request_magic_link(api: &Api, email: &str) -> Result<(), ApiError> {
-    let r = api.post("/auth/magic-link", None, Some(json!({ "email": email }))).await?;
+    let r = api
+        .post("/auth/magic-link", None, Some(json!({ "email": email })))
+        .await?;
     ok_data(&r).map(|_| ())
 }
 
@@ -102,20 +116,40 @@ pub async fn verify_magic_link(
     api: &Api,
     token: &str,
 ) -> Result<(LoginOutcome, Vec<String>), ApiError> {
-    let r = api.post("/auth/magic-link/verify", None, Some(json!({ "token": token }))).await?;
+    let r = api
+        .post(
+            "/auth/magic-link/verify",
+            None,
+            Some(json!({ "token": token })),
+        )
+        .await?;
     let cookies = r.set_cookies.clone();
     let data = ok_data(&r)?.clone();
     Ok((parse_login(data)?, cookies))
 }
 
 pub async fn request_password_reset(api: &Api, email: &str) -> Result<(), ApiError> {
-    let r = api.post("/auth/password-reset", None, Some(json!({ "email": email }))).await?;
+    let r = api
+        .post(
+            "/auth/password-reset",
+            None,
+            Some(json!({ "email": email })),
+        )
+        .await?;
     ok_data(&r).map(|_| ())
 }
 
-pub async fn confirm_password_reset(api: &Api, token: &str, new_password: &str) -> Result<(), ApiError> {
+pub async fn confirm_password_reset(
+    api: &Api,
+    token: &str,
+    new_password: &str,
+) -> Result<(), ApiError> {
     let r = api
-        .post("/auth/password-reset/confirm", None, Some(json!({ "token": token, "new_password": new_password })))
+        .post(
+            "/auth/password-reset/confirm",
+            None,
+            Some(json!({ "token": token, "new_password": new_password })),
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -127,14 +161,30 @@ pub async fn register(
     email: &str,
     password: &str,
 ) -> Result<(User, Vec<String>), ApiError> {
-    let r = api.post("/auth/register", None, Some(json!({ "email": email, "password": password }))).await?;
+    let r = api
+        .post(
+            "/auth/register",
+            None,
+            Some(json!({ "email": email, "password": password })),
+        )
+        .await?;
     let cookies = r.set_cookies.clone();
     let auth: AuthResponse = parse(r)?;
     Ok((auth.user, cookies))
 }
 
-pub async fn setup(api: &Api, email: &str, password: &str) -> Result<(User, Vec<String>), ApiError> {
-    let r = api.post("/auth/setup", None, Some(json!({ "email": email, "password": password }))).await?;
+pub async fn setup(
+    api: &Api,
+    email: &str,
+    password: &str,
+) -> Result<(User, Vec<String>), ApiError> {
+    let r = api
+        .post(
+            "/auth/setup",
+            None,
+            Some(json!({ "email": email, "password": password })),
+        )
+        .await?;
     let cookies = r.set_cookies.clone();
     let auth: AuthResponse = parse(r)?;
     Ok((auth.user, cookies))
@@ -154,8 +204,16 @@ pub async fn accept_invite(
     let r = api.post("/auth/invite/accept", None, Some(body)).await?;
     let cookies = r.set_cookies.clone();
     let data = ok_data(&r)?.clone();
-    if data.get("needs_password").and_then(|b| b.as_bool()).unwrap_or(false) {
-        let email = data.get("email").and_then(|e| e.as_str()).unwrap_or_default().to_string();
+    if data
+        .get("needs_password")
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false)
+    {
+        let email = data
+            .get("email")
+            .and_then(|e| e.as_str())
+            .unwrap_or_default()
+            .to_string();
         return Ok((Some(email), None, cookies));
     }
     let auth: AuthResponse = serde_json::from_value(data).map_err(|e| ApiError {
@@ -168,9 +226,18 @@ pub async fn accept_invite(
 
 // --- account / email / password --------------------------------------------
 
-pub async fn change_password(api: &Api, cookie: Option<&str>, current: &str, new: &str) -> Result<(), ApiError> {
+pub async fn change_password(
+    api: &Api,
+    cookie: Option<&str>,
+    current: &str,
+    new: &str,
+) -> Result<(), ApiError> {
     let r = api
-        .put("/users/me/password", cookie, Some(json!({ "current_password": current, "new_password": new })))
+        .put(
+            "/users/me/password",
+            cookie,
+            Some(json!({ "current_password": current, "new_password": new })),
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -190,20 +257,39 @@ pub async fn request_email_change(
     let r = api.post("/users/me/email", cookie, Some(body)).await?;
     let cookies = r.set_cookies.clone();
     let data = ok_data(&r)?;
-    let relogin = data.get("requires_relogin").and_then(|b| b.as_bool()).unwrap_or(false);
+    let relogin = data
+        .get("requires_relogin")
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false);
     Ok((relogin, cookies))
 }
 
 pub async fn confirm_email_change(api: &Api, token: &str) -> Result<(), ApiError> {
-    let r = api.post("/users/me/email/confirm", None, Some(json!({ "token": token }))).await?;
+    let r = api
+        .post(
+            "/users/me/email/confirm",
+            None,
+            Some(json!({ "token": token })),
+        )
+        .await?;
     ok_data(&r).map(|_| ())
 }
 
 /// Returns the granted subscription tier string.
 pub async fn confirm_email_verification(api: &Api, token: &str) -> Result<String, ApiError> {
-    let r = api.post("/users/me/email/verify/confirm", None, Some(json!({ "token": token }))).await?;
+    let r = api
+        .post(
+            "/users/me/email/verify/confirm",
+            None,
+            Some(json!({ "token": token })),
+        )
+        .await?;
     let data = ok_data(&r)?;
-    Ok(data.get("subscription_tier").and_then(|t| t.as_str()).unwrap_or_default().to_string())
+    Ok(data
+        .get("subscription_tier")
+        .and_then(|t| t.as_str())
+        .unwrap_or_default()
+        .to_string())
 }
 
 pub async fn request_email_verification(api: &Api, cookie: Option<&str>) -> Result<(), ApiError> {
@@ -211,7 +297,12 @@ pub async fn request_email_verification(api: &Api, cookie: Option<&str>) -> Resu
     ok_data(&r).map(|_| ())
 }
 
-pub async fn delete_account(api: &Api, cookie: Option<&str>, password: &str, totp: Option<&str>) -> Result<Vec<String>, ApiError> {
+pub async fn delete_account(
+    api: &Api,
+    cookie: Option<&str>,
+    password: &str,
+    totp: Option<&str>,
+) -> Result<Vec<String>, ApiError> {
     let body = match totp {
         Some(c) => json!({ "password": password, "totp_code": c }),
         None => json!({ "password": password }),
@@ -224,23 +315,53 @@ pub async fn delete_account(api: &Api, cookie: Option<&str>, password: &str, tot
 
 // --- 2FA management ---------------------------------------------------------
 
-pub async fn setup_2fa(api: &Api, cookie: Option<&str>) -> Result<TwoFactorSetupResponse, ApiError> {
+pub async fn setup_2fa(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<TwoFactorSetupResponse, ApiError> {
     parse(api.post("/auth/2fa/setup", cookie, None).await?)
 }
 
-pub async fn confirm_2fa(api: &Api, cookie: Option<&str>, code: &str) -> Result<RecoveryCodesResponse, ApiError> {
-    parse(api.post("/auth/2fa/confirm", cookie, Some(json!({ "code": code }))).await?)
+pub async fn confirm_2fa(
+    api: &Api,
+    cookie: Option<&str>,
+    code: &str,
+) -> Result<RecoveryCodesResponse, ApiError> {
+    parse(
+        api.post("/auth/2fa/confirm", cookie, Some(json!({ "code": code })))
+            .await?,
+    )
 }
 
-pub async fn status_2fa(api: &Api, cookie: Option<&str>) -> Result<TwoFactorStatusResponse, ApiError> {
+pub async fn status_2fa(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<TwoFactorStatusResponse, ApiError> {
     parse(api.get("/auth/2fa/status", cookie).await?)
 }
 
 pub async fn disable_2fa(api: &Api, cookie: Option<&str>, password: &str) -> Result<(), ApiError> {
-    let r = api.post("/auth/2fa/disable", cookie, Some(json!({ "password": password }))).await?;
+    let r = api
+        .post(
+            "/auth/2fa/disable",
+            cookie,
+            Some(json!({ "password": password })),
+        )
+        .await?;
     ok_data(&r).map(|_| ())
 }
 
-pub async fn regenerate_recovery_codes(api: &Api, cookie: Option<&str>, password: &str) -> Result<RecoveryCodesResponse, ApiError> {
-    parse(api.post("/auth/2fa/recovery-codes", cookie, Some(json!({ "password": password }))).await?)
+pub async fn regenerate_recovery_codes(
+    api: &Api,
+    cookie: Option<&str>,
+    password: &str,
+) -> Result<RecoveryCodesResponse, ApiError> {
+    parse(
+        api.post(
+            "/auth/2fa/recovery-codes",
+            cookie,
+            Some(json!({ "password": password })),
+        )
+        .await?,
+    )
 }

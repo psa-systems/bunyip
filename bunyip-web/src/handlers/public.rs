@@ -65,9 +65,15 @@ fn bunyip_mascot() -> maud::Markup {
 
 pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (c, fwd) = ctx(&st, &headers).await;
-    let apps = calls::applications(&st.api, fwd.as_deref()).await.unwrap_or_default();
+    let apps = calls::applications(&st.api, fwd.as_deref())
+        .await
+        .unwrap_or_default();
     let signed_in = c.is_signed_in();
-    let (cta_href, cta_label) = if signed_in { ("/membership", "Go to Membership") } else { ("/register", "Start free trial") };
+    let (cta_href, cta_label) = if signed_in {
+        ("/membership", "Go to Membership")
+    } else {
+        ("/register", "Start free trial")
+    };
 
     let content = html! {
         div {
@@ -177,7 +183,10 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
     };
 
     let body = public_shell(&st.cfg, c.user.as_ref(), &apps, true, content);
-    html_cookies(document("Bunyip · Surfaces what matters.", body), &c.set_cookies)
+    html_cookies(
+        document("Bunyip · Surfaces what matters.", body),
+        &c.set_cookies,
+    )
 }
 
 /// Static legal/marketing copy block shared shape.
@@ -193,7 +202,9 @@ pub fn simple_page(cfg: &Config, title: &str, body: Markup) -> Markup {
 
 pub async fn not_found(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (c, fwd) = ctx(&st, &headers).await;
-    let apps = calls::applications(&st.api, fwd.as_deref()).await.unwrap_or_default();
+    let apps = calls::applications(&st.api, fwd.as_deref())
+        .await
+        .unwrap_or_default();
     let content = html! {
         div class="flex min-h-[60vh] flex-col items-center justify-center text-center px-6" {
             p class="text-6xl font-bold text-gradient bg-gradient-to-r from-primary to-indigo-500" { "404" }

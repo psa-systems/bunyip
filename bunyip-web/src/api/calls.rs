@@ -21,12 +21,19 @@ pub async fn membership(api: &Api, cookie: Option<&str>) -> Result<Option<Member
     parse(api.get("/memberships/me", cookie).await?)
 }
 
-pub async fn checkout(api: &Api, cookie: Option<&str>, price_id: Option<&str>) -> Result<CheckoutSessionResponse, ApiError> {
+pub async fn checkout(
+    api: &Api,
+    cookie: Option<&str>,
+    price_id: Option<&str>,
+) -> Result<CheckoutSessionResponse, ApiError> {
     let body = match price_id {
         Some(id) => json!({ "price_id": id }),
         None => json!({}),
     };
-    parse(api.post("/memberships/checkout", cookie, Some(body)).await?)
+    parse(
+        api.post("/memberships/checkout", cookie, Some(body))
+            .await?,
+    )
 }
 
 /// These mutate JWT claims, so relay any rotated cookies.
@@ -43,14 +50,21 @@ pub async fn reactivate(api: &Api, cookie: Option<&str>) -> Result<Vec<String>, 
     membership_action(api, cookie, "/memberships/reactivate").await
 }
 
-async fn membership_action(api: &Api, cookie: Option<&str>, path: &str) -> Result<Vec<String>, ApiError> {
+async fn membership_action(
+    api: &Api,
+    cookie: Option<&str>,
+    path: &str,
+) -> Result<Vec<String>, ApiError> {
     let r = api.post(path, cookie, None).await?;
     let cookies = r.set_cookies.clone();
     ok_data(&r)?;
     Ok(cookies)
 }
 
-pub async fn payment_history(api: &Api, cookie: Option<&str>) -> Result<Vec<StripePaymentResponse>, ApiError> {
+pub async fn payment_history(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Vec<StripePaymentResponse>, ApiError> {
     parse(api.get("/memberships/payments", cookie).await?)
 }
 
@@ -62,13 +76,23 @@ pub async fn invoices(api: &Api, cookie: Option<&str>) -> Result<Vec<StripeInvoi
 
 // --- downloads --------------------------------------------------------------
 
-pub async fn downloads_all(api: &Api, cookie: Option<&str>) -> Result<Vec<AppDownloadGroup>, ApiError> {
+pub async fn downloads_all(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Vec<AppDownloadGroup>, ApiError> {
     let g: DownloadGroups = parse(api.get("/downloads", cookie).await?)?;
     Ok(g.groups)
 }
 
-pub async fn downloads_for_app(api: &Api, cookie: Option<&str>, slug: &str) -> Result<AppDownloadsResponse, ApiError> {
-    parse(api.get(&format!("/applications/{slug}/downloads"), cookie).await?)
+pub async fn downloads_for_app(
+    api: &Api,
+    cookie: Option<&str>,
+    slug: &str,
+) -> Result<AppDownloadsResponse, ApiError> {
+    parse(
+        api.get(&format!("/applications/{slug}/downloads"), cookie)
+            .await?,
+    )
 }
 
 // --- feedback ---------------------------------------------------------------
@@ -83,7 +107,11 @@ pub struct FeedbackInput {
     pub website: String,
 }
 
-pub async fn submit_feedback(api: &Api, cookie: Option<&str>, input: &FeedbackInput) -> Result<(), ApiError> {
+pub async fn submit_feedback(
+    api: &Api,
+    cookie: Option<&str>,
+    input: &FeedbackInput,
+) -> Result<(), ApiError> {
     let mut form = reqwest::multipart::Form::new().text("message", input.message.clone());
     if !input.name.is_empty() {
         form = form.text("name", input.name.clone());

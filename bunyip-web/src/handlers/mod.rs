@@ -39,19 +39,33 @@ pub fn rotating_index(len: usize) -> usize {
 /// Authenticate (optional) and fetch the applications list (for header + footer).
 pub async fn public_ctx(st: &AppState, headers: &HeaderMap) -> (AuthCtx, Vec<Application>) {
     let (c, fwd) = ctx(st, headers).await;
-    let apps = calls::applications(&st.api, fwd.as_deref()).await.unwrap_or_default();
+    let apps = calls::applications(&st.api, fwd.as_deref())
+        .await
+        .unwrap_or_default();
     (c, apps)
 }
 
 /// Wrap content in the public shell + document and relay any refreshed cookies.
-pub fn public_response(st: &AppState, c: &AuthCtx, apps: &[Application], title: &str, launcher: bool, content: Markup) -> Response {
+pub fn public_response(
+    st: &AppState,
+    c: &AuthCtx,
+    apps: &[Application],
+    title: &str,
+    launcher: bool,
+    content: Markup,
+) -> Response {
     let body = public_shell(&st.cfg, c.user.as_ref(), apps, launcher, content);
     html_cookies(document(title, body), &c.set_cookies)
 }
 
 /// Render an auth/token page (public shell, no feedback launcher). `content` is
 /// computed by the caller.
-pub async fn auth_page(st: &AppState, headers: &HeaderMap, title: &str, content: Markup) -> Response {
+pub async fn auth_page(
+    st: &AppState,
+    headers: &HeaderMap,
+    title: &str,
+    content: Markup,
+) -> Response {
     let (c, apps) = public_ctx(st, headers).await;
     public_response(st, &c, &apps, title, false, content)
 }
@@ -80,7 +94,11 @@ pub fn password_ok(p: &str) -> bool {
 
 /// Authenticate a protected page. `Err` is a ready redirect (to /login when
 /// signed out, or to 2FA setup for an admin who hasn't enabled it yet).
-pub async fn guard(st: &AppState, headers: &HeaderMap, path: &str) -> Result<(User, AuthCtx), Response> {
+pub async fn guard(
+    st: &AppState,
+    headers: &HeaderMap,
+    path: &str,
+) -> Result<(User, AuthCtx), Response> {
     let cookie = cookie_of(headers);
     let c = auth::authenticate(&st.api, cookie.as_deref()).await;
     match c.user.clone() {
@@ -108,10 +126,28 @@ pub fn dashboard_input() -> &'static str {
     "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 }
 
-pub fn dashboard_response(c: &AuthCtx, user: &User, active: &str, title: &str, content: Markup) -> Response {
-    html_cookies(document(title, dashboard_shell(user, active, content)), &c.set_cookies)
+pub fn dashboard_response(
+    c: &AuthCtx,
+    user: &User,
+    active: &str,
+    title: &str,
+    content: Markup,
+) -> Response {
+    html_cookies(
+        document(title, dashboard_shell(user, active, content)),
+        &c.set_cookies,
+    )
 }
 
-pub fn admin_response(c: &AuthCtx, user: &User, active: &str, title: &str, content: Markup) -> Response {
-    html_cookies(document(title, admin_shell(user, active, content)), &c.set_cookies)
+pub fn admin_response(
+    c: &AuthCtx,
+    user: &User,
+    active: &str,
+    title: &str,
+    content: Markup,
+) -> Response {
+    html_cookies(
+        document(title, admin_shell(user, active, content)),
+        &c.set_cookies,
+    )
 }
