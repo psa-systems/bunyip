@@ -193,13 +193,20 @@ impl ApplicationRepository {
         Ok(app)
     }
 
-    /// Create a new application (admin)
+    /// Create a new application (admin). Distribution coordinates (Forgejo
+    /// downloads + OCI image) can be supplied at creation so a product is
+    /// usable in one call; artifact_source falls back to the column default
+    /// ('release') when not provided.
     pub async fn create(pool: &PgPool, data: &CreateApplication) -> Result<Application, AppError> {
         let app = sqlx::query_as::<_, Application>(
             r#"
             INSERT INTO applications (name, slug, display_name, description, icon_url,
-                container_name, health_check_url, subdomain, webhook_url, version, source_code_url)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                container_name, health_check_url, subdomain, webhook_url, version, source_code_url,
+                forgejo_owner, forgejo_repo, forgejo_package, pinned_release_tag, artifact_source,
+                oci_image_owner, oci_image_name, pinned_image_tag)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                $12, $13, $14, $15, COALESCE($16, 'release'),
+                $17, $18, $19)
             RETURNING *
             "#,
         )
@@ -214,6 +221,14 @@ impl ApplicationRepository {
         .bind(data.webhook_url.as_deref())
         .bind(data.version.as_deref())
         .bind(data.source_code_url.as_deref())
+        .bind(data.forgejo_owner.as_deref())
+        .bind(data.forgejo_repo.as_deref())
+        .bind(data.forgejo_package.as_deref())
+        .bind(data.pinned_release_tag.as_deref())
+        .bind(data.artifact_source.as_deref())
+        .bind(data.oci_image_owner.as_deref())
+        .bind(data.oci_image_name.as_deref())
+        .bind(data.pinned_image_tag.as_deref())
         .fetch_one(pool)
         .await?;
 

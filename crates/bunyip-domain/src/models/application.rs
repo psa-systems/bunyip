@@ -149,6 +149,87 @@ impl Application {
     }
 }
 
+/// The distribution-related fields of an application configuration, borrowed
+/// for validation. Built by the admin create AND update handlers (from raw or
+/// merged values respectively) so the validity rules live in one place and
+/// the two handlers cannot drift.
+#[derive(Debug, Default)]
+pub struct DistributionConfig<'a> {
+    pub artifact_source: Option<&'a str>,
+    pub forgejo_owner: Option<&'a str>,
+    pub forgejo_repo: Option<&'a str>,
+    pub forgejo_package: Option<&'a str>,
+    pub pinned_release_tag: Option<&'a str>,
+    pub oci_image_owner: Option<&'a str>,
+    pub oci_image_name: Option<&'a str>,
+    pub pinned_image_tag: Option<&'a str>,
+}
+
+impl DistributionConfig<'_> {
+    /// Validate the configuration. Returns `(field, message)` on failure so
+    /// handlers can map it to a validation error.
+    ///
+    /// Rules (matching [`Application::download_source`] and
+    /// [`Application::is_pullable`]):
+    /// - `artifact_source`, when set, must be a known value.
+    /// - Download config is all-or-nothing: `release` sources need owner +
+    ///   repo + tag; `generic_package` sources need owner + (package or repo)
+    ///   + tag.
+    /// - OCI config is all-or-nothing: owner + name + tag.
+    pub fn validate(&self) -> Result<(), (&'static str, String)> {
+        if let Some(source) = self.artifact_source {
+            if !Application::valid_artifact_source(source) {
+                return Err((
+                    "artifact_source",
+                    "artifact_source must be 'release' or 'generic_package'".to_string(),
+                ));
+            }
+        }
+
+        let is_generic_package = self.artifact_source == Some(ARTIFACT_SOURCE_GENERIC_PACKAGE);
+        let forgejo_any = self.forgejo_owner.is_some()
+            || self.forgejo_repo.is_some()
+            || self.forgejo_package.is_some()
+            || self.pinned_release_tag.is_some();
+        let forgejo_all = self.forgejo_owner.is_some()
+            && self.pinned_release_tag.is_some()
+            && if is_generic_package {
+                self.forgejo_package.is_some() || self.forgejo_repo.is_some()
+            } else {
+                self.forgejo_repo.is_some()
+            };
+        if forgejo_any && !forgejo_all {
+            return Err((
+                "forgejo",
+                if is_generic_package {
+                    "generic_package downloads need forgejo_owner, pinned_release_tag, and \
+                     forgejo_package (or forgejo_repo) set together"
+                        .to_string()
+                } else {
+                    "forgejo_owner, forgejo_repo, and pinned_release_tag must all be set together"
+                        .to_string()
+                },
+            ));
+        }
+
+        let oci_any = self.oci_image_owner.is_some()
+            || self.oci_image_name.is_some()
+            || self.pinned_image_tag.is_some();
+        let oci_all = self.oci_image_owner.is_some()
+            && self.oci_image_name.is_some()
+            && self.pinned_image_tag.is_some();
+        if oci_any && !oci_all {
+            return Err((
+                "oci",
+                "oci_image_owner, oci_image_name, and pinned_image_tag must all be set together"
+                    .to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
 /// Data for creating an application (admin only)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateApplication {
@@ -163,6 +244,26 @@ pub struct CreateApplication {
     pub webhook_url: Option<String>,
     pub version: Option<String>,
     pub source_code_url: Option<String>,
+    // Distribution config (all optional): Forgejo download coordinates and/or
+    // OCI image coordinates, so a product can be fully created in one call.
+    #[serde(default)]
+    pub forgejo_owner: Option<String>,
+    #[serde(default)]
+    pub forgejo_repo: Option<String>,
+    #[serde(default)]
+    pub forgejo_package: Option<String>,
+    #[serde(default)]
+    pub pinned_release_tag: Option<String>,
+    /// One of [`ARTIFACT_SOURCE_RELEASE`] / [`ARTIFACT_SOURCE_GENERIC_PACKAGE`];
+    /// defaults to `release` (the DB column default) when omitted.
+    #[serde(default)]
+    pub artifact_source: Option<String>,
+    #[serde(default)]
+    pub oci_image_owner: Option<String>,
+    #[serde(default)]
+    pub oci_image_name: Option<String>,
+    #[serde(default)]
+    pub pinned_image_tag: Option<String>,
 }
 
 /// Request body for deleting an application (requires password + 2FA)
@@ -325,6 +426,77 @@ mod tests {
         assert!(!Application::valid_artifact_source("generic-package"));
         assert!(!Application::valid_artifact_source("RELEASE"));
         assert!(!Application::valid_artifact_source(""));
+    }
+
+    #[test]
+    fn distribution_config_validation_rules() {
+        // Empty config is valid (no distribution).
+        assert!(DistributionConfig::default().validate().is_ok());
+
+        // Complete release config.
+        assert!(DistributionConfig {
+            forgejo_owner: Some("psa"),
+            forgejo_repo: Some("mokosh"),
+            pinned_release_tag: Some("v1"),
+            ..Default::default()
+        }
+        .validate()
+        .is_ok());
+
+        // Partial release config rejected.
+        let err = DistributionConfig {
+            forgejo_owner: Some("psa"),
+            ..Default::default()
+        }
+        .validate()
+        .unwrap_err();
+        assert_eq!(err.0, "forgejo");
+
+        // generic_package: package (no repo) is sufficient.
+        assert!(DistributionConfig {
+            artifact_source: Some(ARTIFACT_SOURCE_GENERIC_PACKAGE),
+            forgejo_owner: Some("psa"),
+            forgejo_package: Some("vervain-agent"),
+            pinned_release_tag: Some("0.1.0"),
+            ..Default::default()
+        }
+        .validate()
+        .is_ok());
+
+        // generic_package without package or repo rejected.
+        assert!(DistributionConfig {
+            artifact_source: Some(ARTIFACT_SOURCE_GENERIC_PACKAGE),
+            forgejo_owner: Some("psa"),
+            pinned_release_tag: Some("0.1.0"),
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+
+        // Unknown artifact_source rejected.
+        let err = DistributionConfig {
+            artifact_source: Some("not-a-source"),
+            ..Default::default()
+        }
+        .validate()
+        .unwrap_err();
+        assert_eq!(err.0, "artifact_source");
+
+        // Partial OCI config rejected; complete accepted.
+        assert!(DistributionConfig {
+            oci_image_owner: Some("psa"),
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+        assert!(DistributionConfig {
+            oci_image_owner: Some("psa"),
+            oci_image_name: Some("mokosh-server"),
+            pinned_image_tag: Some("v0.2.0"),
+            ..Default::default()
+        }
+        .validate()
+        .is_ok());
     }
 
     #[test]

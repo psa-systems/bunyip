@@ -138,6 +138,7 @@ pub async fn issue_token(
 
     // Scope validation: if provided, the target app must exist + be pullable.
     let mut scope_str = String::new();
+    let mut scope_app_id: Option<uuid::Uuid> = None;
     if let Some(raw_scope) = &query.scope {
         let slug = parse_repository_pull_scope(raw_scope).ok_or(OciError::Denied)?;
         let app = ApplicationRepository::find_active_by_slug(pool.get_ref(), &slug)
@@ -147,16 +148,23 @@ pub async fn issue_token(
         if !app.is_pullable() {
             return Err(OciError::NameUnknown);
         }
+        scope_app_id = Some(app.id);
         scope_str = format!("repository:{slug}:pull");
     }
 
     let token = token_svc.issue(user.id, &scope_str)?;
     let now = Utc::now();
 
-    let log = CreateAuditLog::new(AuditAction::OciLoginSucceeded)
+    // Audit token issuance with the user AND the target application (when the
+    // scope names one), so per-product pull activity is traceable from the
+    // audit log without joining on per-blob requests.
+    let mut log = CreateAuditLog::new(AuditAction::OciLoginSucceeded)
         .with_actor(user.id, &user.email, &user.role)
         .with_ip(ip)
         .with_metadata(serde_json::json!({ "scope": scope_str }));
+    if let Some(app_id) = scope_app_id {
+        log = log.with_resource("application", app_id);
+    }
     if let Err(e) = AuditLogRepository::create(pool.get_ref(), log).await {
         tracing::warn!(?e, "oci audit log write failed");
     }
