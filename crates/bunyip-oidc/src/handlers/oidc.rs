@@ -159,9 +159,12 @@ pub async fn authorize(
                 has_refresh_token = req.cookie("refresh_token").is_some(),
                 "authorize: unauthenticated, redirecting to login",
             );
+            // Use web_origin (single absolute URL of bunyip-web) rather than
+            // cors_origin (which is now a comma-list once multiple RPs are
+            // registered; concatenating that onto `/login` produces garbage).
             let login_url = format!(
                 "{}/login?redirect={}&checked=1",
-                config.cors_origin.trim_end_matches('/'),
+                config.web_origin.trim_end_matches('/'),
                 urlencoding::encode(&authorize_url),
             );
             return Ok(HttpResponse::Found()
