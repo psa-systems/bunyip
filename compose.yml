@@ -6,17 +6,53 @@
 # what an operator or self-hosting MSP deploys.
 #
 # Quick start:
-#   1. cp .env.example .env  and fill in the production values (POSTGRES_PASSWORD,
-#      JWT_SECRET, the OIDC keys under ./secrets, BUNYIP_API_URL, etc.).
-#   2. docker login dev.a8n.run   (the images live in the private registry).
-#   3. docker compose up --detach
+#   1. cp .env.example .env  and fill in the production values (CORS_ORIGIN,
+#      BUNYIP_API_URL, OIDC_ISSUER, etc. - non-secret config only).
+#   2. Create the secret files under ./secrets (one value per file, no quotes).
+#      Every file must exist before `docker compose up`; an empty file means
+#      "not configured" (e.g. leave forgejo_api_token empty to keep the
+#      distribution proxy disabled):
+#        printf '%s' "$(openssl rand -hex 32)" > secrets/jwt_secret
+#        printf '%s' "$(openssl rand -hex 32)" > secrets/totp_encryption_key
+#        printf '%s' "$(openssl rand -hex 32)" > secrets/stripe_encryption_key
+#        printf '%s' "$(openssl rand -hex 32)" > secrets/postgres_password
+#        printf 'postgres://bunyip:%s@postgres:5432/bunyip' \
+#          "$(cat secrets/postgres_password)" > secrets/database_url
+#        printf 'admin@example.com:a-strong-password' > secrets/setup_default_admin
+#        touch secrets/forgejo_api_token
+#      Plus the OIDC signing keys (see .env.example, "OIDC provider").
+#   3. docker login dev.a8n.run   (the images live in the private registry).
+#   4. docker compose up --detach
 #
 # Applying an update is a deliberate operator action:
 #   docker compose pull && docker compose up --detach
 #
+# Secrets are file-based (compose `secrets:` mounted under /run/secrets/*),
+# never plain environment variables, so `docker inspect` and /proc/<pid>/environ
+# never expose them (BUNYIP-38). The api reads each one via the {NAME}_FILE
+# convention with a fallback to {NAME} env vars for dev.
+#
 # Resource naming follows the governance convention: bunyip-{service} for
 # containers/volumes/network (no dev- prefix in production).
 name: bunyip
+
+# File-based secrets, one value per file under ./secrets (gitignored). All
+# files must exist; empty file = not configured.
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  database_url:
+    file: ./secrets/database_url
+  jwt_secret:
+    file: ./secrets/jwt_secret
+  totp_encryption_key:
+    file: ./secrets/totp_encryption_key
+  stripe_encryption_key:
+    file: ./secrets/stripe_encryption_key
+  setup_default_admin:
+    file: ./secrets/setup_default_admin
+  forgejo_api_token:
+    file: ./secrets/forgejo_api_token
 
 services:
 
@@ -27,9 +63,12 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-bunyip}
-      # Set a strong value in .env for any real deployment.
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      # Native postgres-image file-secret support; the password never appears
+      # in `docker inspect`.
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: ${POSTGRES_DB:-bunyip}
+    secrets:
+      - postgres_password
     expose:
       - "5432"
     volumes:
@@ -52,7 +91,15 @@ services:
     restart: unless-stopped
     environment:
       SQLX_OFFLINE: "true"
-      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-bunyip}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-bunyip}}
+      # Secrets are file-based: each {NAME}_FILE points at a compose secret
+      # mounted under /run/secrets. The api's config layer reads the file and
+      # treats an empty file as "not configured" (BUNYIP-38).
+      DATABASE_URL_FILE: /run/secrets/database_url
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      TOTP_ENCRYPTION_KEY_FILE: /run/secrets/totp_encryption_key
+      STRIPE_ENCRYPTION_KEY_FILE: /run/secrets/stripe_encryption_key
+      SETUP_DEFAULT_ADMIN_FILE: /run/secrets/setup_default_admin
+      FORGEJO_API_TOKEN_FILE: /run/secrets/forgejo_api_token
       HOST_IP: 0.0.0.0
       APP_PORT: "4401"
       ENVIRONMENT: ${ENVIRONMENT:-production}
@@ -61,23 +108,17 @@ services:
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4400}
       COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
       RUST_LOG: ${RUST_LOG:-info}
-      # Generate 32+ random chars for any real deployment.
-      JWT_SECRET: ${JWT_SECRET:-changeme-set-a-real-32char-jwt-secret-000000}
-      TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:-}
-      STRIPE_ENCRYPTION_KEY: ${STRIPE_ENCRYPTION_KEY:-}
-      SETUP_DEFAULT_ADMIN: ${SETUP_DEFAULT_ADMIN:-}
       EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
       OIDC_ISSUER: ${OIDC_ISSUER:-}
       OIDC_JWT_PRIVATE_KEY_PATH: /run/secrets/oidc/dev-2026.pem
       OIDC_JWT_ACTIVE_KID: ${OIDC_JWT_ACTIVE_KID:-dev-2026}
       OIDC_JWT_PUBLIC_KEYS_DIR: /run/secrets/oidc
       # ── Distribution proxy (member downloads + OCI registry, BUNYIP-28) ──
-      # Disabled until FORGEJO_BASE_URL + FORGEJO_API_TOKEN are set in .env.
-      # Configuration rules, token scopes, and the reverse-proxy requirements
-      # live in ONE place: dev-docs/oci-registry-verification.md (Production
-      # notes). Every ${VAR} below is documented in .env.example.
+      # Disabled until FORGEJO_BASE_URL (.env) + the forgejo_api_token secret
+      # file are set. Configuration rules, token scopes, and the reverse-proxy
+      # requirements live in ONE place: dev-docs/oci-registry-verification.md
+      # (Production notes). Every ${VAR} below is documented in .env.example.
       FORGEJO_BASE_URL: ${FORGEJO_BASE_URL:-}
-      FORGEJO_API_TOKEN: ${FORGEJO_API_TOKEN:-}
       DOWNLOAD_CACHE_DIR: /var/cache/bunyip-downloads
       DOWNLOAD_CACHE_MAX_BYTES: ${DOWNLOAD_CACHE_MAX_BYTES:-10737418240}
       OCI_REGISTRY_ENABLED: ${OCI_REGISTRY_ENABLED:-false}
@@ -100,6 +141,13 @@ services:
       # publish these plaintext listeners on every host interface.
       - "${HOST_IP:-127.0.0.1}:${BUNYIP_API_PORT:-4401}:4401"
       - "${HOST_IP:-127.0.0.1}:${BUNYIP_OCI_PORT:-18081}:18081"
+    secrets:
+      - database_url
+      - jwt_secret
+      - totp_encryption_key
+      - stripe_encryption_key
+      - setup_default_admin
+      - forgejo_api_token
     volumes:
       - ./secrets:/run/secrets/oidc:ro
       # Distribution caches MUST be NAMED volumes, never host bind-mounts.

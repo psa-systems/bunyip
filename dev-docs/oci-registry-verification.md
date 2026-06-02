@@ -222,9 +222,15 @@ configuration; compose.yml, .env.example, and the dev-sso runbook point here.
   (e.g. `registry.<base-domain>`); leave `OCI_REGISTRY_REALM` unset so it
   defaults to `https://<service>/auth/token` behind TLS. Startup fails fast if
   the registry is enabled with an empty service or a malformed realm.
-- The Forgejo service token is a secret: production sets it in `.env` (mode
-  0600, never committed), with scopes `read:package` + `read:repository`.
-  Generate: Forgejo -> Settings -> Applications -> Generate New Token.
+- The Forgejo service token is a secret with scopes `read:package` +
+  `read:repository`. Generate: Forgejo -> Settings -> Applications -> Generate
+  New Token. In production it lives in the file-based compose secret
+  `./secrets/forgejo_api_token` (mounted at `/run/secrets/forgejo_api_token`,
+  read by the api via `FORGEJO_API_TOKEN_FILE`); an empty file keeps the
+  distribution proxy disabled. Dev still uses the plain `.env`
+  `FORGEJO_API_TOKEN` var (unchanged). File-based secrets never appear in
+  `docker inspect` output or `/proc/<pid>/environ`, unlike plain environment
+  variables (BUNYIP-38).
 - Cache volumes: mount NAMED volumes at `/var/cache/bunyip-oci` and
   `/var/cache/bunyip-downloads`. The image pre-creates those paths owned by
   the runtime user (uid 1001) and named volumes inherit that ownership on

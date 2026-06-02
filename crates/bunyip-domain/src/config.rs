@@ -1,6 +1,37 @@
 use std::env;
 use tracing::info;
 
+/// Read a secret from the environment, supporting the Docker Compose
+/// file-based secret convention (BUNYIP-38).
+///
+/// Resolution order:
+/// 1. `{NAME}_FILE`: if set and non-empty, the secret is the trimmed contents
+///    of that file (a compose `secrets:` mount under `/run/secrets/...`).
+///    An unreadable file panics: a misconfigured secret mount must fail fast
+///    at startup, never silently fall back to a weaker source.
+/// 2. `{NAME}`: the plain environment variable (the dev `.env` path).
+///
+/// Empty values (empty file or empty env var) are treated as unset and return
+/// `None`, so compose interpolation defaults (`${VAR:-}`) and empty secret
+/// files both mean "not configured".
+pub fn secret_env(name: &str) -> Option<String> {
+    let file_var = format!("{name}_FILE");
+    if let Ok(path) = env::var(&file_var) {
+        let path = path.trim();
+        if !path.is_empty() {
+            let contents = std::fs::read_to_string(path).unwrap_or_else(|e| {
+                panic!("{file_var} points to an unreadable file ({path}): {e}")
+            });
+            let value = contents.trim().to_string();
+            return if value.is_empty() { None } else { Some(value) };
+        }
+    }
+    env::var(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
 /// Application configuration loaded from environment variables
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -307,7 +338,7 @@ impl DownloadConfig {
     pub fn from_env() -> Self {
         Self {
             forgejo_base_url: env::var("FORGEJO_BASE_URL").ok().filter(|s| !s.is_empty()),
-            forgejo_api_token: env::var("FORGEJO_API_TOKEN").ok().filter(|s| !s.is_empty()),
+            forgejo_api_token: secret_env("FORGEJO_API_TOKEN"),
             cache_dir: env::var("DOWNLOAD_CACHE_DIR")
                 .unwrap_or_else(|_| "/var/cache/bunyip-downloads".to_string()),
             cache_max_bytes: env::var("DOWNLOAD_CACHE_MAX_BYTES")
@@ -532,8 +563,10 @@ impl Config {
         // Load .env file if it exists (ignore errors if not found)
         let _ = dotenvy::dotenv();
 
-        let database_url = env::var("DATABASE_URL")
-            .map_err(|_| ConfigError::MissingEnv("DATABASE_URL".to_string()))?;
+        // DATABASE_URL embeds the postgres password, so it supports the
+        // DATABASE_URL_FILE secret convention like every other secret.
+        let database_url = secret_env("DATABASE_URL")
+            .ok_or_else(|| ConfigError::MissingEnv("DATABASE_URL".to_string()))?;
 
         let host = env::var("HOST_IP").unwrap_or_else(|_| "0.0.0.0".to_string());
 
@@ -621,11 +654,11 @@ impl Config {
         self.environment == "production"
     }
 
-    /// Load TOTP encryption key from TOTP_ENCRYPTION_KEY env var (hex-encoded 32 bytes).
-    /// In development, defaults to 32 zero bytes.
+    /// Load TOTP encryption key from TOTP_ENCRYPTION_KEY (env var or _FILE
+    /// secret, hex-encoded 32 bytes). In development, defaults to 32 zero bytes.
     fn load_totp_encryption_key(environment: &str) -> [u8; 32] {
-        match env::var("TOTP_ENCRYPTION_KEY") {
-            Ok(hex_str) => {
+        match secret_env("TOTP_ENCRYPTION_KEY") {
+            Some(hex_str) => {
                 let bytes =
                     hex::decode(hex_str.trim()).expect("TOTP_ENCRYPTION_KEY must be valid hex");
                 let key: [u8; 32] = bytes
@@ -633,7 +666,7 @@ impl Config {
                     .expect("TOTP_ENCRYPTION_KEY must be exactly 32 bytes (64 hex chars)");
                 key
             }
-            Err(_) => {
+            None => {
                 if environment == "production" {
                     panic!("TOTP_ENCRYPTION_KEY must be set in production");
                 }
@@ -642,11 +675,11 @@ impl Config {
         }
     }
 
-    /// Load Stripe encryption key from STRIPE_ENCRYPTION_KEY env var (hex-encoded 32 bytes).
-    /// In development, defaults to 32 zero bytes.
+    /// Load Stripe encryption key from STRIPE_ENCRYPTION_KEY (env var or _FILE
+    /// secret, hex-encoded 32 bytes). In development, defaults to 32 zero bytes.
     fn load_stripe_encryption_key(environment: &str) -> [u8; 32] {
-        match env::var("STRIPE_ENCRYPTION_KEY") {
-            Ok(hex_str) => {
+        match secret_env("STRIPE_ENCRYPTION_KEY") {
+            Some(hex_str) => {
                 let bytes =
                     hex::decode(hex_str.trim()).expect("STRIPE_ENCRYPTION_KEY must be valid hex");
                 let key: [u8; 32] = bytes
@@ -654,7 +687,7 @@ impl Config {
                     .expect("STRIPE_ENCRYPTION_KEY must be exactly 32 bytes (64 hex chars)");
                 key
             }
-            Err(_) => {
+            None => {
                 if environment == "production" {
                     panic!("STRIPE_ENCRYPTION_KEY must be set in production");
                 }
@@ -663,10 +696,10 @@ impl Config {
         }
     }
 
-    /// Load an optional encryption key from an env var (hex-encoded 32 bytes).
-    /// Returns `None` if the env var is not set.
+    /// Load an optional encryption key (hex-encoded 32 bytes) from an env var
+    /// or its `_FILE` secret. Returns `None` if not set.
     fn load_optional_encryption_key(env_var: &str) -> Option<[u8; 32]> {
-        env::var(env_var).ok().map(|hex_str| {
+        secret_env(env_var).map(|hex_str| {
             let bytes = hex::decode(hex_str.trim())
                 .unwrap_or_else(|_| panic!("{env_var} must be valid hex"));
             let key: [u8; 32] = bytes
@@ -780,6 +813,72 @@ mod tests {
     fn test_load_optional_encryption_key_panics_on_wrong_length() {
         env::set_var("TEST_OPTIONAL_KEY_SHORT", "aabb"); // only 2 bytes
         Config::load_optional_encryption_key("TEST_OPTIONAL_KEY_SHORT");
+    }
+
+    // ---- secret_env (file-based secrets, BUNYIP-38) ----
+    //
+    // Each test uses a unique env-var prefix touched by no other test, so no
+    // env lock is needed (same convention as the TEST_OPTIONAL_KEY_* tests).
+
+    #[test]
+    fn secret_env_falls_back_to_plain_env_var() {
+        env::remove_var("TEST_SECRET_PLAIN_FILE");
+        env::set_var("TEST_SECRET_PLAIN", "  env-value\n");
+        assert_eq!(
+            secret_env("TEST_SECRET_PLAIN").as_deref(),
+            Some("env-value")
+        );
+        env::remove_var("TEST_SECRET_PLAIN");
+    }
+
+    #[test]
+    fn secret_env_unset_and_empty_are_none() {
+        env::remove_var("TEST_SECRET_ABSENT_FILE");
+        env::remove_var("TEST_SECRET_ABSENT");
+        assert_eq!(secret_env("TEST_SECRET_ABSENT"), None);
+
+        env::set_var("TEST_SECRET_BLANK", "   ");
+        assert_eq!(secret_env("TEST_SECRET_BLANK"), None);
+        env::remove_var("TEST_SECRET_BLANK");
+    }
+
+    #[test]
+    fn secret_env_reads_file_and_takes_precedence_over_env_var() {
+        let path = env::temp_dir().join("bunyip-test-secret-env-file");
+        std::fs::write(&path, "file-value\n").unwrap();
+
+        env::set_var("TEST_SECRET_FILEPREC_FILE", &path);
+        env::set_var("TEST_SECRET_FILEPREC", "env-value");
+        assert_eq!(
+            secret_env("TEST_SECRET_FILEPREC").as_deref(),
+            Some("file-value")
+        );
+
+        env::remove_var("TEST_SECRET_FILEPREC_FILE");
+        env::remove_var("TEST_SECRET_FILEPREC");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn secret_env_empty_file_is_none() {
+        let path = env::temp_dir().join("bunyip-test-secret-env-empty-file");
+        std::fs::write(&path, "\n").unwrap();
+
+        env::set_var("TEST_SECRET_EMPTYFILE_FILE", &path);
+        assert_eq!(secret_env("TEST_SECRET_EMPTYFILE"), None);
+
+        env::remove_var("TEST_SECRET_EMPTYFILE_FILE");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "unreadable file")]
+    fn secret_env_panics_on_unreadable_file() {
+        env::set_var(
+            "TEST_SECRET_MISSINGFILE_FILE",
+            "/nonexistent/bunyip-test-secret",
+        );
+        secret_env("TEST_SECRET_MISSINGFILE");
     }
 
     #[test]
