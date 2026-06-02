@@ -77,6 +77,15 @@ services:
       - "${HOST_IP:-127.0.0.1}:${BUNYIP_API_PORT:-4401}:4401"
     volumes:
       - ./secrets:/run/secrets/oidc:ro
+      # NOTE for the distribution proxy (BUNYIP-32): when the OCI registry and
+      # download proxy are enabled here, their caches MUST be NAMED volumes
+      # mounted at /var/cache/bunyip-oci and /var/cache/bunyip-downloads
+      # (e.g. `oci-cache:/var/cache/bunyip-oci`). The image pre-creates those
+      # paths owned by the runtime user, and named volumes inherit that
+      # ownership on first use. A host bind-mount does NOT inherit it and
+      # mounts root-owned, which breaks every blob/asset write (Permission
+      # denied -> 502 on all pulls). If you must bind-mount, chown the host
+      # directory to the container user first.
     depends_on:
       postgres:
         condition: service_healthy

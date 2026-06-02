@@ -74,24 +74,26 @@ services:
       DUNITE_GIT_TOKEN: ${DUNITE_GIT_TOKEN:-}
       # ── Distribution proxy (downloads + OCI registry) ─────────────────────
       # Both verticals stay disabled until FORGEJO_BASE_URL + FORGEJO_API_TOKEN
-      # are set in .env. The token needs the read:package scope (and
-      # read:repository for release-attachment downloads). See .env.example.
+      # are set in .env. Token scopes: see dev-docs/oci-registry-verification.md.
       FORGEJO_BASE_URL: ${FORGEJO_BASE_URL:-}
       FORGEJO_API_TOKEN: ${FORGEJO_API_TOKEN:-}
       DOWNLOAD_CACHE_DIR: /var/cache/bunyip-downloads
       OCI_REGISTRY_ENABLED: ${OCI_REGISTRY_ENABLED:-false}
+      # Container-internal listener port (fixed). BUNYIP_OCI_PORT changes only
+      # the host side of the port mapping below.
       OCI_REGISTRY_PORT: "18081"
-      # Local verification: docker talks to localhost:18081 over plain HTTP, so
-      # the advertised service name and token realm must match that address.
-      OCI_REGISTRY_SERVICE: ${OCI_REGISTRY_SERVICE:-localhost:18081}
-      OCI_REGISTRY_REALM: ${OCI_REGISTRY_REALM:-http://localhost:18081/auth/token}
+      # What docker on the HOST sees: the advertised service name and token
+      # realm track BUNYIP_OCI_PORT, so overriding the published port keeps
+      # docker login working with no extra configuration.
+      OCI_REGISTRY_SERVICE: ${OCI_REGISTRY_SERVICE:-localhost:${BUNYIP_OCI_PORT:-18081}}
+      OCI_REGISTRY_REALM: ${OCI_REGISTRY_REALM:-http://localhost:${BUNYIP_OCI_PORT:-18081}/auth/token}
       OCI_BLOB_CACHE_DIR: /var/cache/bunyip-oci
     volumes:
       - .:/app
       - cargo-target:/app/target
       - ./secrets:/run/secrets/oidc:ro
-      - dev-bunyip-download-cache:/var/cache/bunyip-downloads
-      - dev-bunyip-oci-cache:/var/cache/bunyip-oci
+      - download-cache:/var/cache/bunyip-downloads
+      - oci-cache:/var/cache/bunyip-oci
     ports:
       - "${BUNYIP_API_PORT:-4401}:4401"
       - "${BUNYIP_OCI_PORT:-18081}:18081"
@@ -140,9 +142,9 @@ volumes:
     name: dev-bunyip-cargo-target-${USER}
   web-node-modules:
     name: dev-bunyip-web-node-modules-${USER}
-  dev-bunyip-download-cache:
+  download-cache:
     name: dev-bunyip-download-cache-${USER}
-  dev-bunyip-oci-cache:
+  oci-cache:
     name: dev-bunyip-oci-cache-${USER}
 
 networks:

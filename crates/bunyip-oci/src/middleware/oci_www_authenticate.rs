@@ -66,9 +66,19 @@ where
                     realm = cfg.realm_url(),
                     service = cfg.service
                 );
-                if let Ok(hv) = actix_web::http::header::HeaderValue::from_str(&header) {
-                    resp.headers_mut()
-                        .insert(actix_web::http::header::WWW_AUTHENTICATE, hv);
+                match actix_web::http::header::HeaderValue::from_str(&header) {
+                    Ok(hv) => {
+                        resp.headers_mut()
+                            .insert(actix_web::http::header::WWW_AUTHENTICATE, hv);
+                    }
+                    // Unreachable when OciConfig::validate() ran at startup;
+                    // log loudly rather than silently dropping the header
+                    // (docker login cannot work without it).
+                    Err(e) => tracing::error!(
+                        error = %e,
+                        header = %header,
+                        "failed to build WWW-Authenticate header; docker login will fail"
+                    ),
                 }
             }
             Ok(resp.map_into_left_body())

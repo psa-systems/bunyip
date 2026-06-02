@@ -290,6 +290,15 @@ async fn main() -> anyhow::Result<()> {
     ));
     let oci_token_service = Arc::new(OciTokenService::new(&jwt_config, config.oci.token_ttl_secs));
 
+    // Fail fast on a registry config that can never work (malformed realm).
+    // Misconfiguration here otherwise only surfaces as opaque docker-login
+    // failures on the client side.
+    if config.oci.enabled {
+        if let Err(e) = config.oci.validate() {
+            anyhow::bail!("invalid OCI registry configuration: {e}");
+        }
+    }
+
     info!(
         enabled = config.oci.enabled,
         port = config.oci.port,

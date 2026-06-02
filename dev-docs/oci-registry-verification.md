@@ -37,6 +37,22 @@ credentials.
 3. **Docker CLI** on the dev box. `localhost` registries are treated as
    insecure by Docker automatically; no daemon config needed.
 
+## Automated verification
+
+Most of the matrix below is scripted; once the stack is up (step 1) run:
+
+```nushell
+just verify-oci
+# or with explicit coordinates:
+just verify-oci <slug> <owner> <image> <tag>
+```
+
+It seeds the application row, then checks: the /v2/ auth challenge, docker
+login, the entitled pull, pinned-tag enforcement, and the blob-cache second
+pull, exiting non-zero on the first failure. The manual steps below remain as
+reference and for the cases the script does not cover (non-member denial, rate
+limits, log inspection).
+
 ## Local verification procedure
 
 ### 1. Configure and start the stack
@@ -46,12 +62,14 @@ credentials.
 "FORGEJO_BASE_URL=https://dev.a8n.run
 FORGEJO_API_TOKEN=<service token>
 OCI_REGISTRY_ENABLED=true
-OCI_REGISTRY_SERVICE=localhost:18081
-OCI_REGISTRY_REALM=http://localhost:18081/auth/token
 " | save --append .env
 
 just dev-detach
 ```
+
+The dev compose file derives the registry hostname and token realm from
+`BUNYIP_OCI_PORT` (default `localhost:18081`); no further OCI configuration is
+needed for local verification.
 
 Confirm the second listener started:
 
@@ -130,7 +148,7 @@ docker login localhost:18081 --username nonmember@example.com
 
 ```nushell
 docker logout localhost:18081
-just dev-down
+just dev-stop
 ```
 
 ## Findings log
