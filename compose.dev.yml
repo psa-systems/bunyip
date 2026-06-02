@@ -65,7 +65,7 @@ services:
       STRIPE_ENCRYPTION_KEY: ${STRIPE_ENCRYPTION_KEY:-}
       SETUP_DEFAULT_ADMIN: ${SETUP_DEFAULT_ADMIN:-}
       EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
-      # Bunyip IS the OIDC issuer; Ed25519 keys mounted from ./secrets (volumes).
+      # Bunyip IS the OIDC issuer; Ed25519 keys mounted from ./secrets/oidc (volumes).
       OIDC_ISSUER: ${OIDC_ISSUER:-http://localhost:4401}
       OIDC_JWT_PRIVATE_KEY_PATH: /run/secrets/oidc/dev-2026.pem
       OIDC_JWT_ACTIVE_KID: ${OIDC_JWT_ACTIVE_KID:-dev-2026}
@@ -91,7 +91,9 @@ services:
     volumes:
       - .:/app
       - cargo-target:/app/target
-      - ./secrets:/run/secrets/oidc:ro
+      # OIDC signing keys live in their own subdir (matches compose.yml; keeps
+      # any production secret value files in ./secrets/ out of the container).
+      - ./secrets/oidc:/run/secrets/oidc:ro
       - download-cache:/var/cache/bunyip-downloads
       - oci-cache:/var/cache/bunyip-oci
     ports:

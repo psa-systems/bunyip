@@ -119,7 +119,7 @@ After the dunite rebuild, **bunyip-api is itself an OIDC issuer**
 (`OIDC_ISSUER=http://localhost:4401`; the provider is gated on that var in
 `main.rs`). It loads an Ed25519 signing key at startup
 (`OIDC_JWT_PRIVATE_KEY_PATH=/run/secrets/oidc/dev-2026.pem`, mounted from
-`./secrets`). Missing keys = boot failure. `just ensure-oidc-keys` now generates
+`./secrets/oidc`). Missing keys = boot failure. `just ensure-oidc-keys` now generates
 them (added this session).
 
 ### 3.8 The OIDC direction is in transition (read this carefully)
@@ -250,9 +250,9 @@ folded into `fix/dev-sso-nebula-secure-list`.
 Symptom: web SSR could not reach `api:4401`. Cause: the api **crash-looped on
 config** - the `.env` was the **old-architecture** one (missing ~20 new keys), so
 `TOTP_ENCRYPTION_KEY`/`STRIPE_ENCRYPTION_KEY` were empty (must be 32-byte hex) and
-the api panicked; plus `secrets/` had no Ed25519 OIDC keys. Fix: regenerate `.env`
+the api panicked; plus `secrets/oidc/` had no Ed25519 OIDC keys. Fix: regenerate `.env`
 from the new template (generated secret keys, kept the registered client_id + uid),
-generate `secrets/dev-2026.pem`, recreate the api. Durable fix: `ensure-oidc-keys`
+generate `secrets/oidc/dev-2026.pem`, recreate the api. Durable fix: `ensure-oidc-keys`
 recipe (`feat/dev-ensure-oidc-keys`) + the existing `ensure-env` key generation.
 See 3.7.
 
@@ -268,7 +268,7 @@ See 3.7.
 | compose "incorrect label ... network" | missing `external: true` | 6.6 |
 | containers restart, 404 backend | HOST_UID fell back to 1000 (0700 repo) | 6.7 |
 | api panics "must be 32 bytes" | stale `.env` missing the new secret keys | 6.9 |
-| api panics on OIDC key | `secrets/dev-2026.pem` missing | 3.7 / 6.9 |
+| api panics on OIDC key | `secrets/oidc/dev-2026.pem` missing | 3.7 / 6.9 |
 | `${USER}` literal in `docker inspect` labels | map-syntax labels | 6.8 |
 
 ## 8. Open / transitional items

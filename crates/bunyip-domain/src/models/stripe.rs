@@ -164,11 +164,10 @@ impl StripeConfigResponse {
     /// Reads env vars and returns a response showing what's currently configured there.
     /// Used as a fallback when no DB config has been saved yet.
     pub fn from_env() -> Self {
-        use std::env;
-        let secret_key = env::var("STRIPE_SECRET_KEY").ok().filter(|s| !s.is_empty());
-        let webhook_secret = env::var("STRIPE_WEBHOOK_SECRET")
-            .ok()
-            .filter(|s| !s.is_empty());
+        // secret_env supports the {NAME}_FILE compose-secret convention,
+        // falling back to the plain env var.
+        let secret_key = crate::config::secret_env("STRIPE_SECRET_KEY");
+        let webhook_secret = crate::config::secret_env("STRIPE_WEBHOOK_SECRET");
 
         Self {
             secret_key_masked: secret_key.as_deref().map(mask_secret),

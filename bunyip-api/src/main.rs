@@ -377,9 +377,9 @@ async fn main() -> anyhow::Result<()> {
     let update_check_url = std::env::var("BUNYIP_UPDATE_CHECK_URL")
         .ok()
         .filter(|s| !s.is_empty());
-    let update_check_token = std::env::var("BUNYIP_UPDATE_CHECK_TOKEN")
-        .ok()
-        .filter(|s| !s.is_empty());
+    // secret_env supports the {NAME}_FILE compose-secret convention,
+    // falling back to the plain env var.
+    let update_check_token = secret_env("BUNYIP_UPDATE_CHECK_TOKEN");
     info!(
         enabled = update_check_url.is_some(),
         "Update checker initialized"

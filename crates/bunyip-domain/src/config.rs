@@ -14,6 +14,9 @@ use tracing::info;
 /// Empty values (empty file or empty env var) are treated as unset and return
 /// `None`, so compose interpolation defaults (`${VAR:-}`) and empty secret
 /// files both mean "not configured".
+///
+/// NOTE: this is generic, domain-free infrastructure; its long-term home is
+/// dunite-core so other dunite consumers share one implementation (PSA-37).
 pub fn secret_env(name: &str) -> Option<String> {
     let file_var = format!("{name}_FILE");
     if let Ok(path) = env::var(&file_var) {
@@ -148,7 +151,9 @@ impl EmailConfig {
                 .unwrap_or(default_port),
             smtp_tls,
             smtp_username: env::var("SMTP_USERNAME").unwrap_or_default(),
-            smtp_password: env::var("SMTP_PASSWORD").unwrap_or_default(),
+            // SMTP_PASSWORD is a secret: supports the SMTP_PASSWORD_FILE
+            // compose-secret convention.
+            smtp_password: secret_env("SMTP_PASSWORD").unwrap_or_default(),
             from_email: parse_smtp_from_email(
                 &env::var("SMTP_FROM").unwrap_or_else(|_| "noreply@localhost".to_string()),
             ),
@@ -337,7 +342,12 @@ pub struct DownloadConfig {
 impl DownloadConfig {
     pub fn from_env() -> Self {
         Self {
-            forgejo_base_url: env::var("FORGEJO_BASE_URL").ok().filter(|s| !s.is_empty()),
+            // Trimmed like its paired token so a stray trailing newline/space
+            // (echo/heredoc artifact) cannot produce malformed upstream URLs.
+            forgejo_base_url: env::var("FORGEJO_BASE_URL")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             forgejo_api_token: secret_env("FORGEJO_API_TOKEN"),
             cache_dir: env::var("DOWNLOAD_CACHE_DIR")
                 .unwrap_or_else(|_| "/var/cache/bunyip-downloads".to_string()),
@@ -670,6 +680,12 @@ impl Config {
                 if environment == "production" {
                     panic!("TOTP_ENCRYPTION_KEY must be set in production");
                 }
+                // Loud, because data encrypted under the zero key is not
+                // protected and will fail to decrypt once a real key is set.
+                tracing::warn!(
+                    "TOTP_ENCRYPTION_KEY is not set; using the all-zero DEVELOPMENT key. \
+                     TOTP secrets encrypted with it are NOT protected."
+                );
                 [0u8; 32]
             }
         }
@@ -691,6 +707,10 @@ impl Config {
                 if environment == "production" {
                     panic!("STRIPE_ENCRYPTION_KEY must be set in production");
                 }
+                tracing::warn!(
+                    "STRIPE_ENCRYPTION_KEY is not set; using the all-zero DEVELOPMENT key. \
+                     Stripe credentials encrypted with it are NOT protected."
+                );
                 [0u8; 32]
             }
         }
@@ -844,31 +864,40 @@ mod tests {
 
     #[test]
     fn secret_env_reads_file_and_takes_precedence_over_env_var() {
-        let path = env::temp_dir().join("bunyip-test-secret-env-file");
+        let path = env::temp_dir().join(format!(
+            "bunyip-test-secret-env-file-{}",
+            std::process::id()
+        ));
         std::fs::write(&path, "file-value\n").unwrap();
 
         env::set_var("TEST_SECRET_FILEPREC_FILE", &path);
         env::set_var("TEST_SECRET_FILEPREC", "env-value");
-        assert_eq!(
-            secret_env("TEST_SECRET_FILEPREC").as_deref(),
-            Some("file-value")
-        );
+        let result = secret_env("TEST_SECRET_FILEPREC");
 
+        // Clean up BEFORE asserting so a failure cannot leak the temp file.
         env::remove_var("TEST_SECRET_FILEPREC_FILE");
         env::remove_var("TEST_SECRET_FILEPREC");
         std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(result.as_deref(), Some("file-value"));
     }
 
     #[test]
     fn secret_env_empty_file_is_none() {
-        let path = env::temp_dir().join("bunyip-test-secret-env-empty-file");
+        let path = env::temp_dir().join(format!(
+            "bunyip-test-secret-env-empty-file-{}",
+            std::process::id()
+        ));
         std::fs::write(&path, "\n").unwrap();
 
         env::set_var("TEST_SECRET_EMPTYFILE_FILE", &path);
-        assert_eq!(secret_env("TEST_SECRET_EMPTYFILE"), None);
+        let result = secret_env("TEST_SECRET_EMPTYFILE");
 
+        // Clean up BEFORE asserting so a failure cannot leak the temp file.
         env::remove_var("TEST_SECRET_EMPTYFILE_FILE");
         std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(result, None);
     }
 
     #[test]

@@ -8,21 +8,17 @@
 # Quick start:
 #   1. cp .env.example .env  and fill in the production values (CORS_ORIGIN,
 #      BUNYIP_API_URL, OIDC_ISSUER, etc. - non-secret config only).
-#   2. Create the secret files under ./secrets (one value per file, no quotes).
-#      Every file must exist before `docker compose up`; an empty file means
-#      "not configured" (e.g. leave forgejo_api_token empty to keep the
-#      distribution proxy disabled):
-#        printf '%s' "$(openssl rand -hex 32)" > secrets/jwt_secret
-#        printf '%s' "$(openssl rand -hex 32)" > secrets/totp_encryption_key
-#        printf '%s' "$(openssl rand -hex 32)" > secrets/stripe_encryption_key
-#        printf '%s' "$(openssl rand -hex 32)" > secrets/postgres_password
-#        printf 'postgres://bunyip:%s@postgres:5432/bunyip' \
-#          "$(cat secrets/postgres_password)" > secrets/database_url
-#        printf 'admin@example.com:a-strong-password' > secrets/setup_default_admin
-#        touch secrets/forgejo_api_token
-#      Plus the OIDC signing keys (see .env.example, "OIDC provider").
+#   2. ./scripts/init-secrets.sh
+#      Creates every secret file under ./secrets/ (generating strong values
+#      where needed) plus the OIDC signing keys under ./secrets/oidc/. The
+#      script is idempotent and never overwrites existing values.
 #   3. docker login dev.a8n.run   (the images live in the private registry).
 #   4. docker compose up --detach
+#
+# Upgrading an EXISTING deployment that used .env-based secrets (pre-BUNYIP-38):
+#   run ./scripts/init-secrets.sh BEFORE `docker compose up`. It migrates the
+#   secret values out of your existing .env into the secret files; without
+#   this step compose aborts because the secret files do not exist.
 #
 # Applying an update is a deliberate operator action:
 #   docker compose pull && docker compose up --detach
@@ -30,14 +26,18 @@
 # Secrets are file-based (compose `secrets:` mounted under /run/secrets/*),
 # never plain environment variables, so `docker inspect` and /proc/<pid>/environ
 # never expose them (BUNYIP-38). The api reads each one via the {NAME}_FILE
-# convention with a fallback to {NAME} env vars for dev.
+# convention with a fallback to {NAME} env vars for dev. Every secret file must
+# exist before compose starts; an EMPTY file means "not configured" (feature
+# off) for every secret except postgres_password and database_url, which must
+# be non-empty (postgres refuses to initialize with an empty password).
 #
 # Resource naming follows the governance convention: bunyip-{service} for
 # containers/volumes/network (no dev- prefix in production).
 name: bunyip
 
-# File-based secrets, one value per file under ./secrets (gitignored). All
-# files must exist; empty file = not configured.
+# File-based secrets, one value per file under ./secrets (gitignored).
+# ./scripts/init-secrets.sh creates all of them; see the header note above for
+# which ones may be left empty.
 secrets:
   postgres_password:
     file: ./secrets/postgres_password
@@ -53,6 +53,14 @@ secrets:
     file: ./secrets/setup_default_admin
   forgejo_api_token:
     file: ./secrets/forgejo_api_token
+  smtp_password:
+    file: ./secrets/smtp_password
+  stripe_secret_key:
+    file: ./secrets/stripe_secret_key
+  stripe_webhook_secret:
+    file: ./secrets/stripe_webhook_secret
+  update_check_token:
+    file: ./secrets/update_check_token
 
 services:
 
@@ -84,7 +92,7 @@ services:
 
   # actix-web backend (bunyip-api). Published musl-static image; binds on
   # HOST_IP:APP_PORT inside the container and IS the OIDC issuer (Ed25519 keys
-  # mounted from ./secrets).
+  # mounted from ./secrets/oidc).
   api:
     image: ${BUNYIP_API_IMAGE:-dev.a8n.run/psa-systems-private/bunyip-api:latest}
     container_name: bunyip-api
@@ -100,6 +108,10 @@ services:
       STRIPE_ENCRYPTION_KEY_FILE: /run/secrets/stripe_encryption_key
       SETUP_DEFAULT_ADMIN_FILE: /run/secrets/setup_default_admin
       FORGEJO_API_TOKEN_FILE: /run/secrets/forgejo_api_token
+      SMTP_PASSWORD_FILE: /run/secrets/smtp_password
+      STRIPE_SECRET_KEY_FILE: /run/secrets/stripe_secret_key
+      STRIPE_WEBHOOK_SECRET_FILE: /run/secrets/stripe_webhook_secret
+      BUNYIP_UPDATE_CHECK_TOKEN_FILE: /run/secrets/update_check_token
       HOST_IP: 0.0.0.0
       APP_PORT: "4401"
       ENVIRONMENT: ${ENVIRONMENT:-production}
@@ -108,7 +120,16 @@ services:
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4400}
       COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
       RUST_LOG: ${RUST_LOG:-info}
+      # ── Email (SMTP). Password comes from the smtp_password secret above. ──
       EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_TLS: ${SMTP_TLS:-implicit}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      ADMIN_NOTIFICATION_EMAILS: ${ADMIN_NOTIFICATION_EMAILS:-}
+      # ── Update checker (operator-facing). Token via update_check_token secret. ──
+      BUNYIP_UPDATE_CHECK_URL: ${BUNYIP_UPDATE_CHECK_URL:-}
       OIDC_ISSUER: ${OIDC_ISSUER:-}
       OIDC_JWT_PRIVATE_KEY_PATH: /run/secrets/oidc/dev-2026.pem
       OIDC_JWT_ACTIVE_KID: ${OIDC_JWT_ACTIVE_KID:-dev-2026}
@@ -148,8 +169,15 @@ services:
       - stripe_encryption_key
       - setup_default_admin
       - forgejo_api_token
+      - smtp_password
+      - stripe_secret_key
+      - stripe_webhook_secret
+      - update_check_token
     volumes:
-      - ./secrets:/run/secrets/oidc:ro
+      # OIDC signing keys only (a dedicated subdir, NOT the whole ./secrets
+      # dir: the secret value files must never be visible at a second path
+      # inside the container).
+      - ./secrets/oidc:/run/secrets/oidc:ro
       # Distribution caches MUST be NAMED volumes, never host bind-mounts.
       # Why + the bind-mount workaround: dev-docs/oci-registry-verification.md
       # (Production notes).
