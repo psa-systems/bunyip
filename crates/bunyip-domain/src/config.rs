@@ -46,8 +46,14 @@ pub struct Config {
     pub port: u16,
     /// Log level (RUST_LOG)
     pub log_level: String,
-    /// CORS allowed origin
+    /// CORS allowed origin(s). Comma-separated when multiple SPAs hit bunyip-api
+    /// from different origins (bunyip-web + mokosh-apps + drillmark, etc.).
     pub cors_origin: String,
+    /// Single absolute URL of the bunyip-web login UI (e.g. `https://a8n.systems`).
+    /// Used by the OIDC `/oauth2/authorize` handler to redirect unauthenticated
+    /// requests to the login page. Distinct from `cors_origin` because the
+    /// latter is now a comma-list and can't be used to build URLs.
+    pub web_origin: String,
     /// Environment (development, production)
     pub environment: String,
     /// Application name used in emails, JWT issuer, etc.
@@ -595,6 +601,25 @@ impl Config {
         let cors_origin =
             env::var("CORS_ORIGIN").unwrap_or_else(|_| "http://localhost:5173".to_string());
 
+        // BUNYIP_WEB_ORIGIN is the single absolute URL of the bunyip-web login
+        // UI. Falls back to the first entry of CORS_ORIGIN for ergonomics on
+        // single-RP deployments (dev, RP-less self-hosters); on a multi-RP
+        // deployment (c-01: bunyip + mokosh-apps + drillmark) the operator MUST
+        // set it explicitly so the OIDC authorize handler doesn't try to
+        // concatenate a comma-list onto `/login`.
+        let web_origin = env::var("BUNYIP_WEB_ORIGIN")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                cors_origin
+                    .split(',')
+                    .next()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("http://localhost:5173")
+                    .to_string()
+            });
+
         let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| "production".to_string());
         let app_name = env::var("APP_NAME").unwrap_or_else(|_| "localhost".to_string());
         let is_production = environment == "production";
@@ -632,6 +657,7 @@ impl Config {
             port,
             log_level,
             cors_origin,
+            web_origin,
             environment,
             app_name,
             email,

@@ -633,7 +633,9 @@ pub async fn logout_redirect(
     let allowed = match url::Url::parse(target_url) {
         Ok(parsed) => {
             if let Some(host) = parsed.host_str() {
-                let cors_domain = url::Url::parse(&config.cors_origin)
+                // web_origin is a single absolute URL (cors_origin is now a
+                // comma-list and Url::parse would fail on it).
+                let web_domain = url::Url::parse(&config.web_origin)
                     .ok()
                     .and_then(|u| u.host_str().map(|h| h.to_string()));
 
@@ -641,7 +643,7 @@ pub async fn logout_redirect(
                     .cookie_domain
                     .as_deref()
                     .map(|d| d.trim_start_matches('.'))
-                    .or(cors_domain.as_deref());
+                    .or(web_domain.as_deref());
 
                 match base_domain {
                     Some(domain) => host == domain || host.ends_with(&format!(".{domain}")),
@@ -676,7 +678,7 @@ pub async fn logout_redirect(
     // Redirect to the login page with the child app URL as the redirect param
     let login_url = format!(
         "{}/login?redirect={}&checked=1",
-        config.cors_origin.trim_end_matches('/'),
+        config.web_origin.trim_end_matches('/'),
         urlencoding::encode(target_url)
     );
 
@@ -877,7 +879,7 @@ pub async fn auth_redirect(
 
     let login_url = format!(
         "{}/login?redirect={}&checked=1",
-        config.cors_origin.trim_end_matches('/'),
+        config.web_origin.trim_end_matches('/'),
         urlencoding::encode(target_url)
     );
 
