@@ -206,13 +206,34 @@ pub struct AppDownloadsResponse {
     pub assets: Vec<DownloadAsset>,
 }
 
+/// OCI pull coordinates for a product (mirrors the API's `AppOciImage`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OciImage {
+    /// Public registry hostname for `docker login`.
+    pub registry: String,
+    /// Repository inside the registry (the application slug).
+    pub repository: String,
+    /// The pinned image tag (the only tag the registry serves).
+    pub tag: String,
+    /// Full pull reference: `{registry}/{repository}:{tag}`.
+    pub reference: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppDownloadGroup {
     pub app_slug: String,
     pub app_display_name: String,
     pub icon_url: Option<String>,
+    /// Version of the binary assets; EMPTY for OCI-only products. Kept a
+    /// plain string (not `Option`) to match the API's wire format, which
+    /// stays a required string for compatibility with older clients.
     pub release_tag: String,
     pub assets: Vec<DownloadAsset>,
+    /// OCI pull info, when the product has a pullable container image.
+    /// `default` so this client also parses responses from an older API
+    /// that does not send the field.
+    #[serde(default)]
+    pub oci: Option<OciImage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
