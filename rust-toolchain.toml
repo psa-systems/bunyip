@@ -1,0 +1,10 @@
+# Pin the Rust toolchain so CI is decoupled from the rolling runner image
+# (vars.RUNS_ON_OPENSUSE_BASE_LATEST). The Rust 1.94 bump on the runner
+# promoted several clippy nits to default-warn (manual_clamp, unnecessary_map_or,
+# field_reassign_with_default, ...) and tightened rustfmt's wrap heuristics,
+# which turned every previously-clean file in the repo into a CI failure. Pin
+# to a known-good channel and bump deliberately when you're ready to address
+# the new lints in one focused PR.
+[toolchain]
+channel = "1.93.0"
+components = ["clippy", "rustfmt"]
