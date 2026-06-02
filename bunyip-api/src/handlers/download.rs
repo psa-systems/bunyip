@@ -15,8 +15,7 @@ use crate::config::OciConfig;
 use crate::errors::AppError;
 use crate::middleware::{extract_client_ip, AdminUser, MemberUser};
 use crate::models::download::{
-    AppDownloadGroup, AppDownloadsResponse, AppOciImage, ArtifactSource, DownloadAsset,
-    ReleaseMetadata,
+    AppDownloadGroup, AppDownloadsResponse, ArtifactSource, DownloadAsset, ReleaseMetadata,
 };
 use crate::models::{Application, AuditAction, CreateAuditLog};
 use crate::repositories::{
@@ -42,23 +41,6 @@ fn to_public_asset(a: &crate::models::download::ReleaseAsset, slug: &str) -> Dow
         content_type: a.content_type.clone(),
         download_url: asset_href(slug, &a.name),
     }
-}
-
-/// Build the member-facing OCI pull coordinates for an application: `Some`
-/// only when the registry is enabled and the application has a pullable image
-/// (active + all three OCI fields set).
-fn oci_pull_info(app: &Application, oci: &OciConfig) -> Option<AppOciImage> {
-    if !oci.enabled || !app.is_pullable() {
-        return None;
-    }
-    let tag = app.pinned_image_tag.clone()?;
-    let reference = format!("{}/{}:{}", oci.service, app.slug, tag);
-    Some(AppOciImage {
-        registry: oci.service.clone(),
-        repository: app.slug.clone(),
-        tag,
-        reference,
-    })
 }
 
 /// GET /v1/applications/{slug}/downloads
@@ -107,8 +89,9 @@ pub async fn list_app_downloads(
 
 /// GET /v1/downloads
 ///
-/// One group per active product that has at least one distribution surface:
-/// binary assets (Forgejo downloads), an OCI image, or both.
+/// One group per active product that has at least one distribution surface
+/// with something to offer: downloadable binary assets, a pullable OCI
+/// image, or both.
 pub async fn list_all_downloads(
     req: HttpRequest,
     _user: MemberUser,
@@ -124,48 +107,72 @@ pub async fn list_all_downloads(
     let request_id = get_request_id(&req);
     let apps = ApplicationRepository::list_active(&pool).await?;
 
-    let mut groups: Vec<AppDownloadGroup> = Vec::new();
-    for app in apps {
-        let oci = oci_pull_info(&app, &oci_config);
-
-        // Binary assets, when the download proxy is enabled and this app has
-        // a complete download config. Best-effort: a failed Forgejo call
-        // degrades to an empty asset list so one bad config doesn't break the
-        // whole page (the OCI block, if any, still renders).
-        let (release_tag, assets) = match (release_cache, app.download_source()) {
-            (Some(cache), Some(source)) => match cache.get(app.id, &source).await {
-                Ok(release) => (
-                    Some(release.version.clone()),
-                    release
-                        .assets
-                        .iter()
-                        .map(|a| to_public_asset(a, &app.slug))
-                        .collect(),
-                ),
-                Err(e) => {
-                    tracing::warn!(app = %app.slug, error = %e, "release fetch failed");
-                    (None, Vec::new())
-                }
-            },
-            _ => (None, Vec::new()),
-        };
-
-        // Nothing to distribute for this app.
-        if release_tag.is_none() && oci.is_none() {
-            continue;
-        }
-
-        groups.push(AppDownloadGroup {
-            app_slug: app.slug.clone(),
-            app_display_name: app.display_name.clone(),
-            icon_url: app.icon_url.clone(),
-            release_tag,
-            assets,
-            oci,
-        });
-    }
+    // Build every group concurrently: each app may need a Forgejo round-trip
+    // (cold release cache), so driving them with join_all turns N sequential
+    // round-trips into one wall-clock round-trip. join_all preserves input
+    // order, so the sort_order from list_active carries through.
+    let groups: Vec<AppDownloadGroup> = futures_util::future::join_all(
+        apps.iter()
+            .map(|app| build_download_group(app, release_cache, &oci_config)),
+    )
+    .await
+    .into_iter()
+    .flatten()
+    .collect();
 
     Ok(success(serde_json::json!({ "groups": groups }), request_id))
+}
+
+/// Build the `/v1/downloads` group for one application, or `None` when it has
+/// nothing to distribute (no downloadable assets AND no pullable image).
+async fn build_download_group(
+    app: &Application,
+    release_cache: Option<&Arc<ReleaseCache>>,
+    oci_config: &OciConfig,
+) -> Option<AppDownloadGroup> {
+    let oci = if oci_config.enabled {
+        app.oci_pull_image(&oci_config.service)
+    } else {
+        None
+    };
+
+    // Binary assets, when the download proxy is enabled and this app has a
+    // complete download config. Best-effort: a failed Forgejo call degrades
+    // to an empty asset list so one bad config doesn't break the whole page
+    // (the OCI block, if any, still renders).
+    let (release_tag, assets) = match (release_cache, app.download_source()) {
+        (Some(cache), Some(source)) => match cache.get(app.id, &source).await {
+            Ok(release) => (
+                release.version.clone(),
+                release
+                    .assets
+                    .iter()
+                    .map(|a| to_public_asset(a, &app.slug))
+                    .collect(),
+            ),
+            Err(e) => {
+                tracing::warn!(app = %app.slug, error = %e, "release fetch failed");
+                (String::new(), Vec::new())
+            }
+        },
+        _ => (String::new(), Vec::new()),
+    };
+
+    // Nothing actionable for this app: no assets to download (a release tag
+    // with zero uploaded assets is not actionable either) and no image to
+    // pull. Skip it rather than render a dead entry.
+    if assets.is_empty() && oci.is_none() {
+        return None;
+    }
+
+    Some(AppDownloadGroup {
+        app_slug: app.slug.clone(),
+        app_display_name: app.display_name.clone(),
+        icon_url: app.icon_url.clone(),
+        release_tag,
+        assets,
+        oci,
+    })
 }
 
 /// GET /v1/applications/{slug}/downloads/{asset_name}
@@ -417,6 +424,49 @@ async fn fetch_release_or_502(
     })
 }
 
+/// POST /v1/admin/applications/{slug}/downloads/refresh
+pub async fn admin_refresh_release(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+    release_cache: web::Data<Option<Arc<ReleaseCache>>>,
+    path: web::Path<String>,
+) -> Result<HttpResponse, AppError> {
+    let release_cache = release_cache
+        .get_ref()
+        .as_ref()
+        .ok_or_else(|| AppError::not_found("Downloads"))?;
+    let request_id = get_request_id(&req);
+    let slug = path.into_inner();
+    let app = ApplicationRepository::find_by_slug(&pool, &slug)
+        .await?
+        .ok_or(AppError::not_found("Application"))?;
+    let Some(source) = app.download_source() else {
+        return Err(AppError::validation(
+            "application",
+            "Application is not configured for downloads",
+        ));
+    };
+    release_cache.invalidate(app.id, &source).await;
+    let release = release_cache.get(app.id, &source).await.map_err(|e| {
+        tracing::warn!(error = %e, "forgejo refresh failed");
+        AppError::upstream("Forgejo upstream error")
+    })?;
+
+    let assets: Vec<_> = release
+        .assets
+        .iter()
+        .map(|a| to_public_asset(a, &app.slug))
+        .collect();
+    Ok(success(
+        AppDownloadsResponse {
+            release_tag: Some(release.version.clone()),
+            assets,
+        },
+        request_id,
+    ))
+}
+
 #[cfg(test)]
 mod integration_tests {
     //! Full-stack happy path: mock Forgejo + real Postgres via `DATABASE_URL`.
@@ -533,126 +583,5 @@ mod integration_tests {
             .execute(&pool)
             .await
             .unwrap();
-    }
-}
-
-/// POST /v1/admin/applications/{slug}/downloads/refresh
-pub async fn admin_refresh_release(
-    req: HttpRequest,
-    _admin: AdminUser,
-    pool: web::Data<PgPool>,
-    release_cache: web::Data<Option<Arc<ReleaseCache>>>,
-    path: web::Path<String>,
-) -> Result<HttpResponse, AppError> {
-    let release_cache = release_cache
-        .get_ref()
-        .as_ref()
-        .ok_or_else(|| AppError::not_found("Downloads"))?;
-    let request_id = get_request_id(&req);
-    let slug = path.into_inner();
-    let app = ApplicationRepository::find_by_slug(&pool, &slug)
-        .await?
-        .ok_or(AppError::not_found("Application"))?;
-    let Some(source) = app.download_source() else {
-        return Err(AppError::validation(
-            "application",
-            "Application is not configured for downloads",
-        ));
-    };
-    release_cache.invalidate(app.id, &source).await;
-    let release = release_cache.get(app.id, &source).await.map_err(|e| {
-        tracing::warn!(error = %e, "forgejo refresh failed");
-        AppError::upstream("Forgejo upstream error")
-    })?;
-
-    let assets: Vec<_> = release
-        .assets
-        .iter()
-        .map(|a| to_public_asset(a, &app.slug))
-        .collect();
-    Ok(success(
-        AppDownloadsResponse {
-            release_tag: Some(release.version.clone()),
-            assets,
-        },
-        request_id,
-    ))
-}
-
-#[cfg(test)]
-mod oci_pull_info_tests {
-    use super::*;
-    use chrono::Utc;
-
-    fn oci_config(enabled: bool) -> OciConfig {
-        OciConfig {
-            enabled,
-            port: 18081,
-            service: "oci.example.com".to_string(),
-            realm: None,
-            blob_cache_dir: "/tmp".to_string(),
-            blob_cache_max_bytes: 0,
-            manifest_cache_ttl_secs: 60,
-            concurrent_manifests_per_user: 1,
-            pulls_per_user_per_day: 1,
-            token_ttl_secs: 300,
-        }
-    }
-
-    fn pullable_app() -> Application {
-        Application {
-            id: uuid::Uuid::new_v4(),
-            name: "mokosh-server".into(),
-            slug: "mokosh-server".into(),
-            display_name: "Mokosh Server".into(),
-            description: None,
-            icon_url: None,
-            is_active: true,
-            is_hosted: false,
-            maintenance_mode: false,
-            maintenance_message: None,
-            subdomain: None,
-            container_name: "catalog".into(),
-            health_check_url: None,
-            webhook_url: None,
-            version: None,
-            source_code_url: None,
-            forgejo_owner: None,
-            forgejo_repo: None,
-            pinned_release_tag: None,
-            artifact_source: "release".into(),
-            forgejo_package: None,
-            oci_image_owner: Some("psa-systems-private".into()),
-            oci_image_name: Some("mokosh-server".into()),
-            pinned_image_tag: Some("v0.2.0".into()),
-            sort_order: 0,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        }
-    }
-
-    #[test]
-    fn builds_reference_from_service_slug_and_pinned_tag() {
-        let info = oci_pull_info(&pullable_app(), &oci_config(true)).expect("pull info");
-        assert_eq!(info.registry, "oci.example.com");
-        assert_eq!(info.repository, "mokosh-server");
-        assert_eq!(info.tag, "v0.2.0");
-        assert_eq!(info.reference, "oci.example.com/mokosh-server:v0.2.0");
-    }
-
-    #[test]
-    fn none_when_registry_disabled() {
-        assert!(oci_pull_info(&pullable_app(), &oci_config(false)).is_none());
-    }
-
-    #[test]
-    fn none_when_app_not_pullable() {
-        let mut no_tag = pullable_app();
-        no_tag.pinned_image_tag = None;
-        assert!(oci_pull_info(&no_tag, &oci_config(true)).is_none());
-
-        let mut inactive = pullable_app();
-        inactive.is_active = false;
-        assert!(oci_pull_info(&inactive, &oci_config(true)).is_none());
     }
 }

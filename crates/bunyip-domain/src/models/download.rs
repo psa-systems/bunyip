@@ -51,13 +51,17 @@ pub struct AppOciImage {
 /// A group in the global `/v1/downloads` response.
 ///
 /// A product can carry binary assets (Forgejo downloads), an OCI image, or
-/// both; `release_tag` is `None` for OCI-only products.
+/// both.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct AppDownloadGroup {
     pub app_slug: String,
     pub app_display_name: String,
     pub icon_url: Option<String>,
-    pub release_tag: Option<String>,
+    /// Version of the binary assets; EMPTY STRING for OCI-only products.
+    /// Stays a plain string (not `Option`) for wire compatibility: deployed
+    /// web clients deserialize this field as a required string, and `null`
+    /// would fail their parse of the whole response.
+    pub release_tag: String,
     pub assets: Vec<DownloadAsset>,
     /// OCI pull info, when the registry is enabled and the product has a
     /// pullable image.

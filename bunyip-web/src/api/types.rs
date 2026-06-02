@@ -224,10 +224,14 @@ pub struct AppDownloadGroup {
     pub app_slug: String,
     pub app_display_name: String,
     pub icon_url: Option<String>,
-    /// Version of the binary assets; `None` for OCI-only products.
-    pub release_tag: Option<String>,
+    /// Version of the binary assets; EMPTY for OCI-only products. Kept a
+    /// plain string (not `Option`) to match the API's wire format, which
+    /// stays a required string for compatibility with older clients.
+    pub release_tag: String,
     pub assets: Vec<DownloadAsset>,
     /// OCI pull info, when the product has a pullable container image.
+    /// `default` so this client also parses responses from an older API
+    /// that does not send the field.
     #[serde(default)]
     pub oci: Option<OciImage>,
 }

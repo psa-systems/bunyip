@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use super::download::ArtifactSource;
+use super::download::{AppOciImage, ArtifactSource};
 
 /// Application database model
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -149,6 +149,31 @@ impl Application {
             && self.oci_image_owner.is_some()
             && self.oci_image_name.is_some()
             && self.pinned_image_tag.is_some()
+    }
+
+    /// Member-facing OCI pull coordinates against the public registry host,
+    /// `Some` only when this application [`is pullable`](Self::is_pullable).
+    ///
+    /// The registry serves repositories by application SLUG: the bunyip-oci
+    /// `/v2/{slug}/...` routes and the token scope check both resolve
+    /// repositories with `find_active_by_slug`. This method is the single
+    /// definition of that convention; anything that advertises a pull
+    /// reference must build it here so it cannot drift from what the
+    /// registry accepts.
+    pub fn oci_pull_image(&self, registry_host: &str) -> Option<AppOciImage> {
+        if !self.is_pullable() {
+            return None;
+        }
+        let tag = self
+            .pinned_image_tag
+            .as_deref()
+            .expect("is_pullable() guarantees pinned_image_tag is set");
+        Some(AppOciImage {
+            registry: registry_host.to_string(),
+            repository: self.slug.clone(),
+            tag: tag.to_string(),
+            reference: format!("{registry_host}/{}:{tag}", self.slug),
+        })
     }
 }
 
@@ -635,6 +660,42 @@ mod tests {
         let mut no_tag = base.clone();
         no_tag.pinned_image_tag = None;
         assert!(!no_tag.is_pullable());
+    }
+
+    #[test]
+    fn oci_pull_image_builds_reference_from_host_slug_and_pinned_tag() {
+        let app = Application {
+            is_active: true,
+            oci_image_owner: Some("psa-systems-private".into()),
+            oci_image_name: Some("mokosh-server".into()),
+            pinned_image_tag: Some("v0.2.0".into()),
+            ..test_app()
+        };
+        let image = app.oci_pull_image("oci.example.com").expect("pullable");
+        assert_eq!(image.registry, "oci.example.com");
+        // Repository is the SLUG, not oci_image_name: the registry's
+        // /v2/{slug}/... routes resolve by slug.
+        assert_eq!(image.repository, "test-app");
+        assert_eq!(image.tag, "v0.2.0");
+        assert_eq!(image.reference, "oci.example.com/test-app:v0.2.0");
+    }
+
+    #[test]
+    fn oci_pull_image_none_when_not_pullable() {
+        // Missing tag.
+        let mut app = Application {
+            is_active: true,
+            oci_image_owner: Some("a8n".into()),
+            oci_image_name: Some("rus".into()),
+            pinned_image_tag: None,
+            ..test_app()
+        };
+        assert!(app.oci_pull_image("oci.example.com").is_none());
+
+        // Inactive.
+        app.pinned_image_tag = Some("v1".into());
+        app.is_active = false;
+        assert!(app.oci_pull_image("oci.example.com").is_none());
     }
 
     #[test]

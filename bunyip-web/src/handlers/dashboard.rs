@@ -288,16 +288,25 @@ pub async fn downloads(State(st): State<AppState>, headers: HeaderMap) -> Respon
     };
     let fwd = c.forward.as_deref();
     let has_membership = has_active_membership(Some(&user));
-    let groups = calls::downloads_all(&st.api, fwd).await.unwrap_or_default();
+    // Keep the error distinct from "genuinely empty catalog" so an API outage
+    // doesn't masquerade as revoked entitlements.
+    let groups_result = calls::downloads_all(&st.api, fwd).await;
 
     let content = html! {
         div class="space-y-6" {
             h1 class="text-2xl font-semibold" { "Downloads" }
-            @if groups.is_empty() {
-                p class="text-sm text-muted-foreground" { "No downloads available" }
-            } @else {
-                @for g in &groups {
-                    (download_group(g, has_membership))
+            @match &groups_result {
+                Err(_) => {
+                    (error_box("Downloads are temporarily unavailable. Refresh the page to try again."))
+                }
+                Ok(groups) => {
+                    @if groups.is_empty() {
+                        p class="text-sm text-muted-foreground" { "No downloads available" }
+                    } @else {
+                        @for g in groups {
+                            (download_group(g, has_membership))
+                        }
+                    }
                 }
             }
         }
@@ -309,11 +318,13 @@ pub async fn downloads(State(st): State<AppState>, headers: HeaderMap) -> Respon
 /// latest) version, binary assets, and OCI pull instructions.
 fn download_group(g: &AppDownloadGroup, has_membership: bool) -> Markup {
     // Pinned-version distribution model: exactly one version is available per
-    // product, so the version shown is by definition the latest.
-    let version = g
-        .release_tag
-        .as_deref()
-        .or(g.oci.as_ref().map(|o| o.tag.as_str()));
+    // product, so the version shown is by definition the latest. release_tag
+    // is empty (not absent) for OCI-only products; see api/types.rs.
+    let version = if g.release_tag.is_empty() {
+        g.oci.as_ref().map(|o| o.tag.as_str())
+    } else {
+        Some(g.release_tag.as_str())
+    };
     html! {
         section class="border rounded p-4" {
             div class="flex items-center gap-2" {
@@ -338,7 +349,7 @@ fn download_group(g: &AppDownloadGroup, has_membership: bool) -> Markup {
                             @if has_membership {
                                 a href=(a.download_url) download=(a.asset_name) class="px-3 py-1 rounded bg-primary text-primary-foreground text-sm" { "Download" }
                             } @else {
-                                a href="/membership" class="text-sm text-primary underline" { "Upgrade to access" }
+                                (upgrade_link())
                             }
                         }
                     }
@@ -357,10 +368,17 @@ fn download_group(g: &AppDownloadGroup, has_membership: bool) -> Markup {
                         (command_block(&format!("docker pull {}", oci.reference)))
                     }
                 } @else {
-                    a href="/membership" class="text-sm text-primary underline" { "Upgrade to access" }
+                    (upgrade_link())
                 }
             }
         }
+    }
+}
+
+/// Membership-gate link shown in place of download/pull actions.
+fn upgrade_link() -> Markup {
+    html! {
+        a href="/membership" class="text-sm text-primary underline" { "Upgrade to access" }
     }
 }
 
@@ -368,16 +386,27 @@ fn download_group(g: &AppDownloadGroup, has_membership: bool) -> Markup {
 fn command_block(cmd: &str) -> Markup {
     // JSON-encode the command so it is a valid JS string literal inside the
     // onclick handler (Maud HTML-escapes the attribute value; the browser
-    // un-escapes it before executing).
+    // un-escapes it before executing). Serializing a &str cannot fail.
+    let cmd_js = serde_json::to_string(cmd).expect("serializing a string to JSON is infallible");
+    // Clipboard API needs a secure context (HTTPS / localhost). When it is
+    // unavailable, select the command text so the user can copy manually;
+    // otherwise report success/failure on the button label.
     let copy_js = format!(
-        "navigator.clipboard.writeText({})",
-        serde_json::to_string(cmd).unwrap_or_default()
+        "var b=this;var t=b.innerText;\
+         if(navigator.clipboard){{\
+           navigator.clipboard.writeText({cmd_js}).then(\
+             function(){{b.innerText='Copied';setTimeout(function(){{b.innerText=t}},1500)}},\
+             function(){{b.innerText='Copy failed';setTimeout(function(){{b.innerText=t}},1500)}});\
+         }}else{{\
+           window.getSelection().selectAllChildren(b.previousElementSibling);\
+           b.innerText='Press Ctrl+C';setTimeout(function(){{b.innerText=t}},3000);\
+         }}"
     );
     html! {
         div class="flex items-center gap-2" {
             code class="flex-1 rounded bg-muted px-3 py-2 font-mono text-sm overflow-x-auto whitespace-nowrap" { (cmd) }
-            button type="button" aria-label="Copy command" class=(button_class("ghost", "icon", "shrink-0")) onclick=(copy_js) {
-                (icon("copy", "h-4 w-4"))
+            button type="button" aria-label="Copy command" class=(button_class("outline", "sm", "shrink-0 w-28")) onclick=(copy_js) {
+                "Copy"
             }
         }
     }
