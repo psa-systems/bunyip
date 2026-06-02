@@ -41,7 +41,7 @@ impl OciBearerUser {
 fn has_member_access(user: &User) -> bool {
     user.role == "admin"
         || user.lifetime_member
-        || user.trial_ends_at.map_or(false, |t| t > Utc::now())
+        || user.trial_ends_at.is_some_and(|t| t > Utc::now())
         || user.membership_status == "active"
         || user.membership_status == "grace_period"
 }

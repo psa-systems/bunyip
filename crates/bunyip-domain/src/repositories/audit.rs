@@ -42,6 +42,8 @@ impl AuditLogRepository {
     }
 
     /// List audit logs with pagination and filters
+    // Pagination + independent filter columns; a params struct would only relocate the argument list.
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_paginated(
         pool: &PgPool,
         page: i32,

@@ -227,6 +227,9 @@ impl OidcProvider {
     // ── Authorization code ────────────────────────────────────────────────────
 
     /// Issue an authorization code.  Returns the raw opaque code (never stored).
+    // Each argument is a distinct OIDC protocol parameter bound into the code
+    // (RFC 6749 / OIDC Core); a params struct would only relocate the list.
+    #[allow(clippy::too_many_arguments)]
     pub async fn issue_authorization_code(
         &self,
         client: &OAuthClient,
@@ -559,8 +562,8 @@ impl OidcProvider {
 
         // Expiry checks
         let now = Utc::now();
-        let idle_exp: DateTime<Utc> = old.idle_expires_at.into();
-        let abs_exp: DateTime<Utc> = old.absolute_expires_at.into();
+        let idle_exp: DateTime<Utc> = old.idle_expires_at;
+        let abs_exp: DateTime<Utc> = old.absolute_expires_at;
         if now > idle_exp || now > abs_exp {
             return Err(AppError::OidcInvalidGrant("refresh token expired".into()));
         }
@@ -870,6 +873,10 @@ impl OidcProvider {
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
+    // Each argument is a distinct column of the refresh-token row (rotation
+    // lineage + client binding + audit metadata); a params struct would only
+    // relocate the list.
+    #[allow(clippy::too_many_arguments)]
     async fn insert_refresh_token(
         &self,
         client: &OAuthClient,
@@ -1004,7 +1011,7 @@ fn sha256_bytes(input: &[u8]) -> Vec<u8> {
 fn user_has_member_access(user: &User) -> bool {
     user.role == "admin"
         || user.lifetime_member
-        || user.trial_ends_at.map_or(false, |t| t > Utc::now())
+        || user.trial_ends_at.is_some_and(|t| t > Utc::now())
         || user.membership_status == "active"
         || user.membership_status == "grace_period"
 }

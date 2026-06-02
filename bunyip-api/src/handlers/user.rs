@@ -320,6 +320,8 @@ pub async fn confirm_email_verification(
 
 /// DELETE /v1/users/me
 /// Delete current user's account (soft delete)
+// actix-web handler: each argument is a framework extractor, not a refactorable params list.
+#[allow(clippy::too_many_arguments)]
 pub async fn delete_account(
     req: HttpRequest,
     user: AuthenticatedUser,

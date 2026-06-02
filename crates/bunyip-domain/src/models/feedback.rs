@@ -22,14 +22,18 @@ impl FeedbackStatus {
             FeedbackStatus::Closed => "closed",
         }
     }
+}
 
-    pub fn from_str(value: &str) -> Option<Self> {
+impl std::str::FromStr for FeedbackStatus {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
-            "new" => Some(Self::New),
-            "reviewed" => Some(Self::Reviewed),
-            "responded" => Some(Self::Responded),
-            "closed" => Some(Self::Closed),
-            _ => None,
+            "new" => Ok(Self::New),
+            "reviewed" => Ok(Self::Reviewed),
+            "responded" => Ok(Self::Responded),
+            "closed" => Ok(Self::Closed),
+            _ => Err(()),
         }
     }
 }
@@ -218,6 +222,7 @@ impl Feedback {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     // -- FeedbackStatus --
 
@@ -231,20 +236,20 @@ mod tests {
 
     #[test]
     fn feedback_status_from_str() {
-        assert_eq!(FeedbackStatus::from_str("new"), Some(FeedbackStatus::New));
+        assert_eq!(FeedbackStatus::from_str("new"), Ok(FeedbackStatus::New));
         assert_eq!(
             FeedbackStatus::from_str("reviewed"),
-            Some(FeedbackStatus::Reviewed)
+            Ok(FeedbackStatus::Reviewed)
         );
         assert_eq!(
             FeedbackStatus::from_str("responded"),
-            Some(FeedbackStatus::Responded)
+            Ok(FeedbackStatus::Responded)
         );
         assert_eq!(
             FeedbackStatus::from_str("closed"),
-            Some(FeedbackStatus::Closed)
+            Ok(FeedbackStatus::Closed)
         );
-        assert_eq!(FeedbackStatus::from_str("invalid"), None);
+        assert_eq!(FeedbackStatus::from_str("invalid"), Err(()));
     }
 
     // -- Feedback::mask_email --

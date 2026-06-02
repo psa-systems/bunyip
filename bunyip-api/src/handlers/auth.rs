@@ -119,11 +119,7 @@ pub async fn register(
     crate::validation::validate_email(&body.email)?;
 
     auth_service
-        .register(
-            body.email.clone(),
-            body.password.clone(),
-            ip_address.clone(),
-        )
+        .register(body.email.clone(), body.password.clone(), ip_address)
         .await?;
 
     // Generate tokens so the user is logged in immediately
@@ -138,7 +134,7 @@ pub async fn register(
         .await?;
 
     let (tokens, user) = match result {
-        LoginResult::Success(tokens, user) => (tokens, user),
+        LoginResult::Success(tokens, user) => (tokens, *user),
         LoginResult::TwoFactorRequired { .. } => {
             // Should never happen for a brand-new registration
             return Err(AppError::internal(
@@ -235,7 +231,7 @@ pub async fn login(
             let cookie_domain = config.cookie_domain.as_deref();
 
             let response = AuthResponse {
-                user,
+                user: *user,
                 expires_in: tokens.expires_in,
             };
 
@@ -367,7 +363,7 @@ pub async fn verify_magic_link(
             let cookie_domain = config.cookie_domain.as_deref();
 
             let response = AuthResponse {
-                user,
+                user: *user,
                 expires_in: tokens.expires_in,
             };
 
@@ -439,7 +435,7 @@ pub async fn accept_admin_invite(
             let cookie_domain = config.cookie_domain.as_deref();
 
             let response = AuthResponse {
-                user,
+                user: *user,
                 expires_in: tokens.expires_in,
             };
 
@@ -1018,7 +1014,7 @@ pub async fn setup_admin(
         .await?;
 
     let (tokens, user) = match result {
-        LoginResult::Success(tokens, user) => (tokens, user),
+        LoginResult::Success(tokens, user) => (tokens, *user),
         LoginResult::TwoFactorRequired { .. } => {
             return Err(AppError::internal("Unexpected 2FA challenge during setup"));
         }

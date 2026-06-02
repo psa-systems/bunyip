@@ -63,7 +63,7 @@ impl AccessTokenClaims {
     ) -> bool {
         role == "admin"
             || lifetime_member
-            || trial_ends_at.map_or(false, |ts| ts > chrono::Utc::now().timestamp())
+            || trial_ends_at.is_some_and(|ts| ts > chrono::Utc::now().timestamp())
             || membership_status == "active"
             || membership_status == "grace_period"
     }

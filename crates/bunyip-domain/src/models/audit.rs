@@ -168,9 +168,10 @@ impl AuditAction {
 }
 
 /// Audit severity levels
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditSeverity {
+    #[default]
     Info,
     Warning,
     Error,
@@ -185,12 +186,6 @@ impl AuditSeverity {
             AuditSeverity::Error => "error",
             AuditSeverity::Critical => "critical",
         }
-    }
-}
-
-impl Default for AuditSeverity {
-    fn default() -> Self {
-        AuditSeverity::Info
     }
 }
 

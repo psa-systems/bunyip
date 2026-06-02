@@ -282,8 +282,10 @@ impl StripeService {
             .parse()
             .map_err(|_| AppError::validation("product_id", "Invalid product ID"))?;
 
-        let mut params = stripe::UpdateProduct::default();
-        params.active = Some(false);
+        let params = stripe::UpdateProduct {
+            active: Some(false),
+            ..Default::default()
+        };
 
         stripe::Product::update(&client, &pid, params)
             .await
@@ -432,8 +434,10 @@ impl StripeService {
             .parse()
             .map_err(|_| AppError::validation("price_id", "Invalid price ID"))?;
 
-        let mut params = stripe::UpdatePrice::default();
-        params.active = Some(false);
+        let params = stripe::UpdatePrice {
+            active: Some(false),
+            ..Default::default()
+        };
 
         stripe::Price::update(&client, &pid, params)
             .await
@@ -494,7 +498,7 @@ impl StripeService {
                     StripeSubscriptionItemResponse {
                         price_id,
                         product_id,
-                        quantity: item.quantity.map(|q| q as u64),
+                        quantity: item.quantity,
                     }
                 })
                 .collect();

@@ -1,10 +1,9 @@
-# Pin the Rust toolchain so CI is decoupled from the rolling runner image
-# (vars.RUNS_ON_OPENSUSE_BASE_LATEST). The Rust 1.94 bump on the runner
-# promoted several clippy nits to default-warn (manual_clamp, unnecessary_map_or,
-# field_reassign_with_default, ...) and tightened rustfmt's wrap heuristics,
-# which turned every previously-clean file in the repo into a CI failure. Pin
-# to a known-good channel and bump deliberately when you're ready to address
-# the new lints in one focused PR.
+# Pin the Rust toolchain so CI, local checks, and the rust-builder images all
+# agree on one compiler. 1.94 matches the ghcr.io/niceguyit/rust-builder-*
+# v1.0.0-rust1.94-* images used by the Dockerfiles and the container check
+# workflow (see CLAUDE.md "Checks on toolchain-less dev boxes"). Bump this
+# deliberately and fix any newly-promoted clippy/rustfmt lints in the same PR
+# (BUNYIP-36 did exactly that for the 1.93 -> 1.94 move).
 [toolchain]
-channel = "1.93.0"
+channel = "1.94.1"
 components = ["clippy", "rustfmt"]

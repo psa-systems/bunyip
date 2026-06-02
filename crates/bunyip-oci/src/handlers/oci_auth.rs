@@ -40,7 +40,7 @@ pub struct TokenResponse {
 fn has_member_access(user: &User) -> bool {
     user.role == "admin"
         || user.lifetime_member
-        || user.trial_ends_at.map_or(false, |t| t > Utc::now())
+        || user.trial_ends_at.is_some_and(|t| t > Utc::now())
         || user.membership_status == "active"
         || user.membership_status == "grace_period"
 }
@@ -87,7 +87,7 @@ pub async fn issue_token(
         .unwrap_or(60);
         audit_failed(pool.get_ref(), &email, ip, "rate_limited").await;
         return Err(OciError::TooManyRequests {
-            retry_after_secs: Some(retry_after as u64),
+            retry_after_secs: Some(retry_after),
         });
     }
 

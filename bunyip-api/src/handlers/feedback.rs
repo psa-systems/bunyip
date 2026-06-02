@@ -6,6 +6,7 @@ use futures_util::TryStreamExt;
 use serde::Deserialize;
 use sqlx::PgPool;
 use std::collections::HashSet;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::config::Config;
@@ -328,7 +329,7 @@ pub async fn list_feedback(
 
     if let Some(status) = query.status.as_deref() {
         FeedbackStatus::from_str(status)
-            .ok_or_else(|| AppError::validation("status", "Invalid feedback status"))?;
+            .map_err(|_| AppError::validation("status", "Invalid feedback status"))?;
     }
 
     let (feedback, total) =
@@ -382,7 +383,7 @@ pub async fn respond_to_feedback(
         .as_deref()
         .map(|value| {
             FeedbackStatus::from_str(value)
-                .ok_or_else(|| AppError::validation("status", "Invalid feedback status"))
+                .map_err(|_| AppError::validation("status", "Invalid feedback status"))
         })
         .transpose()?
         .unwrap_or(FeedbackStatus::Responded);
@@ -439,7 +440,7 @@ pub async fn update_feedback_status(
         .ok_or_else(|| AppError::not_found("Feedback"))?;
 
     let status = FeedbackStatus::from_str(&body.status)
-        .ok_or_else(|| AppError::validation("status", "Invalid feedback status"))?;
+        .map_err(|_| AppError::validation("status", "Invalid feedback status"))?;
 
     let updated = FeedbackRepository::update_status(&pool, feedback_id, status).await?;
 
