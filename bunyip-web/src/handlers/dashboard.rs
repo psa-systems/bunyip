@@ -15,7 +15,7 @@ use crate::api::types::{Membership, MembershipStatus, SubscriptionTier, User};
 use crate::handlers::{dashboard_response, guard, password_ok, rotating_index};
 use crate::util::{app_gradient, days_until, has_active_membership};
 use crate::views::ui::{badge, button_class, error_box, icon};
-use crate::web::{redirect, redirect_cookies, AppState};
+use crate::web::{redirect_cookies, AppState};
 
 const TAGLINES: [&str; 5] = [
     "All access. No clock.",
