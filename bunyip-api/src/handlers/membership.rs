@@ -374,7 +374,7 @@ pub async fn get_payment_history(
         .ok_or(AppError::not_found("User"))?;
 
     let payments = if let Some(ref customer_id) = db_user.stripe_customer_id {
-        let limit = query.per_page.map(|p| p.min(100).max(1) as u64);
+        let limit = query.per_page.map(|p| p.clamp(1, 100) as u64);
         let invoices = stripe.list_customer_invoices(customer_id, limit).await?;
         invoices
             .into_iter()

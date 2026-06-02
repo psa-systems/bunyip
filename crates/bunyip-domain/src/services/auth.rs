@@ -29,13 +29,21 @@ pub struct AuthTokens {
     pub expires_in: i64,
 }
 
-/// Result of a login attempt — either full success or 2FA challenge
+// The three result enums below carry a full UserResponse in their Success
+// variant, which dwarfs the alternative variants. That is fine: each value is
+// a transient per-request return, matched exactly once and never stored in a
+// collection, so the size imbalance costs nothing (and boxing would add a
+// pointless per-login heap allocation).
+
+/// Result of a login attempt: either full success or 2FA challenge.
+#[allow(clippy::large_enum_variant)]
 pub enum LoginResult {
     Success(AuthTokens, UserResponse),
     TwoFactorRequired { challenge_token: String },
 }
 
 /// Result of magic link verification
+#[allow(clippy::large_enum_variant)]
 pub enum MagicLinkResult {
     Success(AuthTokens, UserResponse, bool),
     TwoFactorRequired {
@@ -45,6 +53,7 @@ pub enum MagicLinkResult {
 }
 
 /// Result of accepting an admin invite
+#[allow(clippy::large_enum_variant)]
 pub enum AcceptInviteResult {
     Success(AuthTokens, UserResponse),
     PasswordRequired { email: String },
@@ -109,7 +118,7 @@ impl AuthService {
         .await?;
 
         // Create audit log
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
         AuditLogRepository::create(
             &self.pool,
             CreateAuditLog::new(AuditAction::UserRegistered)
@@ -174,7 +183,7 @@ impl AuthService {
         UserRepository::update_last_login(&self.pool, user.id).await?;
 
         // Create audit log
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
         AuditLogRepository::create(
             &self.pool,
             CreateAuditLog::new(AuditAction::UserLogin)
@@ -289,7 +298,7 @@ impl AuthService {
 
         // Get user for audit log
         if let Some(user) = UserRepository::find_by_id(&self.pool, user_id).await? {
-            let ip = ip_address.map(|ip| IpNetwork::from(ip));
+            let ip = ip_address.map(IpNetwork::from);
             AuditLogRepository::create(
                 &self.pool,
                 CreateAuditLog::new(AuditAction::UserLogout)
@@ -312,7 +321,7 @@ impl AuthService {
 
         // Get user for audit log
         if let Some(user) = UserRepository::find_by_id(&self.pool, user_id).await? {
-            let ip = ip_address.map(|ip| IpNetwork::from(ip));
+            let ip = ip_address.map(IpNetwork::from);
             AuditLogRepository::create(
                 &self.pool,
                 CreateAuditLog::new(AuditAction::UserLogout)
@@ -332,7 +341,7 @@ impl AuthService {
         email: String,
         ip_address: Option<IpAddr>,
     ) -> Result<String, AppError> {
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
 
         // Generate token
         let token = generate_secure_token(32);
@@ -453,7 +462,7 @@ impl AuthService {
         UserRepository::update_last_login(&self.pool, user.id).await?;
 
         // Audit log
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
         AuditLogRepository::create(
             &self.pool,
             CreateAuditLog::new(AuditAction::MagicLinkUsed)
@@ -498,7 +507,7 @@ impl AuthService {
         UserRepository::update_last_login(&self.pool, user.id).await?;
 
         // Audit log
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
         AuditLogRepository::create(
             &self.pool,
             CreateAuditLog::new(AuditAction::UserLogin)
@@ -517,7 +526,7 @@ impl AuthService {
         email: String,
         ip_address: Option<IpAddr>,
     ) -> Result<Option<String>, AppError> {
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
 
         // Find user
         let user = match UserRepository::find_by_email(&self.pool, &email).await? {
@@ -622,7 +631,7 @@ impl AuthService {
         TokenRepository::revoke_all_user_refresh_tokens(&self.pool, user.id).await?;
 
         // Audit log
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
         AuditLogRepository::create(
             &self.pool,
             CreateAuditLog::new(AuditAction::PasswordResetCompleted)
@@ -669,7 +678,7 @@ impl AuthService {
         UserRepository::update_password(&self.pool, user_id, &new_hash).await?;
 
         // Audit log
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
         AuditLogRepository::create(
             &self.pool,
             CreateAuditLog::new(AuditAction::PasswordChanged)
@@ -693,7 +702,7 @@ impl AuthService {
         current_password: Option<String>,
         ip_address: Option<IpAddr>,
     ) -> Result<(String, Option<String>), AppError> {
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
 
         // Get user
         let user = UserRepository::find_by_id(&self.pool, user_id)
@@ -717,12 +726,11 @@ impl AuthService {
         }
 
         // If user has a password, require it for verification
-        if user.password_hash.is_some() {
+        if let Some(password_hash) = &user.password_hash {
             let password = current_password.ok_or(AppError::validation(
                 "current_password",
                 "Password is required to change email",
             ))?;
-            let password_hash = user.password_hash.as_ref().unwrap();
             if !self.password.verify(&password, password_hash)? {
                 return Err(AppError::validation(
                     "current_password",
@@ -835,7 +843,7 @@ impl AuthService {
         token: String,
         ip_address: Option<IpAddr>,
     ) -> Result<(String, String), AppError> {
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
         let token_hash = self.jwt.hash_token(&token);
 
         // Find request (outside transaction for early rejection)
@@ -920,7 +928,7 @@ impl AuthService {
         user_id: Uuid,
         ip_address: Option<IpAddr>,
     ) -> Result<String, AppError> {
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
 
         let user = UserRepository::find_by_id(&self.pool, user_id)
             .await?
@@ -985,7 +993,7 @@ impl AuthService {
         token: String,
         ip_address: Option<IpAddr>,
     ) -> Result<(Uuid, String, SubscriptionTier), AppError> {
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
         let token_hash = self.jwt.hash_token(&token);
 
         // Find and validate token before opening the transaction
@@ -1143,7 +1151,7 @@ impl AuthService {
         match UserRepository::find_by_email(&self.pool, &invite.email).await? {
             Some(user) if user.role == "admin" => {
                 // Already an admin — stale invite
-                return Err(AppError::conflict("User is already an admin"));
+                Err(AppError::conflict("User is already an admin"))
             }
             Some(user) => {
                 // Existing non-admin user — upgrade to admin
@@ -1275,7 +1283,7 @@ impl AuthService {
         let access_token = self.jwt.create_access_token(user)?;
         let (refresh_token, token_hash) = self.jwt.create_refresh_token(user.id)?;
 
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
         let expires_at = Utc::now() + Duration::days(30);
 
         // Store refresh token

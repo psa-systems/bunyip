@@ -7,6 +7,9 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 # Generic kernel (errors, responses, validation, middleware, primitive services).
 dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", branch = "main" }

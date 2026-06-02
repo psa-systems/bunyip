@@ -142,7 +142,7 @@ pub async fn authorize(
     req: HttpRequest,
     user: OptionalUser,
     provider: web::Data<Option<Arc<OidcProvider>>>,
-    pool: web::Data<sqlx::PgPool>,
+    _pool: web::Data<sqlx::PgPool>,
     query: web::Query<AuthorizeQuery>,
     config: web::Data<crate::config::Config>,
 ) -> Result<HttpResponse, AppError> {
@@ -382,7 +382,7 @@ pub async fn token(
 async fn handle_authorization_code_grant(
     provider: &OidcProvider,
     pool: &sqlx::PgPool,
-    req: &HttpRequest,
+    _req: &HttpRequest,
     body: &TokenRequest,
     client: &OAuthClient,
     ip: Option<std::net::IpAddr>,
@@ -763,7 +763,7 @@ fn authenticate_client(
 
 /// Verify an `at+jwt` access token and return its `sub` claim.
 fn verify_at_jwt_get_sub(provider: &OidcProvider, token: &str) -> Result<String, AppError> {
-    use jsonwebtoken::{Algorithm, DecodingKey, Header, Validation};
+    use jsonwebtoken::{Algorithm, Validation};
 
     // Peek at the header to get kid and validate typ
     let header = jsonwebtoken::decode_header(token)

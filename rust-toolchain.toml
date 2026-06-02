@@ -1,10 +1,16 @@
-# Pin the Rust toolchain so CI is decoupled from the rolling runner image
-# (vars.RUNS_ON_OPENSUSE_BASE_LATEST). The Rust 1.94 bump on the runner
-# promoted several clippy nits to default-warn (manual_clamp, unnecessary_map_or,
-# field_reassign_with_default, ...) and tightened rustfmt's wrap heuristics,
-# which turned every previously-clean file in the repo into a CI failure. Pin
-# to a known-good channel and bump deliberately when you're ready to address
-# the new lints in one focused PR.
+# Pin the Rust toolchain so CI, local checks, and the rust-builder images all
+# agree on one compiler.
+#
+# The pin is the EXACT patch version shipped in the
+# ghcr.io/niceguyit/rust-builder-*:v1.0.0-rust1.94-* images, deliberately:
+# rustup resolves an exact pin to the image's preinstalled toolchain with no
+# network access, whereas a partial pin ("1.94") resolves to the latest
+# upstream patch and forces a download whenever upstream moves ahead of the
+# image. This means the pin MUST be bumped in lockstep with the rust-builder
+# image tag: when the image moves (e.g. to a rust1.95 tag or a rebuilt
+# rust1.94 with a newer patch), update this channel in the same PR and fix any
+# newly-promoted clippy/rustfmt lints there too (BUNYIP-36 did exactly that
+# for the 1.93 -> 1.94.1 move).
 [toolchain]
-channel = "1.93.0"
+channel = "1.94.1"
 components = ["clippy", "rustfmt"]

@@ -176,7 +176,6 @@ async fn build_download_group(
 }
 
 /// GET /v1/applications/{slug}/downloads/{asset_name}
-#[allow(clippy::too_many_arguments)]
 pub async fn download_asset(
     req: HttpRequest,
     user: MemberUser,

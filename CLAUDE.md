@@ -44,6 +44,22 @@ is also bunyip's OIDC issuer (it serves `/.well-known/*` + `/oauth2/*`).
 Production runs the published images via `compose.yml` (api + web + postgres,
 images under `dev.a8n.run/psa-systems-private/{bunyip-api,bunyip-web}`).
 
+## Toolchain / checks on toolchain-less dev boxes
+
+The canonical Rust toolchain is pinned in `rust-toolchain.toml` (currently
+1.94.1, matching the `ghcr.io/niceguyit/rust-builder-*:v1.0.0-rust1.94-*`
+images and CI). Bumping it means fixing any newly-promoted clippy/rustfmt
+lints in the same PR so `just check` stays green everywhere.
+
+Dev boxes have **no local Rust toolchain**, so run `just check-container`. It
+wraps fmt + clippy + workspace lib tests in the pinned rust-builder image with
+named cache volumes for the cargo registry and target dir (so repeated runs
+stay incremental).
+
+The image's rustup honours `rust-toolchain.toml`, so the pin (not the image
+default) decides the compiler version. CI (`.forgejo/workflows/check.yml`)
+runs the same fmt/clippy/build/test sequence on every PR and push to main.
+
 ## Critical conventions
 
 - **sqlx**: only `bunyip-oidc` uses compile-time `sqlx::query!` macros. They resolve against the workspace-root `.sqlx/` offline cache; build with `SQLX_OFFLINE=true` (the justfile/Dockerfiles set it). After changing those queries, regenerate `.sqlx/` and commit it.

@@ -454,6 +454,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::env_lock;
 
     #[test]
     fn test_suspicious_patterns_scripting_extensions() {
@@ -578,6 +579,9 @@ mod tests {
 
     #[test]
     fn test_auto_ban_config_defaults() {
+        // AUTO_BAN_* is also read by Config::from_env (config.rs tests), so
+        // mutating it requires the crate-wide env lock.
+        let _env = env_lock();
         // Clear env vars to test defaults
         std::env::remove_var("AUTO_BAN_ENABLED");
         std::env::remove_var("AUTO_BAN_THRESHOLD");

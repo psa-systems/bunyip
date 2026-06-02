@@ -449,7 +449,7 @@ impl OidcProvider {
                 None
             },
             has_member_access: if include_profile {
-                Some(user_has_member_access(user))
+                Some(user.is_access_allowed())
             } else {
                 None
             },
@@ -559,8 +559,8 @@ impl OidcProvider {
 
         // Expiry checks
         let now = Utc::now();
-        let idle_exp: DateTime<Utc> = old.idle_expires_at.into();
-        let abs_exp: DateTime<Utc> = old.absolute_expires_at.into();
+        let idle_exp: DateTime<Utc> = old.idle_expires_at;
+        let abs_exp: DateTime<Utc> = old.absolute_expires_at;
         if now > idle_exp || now > abs_exp {
             return Err(AppError::OidcInvalidGrant("refresh token expired".into()));
         }
@@ -998,13 +998,4 @@ fn sha256_bytes(input: &[u8]) -> Vec<u8> {
     let mut h = Sha256::new();
     h.update(input);
     h.finalize().to_vec()
-}
-
-/// Whether a User has active member access.
-fn user_has_member_access(user: &User) -> bool {
-    user.role == "admin"
-        || user.lifetime_member
-        || user.trial_ends_at.map_or(false, |t| t > Utc::now())
-        || user.membership_status == "active"
-        || user.membership_status == "grace_period"
 }

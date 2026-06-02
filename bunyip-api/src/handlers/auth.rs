@@ -119,11 +119,7 @@ pub async fn register(
     crate::validation::validate_email(&body.email)?;
 
     auth_service
-        .register(
-            body.email.clone(),
-            body.password.clone(),
-            ip_address.clone(),
-        )
+        .register(body.email.clone(), body.password.clone(), ip_address)
         .await?;
 
     // Generate tokens so the user is logged in immediately

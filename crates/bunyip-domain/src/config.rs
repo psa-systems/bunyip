@@ -497,8 +497,7 @@ impl OidcConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(600)
-                .min(900)
-                .max(60),
+                .clamp(60, 900),
             refresh_token_ttl_secs: env::var("OIDC_REFRESH_TOKEN_TTL_SECONDS")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -696,10 +695,14 @@ pub enum ConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Crate-wide lock serializing env-var-mutating tests (BUNYIP-36); every
+    // test below that touches process env must hold it.
+    use crate::test_support::env_lock;
     use std::env;
 
     #[test]
     fn test_config_defaults() {
+        let _env = env_lock();
         // Set required env vars
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
         // Use development to avoid requiring TOTP_ENCRYPTION_KEY
@@ -781,6 +784,7 @@ mod tests {
 
     #[test]
     fn download_config_defaults_when_forgejo_unset() {
+        let _env = env_lock();
         env::remove_var("FORGEJO_BASE_URL");
         env::remove_var("FORGEJO_API_TOKEN");
         env::remove_var("DOWNLOAD_CACHE_DIR");
@@ -800,6 +804,7 @@ mod tests {
 
     #[test]
     fn download_config_enabled_when_forgejo_set() {
+        let _env = env_lock();
         env::set_var("FORGEJO_BASE_URL", "https://git.example.com");
         env::set_var("FORGEJO_API_TOKEN", "test-token");
         let cfg = DownloadConfig::from_env();
@@ -834,6 +839,7 @@ mod tests {
 
     #[test]
     fn oci_config_defaults() {
+        let _env = env_lock();
         env::remove_var("OCI_REGISTRY_ENABLED");
         env::remove_var("OCI_REGISTRY_PORT");
         env::remove_var("OCI_REGISTRY_SERVICE");
@@ -938,6 +944,7 @@ mod tests {
 
     #[test]
     fn oci_config_enabled_when_set() {
+        let _env = env_lock();
         env::set_var("OCI_REGISTRY_ENABLED", "true");
         let cfg = OciConfig::from_env();
         assert!(cfg.enabled);

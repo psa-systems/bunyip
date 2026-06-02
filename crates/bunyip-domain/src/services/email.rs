@@ -367,17 +367,6 @@ impl EmailService {
         context
     }
 
-    fn feedback_excerpt(message: &str) -> String {
-        let normalized = message.split_whitespace().collect::<Vec<_>>().join(" ");
-        let mut chars = normalized.chars();
-        let excerpt: String = chars.by_ref().take(180).collect();
-        if chars.next().is_some() {
-            format!("{excerpt}...")
-        } else {
-            excerpt
-        }
-    }
-
     /// Send magic link email
     pub async fn send_magic_link(&self, email: &str, token: &str) -> Result<(), AppError> {
         let magic_link_url = format!("{}/magic-link?token={}", self.config.base_url, token);
@@ -800,46 +789,5 @@ impl EmailService {
 impl Default for EmailService {
     fn default() -> Self {
         Self::new_dev()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn feedback_excerpt_short_message() {
-        let msg = "This is a short message.";
-        assert_eq!(EmailService::feedback_excerpt(msg), msg);
-    }
-
-    #[test]
-    fn feedback_excerpt_empty() {
-        assert_eq!(EmailService::feedback_excerpt(""), "");
-    }
-
-    #[test]
-    fn feedback_excerpt_exactly_180_chars() {
-        let msg = "a".repeat(180);
-        assert_eq!(EmailService::feedback_excerpt(&msg), msg);
-    }
-
-    #[test]
-    fn feedback_excerpt_truncates_at_181() {
-        let msg = "a".repeat(200);
-        let result = EmailService::feedback_excerpt(&msg);
-        assert_eq!(result.len(), 183); // 180 + "..."
-        assert!(result.ends_with("..."));
-    }
-
-    #[test]
-    fn feedback_excerpt_normalizes_whitespace() {
-        let msg = "hello   world\t\tfoo\n\nbar";
-        assert_eq!(EmailService::feedback_excerpt(msg), "hello world foo bar");
-    }
-
-    #[test]
-    fn feedback_excerpt_whitespace_only() {
-        assert_eq!(EmailService::feedback_excerpt("   \t\n  "), "");
     }
 }
