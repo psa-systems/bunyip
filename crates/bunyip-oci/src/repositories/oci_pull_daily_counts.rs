@@ -65,6 +65,10 @@ impl OciPullDailyCountRepository {
 }
 
 /// Wire the Postgres repository to the engine's counter trait.
+///
+/// `PullCounter` is dunite-core's generic `UsageCounter` (re-exported by
+/// dunite-oci), so only `increment` / `decrement` are part of the trait;
+/// `current` stays as an inherent method for tests and diagnostics.
 #[async_trait]
 impl dunite_oci::store::PullCounter for OciPullDailyCountRepository {
     async fn increment(&self, user_id: Uuid, day: NaiveDate) -> Result<i32, AppError> {
@@ -73,10 +77,6 @@ impl dunite_oci::store::PullCounter for OciPullDailyCountRepository {
 
     async fn decrement(&self, user_id: Uuid, day: NaiveDate) -> Result<(), AppError> {
         OciPullDailyCountRepository::decrement(self, user_id, day).await
-    }
-
-    async fn current(&self, user_id: Uuid, day: NaiveDate) -> Result<i32, AppError> {
-        OciPullDailyCountRepository::current(self, user_id, day).await
     }
 }
 

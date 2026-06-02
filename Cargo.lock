@@ -1263,7 +1263,7 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 [[package]]
 name = "dunite-core"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#72c26d34a2224fd216bb14de9c9585e7187c3e57"
+source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#269ee30b9f00b81c43800d8d9945abc137ac4489"
 dependencies = [
  "actix-web",
  "aes-gcm",
@@ -1285,7 +1285,7 @@ dependencies = [
 [[package]]
 name = "dunite-download"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#72c26d34a2224fd216bb14de9c9585e7187c3e57"
+source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#269ee30b9f00b81c43800d8d9945abc137ac4489"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1310,7 +1310,7 @@ dependencies = [
 [[package]]
 name = "dunite-oci"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#72c26d34a2224fd216bb14de9c9585e7187c3e57"
+source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#269ee30b9f00b81c43800d8d9945abc137ac4489"
 dependencies = [
  "actix-web",
  "async-trait",
@@ -1337,7 +1337,7 @@ dependencies = [
 [[package]]
 name = "dunite-oidc"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#72c26d34a2224fd216bb14de9c9585e7187c3e57"
+source = "git+https://dev.a8n.run/psa-systems/dunite?branch=main#269ee30b9f00b81c43800d8d9945abc137ac4489"
 dependencies = [
  "base64 0.21.7",
  "dunite-core",
