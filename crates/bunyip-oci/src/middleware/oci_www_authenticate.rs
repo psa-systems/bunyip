@@ -58,13 +58,27 @@ where
         Box::pin(async move {
             let mut resp = fut.await?;
             if resp.status() == actix_web::http::StatusCode::UNAUTHORIZED {
+                // The realm is configurable (OCI_REGISTRY_REALM) so local /
+                // plain-HTTP deployments can point Docker at a reachable token
+                // endpoint; it defaults to https://{service}/auth/token.
                 let header = format!(
-                    "Bearer realm=\"https://{service}/auth/token\",service=\"{service}\"",
+                    "Bearer realm=\"{realm}\",service=\"{service}\"",
+                    realm = cfg.realm_url(),
                     service = cfg.service
                 );
-                if let Ok(hv) = actix_web::http::header::HeaderValue::from_str(&header) {
-                    resp.headers_mut()
-                        .insert(actix_web::http::header::WWW_AUTHENTICATE, hv);
+                match actix_web::http::header::HeaderValue::from_str(&header) {
+                    Ok(hv) => {
+                        resp.headers_mut()
+                            .insert(actix_web::http::header::WWW_AUTHENTICATE, hv);
+                    }
+                    // Unreachable when OciConfig::validate() ran at startup;
+                    // log loudly rather than silently dropping the header
+                    // (docker login cannot work without it).
+                    Err(e) => tracing::error!(
+                        error = %e,
+                        header = %header,
+                        "failed to build WWW-Authenticate header; docker login will fail"
+                    ),
                 }
             }
             Ok(resp.map_into_left_body())

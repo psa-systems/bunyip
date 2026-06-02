@@ -230,6 +230,19 @@ pub async fn get_blob(
                 _ => OciError::Upstream,
             };
             if matches!(mapped, OciError::Upstream) {
+                // The engine flattens the underlying cause (upstream status,
+                // filesystem error) into the AppError string; surface it in
+                // the logs so operators do not need the audit table to
+                // diagnose. An Upstream(401)/Upstream(403) in the string
+                // means Forgejo rejected the service credentials; check
+                // FORGEJO_API_TOKEN and its read:package scope. (Typed
+                // errors through the blob path are tracked in PSA-35.)
+                tracing::error!(
+                    error = ?e,
+                    slug = %slug,
+                    digest = %digest,
+                    "blob fetch failed; see error for the upstream/filesystem cause"
+                );
                 audit_failed_upstream(
                     pool.get_ref(),
                     &req,
@@ -274,6 +287,18 @@ pub async fn push_not_supported() -> Result<HttpResponse, OciError> {
 fn map_reg_err(e: &RegistryError) -> OciError {
     match e {
         RegistryError::NotFound => OciError::ManifestUnknown,
+        // 401/403 from Forgejo means OUR service credentials were rejected,
+        // not the member's. Surface a precise operator diagnostic; the member
+        // still sees a generic upstream error.
+        RegistryError::Upstream(status @ (401 | 403)) => {
+            tracing::error!(
+                status,
+                "upstream Forgejo rejected the registry service credentials; \
+                 verify FORGEJO_API_TOKEN is valid and has the read:package scope \
+                 for the configured owner/image"
+            );
+            OciError::Upstream
+        }
         _ => OciError::Upstream,
     }
 }

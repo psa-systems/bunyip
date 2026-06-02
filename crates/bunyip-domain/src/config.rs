@@ -340,6 +340,11 @@ pub struct OciConfig {
     pub enabled: bool,
     pub port: u16,
     pub service: String,
+    /// Full token-endpoint realm URL advertised in `WWW-Authenticate`.
+    /// Defaults to `https://{service}/auth/token`. Override for deployments
+    /// where the registry is not served over HTTPS on the service hostname
+    /// (e.g. local verification: `http://localhost:18081/auth/token`).
+    pub realm: Option<String>,
     pub blob_cache_dir: String,
     pub blob_cache_max_bytes: u64,
     pub manifest_cache_ttl_secs: u64,
@@ -349,6 +354,47 @@ pub struct OciConfig {
 }
 
 impl OciConfig {
+    /// The realm URL Docker clients must hit to exchange credentials for a
+    /// registry bearer token.
+    pub fn realm_url(&self) -> String {
+        self.realm
+            .clone()
+            .unwrap_or_else(|| format!("https://{}/auth/token", self.service))
+    }
+
+    /// Validate the realm/service pair. Called at startup when the registry is
+    /// enabled so misconfiguration fails fast instead of surfacing as opaque
+    /// docker-login failures.
+    ///
+    /// Hard errors: a realm that is not a valid URL, or one containing quotes
+    /// or control characters (it is interpolated into a quoted
+    /// `WWW-Authenticate` header value, where such characters produce a
+    /// malformed or silently-dropped header). A realm host that differs from
+    /// the service host is only a warning: split-horizon setups exist, but it
+    /// is almost always a mistake.
+    pub fn validate(&self) -> Result<(), String> {
+        let realm = self.realm_url();
+        if realm.chars().any(|c| c == '"' || c.is_control()) {
+            return Err(format!(
+                "OCI registry realm contains quotes or control characters: {realm:?}"
+            ));
+        }
+        let parsed = url::Url::parse(&realm)
+            .map_err(|e| format!("OCI registry realm is not a valid URL ({realm}): {e}"))?;
+
+        let realm_host = parsed.host_str().unwrap_or("");
+        let service_host = self.service.split(':').next().unwrap_or("");
+        if !service_host.is_empty() && realm_host != service_host {
+            tracing::warn!(
+                realm = %realm,
+                service = %self.service,
+                "OCI realm host does not match OCI_REGISTRY_SERVICE; docker clients will \
+                 be told to fetch tokens from a different host than the registry they use"
+            );
+        }
+        Ok(())
+    }
+
     pub fn from_env() -> Self {
         Self {
             enabled: env::var("OCI_REGISTRY_ENABLED")
@@ -360,6 +406,9 @@ impl OciConfig {
                 .unwrap_or(18081),
             service: env::var("OCI_REGISTRY_SERVICE")
                 .unwrap_or_else(|_| "oci.example.com".to_string()),
+            realm: env::var("OCI_REGISTRY_REALM")
+                .ok()
+                .filter(|s| !s.is_empty()),
             blob_cache_dir: env::var("OCI_BLOB_CACHE_DIR")
                 .unwrap_or_else(|_| "/var/cache/bunyip-oci".to_string()),
             blob_cache_max_bytes: env::var("OCI_BLOB_CACHE_MAX_BYTES")
@@ -789,6 +838,69 @@ mod tests {
         assert_eq!(cfg.concurrent_manifests_per_user, 2);
         assert_eq!(cfg.pulls_per_user_per_day, 50);
         assert_eq!(cfg.token_ttl_secs, 900);
+    }
+
+    // Realm assertions live in ONE self-contained test module (and
+    // OCI_REGISTRY_REALM is touched by no env-var test) to avoid the parallel
+    // env-var races tracked in BUNYIP-36. All assertions are computed from
+    // explicit structs, never from process env.
+    fn oci_cfg(service: &str, realm: Option<&str>) -> OciConfig {
+        OciConfig {
+            enabled: false,
+            port: 18081,
+            service: service.to_string(),
+            realm: realm.map(str::to_string),
+            blob_cache_dir: String::new(),
+            blob_cache_max_bytes: 0,
+            manifest_cache_ttl_secs: 0,
+            concurrent_manifests_per_user: 0,
+            pulls_per_user_per_day: 0,
+            token_ttl_secs: 0,
+        }
+    }
+
+    #[test]
+    fn oci_config_realm_default_and_override() {
+        let cfg = oci_cfg("registry.example.com", None);
+        assert_eq!(cfg.realm_url(), "https://registry.example.com/auth/token");
+
+        let with_override = oci_cfg(
+            "registry.example.com",
+            Some("http://localhost:18081/auth/token"),
+        );
+        assert_eq!(
+            with_override.realm_url(),
+            "http://localhost:18081/auth/token"
+        );
+    }
+
+    #[test]
+    fn oci_config_validate_accepts_sane_configs() {
+        // Default realm derived from the service host.
+        assert!(oci_cfg("registry.example.com", None).validate().is_ok());
+        // Explicit realm on the same host, different port (dev: localhost).
+        assert!(
+            oci_cfg("localhost:18081", Some("http://localhost:18081/auth/token"))
+                .validate()
+                .is_ok()
+        );
+        // Mismatched hosts only warn; still Ok.
+        assert!(oci_cfg(
+            "registry.example.com",
+            Some("https://auth.example.com/token")
+        )
+        .validate()
+        .is_ok());
+    }
+
+    #[test]
+    fn oci_config_validate_rejects_malformed_realms() {
+        // Not a URL.
+        assert!(oci_cfg("svc", Some("not a url")).validate().is_err());
+        // Embedded double quote would break the WWW-Authenticate header.
+        assert!(oci_cfg("svc", Some("https://h/\"evil")).validate().is_err());
+        // Control character (e.g. stray CR from a mis-edited .env).
+        assert!(oci_cfg("svc", Some("https://h/auth\r")).validate().is_err());
     }
 
     #[test]

@@ -111,6 +111,85 @@ dev-clean:
     {{ compose }}down --volumes
     [".env"] | where ($it | path exists) | each {|f| rm $f; print $"Removed ($f)" } | ignore
 
+# Automated OCI registry verification against the running dev stack (BUNYIP-31).
+# Prerequisites: `just dev-detach` already up with the distribution proxy enabled
+# in .env (FORGEJO_BASE_URL, FORGEJO_API_TOKEN, OCI_REGISTRY_ENABLED=true) and a
+# published image to pull. Runs the docker login/pull matrix from
+# dev-docs/oci-registry-verification.md and exits non-zero on the first failure.
+[group: 'dev']
+verify-oci slug="bunyip-api" owner="psa-systems-private" image="bunyip-api" tag="v0.1.1":
+    #!/usr/bin/env nu
+    let user_name = (^whoami | str trim)
+    let api_container = $"dev-bunyip-api-($user_name)"
+    let pg_container = $"dev-bunyip-postgres-($user_name)"
+
+    # Pull connection details out of .env (never printed).
+    let env_vars = (
+        open .env | lines
+        | where $it !~ '^#'
+        | where ($it | is-not-empty)
+        | parse '{name}={value}'
+        | transpose --header-row --as-record
+    )
+    let port = (try { $env_vars | get BUNYIP_OCI_PORT } catch { "18081" })
+    let registry = $"localhost:($port)"
+    let admin = (
+        try { $env_vars | get SETUP_DEFAULT_ADMIN } catch {
+            print "FAIL: SETUP_DEFAULT_ADMIN missing from .env (needed for docker login)"
+            exit 1
+        }
+    )
+    let admin_email = ($admin | split row ':' | first)
+    let admin_pass = ($admin | split row ':' | skip 1 | str join ':')
+
+    print $"== OCI registry verification against ($registry) =="
+
+    # Stack must be up.
+    if (do { ^docker inspect $api_container } | complete | get exit_code) != 0 {
+        print $"FAIL: ($api_container) is not running. Run `just dev-detach` first."
+        exit 1
+    }
+
+    # Seed (or repoint) the application row the registry serves.
+    ^docker exec $pg_container psql --username bunyip --dbname bunyip --quiet --command $"
+        INSERT INTO applications \(name, slug, display_name, container_name, oci_image_owner, oci_image_name, pinned_image_tag\)
+        VALUES \('{{ slug }}', '{{ slug }}', '{{ slug }}', 'unused', '{{ owner }}', '{{ image }}', '{{ tag }}'\)
+        ON CONFLICT \(slug\) DO UPDATE
+            SET oci_image_owner = '{{ owner }}', oci_image_name = '{{ image }}', pinned_image_tag = '{{ tag }}';"
+    print "seeded application row"
+
+    # 1. Unauthenticated probe must 401 with a WWW-Authenticate challenge.
+    let probe = (^curl --silent --include $"http://($registry)/v2/" | str join "\n")
+    if not ($probe | str contains "401") { print "FAIL: GET /v2/ did not return 401"; exit 1 }
+    if not ($probe | str downcase | str contains "www-authenticate") {
+        print "FAIL: 401 response is missing the WWW-Authenticate challenge"; exit 1
+    }
+    print "PASS: /v2/ auth challenge"
+
+    # 2. docker login with the admin member credentials.
+    $admin_pass | ^docker login $registry --username $admin_email --password-stdin
+    print "PASS: docker login"
+
+    # 3. Entitled pull of the pinned tag.
+    ^docker pull $"($registry)/{{ slug }}:{{ tag }}"
+    print "PASS: entitled pull (pinned tag)"
+
+    # 4. A non-pinned tag must be refused.
+    let wrong = (do { ^docker pull $"($registry)/{{ slug }}:not-the-pinned-tag" } | complete)
+    if $wrong.exit_code == 0 { print "FAIL: pull of a non-pinned tag succeeded"; exit 1 }
+    print "PASS: pinned-tag enforcement"
+
+    # 5. Second pull exercises the blob cache (rows touched, no re-fetch).
+    ^docker rmi $"($registry)/{{ slug }}:{{ tag }}" out> /dev/null
+    ^docker pull $"($registry)/{{ slug }}:{{ tag }}" out> /dev/null
+    print "PASS: second pull (blob cache)"
+
+    # Cleanup: remove the test image and registry credentials.
+    ^docker rmi $"($registry)/{{ slug }}:{{ tag }}" out> /dev/null
+    ^docker logout $registry out> /dev/null
+    print ""
+    print "== All OCI verification checks passed =="
+
 # Tail all logs.
 [group: 'dev']
 dev-logs: ensure-env
