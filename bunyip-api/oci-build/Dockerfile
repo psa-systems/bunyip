@@ -122,7 +122,11 @@ COPY --from=builder /build/target/release/bunyip-api /app/bunyip-api
 COPY --from=builder /build/bunyip-api/migrations /app/migrations
 COPY --from=builder /build/crates/bunyip-domain/templates /app/templates
 
-RUN chown -R appuser:appuser /app
+# Distribution cache dirs: pre-created WITH ownership so named volumes mounted
+# here inherit it on first use; root-owned mounts would fail every blob/asset
+# write with Permission denied (found during BUNYIP-31 verification).
+RUN mkdir -p /var/cache/bunyip-oci /var/cache/bunyip-downloads \
+ && chown -R appuser:appuser /app /var/cache/bunyip-oci /var/cache/bunyip-downloads
 USER appuser
 
 LABEL org.opencontainers.image.source=https://dev.a8n.run/psa-systems/bunyip \

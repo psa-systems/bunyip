@@ -135,15 +135,41 @@ just dev-down
 
 ## Findings log
 
+Verified 2026-06-02 against dev.a8n.run (Forgejo), image
+`psa-systems-private/bunyip-api:v0.1.1`, on the dev stack (`just dev-detach`).
+
 | Date | Item | Result |
 |------|------|--------|
-| | docker login via token endpoint | |
-| | docker pull (single-arch manifest) | |
-| | multi-arch index passthrough | |
-| | blob cache hit on second pull | |
-| | NAME_UNKNOWN / DENIED envelopes | |
-| | rate-limit TOOMANYREQUESTS + Retry-After | |
-| | Forgejo basic-auth with empty username accepted | |
+| 2026-06-02 | docker login via token endpoint | PASS (admin member; token TTL 900s) |
+| 2026-06-02 | docker pull (pinned tag) | PASS (8 layers, ~4s first pull) |
+| 2026-06-02 | multi-arch index passthrough | PASS (index digest -> child manifests by digest -> blobs) |
+| 2026-06-02 | blob cache hit on second pull | PASS (oci_blob_cache rows touched, not re-fetched; 9 blobs / 44 MB) |
+| 2026-06-02 | pinned-tag enforcement (other tag) | PASS (MANIFEST_UNKNOWN) |
+| 2026-06-02 | NAME_UNKNOWN envelope (unknown repo) | PASS |
+| 2026-06-02 | bad credentials rejected | PASS (and the 5/min/email login rate limit fires -> docker shows "toomanyrequests") |
+| 2026-06-02 | non-member denied | PASS (401; audit reason no_active_membership) |
+| 2026-06-02 | Forgejo basic-auth with empty username accepted | PASS (manifests + blobs; caveat below resolved) |
+| 2026-06-02 | OCI audit trail | PASS (oci_login_failed / oci_pull_requested / oci_pull_completed rows) |
+| not tested | daily pull cap TOOMANYREQUESTS + Retry-After | covered by dunite-oci unit tests; needs a low-limit restart to exercise live |
+
+### Bugs found during verification
+
+1. **Root-owned cache volumes break every blob fetch (fixed).** Fresh named
+   volumes mounted at `/var/cache/bunyip-oci` / `/var/cache/bunyip-downloads`
+   are created root-owned; the api container runs as the host user, so every
+   blob write failed with Permission denied, surfacing to docker as 502 on all
+   blobs (manifests, which are memory-cached, still worked). Fixed by
+   pre-creating the cache dirs WITH ownership in both the dev and production
+   api Dockerfiles, so first-mount volume initialization inherits it.
+2. **dunite-oci flattens blob-fetch errors** (the Permission denied above
+   surfaced as a generic "Upstream"/502 with no diagnostic anywhere). Same
+   error-fidelity problem that dunite-download fixed in review; tracked in
+   PSA-35.
+3. **bunyip-web dev container is broken** (pre-existing, unrelated to OCI):
+   `bun` lives in `/root/.bun` inside the builder image and the container runs
+   as the host user -> "bun: Permission denied" crash loop. Needs its own fix.
+4. Cosmetic: the OCI server sends HSTS / CSP headers (SecurityHeaders
+   middleware) on plain-HTTP responses; harmless for docker clients.
 
 ## Production notes (input to BUNYIP-32)
 
@@ -155,8 +181,11 @@ just dev-down
   bodies (images can be hundreds of MB).
 - The Forgejo service token is a secret: production uses the existing secret
   mechanism, never compose environment defaults.
-- Known engine caveat: bunyip authenticates to Forgejo's `/v2` API with HTTP
-  basic auth using an EMPTY username and the token as password
-  (`dunite-oci::ForgejoRegistryClient`). If verification shows Forgejo
-  rejecting this, the fix is to send the service-account username alongside
-  the token (engine change in dunite-oci).
+- The production runtime image must pre-create `/var/cache/bunyip-oci` and
+  `/var/cache/bunyip-downloads` owned by `appuser` (it does, as of BUNYIP-31)
+  so the production volumes mounted there are writable. Mount NAMED volumes at
+  those paths; a host bind-mount does NOT inherit image ownership and must be
+  chowned to the container uid by the operator.
+- RESOLVED caveat: Forgejo accepts the engine's basic auth with an empty
+  username and the token as password, for both manifests and blobs. No engine
+  change needed.
