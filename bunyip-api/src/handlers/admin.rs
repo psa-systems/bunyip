@@ -15,9 +15,9 @@ use crate::errors::AppError;
 use crate::middleware::{AdminUser, AuthenticatedUser};
 use crate::models::stripe::encrypt_secret;
 use crate::models::{
-    Application, AuditAction, CreateApplication, CreateAuditLog, CreatePasswordResetToken,
-    CreateRefreshToken, DeleteApplicationRequest, MembershipStatus, StripeConfigResponse,
-    SwapApplicationOrderRequest, UpdateApplication, UserResponse, ARTIFACT_SOURCE_GENERIC_PACKAGE,
+    AuditAction, CreateApplication, CreateAuditLog, CreatePasswordResetToken, CreateRefreshToken,
+    DeleteApplicationRequest, MembershipStatus, StripeConfigResponse, SwapApplicationOrderRequest,
+    UpdateApplication, UserResponse,
 };
 use crate::repositories::{
     ApplicationRepository, AuditLogRepository, InviteRepository, NotificationRepository,
@@ -504,84 +504,11 @@ pub async fn update_application(
         .await?
         .ok_or(AppError::not_found("Application"))?;
 
-    // Validate artifact_source against the allowed set BEFORE the update, so a
-    // bad value is a clean 400 instead of a DB CHECK-constraint 500.
-    if let Some(source) = body.artifact_source.as_deref() {
-        if !Application::valid_artifact_source(source) {
-            return Err(AppError::validation(
-                "artifact_source",
-                "artifact_source must be 'release' or 'generic_package'",
-            ));
-        }
-    }
-
-    // Source-aware Forgejo download validation on merged values:
-    // - release sources need owner + repo + tag
-    // - generic_package sources need owner + (package or repo) + tag
-    let merged_owner = body
-        .forgejo_owner
-        .as_ref()
-        .or(old_app.forgejo_owner.as_ref());
-    let merged_repo = body.forgejo_repo.as_ref().or(old_app.forgejo_repo.as_ref());
-    let merged_package = body
-        .forgejo_package
-        .as_ref()
-        .filter(|p| !p.is_empty())
-        .or(old_app.forgejo_package.as_ref());
-    let merged_tag = body
-        .pinned_release_tag
-        .as_ref()
-        .or(old_app.pinned_release_tag.as_ref());
-    let merged_source = body
-        .artifact_source
-        .as_deref()
-        .unwrap_or(old_app.artifact_source.as_str());
-    let is_generic_package = merged_source == ARTIFACT_SOURCE_GENERIC_PACKAGE;
-
-    let forgejo_any = merged_owner.is_some()
-        || merged_repo.is_some()
-        || merged_package.is_some()
-        || merged_tag.is_some();
-    let forgejo_all = merged_owner.is_some()
-        && merged_tag.is_some()
-        && if is_generic_package {
-            merged_package.is_some() || merged_repo.is_some()
-        } else {
-            merged_repo.is_some()
-        };
-    if forgejo_any && !forgejo_all {
-        return Err(AppError::validation(
-            "forgejo",
-            if is_generic_package {
-                "generic_package downloads need forgejo_owner, pinned_release_tag, and forgejo_package (or forgejo_repo) set together"
-            } else {
-                "forgejo_owner, forgejo_repo, and pinned_release_tag must all be set together"
-            },
-        ));
-    }
-
-    // All-or-nothing OCI validation on merged values
-    let merged_oci_owner = body
-        .oci_image_owner
-        .as_ref()
-        .or(old_app.oci_image_owner.as_ref());
-    let merged_oci_name = body
-        .oci_image_name
-        .as_ref()
-        .or(old_app.oci_image_name.as_ref());
-    let merged_oci_tag = body
-        .pinned_image_tag
-        .as_ref()
-        .or(old_app.pinned_image_tag.as_ref());
-    let oci_any =
-        merged_oci_owner.is_some() || merged_oci_name.is_some() || merged_oci_tag.is_some();
-    let oci_all =
-        merged_oci_owner.is_some() && merged_oci_name.is_some() && merged_oci_tag.is_some();
-    if oci_any && !oci_all {
-        return Err(AppError::validation(
-            "oci",
-            "oci_image_owner, oci_image_name, and pinned_image_tag must all be set together",
-        ));
+    // Validate the MERGED distribution config (body values overlaid on the
+    // existing row) using the shared model rules, so a bad value is a clean
+    // 400 instead of a DB CHECK-constraint 500 and create/update cannot drift.
+    if let Err((field, message)) = body.distribution_merged(&old_app).validate() {
+        return Err(AppError::validation(field, &message));
     }
 
     // Capture the old artifact source before update for cache invalidation
@@ -708,6 +635,12 @@ pub async fn create_application(
         return Err(AppError::conflict(
             "An application with this slug already exists",
         ));
+    }
+
+    // Validate the distribution config (Forgejo downloads + OCI image) with
+    // the shared model rules, so a product can be fully created in one call.
+    if let Err((field, message)) = body.distribution().validate() {
+        return Err(AppError::validation(field, &message));
     }
 
     let app = ApplicationRepository::create(&pool, &body).await?;
@@ -2086,6 +2019,7 @@ mod tests {
             container_name: None,
             health_check_url: None,
             is_active: None,
+            is_hosted: None,
             maintenance_mode: None,
             maintenance_message: None,
             webhook_url: None,
