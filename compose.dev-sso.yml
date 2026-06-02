@@ -33,13 +33,17 @@ services:
     # syntax leaves a literal `${USER}` in the router name and the host fails to
     # route (default cert + 404). List form makes the whole "key=value" one
     # string value, so ${USER} interpolates. Mirrors mokosh-server's overlay.
-    # `nebula-secure` is the Nebula-published Traefik entrypoint (asDefault), so
-    # ${USER}-bunyip.a8n.run is reachable over the mesh like the other dev apps.
+    #
+    # Routers bind BOTH secure entrypoints because the dev boxes map :443 to
+    # different ones: dev-01's public :443 is `web-secure`, desktop-02's
+    # Nebula-published :443 is `nebula-secure`. A router bound to only one
+    # 404s on the other box (verified on dev-01, 2026-06-02; this was the
+    # runbook section 8 open item).
     labels:
       - traefik.enable=true
       - traefik.docker.network=network-traefik-public
       - traefik.http.routers.bunyip-${USER}.rule=Host(`${USER}-bunyip.a8n.run`)
-      - traefik.http.routers.bunyip-${USER}.entrypoints=nebula-secure
+      - traefik.http.routers.bunyip-${USER}.entrypoints=web-secure,nebula-secure
       - traefik.http.routers.bunyip-${USER}.tls.certresolver=cert-cloudflare
       - traefik.http.services.bunyip-${USER}.loadbalancer.server.port=4400
 
@@ -52,17 +56,13 @@ services:
       # Advertise the public Traefik hostname. The token realm is forced back
       # to its code default (https://<service>/auth/token) by clearing the
       # localhost realm that compose.dev.yml sets for plain `just dev`.
-      OCI_REGISTRY_SERVICE: ${USER}-bunyip-registry.a8n.run
+      OCI_REGISTRY_SERVICE: ${USER:?USER missing - run via just dev-sso}-bunyip-registry.a8n.run
       OCI_REGISTRY_REALM: ""
     networks:
       - private
       - traefik-public
-    # Same list-syntax requirement as the web service above (${USER} lives in
-    # the label keys). The router binds to BOTH secure entrypoints because the
-    # two dev boxes differ: on dev-01 the public :443 maps to `web-secure`,
-    # while on desktop-02 the Nebula-published :443 is `nebula-secure` (see the
-    # dev-sso runbook, section 8 open items). Binding both makes the registry
-    # reachable on either topology.
+    # Same list-syntax and dual-entrypoint requirements as the web service
+    # above (${USER} lives in the label keys; both boxes' :443 entrypoints).
     labels:
       - traefik.enable=true
       - traefik.docker.network=network-traefik-public

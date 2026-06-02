@@ -15,7 +15,7 @@ in production (you cannot do that on `localhost`).
 
 | Repo | Role | dev-sso hostname (user `long`) | Upstream port |
 | --- | --- | --- | --- |
-| `bunyip` | SaaS hub / account + billing UI; **its own OIDC issuer** (new) | `long-bunyip.a8n.run` | web 4400 (api 4401 internal) |
+| `bunyip` | SaaS hub / account + billing UI; **its own OIDC issuer** (new) | `long-bunyip.a8n.run` + `long-bunyip-registry.a8n.run` (OCI registry, sec 9) | web 4400; api 4401 internal, registry 18081 via Traefik |
 | `mokosh-server` | Identity provider (the OIDC issuer the SPA still points at) | `long-mokosh-api.a8n.run` | 4301 |
 | `mokosh-apps` | The PSA client SPA (relying party) | `long-mokosh.a8n.run` | 4301 |
 
@@ -289,21 +289,23 @@ The dev-sso overlay routes the bunyip OCI registry through Traefik on its own
 per-developer hostname, `<user>-bunyip-registry.a8n.run`, with a real
 certificate. Members (or you, testing) docker-login with bunyip credentials;
 bunyip fetches the actual images from the private Forgejo with a server-side
-service token. Full background: `dev-docs/oci-registry-verification.md`.
+service token. Procedures and configuration rules live in
+`dev-docs/oci-registry-verification.md` (which has a dedicated dev-sso
+section); this section covers only the dev-sso-specific wiring.
 
 ### Required .env additions
 
-```
-FORGEJO_BASE_URL=https://dev.a8n.run
-FORGEJO_API_TOKEN=<service token: read:package + read:repository>
-OCI_REGISTRY_ENABLED=true
-```
+The same distribution block documented in `.env.example` (Forgejo base URL,
+service token, `OCI_REGISTRY_ENABLED=true`). Do NOT set
+`OCI_REGISTRY_SERVICE` / `OCI_REGISTRY_REALM` for dev-sso: the overlay pins the
+service to `<user>-bunyip-registry.a8n.run` and clears the realm so it derives
+to `https://<service>/auth/token` (TLS via Traefik).
 
-Do NOT set `OCI_REGISTRY_SERVICE` / `OCI_REGISTRY_REALM` in `.env` for dev-sso:
-the overlay pins the service to `<user>-bunyip-registry.a8n.run` and clears the
-realm so it derives to `https://<service>/auth/token` (TLS via Traefik). Plain
-`just dev` (localhost, no TLS) still works at the same time on
-`localhost:18081`.
+The single api container serves both access paths at once: Traefik routes the
+registry hostname to it AND its localhost port stays published, so
+`localhost:18081` keeps working. (This is one container reachable two ways,
+not two stacks; a separate plain `just dev` cannot run concurrently with
+dev-sso - same container names and host ports.)
 
 ### How it is wired
 
@@ -321,11 +323,11 @@ realm so it derives to `https://<service>/auth/token` (TLS via Traefik). Plain
 
 ### Smoke test (on the dev box)
 
-```nu
-# A member user must exist (SETUP_DEFAULT_ADMIN works) and an application row
-# must point at a published image; `just verify-oci` seeds one for plain dev,
-# or insert it manually per dev-docs/oci-registry-verification.md step 2.
+Run `just verify-oci` first (covers the full matrix against `localhost:18081`,
+which the same container also serves). Then confirm the Traefik path:
 
+```nu
+# A member user + application row must exist; `just verify-oci` seeds them.
 let user_name = (^whoami | str trim)
 let registry = $"($user_name)-bunyip-registry.a8n.run"
 
@@ -333,14 +335,16 @@ let registry = $"($user_name)-bunyip-registry.a8n.run"
 ^curl --silent --include $"https://($registry)/v2/" | lines | where $it =~ "www-authenticate"
 # expect: Bearer realm="https://<user>-bunyip-registry.a8n.run/auth/token",service="..."
 
-# 2. Login + pull through Traefik
+# 2. Login + pull through Traefik (login prompts for the password; pipe it via
+#    --password-stdin when scripting)
 ^docker login $registry --username admin@bunyip.local
 ^docker pull $"($registry)/bunyip-api:v0.1.1"
-
-# 3. Binary download proxy (rides the api, no extra routing); needs a session:
-# log into the web UI and use /downloads, or exercise /v1/downloads with a
-# bearer token.
 ```
+
+The rest of the matrix (denials, cache hits, rate limits) is identical to the
+localhost procedure in `dev-docs/oci-registry-verification.md`. The binary
+download proxy rides the api with no extra routing; exercise it via the web UI
+/downloads page or `/v1/downloads` with a bearer token.
 
 ### Mac access
 

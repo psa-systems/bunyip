@@ -72,26 +72,18 @@ services:
       OIDC_JWT_ACTIVE_KID: ${OIDC_JWT_ACTIVE_KID:-dev-2026}
       OIDC_JWT_PUBLIC_KEYS_DIR: /run/secrets/oidc
       # ── Distribution proxy (member downloads + OCI registry, BUNYIP-28) ──
-      # Disabled until FORGEJO_BASE_URL + FORGEJO_API_TOKEN are set. The token
-      # is a Forgejo service-account secret (scopes: read:package +
-      # read:repository); set it in .env, never commit it. See
-      # dev-docs/oci-registry-verification.md for token generation.
+      # Disabled until FORGEJO_BASE_URL + FORGEJO_API_TOKEN are set in .env.
+      # Configuration rules, token scopes, and the reverse-proxy requirements
+      # live in ONE place: dev-docs/oci-registry-verification.md (Production
+      # notes). Every ${VAR} below is documented in .env.example.
       FORGEJO_BASE_URL: ${FORGEJO_BASE_URL:-}
       FORGEJO_API_TOKEN: ${FORGEJO_API_TOKEN:-}
       DOWNLOAD_CACHE_DIR: /var/cache/bunyip-downloads
       DOWNLOAD_CACHE_MAX_BYTES: ${DOWNLOAD_CACHE_MAX_BYTES:-10737418240}
-      # OCI registry proxy: members docker-login/pull through this instance.
-      # The registry answers on its own port (18081) and MUST be fronted by a
-      # TLS reverse proxy on its own hostname (docker clients require TLS).
-      # Set OCI_REGISTRY_SERVICE to that public hostname; the token realm then
-      # defaults to https://$OCI_REGISTRY_SERVICE/auth/token in code. Do NOT
-      # set OCI_REGISTRY_REALM unless the token endpoint genuinely lives on a
-      # different origin. The reverse proxy must route BOTH /v2/* and
-      # /auth/token on the registry hostname to this container's port 18081,
-      # without buffering or size-limiting response bodies (image layers are
-      # hundreds of MB).
       OCI_REGISTRY_ENABLED: ${OCI_REGISTRY_ENABLED:-false}
       OCI_REGISTRY_PORT: "18081"
+      # The public registry hostname behind the TLS reverse proxy. Required
+      # when OCI_REGISTRY_ENABLED=true (startup fails fast if empty).
       OCI_REGISTRY_SERVICE: ${OCI_REGISTRY_SERVICE:-}
       OCI_BLOB_CACHE_DIR: /var/cache/bunyip-oci
       OCI_BLOB_CACHE_MAX_BYTES: ${OCI_BLOB_CACHE_MAX_BYTES:-53687091200}
@@ -101,18 +93,18 @@ services:
       - "4401"
       - "18081"
     ports:
+      # NOTE: ${HOST_IP} here is the HOST-side publish interface (loopback by
+      # default, for the reverse proxy to consume). It is a DIFFERENT setting
+      # from the container env `HOST_IP: 0.0.0.0` above (the in-container bind
+      # address). Do not set HOST_IP=0.0.0.0 in .env unless you intend to
+      # publish these plaintext listeners on every host interface.
       - "${HOST_IP:-127.0.0.1}:${BUNYIP_API_PORT:-4401}:4401"
-      # OCI registry listener: published on loopback for the reverse proxy to
-      # consume (same pattern as the api port above).
       - "${HOST_IP:-127.0.0.1}:${BUNYIP_OCI_PORT:-18081}:18081"
     volumes:
       - ./secrets:/run/secrets/oidc:ro
-      # Distribution caches MUST be NAMED volumes (not host bind-mounts): the
-      # image pre-creates these paths owned by the runtime user and a fresh
-      # named volume inherits that ownership on first use. A bind-mount stays
-      # root-owned and every blob/asset write fails (Permission denied -> 502
-      # on all pulls). If a bind-mount is unavoidable, chown the host directory
-      # to the container user (uid 1001) first.
+      # Distribution caches MUST be NAMED volumes, never host bind-mounts.
+      # Why + the bind-mount workaround: dev-docs/oci-registry-verification.md
+      # (Production notes).
       - oci-cache:/var/cache/bunyip-oci
       - download-cache:/var/cache/bunyip-downloads
     depends_on:
