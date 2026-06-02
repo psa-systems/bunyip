@@ -11,6 +11,15 @@ FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.0-rust1.94-trixie
 ARG CARGO_BUILD_JOBS=2
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
+# The base image ships /usr/local/bin/bun as a symlink into /root/.bun, which
+# non-root users cannot traverse (/root is mode 700). The container runs as the
+# host user (see USER below), so replace the symlink with a real copy or the
+# CMD's CSS build/watch fails with "bun: Permission denied" and the container
+# crash-loops (BUNYIP-37).
+RUN rm /usr/local/bin/bun \
+ && cp /root/.bun/bin/bun /usr/local/bin/bun \
+ && ln -s bun /usr/local/bin/bunx
+
 WORKDIR /app
 
 # Cache JS deps (tailwindcss). bun ships in the builder image. bunyip-web is a
