@@ -33,7 +33,10 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
     let fwd = c.forward.as_deref();
 
     let apps = calls::applications(&st.api, fwd).await.unwrap_or_default();
-    let stripe_enabled = auth_api::setup_status(&st.api).await.map(|s| s.stripe_enabled).unwrap_or(true);
+    let stripe_enabled = auth_api::setup_status(&st.api)
+        .await
+        .map(|s| s.stripe_enabled)
+        .unwrap_or(true);
     let is_member = has_active_membership(Some(&user));
     let tagline = TAGLINES[rotating_index(TAGLINES.len())];
     let base_domain = st.cfg.domain_or_localhost();
@@ -147,7 +150,8 @@ pub fn membership_badge(user: &User) -> Markup {
 }
 
 fn membership_prompt(user: &User) -> Markup {
-    let ended = user.trial_ends_at.is_some() || user.membership_status == MembershipStatus::Canceled;
+    let ended =
+        user.trial_ends_at.is_some() || user.membership_status == MembershipStatus::Canceled;
     html! {
         @if ended { "Your trial has ended - subscribe to continue." }
         @else { "Subscribe to get access to all applications." }
@@ -183,17 +187,25 @@ fn base_domain(st: &AppState) -> String {
     st.cfg.domain_or_localhost()
 }
 fn fmt_ts(ts: i64) -> String {
-    chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0).map(|d| d.format("%B %-d, %Y").to_string()).unwrap_or_default()
+    chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
+        .map(|d| d.format("%B %-d, %Y").to_string())
+        .unwrap_or_default()
 }
 fn fmt_date_iso(iso: &str) -> String {
-    chrono::DateTime::parse_from_rfc3339(iso).map(|d| d.format("%B %-d, %Y").to_string()).unwrap_or_else(|_| iso.to_string())
+    chrono::DateTime::parse_from_rfc3339(iso)
+        .map(|d| d.format("%B %-d, %Y").to_string())
+        .unwrap_or_else(|_| iso.to_string())
 }
 fn fmt_currency(cents: i64, currency: &str) -> String {
     format!("{} {:.2}", currency.to_uppercase(), cents as f64 / 100.0)
 }
 fn format_size(bytes: i64) -> String {
     let mb = bytes as f64 / 1_048_576.0;
-    if mb >= 1.0 { format!("{mb:.1} MB") } else { format!("{:.1} KB", bytes as f64 / 1024.0) }
+    if mb >= 1.0 {
+        format!("{mb:.1} MB")
+    } else {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    }
 }
 
 // ===========================================================================
@@ -201,10 +213,16 @@ fn format_size(bytes: i64) -> String {
 // ===========================================================================
 
 pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match guard(&st, &headers, "/applications").await { Ok(v) => v, Err(r) => return r };
+    let (user, c) = match guard(&st, &headers, "/applications").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let fwd = c.forward.as_deref();
     let apps = calls::applications(&st.api, fwd).await.unwrap_or_default();
-    let stripe = auth_api::setup_status(&st.api).await.map(|s| s.stripe_enabled).unwrap_or(true);
+    let stripe = auth_api::setup_status(&st.api)
+        .await
+        .map(|s| s.stripe_enabled)
+        .unwrap_or(true);
     let is_member = has_active_membership(Some(&user));
     let domain = base_domain(&st);
 
@@ -264,7 +282,10 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
 // ===========================================================================
 
 pub async fn downloads(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match guard(&st, &headers, "/downloads").await { Ok(v) => v, Err(r) => return r };
+    let (user, c) = match guard(&st, &headers, "/downloads").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let fwd = c.forward.as_deref();
     let has_membership = has_active_membership(Some(&user));
     let groups = calls::downloads_all(&st.api, fwd).await.unwrap_or_default();
@@ -310,7 +331,10 @@ pub async fn downloads(State(st): State<AppState>, headers: HeaderMap) -> Respon
 // ===========================================================================
 
 pub async fn billing(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match guard(&st, &headers, "/billing").await { Ok(v) => v, Err(r) => return r };
+    let (user, c) = match guard(&st, &headers, "/billing").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let fwd = c.forward.as_deref();
     let invoices = calls::invoices(&st.api, fwd).await.unwrap_or_default();
 
@@ -357,8 +381,15 @@ pub async fn billing(State(st): State<AppState>, headers: HeaderMap) -> Response
 
 pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) -> Response {
     // authenticate() already refreshed claims via /me; that picks up the new membership.
-    let (user, c) = match guard(&st, &headers, "/checkout/success").await { Ok(v) => v, Err(r) => return r };
-    let tier = match user.subscription_tier { SubscriptionTier::EarlyAdopter => "Early Adopter", SubscriptionTier::Lifetime => "Lifetime", _ => "Standard" };
+    let (user, c) = match guard(&st, &headers, "/checkout/success").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let tier = match user.subscription_tier {
+        SubscriptionTier::EarlyAdopter => "Early Adopter",
+        SubscriptionTier::Lifetime => "Lifetime",
+        _ => "Standard",
+    };
     let content = html! {
         div class="flex items-center justify-center min-h-[70vh]" {
             div class="rounded-lg border bg-card text-card-foreground shadow-sm max-w-lg w-full border-border/50 overflow-hidden" {
@@ -391,7 +422,10 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
 // ===========================================================================
 
 pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match guard(&st, &headers, "/membership-required").await { Ok(v) => v, Err(r) => return r };
+    let (user, c) = match guard(&st, &headers, "/membership-required").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let content = html! {
         div class="flex min-h-[60vh] items-center justify-center px-4" {
             div class="rounded-lg border bg-card text-card-foreground shadow-sm w-full max-w-md" {
@@ -410,7 +444,13 @@ pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap)
             }
         }
     };
-    dashboard_response(&c, &user, "/dashboard", "Membership required · Bunyip", content)
+    dashboard_response(
+        &c,
+        &user,
+        "/dashboard",
+        "Membership required · Bunyip",
+        content,
+    )
 }
 
 // ===========================================================================
@@ -418,23 +458,49 @@ pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap)
 // ===========================================================================
 
 fn tier_name(t: &SubscriptionTier) -> &'static str {
-    match t { SubscriptionTier::Lifetime => "Lifetime", SubscriptionTier::Free => "Free", SubscriptionTier::EarlyAdopter => "Early Adopter", SubscriptionTier::Standard => "Standard" }
+    match t {
+        SubscriptionTier::Lifetime => "Lifetime",
+        SubscriptionTier::Free => "Free",
+        SubscriptionTier::EarlyAdopter => "Early Adopter",
+        SubscriptionTier::Standard => "Standard",
+    }
 }
 fn status_label(s: &MembershipStatus) -> &'static str {
-    match s { MembershipStatus::None => "none", MembershipStatus::Active => "active", MembershipStatus::PastDue => "past_due", MembershipStatus::Canceled => "canceled", MembershipStatus::Incomplete => "incomplete", MembershipStatus::GracePeriod => "grace_period" }
+    match s {
+        MembershipStatus::None => "none",
+        MembershipStatus::Active => "active",
+        MembershipStatus::PastDue => "past_due",
+        MembershipStatus::Canceled => "canceled",
+        MembershipStatus::Incomplete => "incomplete",
+        MembershipStatus::GracePeriod => "grace_period",
+    }
 }
 
 pub async fn membership(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match guard(&st, &headers, "/membership").await { Ok(v) => v, Err(r) => return r };
+    let (user, c) = match guard(&st, &headers, "/membership").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let fwd = c.forward.as_deref();
     let current: Option<Membership> = calls::membership(&st.api, fwd).await.unwrap_or(None);
-    let payments = calls::payment_history(&st.api, fwd).await.unwrap_or_default();
-    let stripe = auth_api::setup_status(&st.api).await.map(|s| s.stripe_enabled).unwrap_or(true);
+    let payments = calls::payment_history(&st.api, fwd)
+        .await
+        .unwrap_or_default();
+    let stripe = auth_api::setup_status(&st.api)
+        .await
+        .map(|s| s.stripe_enabled)
+        .unwrap_or(true);
     let tier = user.subscription_tier.clone();
     let status = current.as_ref().map(|m| m.status.clone());
-    let has = matches!(status, Some(MembershipStatus::Active) | Some(MembershipStatus::PastDue));
+    let has = matches!(
+        status,
+        Some(MembershipStatus::Active) | Some(MembershipStatus::PastDue)
+    );
     let past_due = matches!(status, Some(MembershipStatus::PastDue));
-    let will_cancel = current.as_ref().map(|m| m.cancel_at_period_end).unwrap_or(false);
+    let will_cancel = current
+        .as_ref()
+        .map(|m| m.cancel_at_period_end)
+        .unwrap_or(false);
 
     let content = html! {
         div class="space-y-6" {
@@ -517,28 +583,51 @@ pub async fn membership(State(st): State<AppState>, headers: HeaderMap) -> Respo
 }
 
 pub async fn membership_subscribe(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (_, c) = match guard(&st, &headers, "/membership").await { Ok(v) => v, Err(r) => return r };
+    let (_, c) = match guard(&st, &headers, "/membership").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     match calls::checkout(&st.api, c.forward.as_deref(), None).await {
-        Ok(s) if s.checkout_url.starts_with("https://checkout.stripe.com/") => redirect_cookies(&s.checkout_url, &c.set_cookies),
+        Ok(s) if s.checkout_url.starts_with("https://checkout.stripe.com/") => {
+            redirect_cookies(&s.checkout_url, &c.set_cookies)
+        }
         _ => redirect_cookies("/membership", &c.set_cookies),
     }
 }
 pub async fn membership_cancel(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (_, c) = match guard(&st, &headers, "/membership").await { Ok(v) => v, Err(r) => return r };
-    let extra = calls::cancel(&st.api, c.forward.as_deref()).await.unwrap_or_default();
-    let mut cookies = c.set_cookies.clone(); cookies.extend(extra);
+    let (_, c) = match guard(&st, &headers, "/membership").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let extra = calls::cancel(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
+    let mut cookies = c.set_cookies.clone();
+    cookies.extend(extra);
     redirect_cookies("/membership", &cookies)
 }
 pub async fn membership_cancel_now(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (_, c) = match guard(&st, &headers, "/membership").await { Ok(v) => v, Err(r) => return r };
-    let extra = calls::cancel_now(&st.api, c.forward.as_deref()).await.unwrap_or_default();
-    let mut cookies = c.set_cookies.clone(); cookies.extend(extra);
+    let (_, c) = match guard(&st, &headers, "/membership").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let extra = calls::cancel_now(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
+    let mut cookies = c.set_cookies.clone();
+    cookies.extend(extra);
     redirect_cookies("/membership", &cookies)
 }
 pub async fn membership_reactivate(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (_, c) = match guard(&st, &headers, "/membership").await { Ok(v) => v, Err(r) => return r };
-    let extra = calls::reactivate(&st.api, c.forward.as_deref()).await.unwrap_or_default();
-    let mut cookies = c.set_cookies.clone(); cookies.extend(extra);
+    let (_, c) = match guard(&st, &headers, "/membership").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let extra = calls::reactivate(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
+    let mut cookies = c.set_cookies.clone();
+    cookies.extend(extra);
     redirect_cookies("/membership", &cookies)
 }
 
@@ -547,13 +636,26 @@ pub async fn membership_reactivate(State(st): State<AppState>, headers: HeaderMa
 // ===========================================================================
 
 #[derive(Deserialize)]
-pub struct SettingsQuery { pub ok: Option<String>, pub error: Option<String> }
+pub struct SettingsQuery {
+    pub ok: Option<String>,
+    pub error: Option<String>,
+}
 
-pub async fn settings(State(st): State<AppState>, headers: HeaderMap, Query(q): Query<SettingsQuery>) -> Response {
-    let (user, c) = match guard(&st, &headers, "/settings").await { Ok(v) => v, Err(r) => return r };
+pub async fn settings(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<SettingsQuery>,
+) -> Response {
+    let (user, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let fwd = c.forward.as_deref();
     let twofa = auth_api::status_2fa(&st.api, fwd).await.ok();
-    let twofa_enabled = twofa.as_ref().map(|s| s.enabled).unwrap_or(user.two_factor_enabled);
+    let twofa_enabled = twofa
+        .as_ref()
+        .map(|s| s.enabled)
+        .unwrap_or(user.two_factor_enabled);
     let is_admin = matches!(user.role, crate::api::types::UserRole::Admin);
 
     let content = html! {
@@ -645,57 +747,148 @@ fn settings_card(icon_name: &str, gradient: &str, title: &str, body: Markup) -> 
 }
 
 #[derive(Deserialize)]
-pub struct EmailChangeForm { pub new_email: String, #[serde(default)] pub current_password: String }
-pub async fn settings_email(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<EmailChangeForm>) -> Response {
-    let (_, c) = match guard(&st, &headers, "/settings").await { Ok(v) => v, Err(r) => return r };
-    match auth_api::request_email_change(&st.api, c.forward.as_deref(), f.new_email.trim(), &f.current_password).await {
+pub struct EmailChangeForm {
+    pub new_email: String,
+    #[serde(default)]
+    pub current_password: String,
+}
+pub async fn settings_email(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<EmailChangeForm>,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match auth_api::request_email_change(
+        &st.api,
+        c.forward.as_deref(),
+        f.new_email.trim(),
+        &f.current_password,
+    )
+    .await
+    {
         Ok((relogin, mut cookies)) => {
-            let mut all = c.set_cookies.clone(); all.append(&mut cookies);
-            if relogin { redirect_cookies("/login", &all) } else { redirect_cookies("/settings?ok=Email+change+requested", &all) }
+            let mut all = c.set_cookies.clone();
+            all.append(&mut cookies);
+            if relogin {
+                redirect_cookies("/login", &all)
+            } else {
+                redirect_cookies("/settings?ok=Email+change+requested", &all)
+            }
         }
-        Err(e) => redirect_cookies(&format!("/settings?error={}", urlenc(&e.user_message())), &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
     }
 }
 
 #[derive(Deserialize)]
-pub struct PasswordChangeForm { pub current_password: String, pub new_password: String, pub confirm: String }
-pub async fn settings_password(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<PasswordChangeForm>) -> Response {
-    let (_, c) = match guard(&st, &headers, "/settings").await { Ok(v) => v, Err(r) => return r };
+pub struct PasswordChangeForm {
+    pub current_password: String,
+    pub new_password: String,
+    pub confirm: String,
+}
+pub async fn settings_password(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<PasswordChangeForm>,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     if !password_ok(&f.new_password) || f.new_password != f.confirm {
-        let e = if f.new_password != f.confirm { "Passwords don't match" } else { "Password does not meet the requirements" };
+        let e = if f.new_password != f.confirm {
+            "Passwords don't match"
+        } else {
+            "Password does not meet the requirements"
+        };
         return redirect_cookies(&format!("/settings?error={}", urlenc(e)), &c.set_cookies);
     }
-    match auth_api::change_password(&st.api, c.forward.as_deref(), &f.current_password, &f.new_password).await {
+    match auth_api::change_password(
+        &st.api,
+        c.forward.as_deref(),
+        &f.current_password,
+        &f.new_password,
+    )
+    .await
+    {
         Ok(()) => redirect_cookies("/settings?ok=Password+updated", &c.set_cookies),
-        Err(e) => redirect_cookies(&format!("/settings?error={}", urlenc(&e.user_message())), &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
     }
 }
 
 #[derive(Deserialize)]
-pub struct DisableForm { pub password: String }
-pub async fn settings_disable_2fa(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<DisableForm>) -> Response {
-    let (_, c) = match guard(&st, &headers, "/settings").await { Ok(v) => v, Err(r) => return r };
+pub struct DisableForm {
+    pub password: String,
+}
+pub async fn settings_disable_2fa(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<DisableForm>,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     match auth_api::disable_2fa(&st.api, c.forward.as_deref(), &f.password).await {
         Ok(()) => redirect_cookies("/settings?ok=Two-factor+disabled", &c.set_cookies),
-        Err(e) => redirect_cookies(&format!("/settings?error={}", urlenc(&e.user_message())), &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
     }
 }
 
 #[derive(Deserialize)]
-pub struct DeleteForm { pub password: String, #[serde(default)] pub totp_code: String }
-pub async fn settings_delete(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<DeleteForm>) -> Response {
-    let (_, c) = match guard(&st, &headers, "/settings").await { Ok(v) => v, Err(r) => return r };
-    let totp = if f.totp_code.is_empty() { None } else { Some(f.totp_code.as_str()) };
+pub struct DeleteForm {
+    pub password: String,
+    #[serde(default)]
+    pub totp_code: String,
+}
+pub async fn settings_delete(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<DeleteForm>,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let totp = if f.totp_code.is_empty() {
+        None
+    } else {
+        Some(f.totp_code.as_str())
+    };
     match auth_api::delete_account(&st.api, c.forward.as_deref(), &f.password, totp).await {
-        Ok(mut cookies) => { let mut all = c.set_cookies.clone(); all.append(&mut cookies); redirect_cookies("/", &all) }
-        Err(e) => redirect_cookies(&format!("/settings?error={}", urlenc(&e.user_message())), &c.set_cookies),
+        Ok(mut cookies) => {
+            let mut all = c.set_cookies.clone();
+            all.append(&mut cookies);
+            redirect_cookies("/", &all)
+        }
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
     }
 }
 
 fn urlenc(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
-        match b { b'A'..=b'Z'|b'a'..=b'z'|b'0'..=b'9'|b'-'|b'_'|b'.'|b'~' => out.push(b as char), b' ' => out.push('+'), _ => out.push_str(&format!("%{b:02X}")) }
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
     }
     out
 }
@@ -706,12 +899,20 @@ fn urlenc(s: &str) -> String {
 
 fn qr_svg(uri: &str) -> String {
     qrcode::QrCode::new(uri.as_bytes())
-        .map(|code| code.render::<qrcode::render::svg::Color>().min_dimensions(200, 200).quiet_zone(false).build())
+        .map(|code| {
+            code.render::<qrcode::render::svg::Color>()
+                .min_dimensions(200, 200)
+                .quiet_zone(false)
+                .build()
+        })
         .unwrap_or_default()
 }
 
 pub async fn twofa_setup_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match guard(&st, &headers, "/settings/2fa/setup").await { Ok(v) => v, Err(r) => return r };
+    let (user, c) = match guard(&st, &headers, "/settings/2fa/setup").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let fwd = c.forward.as_deref();
     let content = match auth_api::setup_2fa(&st.api, fwd).await {
         Ok(s) => html! {
@@ -738,9 +939,18 @@ pub async fn twofa_setup_get(State(st): State<AppState>, headers: HeaderMap) -> 
 }
 
 #[derive(Deserialize)]
-pub struct TwoFactorSetupForm { pub code: String }
-pub async fn twofa_setup_post(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<TwoFactorSetupForm>) -> Response {
-    let (user, c) = match guard(&st, &headers, "/settings/2fa/setup").await { Ok(v) => v, Err(r) => return r };
+pub struct TwoFactorSetupForm {
+    pub code: String,
+}
+pub async fn twofa_setup_post(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<TwoFactorSetupForm>,
+) -> Response {
+    let (user, c) = match guard(&st, &headers, "/settings/2fa/setup").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let fwd = c.forward.as_deref();
     let content = match auth_api::confirm_2fa(&st.api, fwd, f.code.trim()).await {
         Ok(codes) => html! {
@@ -755,7 +965,9 @@ pub async fn twofa_setup_post(State(st): State<AppState>, headers: HeaderMap, Fo
                 }
             }
         },
-        Err(e) => html! { div class="mx-auto max-w-lg space-y-4" { (error_box(&e.user_message())) a href="/settings/2fa/setup" class=(button_class("outline","default","")) { "Try again" } } },
+        Err(e) => {
+            html! { div class="mx-auto max-w-lg space-y-4" { (error_box(&e.user_message())) a href="/settings/2fa/setup" class=(button_class("outline","default","")) { "Try again" } } }
+        }
     };
     dashboard_response(&c, &user, "/settings", "Two-factor setup · Bunyip", content)
 }
