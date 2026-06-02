@@ -15,7 +15,7 @@ in production (you cannot do that on `localhost`).
 
 | Repo | Role | dev-sso hostname (user `long`) | Upstream port |
 | --- | --- | --- | --- |
-| `bunyip` | SaaS hub / account + billing UI; **its own OIDC issuer** (new) | `long-bunyip.a8n.run` | web 4400 (api 4401 internal) |
+| `bunyip` | SaaS hub / account + billing UI; **its own OIDC issuer** (new) | `long-bunyip.a8n.run` + `long-bunyip-registry.a8n.run` (OCI registry, sec 9) | web 4400; api 4401 internal, registry 18081 via Traefik |
 | `mokosh-server` | Identity provider (the OIDC issuer the SPA still points at) | `long-mokosh-api.a8n.run` | 4301 |
 | `mokosh-apps` | The PSA client SPA (relying party) | `long-mokosh.a8n.run` | 4301 |
 
@@ -162,6 +162,10 @@ BUNYIP_OIDC_CLIENT_ID=<uuid from step 2>
 BUNYIP_OIDC_REDIRECT_URI=https://long-bunyip.a8n.run/auth/callback
 ```
 
+Optionally, to also serve the distribution proxy (member downloads + the OCI
+registry on `<user>-bunyip-registry.a8n.run`), add the Forgejo service
+credentials; see section 9.
+
 On your **Mac** (one time), point the dev hostnames at desktop-02's Nebula IP:
 ```bash
 # remove any stale 127.0.0.1 mapping for these first (it wins; see 6.5)
@@ -278,3 +282,72 @@ See 3.7.
   mokosh-server already carries the nebula-secure change.
 - The `milestone-1-handoff.md` and `bunyip-on-dunite-scaffold.md` docs predate the
   rebuild landing and are stale on "mock backend / don't persist in bunyip-api".
+
+## 9. OCI registry subdomain (distribution proxy, BUNYIP-32)
+
+The dev-sso overlay routes the bunyip OCI registry through Traefik on its own
+per-developer hostname, `<user>-bunyip-registry.a8n.run`, with a real
+certificate. Members (or you, testing) docker-login with bunyip credentials;
+bunyip fetches the actual images from the private Forgejo with a server-side
+service token. Procedures and configuration rules live in
+`dev-docs/oci-registry-verification.md` (which has a dedicated dev-sso
+section); this section covers only the dev-sso-specific wiring.
+
+### Required .env additions
+
+The same distribution block documented in `.env.example` (Forgejo base URL,
+service token, `OCI_REGISTRY_ENABLED=true`). Do NOT set
+`OCI_REGISTRY_SERVICE` / `OCI_REGISTRY_REALM` for dev-sso: the overlay pins the
+service to `<user>-bunyip-registry.a8n.run` and clears the realm so it derives
+to `https://<service>/auth/token` (TLS via Traefik).
+
+The single api container serves both access paths at once: Traefik routes the
+registry hostname to it AND its localhost port stays published, so
+`localhost:18081` keeps working. (This is one container reachable two ways,
+not two stacks; a separate plain `just dev` cannot run concurrently with
+dev-sso - same container names and host ports.)
+
+### How it is wired
+
+- `compose.dev-sso.yml` adds Traefik labels to the `api` service:
+  router `bunyip-registry-<user>` on entrypoints `web-secure,nebula-secure`,
+  certresolver `cert-cloudflare`, forwarding to container port 18081.
+- The router binds BOTH secure entrypoints because the dev boxes differ
+  (verified on dev-01, 2026-06-02): on dev-01 the public :443 maps to Traefik's
+  `web-secure` entrypoint, while on desktop-02 the Nebula-published :443 is
+  `nebula-secure`. A router bound to only one of them 404s on the other box.
+  This is the same split behind the section 8 open item about bunyip-web's
+  entrypoint.
+- Both `/v2/*` and `/auth/token` ride the same hostname, which is exactly what
+  Docker's auth flow expects.
+
+### Smoke test (on the dev box)
+
+Run `just verify-oci` first (covers the full matrix against `localhost:18081`,
+which the same container also serves). Then confirm the Traefik path:
+
+```nu
+# A member user + application row must exist; `just verify-oci` seeds them.
+let user_name = (^whoami | str trim)
+let registry = $"($user_name)-bunyip-registry.a8n.run"
+
+# 1. Challenge advertises the Traefik hostname + https realm
+^curl --silent --include $"https://($registry)/v2/" | lines | where $it =~ "www-authenticate"
+# expect: Bearer realm="https://<user>-bunyip-registry.a8n.run/auth/token",service="..."
+
+# 2. Login + pull through Traefik (login prompts for the password; pipe it via
+#    --password-stdin when scripting)
+^docker login $registry --username admin@bunyip.local
+^docker pull $"($registry)/bunyip-api:v0.1.1"
+```
+
+The rest of the matrix (denials, cache hits, rate limits) is identical to the
+localhost procedure in `dev-docs/oci-registry-verification.md`. The binary
+download proxy rides the api with no extra routing; exercise it via the web UI
+/downloads page or `/v1/downloads` with a bearer token.
+
+### Mac access
+
+Add the registry hostname to the same `/etc/hosts` line as the other dev
+hostnames (section 4): `<nebula-ip>  <user>-bunyip-registry.a8n.run`. Docker
+Desktop on macOS resolves through the host's `/etc/hosts`.

@@ -366,13 +366,23 @@ impl OciConfig {
     /// enabled so misconfiguration fails fast instead of surfacing as opaque
     /// docker-login failures.
     ///
-    /// Hard errors: a realm that is not a valid URL, or one containing quotes
-    /// or control characters (it is interpolated into a quoted
-    /// `WWW-Authenticate` header value, where such characters produce a
-    /// malformed or silently-dropped header). A realm host that differs from
-    /// the service host is only a warning: split-horizon setups exist, but it
-    /// is almost always a mistake.
+    /// Hard errors: an empty/missing service hostname (the realm would derive
+    /// to `https:///auth/token`), a realm that is not a valid URL or has no
+    /// host, or one containing quotes or control characters (it is
+    /// interpolated into a quoted `WWW-Authenticate` header value, where such
+    /// characters produce a malformed or silently-dropped header). A realm
+    /// host that differs from the service host is only a warning:
+    /// split-horizon setups exist, but it is almost always a mistake.
     pub fn validate(&self) -> Result<(), String> {
+        let service_host = self.service.split(':').next().unwrap_or("");
+        if service_host.is_empty() {
+            return Err(
+                "OCI_REGISTRY_SERVICE is empty; set it to the public registry hostname \
+                 (e.g. registry.example.com)"
+                    .to_string(),
+            );
+        }
+
         let realm = self.realm_url();
         if realm.chars().any(|c| c == '"' || c.is_control()) {
             return Err(format!(
@@ -383,8 +393,13 @@ impl OciConfig {
             .map_err(|e| format!("OCI registry realm is not a valid URL ({realm}): {e}"))?;
 
         let realm_host = parsed.host_str().unwrap_or("");
-        let service_host = self.service.split(':').next().unwrap_or("");
-        if !service_host.is_empty() && realm_host != service_host {
+        if realm_host.is_empty() {
+            return Err(format!(
+                "OCI registry realm has no host ({realm}); check OCI_REGISTRY_SERVICE / \
+                 OCI_REGISTRY_REALM"
+            ));
+        }
+        if realm_host != service_host {
             tracing::warn!(
                 realm = %realm,
                 service = %self.service,
@@ -901,6 +916,24 @@ mod tests {
         assert!(oci_cfg("svc", Some("https://h/\"evil")).validate().is_err());
         // Control character (e.g. stray CR from a mis-edited .env).
         assert!(oci_cfg("svc", Some("https://h/auth\r")).validate().is_err());
+    }
+
+    #[test]
+    fn oci_config_validate_rejects_empty_service() {
+        // Empty service (e.g. OCI_REGISTRY_ENABLED=true with the compose
+        // default ${OCI_REGISTRY_SERVICE:-}) must fail fast at startup: the
+        // derived realm would be unusable.
+        assert!(oci_cfg("", None).validate().is_err());
+        // Port-only service is still an empty host.
+        assert!(oci_cfg(":18081", None).validate().is_err());
+        // Note: an EXPLICIT realm written as https:///auth/token is not
+        // rejected here because the WHATWG URL parser normalizes it (extra
+        // slashes are skipped, so "auth" becomes the host). The empty-service
+        // check above is what protects the derived-realm path; an explicit
+        // realm pointing at the wrong host triggers the mismatch warning.
+        assert!(oci_cfg("svc", Some("https:///auth/token"))
+            .validate()
+            .is_ok());
     }
 
     #[test]

@@ -71,21 +71,42 @@ services:
       OIDC_JWT_PRIVATE_KEY_PATH: /run/secrets/oidc/dev-2026.pem
       OIDC_JWT_ACTIVE_KID: ${OIDC_JWT_ACTIVE_KID:-dev-2026}
       OIDC_JWT_PUBLIC_KEYS_DIR: /run/secrets/oidc
+      # ── Distribution proxy (member downloads + OCI registry, BUNYIP-28) ──
+      # Disabled until FORGEJO_BASE_URL + FORGEJO_API_TOKEN are set in .env.
+      # Configuration rules, token scopes, and the reverse-proxy requirements
+      # live in ONE place: dev-docs/oci-registry-verification.md (Production
+      # notes). Every ${VAR} below is documented in .env.example.
+      FORGEJO_BASE_URL: ${FORGEJO_BASE_URL:-}
+      FORGEJO_API_TOKEN: ${FORGEJO_API_TOKEN:-}
+      DOWNLOAD_CACHE_DIR: /var/cache/bunyip-downloads
+      DOWNLOAD_CACHE_MAX_BYTES: ${DOWNLOAD_CACHE_MAX_BYTES:-10737418240}
+      OCI_REGISTRY_ENABLED: ${OCI_REGISTRY_ENABLED:-false}
+      OCI_REGISTRY_PORT: "18081"
+      # The public registry hostname behind the TLS reverse proxy. Required
+      # when OCI_REGISTRY_ENABLED=true (startup fails fast if empty).
+      OCI_REGISTRY_SERVICE: ${OCI_REGISTRY_SERVICE:-}
+      OCI_BLOB_CACHE_DIR: /var/cache/bunyip-oci
+      OCI_BLOB_CACHE_MAX_BYTES: ${OCI_BLOB_CACHE_MAX_BYTES:-53687091200}
+      OCI_PULLS_PER_USER_PER_DAY: ${OCI_PULLS_PER_USER_PER_DAY:-50}
+      DOWNLOAD_DAILY_LIMIT_PER_USER: ${DOWNLOAD_DAILY_LIMIT_PER_USER:-50}
     expose:
       - "4401"
+      - "18081"
     ports:
+      # NOTE: ${HOST_IP} here is the HOST-side publish interface (loopback by
+      # default, for the reverse proxy to consume). It is a DIFFERENT setting
+      # from the container env `HOST_IP: 0.0.0.0` above (the in-container bind
+      # address). Do not set HOST_IP=0.0.0.0 in .env unless you intend to
+      # publish these plaintext listeners on every host interface.
       - "${HOST_IP:-127.0.0.1}:${BUNYIP_API_PORT:-4401}:4401"
+      - "${HOST_IP:-127.0.0.1}:${BUNYIP_OCI_PORT:-18081}:18081"
     volumes:
       - ./secrets:/run/secrets/oidc:ro
-      # NOTE for the distribution proxy (BUNYIP-32): when the OCI registry and
-      # download proxy are enabled here, their caches MUST be NAMED volumes
-      # mounted at /var/cache/bunyip-oci and /var/cache/bunyip-downloads
-      # (e.g. `oci-cache:/var/cache/bunyip-oci`). The image pre-creates those
-      # paths owned by the runtime user, and named volumes inherit that
-      # ownership on first use. A host bind-mount does NOT inherit it and
-      # mounts root-owned, which breaks every blob/asset write (Permission
-      # denied -> 502 on all pulls). If you must bind-mount, chown the host
-      # directory to the container user first.
+      # Distribution caches MUST be NAMED volumes, never host bind-mounts.
+      # Why + the bind-mount workaround: dev-docs/oci-registry-verification.md
+      # (Production notes).
+      - oci-cache:/var/cache/bunyip-oci
+      - download-cache:/var/cache/bunyip-downloads
     depends_on:
       postgres:
         condition: service_healthy
@@ -118,6 +139,10 @@ services:
 volumes:
   postgres-data:
     name: bunyip-postgres-data
+  oci-cache:
+    name: bunyip-oci-cache
+  download-cache:
+    name: bunyip-download-cache
 
 networks:
   private:

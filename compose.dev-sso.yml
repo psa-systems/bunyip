@@ -6,11 +6,13 @@
 # What this overlay changes:
 #   - bunyip-web stops publishing its host port (Traefik does the publishing).
 #   - bunyip-web gets Traefik labels for ${USER}-bunyip.a8n.run.
+#   - bunyip-api gets Traefik labels for the OCI registry on
+#     ${USER}-bunyip-registry.a8n.run (docker login/pull need real TLS, which
+#     Traefik terminates; the api's other endpoints stay internal).
 #   - The shared `network-traefik-public` network is joined.
 #   - BUNYIP_OIDC_* are passed as runtime CONTAINER env. bunyip-web is an
 #     Axum SSR server that reads them at startup (see bunyip-web/src/config.rs).
 #
-# bunyip-api is internal-only in dev-sso mode (Traefik does not route to it).
 # The frontend reaches the OIDC issuer (mokosh-server) per the BUNYIP_OIDC_*
 # vars below.
 
@@ -31,15 +33,43 @@ services:
     # syntax leaves a literal `${USER}` in the router name and the host fails to
     # route (default cert + 404). List form makes the whole "key=value" one
     # string value, so ${USER} interpolates. Mirrors mokosh-server's overlay.
-    # `nebula-secure` is the Nebula-published Traefik entrypoint (asDefault), so
-    # ${USER}-bunyip.a8n.run is reachable over the mesh like the other dev apps.
+    #
+    # Routers bind BOTH secure entrypoints because the dev boxes map :443 to
+    # different ones: dev-01's public :443 is `web-secure`, desktop-02's
+    # Nebula-published :443 is `nebula-secure`. A router bound to only one
+    # 404s on the other box (verified on dev-01, 2026-06-02; this was the
+    # runbook section 8 open item).
     labels:
       - traefik.enable=true
       - traefik.docker.network=network-traefik-public
       - traefik.http.routers.bunyip-${USER}.rule=Host(`${USER}-bunyip.a8n.run`)
-      - traefik.http.routers.bunyip-${USER}.entrypoints=nebula-secure
+      - traefik.http.routers.bunyip-${USER}.entrypoints=web-secure,nebula-secure
       - traefik.http.routers.bunyip-${USER}.tls.certresolver=cert-cloudflare
       - traefik.http.services.bunyip-${USER}.loadbalancer.server.port=4400
+
+  # The api joins the Traefik network ONLY to expose the OCI registry on its
+  # own per-developer hostname. docker login/pull require TLS; Traefik
+  # terminates it with a real certificate and forwards both /v2/* and
+  # /auth/token to the registry listener (port 18081).
+  api:
+    environment:
+      # Advertise the public Traefik hostname. The token realm is forced back
+      # to its code default (https://<service>/auth/token) by clearing the
+      # localhost realm that compose.dev.yml sets for plain `just dev`.
+      OCI_REGISTRY_SERVICE: ${USER:?USER missing - run via just dev-sso}-bunyip-registry.a8n.run
+      OCI_REGISTRY_REALM: ""
+    networks:
+      - private
+      - traefik-public
+    # Same list-syntax and dual-entrypoint requirements as the web service
+    # above (${USER} lives in the label keys; both boxes' :443 entrypoints).
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=network-traefik-public
+      - traefik.http.routers.bunyip-registry-${USER}.rule=Host(`${USER}-bunyip-registry.a8n.run`)
+      - traefik.http.routers.bunyip-registry-${USER}.entrypoints=web-secure,nebula-secure
+      - traefik.http.routers.bunyip-registry-${USER}.tls.certresolver=cert-cloudflare
+      - traefik.http.services.bunyip-registry-${USER}.loadbalancer.server.port=18081
 
 networks:
   traefik-public:

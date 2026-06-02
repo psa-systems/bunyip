@@ -189,21 +189,103 @@ Verified 2026-06-02 against dev.a8n.run (Forgejo), image
 4. Cosmetic: the OCI server sends HSTS / CSP headers (SecurityHeaders
    middleware) on plain-HTTP responses; harmless for docker clients.
 
-## Production notes (input to BUNYIP-32)
+## dev-sso verification (Traefik registry subdomain)
+
+`just dev-sso` (or the api-only overlay) routes the registry through Traefik on
+`<user>-bunyip-registry.a8n.run` with a real certificate. Wiring details live
+in `dev-docs/dev-sso-three-repo-runbook.md` section 9. Differences from the
+localhost procedure above:
+
+- Do NOT set `OCI_REGISTRY_SERVICE` / `OCI_REGISTRY_REALM` in `.env`; the
+  overlay pins the service to the Traefik hostname and the realm derives to
+  `https://<service>/auth/token`.
+- The challenge advertises that https realm:
+  `curl --silent --include https://<user>-bunyip-registry.a8n.run/v2/` must
+  return 401 with
+  `WWW-Authenticate: Bearer realm="https://<user>-bunyip-registry.a8n.run/auth/token",...`
+- docker login / pull target the Traefik hostname instead of localhost:18081;
+  the rest of the matrix (pinned-tag enforcement, cache hits, denials) is
+  identical and `just verify-oci` covers it for the localhost path.
+
+Verified live on dev-01 (2026-06-02): login + pull of
+`psa-systems-private/bunyip-api:v0.1.1` through
+`https://nate-bunyip-registry.a8n.run` with a valid Let's Encrypt certificate.
+
+## Production notes (CANONICAL: operator configuration rules)
+
+This section is the single source for production distribution-proxy
+configuration; compose.yml, .env.example, and the dev-sso runbook point here.
+
+### Configuration rules
 
 - `OCI_REGISTRY_SERVICE` must equal the public registry hostname
   (e.g. `registry.<base-domain>`); leave `OCI_REGISTRY_REALM` unset so it
-  defaults to `https://<service>/auth/token` behind TLS.
-- The reverse proxy must route BOTH `/v2/*` and `/auth/token` on that hostname
-  to the api container's OCI port, and must not buffer/limit blob response
-  bodies (images can be hundreds of MB).
-- The Forgejo service token is a secret: production uses the existing secret
-  mechanism, never compose environment defaults.
-- The production runtime image must pre-create `/var/cache/bunyip-oci` and
-  `/var/cache/bunyip-downloads` owned by `appuser` (it does, as of BUNYIP-31)
-  so the production volumes mounted there are writable. Mount NAMED volumes at
-  those paths; a host bind-mount does NOT inherit image ownership and must be
-  chowned to the container uid by the operator.
-- RESOLVED caveat: Forgejo accepts the engine's basic auth with an empty
-  username and the token as password, for both manifests and blobs. No engine
-  change needed.
+  defaults to `https://<service>/auth/token` behind TLS. Startup fails fast if
+  the registry is enabled with an empty service or a malformed realm.
+- The Forgejo service token is a secret: production sets it in `.env` (mode
+  0600, never committed), with scopes `read:package` + `read:repository`.
+  Generate: Forgejo -> Settings -> Applications -> Generate New Token.
+- Cache volumes: mount NAMED volumes at `/var/cache/bunyip-oci` and
+  `/var/cache/bunyip-downloads`. The image pre-creates those paths owned by
+  the runtime user (uid 1001) and named volumes inherit that ownership on
+  first use. A host bind-mount does NOT inherit it, mounts root-owned, and
+  every blob/asset write fails (Permission denied -> 502 on all pulls). If a
+  bind-mount is unavoidable: `chown 1001:1001 <host dir>` first.
+
+### Reverse-proxy requirements + reference configs
+
+The proxy must route BOTH `/v2/*` and `/auth/token` on the registry hostname
+to the api container's port 18081, terminate TLS, and must not buffer or
+size-limit response bodies (image layers are hundreds of MB).
+
+Caddy:
+
+```caddyfile
+registry.example.com {
+    # Both /v2/* and /auth/token go to the same upstream; no body limits.
+    reverse_proxy 127.0.0.1:18081 {
+        flush_interval -1
+    }
+}
+```
+
+Traefik (file provider):
+
+```yaml
+http:
+  routers:
+    bunyip-registry:
+      rule: Host(`registry.example.com`)
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: your-resolver
+      service: bunyip-registry
+  services:
+    bunyip-registry:
+      loadBalancer:
+        servers:
+          - url: http://127.0.0.1:18081
+```
+
+nginx (note the body-size and buffering directives; defaults break pulls):
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name registry.example.com;
+    # ... ssl_certificate / ssl_certificate_key ...
+    client_max_body_size 0;
+    proxy_buffering off;
+    proxy_request_buffering off;
+    location / {
+        proxy_pass http://127.0.0.1:18081;
+        proxy_set_header Host $host;
+    }
+}
+```
+
+### Resolved caveats
+
+- Forgejo accepts the engine's basic auth with an empty username and the token
+  as password, for both manifests and blobs. No engine change needed.
