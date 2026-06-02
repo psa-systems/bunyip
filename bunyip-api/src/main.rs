@@ -12,7 +12,7 @@ use tracing_actix_web::TracingLogger;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use bunyip_api::{
-    config::{Config, TierConfig},
+    config::{secret_env, Config, TierConfig},
     middleware::{
         auto_ban::{self, AutoBanService},
         request_id::RequestIdMiddleware,
@@ -85,8 +85,11 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Database migrations completed successfully");
 
-    // Seed default admin if SETUP_DEFAULT_ADMIN is set and no admin exists
-    if let Ok(setup_admin) = std::env::var("SETUP_DEFAULT_ADMIN") {
+    // Seed default admin if SETUP_DEFAULT_ADMIN is set and no admin exists.
+    // secret_env supports both the plain env var (dev) and the
+    // SETUP_DEFAULT_ADMIN_FILE compose secret (production), and treats empty
+    // values as unset.
+    if let Some(setup_admin) = secret_env("SETUP_DEFAULT_ADMIN") {
         let admin_emails = UserRepository::find_admin_emails(&pool).await?;
         if admin_emails.is_empty() {
             let (email, password) = setup_admin.split_once(':').unwrap_or_else(|| {
@@ -123,8 +126,10 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Database health check passed");
 
-    // Initialize JWT service
-    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| {
+    // Initialize JWT service. secret_env reads JWT_SECRET_FILE (compose
+    // secret) or JWT_SECRET (dev .env); empty counts as unset, so an
+    // unconfigured production deployment fails fast here.
+    let jwt_secret = secret_env("JWT_SECRET").unwrap_or_else(|| {
         if config.is_production() {
             panic!("JWT_SECRET must be set in production");
         }
@@ -372,9 +377,9 @@ async fn main() -> anyhow::Result<()> {
     let update_check_url = std::env::var("BUNYIP_UPDATE_CHECK_URL")
         .ok()
         .filter(|s| !s.is_empty());
-    let update_check_token = std::env::var("BUNYIP_UPDATE_CHECK_TOKEN")
-        .ok()
-        .filter(|s| !s.is_empty());
+    // secret_env supports the {NAME}_FILE compose-secret convention,
+    // falling back to the plain env var.
+    let update_check_token = secret_env("BUNYIP_UPDATE_CHECK_TOKEN");
     info!(
         enabled = update_check_url.is_some(),
         "Update checker initialized"

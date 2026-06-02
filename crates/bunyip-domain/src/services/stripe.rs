@@ -41,10 +41,12 @@ impl StripeConfig {
         let base = frontend_origin.trim_end_matches('/');
 
         Ok(Self {
-            secret_key: std::env::var("STRIPE_SECRET_KEY")
-                .unwrap_or_else(|_| "sk_test_placeholder".to_string()),
-            webhook_secret: std::env::var("STRIPE_WEBHOOK_SECRET")
-                .unwrap_or_else(|_| "whsec_placeholder".to_string()),
+            // secret_env supports the {NAME}_FILE compose-secret convention,
+            // falling back to the plain env var.
+            secret_key: crate::config::secret_env("STRIPE_SECRET_KEY")
+                .unwrap_or_else(|| "sk_test_placeholder".to_string()),
+            webhook_secret: crate::config::secret_env("STRIPE_WEBHOOK_SECRET")
+                .unwrap_or_else(|| "whsec_placeholder".to_string()),
             success_url: std::env::var("STRIPE_SUCCESS_URL")
                 .unwrap_or_else(|_| format!("{base}/checkout/success")),
             cancel_url: std::env::var("STRIPE_CANCEL_URL")

@@ -50,19 +50,34 @@ ensure-env:
     | save .env
     print "Wrote .env (generated TOTP_ENCRYPTION_KEY, STRIPE_ENCRYPTION_KEY, JWT_SECRET)."
 
-# Generate the dev OIDC signing keypair (Ed25519, kid dev-2026) into ./secrets if
-# missing. bunyip-api IS the OIDC issuer and loads these at startup
-# (OIDC_JWT_PRIVATE_KEY_PATH); without them it fails to boot. ./secrets is mounted
-# into the api container at /run/secrets/oidc (see compose.dev.yml). The keypair is
-# gitignored; this just makes a fresh clone bootable without manual openssl steps.
+# Generate the dev OIDC signing keypair (Ed25519, kid dev-2026) into ./secrets/oidc
+# if missing. bunyip-api IS the OIDC issuer and loads these at startup
+# (OIDC_JWT_PRIVATE_KEY_PATH); without them it fails to boot. ./secrets/oidc is
+# mounted into the api container at /run/secrets/oidc (see compose.dev.yml). The
+# keypair is gitignored; this just makes a fresh clone bootable without manual
+# openssl steps. Pre-BUNYIP-38 layouts kept the keys at ./secrets/ directly; they
+# are migrated into the subdir automatically.
 [private]
 ensure-oidc-keys:
     #!/usr/bin/env nu
-    if (("secrets/dev-2026.pem" | path exists) and ("secrets/dev-2026.pub.pem" | path exists)) { return }
-    mkdir secrets
-    ^openssl genpkey --algorithm ed25519 --out secrets/dev-2026.pem
-    ^openssl pkey --in secrets/dev-2026.pem --pubout --out secrets/dev-2026.pub.pem
-    print "Generated secrets/dev-2026.pem (Ed25519 OIDC signing key, kid dev-2026)."
+    mkdir secrets/oidc
+    # Migrate the old flat layout (secrets/dev-2026.pem) into secrets/oidc/.
+    ["dev-2026.pem", "dev-2026.pub.pem"] | each {|f|
+        if (($"secrets/($f)" | path exists) and not ($"secrets/oidc/($f)" | path exists)) {
+            mv $"secrets/($f)" $"secrets/oidc/($f)"
+            print $"Migrated secrets/($f) -> secrets/oidc/($f)"
+        }
+    } | ignore
+    if (("secrets/oidc/dev-2026.pem" | path exists) and ("secrets/oidc/dev-2026.pub.pem" | path exists)) { return }
+    ^openssl genpkey --algorithm ed25519 --out secrets/oidc/dev-2026.pem
+    ^openssl pkey --in secrets/oidc/dev-2026.pem --pubout --out secrets/oidc/dev-2026.pub.pem
+    print "Generated secrets/oidc/dev-2026.pem (Ed25519 OIDC signing key, kid dev-2026)."
+
+# Create/migrate the production secret files under ./secrets (BUNYIP-38).
+# Idempotent wrapper around scripts/init-secrets.sh; see compose.yml quick start.
+[group: 'dev']
+init-secrets:
+    ./scripts/init-secrets.sh
 
 # Start the full dev stack (postgres + api + web) in the foreground.
 [group: 'dev']
