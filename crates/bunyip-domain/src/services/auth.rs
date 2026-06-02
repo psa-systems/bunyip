@@ -98,16 +98,12 @@ impl AuthService {
         let password_hash = self.password.hash(&password)?;
 
         // Create user
-        //
-        // STAGING ONLY: every new registration lands as Admin so testers can
-        // exercise admin surfaces without a separate promote step. Revert to
-        // UserRole::Subscriber before production.
         let user = UserRepository::create(
             &self.pool,
             CreateUser {
                 email: email.clone(),
                 password_hash: Some(password_hash),
-                role: UserRole::Admin,
+                role: UserRole::Subscriber,
             },
         )
         .await?;
