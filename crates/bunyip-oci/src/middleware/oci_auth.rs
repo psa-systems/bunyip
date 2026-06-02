@@ -6,14 +6,12 @@
 //!   responsible for calling `user.assert_scope(slug)`.
 
 use actix_web::{dev::Payload, FromRequest, HttpRequest};
-use chrono::Utc;
 use sqlx::PgPool;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::errors::OciError;
-use crate::models::User;
 use crate::repositories::UserRepository;
 use crate::services::{OciTokenService, RegistryTokenClaims};
 
@@ -33,17 +31,6 @@ impl OciBearerUser {
             Err(OciError::Denied)
         }
     }
-}
-
-/// Same membership rules as `AccessTokenClaims::has_member_access` — kept in
-/// sync manually because the registry re-loads the live User on each request
-/// (it cannot trust stale JWT claims).
-fn has_member_access(user: &User) -> bool {
-    user.role == "admin"
-        || user.lifetime_member
-        || user.trial_ends_at.is_some_and(|t| t > Utc::now())
-        || user.membership_status == "active"
-        || user.membership_status == "grace_period"
 }
 
 impl FromRequest for OciBearerUser {
@@ -75,7 +62,7 @@ impl FromRequest for OciBearerUser {
             if user.deleted_at.is_some() {
                 return Err(OciError::Unauthorized);
             }
-            if !has_member_access(&user) {
+            if !user.is_access_allowed() {
                 return Err(OciError::Unauthorized);
             }
 

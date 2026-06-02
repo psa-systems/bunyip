@@ -17,7 +17,6 @@ impl TierConfigRepository {
     }
 
     /// Updates only the fields that are `Some`. `None` leaves the existing DB value unchanged.
-    #[allow(clippy::too_many_arguments)]
     pub async fn update(
         pool: &PgPool,
         lifetime_slots: Option<i64>,

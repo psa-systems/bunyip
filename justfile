@@ -254,6 +254,19 @@ check-fmt:
 check-docker:
     docker build --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .
 
+# Run fmt + clippy + workspace lib tests inside the pinned rust-builder image.
+# For dev boxes with no local Rust toolchain; named volumes keep repeat runs incremental.
+[group: 'checks']
+check-container:
+    docker run --rm \
+        -v {{ justfile_directory() }}:/work \
+        -v dunite-check-cargo-registry:/usr/local/cargo/registry \
+        -v bunyip-check-target:/work/target \
+        -w /work \
+        -e SQLX_OFFLINE=true \
+        ghcr.io/niceguyit/rust-builder-glibc:v1.0.0-rust1.94-trixie \
+        bash -c "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace --lib"
+
 # Type-check the workspace.
 [group: 'checks']
 typecheck:

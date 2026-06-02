@@ -51,19 +51,10 @@ The canonical Rust toolchain is pinned in `rust-toolchain.toml` (currently
 images and CI). Bumping it means fixing any newly-promoted clippy/rustfmt
 lints in the same PR so `just check` stays green everywhere.
 
-Dev boxes have **no local Rust toolchain**; cargo commands run inside the
-rust-builder image with named volumes for the cargo registry and target dir
-(so repeated runs stay incremental):
-
-```sh
-docker run --rm \
-  -v /home/nate/bunyip:/work \
-  -v dunite-check-cargo-registry:/usr/local/cargo/registry \
-  -v bunyip-check-target:/work/target \
-  -w /work -e SQLX_OFFLINE=true \
-  ghcr.io/niceguyit/rust-builder-glibc:v1.0.0-rust1.94-trixie \
-  bash -c "cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all --check && cargo test --workspace --lib"
-```
+Dev boxes have **no local Rust toolchain**, so run `just check-container`. It
+wraps fmt + clippy + workspace lib tests in the pinned rust-builder image with
+named cache volumes for the cargo registry and target dir (so repeated runs
+stay incremental).
 
 The image's rustup honours `rust-toolchain.toml`, so the pin (not the image
 default) decides the compiler version. CI (`.forgejo/workflows/check.yml`)

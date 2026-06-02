@@ -18,6 +18,10 @@ pub mod models;
 pub mod repositories;
 pub mod services;
 
+// Shared test utilities (env-var lock); test builds only.
+#[cfg(test)]
+pub(crate) mod test_support;
+
 // Re-export commonly used types.
 pub use config::Config;
 pub use errors::AppError;

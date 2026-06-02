@@ -37,8 +37,6 @@ pub async fn version_probe(user: Option<OciBearerUser>) -> Result<HttpResponse, 
 }
 
 /// GET/HEAD /v2/{slug}/manifests/{reference}
-// actix-web handler: each argument is a framework extractor, not a refactorable params list.
-#[allow(clippy::too_many_arguments)]
 pub async fn get_manifest(
     req: HttpRequest,
     user: OciBearerUser,

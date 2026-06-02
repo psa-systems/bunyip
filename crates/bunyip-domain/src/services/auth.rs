@@ -29,19 +29,23 @@ pub struct AuthTokens {
     pub expires_in: i64,
 }
 
+// The three result enums below carry a full UserResponse in their Success
+// variant, which dwarfs the alternative variants. That is fine: each value is
+// a transient per-request return, matched exactly once and never stored in a
+// collection, so the size imbalance costs nothing (and boxing would add a
+// pointless per-login heap allocation).
+
 /// Result of a login attempt: either full success or 2FA challenge.
-///
-/// `UserResponse` is boxed in the Success variants below to keep the enums
-/// small (clippy::large_enum_variant); the challenge variants are a fraction
-/// of its size.
+#[allow(clippy::large_enum_variant)]
 pub enum LoginResult {
-    Success(AuthTokens, Box<UserResponse>),
+    Success(AuthTokens, UserResponse),
     TwoFactorRequired { challenge_token: String },
 }
 
 /// Result of magic link verification
+#[allow(clippy::large_enum_variant)]
 pub enum MagicLinkResult {
-    Success(AuthTokens, Box<UserResponse>, bool),
+    Success(AuthTokens, UserResponse, bool),
     TwoFactorRequired {
         challenge_token: String,
         is_new_user: bool,
@@ -49,8 +53,9 @@ pub enum MagicLinkResult {
 }
 
 /// Result of accepting an admin invite
+#[allow(clippy::large_enum_variant)]
 pub enum AcceptInviteResult {
-    Success(AuthTokens, Box<UserResponse>),
+    Success(AuthTokens, UserResponse),
     PasswordRequired { email: String },
 }
 
@@ -188,10 +193,7 @@ impl AuthService {
         )
         .await?;
 
-        Ok(LoginResult::Success(
-            tokens,
-            Box::new(UserResponse::from(user)),
-        ))
+        Ok(LoginResult::Success(tokens, UserResponse::from(user)))
     }
 
     /// Refresh tokens
@@ -471,7 +473,7 @@ impl AuthService {
 
         Ok(MagicLinkResult::Success(
             tokens,
-            Box::new(UserResponse::from(user)),
+            UserResponse::from(user),
             is_new_user,
         ))
     }
@@ -1184,7 +1186,7 @@ impl AuthService {
 
                 Ok(AcceptInviteResult::Success(
                     tokens,
-                    Box::new(UserResponse::from(refreshed)),
+                    UserResponse::from(refreshed),
                 ))
             }
             None => {
@@ -1243,7 +1245,7 @@ impl AuthService {
 
                 Ok(AcceptInviteResult::Success(
                     tokens,
-                    Box::new(UserResponse::from(refreshed)),
+                    UserResponse::from(refreshed),
                 ))
             }
         }

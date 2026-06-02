@@ -1,9 +1,16 @@
 # Pin the Rust toolchain so CI, local checks, and the rust-builder images all
-# agree on one compiler. 1.94 matches the ghcr.io/niceguyit/rust-builder-*
-# v1.0.0-rust1.94-* images used by the Dockerfiles and the container check
-# workflow (see CLAUDE.md "Checks on toolchain-less dev boxes"). Bump this
-# deliberately and fix any newly-promoted clippy/rustfmt lints in the same PR
-# (BUNYIP-36 did exactly that for the 1.93 -> 1.94 move).
+# agree on one compiler.
+#
+# The pin is the EXACT patch version shipped in the
+# ghcr.io/niceguyit/rust-builder-*:v1.0.0-rust1.94-* images, deliberately:
+# rustup resolves an exact pin to the image's preinstalled toolchain with no
+# network access, whereas a partial pin ("1.94") resolves to the latest
+# upstream patch and forces a download whenever upstream moves ahead of the
+# image. This means the pin MUST be bumped in lockstep with the rust-builder
+# image tag: when the image moves (e.g. to a rust1.95 tag or a rebuilt
+# rust1.94 with a newer patch), update this channel in the same PR and fix any
+# newly-promoted clippy/rustfmt lints there too (BUNYIP-36 did exactly that
+# for the 1.93 -> 1.94.1 move).
 [toolchain]
 channel = "1.94.1"
 components = ["clippy", "rustfmt"]

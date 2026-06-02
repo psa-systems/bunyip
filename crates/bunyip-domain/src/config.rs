@@ -695,22 +695,10 @@ pub enum ConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Crate-wide lock serializing env-var-mutating tests (BUNYIP-36); every
+    // test below that touches process env must hold it.
+    use crate::test_support::env_lock;
     use std::env;
-    use std::sync::{Mutex, MutexGuard};
-
-    /// Serializes tests that mutate process-global environment variables.
-    ///
-    /// cargo test runs tests on parallel threads inside one process, so two
-    /// tests touching the same env var (or calling `Config::from_env`, which
-    /// reads them all) race and fail intermittently (BUNYIP-36). Every test
-    /// that calls `env::set_var`/`env::remove_var` on a var another test also
-    /// reads must hold this lock. Poisoning is recovered so one failed test
-    /// does not cascade into unrelated env-test failures.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    fn env_lock() -> MutexGuard<'static, ()> {
-        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
 
     #[test]
     fn test_config_defaults() {

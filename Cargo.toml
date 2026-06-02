@@ -17,6 +17,13 @@ authors = ["PSA Systems"]
 license = "MIT"
 repository = "https://dev.a8n.run/psa-systems/bunyip"
 
+# Workspace-wide lint policy. Crates opt in via `[lints] workspace = true`.
+# too_many_arguments: actix handlers take one extractor per argument and
+# repository functions take one argument per independent filter/column; a
+# params struct would only relocate the list.
+[workspace.lints.clippy]
+too_many_arguments = "allow"
+
 [workspace.dependencies]
 parking_lot = "0.12"
 serde_json = "1"

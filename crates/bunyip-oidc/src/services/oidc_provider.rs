@@ -227,9 +227,6 @@ impl OidcProvider {
     // ── Authorization code ────────────────────────────────────────────────────
 
     /// Issue an authorization code.  Returns the raw opaque code (never stored).
-    // Each argument is a distinct OIDC protocol parameter bound into the code
-    // (RFC 6749 / OIDC Core); a params struct would only relocate the list.
-    #[allow(clippy::too_many_arguments)]
     pub async fn issue_authorization_code(
         &self,
         client: &OAuthClient,
@@ -452,7 +449,7 @@ impl OidcProvider {
                 None
             },
             has_member_access: if include_profile {
-                Some(user_has_member_access(user))
+                Some(user.is_access_allowed())
             } else {
                 None
             },
@@ -873,10 +870,6 @@ impl OidcProvider {
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    // Each argument is a distinct column of the refresh-token row (rotation
-    // lineage + client binding + audit metadata); a params struct would only
-    // relocate the list.
-    #[allow(clippy::too_many_arguments)]
     async fn insert_refresh_token(
         &self,
         client: &OAuthClient,
@@ -1005,13 +998,4 @@ fn sha256_bytes(input: &[u8]) -> Vec<u8> {
     let mut h = Sha256::new();
     h.update(input);
     h.finalize().to_vec()
-}
-
-/// Whether a User has active member access.
-fn user_has_member_access(user: &User) -> bool {
-    user.role == "admin"
-        || user.lifetime_member
-        || user.trial_ends_at.is_some_and(|t| t > Utc::now())
-        || user.membership_status == "active"
-        || user.membership_status == "grace_period"
 }

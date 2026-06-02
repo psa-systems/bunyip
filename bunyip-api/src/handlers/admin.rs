@@ -485,7 +485,6 @@ pub async fn swap_application_order(
 
 /// PUT /v1/admin/applications/{app_id}
 /// Update an application
-#[allow(clippy::too_many_arguments)]
 pub async fn update_application(
     req: HttpRequest,
     admin: AdminUser,

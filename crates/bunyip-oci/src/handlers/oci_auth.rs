@@ -13,7 +13,7 @@ use std::sync::{Arc, OnceLock};
 
 use crate::errors::OciError;
 use crate::middleware::extract_client_ip;
-use crate::models::{AuditAction, CreateAuditLog, RateLimitConfig, User};
+use crate::models::{AuditAction, CreateAuditLog, RateLimitConfig};
 use crate::repositories::{
     ApplicationRepository, AuditLogRepository, RateLimitRepository, UserRepository,
 };
@@ -33,16 +33,6 @@ pub struct TokenResponse {
     pub access_token: String,
     pub expires_in: u64,
     pub issued_at: String,
-}
-
-/// Active-member gate. Mirrors `AccessTokenClaims::has_member_access()` and
-/// the OCI bearer extractor check.
-fn has_member_access(user: &User) -> bool {
-    user.role == "admin"
-        || user.lifetime_member
-        || user.trial_ends_at.is_some_and(|t| t > Utc::now())
-        || user.membership_status == "active"
-        || user.membership_status == "grace_period"
 }
 
 /// A pre-hashed Argon2id string used to perform constant-time verification
@@ -131,7 +121,7 @@ pub async fn issue_token(
         return Err(OciError::Unauthorized);
     }
 
-    if !has_member_access(&user) {
+    if !user.is_access_allowed() {
         audit_failed(pool.get_ref(), &email, ip, "no_active_membership").await;
         return Err(OciError::Unauthorized);
     }
