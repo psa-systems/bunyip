@@ -308,8 +308,16 @@ pub async fn downloads(State(st): State<AppState>, headers: HeaderMap) -> Respon
                         }
                     } @else if e.status == 401 {
                         // The API rejected the session even though this page
-                        // loaded; a refresh won't fix a stale session.
-                        (error_box("Your session has expired. Please sign in again to view downloads."))
+                        // loaded; a refresh won't fix a stale session, so point
+                        // at sign-in instead.
+                        div class="space-y-2" {
+                            (error_box("Your session has expired. Please sign in again to view downloads."))
+                            a href="/login" class="text-sm text-primary underline" { "Sign in" }
+                        }
+                    } @else if e.status == 404 {
+                        // Downloads are disabled server-side: a config state, not
+                        // a transient outage, so don't suggest a refresh.
+                        (error_box("Downloads aren't available on this server."))
                     } @else {
                         (error_box("Downloads are temporarily unavailable. Refresh the page to try again."))
                     }
