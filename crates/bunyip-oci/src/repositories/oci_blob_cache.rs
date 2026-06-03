@@ -61,10 +61,18 @@ impl OciBlobCacheRepository {
     }
 
     pub async fn total_size_bytes(&self) -> Result<i64, AppError> {
-        let (total,): (Option<i64>,) = sqlx::query_as("SELECT SUM(size_bytes) FROM oci_blob_cache")
-            .fetch_one(&self.pool)
-            .await?;
-        Ok(total.unwrap_or(0))
+        // Postgres `SUM(bigint)` returns NUMERIC (to avoid overflow), which does
+        // NOT decode into i64 and made this query fail on every non-empty table
+        // ("mismatched types ... INT8 vs NUMERIC"), so LRU eviction silently
+        // failed on every blob store (BUNYIP-41). COALESCE to 0 and cast back to
+        // BIGINT so the result is a non-null i64 the row decodes cleanly. The
+        // per-blob-cache byte cap is far below i64::MAX, so the cast cannot
+        // overflow in practice.
+        let (total,): (i64,) =
+            sqlx::query_as("SELECT COALESCE(SUM(size_bytes), 0)::BIGINT FROM oci_blob_cache")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(total)
     }
 
     /// Return rows for LRU eviction in oldest-last-access-first order, up to `limit`.
@@ -226,6 +234,48 @@ mod tests {
             .position(|r| r.content_digest == b)
             .expect("b present");
         assert!(a_idx < b_idx, "a was inserted first, should come before b");
+
+        cleanup(&repo, &[&a, &b]).await;
+    }
+
+    #[actix_rt::test]
+    async fn total_size_bytes_sums_without_decode_error() {
+        // Regression for BUNYIP-41: SUM(bigint) is NUMERIC in Postgres and used
+        // to fail decoding into i64, breaking LRU eviction. This must return the
+        // summed bytes, not error.
+        let Some(repo) = maybe_repo().await else {
+            return;
+        };
+        let suffix = uuid::Uuid::new_v4();
+        let a = format!("sha256:test-sum-a-{}", suffix);
+        let b = format!("sha256:test-sum-b-{}", suffix);
+        cleanup(&repo, &[&a, &b]).await;
+
+        let before = repo.total_size_bytes().await.unwrap();
+        repo.upsert(&NewCachedBlob {
+            content_digest: a.clone(),
+            size_bytes: 1000,
+            media_type: None,
+        })
+        .await
+        .unwrap();
+        repo.upsert(&NewCachedBlob {
+            content_digest: b.clone(),
+            size_bytes: 2345,
+            media_type: None,
+        })
+        .await
+        .unwrap();
+
+        // Use >= (not ==): total_size_bytes is a GLOBAL sum and the sibling
+        // DB-gated tests run in parallel against the same table, so an exact
+        // delta would be flaky. The point is that the query DECODES (the
+        // BUNYIP-41 bug) and includes our rows; >= proves both.
+        let after = repo.total_size_bytes().await.unwrap();
+        assert!(
+            after >= before + 3345,
+            "expected total to grow by at least 3345 (before={before}, after={after})"
+        );
 
         cleanup(&repo, &[&a, &b]).await;
     }
