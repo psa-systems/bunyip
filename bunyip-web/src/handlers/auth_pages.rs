@@ -41,11 +41,35 @@ fn pw_reqs() -> Markup {
     }
 }
 
-fn safe_redirect(raw: Option<&str>) -> String {
-    match raw {
-        Some(r) if r.starts_with('/') && !r.starts_with("//") => r.to_string(),
-        _ => "/dashboard".to_string(),
+/// Validate and normalise a post-login redirect target.
+///
+/// Accepts two shapes:
+/// - Relative paths starting with `/` (but not `//`, which would be a
+///   protocol-relative URL and could escape the BFF host).
+/// - Absolute URLs whose origin equals `oidc_issuer` (bunyip-api's host).
+///   This is what lets the `/oauth2/authorize` -> `/login` -> `/oauth2/authorize`
+///   round-trip complete: bunyip-api passes the full authorize URL in
+///   `?redirect=`, bunyip-web logs the user in, then bounces them back.
+///
+/// Anything else (other hostnames, schemes, javascript:, etc.) falls back to
+/// `/dashboard` so a malicious `?redirect=` can't be weaponised.
+fn safe_redirect(raw: Option<&str>, oidc_issuer: &str) -> String {
+    const FALLBACK: &str = "/dashboard";
+    let Some(r) = raw else {
+        return FALLBACK.into();
+    };
+    if r.starts_with('/') && !r.starts_with("//") {
+        return r.to_string();
     }
+    // Match by exact origin prefix. The issuer is normalised to its origin
+    // (scheme + host + optional port, no trailing slash); the redirect must
+    // start with `{issuer}/` so a path on the same origin always follows.
+    // No `url` crate dep is needed for this check.
+    let issuer = oidc_issuer.trim_end_matches('/');
+    if !issuer.is_empty() && (r == issuer || r.starts_with(&format!("{issuer}/"))) {
+        return r.to_string();
+    }
+    FALLBACK.into()
 }
 
 #[derive(Deserialize)]
@@ -110,7 +134,7 @@ pub async fn login_get(
 ) -> Response {
     let (c, fwd) = ctx(&st, &headers).await;
     if c.is_signed_in() {
-        return redirect(&safe_redirect(q.redirect.as_deref()));
+        return redirect(&safe_redirect(q.redirect.as_deref(), &st.cfg.oidc_issuer));
     }
     let apps = calls::applications(&st.api, fwd.as_deref())
         .await
@@ -135,7 +159,7 @@ pub async fn login_post(
 ) -> Response {
     let cookie = cookie_of(&headers);
     let remember = f.remember.is_some();
-    let target = safe_redirect(f.redirect.as_deref());
+    let target = safe_redirect(f.redirect.as_deref(), &st.cfg.oidc_issuer);
 
     match auth_api::login(
         &st.api,
@@ -871,4 +895,55 @@ pub async fn verify_email(
         },
     };
     auth_page(&st, &headers, "Verify email · Bunyip", card).await
+}
+
+#[cfg(test)]
+mod safe_redirect_tests {
+    use super::safe_redirect;
+
+    const ISSUER: &str = "https://api.a8n.systems";
+
+    #[test]
+    fn none_falls_back_to_dashboard() {
+        assert_eq!(safe_redirect(None, ISSUER), "/dashboard");
+    }
+
+    #[test]
+    fn relative_path_passes_through() {
+        assert_eq!(safe_redirect(Some("/membership"), ISSUER), "/membership");
+    }
+
+    #[test]
+    fn protocol_relative_url_is_rejected() {
+        // `//evil.example.com/x` would escape the host on a real browser.
+        assert_eq!(safe_redirect(Some("//evil.com/x"), ISSUER), "/dashboard");
+    }
+
+    #[test]
+    fn absolute_url_on_issuer_origin_passes_through() {
+        let target = "https://api.a8n.systems/oauth2/authorize?client_id=abc&response_type=code";
+        assert_eq!(safe_redirect(Some(target), ISSUER), target);
+    }
+
+    #[test]
+    fn absolute_url_on_different_origin_falls_back() {
+        let target = "https://evil.example.com/oauth2/authorize";
+        assert_eq!(safe_redirect(Some(target), ISSUER), "/dashboard");
+    }
+
+    #[test]
+    fn issuer_prefix_match_is_origin_anchored() {
+        // `https://api.a8n.systems.evil.com/...` must NOT match a substring of
+        // the issuer; the trailing-slash anchor on the prefix check prevents it.
+        let target = "https://api.a8n.systems.evil.com/oauth2/authorize";
+        assert_eq!(safe_redirect(Some(target), ISSUER), "/dashboard");
+    }
+
+    #[test]
+    fn javascript_scheme_rejected() {
+        assert_eq!(
+            safe_redirect(Some("javascript:alert(1)"), ISSUER),
+            "/dashboard"
+        );
+    }
 }
