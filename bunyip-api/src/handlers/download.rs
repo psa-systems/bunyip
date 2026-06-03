@@ -244,19 +244,39 @@ pub async fn download_asset(
             {
                 Ok(row) => row,
                 Err(e) => {
-                    // Integrity failures usually mean the upstream metadata is
-                    // stale (re-uploaded asset, lagging size column); make them
-                    // distinguishable from plain upstream outages in the logs.
+                    // Classify the failure (PSA-36 gave dunite-download a total,
+                    // class-preserving error type). Forgejo/Transport outages and
+                    // integrity mismatches are upstream-class (502); Io/Store are
+                    // local failures on OUR side (500). Before PSA-36 transport
+                    // errors round-tripped as Io, so every failure looked like a
+                    // 502 - now a genuine filesystem/store fault is reported as
+                    // such instead of blaming the upstream.
+                    let is_upstream = matches!(
+                        e,
+                        DownloadCacheError::Forgejo(_)
+                            | DownloadCacheError::Transport(_)
+                            | DownloadCacheError::ShaMismatch { .. }
+                            | DownloadCacheError::SizeMismatch { .. }
+                    );
                     if matches!(
                         e,
                         DownloadCacheError::ShaMismatch { .. }
                             | DownloadCacheError::SizeMismatch { .. }
                     ) {
+                        // Integrity failures usually mean the upstream metadata is
+                        // stale (re-uploaded asset, lagging size column).
                         tracing::warn!(
                             app = %app.slug,
                             asset = %asset_name,
                             error = %e,
                             "download integrity check failed; upstream Forgejo metadata may be stale"
+                        );
+                    } else if !is_upstream {
+                        tracing::error!(
+                            app = %app.slug,
+                            asset = %asset_name,
+                            error = ?e,
+                            "download cache local failure (filesystem/store), not an upstream outage"
                         );
                     }
                     AuditLogRepository::create(
@@ -272,7 +292,11 @@ pub async fn download_asset(
                             })),
                     )
                     .await?;
-                    return Err(AppError::upstream("Download upstream failed"));
+                    return Err(if is_upstream {
+                        AppError::upstream("Download upstream failed")
+                    } else {
+                        AppError::internal("Download failed")
+                    });
                 }
             };
 
