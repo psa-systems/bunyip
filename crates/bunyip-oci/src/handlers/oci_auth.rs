@@ -56,30 +56,65 @@ pub async fn issue_token(
 ) -> Result<HttpResponse, OciError> {
     let ip = extract_client_ip(&req).map(IpNetwork::from);
     let (email, password) = parse_basic_auth(&req).ok_or(OciError::Unauthorized)?;
-
-    // Rate-limit by lowercased email, matching the primary-API login endpoint
-    // (5 attempts/min/key). Prevents credential-stuffing attacks that pivot
-    // from /v1/auth/login to the registry's /auth/token.
     let rate_key = email.to_lowercase();
-    let (_count, exceeded) = RateLimitRepository::check_and_increment(
+
+    // BUNYIP-40: Docker requests a fresh bearer token per repository per
+    // operation, so a single `docker compose pull` of N images is N token
+    // requests in seconds. Rate-limiting EVERY request at the login cap (5/min)
+    // throttled legitimate pulls. Instead:
+    //   1. Block when too many FAILED verifications have accrued for this email
+    //      or this source IP (the credential-stuffing signal) - read-only, so a
+    //      request that may succeed does not consume the failure budget.
+    //   2. Bound total throughput per email at a generous cap purely to cap
+    //      Argon2 CPU.
+    // Only genuine credential failures (below, via fail_credential) increment
+    // the failure counters. These are cheap indexed lookups; they run before
+    // the ~100ms Argon2 verify, which dominates the request cost.
+    let ip_key = ip.map(|net| net.ip().to_string());
+
+    // Per-email failure cap. `check` reads without incrementing, so compare the
+    // read count directly (`>=`); do NOT switch this to the repo's
+    // increment-oriented `exceeded` (`>`), which would allow one extra guess.
+    if failures_at_cap(
         pool.get_ref(),
         &rate_key,
-        &RateLimitConfig::LOGIN,
+        &RateLimitConfig::OCI_TOKEN_FAILURES,
+    )
+    .await?
+    {
+        return Err(too_many(pool.get_ref(), &rate_key, &email, ip, "rate_limited").await);
+    }
+
+    // Per-IP failure cap (distributed-guessing brake). Skipped when no client
+    // IP could be determined.
+    if let Some(ip_key) = ip_key.as_deref() {
+        if failures_at_cap(
+            pool.get_ref(),
+            ip_key,
+            &RateLimitConfig::OCI_TOKEN_IP_FAILURES,
+        )
+        .await?
+        {
+            return Err(too_many(pool.get_ref(), ip_key, &email, ip, "rate_limited_ip").await);
+        }
+    }
+
+    let (_throughput, throughput_exceeded) = RateLimitRepository::check_and_increment(
+        pool.get_ref(),
+        &rate_key,
+        &RateLimitConfig::OCI_TOKEN_THROUGHPUT,
     )
     .await
     .map_err(|_| OciError::Internal)?;
-    if exceeded {
-        let retry_after = RateLimitRepository::get_retry_after(
+    if throughput_exceeded {
+        return Err(too_many(
             pool.get_ref(),
             &rate_key,
-            &RateLimitConfig::LOGIN,
+            &email,
+            ip,
+            "rate_limited_throughput",
         )
-        .await
-        .unwrap_or(60);
-        audit_failed(pool.get_ref(), &email, ip, "rate_limited").await;
-        return Err(OciError::TooManyRequests {
-            retry_after_secs: Some(retry_after),
-        });
+        .await);
     }
 
     let user = UserRepository::find_by_email(pool.get_ref(), &email)
@@ -93,8 +128,9 @@ pub async fn issue_token(
             // email enumeration attacks via response-time analysis.
             let password_service = PasswordService::new();
             let _ = password_service.verify(&password, dummy_hash());
-            audit_failed(pool.get_ref(), &email, ip, "user_not_found").await;
-            return Err(OciError::Unauthorized);
+            return Err(
+                fail_credential(pool.get_ref(), &rate_key, &email, ip, "user_not_found").await,
+            );
         }
     };
 
@@ -110,16 +146,14 @@ pub async fn issue_token(
     // password-check branch.
     let Some(password_hash) = user.password_hash.as_ref() else {
         let _ = password_service.verify(&password, dummy_hash());
-        audit_failed(pool.get_ref(), &email, ip, "no_password").await;
-        return Err(OciError::Unauthorized);
+        return Err(fail_credential(pool.get_ref(), &rate_key, &email, ip, "no_password").await);
     };
 
     let password_ok = password_service
         .verify(&password, password_hash)
         .map_err(|_| OciError::Internal)?;
     if !password_ok {
-        audit_failed(pool.get_ref(), &email, ip, "bad_password").await;
-        return Err(OciError::Unauthorized);
+        return Err(fail_credential(pool.get_ref(), &rate_key, &email, ip, "bad_password").await);
     }
 
     if !user.is_access_allowed() {
@@ -213,6 +247,85 @@ async fn audit_failed(pool: &PgPool, email: &str, ip: Option<IpNetwork>, reason:
     if let Err(e) = AuditLogRepository::create(pool, log).await {
         tracing::warn!(?e, "oci audit log write failed");
     }
+}
+
+/// Read (without incrementing) a failure counter and report whether it is at or
+/// over its cap. Uses `>=` against the read count deliberately: the failures
+/// are counted on the failure paths (`fail_credential`), not here, so the
+/// boundary value must block. A DB read error fails closed (propagates 500).
+async fn failures_at_cap(
+    pool: &PgPool,
+    key: &str,
+    config: &RateLimitConfig,
+) -> Result<bool, OciError> {
+    let (count, _) = RateLimitRepository::check(pool, key, config)
+        .await
+        .map_err(|_| OciError::Internal)?;
+    Ok(count >= config.max_requests)
+}
+
+/// Build a 429 for an exceeded limit: look up the reset window, audit, and
+/// return the error. `key` is the counter key that tripped (email or IP);
+/// `email`/`ip` are for the audit record.
+async fn too_many(
+    pool: &PgPool,
+    key: &str,
+    email: &str,
+    ip: Option<IpNetwork>,
+    reason: &str,
+) -> OciError {
+    // get_retry_after needs the config to compute the window; the failure and
+    // throughput windows are both 60s, so any of the OCI token configs gives
+    // the right answer. Use FAILURES as the representative 60s window.
+    let retry_after =
+        RateLimitRepository::get_retry_after(pool, key, &RateLimitConfig::OCI_TOKEN_FAILURES)
+            .await
+            .unwrap_or(60);
+    audit_failed(pool, email, ip, reason).await;
+    OciError::TooManyRequests {
+        retry_after_secs: Some(retry_after),
+    }
+}
+
+/// A credential-verification failure (wrong/absent password, unknown email):
+/// the credential-stuffing signal (BUNYIP-40). Increments BOTH the per-email
+/// and per-IP failure counters that gate the endpoint, audits, and returns 401.
+/// Authorization failures (deleted user, no membership, no entitlement) happen
+/// AFTER a successful password check and so are NOT counted here. `rate_key` is
+/// the lowercased email used as the per-email counter key.
+async fn fail_credential(
+    pool: &PgPool,
+    rate_key: &str,
+    email: &str,
+    ip: Option<IpNetwork>,
+    reason: &str,
+) -> OciError {
+    // Best-effort: a counter write failure must not change the auth outcome,
+    // but log it because it means the credential-stuffing guard is degrading
+    // open (failures stop being counted) under DB stress.
+    if let Err(e) = RateLimitRepository::check_and_increment(
+        pool,
+        rate_key,
+        &RateLimitConfig::OCI_TOKEN_FAILURES,
+    )
+    .await
+    {
+        tracing::warn!(?e, "oci failure-counter increment failed (email)");
+    }
+    if let Some(net) = ip {
+        let ip_key = net.ip().to_string();
+        if let Err(e) = RateLimitRepository::check_and_increment(
+            pool,
+            &ip_key,
+            &RateLimitConfig::OCI_TOKEN_IP_FAILURES,
+        )
+        .await
+        {
+            tracing::warn!(?e, "oci failure-counter increment failed (ip)");
+        }
+    }
+    audit_failed(pool, email, ip, reason).await;
+    OciError::Unauthorized
 }
 
 #[cfg(test)]
