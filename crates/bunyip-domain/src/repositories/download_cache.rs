@@ -140,10 +140,15 @@ impl DownloadCacheRepository {
     }
 
     pub async fn total_size_bytes(&self) -> Result<i64, AppError> {
-        let (total,): (Option<i64>,) = sqlx::query_as("SELECT SUM(size_bytes) FROM download_cache")
-            .fetch_one(&self.pool)
-            .await?;
-        Ok(total.unwrap_or(0))
+        // Postgres `SUM(bigint)` returns NUMERIC, which does NOT decode into
+        // i64 and made this query fail on every non-empty table, silently
+        // breaking download-cache LRU eviction (the download-vertical twin of
+        // BUNYIP-41). COALESCE to 0 and cast back to BIGINT for a clean i64.
+        let (total,): (i64,) =
+            sqlx::query_as("SELECT COALESCE(SUM(size_bytes), 0)::BIGINT FROM download_cache")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(total)
     }
 
     /// Returns up to `limit` oldest-by-last-accessed rows.

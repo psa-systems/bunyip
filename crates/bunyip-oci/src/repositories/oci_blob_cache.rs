@@ -267,8 +267,15 @@ mod tests {
         .await
         .unwrap();
 
+        // Use >= (not ==): total_size_bytes is a GLOBAL sum and the sibling
+        // DB-gated tests run in parallel against the same table, so an exact
+        // delta would be flaky. The point is that the query DECODES (the
+        // BUNYIP-41 bug) and includes our rows; >= proves both.
         let after = repo.total_size_bytes().await.unwrap();
-        assert_eq!(after - before, 3345);
+        assert!(
+            after >= before + 3345,
+            "expected total to grow by at least 3345 (before={before}, after={after})"
+        );
 
         cleanup(&repo, &[&a, &b]).await;
     }
