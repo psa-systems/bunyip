@@ -29,6 +29,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 
+# Percent-encode the OIDC return URL when shuttling it through the 2FA hop.
+urlencoding = "2"
+
 # Server-side QR rendering (otpauth URI -> inline SVG) for 2FA setup.
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
