@@ -240,7 +240,7 @@ fn feedback_form(submitted: bool, error: Option<&str>) -> Markup {
                         (icon("smile-plus", "h-4 w-4")) "Help shape what ships next"
                     }
                     h1 class="mt-6 text-4xl font-bold tracking-tight sm:text-5xl" {
-                        "Tell us what would make " span class="text-gradient bg-gradient-to-r from-primary via-indigo-500 to-teal-400" { "Bunyip" } " better."
+                        "Tell us what would make " span class="text-bunyip-reed-900 dark:text-bunyip-reed-50" { "Bunyip" } " better."
                     }
                     p class="mx-auto mt-4 max-w-2xl text-lg text-muted-foreground" { "Share bugs, missing features, rough edges, or ideas. We read everything." }
                 }
