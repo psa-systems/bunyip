@@ -22,8 +22,8 @@ pub use dunite_core::services::{encryption, password};
 // Binary-distribution engine (re-exported from dunite-download). Bunyip
 // implements the engine's store traits in `crate::repositories`.
 pub use dunite_download::services::{
-    DownloadCache, DownloadCacheError, DownloadGuard, DownloadLimiter, ForgejoAssetClient,
-    ForgejoError, LimitDenial, ReleaseCache,
+    DownloadCache, DownloadCacheError, DownloadGuard, DownloadLimiter, ErrorClass,
+    ForgejoAssetClient, ForgejoError, LimitDenial, ReleaseCache,
 };
 
 /// The concrete download cache: the generic dunite-download `DownloadCache`
