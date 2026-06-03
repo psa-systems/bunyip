@@ -110,7 +110,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                             }
                             div class="p-6 pt-0 mt-auto" {
                                 @if app.is_accessible {
-                                    a href=(format!("https://{app_url}")) target="_blank" rel="noopener noreferrer" {
+                                    a href=(format!("https://{app_url}/dashboard")) target="_blank" rel="noopener noreferrer" {
                                         span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md shadow-indigo-500/15 hover:shadow-lg hover:shadow-indigo-500/25 transition-shadow", app_gradient(i)))) {
                                             "Open " (app.display_name) (icon("external-link", "ml-2 h-4 w-4"))
                                         }
