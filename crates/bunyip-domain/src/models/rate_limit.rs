@@ -64,4 +64,25 @@ impl RateLimitConfig {
         max_requests: 3,
         window_seconds: 3600,
     };
+
+    /// OCI token endpoint, FAILED credential verifications: 5 per minute per
+    /// email (BUNYIP-40). Only credential-guessing failures count toward this
+    /// cap, so a chatty but VALID `docker compose pull` (one token per image
+    /// per op) is never throttled, while credential stuffing is still capped at
+    /// the same rate as `/v1/auth/login`.
+    pub const OCI_TOKEN_FAILURES: Self = Self {
+        action: "oci_token_failures",
+        max_requests: 5,
+        window_seconds: 60,
+    };
+
+    /// OCI token endpoint, ALL requests: 60 per minute per email (BUNYIP-40).
+    /// A generous throughput cap that bounds Argon2 CPU (each verify is ~100ms)
+    /// so a flood of valid-credential requests cannot exhaust the server, while
+    /// staying far above any real multi-image pull.
+    pub const OCI_TOKEN_THROUGHPUT: Self = Self {
+        action: "oci_token_throughput",
+        max_requests: 60,
+        window_seconds: 60,
+    };
 }
