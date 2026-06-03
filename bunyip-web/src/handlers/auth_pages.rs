@@ -175,7 +175,13 @@ pub async fn login_post(
             cookies.push(format!(
                 "bunyip_2fa={challenge_token}; Path=/; HttpOnly; SameSite=Lax"
             ));
-            redirect_cookies("/login/2fa", &cookies)
+            // Carry the original ?redirect= forward so the OIDC return-URL
+            // survives the 2FA step.
+            let path = match f.redirect.as_deref().filter(|s| !s.is_empty()) {
+                Some(r) => format!("/login/2fa?redirect={}", urlencoding::encode(r)),
+                None => "/login/2fa".to_string(),
+            };
+            redirect_cookies(&path, &cookies)
         }
         Err(e) => {
             let apps = calls::applications(&st.api, None).await.unwrap_or_default();
@@ -550,9 +556,11 @@ pub async fn password_reset_confirm_post(
 #[derive(Deserialize)]
 pub struct TwoFactorForm {
     pub code: String,
+    pub redirect: Option<String>,
 }
 
-fn twofa_card(error: Option<&str>) -> Markup {
+fn twofa_card(error: Option<&str>, redirect: Option<&str>) -> Markup {
+    let redirect = redirect.unwrap_or_default();
     auth_card(
         "shield",
         "bg-primary/10 text-primary",
@@ -560,6 +568,9 @@ fn twofa_card(error: Option<&str>) -> Markup {
         "Enter the 6-digit code from your authenticator app",
         html! {
             form method="post" action="/login/2fa" class="space-y-4" {
+                @if !redirect.is_empty() {
+                    input type="hidden" name="redirect" value=(redirect);
+                }
                 @if let Some(e) = error { (error_box(e)) }
                 div class="space-y-2" {
                     label for="code" class="text-sm font-medium leading-none" { "Authentication Code" }
@@ -574,7 +585,11 @@ fn twofa_card(error: Option<&str>) -> Markup {
     )
 }
 
-pub async fn twofa_verify_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
+pub async fn twofa_verify_get(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<RedirectQuery>,
+) -> Response {
     if cookie_value(&headers, "bunyip_2fa").is_none() {
         let card = auth_card(
             "shield",
@@ -587,7 +602,13 @@ pub async fn twofa_verify_get(State(st): State<AppState>, headers: HeaderMap) ->
         );
         return auth_page(&st, &headers, "Two-factor · Bunyip", card).await;
     }
-    auth_page(&st, &headers, "Two-factor · Bunyip", twofa_card(None)).await
+    auth_page(
+        &st,
+        &headers,
+        "Two-factor · Bunyip",
+        twofa_card(None, q.redirect.as_deref()),
+    )
+    .await
 }
 
 pub async fn twofa_verify_post(
@@ -599,17 +620,18 @@ pub async fn twofa_verify_post(
         return redirect("/login");
     };
     let cookie = cookie_of(&headers);
+    let target = safe_redirect(f.redirect.as_deref(), &st.cfg.oidc_issuer);
     match auth_api::verify_2fa(&st.api, cookie.as_deref(), &challenge, f.code.trim()).await {
         Ok((_, mut cookies)) => {
             cookies.push("bunyip_2fa=; Path=/; Max-Age=0".to_string());
-            redirect_cookies("/dashboard", &cookies)
+            redirect_cookies(&target, &cookies)
         }
         Err(e) => {
             auth_page(
                 &st,
                 &headers,
                 "Two-factor · Bunyip",
-                twofa_card(Some(&e.user_message())),
+                twofa_card(Some(&e.user_message()), f.redirect.as_deref()),
             )
             .await
         }
