@@ -14,7 +14,8 @@ use crate::middleware::{extract_client_ip, OciBearerUser};
 use crate::models::oci::CachedManifest;
 use crate::models::{AuditAction, CreateAuditLog};
 use crate::repositories::{
-    ApplicationRepository, AuditLogRepository, OciBlobCacheRepository, OciPullDailyCountRepository,
+    ApplicationRepository, AuditLogRepository, EntitlementRepository, OciBlobCacheRepository,
+    OciPullDailyCountRepository,
 };
 use crate::services::{
     BlobCache, BlobCacheError, ForgejoRegistryClient, ManifestCache, OciLimitDenial, OciLimiter,
@@ -71,6 +72,7 @@ pub async fn get_manifest(
     if !app.is_pullable() {
         return Err(OciError::NameUnknown);
     }
+    assert_entitled(pool.get_ref(), &req, &user, &app).await?;
     let pinned = app
         .pinned_image_tag
         .clone()
@@ -216,6 +218,7 @@ pub async fn get_blob(
     if !app.is_pullable() {
         return Err(OciError::NameUnknown);
     }
+    assert_entitled(pool.get_ref(), &req, &user, &app).await?;
     let owner = app
         .oci_image_owner
         .as_deref()
@@ -396,4 +399,33 @@ async fn audit_failed_upstream(
     if let Err(e) = AuditLogRepository::create(pool, log).await {
         tracing::warn!(?e, "oci pull_failed_upstream audit log failed");
     }
+}
+
+/// Entitlement gate for a restricted product (BUNYIP-39). The decision is the
+/// shared `EntitlementRepository::is_allowed` (open products and admins pass
+/// without a DB hit). Denials are audited and surface as `NameUnknown` (404),
+/// the same code as a non-pullable product, so an unentitled member cannot
+/// distinguish "restricted product exists" from "no such product" by status.
+async fn assert_entitled(
+    pool: &PgPool,
+    req: &HttpRequest,
+    user: &OciBearerUser,
+    app: &crate::models::Application,
+) -> Result<(), OciError> {
+    let allowed =
+        EntitlementRepository::is_allowed(pool, user.claims.sub, user.role == "admin", app)
+            .await
+            .map_err(|_| OciError::Internal)?;
+    if allowed {
+        return Ok(());
+    }
+    let log = CreateAuditLog::new(AuditAction::OciPullDeniedEntitlement)
+        .with_actor(user.claims.sub, &user.email, &user.role)
+        .with_resource("application", app.id)
+        .with_ip(extract_client_ip(req).map(IpNetwork::from))
+        .with_metadata(serde_json::json!({ "slug": app.slug }));
+    if let Err(e) = AuditLogRepository::create(pool, log).await {
+        tracing::warn!(?e, "oci pull_denied_entitlement audit log failed");
+    }
+    Err(OciError::NameUnknown)
 }

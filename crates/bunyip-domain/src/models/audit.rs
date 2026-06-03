@@ -62,6 +62,7 @@ pub enum AuditAction {
     DownloadCompleted,
     DownloadDeniedMembership,
     DownloadDeniedRateLimit,
+    DownloadDeniedEntitlement,
     DownloadFailedUpstream,
     OciLoginSucceeded,
     OciLoginFailed,
@@ -70,6 +71,11 @@ pub enum AuditAction {
     OciPullFailedUpstream,
     OciPullDeniedRateLimit,
     OciPullDeniedScope,
+    OciPullDeniedEntitlement,
+    AdminEntitlementGranted,
+    AdminEntitlementRevoked,
+    AdminApplicationRestrictionChanged,
+    AdminStripePriceMappingChanged,
 }
 
 impl AuditAction {
@@ -128,6 +134,7 @@ impl AuditAction {
             AuditAction::DownloadCompleted => "download_completed",
             AuditAction::DownloadDeniedMembership => "download_denied_membership",
             AuditAction::DownloadDeniedRateLimit => "download_denied_rate_limit",
+            AuditAction::DownloadDeniedEntitlement => "download_denied_entitlement",
             AuditAction::DownloadFailedUpstream => "download_failed_upstream",
             AuditAction::OciLoginSucceeded => "oci_login_succeeded",
             AuditAction::OciLoginFailed => "oci_login_failed",
@@ -136,6 +143,13 @@ impl AuditAction {
             AuditAction::OciPullFailedUpstream => "oci_pull_failed_upstream",
             AuditAction::OciPullDeniedRateLimit => "oci_pull_denied_rate_limit",
             AuditAction::OciPullDeniedScope => "oci_pull_denied_scope",
+            AuditAction::OciPullDeniedEntitlement => "oci_pull_denied_entitlement",
+            AuditAction::AdminEntitlementGranted => "admin_entitlement_granted",
+            AuditAction::AdminEntitlementRevoked => "admin_entitlement_revoked",
+            AuditAction::AdminApplicationRestrictionChanged => {
+                "admin_application_restriction_changed"
+            }
+            AuditAction::AdminStripePriceMappingChanged => "admin_stripe_price_mapping_changed",
         }
     }
 
@@ -163,6 +177,10 @@ impl AuditAction {
                 | AuditAction::AdminStripeConfigUpdated
                 | AuditAction::AdminTierConfigUpdated
                 | AuditAction::AdminKeyRotation
+                | AuditAction::AdminEntitlementGranted
+                | AuditAction::AdminEntitlementRevoked
+                | AuditAction::AdminApplicationRestrictionChanged
+                | AuditAction::AdminStripePriceMappingChanged
         )
     }
 }

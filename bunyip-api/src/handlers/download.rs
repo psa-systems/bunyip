@@ -19,7 +19,7 @@ use crate::models::download::{
 };
 use crate::models::{Application, AuditAction, CreateAuditLog};
 use crate::repositories::{
-    ApplicationRepository, AuditLogRepository, DownloadDailyCountRepository,
+    ApplicationRepository, AuditLogRepository, DownloadDailyCountRepository, EntitlementRepository,
 };
 use crate::responses::{get_request_id, success};
 use crate::services::{
@@ -46,7 +46,7 @@ fn to_public_asset(a: &crate::models::download::ReleaseAsset, slug: &str) -> Dow
 /// GET /v1/applications/{slug}/downloads
 pub async fn list_app_downloads(
     req: HttpRequest,
-    _user: MemberUser,
+    user: MemberUser,
     pool: web::Data<PgPool>,
     release_cache: web::Data<Option<Arc<ReleaseCache>>>,
     path: web::Path<String>,
@@ -60,6 +60,20 @@ pub async fn list_app_downloads(
     let app = ApplicationRepository::find_active_by_slug(&pool, &slug)
         .await?
         .ok_or(AppError::not_found("Application"))?;
+
+    // Restricted product the caller can't access: degrade to an empty asset
+    // list (same shape as the no-download-config branch) so the page still
+    // renders rather than surfacing a 403. Shared decision; a DB error
+    // propagates (fails closed).
+    if !EntitlementRepository::is_allowed(&pool, user.0.sub, user.0.role == "admin", &app).await? {
+        return Ok(success(
+            AppDownloadsResponse {
+                release_tag: None,
+                assets: vec![],
+            },
+            request_id,
+        ));
+    }
 
     let Some(source) = app.download_source() else {
         return Ok(success(
@@ -94,7 +108,7 @@ pub async fn list_app_downloads(
 /// image, or both.
 pub async fn list_all_downloads(
     req: HttpRequest,
-    _user: MemberUser,
+    user: MemberUser,
     pool: web::Data<PgPool>,
     release_cache: web::Data<Option<Arc<ReleaseCache>>>,
     oci_config: web::Data<OciConfig>,
@@ -107,13 +121,27 @@ pub async fn list_all_downloads(
     let request_id = get_request_id(&req);
     let apps = ApplicationRepository::list_active(&pool).await?;
 
+    let is_admin = user.0.role == "admin";
+
+    // Fetch the caller's full active-entitlement set in ONE query, then filter
+    // restricted products in memory (avoids an is_entitled round-trip per
+    // restricted product). Admins see everything, so skip the query entirely.
+    let entitled: std::collections::HashSet<uuid::Uuid> = if is_admin {
+        std::collections::HashSet::new()
+    } else {
+        EntitlementRepository::active_application_ids(&pool, user.0.sub)
+            .await?
+            .into_iter()
+            .collect()
+    };
+
     // Build every group concurrently: each app may need a Forgejo round-trip
     // (cold release cache), so driving them with join_all turns N sequential
     // round-trips into one wall-clock round-trip. join_all preserves input
     // order, so the sort_order from list_active carries through.
     let groups: Vec<AppDownloadGroup> = futures_util::future::join_all(
         apps.iter()
-            .map(|app| build_download_group(app, release_cache, &oci_config)),
+            .map(|app| build_download_group(app, release_cache, &oci_config, is_admin, &entitled)),
     )
     .await
     .into_iter()
@@ -124,12 +152,21 @@ pub async fn list_all_downloads(
 }
 
 /// Build the `/v1/downloads` group for one application, or `None` when it has
-/// nothing to distribute (no downloadable assets AND no pullable image).
+/// nothing to distribute (no downloadable assets AND no pullable image) or the
+/// caller is not entitled to a restricted product.
 async fn build_download_group(
     app: &Application,
     release_cache: Option<&Arc<ReleaseCache>>,
     oci_config: &OciConfig,
+    is_admin: bool,
+    entitled: &std::collections::HashSet<uuid::Uuid>,
 ) -> Option<AppDownloadGroup> {
+    // Hide restricted products the caller can't access (shared decision; the
+    // entitlement set was fetched once by the caller).
+    if !app.entitlement_satisfied(is_admin, entitled.contains(&app.id)) {
+        return None;
+    }
+
     let oci = if oci_config.enabled {
         app.oci_pull_image(&oci_config.service)
     } else {
@@ -203,6 +240,27 @@ pub async fn download_asset(
     let Some(source) = app.download_source() else {
         return Err(AppError::not_found("Asset"));
     };
+
+    // Entitlement gate (shared decision): a restricted product requires the
+    // caller to be an admin or hold an active entitlement. Checked before the
+    // rate-limit acquire so an unentitled caller never consumes a slot. Denial
+    // returns 404 (not 403), matching the unknown-asset/OCI paths so a
+    // restricted product's existence does not leak by status code.
+    if !EntitlementRepository::is_allowed(&pool, user.0.sub, user.0.role == "admin", &app).await? {
+        AuditLogRepository::create(
+            &pool,
+            CreateAuditLog::new(AuditAction::DownloadDeniedEntitlement)
+                .with_actor(user.0.sub, &user.0.email, &user.0.role)
+                .with_resource("application", app.id)
+                .with_ip(ip)
+                .with_metadata(serde_json::json!({
+                    "slug": slug,
+                    "asset_name": asset_name,
+                })),
+        )
+        .await?;
+        return Err(AppError::not_found("Asset"));
+    }
 
     // Rate limiting (before any upstream call). The durable daily count lives
     // in Postgres behind the DownloadCounter trait.

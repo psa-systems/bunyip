@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeedbackSummary, AdminMembership,
     AdminStatsResponse, AdminUser, FeedbackStatus, PaginatedResponse, StripeConfigResponse,
-    TierConfigResponse,
+    TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 
@@ -110,6 +110,67 @@ pub async fn update_application(
 ) -> Result<(), ApiError> {
     let r = api
         .put(&format!("/admin/applications/{app_id}"), cookie, Some(body))
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+// --- entitlements -----------------------------------------------------------
+
+pub async fn list_user_entitlements(
+    api: &Api,
+    cookie: Option<&str>,
+    user_id: &str,
+) -> Result<Vec<UserEntitlement>, ApiError> {
+    parse(
+        api.get(&format!("/admin/users/{user_id}/entitlements"), cookie)
+            .await?,
+    )
+}
+
+pub async fn grant_user_entitlement(
+    api: &Api,
+    cookie: Option<&str>,
+    user_id: &str,
+    slug: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            &format!("/admin/users/{user_id}/entitlements"),
+            cookie,
+            Some(json!({ "slug": slug })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn revoke_user_entitlement(
+    api: &Api,
+    cookie: Option<&str>,
+    user_id: &str,
+    slug: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            &format!("/admin/users/{user_id}/entitlements/revoke"),
+            cookie,
+            Some(json!({ "slug": slug })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn set_application_restricted(
+    api: &Api,
+    cookie: Option<&str>,
+    slug: &str,
+    requires_entitlement: bool,
+) -> Result<(), ApiError> {
+    let r = api
+        .put(
+            &format!("/admin/applications/{slug}/restricted"),
+            cookie,
+            Some(json!({ "requires_entitlement": requires_entitlement })),
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }

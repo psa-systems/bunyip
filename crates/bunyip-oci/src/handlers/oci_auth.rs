@@ -15,7 +15,8 @@ use crate::errors::OciError;
 use crate::middleware::extract_client_ip;
 use crate::models::{AuditAction, CreateAuditLog, RateLimitConfig};
 use crate::repositories::{
-    ApplicationRepository, AuditLogRepository, RateLimitRepository, UserRepository,
+    ApplicationRepository, AuditLogRepository, EntitlementRepository, RateLimitRepository,
+    UserRepository,
 };
 use crate::services::{OciTokenService, PasswordService};
 
@@ -136,6 +137,17 @@ pub async fn issue_token(
             .map_err(|_| OciError::Internal)?
             .ok_or(OciError::NameUnknown)?;
         if !app.is_pullable() {
+            return Err(OciError::NameUnknown);
+        }
+        // Per-product entitlement (BUNYIP-39), via the shared decision. Denial
+        // surfaces as NameUnknown (404), matching the not-pullable branch, so
+        // restricted-product existence does not leak by status code.
+        let allowed =
+            EntitlementRepository::is_allowed(pool.get_ref(), user.id, user.is_admin(), &app)
+                .await
+                .map_err(|_| OciError::Internal)?;
+        if !allowed {
+            audit_failed(pool.get_ref(), &email, ip, "no_entitlement").await;
             return Err(OciError::NameUnknown);
         }
         scope_app_id = Some(app.id);

@@ -85,6 +85,28 @@ impl ApplicationRepository {
         Ok(app)
     }
 
+    /// Toggle whether a product requires a per-product entitlement (BUNYIP-39).
+    /// FALSE keeps it open to all members; TRUE gates it behind an entitlement.
+    pub async fn set_requires_entitlement(
+        pool: &PgPool,
+        app_id: Uuid,
+        requires_entitlement: bool,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            UPDATE applications
+            SET requires_entitlement = $1, updated_at = NOW()
+            WHERE id = $2
+            "#,
+        )
+        .bind(requires_entitlement)
+        .bind(app_id)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
     /// Toggle maintenance mode
     pub async fn set_maintenance_mode(
         pool: &PgPool,

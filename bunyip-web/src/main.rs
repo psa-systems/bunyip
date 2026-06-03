@@ -135,6 +135,23 @@ async fn main() {
             "/admin/applications/{id}/field",
             axum::routing::post(handlers::admin::application_field),
         )
+        .route("/admin/entitlements", get(handlers::admin::entitlements))
+        .route(
+            "/admin/applications/{slug}/restricted-toggle",
+            axum::routing::post(handlers::admin::set_app_restricted),
+        )
+        .route(
+            "/admin/users/{user_id}/entitlements",
+            get(handlers::admin::user_entitlements),
+        )
+        .route(
+            "/admin/users/{user_id}/entitlements/grant",
+            axum::routing::post(handlers::admin::grant_user_entitlement_h),
+        )
+        .route(
+            "/admin/users/{user_id}/entitlements/revoke",
+            axum::routing::post(handlers::admin::revoke_user_entitlement_h),
+        )
         .route(
             "/admin/tier-settings",
             get(handlers::admin::tier_settings).post(handlers::admin::tier_settings_save),
