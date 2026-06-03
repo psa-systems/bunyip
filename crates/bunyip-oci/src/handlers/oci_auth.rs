@@ -15,7 +15,8 @@ use crate::errors::OciError;
 use crate::middleware::extract_client_ip;
 use crate::models::{AuditAction, CreateAuditLog, RateLimitConfig};
 use crate::repositories::{
-    ApplicationRepository, AuditLogRepository, RateLimitRepository, UserRepository,
+    ApplicationRepository, AuditLogRepository, EntitlementRepository, RateLimitRepository,
+    UserRepository,
 };
 use crate::services::{OciTokenService, PasswordService};
 
@@ -137,6 +138,15 @@ pub async fn issue_token(
             .ok_or(OciError::NameUnknown)?;
         if !app.is_pullable() {
             return Err(OciError::NameUnknown);
+        }
+        if app.requires_entitlement && !user.is_admin() {
+            let entitled = EntitlementRepository::is_entitled(pool.get_ref(), user.id, app.id)
+                .await
+                .map_err(|_| OciError::Internal)?;
+            if !entitled {
+                audit_failed(pool.get_ref(), &email, ip, "no_entitlement").await;
+                return Err(OciError::Denied);
+            }
         }
         scope_app_id = Some(app.id);
         scope_str = format!("repository:{slug}:pull");

@@ -244,6 +244,11 @@ fn admin_items() -> Vec<NavItem> {
             icon: "app-window",
         },
         NavItem {
+            title: "Entitlements",
+            href: "/admin/entitlements",
+            icon: "key",
+        },
+        NavItem {
             title: "Stripe",
             href: "/admin/stripe",
             icon: "banknote",

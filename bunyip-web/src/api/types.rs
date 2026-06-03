@@ -321,6 +321,19 @@ pub struct AdminApplication {
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
+    #[serde(default)]
+    pub requires_entitlement: bool,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct UserEntitlement {
+    pub application_id: String,
+    pub slug: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub requires_entitlement: bool,
+    pub granted_at: String,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

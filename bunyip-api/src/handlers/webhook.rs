@@ -9,11 +9,84 @@ use std::sync::Arc;
 
 use crate::config::TierConfig;
 use crate::errors::AppError;
+use crate::models::entitlement::entitlement_source;
 use crate::models::{
     AuditAction, AuditSeverity, CreateAuditLog, MembershipStatus, SubscriptionTier,
 };
-use crate::repositories::{AuditLogRepository, UserRepository};
+use crate::repositories::{AuditLogRepository, EntitlementRepository, UserRepository};
 use crate::services::{EmailService, StripeService};
+
+/// Re-sync a user's Stripe-sourced product entitlements to match the prices on
+/// their current subscription (BUNYIP-39). Revokes every prior Stripe-sourced
+/// grant first, then grants the products mapped to the subscription's current
+/// prices, so removing a product from a plan (downgrade) also removes access.
+/// Admin-granted entitlements (source 'admin') are never touched. Best-effort:
+/// a failure here is logged but does not fail the webhook (membership state was
+/// already committed by the caller).
+async fn sync_stripe_entitlements(
+    pool: &PgPool,
+    user_id: uuid::Uuid,
+    subscription: &serde_json::Value,
+) {
+    // Collect every price id across all subscription items.
+    let price_ids: Vec<String> = subscription["items"]["data"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|i| i["price"]["id"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if let Err(e) = EntitlementRepository::revoke_all_for_user_by_source(
+        pool,
+        user_id,
+        entitlement_source::STRIPE,
+    )
+    .await
+    {
+        tracing::error!(error = %e, %user_id, "failed to clear stripe entitlements before re-sync");
+        return;
+    }
+
+    for price_id in &price_ids {
+        match EntitlementRepository::applications_for_price(pool, price_id).await {
+            Ok(app_ids) => {
+                for app_id in app_ids {
+                    if let Err(e) = EntitlementRepository::grant(
+                        pool,
+                        user_id,
+                        app_id,
+                        None,
+                        entitlement_source::STRIPE,
+                    )
+                    .await
+                    {
+                        tracing::error!(error = %e, %user_id, %app_id, "failed to grant stripe entitlement");
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, price_id = %price_id, "failed to resolve price->product mapping");
+            }
+        }
+    }
+}
+
+/// Revoke all of a user's Stripe-sourced entitlements (subscription canceled /
+/// deleted). Admin grants are preserved. Best-effort.
+async fn revoke_stripe_entitlements(pool: &PgPool, user_id: uuid::Uuid) {
+    if let Err(e) = EntitlementRepository::revoke_all_for_user_by_source(
+        pool,
+        user_id,
+        entitlement_source::STRIPE,
+    )
+    .await
+    {
+        tracing::error!(error = %e, %user_id, "failed to revoke stripe entitlements");
+    }
+}
 
 /// POST /v1/webhooks/stripe
 /// Handle Stripe webhook events
@@ -182,6 +255,9 @@ async fn handle_subscription_created(
     }
     tx.commit().await?;
 
+    // Grant per-product entitlements for the subscription's prices (BUNYIP-39).
+    sync_stripe_entitlements(pool, user.id, subscription).await;
+
     tracing::info!(
         user_id = %user.id,
         stripe_subscription_id = %stripe_subscription_id,
@@ -243,6 +319,8 @@ async fn handle_subscription_updated(
             "canceled" => MembershipStatus::Canceled,
             _ => MembershipStatus::Active,
         };
+        // Capture before the value is moved into update_membership_status.
+        let is_canceled = user_status == MembershipStatus::Canceled;
 
         let resolved_tier = resolve_tier_for_product(product_id, tc);
 
@@ -252,6 +330,16 @@ async fn handle_subscription_updated(
             UserRepository::upgrade_subscription_tier(&mut *tx, user.id, tier).await?;
         }
         tx.commit().await?;
+
+        // Sync per-product entitlements (BUNYIP-39): a canceled subscription
+        // revokes the Stripe-sourced grants; any other status re-syncs them to
+        // the current price set (handles plan add/remove). Admin grants are
+        // untouched either way.
+        if is_canceled {
+            revoke_stripe_entitlements(pool, user.id).await;
+        } else {
+            sync_stripe_entitlements(pool, user.id, subscription).await;
+        }
 
         tracing::info!(
             stripe_subscription_id = %stripe_subscription_id,
@@ -319,6 +407,9 @@ async fn handle_subscription_deleted(
         UserRepository::reset_subscription_tier(&mut *tx, user.id).await?;
         UserRepository::clear_grace_period(&mut *tx, user.id).await?;
         tx.commit().await?;
+
+        // Subscription gone: drop the Stripe-sourced entitlements (BUNYIP-39).
+        revoke_stripe_entitlements(pool, user.id).await;
 
         tracing::info!(
             user_id = %user.id,

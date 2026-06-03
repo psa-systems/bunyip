@@ -3,6 +3,7 @@
 //! This module contains all HTTP request handlers organized by domain.
 
 pub mod admin;
+pub mod admin_entitlements;
 pub mod admin_stripe;
 pub mod application;
 pub mod auth;
@@ -52,6 +53,10 @@ pub use admin::{
     mark_notification_read, reencrypt_key, revoke_admin_invite, revoke_membership, send_test_email,
     swap_application_order, update_application, update_stripe_config, update_tier_config,
     update_user_role, update_user_status,
+};
+pub use admin_entitlements::{
+    add_price_mapping, grant_entitlement, list_user_entitlements, remove_price_mapping,
+    revoke_entitlement, set_application_restricted,
 };
 pub use admin_stripe::{
     archive_stripe_price, archive_stripe_product, create_stripe_price, create_stripe_product,

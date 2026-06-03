@@ -20,6 +20,10 @@ pub struct Application {
     /// Whether this is a hosted app (appears as a hub launch tile) or a
     /// catalog-only distribution product (downloads / OCI registry only).
     pub is_hosted: bool,
+    /// When TRUE, member access alone is not enough: the user also needs an
+    /// active entitlement for this product (admins bypass). FALSE means the
+    /// product is open to every member, the pre-BUNYIP-39 default.
+    pub requires_entitlement: bool,
     pub maintenance_mode: bool,
     pub maintenance_message: Option<String>,
     pub subdomain: Option<String>,
@@ -372,6 +376,7 @@ mod tests {
             icon_url: None,
             is_active: true,
             is_hosted: true,
+            requires_entitlement: false,
             maintenance_mode: false,
             maintenance_message: None,
             subdomain: Some("test".to_string()),

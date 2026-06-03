@@ -5,6 +5,7 @@
 pub mod application;
 pub mod audit;
 pub mod download;
+pub mod entitlement;
 pub mod feedback;
 pub mod membership;
 pub mod rate_limit;
@@ -28,6 +29,7 @@ pub use download::{
     AppDownloadGroup, AppDownloadsResponse, AppOciImage, DownloadAsset, DownloadCacheRow,
     ReleaseAsset, ReleaseMetadata,
 };
+pub use entitlement::{ApplicationEntitlement, UserEntitlementRow};
 pub use feedback::{
     AdminFeedbackDetail, AdminFeedbackSummary, ArchivedFeedbackItem, CreateFeedback,
     CreateFeedbackRequest, Feedback, FeedbackAttachmentMeta, FeedbackStatus,

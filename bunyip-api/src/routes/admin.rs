@@ -41,6 +41,31 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/users/{user_id}/lifetime",
                 web::post().to(handlers::grant_lifetime_membership),
             )
+            // Per-product entitlements (BUNYIP-39)
+            .route(
+                "/users/{user_id}/entitlements",
+                web::get().to(handlers::list_user_entitlements),
+            )
+            .route(
+                "/users/{user_id}/entitlements",
+                web::post().to(handlers::grant_entitlement),
+            )
+            .route(
+                "/users/{user_id}/entitlements/revoke",
+                web::post().to(handlers::revoke_entitlement),
+            )
+            .route(
+                "/applications/{slug}/restricted",
+                web::put().to(handlers::set_application_restricted),
+            )
+            .route(
+                "/applications/{slug}/stripe-prices",
+                web::post().to(handlers::add_price_mapping),
+            )
+            .route(
+                "/applications/{slug}/stripe-prices",
+                web::delete().to(handlers::remove_price_mapping),
+            )
             // Membership management
             .route("/memberships", web::get().to(handlers::list_memberships))
             .route(
