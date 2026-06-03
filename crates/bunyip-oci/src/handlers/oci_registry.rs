@@ -95,8 +95,12 @@ pub async fn get_manifest(
     // and GET by tag meters twice; one that resolves via HEAD-by-tag then GETs
     // by digest meters once. Either way a pull never exceeds the tag requests,
     // and digest follow-ups are free.
+    //
+    // Side effect: since the limiter couples concurrency + daily count in one
+    // acquire(), digest requests also lose concurrency bounding. PSA-42 tracks
+    // a concurrency-only acquire so digest follow-ups stay bounded but unmetered.
     let is_head = req.method() == actix_web::http::Method::HEAD;
-    let counts_as_pull = !is_digest;
+    let counts_as_pull = should_meter(&reference);
     let _guard = if counts_as_pull {
         match limiter
             .acquire(counter.get_ref().as_ref(), user.claims.sub)
@@ -193,6 +197,8 @@ pub async fn get_manifest(
         &manifest.digest,
     )
     .await;
+    // Release the concurrency slot (metered path only; None is a no-op) before
+    // cloning the response bytes, so a slow client read does not hold it.
     drop(_guard);
 
     let mut resp = HttpResponse::Ok();
@@ -308,6 +314,14 @@ fn log_forgejo_credential_rejection(status: u16) {
          verify FORGEJO_API_TOKEN is valid and has the read:package scope \
          for the configured owner/image"
     );
+}
+
+/// Whether a manifest request should be metered toward the daily pull cap +
+/// concurrency limit (BUNYIP-43). Only TAG-addressed requests count as a
+/// logical pull; digest-addressed requests are the multi-arch platform-manifest
+/// follow-ups within a pull (or a direct by-digest pull) and are not metered.
+fn should_meter(reference: &str) -> bool {
+    !reference.starts_with("sha256:")
 }
 
 fn map_reg_err(e: &RegistryError) -> OciError {
@@ -442,4 +456,21 @@ async fn assert_entitled(
         tracing::warn!(?e, "oci pull_denied_entitlement audit log failed");
     }
     Err(OciError::NameUnknown)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_meter;
+
+    #[test]
+    fn should_meter_tag_but_not_digest() {
+        // Tag-addressed requests are logical pulls -> metered.
+        assert!(should_meter("v0.1.1"));
+        assert!(should_meter("latest"));
+        // Digest-addressed requests are multi-arch follow-ups / by-digest pulls
+        // -> not metered (BUNYIP-43: prevents one pull burning 3+ of the cap).
+        assert!(!should_meter(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        ));
+    }
 }

@@ -396,9 +396,12 @@ pub struct OciConfig {
     pub blob_cache_max_bytes: u64,
     pub manifest_cache_ttl_secs: u64,
     pub concurrent_manifests_per_user: u32,
-    /// Daily cap on LOGICAL pulls per user. One `docker pull` counts once: only
-    /// a GET of the manifest by its tag is metered, not the HEAD pre-check or
-    /// the digest-addressed multi-arch follow-up manifests (BUNYIP-43).
+    /// Daily cap on pulls per user, metered per TAG-addressed manifest request
+    /// (BUNYIP-43). Digest-addressed requests (the multi-arch platform-manifest
+    /// follow-ups within a pull) are NOT metered, so one `docker pull` no longer
+    /// burns 3+; a client that issues both HEAD and GET by tag meters twice, so
+    /// effective logical pulls are roughly half this number for such clients.
+    /// (A direct by-digest pull, `docker pull slug@sha256:...`, is unmetered.)
     pub pulls_per_user_per_day: u32,
     pub token_ttl_secs: u64,
 }
