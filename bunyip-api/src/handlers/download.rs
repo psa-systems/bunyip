@@ -23,7 +23,7 @@ use crate::repositories::{
 };
 use crate::responses::{get_request_id, success};
 use crate::services::{
-    AppDownloadCache, DownloadCacheError, DownloadLimiter, LimitDenial, ReleaseCache,
+    AppDownloadCache, DownloadCacheError, DownloadLimiter, ForgejoError, LimitDenial, ReleaseCache,
 };
 
 fn asset_href(slug: &str, asset_name: &str) -> String {
@@ -244,41 +244,55 @@ pub async fn download_asset(
             {
                 Ok(row) => row,
                 Err(e) => {
-                    // Classify the failure (PSA-36 gave dunite-download a total,
-                    // class-preserving error type). Forgejo/Transport outages and
+                    // dunite-download's error type is total and class-preserving
+                    // (PSA-36). A NotFound from upstream is a permanent 404 (the
+                    // release or asset was deleted/renamed in Forgejo while the
+                    // configured version still points at it), handled like every
+                    // other missing-asset path: a plain 404 with no
+                    // upstream-failure audit. dunite keeps NotFound as its own
+                    // typed variant precisely so consumers can do this.
+                    if matches!(e, DownloadCacheError::Forgejo(ForgejoError::NotFound)) {
+                        return Err(AppError::not_found("Asset"));
+                    }
+
+                    // Everything else is a real failure. Classify it with an
+                    // exhaustive match (NOT a non-exhaustive matches!) so a
+                    // future DownloadCacheError variant forces a decision here
+                    // instead of silently defaulting. (PSA-38 tracks moving this
+                    // classification into dunite-download itself, the way
+                    // dunite-oci owns it via From<&BlobCacheError>.) Upstream
+                    // outages and
                     // integrity mismatches are upstream-class (502); Io/Store are
                     // local failures on OUR side (500). Before PSA-36 transport
                     // errors round-tripped as Io, so every failure looked like a
-                    // 502 - now a genuine filesystem/store fault is reported as
+                    // 502; now a genuine filesystem/store fault is reported as
                     // such instead of blaming the upstream.
-                    let is_upstream = matches!(
-                        e,
-                        DownloadCacheError::Forgejo(_)
-                            | DownloadCacheError::Transport(_)
-                            | DownloadCacheError::ShaMismatch { .. }
-                            | DownloadCacheError::SizeMismatch { .. }
-                    );
-                    if matches!(
-                        e,
+                    let app_err = match &e {
                         DownloadCacheError::ShaMismatch { .. }
-                            | DownloadCacheError::SizeMismatch { .. }
-                    ) {
-                        // Integrity failures usually mean the upstream metadata is
-                        // stale (re-uploaded asset, lagging size column).
-                        tracing::warn!(
-                            app = %app.slug,
-                            asset = %asset_name,
-                            error = %e,
-                            "download integrity check failed; upstream Forgejo metadata may be stale"
-                        );
-                    } else if !is_upstream {
-                        tracing::error!(
-                            app = %app.slug,
-                            asset = %asset_name,
-                            error = ?e,
-                            "download cache local failure (filesystem/store), not an upstream outage"
-                        );
-                    }
+                        | DownloadCacheError::SizeMismatch { .. } => {
+                            // Integrity failure: upstream metadata is usually
+                            // stale (re-uploaded asset, lagging size column).
+                            tracing::warn!(
+                                app = %app.slug,
+                                asset = %asset_name,
+                                error = %e,
+                                "download integrity check failed; upstream Forgejo metadata may be stale"
+                            );
+                            AppError::upstream("Download upstream failed")
+                        }
+                        DownloadCacheError::Forgejo(_) | DownloadCacheError::Transport(_) => {
+                            AppError::upstream("Download upstream failed")
+                        }
+                        DownloadCacheError::Io(_) | DownloadCacheError::Store(_) => {
+                            tracing::error!(
+                                app = %app.slug,
+                                asset = %asset_name,
+                                error = ?e,
+                                "download cache local failure (filesystem/store), not an upstream outage"
+                            );
+                            AppError::internal("Download failed")
+                        }
+                    };
                     AuditLogRepository::create(
                         &pool,
                         CreateAuditLog::new(AuditAction::DownloadFailedUpstream)
@@ -292,11 +306,7 @@ pub async fn download_asset(
                             })),
                     )
                     .await?;
-                    return Err(if is_upstream {
-                        AppError::upstream("Download upstream failed")
-                    } else {
-                        AppError::internal("Download failed")
-                    });
+                    return Err(app_err);
                 }
             };
 
