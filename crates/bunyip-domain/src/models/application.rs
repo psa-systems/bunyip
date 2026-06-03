@@ -96,6 +96,18 @@ pub const ARTIFACT_SOURCE_RELEASE: &str = "release";
 pub const ARTIFACT_SOURCE_GENERIC_PACKAGE: &str = "generic_package";
 
 impl Application {
+    /// The per-product access decision (BUNYIP-39), in ONE place so the OCI,
+    /// download, and web gates cannot drift. Given whether the caller is an
+    /// admin and whether they hold an active entitlement, returns whether the
+    /// entitlement requirement is satisfied. Membership (`is_access_allowed`)
+    /// is a separate, prior gate; this only covers the per-product layer.
+    ///
+    /// Open products (`requires_entitlement == false`) and admins always pass;
+    /// otherwise an active entitlement is required.
+    pub fn entitlement_satisfied(&self, is_admin: bool, is_entitled: bool) -> bool {
+        !self.requires_entitlement || is_admin || is_entitled
+    }
+
     /// Whether `value` is an allowed `artifact_source` (mirrors the DB CHECK
     /// constraint; admin handlers validate against this before writing).
     pub fn valid_artifact_source(value: &str) -> bool {
@@ -397,6 +409,24 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn entitlement_satisfied_open_product_always_allows() {
+        let app = test_app(); // requires_entitlement = false
+        assert!(app.entitlement_satisfied(false, false));
+        assert!(app.entitlement_satisfied(true, false));
+    }
+
+    #[test]
+    fn entitlement_satisfied_restricted_needs_admin_or_entitlement() {
+        let app = Application {
+            requires_entitlement: true,
+            ..test_app()
+        };
+        assert!(!app.entitlement_satisfied(false, false)); // member, no grant -> deny
+        assert!(app.entitlement_satisfied(false, true)); // member, granted -> allow
+        assert!(app.entitlement_satisfied(true, false)); // admin bypass -> allow
     }
 
     #[test]

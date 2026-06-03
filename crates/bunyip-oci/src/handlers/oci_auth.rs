@@ -139,14 +139,16 @@ pub async fn issue_token(
         if !app.is_pullable() {
             return Err(OciError::NameUnknown);
         }
-        if app.requires_entitlement && !user.is_admin() {
-            let entitled = EntitlementRepository::is_entitled(pool.get_ref(), user.id, app.id)
+        // Per-product entitlement (BUNYIP-39), via the shared decision. Denial
+        // surfaces as NameUnknown (404), matching the not-pullable branch, so
+        // restricted-product existence does not leak by status code.
+        let allowed =
+            EntitlementRepository::is_allowed(pool.get_ref(), user.id, user.is_admin(), &app)
                 .await
                 .map_err(|_| OciError::Internal)?;
-            if !entitled {
-                audit_failed(pool.get_ref(), &email, ip, "no_entitlement").await;
-                return Err(OciError::Denied);
-            }
+        if !allowed {
+            audit_failed(pool.get_ref(), &email, ip, "no_entitlement").await;
+            return Err(OciError::NameUnknown);
         }
         scope_app_id = Some(app.id);
         scope_str = format!("repository:{slug}:pull");

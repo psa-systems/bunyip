@@ -122,22 +122,35 @@ pub async fn set_application_restricted(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let slug = path.into_inner();
-    let app_id = resolve_app_id(pool.get_ref(), &slug).await?;
+    let app = ApplicationRepository::find_by_slug(pool.get_ref(), &slug)
+        .await?
+        .ok_or_else(|| AppError::not_found("Application"))?;
 
     ApplicationRepository::set_requires_entitlement(
         pool.get_ref(),
-        app_id,
+        app.id,
         body.requires_entitlement,
     )
     .await?;
 
-    // Reuse the application-updated audit action; the metadata records the flag.
-    let log = CreateAuditLog::new(AuditAction::ApplicationUpdated)
+    // Preserve current access (BUNYIP-39): flipping an open product to
+    // restricted grants it to every member who can access it right now, so
+    // nobody loses access to a product they could use moments ago. (The
+    // migration only backfilled members who existed at deploy time; this covers
+    // everyone current at flip time.)
+    let mut backfilled = 0u64;
+    if body.requires_entitlement && !app.requires_entitlement {
+        backfilled =
+            EntitlementRepository::backfill_for_application(pool.get_ref(), app.id).await?;
+    }
+
+    let log = CreateAuditLog::new(AuditAction::AdminApplicationRestrictionChanged)
         .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
-        .with_resource("application", app_id)
+        .with_resource("application", app.id)
         .with_metadata(serde_json::json!({
             "slug": slug,
             "requires_entitlement": body.requires_entitlement,
+            "backfilled_members": backfilled,
         }));
     AuditLogRepository::create(pool.get_ref(), log).await?;
 
@@ -159,7 +172,7 @@ pub async fn add_price_mapping(
 
     EntitlementRepository::add_price_mapping(pool.get_ref(), &body.stripe_price_id, app_id).await?;
 
-    let log = CreateAuditLog::new(AuditAction::ApplicationUpdated)
+    let log = CreateAuditLog::new(AuditAction::AdminStripePriceMappingChanged)
         .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
         .with_resource("application", app_id)
         .with_metadata(serde_json::json!({
@@ -187,7 +200,7 @@ pub async fn remove_price_mapping(
     EntitlementRepository::remove_price_mapping(pool.get_ref(), &body.stripe_price_id, app_id)
         .await?;
 
-    let log = CreateAuditLog::new(AuditAction::ApplicationUpdated)
+    let log = CreateAuditLog::new(AuditAction::AdminStripePriceMappingChanged)
         .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
         .with_resource("application", app_id)
         .with_metadata(serde_json::json!({

@@ -401,22 +401,22 @@ async fn audit_failed_upstream(
     }
 }
 
-/// Entitlement gate for a restricted product (BUNYIP-39). Open products
-/// (requires_entitlement == false) and admins always pass; otherwise an
-/// active entitlement is required. Denials are audited.
+/// Entitlement gate for a restricted product (BUNYIP-39). The decision is the
+/// shared `EntitlementRepository::is_allowed` (open products and admins pass
+/// without a DB hit). Denials are audited and surface as `NameUnknown` (404),
+/// the same code as a non-pullable product, so an unentitled member cannot
+/// distinguish "restricted product exists" from "no such product" by status.
 async fn assert_entitled(
     pool: &PgPool,
     req: &HttpRequest,
     user: &OciBearerUser,
     app: &crate::models::Application,
 ) -> Result<(), OciError> {
-    if !app.requires_entitlement || user.role == "admin" {
-        return Ok(());
-    }
-    let entitled = EntitlementRepository::is_entitled(pool, user.claims.sub, app.id)
-        .await
-        .map_err(|_| OciError::Internal)?;
-    if entitled {
+    let allowed =
+        EntitlementRepository::is_allowed(pool, user.claims.sub, user.role == "admin", app)
+            .await
+            .map_err(|_| OciError::Internal)?;
+    if allowed {
         return Ok(());
     }
     let log = CreateAuditLog::new(AuditAction::OciPullDeniedEntitlement)
@@ -427,5 +427,5 @@ async fn assert_entitled(
     if let Err(e) = AuditLogRepository::create(pool, log).await {
         tracing::warn!(?e, "oci pull_denied_entitlement audit log failed");
     }
-    Err(OciError::Denied)
+    Err(OciError::NameUnknown)
 }

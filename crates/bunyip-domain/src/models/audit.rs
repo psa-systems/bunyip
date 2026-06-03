@@ -74,6 +74,8 @@ pub enum AuditAction {
     OciPullDeniedEntitlement,
     AdminEntitlementGranted,
     AdminEntitlementRevoked,
+    AdminApplicationRestrictionChanged,
+    AdminStripePriceMappingChanged,
 }
 
 impl AuditAction {
@@ -144,6 +146,10 @@ impl AuditAction {
             AuditAction::OciPullDeniedEntitlement => "oci_pull_denied_entitlement",
             AuditAction::AdminEntitlementGranted => "admin_entitlement_granted",
             AuditAction::AdminEntitlementRevoked => "admin_entitlement_revoked",
+            AuditAction::AdminApplicationRestrictionChanged => {
+                "admin_application_restriction_changed"
+            }
+            AuditAction::AdminStripePriceMappingChanged => "admin_stripe_price_mapping_changed",
         }
     }
 
@@ -173,6 +179,8 @@ impl AuditAction {
                 | AuditAction::AdminKeyRotation
                 | AuditAction::AdminEntitlementGranted
                 | AuditAction::AdminEntitlementRevoked
+                | AuditAction::AdminApplicationRestrictionChanged
+                | AuditAction::AdminStripePriceMappingChanged
         )
     }
 }

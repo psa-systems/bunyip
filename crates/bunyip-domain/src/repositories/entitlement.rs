@@ -1,22 +1,74 @@
 //! Per-product entitlement repository (BUNYIP-39).
 //!
-//! The access decision itself lives in [`crate::services`] callers; this
-//! repository only answers "is there an active grant" and performs grant /
-//! revoke. Grants are upserted so re-granting a previously revoked entitlement
+//! [`EntitlementRepository::is_allowed`] is the single per-product access
+//! decision every distribution surface calls; the lower-level `is_entitled`
+//! /`grant`/`revoke` primitives answer "is there an active grant" and mutate
+//! grants. Grants are upserted so re-granting a previously revoked entitlement
 //! clears `revoked_at` (and refreshes provenance) rather than erroring.
 
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::errors::AppError;
-use crate::models::entitlement::{ApplicationEntitlement, UserEntitlementRow};
+use crate::models::entitlement::UserEntitlementRow;
+use crate::models::Application;
 
 pub struct EntitlementRepository;
 
 impl EntitlementRepository {
-    /// Whether the user has an ACTIVE entitlement for the product. This is the
-    /// hot-path check called from the OCI and download gates; it is only
-    /// consulted for products with `requires_entitlement = TRUE`.
+    /// The full per-product access decision for a member who has already passed
+    /// the membership gate (BUNYIP-39). Open products and admins short-circuit
+    /// without touching the database; only a restricted product for a
+    /// non-admin runs the entitlement lookup. This is the single decision point
+    /// every distribution surface (OCI, downloads, web, catalog metadata)
+    /// calls so the rule cannot drift between them.
+    pub async fn is_allowed(
+        pool: &PgPool,
+        user_id: Uuid,
+        is_admin: bool,
+        app: &Application,
+    ) -> Result<bool, AppError> {
+        if !app.requires_entitlement || is_admin {
+            return Ok(true);
+        }
+        Self::is_entitled(pool, user_id, app.id).await
+    }
+
+    /// Grant the given product to every member who currently has access
+    /// (mirrors the migration backfill predicate and `User::is_access_allowed`).
+    /// Called when an admin flips a previously-open product to restricted, so
+    /// members who could access it while it was open keep access (the
+    /// "preserve current access" guarantee, extended past migration time).
+    /// Existing grants are left untouched (`DO NOTHING`). Returns rows inserted.
+    pub async fn backfill_for_application(
+        pool: &PgPool,
+        application_id: Uuid,
+    ) -> Result<u64, AppError> {
+        let affected = sqlx::query(
+            r#"
+            INSERT INTO application_entitlements (user_id, application_id, granted_by, source)
+            SELECT u.id, $1, NULL, 'backfill'
+            FROM users u
+            WHERE u.deleted_at IS NULL
+              AND u.role <> 'admin'
+              AND (
+                    u.lifetime_member = TRUE
+                    OR (u.trial_ends_at IS NOT NULL AND u.trial_ends_at > now())
+                    OR u.subscription_status IN ('active', 'grace_period')
+              )
+            ON CONFLICT (user_id, application_id) DO NOTHING
+            "#,
+        )
+        .bind(application_id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+        Ok(affected)
+    }
+
+    /// Whether the user has an ACTIVE entitlement for the product. Prefer
+    /// [`Self::is_allowed`] at gates (it short-circuits open products/admins);
+    /// this is the raw grant lookup.
     pub async fn is_entitled(
         pool: &PgPool,
         user_id: Uuid,
@@ -209,24 +261,5 @@ impl EntitlementRepository {
         .execute(pool)
         .await?;
         Ok(())
-    }
-
-    /// All active entitlement rows for a product (admin "who can access X").
-    pub async fn list_for_application(
-        pool: &PgPool,
-        application_id: Uuid,
-    ) -> Result<Vec<ApplicationEntitlement>, AppError> {
-        let rows = sqlx::query_as::<_, ApplicationEntitlement>(
-            r#"
-            SELECT user_id, application_id, granted_at, granted_by, source, revoked_at
-            FROM application_entitlements
-            WHERE application_id = $1 AND revoked_at IS NULL
-            ORDER BY granted_at DESC
-            "#,
-        )
-        .bind(application_id)
-        .fetch_all(pool)
-        .await?;
-        Ok(rows)
     }
 }
