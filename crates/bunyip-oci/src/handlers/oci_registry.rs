@@ -86,33 +86,48 @@ pub async fn get_manifest(
         return Err(OciError::ManifestUnknown);
     }
 
-    let guard = match limiter
-        .acquire(counter.get_ref().as_ref(), user.claims.sub)
-        .await
-        .map_err(|_| OciError::Internal)?
-    {
-        Ok(g) => g,
-        Err(OciLimitDenial::Concurrency) => {
-            audit_denied(pool.get_ref(), &req, &user, &app.id, "concurrency", None).await;
-            return Err(OciError::TooManyRequests {
-                retry_after_secs: None,
-            });
+    // Meter (daily pull cap + concurrency) only TAG-addressed manifest requests
+    // (BUNYIP-43). A logical `docker pull` resolves the tag (HEAD and/or GET by
+    // tag) and then fetches the platform manifest by DIGEST; counting the
+    // digest follow-ups made one multi-arch pull consume 3+ of the daily
+    // allowance (default 50 yielded ~16 real pulls). Digest-addressed requests
+    // are still served, just not metered. Note: a client that does both HEAD
+    // and GET by tag meters twice; one that resolves via HEAD-by-tag then GETs
+    // by digest meters once. Either way a pull never exceeds the tag requests,
+    // and digest follow-ups are free.
+    let is_head = req.method() == actix_web::http::Method::HEAD;
+    let counts_as_pull = !is_digest;
+    let _guard = if counts_as_pull {
+        match limiter
+            .acquire(counter.get_ref().as_ref(), user.claims.sub)
+            .await
+            .map_err(|_| OciError::Internal)?
+        {
+            Ok(g) => Some(g),
+            Err(OciLimitDenial::Concurrency) => {
+                audit_denied(pool.get_ref(), &req, &user, &app.id, "concurrency", None).await;
+                return Err(OciError::TooManyRequests {
+                    retry_after_secs: None,
+                });
+            }
+            Err(OciLimitDenial::DailyCap { reset_in_secs }) => {
+                let secs_u64 = reset_in_secs.max(0) as u64;
+                audit_denied(
+                    pool.get_ref(),
+                    &req,
+                    &user,
+                    &app.id,
+                    "daily_cap",
+                    Some(secs_u64),
+                )
+                .await;
+                return Err(OciError::TooManyRequests {
+                    retry_after_secs: Some(secs_u64),
+                });
+            }
         }
-        Err(OciLimitDenial::DailyCap { reset_in_secs }) => {
-            let secs_u64 = reset_in_secs.max(0) as u64;
-            audit_denied(
-                pool.get_ref(),
-                &req,
-                &user,
-                &app.id,
-                "daily_cap",
-                Some(secs_u64),
-            )
-            .await;
-            return Err(OciError::TooManyRequests {
-                retry_after_secs: Some(secs_u64),
-            });
-        }
+    } else {
+        None
     };
 
     audit_requested(pool.get_ref(), &req, &user, &app.id, &reference).await;
@@ -178,9 +193,8 @@ pub async fn get_manifest(
         &manifest.digest,
     )
     .await;
-    drop(guard);
+    drop(_guard);
 
-    let is_head = req.method() == actix_web::http::Method::HEAD;
     let mut resp = HttpResponse::Ok();
     resp.insert_header(("Content-Type", manifest.media_type.clone()));
     resp.insert_header(("Docker-Content-Digest", manifest.digest.clone()));
