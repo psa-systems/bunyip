@@ -102,13 +102,15 @@ pub async fn get_manifest(
     // without counting toward the daily cap.
     let is_head = req.method() == actix_web::http::Method::HEAD;
     let counts_as_pull = should_meter(&reference);
+    // Every request holds a concurrency slot for the duration of the fetch;
+    // only tag-addressed (metered) requests also count toward the daily cap.
     let _guard = if counts_as_pull {
         match limiter
             .acquire(counter.get_ref().as_ref(), user.claims.sub)
             .await
             .map_err(|_| OciError::Internal)?
         {
-            Ok(g) => Some(g),
+            Ok(g) => g,
             Err(OciLimitDenial::Concurrency) => {
                 audit_denied(pool.get_ref(), &req, &user, &app.id, "concurrency", None).await;
                 return Err(OciError::TooManyRequests {
@@ -135,7 +137,7 @@ pub async fn get_manifest(
         // Not metered (digest-addressed), but still take a concurrency slot so
         // the by-digest follow-ups of a multi-arch pull stay bounded (PSA-42).
         match limiter.acquire_concurrency_only(user.claims.sub) {
-            Ok(g) => Some(g),
+            Ok(g) => g,
             Err(OciLimitDenial::Concurrency) => {
                 audit_denied(pool.get_ref(), &req, &user, &app.id, "concurrency", None).await;
                 return Err(OciError::TooManyRequests {
@@ -212,8 +214,8 @@ pub async fn get_manifest(
         &manifest.digest,
     )
     .await;
-    // Release the concurrency slot (metered path only; None is a no-op) before
-    // cloning the response bytes, so a slow client read does not hold it.
+    // Release the concurrency slot (held by every request) before cloning the
+    // response bytes, so a slow client read does not hold it.
     drop(_guard);
 
     let mut resp = HttpResponse::Ok();
