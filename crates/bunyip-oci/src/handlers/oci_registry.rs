@@ -96,9 +96,10 @@ pub async fn get_manifest(
     // by digest meters once. Either way a pull never exceeds the tag requests,
     // and digest follow-ups are free.
     //
-    // Side effect: since the limiter couples concurrency + daily count in one
-    // acquire(), digest requests also lose concurrency bounding. PSA-42 tracks
-    // a concurrency-only acquire so digest follow-ups stay bounded but unmetered.
+    // Digest-addressed requests are still concurrency-bounded via a
+    // concurrency-only acquire (PSA-42), so a multi-arch pull's by-digest
+    // platform-manifest follow-ups stay within concurrent_manifests_per_user
+    // without counting toward the daily cap.
     let is_head = req.method() == actix_web::http::Method::HEAD;
     let counts_as_pull = should_meter(&reference);
     let _guard = if counts_as_pull {
@@ -131,7 +132,21 @@ pub async fn get_manifest(
             }
         }
     } else {
-        None
+        // Not metered (digest-addressed), but still take a concurrency slot so
+        // the by-digest follow-ups of a multi-arch pull stay bounded (PSA-42).
+        match limiter.acquire_concurrency_only(user.claims.sub) {
+            Ok(g) => Some(g),
+            Err(OciLimitDenial::Concurrency) => {
+                audit_denied(pool.get_ref(), &req, &user, &app.id, "concurrency", None).await;
+                return Err(OciError::TooManyRequests {
+                    retry_after_secs: None,
+                });
+            }
+            // acquire_concurrency_only never touches the daily counter.
+            Err(OciLimitDenial::DailyCap { .. }) => {
+                unreachable!("acquire_concurrency_only cannot return DailyCap")
+            }
+        }
     };
 
     audit_requested(pool.get_ref(), &req, &user, &app.id, &reference).await;

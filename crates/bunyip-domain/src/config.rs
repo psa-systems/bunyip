@@ -1,39 +1,10 @@
 use std::env;
 use tracing::info;
 
-/// Read a secret from the environment, supporting the Docker Compose
-/// file-based secret convention (BUNYIP-38).
-///
-/// Resolution order:
-/// 1. `{NAME}_FILE`: if set and non-empty, the secret is the trimmed contents
-///    of that file (a compose `secrets:` mount under `/run/secrets/...`).
-///    An unreadable file panics: a misconfigured secret mount must fail fast
-///    at startup, never silently fall back to a weaker source.
-/// 2. `{NAME}`: the plain environment variable (the dev `.env` path).
-///
-/// Empty values (empty file or empty env var) are treated as unset and return
-/// `None`, so compose interpolation defaults (`${VAR:-}`) and empty secret
-/// files both mean "not configured".
-///
-/// NOTE: this is generic, domain-free infrastructure; its long-term home is
-/// dunite-core so other dunite consumers share one implementation (PSA-37).
-pub fn secret_env(name: &str) -> Option<String> {
-    let file_var = format!("{name}_FILE");
-    if let Ok(path) = env::var(&file_var) {
-        let path = path.trim();
-        if !path.is_empty() {
-            let contents = std::fs::read_to_string(path).unwrap_or_else(|e| {
-                panic!("{file_var} points to an unreadable file ({path}): {e}")
-            });
-            let value = contents.trim().to_string();
-            return if value.is_empty() { None } else { Some(value) };
-        }
-    }
-    env::var(name)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
+/// The file-or-env secret reader now lives in dunite-core (PSA-37), shared by
+/// every dunite consumer. Re-exported here so existing `secret_env(...)` and
+/// `crate::config::secret_env(...)` call sites keep resolving unchanged.
+pub use dunite_core::services::secret_env;
 
 /// Application configuration loaded from environment variables
 #[derive(Debug, Clone)]
@@ -867,80 +838,7 @@ mod tests {
         Config::load_optional_encryption_key("TEST_OPTIONAL_KEY_SHORT");
     }
 
-    // ---- secret_env (file-based secrets, BUNYIP-38) ----
-    //
-    // Each test uses a unique env-var prefix touched by no other test, so no
-    // env lock is needed (same convention as the TEST_OPTIONAL_KEY_* tests).
-
-    #[test]
-    fn secret_env_falls_back_to_plain_env_var() {
-        env::remove_var("TEST_SECRET_PLAIN_FILE");
-        env::set_var("TEST_SECRET_PLAIN", "  env-value\n");
-        assert_eq!(
-            secret_env("TEST_SECRET_PLAIN").as_deref(),
-            Some("env-value")
-        );
-        env::remove_var("TEST_SECRET_PLAIN");
-    }
-
-    #[test]
-    fn secret_env_unset_and_empty_are_none() {
-        env::remove_var("TEST_SECRET_ABSENT_FILE");
-        env::remove_var("TEST_SECRET_ABSENT");
-        assert_eq!(secret_env("TEST_SECRET_ABSENT"), None);
-
-        env::set_var("TEST_SECRET_BLANK", "   ");
-        assert_eq!(secret_env("TEST_SECRET_BLANK"), None);
-        env::remove_var("TEST_SECRET_BLANK");
-    }
-
-    #[test]
-    fn secret_env_reads_file_and_takes_precedence_over_env_var() {
-        let path = env::temp_dir().join(format!(
-            "bunyip-test-secret-env-file-{}",
-            std::process::id()
-        ));
-        std::fs::write(&path, "file-value\n").unwrap();
-
-        env::set_var("TEST_SECRET_FILEPREC_FILE", &path);
-        env::set_var("TEST_SECRET_FILEPREC", "env-value");
-        let result = secret_env("TEST_SECRET_FILEPREC");
-
-        // Clean up BEFORE asserting so a failure cannot leak the temp file.
-        env::remove_var("TEST_SECRET_FILEPREC_FILE");
-        env::remove_var("TEST_SECRET_FILEPREC");
-        std::fs::remove_file(&path).unwrap();
-
-        assert_eq!(result.as_deref(), Some("file-value"));
-    }
-
-    #[test]
-    fn secret_env_empty_file_is_none() {
-        let path = env::temp_dir().join(format!(
-            "bunyip-test-secret-env-empty-file-{}",
-            std::process::id()
-        ));
-        std::fs::write(&path, "\n").unwrap();
-
-        env::set_var("TEST_SECRET_EMPTYFILE_FILE", &path);
-        let result = secret_env("TEST_SECRET_EMPTYFILE");
-
-        // Clean up BEFORE asserting so a failure cannot leak the temp file.
-        env::remove_var("TEST_SECRET_EMPTYFILE_FILE");
-        std::fs::remove_file(&path).unwrap();
-
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    #[should_panic(expected = "unreadable file")]
-    fn secret_env_panics_on_unreadable_file() {
-        env::set_var(
-            "TEST_SECRET_MISSINGFILE_FILE",
-            "/nonexistent/bunyip-test-secret",
-        );
-        secret_env("TEST_SECRET_MISSINGFILE");
-    }
+    // secret_env tests moved to dunite-core with the function (PSA-37).
 
     #[test]
     fn download_config_defaults_when_forgejo_unset() {
