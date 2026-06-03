@@ -387,11 +387,26 @@ async fn main() -> anyhow::Result<()> {
     let update_checker = Arc::new(UpdateChecker::new(update_check_url, update_check_token));
 
     let server_addr = config.server_addr();
-    let cors_origin = config.cors_origin.clone();
+    // CORS_ORIGIN is a comma-separated allow-list once multiple RPs register
+    // (bunyip-web + mokosh-apps + drillmark). Parse it into a Vec so each
+    // origin can be registered individually with the CorsLayer; passing the
+    // raw comma-list as a single .allowed_origin() never matches any browser
+    // Origin header.
+    let cors_origins: Vec<String> = config
+        .cors_origin
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
 
-    // Extract the domain from CORS_ORIGIN for subdomain matching
-    // e.g. "https://example.net" → ".example.net"
-    let cors_domain = cors_origin
+    // Subdomain-fallback host derived from BUNYIP_WEB_ORIGIN (single absolute
+    // URL). Used by the allowed_origin_fn closure so any *.{web_origin host}
+    // also passes CORS for self-hosters that haven't enumerated every child
+    // app in CORS_ORIGIN.
+    // e.g. "https://example.net" -> ".example.net"
+    let cors_domain = config
+        .web_origin
         .split("://")
         .nth(1)
         .unwrap_or("")
@@ -485,8 +500,11 @@ async fn main() -> anyhow::Result<()> {
     let primary = HttpServer::new(move || {
         // Configure CORS
         let domain = cors_domain.clone();
-        let cors = Cors::default()
-            .allowed_origin(&cors_origin)
+        let mut cors = Cors::default();
+        for o in &cors_origins {
+            cors = cors.allowed_origin(o);
+        }
+        let cors = cors
             .allowed_origin_fn(move |origin, _req_head| {
                 let origin = origin.as_bytes();
                 // Allow localhost (development)
