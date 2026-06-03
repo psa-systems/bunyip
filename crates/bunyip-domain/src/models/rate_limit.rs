@@ -85,4 +85,16 @@ impl RateLimitConfig {
         max_requests: 60,
         window_seconds: 60,
     };
+
+    /// OCI token endpoint, FAILED verifications per source IP: 20 per minute
+    /// (BUNYIP-40 optional hardening). The per-email failure cap alone lets one
+    /// host spray a few guesses each across many accounts (each email has its
+    /// own budget); this per-IP cap bounds that distributed-guessing shape. It
+    /// counts only failures, so legitimate users behind a shared NAT/gateway
+    /// (who rarely fail) are unaffected.
+    pub const OCI_TOKEN_IP_FAILURES: Self = Self {
+        action: "oci_token_ip_failures",
+        max_requests: 20,
+        window_seconds: 60,
+    };
 }
