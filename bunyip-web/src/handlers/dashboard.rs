@@ -296,8 +296,23 @@ pub async fn downloads(State(st): State<AppState>, headers: HeaderMap) -> Respon
         div class="space-y-6" {
             h1 class="text-2xl font-semibold" { "Downloads" }
             @match &groups_result {
-                Err(_) => {
-                    (error_box("Downloads are temporarily unavailable. Refresh the page to try again."))
+                Err(e) => {
+                    @if e.status == 403 {
+                        // Authenticated but not permitted: the API gates
+                        // /v1/downloads behind active membership. Say so (and
+                        // link to upgrade) rather than implying a transient
+                        // outage the user could refresh away.
+                        div class="space-y-2" {
+                            (error_box("Downloads are available with an active membership."))
+                            (upgrade_link())
+                        }
+                    } @else if e.status == 401 {
+                        // The API rejected the session even though this page
+                        // loaded; a refresh won't fix a stale session.
+                        (error_box("Your session has expired. Please sign in again to view downloads."))
+                    } @else {
+                        (error_box("Downloads are temporarily unavailable. Refresh the page to try again."))
+                    }
                 }
                 Ok(groups) => {
                     @if groups.is_empty() {
