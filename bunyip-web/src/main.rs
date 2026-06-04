@@ -147,7 +147,22 @@ async fn main() {
             "/admin/feedback/:id/status",
             axum::routing::post(handlers::admin::feedback_status),
         )
-        .route("/admin/applications", get(handlers::admin::applications))
+        .route(
+            "/admin/applications",
+            get(handlers::admin::applications).post(handlers::admin::application_create),
+        )
+        .route(
+            "/admin/applications/new",
+            get(handlers::admin::application_new),
+        )
+        .route(
+            "/admin/applications/:id/edit",
+            get(handlers::admin::application_edit),
+        )
+        .route(
+            "/admin/applications/:id/distribution",
+            axum::routing::post(handlers::admin::application_distribution_save),
+        )
         .route(
             "/admin/applications/:id/field",
             axum::routing::post(handlers::admin::application_field),
