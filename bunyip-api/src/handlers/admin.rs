@@ -1387,6 +1387,33 @@ pub async fn grant_lifetime_membership(
     Ok(success(UserResponse::from(user), request_id))
 }
 
+/// POST /v1/admin/users/{user_id}/lifetime/revoke
+pub async fn revoke_lifetime_membership(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let user_id = path.into_inner();
+
+    let user = UserRepository::revoke_lifetime_membership(&pool, user_id).await?;
+
+    AuditLogRepository::create(
+        &pool,
+        CreateAuditLog::new(AuditAction::AdminMembershipRevoked)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+            .with_resource("user", user_id)
+            .with_metadata(serde_json::json!({
+                "tier": "lifetime",
+                "target_email": user.email,
+            })),
+    )
+    .await?;
+
+    Ok(success(UserResponse::from(user), request_id))
+}
+
 // =============================================================================
 // Tier Configuration
 // =============================================================================

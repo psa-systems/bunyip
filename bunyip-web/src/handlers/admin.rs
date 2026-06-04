@@ -258,7 +258,11 @@ pub async fn users(
                                     form method="post" action=(format!("/admin/users/{}/reset-password", u.id)) onsubmit="return confirm('Send a password reset email to this user?')" {
                                         button type="submit" class=(button_class("outline", "sm", "")) { "Reset Password" }
                                     }
-                                    @if !u.lifetime_member {
+                                    @if u.lifetime_member {
+                                        form method="post" action=(format!("/admin/users/{}/lifetime/revoke", u.id)) onsubmit="return confirm('Revoke lifetime membership? User will be returned to standard tier with no active subscription.')" {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Revoke Lifetime" }
+                                        }
+                                    } @else {
                                         form method="post" action=(format!("/admin/users/{}/lifetime", u.id)) onsubmit="return confirm('Grant lifetime membership? Creates a $0 Stripe subscription.')" {
                                             button type="submit" class=(button_class("outline", "sm", "")) { "Lifetime" }
                                         }
@@ -351,6 +355,19 @@ pub async fn user_grant_lifetime(
     redirect_cookies(&format!("/admin/users/{id}"), &c.set_cookies)
 }
 
+pub async fn user_revoke_lifetime(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::revoke_lifetime(&st.api, c.forward.as_deref(), &id).await;
+    redirect_cookies(&format!("/admin/users/{id}"), &c.set_cookies)
+}
+
 /// GET /admin/users/{id} - single-user detail page with all admin actions in one place.
 pub async fn user_detail(
     State(st): State<AppState>,
@@ -435,7 +452,11 @@ pub async fn user_detail(
                     form method="post" action=(format!("/admin/users/{}/reset-password", target.id)) onsubmit="return confirm('Send a password reset email to this user?')" {
                         button type="submit" class=(button_class("outline", "default", "")) { "Send password reset" }
                     }
-                    @if !target.lifetime_member {
+                    @if target.lifetime_member {
+                        form method="post" action=(format!("/admin/users/{}/lifetime/revoke", target.id)) onsubmit="return confirm('Revoke lifetime membership? User will be returned to standard tier with no active subscription.')" {
+                            button type="submit" class=(button_class("outline", "default", "")) { "Revoke lifetime" }
+                        }
+                    } @else {
                         form method="post" action=(format!("/admin/users/{}/lifetime", target.id)) onsubmit="return confirm('Grant lifetime membership? Creates a $0 Stripe subscription.')" {
                             button type="submit" class=(button_class("outline", "default", "")) { "Grant lifetime" }
                         }
