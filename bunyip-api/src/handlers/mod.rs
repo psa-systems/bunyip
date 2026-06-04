@@ -50,9 +50,9 @@ pub use admin::{
     get_system_health, get_tier_config, get_user, grant_lifetime_membership, grant_membership,
     impersonate_user, key_rotation_status, list_admin_invites, list_all_applications,
     list_audit_logs, list_memberships, list_notifications, list_users, mark_all_notifications_read,
-    mark_notification_read, reencrypt_key, revoke_admin_invite, revoke_membership, send_test_email,
-    swap_application_order, update_application, update_stripe_config, update_tier_config,
-    update_user_role, update_user_status,
+    mark_notification_read, reencrypt_key, revoke_admin_invite, revoke_lifetime_membership,
+    revoke_membership, send_test_email, swap_application_order, update_application,
+    update_stripe_config, update_tier_config, update_user_role, update_user_status,
 };
 pub use admin_entitlements::{
     add_price_mapping, grant_entitlement, list_user_entitlements, remove_price_mapping,

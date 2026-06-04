@@ -610,6 +610,35 @@ impl UserRepository {
         Ok(user)
     }
 
+    /// Revoke a previously-granted lifetime / free admin-override membership.
+    /// Returns the user to `standard` tier with no active subscription, mirroring
+    /// the post-cancel Stripe state. Caller is responsible for any Stripe-side
+    /// cleanup (cancelling the $0 invoice subscription, etc.).
+    pub async fn revoke_lifetime_membership(
+        pool: &PgPool,
+        user_id: Uuid,
+    ) -> Result<User, AppError> {
+        let user = sqlx::query_as::<_, User>(
+            r#"
+            UPDATE users
+            SET subscription_tier = 'standard',
+                lifetime_member = FALSE,
+                trial_ends_at = NULL,
+                subscription_override_by = NULL,
+                subscription_status = 'none',
+                updated_at = NOW()
+            WHERE id = $1 AND deleted_at IS NULL AND lifetime_member = TRUE
+            RETURNING *
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("Lifetime membership"))?;
+
+        Ok(user)
+    }
+
     /// Grant free membership to a user (admin override, not tied to signup count).
     pub async fn grant_free_membership(
         pool: &PgPool,

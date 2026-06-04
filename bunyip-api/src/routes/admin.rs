@@ -41,6 +41,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/users/{user_id}/lifetime",
                 web::post().to(handlers::grant_lifetime_membership),
             )
+            .route(
+                "/users/{user_id}/lifetime/revoke",
+                web::post().to(handlers::revoke_lifetime_membership),
+            )
             // Per-product entitlements (BUNYIP-39)
             .route(
                 "/users/{user_id}/entitlements",

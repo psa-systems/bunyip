@@ -128,6 +128,23 @@ pub async fn grant_lifetime(
     ok_data(&r).map(|_| ())
 }
 
+/// Revoke a previously-granted lifetime membership. Returns the user to the
+/// standard tier with no active subscription.
+pub async fn revoke_lifetime(
+    api: &Api,
+    cookie: Option<&str>,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            &format!("/admin/users/{user_id}/lifetime/revoke"),
+            cookie,
+            None,
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
 // --- memberships ------------------------------------------------------------
 
 pub async fn memberships(
