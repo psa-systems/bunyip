@@ -116,53 +116,53 @@ async fn main() {
         .route("/admin", get(handlers::admin::dashboard))
         .route("/admin/audit-logs", get(handlers::admin::audit_logs))
         .route("/admin/users", get(handlers::admin::users))
-        .route("/admin/users/{id}", get(handlers::admin::user_detail))
+        .route("/admin/users/:id", get(handlers::admin::user_detail))
         .route(
-            "/admin/users/{id}/role",
+            "/admin/users/:id/role",
             axum::routing::post(handlers::admin::user_role),
         )
         .route(
-            "/admin/users/{id}/delete",
+            "/admin/users/:id/delete",
             axum::routing::post(handlers::admin::user_delete),
         )
         .route(
-            "/admin/users/{id}/suspend",
+            "/admin/users/:id/suspend",
             axum::routing::post(handlers::admin::user_suspend),
         )
         .route(
-            "/admin/users/{id}/reset-password",
+            "/admin/users/:id/reset-password",
             axum::routing::post(handlers::admin::user_reset_password),
         )
         .route(
-            "/admin/users/{id}/lifetime",
+            "/admin/users/:id/lifetime",
             axum::routing::post(handlers::admin::user_grant_lifetime),
         )
         .route("/admin/memberships", get(handlers::admin::memberships))
         .route("/admin/feedback", get(handlers::admin::feedback))
         .route(
-            "/admin/feedback/{id}/status",
+            "/admin/feedback/:id/status",
             axum::routing::post(handlers::admin::feedback_status),
         )
         .route("/admin/applications", get(handlers::admin::applications))
         .route(
-            "/admin/applications/{id}/field",
+            "/admin/applications/:id/field",
             axum::routing::post(handlers::admin::application_field),
         )
         .route("/admin/entitlements", get(handlers::admin::entitlements))
         .route(
-            "/admin/applications/{slug}/restricted-toggle",
+            "/admin/applications/:slug/restricted-toggle",
             axum::routing::post(handlers::admin::set_app_restricted),
         )
         .route(
-            "/admin/users/{user_id}/entitlements",
+            "/admin/users/:user_id/entitlements",
             get(handlers::admin::user_entitlements),
         )
         .route(
-            "/admin/users/{user_id}/entitlements/grant",
+            "/admin/users/:user_id/entitlements/grant",
             axum::routing::post(handlers::admin::grant_user_entitlement_h),
         )
         .route(
-            "/admin/users/{user_id}/entitlements/revoke",
+            "/admin/users/:user_id/entitlements/revoke",
             axum::routing::post(handlers::admin::revoke_user_entitlement_h),
         )
         .route(
