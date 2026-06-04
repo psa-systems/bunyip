@@ -16,7 +16,7 @@ use crate::api::types::{AdminAuditLog, FeedbackStatus, UserEntitlement};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::relative_time;
 use crate::views::ui::{badge, button_class, icon};
-use crate::web::{redirect, AppState};
+use crate::web::{redirect, redirect_cookies, AppState};
 
 fn title_case(action: &str) -> String {
     action
@@ -248,11 +248,23 @@ pub async fn users(
                                     p class="font-medium flex items-center gap-2" { (u.email) @if is_admin { (badge("default", "Admin")) } @if !u.email_verified { (badge("outline", "Unverified")) } }
                                     p class="text-xs text-muted-foreground" { "Joined " (relative_time(&u.created_at)) }
                                 }
-                                div class="flex items-center gap-2" {
+                                div class="flex items-center gap-2 flex-wrap" {
+                                    a href=(format!("/admin/users/{}", u.id)) class=(button_class("outline", "sm", "")) { "View" }
                                     a href=(format!("/admin/users/{}/entitlements", u.id)) class=(button_class("outline", "sm", "")) { "Entitlements" }
                                     form method="post" action=(format!("/admin/users/{}/role", u.id)) {
                                         input type="hidden" name="role" value=(if is_admin { "subscriber" } else { "admin" });
                                         button type="submit" class=(button_class("outline", "sm", "")) { @if is_admin { "Demote" } @else { "Make Admin" } }
+                                    }
+                                    form method="post" action=(format!("/admin/users/{}/reset-password", u.id)) onsubmit="return confirm('Send a password reset email to this user?')" {
+                                        button type="submit" class=(button_class("outline", "sm", "")) { "Reset Password" }
+                                    }
+                                    @if !u.lifetime_member {
+                                        form method="post" action=(format!("/admin/users/{}/lifetime", u.id)) onsubmit="return confirm('Grant lifetime membership? Creates a $0 Stripe subscription.')" {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Lifetime" }
+                                        }
+                                    }
+                                    form method="post" action=(format!("/admin/users/{}/suspend", u.id)) onsubmit="return confirm('Suspend (soft-delete) this user?')" {
+                                        button type="submit" class=(button_class("outline", "sm", "")) { "Suspend" }
                                     }
                                     form method="post" action=(format!("/admin/users/{}/delete", u.id)) onsubmit="return confirm('Delete this user? This cannot be undone.')" {
                                         button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("trash", "h-4 w-4")) }
@@ -285,7 +297,7 @@ pub async fn user_role(
         Err(r) => return r,
     };
     let _ = admin_api::update_user_role(&st.api, c.forward.as_deref(), &id, &f.role).await;
-    redirect("/admin/users")
+    redirect_cookies("/admin/users", &c.set_cookies)
 }
 pub async fn user_delete(
     State(st): State<AppState>,
@@ -297,7 +309,148 @@ pub async fn user_delete(
         Err(r) => return r,
     };
     let _ = admin_api::delete_user(&st.api, c.forward.as_deref(), &id).await;
-    redirect("/admin/users")
+    redirect_cookies("/admin/users", &c.set_cookies)
+}
+
+pub async fn user_suspend(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::suspend_user(&st.api, c.forward.as_deref(), &id).await;
+    redirect_cookies("/admin/users", &c.set_cookies)
+}
+
+pub async fn user_reset_password(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::admin_reset_password(&st.api, c.forward.as_deref(), &id).await;
+    redirect_cookies(&format!("/admin/users/{id}"), &c.set_cookies)
+}
+
+pub async fn user_grant_lifetime(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::grant_lifetime(&st.api, c.forward.as_deref(), &id).await;
+    redirect_cookies(&format!("/admin/users/{id}"), &c.set_cookies)
+}
+
+/// GET /admin/users/{id} - single-user detail page with all admin actions in one place.
+pub async fn user_detail(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::get_user(&st.api, c.forward.as_deref(), &id).await {
+        Ok(u) => u,
+        Err(_) => {
+            return admin_response(
+                &c,
+                &user,
+                "/admin/users",
+                "User not found",
+                html! {
+                    div class="rounded-lg border bg-card text-card-foreground shadow-sm p-6" {
+                        p { "Could not load user " (id) "." }
+                        p class="mt-2" { a href="/admin/users" class="text-primary hover:underline" { "Back to users" } }
+                    }
+                },
+            )
+        }
+    };
+    let is_admin_target = matches!(target.role, crate::api::types::UserRole::Admin);
+
+    let content = html! {
+        div class="space-y-6" {
+            div class="flex items-center justify-between" {
+                div {
+                    h1 class="text-2xl font-bold flex items-center gap-2" {
+                        (target.email)
+                        @if is_admin_target { (badge("default", "Admin")) }
+                        @if target.lifetime_member { (badge("default", "Lifetime")) }
+                        @if !target.email_verified { (badge("outline", "Unverified")) }
+                    }
+                    p class="text-sm text-muted-foreground mt-1" {
+                        "Joined " (relative_time(&target.created_at))
+                        @if let Some(last) = target.last_login_at.as_deref() {
+                            " · last login " (relative_time(last))
+                        }
+                    }
+                }
+                a href="/admin/users" class=(button_class("outline", "sm", "")) { (icon("arrow-left", "h-4 w-4 mr-1")) "Back" }
+            }
+
+            // Profile card
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6 pb-2" {
+                    h3 class="text-base font-semibold leading-none tracking-tight" { "Profile" }
+                }
+                div class="p-6 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm" {
+                    div { span class="text-muted-foreground" { "User ID: " } code class="font-mono text-xs" { (target.id) } }
+                    div { span class="text-muted-foreground" { "Email: " } (target.email) }
+                    div { span class="text-muted-foreground" { "Role: " } (format!("{:?}", target.role)) }
+                    div { span class="text-muted-foreground" { "Email verified: " } @if target.email_verified { "Yes" } @else { "No" } }
+                    div { span class="text-muted-foreground" { "Two-factor: " } @if target.two_factor_enabled { "Enabled" } @else { "Disabled" } }
+                    div { span class="text-muted-foreground" { "Membership: " } (format!("{:?}", target.membership_status)) }
+                    div { span class="text-muted-foreground" { "Tier: " } (format!("{:?}", target.subscription_tier)) }
+                    @if target.lifetime_member { div { span class="text-muted-foreground" { "Lifetime: " } "Yes" } }
+                    @if let Some(grace) = target.grace_period_end.as_deref() {
+                        div { span class="text-muted-foreground" { "Grace ends: " } (relative_time(grace)) }
+                    }
+                }
+            }
+
+            // Actions card
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6 pb-2" {
+                    h3 class="text-base font-semibold leading-none tracking-tight" { "Actions" }
+                    p class="text-xs text-muted-foreground" { "All actions write an audit-log entry." }
+                }
+                div class="p-6 pt-2 flex flex-wrap gap-2" {
+                    a href=(format!("/admin/users/{}/entitlements", target.id)) class=(button_class("outline", "default", "")) { "Manage Entitlements" }
+                    form method="post" action=(format!("/admin/users/{}/role", target.id)) {
+                        input type="hidden" name="role" value=(if is_admin_target { "subscriber" } else { "admin" });
+                        button type="submit" class=(button_class("outline", "default", "")) { @if is_admin_target { "Demote to subscriber" } @else { "Promote to admin" } }
+                    }
+                    form method="post" action=(format!("/admin/users/{}/reset-password", target.id)) onsubmit="return confirm('Send a password reset email to this user?')" {
+                        button type="submit" class=(button_class("outline", "default", "")) { "Send password reset" }
+                    }
+                    @if !target.lifetime_member {
+                        form method="post" action=(format!("/admin/users/{}/lifetime", target.id)) onsubmit="return confirm('Grant lifetime membership? Creates a $0 Stripe subscription.')" {
+                            button type="submit" class=(button_class("outline", "default", "")) { "Grant lifetime" }
+                        }
+                    }
+                    form method="post" action=(format!("/admin/users/{}/suspend", target.id)) onsubmit="return confirm('Suspend (soft-delete) this user?')" {
+                        button type="submit" class=(button_class("outline", "default", "")) { "Suspend" }
+                    }
+                    form method="post" action=(format!("/admin/users/{}/delete", target.id)) onsubmit="return confirm('Delete this user? This cannot be undone.')" {
+                        button type="submit" class=(button_class("outline", "default", "text-destructive hover:text-destructive")) { "Delete user" }
+                    }
+                }
+            }
+        }
+    };
+    admin_response(&c, &user, "/admin/users", "User · Bunyip", content)
 }
 
 // ===========================================================================
