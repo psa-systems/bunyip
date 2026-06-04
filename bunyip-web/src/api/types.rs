@@ -323,6 +323,24 @@ pub struct AdminApplication {
     pub updated_at: String,
     #[serde(default)]
     pub requires_entitlement: bool,
+    // Distribution config, for prefilling the admin edit form. The backend
+    // serialises these straight off the `Application` model (snake_case).
+    #[serde(default)]
+    pub artifact_source: Option<String>,
+    #[serde(default)]
+    pub forgejo_owner: Option<String>,
+    #[serde(default)]
+    pub forgejo_repo: Option<String>,
+    #[serde(default)]
+    pub forgejo_package: Option<String>,
+    #[serde(default)]
+    pub pinned_release_tag: Option<String>,
+    #[serde(default)]
+    pub oci_image_owner: Option<String>,
+    #[serde(default)]
+    pub oci_image_name: Option<String>,
+    #[serde(default)]
+    pub pinned_image_tag: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

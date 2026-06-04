@@ -618,7 +618,10 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
 
     let content = html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Applications" } p class="mt-2 text-muted-foreground" { "Configure available applications." } }
+            div class="flex items-center justify-between gap-4" {
+                div { h1 class="text-3xl font-bold" { "Applications" } p class="mt-2 text-muted-foreground" { "Configure available applications." } }
+                a href="/admin/applications/new" class=(button_class("default", "default", "")) { "New application" }
+            }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "All Applications" } }
                 div class="p-6 pt-0" {
@@ -639,6 +642,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                                         span class="text-sm text-muted-foreground" { "Maintenance: " (if app.maintenance_mode { "on" } else { "off" }) }
                                         button type="submit" class=(button_class("outline", "sm", "")) { "Toggle" }
                                     }
+                                    a href=(format!("/admin/applications/{}/edit", app.id)) class=(button_class("outline", "sm", "")) { "Edit" }
                                 }
                             }
                         }
@@ -678,6 +682,378 @@ pub async fn application_field(
     let body = serde_json::Value::Object(map);
     let _ = admin_api::update_application(&st.api, c.forward.as_deref(), &id, body).await;
     redirect("/admin/applications")
+}
+
+// --- application distribution edit / create --------------------------------
+
+/// Current values of the distribution form, borrowed for rendering. Shared by
+/// the create and edit forms so the field layout cannot drift between them.
+struct DistView<'a> {
+    artifact_source: &'a str,
+    forgejo_owner: &'a str,
+    forgejo_repo: &'a str,
+    forgejo_package: &'a str,
+    pinned_release_tag: &'a str,
+    oci_image_owner: &'a str,
+    oci_image_name: &'a str,
+    pinned_image_tag: &'a str,
+}
+
+/// Identity fields shown only on the create form (the backend requires them;
+/// they are immutable afterwards, so the edit form omits them).
+struct IdentityView<'a> {
+    name: &'a str,
+    slug: &'a str,
+    display_name: &'a str,
+    container_name: &'a str,
+}
+
+fn error_banner(msg: &str) -> Markup {
+    html! { div class="rounded-md border border-destructive bg-destructive/10 text-destructive px-4 py-3 text-sm" { (msg) } }
+}
+
+fn distribution_fields(v: &DistView) -> Markup {
+    html! {
+        h4 class="text-lg font-semibold pt-2" { "Binary (Forgejo)" }
+        div class="space-y-2" {
+            label class="text-sm font-medium" { "Artifact source" }
+            select name="artifact_source" class=(dashboard_input()) {
+                option value="release" selected[v.artifact_source != "generic_package"] { "release" }
+                option value="generic_package" selected[v.artifact_source == "generic_package"] { "generic_package" }
+            }
+        }
+        div class="space-y-2" { label class="text-sm font-medium" { "Forgejo owner" } input name="forgejo_owner" value=(v.forgejo_owner) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Forgejo repo" } input name="forgejo_repo" value=(v.forgejo_repo) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Forgejo package" } p class="text-xs text-muted-foreground" { "generic_package sources only; leave blank to clear back to the repo name." } input name="forgejo_package" value=(v.forgejo_package) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Pinned release tag" } input name="pinned_release_tag" value=(v.pinned_release_tag) class=(dashboard_input()); }
+        h4 class="text-lg font-semibold pt-2" { "Container (OCI)" }
+        div class="space-y-2" { label class="text-sm font-medium" { "OCI image owner" } input name="oci_image_owner" value=(v.oci_image_owner) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "OCI image name" } input name="oci_image_name" value=(v.oci_image_name) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Pinned image tag" } input name="pinned_image_tag" value=(v.pinned_image_tag) class=(dashboard_input()); }
+    }
+}
+
+/// Render the application create/edit form. `identity` is `Some` only for
+/// create (the edit form posts distribution fields only). `error` renders a
+/// banner and the form keeps the submitted values for correction.
+fn application_form(
+    action: &str,
+    heading: &str,
+    blurb: &str,
+    identity: Option<&IdentityView>,
+    v: &DistView,
+    error: Option<&str>,
+) -> Markup {
+    html! {
+        div class="space-y-6" {
+            div { h1 class="text-3xl font-bold" { (heading) } p class="mt-2 text-muted-foreground" { (blurb) } }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="p-6" {
+                    form method="post" action=(action) class="space-y-4 max-w-md" {
+                        @if let Some(err) = error { (error_banner(err)) }
+                        @if let Some(id) = identity {
+                            h4 class="text-lg font-semibold" { "Identity" }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Name" } input name="name" value=(id.name) required class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Slug" } input name="slug" value=(id.slug) required class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Display name" } input name="display_name" value=(id.display_name) required class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Container name" } input name="container_name" value=(id.container_name) required class=(dashboard_input()); }
+                        }
+                        (distribution_fields(v))
+                        div class="flex items-center gap-2 pt-2" {
+                            button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
+                            a href="/admin/applications" class=(button_class("outline", "default", "")) { "Cancel" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn dist_view_from_form(f: &DistributionForm) -> DistView<'_> {
+    DistView {
+        artifact_source: &f.artifact_source,
+        forgejo_owner: &f.forgejo_owner,
+        forgejo_repo: &f.forgejo_repo,
+        forgejo_package: &f.forgejo_package,
+        pinned_release_tag: &f.pinned_release_tag,
+        oci_image_owner: &f.oci_image_owner,
+        oci_image_name: &f.oci_image_name,
+        pinned_image_tag: &f.pinned_image_tag,
+    }
+}
+
+/// Body for PUT /admin/applications/{id}: set every non-empty distribution
+/// field. Empty inputs are omitted so the backend keeps the existing column
+/// (its UPDATE COALESCEs a NULL to the old value), EXCEPT `forgejo_package`,
+/// which is always sent so an empty value clears it to NULL (the documented
+/// backend sentinel).
+fn distribution_update_body(f: &DistributionForm) -> serde_json::Value {
+    let mut m = serde_json::Map::new();
+    if !f.artifact_source.trim().is_empty() {
+        m.insert("artifact_source".into(), json!(f.artifact_source.trim()));
+    }
+    for (k, val) in [
+        ("forgejo_owner", &f.forgejo_owner),
+        ("forgejo_repo", &f.forgejo_repo),
+        ("pinned_release_tag", &f.pinned_release_tag),
+        ("oci_image_owner", &f.oci_image_owner),
+        ("oci_image_name", &f.oci_image_name),
+        ("pinned_image_tag", &f.pinned_image_tag),
+    ] {
+        if !val.trim().is_empty() {
+            m.insert(k.into(), json!(val.trim()));
+        }
+    }
+    m.insert("forgejo_package".into(), json!(f.forgejo_package.trim()));
+    serde_json::Value::Object(m)
+}
+
+#[derive(Deserialize, Default)]
+pub struct DistributionForm {
+    #[serde(default)]
+    pub artifact_source: String,
+    #[serde(default)]
+    pub forgejo_owner: String,
+    #[serde(default)]
+    pub forgejo_repo: String,
+    #[serde(default)]
+    pub forgejo_package: String,
+    #[serde(default)]
+    pub pinned_release_tag: String,
+    #[serde(default)]
+    pub oci_image_owner: String,
+    #[serde(default)]
+    pub oci_image_name: String,
+    #[serde(default)]
+    pub pinned_image_tag: String,
+}
+
+/// GET /admin/applications/{id}/edit
+pub async fn application_edit(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let apps = admin_api::applications(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
+    let content = match apps.iter().find(|a| a.id == id) {
+        None => {
+            html! { div class="space-y-6" { h1 class="text-3xl font-bold" { "Edit application" } p class="text-muted-foreground" { "Application not found." } } }
+        }
+        Some(app) => {
+            let v = DistView {
+                artifact_source: app.artifact_source.as_deref().unwrap_or("release"),
+                forgejo_owner: app.forgejo_owner.as_deref().unwrap_or_default(),
+                forgejo_repo: app.forgejo_repo.as_deref().unwrap_or_default(),
+                forgejo_package: app.forgejo_package.as_deref().unwrap_or_default(),
+                pinned_release_tag: app.pinned_release_tag.as_deref().unwrap_or_default(),
+                oci_image_owner: app.oci_image_owner.as_deref().unwrap_or_default(),
+                oci_image_name: app.oci_image_name.as_deref().unwrap_or_default(),
+                pinned_image_tag: app.pinned_image_tag.as_deref().unwrap_or_default(),
+            };
+            application_form(
+                &format!("/admin/applications/{id}/distribution"),
+                &format!("Edit {}", app.display_name),
+                "Set the Forgejo binary and OCI container coordinates. Blank fields keep their current value.",
+                None,
+                &v,
+                None,
+            )
+        }
+    };
+    admin_response(
+        &c,
+        &user,
+        "/admin/applications",
+        "Edit application · Bunyip",
+        content,
+    )
+}
+
+/// POST /admin/applications/{id}/distribution
+pub async fn application_distribution_save(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<DistributionForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let body = distribution_update_body(&f);
+    match admin_api::update_application(&st.api, c.forward.as_deref(), &id, body).await {
+        Ok(()) => redirect("/admin/applications"),
+        Err(e) => {
+            let v = dist_view_from_form(&f);
+            let content = application_form(
+                &format!("/admin/applications/{id}/distribution"),
+                "Edit application",
+                "Set the Forgejo binary and OCI container coordinates. Blank fields keep their current value.",
+                None,
+                &v,
+                Some(&e.user_message()),
+            );
+            admin_response(
+                &c,
+                &user,
+                "/admin/applications",
+                "Edit application · Bunyip",
+                content,
+            )
+        }
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct CreateAppForm {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub container_name: String,
+    #[serde(default)]
+    pub artifact_source: String,
+    #[serde(default)]
+    pub forgejo_owner: String,
+    #[serde(default)]
+    pub forgejo_repo: String,
+    #[serde(default)]
+    pub forgejo_package: String,
+    #[serde(default)]
+    pub pinned_release_tag: String,
+    #[serde(default)]
+    pub oci_image_owner: String,
+    #[serde(default)]
+    pub oci_image_name: String,
+    #[serde(default)]
+    pub pinned_image_tag: String,
+}
+
+/// Body for POST /admin/applications: required identity fields plus every
+/// non-empty distribution field. Empty distribution inputs are omitted (a new
+/// row has nothing to clear, and an empty string would fail backend
+/// validation).
+fn create_app_body(f: &CreateAppForm) -> serde_json::Value {
+    let mut m = serde_json::Map::new();
+    m.insert("name".into(), json!(f.name.trim()));
+    m.insert("slug".into(), json!(f.slug.trim()));
+    m.insert("display_name".into(), json!(f.display_name.trim()));
+    m.insert("container_name".into(), json!(f.container_name.trim()));
+    if !f.artifact_source.trim().is_empty() {
+        m.insert("artifact_source".into(), json!(f.artifact_source.trim()));
+    }
+    for (k, val) in [
+        ("forgejo_owner", &f.forgejo_owner),
+        ("forgejo_repo", &f.forgejo_repo),
+        ("forgejo_package", &f.forgejo_package),
+        ("pinned_release_tag", &f.pinned_release_tag),
+        ("oci_image_owner", &f.oci_image_owner),
+        ("oci_image_name", &f.oci_image_name),
+        ("pinned_image_tag", &f.pinned_image_tag),
+    ] {
+        if !val.trim().is_empty() {
+            m.insert(k.into(), json!(val.trim()));
+        }
+    }
+    serde_json::Value::Object(m)
+}
+
+/// GET /admin/applications/new
+pub async fn application_new(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let id = IdentityView {
+        name: "",
+        slug: "",
+        display_name: "",
+        container_name: "",
+    };
+    let v = DistView {
+        artifact_source: "release",
+        forgejo_owner: "",
+        forgejo_repo: "",
+        forgejo_package: "",
+        pinned_release_tag: "",
+        oci_image_owner: "",
+        oci_image_name: "",
+        pinned_image_tag: "",
+    };
+    let content = application_form(
+        "/admin/applications",
+        "New application",
+        "Create a catalog application and (optionally) its Forgejo binary and OCI container coordinates.",
+        Some(&id),
+        &v,
+        None,
+    );
+    admin_response(
+        &c,
+        &user,
+        "/admin/applications",
+        "New application · Bunyip",
+        content,
+    )
+}
+
+/// POST /admin/applications
+pub async fn application_create(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<CreateAppForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let body = create_app_body(&f);
+    match admin_api::create_application(&st.api, c.forward.as_deref(), body).await {
+        Ok(()) => redirect("/admin/applications"),
+        Err(e) => {
+            let id = IdentityView {
+                name: &f.name,
+                slug: &f.slug,
+                display_name: &f.display_name,
+                container_name: &f.container_name,
+            };
+            let v = DistView {
+                artifact_source: &f.artifact_source,
+                forgejo_owner: &f.forgejo_owner,
+                forgejo_repo: &f.forgejo_repo,
+                forgejo_package: &f.forgejo_package,
+                pinned_release_tag: &f.pinned_release_tag,
+                oci_image_owner: &f.oci_image_owner,
+                oci_image_name: &f.oci_image_name,
+                pinned_image_tag: &f.pinned_image_tag,
+            };
+            let content = application_form(
+                "/admin/applications",
+                "New application",
+                "Create a catalog application and (optionally) its Forgejo binary and OCI container coordinates.",
+                Some(&id),
+                &v,
+                Some(&e.user_message()),
+            );
+            admin_response(
+                &c,
+                &user,
+                "/admin/applications",
+                "New application · Bunyip",
+                content,
+            )
+        }
+    }
 }
 
 // ===========================================================================
@@ -1002,4 +1378,57 @@ fn urlenc(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_body_omits_empty_but_always_sends_forgejo_package() {
+        // Empty optional inputs are dropped so the backend keeps the existing
+        // column; forgejo_package is always present as the clear-to-NULL sentinel.
+        let f = DistributionForm {
+            artifact_source: "release".into(),
+            forgejo_owner: "acme".into(),
+            ..Default::default()
+        };
+        let body = distribution_update_body(&f);
+        assert_eq!(body["artifact_source"], json!("release"));
+        assert_eq!(body["forgejo_owner"], json!("acme"));
+        assert_eq!(body["forgejo_package"], json!(""));
+        assert!(body.get("forgejo_repo").is_none());
+        assert!(body.get("oci_image_owner").is_none());
+    }
+
+    #[test]
+    fn update_body_sends_set_forgejo_package_and_trims() {
+        let f = DistributionForm {
+            artifact_source: "generic_package".into(),
+            forgejo_package: "  mypkg  ".into(),
+            ..Default::default()
+        };
+        let body = distribution_update_body(&f);
+        assert_eq!(body["forgejo_package"], json!("mypkg"));
+    }
+
+    #[test]
+    fn create_body_requires_identity_and_omits_empty_package() {
+        // A new row has nothing to clear, so an empty forgejo_package is omitted
+        // (an empty string would fail backend non-empty validation).
+        let f = CreateAppForm {
+            name: "Mokosh".into(),
+            slug: "mokosh".into(),
+            display_name: "Mokosh".into(),
+            container_name: "mokosh".into(),
+            ..Default::default()
+        };
+        let body = create_app_body(&f);
+        assert_eq!(body["name"], json!("Mokosh"));
+        assert_eq!(body["slug"], json!("mokosh"));
+        assert_eq!(body["display_name"], json!("Mokosh"));
+        assert_eq!(body["container_name"], json!("mokosh"));
+        assert!(body.get("forgejo_package").is_none());
+        assert!(body.get("forgejo_owner").is_none());
+    }
 }

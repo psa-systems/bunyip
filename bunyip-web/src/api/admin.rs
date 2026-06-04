@@ -183,6 +183,15 @@ pub async fn update_application(
     ok_data(&r).map(|_| ())
 }
 
+pub async fn create_application(
+    api: &Api,
+    cookie: Option<&str>,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api.post("/admin/applications", cookie, Some(body)).await?;
+    ok_data(&r).map(|_| ())
+}
+
 // --- entitlements -----------------------------------------------------------
 
 pub async fn list_user_entitlements(
