@@ -15,7 +15,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::{AdminAuditLog, FeedbackStatus, UserEntitlement};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::relative_time;
-use crate::views::ui::{badge, button_class, icon};
+use crate::views::ui::{badge, button_class, error_box, icon};
 use crate::web::{redirect, redirect_cookies, AppState};
 
 fn title_case(action: &str) -> String {
@@ -708,8 +708,11 @@ struct IdentityView<'a> {
     container_name: &'a str,
 }
 
-fn error_banner(msg: &str) -> Markup {
-    html! { div class="rounded-md border border-destructive bg-destructive/10 text-destructive px-4 py-3 text-sm" { (msg) } }
+/// An HTML checkbox submits its value only when checked, so an unchecked box is
+/// absent from the form body (serde default `""`). Treat the standard checked
+/// markers as true.
+fn checkbox_on(s: &str) -> bool {
+    s == "true" || s == "on"
 }
 
 fn distribution_fields(v: &DistView) -> Markup {
@@ -741,6 +744,7 @@ fn application_form(
     heading: &str,
     blurb: &str,
     identity: Option<&IdentityView>,
+    is_hosted: bool,
     v: &DistView,
     error: Option<&str>,
 ) -> Markup {
@@ -750,13 +754,17 @@ fn application_form(
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="p-6" {
                     form method="post" action=(action) class="space-y-4 max-w-md" {
-                        @if let Some(err) = error { (error_banner(err)) }
+                        @if let Some(err) = error { (error_box(err)) }
                         @if let Some(id) = identity {
                             h4 class="text-lg font-semibold" { "Identity" }
                             div class="space-y-2" { label class="text-sm font-medium" { "Name" } input name="name" value=(id.name) required class=(dashboard_input()); }
                             div class="space-y-2" { label class="text-sm font-medium" { "Slug" } input name="slug" value=(id.slug) required class=(dashboard_input()); }
                             div class="space-y-2" { label class="text-sm font-medium" { "Display name" } input name="display_name" value=(id.display_name) required class=(dashboard_input()); }
                             div class="space-y-2" { label class="text-sm font-medium" { "Container name" } input name="container_name" value=(id.container_name) required class=(dashboard_input()); }
+                        }
+                        div class="flex items-start gap-2" {
+                            input type="checkbox" name="is_hosted" value="true" checked[is_hosted] id="is_hosted" class="mt-1";
+                            label for="is_hosted" class="text-sm font-medium" { "Hosted app" p class="text-xs font-normal text-muted-foreground" { "Checked: shows as a launchable hub tile. Unchecked: catalog-only distribution product (downloads / OCI pulls only)." } }
                         }
                         (distribution_fields(v))
                         div class="flex items-center gap-2 pt-2" {
@@ -787,7 +795,10 @@ fn dist_view_from_form(f: &DistributionForm) -> DistView<'_> {
 /// field. Empty inputs are omitted so the backend keeps the existing column
 /// (its UPDATE COALESCEs a NULL to the old value), EXCEPT `forgejo_package`,
 /// which is always sent so an empty value clears it to NULL (the documented
-/// backend sentinel).
+/// backend sentinel). `forgejo_package` is also forced empty on non-generic
+/// sources: it is meaningless there, and re-sending a prefilled package while
+/// the admin flips the source to `release` would fail backend validation.
+/// `is_hosted` is always sent so the checkbox can toggle it in both directions.
 fn distribution_update_body(f: &DistributionForm) -> serde_json::Value {
     let mut m = serde_json::Map::new();
     if !f.artifact_source.trim().is_empty() {
@@ -805,7 +816,13 @@ fn distribution_update_body(f: &DistributionForm) -> serde_json::Value {
             m.insert(k.into(), json!(val.trim()));
         }
     }
-    m.insert("forgejo_package".into(), json!(f.forgejo_package.trim()));
+    let package = if f.artifact_source.trim() == "generic_package" {
+        f.forgejo_package.trim()
+    } else {
+        ""
+    };
+    m.insert("forgejo_package".into(), json!(package));
+    m.insert("is_hosted".into(), json!(checkbox_on(&f.is_hosted)));
     serde_json::Value::Object(m)
 }
 
@@ -827,6 +844,8 @@ pub struct DistributionForm {
     pub oci_image_name: String,
     #[serde(default)]
     pub pinned_image_tag: String,
+    #[serde(default)]
+    pub is_hosted: String,
 }
 
 /// GET /admin/applications/{id}/edit
@@ -839,9 +858,26 @@ pub async fn application_edit(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let apps = admin_api::applications(&st.api, c.forward.as_deref())
-        .await
-        .unwrap_or_default();
+    // Distinguish a failed list fetch (network / auth / 5xx) from a genuinely
+    // missing application; collapsing both to "not found" would mislead.
+    let apps = match admin_api::applications(&st.api, c.forward.as_deref()).await {
+        Ok(apps) => apps,
+        Err(e) => {
+            let content = html! {
+                div class="space-y-6" {
+                    h1 class="text-3xl font-bold" { "Edit application" }
+                    (error_box(&e.user_message()))
+                }
+            };
+            return admin_response(
+                &c,
+                &user,
+                "/admin/applications",
+                "Edit application · Bunyip",
+                content,
+            );
+        }
+    };
     let content = match apps.iter().find(|a| a.id == id) {
         None => {
             html! { div class="space-y-6" { h1 class="text-3xl font-bold" { "Edit application" } p class="text-muted-foreground" { "Application not found." } } }
@@ -862,6 +898,7 @@ pub async fn application_edit(
                 &format!("Edit {}", app.display_name),
                 "Set the Forgejo binary and OCI container coordinates. Blank fields keep their current value.",
                 None,
+                app.is_hosted,
                 &v,
                 None,
             )
@@ -897,6 +934,7 @@ pub async fn application_distribution_save(
                 "Edit application",
                 "Set the Forgejo binary and OCI container coordinates. Blank fields keep their current value.",
                 None,
+                checkbox_on(&f.is_hosted),
                 &v,
                 Some(&e.user_message()),
             );
@@ -937,25 +975,29 @@ pub struct CreateAppForm {
     pub oci_image_name: String,
     #[serde(default)]
     pub pinned_image_tag: String,
+    #[serde(default)]
+    pub is_hosted: String,
 }
 
 /// Body for POST /admin/applications: required identity fields plus every
 /// non-empty distribution field. Empty distribution inputs are omitted (a new
 /// row has nothing to clear, and an empty string would fail backend
-/// validation).
+/// validation). `forgejo_package` is only sent on a `generic_package` source
+/// (it is invalid on `release`). `is_hosted` reflects the checkbox so a
+/// catalog-only product (unchecked) is not forced to the DB default of hosted.
 fn create_app_body(f: &CreateAppForm) -> serde_json::Value {
     let mut m = serde_json::Map::new();
     m.insert("name".into(), json!(f.name.trim()));
     m.insert("slug".into(), json!(f.slug.trim()));
     m.insert("display_name".into(), json!(f.display_name.trim()));
     m.insert("container_name".into(), json!(f.container_name.trim()));
+    m.insert("is_hosted".into(), json!(checkbox_on(&f.is_hosted)));
     if !f.artifact_source.trim().is_empty() {
         m.insert("artifact_source".into(), json!(f.artifact_source.trim()));
     }
     for (k, val) in [
         ("forgejo_owner", &f.forgejo_owner),
         ("forgejo_repo", &f.forgejo_repo),
-        ("forgejo_package", &f.forgejo_package),
         ("pinned_release_tag", &f.pinned_release_tag),
         ("oci_image_owner", &f.oci_image_owner),
         ("oci_image_name", &f.oci_image_name),
@@ -964,6 +1006,9 @@ fn create_app_body(f: &CreateAppForm) -> serde_json::Value {
         if !val.trim().is_empty() {
             m.insert(k.into(), json!(val.trim()));
         }
+    }
+    if f.artifact_source.trim() == "generic_package" && !f.forgejo_package.trim().is_empty() {
+        m.insert("forgejo_package".into(), json!(f.forgejo_package.trim()));
     }
     serde_json::Value::Object(m)
 }
@@ -995,6 +1040,7 @@ pub async fn application_new(State(st): State<AppState>, headers: HeaderMap) -> 
         "New application",
         "Create a catalog application and (optionally) its Forgejo binary and OCI container coordinates.",
         Some(&id),
+        true,
         &v,
         None,
     );
@@ -1042,6 +1088,7 @@ pub async fn application_create(
                 "New application",
                 "Create a catalog application and (optionally) its Forgejo binary and OCI container coordinates.",
                 Some(&id),
+                checkbox_on(&f.is_hosted),
                 &v,
                 Some(&e.user_message()),
             );
@@ -1399,6 +1446,9 @@ mod tests {
         assert_eq!(body["forgejo_package"], json!(""));
         assert!(body.get("forgejo_repo").is_none());
         assert!(body.get("oci_image_owner").is_none());
+        // Unchecked checkbox (absent field) is sent as false, not omitted, so
+        // the toggle works in both directions.
+        assert_eq!(body["is_hosted"], json!(false));
     }
 
     #[test]
@@ -1410,6 +1460,21 @@ mod tests {
         };
         let body = distribution_update_body(&f);
         assert_eq!(body["forgejo_package"], json!("mypkg"));
+    }
+
+    #[test]
+    fn update_body_clears_package_on_release_even_if_prefilled() {
+        // Switching a generic_package app to release must not re-send the stale
+        // package, which would fail backend validation.
+        let f = DistributionForm {
+            artifact_source: "release".into(),
+            forgejo_package: "leftover-pkg".into(),
+            is_hosted: "true".into(),
+            ..Default::default()
+        };
+        let body = distribution_update_body(&f);
+        assert_eq!(body["forgejo_package"], json!(""));
+        assert_eq!(body["is_hosted"], json!(true));
     }
 
     #[test]
@@ -1430,5 +1495,25 @@ mod tests {
         assert_eq!(body["container_name"], json!("mokosh"));
         assert!(body.get("forgejo_package").is_none());
         assert!(body.get("forgejo_owner").is_none());
+        // Unchecked "Hosted app" creates a catalog-only product (is_hosted=false)
+        // instead of inheriting the DB default of true.
+        assert_eq!(body["is_hosted"], json!(false));
+    }
+
+    #[test]
+    fn create_body_sends_generic_package_and_hosted_flag() {
+        let f = CreateAppForm {
+            name: "Mokosh".into(),
+            slug: "mokosh".into(),
+            display_name: "Mokosh".into(),
+            container_name: "mokosh".into(),
+            artifact_source: "generic_package".into(),
+            forgejo_package: "mokosh-cli".into(),
+            is_hosted: "true".into(),
+            ..Default::default()
+        };
+        let body = create_app_body(&f);
+        assert_eq!(body["forgejo_package"], json!("mokosh-cli"));
+        assert_eq!(body["is_hosted"], json!(true));
     }
 }

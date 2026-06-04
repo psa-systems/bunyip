@@ -302,6 +302,10 @@ pub struct AdminAuditLog {
     pub created_at: String,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminApplication {
     pub id: String,
@@ -323,6 +327,10 @@ pub struct AdminApplication {
     pub updated_at: String,
     #[serde(default)]
     pub requires_entitlement: bool,
+    // Whether this is a hosted app (hub launch tile) or a catalog-only
+    // distribution product. Defaults to hosted to match the DB column default.
+    #[serde(default = "default_true")]
+    pub is_hosted: bool,
     // Distribution config, for prefilling the admin edit form. The backend
     // serialises these straight off the `Application` model (snake_case).
     #[serde(default)]
