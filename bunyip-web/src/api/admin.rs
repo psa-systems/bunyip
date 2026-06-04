@@ -76,6 +76,58 @@ pub async fn delete_user(api: &Api, cookie: Option<&str>, user_id: &str) -> Resu
     ok_data(&r).map(|_| ())
 }
 
+/// Single-user details for the admin user-detail page. Wraps GET /admin/users/{id}.
+pub async fn get_user(
+    api: &Api,
+    cookie: Option<&str>,
+    user_id: &str,
+) -> Result<AdminUser, ApiError> {
+    parse(api.get(&format!("/admin/users/{user_id}"), cookie).await?)
+}
+
+/// Soft-delete a user. (PUT /admin/users/{id}/status with active=false.) The
+/// backend rejects active=true today, so this only handles the suspend
+/// direction; reactivation is a follow-up that needs a new endpoint.
+pub async fn suspend_user(api: &Api, cookie: Option<&str>, user_id: &str) -> Result<(), ApiError> {
+    let r = api
+        .put(
+            &format!("/admin/users/{user_id}/status"),
+            cookie,
+            Some(json!({ "active": false })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// Admin-triggered password reset. The backend emails the user a reset link.
+pub async fn admin_reset_password(
+    api: &Api,
+    cookie: Option<&str>,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            &format!("/admin/users/{user_id}/reset-password"),
+            cookie,
+            None,
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// Grant lifetime membership. Creates a $0 Stripe subscription on the backend
+/// so invoices still flow.
+pub async fn grant_lifetime(
+    api: &Api,
+    cookie: Option<&str>,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(&format!("/admin/users/{user_id}/lifetime"), cookie, None)
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
 // --- memberships ------------------------------------------------------------
 
 pub async fn memberships(

@@ -116,6 +116,7 @@ async fn main() {
         .route("/admin", get(handlers::admin::dashboard))
         .route("/admin/audit-logs", get(handlers::admin::audit_logs))
         .route("/admin/users", get(handlers::admin::users))
+        .route("/admin/users/{id}", get(handlers::admin::user_detail))
         .route(
             "/admin/users/{id}/role",
             axum::routing::post(handlers::admin::user_role),
@@ -123,6 +124,18 @@ async fn main() {
         .route(
             "/admin/users/{id}/delete",
             axum::routing::post(handlers::admin::user_delete),
+        )
+        .route(
+            "/admin/users/{id}/suspend",
+            axum::routing::post(handlers::admin::user_suspend),
+        )
+        .route(
+            "/admin/users/{id}/reset-password",
+            axum::routing::post(handlers::admin::user_reset_password),
+        )
+        .route(
+            "/admin/users/{id}/lifetime",
+            axum::routing::post(handlers::admin::user_grant_lifetime),
         )
         .route("/admin/memberships", get(handlers::admin::memberships))
         .route("/admin/feedback", get(handlers::admin::feedback))
