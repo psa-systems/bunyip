@@ -107,7 +107,7 @@ dev-sso: ensure-env ensure-oidc-keys
     {{ compose_sso }}up --build --detach
     print ""
     print $"  bunyip hub:   https://($user_name)-bunyip.a8n.run"
-    print $"  OCI registry: https://($user_name)-bunyip-registry.a8n.run  (when OCI_REGISTRY_ENABLED=true in .env)"
+    print $"  OCI registry: https://($user_name)-bunyip-registry.a8n.run  \(when OCI_REGISTRY_ENABLED=true in .env)"
 
 # Stop the dev stack.
 [group: 'dev']
