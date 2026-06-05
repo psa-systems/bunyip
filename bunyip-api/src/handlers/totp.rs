@@ -125,6 +125,7 @@ pub async fn verify_2fa(
     totp_service: web::Data<Arc<TotpService>>,
     body: web::Json<Verify2FARequest>,
     config: web::Data<crate::config::Config>,
+    oidc_provider: crate::handlers::auth::OidcProviderData,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let ip_address = extract_client_ip(&req);
@@ -194,6 +195,15 @@ pub async fn verify_2fa(
     let secure = config.is_production();
     let cookie_domain = config.cookie_domain.as_deref();
 
+    let op_cookie = crate::handlers::auth::establish_op_session(
+        &oidc_provider,
+        &req,
+        user_response.id,
+        secure,
+        cookie_domain,
+    )
+    .await;
+
     let response = AuthResponse {
         user: user_response,
         expires_in: tokens.expires_in,
@@ -203,23 +213,25 @@ pub async fn verify_2fa(
     for cookie in AuthCookies::clear_stale(secure) {
         resp.cookie(cookie);
     }
-    Ok(resp
-        .cookie(AuthCookies::access_token(
-            &tokens.access_token,
-            secure,
-            cookie_domain,
-        ))
-        .cookie(AuthCookies::refresh_token(
-            &tokens.refresh_token,
-            secure,
-            true,
-            cookie_domain,
-        ))
-        .json(crate::responses::ApiResponse {
-            success: true,
-            data: Some(response),
-            meta: crate::responses::ResponseMeta::new(request_id),
-        }))
+    resp.cookie(AuthCookies::access_token(
+        &tokens.access_token,
+        secure,
+        cookie_domain,
+    ))
+    .cookie(AuthCookies::refresh_token(
+        &tokens.refresh_token,
+        secure,
+        true,
+        cookie_domain,
+    ));
+    if let Some(op) = op_cookie {
+        resp.cookie(op);
+    }
+    Ok(resp.json(crate::responses::ApiResponse {
+        success: true,
+        data: Some(response),
+        meta: crate::responses::ResponseMeta::new(request_id),
+    }))
 }
 
 /// DELETE /v1/auth/2fa
