@@ -46,6 +46,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             )
             .route("/redirect", web::get().to(handlers::auth_redirect))
             .route("/setup/status", web::get().to(handlers::setup_status))
-            .route("/setup", web::post().to(handlers::setup_admin)),
+            .route("/setup", web::post().to(handlers::setup_admin))
+            // Synthetic single-tenant membership stub for the mokosh
+            // SPA's tenant switcher. See the handler docstring for the
+            // multi-tenant story (deferred to phase-04).
+            .route("/memberships", web::get().to(handlers::get_memberships)),
     );
 }

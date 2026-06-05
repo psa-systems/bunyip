@@ -1052,3 +1052,128 @@ pub async fn setup_admin(
             meta: crate::responses::ResponseMeta::new(request_id),
         }))
 }
+
+// ── /v1/auth/memberships ────────────────────────────────────────────────────
+//
+// Synthetic single-tenant stub. Bunyip's M1 scope (per
+// `dev-docs/milestone-1-handoff.md`) is "one user = one account"; the
+// real organisations + memberships domain is the phase-04 multi-tenant
+// work and has no tables yet. Until that ships, the mokosh-clients SPA
+// (`src/hooks/auth.rs:240+`) hits this endpoint to populate its tenant
+// switcher and brand label, so a missing endpoint shows up as a
+// `memberships load failed: HTTP 404` warning and an empty brand area.
+//
+// This handler returns one synthetic membership derived from the
+// authenticated bunyip user. `tenant_id` is the all-zeros-with-1
+// default tenant UUID (`Uuid::from_u128(1)`), which matches
+// mokosh-server's `OIDC_DEFAULT_TENANT_ID` fallback: every user
+// JIT-provisioned from a bunyip at+jwt lands in that mokosh tenant, so
+// the SPA sees a tenant id that lines up with the data scope its PSA
+// API calls run against. When the real phase-04 work lands, this
+// handler is replaced by a real-row query against an `org_memberships`
+// table; the response shape stays as-is.
+
+#[derive(Debug, Serialize)]
+struct MembershipView {
+    tenant_id: String,
+    tenant_name: String,
+    tenant_kind: String,
+    role: String,
+    status: String,
+    is_active: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct MembershipsResponse {
+    memberships: Vec<MembershipView>,
+    active_tenant_id: String,
+}
+
+/// GET /v1/auth/memberships
+///
+/// Lists the tenants the authenticated user is a member of. Today
+/// returns a synthetic single-tenant response (see module comment); the
+/// real implementation lands with the phase-04 multi-tenant work.
+///
+/// Response shape (raw JSON, not wrapped in `ApiResponse` because the
+/// mokosh-clients SPA decodes the body directly):
+/// ```json
+/// {
+///   "memberships": [
+///     {
+///       "tenant_id":   "00000000-0000-0000-0000-000000000001",
+///       "tenant_name": "<user.email>",
+///       "tenant_kind": "personal",
+///       "role":        "owner",
+///       "status":      "active",
+///       "is_active":   true
+///     }
+///   ],
+///   "active_tenant_id": "00000000-0000-0000-0000-000000000001"
+/// }
+/// ```
+/// Synthesise the response payload for the current synthetic stub.
+/// Extracted so the unit test below can exercise the shape without
+/// going through the actix extractor machinery.
+///
+/// The default tenant UUID matches mokosh-server's
+/// `OIDC_DEFAULT_TENANT_ID` fallback (see mokosh-server's
+/// `auth/middleware.rs::default_bunyip_tenant_id`). Bunyip-issued
+/// at+jwt tokens currently carry no tenant claim, so every JIT-
+/// provisioned user lands in this tenant in mokosh; the SPA needs to
+/// see the same id here for its `active_membership()` lookup to match.
+fn synthesise_memberships_response(email: &str) -> MembershipsResponse {
+    let default_tenant_id = uuid::Uuid::from_u128(1).to_string();
+    MembershipsResponse {
+        memberships: vec![MembershipView {
+            tenant_id: default_tenant_id.clone(),
+            tenant_name: email.to_string(),
+            tenant_kind: "personal".to_string(),
+            role: "owner".to_string(),
+            status: "active".to_string(),
+            is_active: true,
+        }],
+        active_tenant_id: default_tenant_id,
+    }
+}
+
+pub async fn get_memberships(
+    _req: HttpRequest,
+    user: AuthenticatedUser,
+) -> Result<HttpResponse, AppError> {
+    Ok(HttpResponse::Ok().json(synthesise_memberships_response(&user.0.email)))
+}
+
+#[cfg(test)]
+mod memberships_tests {
+    use super::*;
+
+    #[test]
+    fn synthesise_memberships_response_matches_spa_shape() {
+        let resp = synthesise_memberships_response("alice@example.com");
+        let json = serde_json::to_value(&resp).expect("serialise");
+
+        // Top-level fields that mokosh-clients SPA's `Body` struct
+        // decodes (src/hooks/auth.rs around line 252).
+        assert!(json["memberships"].is_array());
+        assert_eq!(json["memberships"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            json["active_tenant_id"].as_str(),
+            Some("00000000-0000-0000-0000-000000000001"),
+            "active_tenant_id must match mokosh-server's default_bunyip_tenant_id"
+        );
+
+        // Per-row fields that mokosh-clients SPA's `MembershipView`
+        // struct decodes (src/hooks/auth.rs around line 13).
+        let row = &json["memberships"][0];
+        assert_eq!(
+            row["tenant_id"].as_str(),
+            Some("00000000-0000-0000-0000-000000000001"),
+        );
+        assert_eq!(row["tenant_name"].as_str(), Some("alice@example.com"));
+        assert_eq!(row["tenant_kind"].as_str(), Some("personal"));
+        assert_eq!(row["role"].as_str(), Some("owner"));
+        assert_eq!(row["status"].as_str(), Some("active"));
+        assert_eq!(row["is_active"].as_bool(), Some(true));
+    }
+}
