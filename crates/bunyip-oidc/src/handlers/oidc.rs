@@ -17,7 +17,7 @@ use tokio;
 use uuid::Uuid;
 
 use crate::errors::AppError;
-use crate::middleware::auth::{AuthenticatedUser, OptionalUser};
+use crate::middleware::auth::OptionalUser;
 use crate::repositories::UserRepository;
 use crate::services::oidc_provider::{OAuthClient, OidcProvider};
 
@@ -140,7 +140,6 @@ pub struct AuthorizeQuery {
 /// On success, redirects to the client's redirect_uri with code and state.
 pub async fn authorize(
     req: HttpRequest,
-    user: OptionalUser,
     provider: web::Data<Option<Arc<OidcProvider>>>,
     _pool: web::Data<sqlx::PgPool>,
     query: web::Query<AuthorizeQuery>,
@@ -148,16 +147,23 @@ pub async fn authorize(
 ) -> Result<HttpResponse, AppError> {
     let provider = require_provider!(provider);
 
-    // Redirect unauthenticated users to the SaaS login page, preserving the
-    // full authorize URL so they are sent back after logging in.
-    let user = match user.0 {
-        Some(claims) => AuthenticatedUser(claims),
+    // Authentication is gated on a server-validated OP session, NOT on the
+    // stateless hub access_token. logout revokes the op_sessions row, so a
+    // surviving/replayed access_token cookie can no longer mint a code.
+    let op_session = match req.cookie(crate::middleware::auth::AuthCookies::OP_SESSION_COOKIE) {
+        Some(c) => provider.load_op_session(c.value()).await?,
+        None => None,
+    };
+    let session = match op_session {
+        Some(s) => s,
         None => {
             let authorize_url = format!("{}{}", provider.issuer(), req.uri());
             tracing::info!(
+                has_op_session = req
+                    .cookie(crate::middleware::auth::AuthCookies::OP_SESSION_COOKIE)
+                    .is_some(),
                 has_access_token = req.cookie("access_token").is_some(),
-                has_refresh_token = req.cookie("refresh_token").is_some(),
-                "authorize: unauthenticated, redirecting to login",
+                "authorize: no active OP session, redirecting to login",
             );
             // Use web_origin (single absolute URL of bunyip-web) rather than
             // cors_origin (which is now a comma-list once multiple RPs are
@@ -234,47 +240,33 @@ pub async fn authorize(
         .collect();
 
     // Auto-grant entitlement on first login (JIT provisioning)
-    if !provider.has_entitlement(user.0.sub, client_id).await? {
+    if !provider.has_entitlement(session.user_id, client_id).await? {
         provider
-            .grant_entitlement(user.0.sub, client_id, &client.allowed_scopes)
+            .grant_entitlement(session.user_id, client_id, &client.allowed_scopes)
             .await?;
     }
 
-    // Look up (or create) the op_session for this user.
-    // For now we create a new one per authorization request.
-    // TODO: reuse the existing IdP session if one exists in the browser cookie.
-    let ip = extract_ip(&req);
-    let user_agent = req
-        .headers()
-        .get("User-Agent")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
-    let op_session = provider
-        .create_op_session(
-            user.0.sub,
-            user_agent.as_deref(),
-            ip,
-            "urn:bunyip:loa:pwd",
-            &["pwd".to_string()],
-        )
-        .await?;
-
-    let auth_time = chrono::Utc::now();
+    // Reuse the existing OP session established at login; auth_time/acr/amr come
+    // from that session rather than being re-minted per authorize request.
+    let acr = session.acr.as_deref().unwrap_or("urn:bunyip:loa:pwd");
+    let amr = session
+        .amr
+        .clone()
+        .unwrap_or_else(|| vec!["pwd".to_string()]);
 
     // Issue authorization code
     let code = provider
         .issue_authorization_code(
             &client,
-            user.0.sub,
-            op_session.id,
+            session.user_id,
+            session.id,
             &q.redirect_uri,
             &requested_scopes,
             &q.code_challenge,
             &q.nonce,
-            auth_time,
-            "urn:bunyip:loa:pwd",
-            &["pwd".to_string()],
+            session.created_at,
+            acr,
+            &amr,
         )
         .await?;
 

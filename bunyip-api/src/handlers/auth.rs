@@ -30,6 +30,95 @@ async fn check_rate_limit(
     Ok(())
 }
 
+/// Injected OIDC provider (present only when bunyip-api runs as the OP).
+pub type OidcProviderData =
+    web::Data<Option<Arc<bunyip_oidc::services::oidc_provider::OidcProvider>>>;
+
+/// Establish a server-side OP session for a freshly-authenticated user and
+/// return the `bunyip_op_session` cookie to set on the login response.
+///
+/// `/oauth2/authorize` gates on this session (not the stateless access_token),
+/// so it must be created at every login path. Returns `None` when the OP
+/// provider is not configured (non-OP deploys), or if session creation fails -
+/// callers simply skip setting the cookie in that case.
+pub(crate) async fn establish_op_session(
+    provider: &OidcProviderData,
+    req: &HttpRequest,
+    user_id: uuid::Uuid,
+    secure: bool,
+    cookie_domain: Option<&str>,
+) -> Option<actix_web::cookie::Cookie<'static>> {
+    let provider = provider.as_ref().as_ref()?;
+    let user_agent = req
+        .headers()
+        .get("User-Agent")
+        .and_then(|v| v.to_str().ok());
+    let ip = extract_client_ip(req);
+    match provider
+        .create_op_session(
+            user_id,
+            user_agent,
+            ip,
+            "urn:bunyip:loa:pwd",
+            &["pwd".to_string()],
+        )
+        .await
+    {
+        Ok(session) => Some(AuthCookies::op_session(&session.sid, secure, cookie_domain)),
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to establish OP session at login");
+            None
+        }
+    }
+}
+
+/// Revoke all of a user's OP sessions and fan out back-channel logout tokens.
+///
+/// The DB revoke is awaited SYNCHRONOUSLY so an immediately-subsequent
+/// `/oauth2/authorize` sees no active session (the BUNYIP-53 race). Only the
+/// back-channel HTTP delivery to registered clients (e.g. DMARC) is spawned.
+/// No-op when the OP provider is not configured.
+pub(crate) async fn revoke_op_sessions(provider: &OidcProviderData, user_id: uuid::Uuid) {
+    let Some(provider_arc) = provider.as_ref().as_ref().cloned() else {
+        return;
+    };
+    match provider_arc.revoke_sessions_for_backchannel(user_id).await {
+        Ok(targets) => {
+            tokio::spawn(async move {
+                let http = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(5))
+                    .build()
+                    .unwrap_or_default();
+                for (client_id, uri, sid) in targets {
+                    match provider_arc.mint_logout_token(user_id, &sid, client_id) {
+                        Ok(token) => {
+                            if let Err(e) = http
+                                .post(&uri)
+                                .form(&[("logout_token", &token)])
+                                .send()
+                                .await
+                            {
+                                tracing::warn!(
+                                    %uri, %client_id, error = %e,
+                                    "Backchannel logout delivery failed"
+                                );
+                            } else {
+                                tracing::info!(%uri, %client_id, "Backchannel logout delivered");
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(%client_id, error = %e, "Failed to mint logout token");
+                        }
+                    }
+                }
+            });
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to revoke sessions for backchannel logout");
+        }
+    }
+}
+
 /// Request body for user registration
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
@@ -106,6 +195,7 @@ pub async fn register(
     email_service: web::Data<Arc<crate::services::EmailService>>,
     body: web::Json<RegisterRequest>,
     config: web::Data<crate::config::Config>,
+    oidc_provider: OidcProviderData,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let ip_address = extract_client_ip(&req);
@@ -159,6 +249,9 @@ pub async fn register(
     let secure = config.is_production();
     let cookie_domain = config.cookie_domain.as_deref();
 
+    let op_cookie =
+        establish_op_session(&oidc_provider, &req, user.id, secure, cookie_domain).await;
+
     // Send welcome email (in background, don't wait)
     let email = body.email.clone();
     let email_svc = email_service.get_ref().clone();
@@ -177,23 +270,25 @@ pub async fn register(
     for cookie in AuthCookies::clear_stale(secure) {
         resp.cookie(cookie);
     }
-    Ok(resp
-        .cookie(AuthCookies::access_token(
-            &tokens.access_token,
-            secure,
-            cookie_domain,
-        ))
-        .cookie(AuthCookies::refresh_token(
-            &tokens.refresh_token,
-            secure,
-            false,
-            cookie_domain,
-        ))
-        .json(crate::responses::ApiResponse {
-            success: true,
-            data: Some(response),
-            meta: crate::responses::ResponseMeta::new(request_id),
-        }))
+    resp.cookie(AuthCookies::access_token(
+        &tokens.access_token,
+        secure,
+        cookie_domain,
+    ))
+    .cookie(AuthCookies::refresh_token(
+        &tokens.refresh_token,
+        secure,
+        false,
+        cookie_domain,
+    ));
+    if let Some(op) = op_cookie {
+        resp.cookie(op);
+    }
+    Ok(resp.json(crate::responses::ApiResponse {
+        success: true,
+        data: Some(response),
+        meta: crate::responses::ResponseMeta::new(request_id),
+    }))
 }
 
 /// POST /v1/auth/login
@@ -204,6 +299,7 @@ pub async fn login(
     auth_service: web::Data<Arc<AuthService>>,
     body: web::Json<LoginRequest>,
     config: web::Data<crate::config::Config>,
+    oidc_provider: OidcProviderData,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let ip_address = extract_client_ip(&req);
@@ -230,6 +326,9 @@ pub async fn login(
             let secure = config.is_production();
             let cookie_domain = config.cookie_domain.as_deref();
 
+            let op_cookie =
+                establish_op_session(&oidc_provider, &req, user.id, secure, cookie_domain).await;
+
             let response = AuthResponse {
                 user,
                 expires_in: tokens.expires_in,
@@ -240,23 +339,25 @@ pub async fn login(
             for cookie in AuthCookies::clear_stale(secure) {
                 resp.cookie(cookie);
             }
-            Ok(resp
-                .cookie(AuthCookies::access_token(
-                    &tokens.access_token,
-                    secure,
-                    cookie_domain,
-                ))
-                .cookie(AuthCookies::refresh_token(
-                    &tokens.refresh_token,
-                    secure,
-                    body.remember,
-                    cookie_domain,
-                ))
-                .json(crate::responses::ApiResponse {
-                    success: true,
-                    data: Some(response),
-                    meta: crate::responses::ResponseMeta::new(request_id),
-                }))
+            resp.cookie(AuthCookies::access_token(
+                &tokens.access_token,
+                secure,
+                cookie_domain,
+            ))
+            .cookie(AuthCookies::refresh_token(
+                &tokens.refresh_token,
+                secure,
+                body.remember,
+                cookie_domain,
+            ));
+            if let Some(op) = op_cookie {
+                resp.cookie(op);
+            }
+            Ok(resp.json(crate::responses::ApiResponse {
+                success: true,
+                data: Some(response),
+                meta: crate::responses::ResponseMeta::new(request_id),
+            }))
         }
     }
 }
@@ -317,6 +418,7 @@ pub async fn verify_magic_link(
     email_service: web::Data<Arc<crate::services::EmailService>>,
     body: web::Json<VerifyMagicLinkRequest>,
     config: web::Data<crate::config::Config>,
+    oidc_provider: OidcProviderData,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let ip_address = extract_client_ip(&req);
@@ -362,6 +464,9 @@ pub async fn verify_magic_link(
             let secure = config.is_production();
             let cookie_domain = config.cookie_domain.as_deref();
 
+            let op_cookie =
+                establish_op_session(&oidc_provider, &req, user.id, secure, cookie_domain).await;
+
             let response = AuthResponse {
                 user,
                 expires_in: tokens.expires_in,
@@ -371,23 +476,25 @@ pub async fn verify_magic_link(
             for cookie in AuthCookies::clear_stale(secure) {
                 resp.cookie(cookie);
             }
-            Ok(resp
-                .cookie(AuthCookies::access_token(
-                    &tokens.access_token,
-                    secure,
-                    cookie_domain,
-                ))
-                .cookie(AuthCookies::refresh_token(
-                    &tokens.refresh_token,
-                    secure,
-                    true,
-                    cookie_domain,
-                ))
-                .json(crate::responses::ApiResponse {
-                    success: true,
-                    data: Some(response),
-                    meta: crate::responses::ResponseMeta::new(request_id),
-                }))
+            resp.cookie(AuthCookies::access_token(
+                &tokens.access_token,
+                secure,
+                cookie_domain,
+            ))
+            .cookie(AuthCookies::refresh_token(
+                &tokens.refresh_token,
+                secure,
+                true,
+                cookie_domain,
+            ));
+            if let Some(op) = op_cookie {
+                resp.cookie(op);
+            }
+            Ok(resp.json(crate::responses::ApiResponse {
+                success: true,
+                data: Some(response),
+                meta: crate::responses::ResponseMeta::new(request_id),
+            }))
         }
     }
 }
@@ -407,6 +514,7 @@ pub async fn accept_admin_invite(
     auth_service: web::Data<Arc<AuthService>>,
     body: web::Json<AcceptInviteRequest>,
     config: web::Data<crate::config::Config>,
+    oidc_provider: OidcProviderData,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let ip_address = extract_client_ip(&req);
@@ -434,6 +542,9 @@ pub async fn accept_admin_invite(
             let secure = config.is_production();
             let cookie_domain = config.cookie_domain.as_deref();
 
+            let op_cookie =
+                establish_op_session(&oidc_provider, &req, user.id, secure, cookie_domain).await;
+
             let response = AuthResponse {
                 user,
                 expires_in: tokens.expires_in,
@@ -443,23 +554,25 @@ pub async fn accept_admin_invite(
             for cookie in AuthCookies::clear_stale(secure) {
                 resp.cookie(cookie);
             }
-            Ok(resp
-                .cookie(AuthCookies::access_token(
-                    &tokens.access_token,
-                    secure,
-                    cookie_domain,
-                ))
-                .cookie(AuthCookies::refresh_token(
-                    &tokens.refresh_token,
-                    secure,
-                    true,
-                    cookie_domain,
-                ))
-                .json(crate::responses::ApiResponse {
-                    success: true,
-                    data: Some(response),
-                    meta: crate::responses::ResponseMeta::new(request_id),
-                }))
+            resp.cookie(AuthCookies::access_token(
+                &tokens.access_token,
+                secure,
+                cookie_domain,
+            ))
+            .cookie(AuthCookies::refresh_token(
+                &tokens.refresh_token,
+                secure,
+                true,
+                cookie_domain,
+            ));
+            if let Some(op) = op_cookie {
+                resp.cookie(op);
+            }
+            Ok(resp.json(crate::responses::ApiResponse {
+                success: true,
+                data: Some(response),
+                meta: crate::responses::ResponseMeta::new(request_id),
+            }))
         }
     }
 }
@@ -555,49 +668,9 @@ pub async fn logout(
             .await?;
     }
 
-    // Revoke OIDC op-sessions and fan out back-channel logout tokens to all
-    // registered clients (e.g. DMARC) so they kill their local sessions too.
-    if let Some(provider_arc) = oidc_provider.as_ref().as_ref().cloned() {
-        let user_id = user.0.sub;
-        tokio::spawn(async move {
-            match provider_arc.revoke_sessions_for_backchannel(user_id).await {
-                Ok(targets) => {
-                    let http = reqwest::Client::builder()
-                        .timeout(std::time::Duration::from_secs(5))
-                        .build()
-                        .unwrap_or_default();
-                    for (client_id, uri, sid) in targets {
-                        match provider_arc.mint_logout_token(user_id, &sid, client_id) {
-                            Ok(token) => {
-                                if let Err(e) = http
-                                    .post(&uri)
-                                    .form(&[("logout_token", &token)])
-                                    .send()
-                                    .await
-                                {
-                                    tracing::warn!(
-                                        %uri, %client_id, error = %e,
-                                        "Backchannel logout delivery failed"
-                                    );
-                                } else {
-                                    tracing::info!(
-                                        %uri, %client_id,
-                                        "Backchannel logout delivered"
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!(%client_id, error = %e, "Failed to mint logout token");
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to revoke sessions for backchannel logout");
-                }
-            }
-        });
-    }
+    // Revoke OIDC op-sessions (synchronously) and fan out back-channel logout
+    // tokens so an immediately-subsequent /oauth2/authorize finds no session.
+    revoke_op_sessions(&oidc_provider, user.0.sub).await;
 
     let secure = config.is_production();
     let cookie_domain = config.cookie_domain.as_deref();
@@ -626,6 +699,7 @@ pub async fn logout_redirect(
     optional_user: OptionalUser,
     auth_service: web::Data<Arc<AuthService>>,
     config: web::Data<crate::config::Config>,
+    oidc_provider: OidcProviderData,
 ) -> Result<HttpResponse, AppError> {
     let target_url = &query.url;
 
@@ -660,7 +734,7 @@ pub async fn logout_redirect(
         return Err(AppError::validation("url", "Invalid redirect URL"));
     }
 
-    // If authenticated, revoke the refresh token
+    // If authenticated, revoke the refresh token and OP sessions.
     if let Some(user) = &optional_user.0 {
         if let Some(refresh_token) = req.cookie("refresh_token").map(|c| c.value().to_string()) {
             let ip_address = extract_client_ip(&req);
@@ -669,6 +743,7 @@ pub async fn logout_redirect(
                 .await
                 .ok();
         }
+        revoke_op_sessions(&oidc_provider, user.sub).await;
     }
 
     let secure = config.is_production();
@@ -699,11 +774,13 @@ pub async fn logout_all(
     user: AuthenticatedUser,
     auth_service: web::Data<Arc<AuthService>>,
     config: web::Data<crate::config::Config>,
+    oidc_provider: OidcProviderData,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let ip_address = extract_client_ip(&req);
 
     auth_service.logout_all(user.0.sub, ip_address).await?;
+    revoke_op_sessions(&oidc_provider, user.0.sub).await;
 
     let secure = config.is_production();
     let cookie_domain = config.cookie_domain.as_deref();
@@ -972,6 +1049,7 @@ pub async fn setup_admin(
     auth_service: web::Data<Arc<AuthService>>,
     body: web::Json<SetupRequest>,
     config: web::Data<crate::config::Config>,
+    oidc_provider: OidcProviderData,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let ip_address = extract_client_ip(&req);
@@ -1025,6 +1103,9 @@ pub async fn setup_admin(
     let secure = config.is_production();
     let cookie_domain = config.cookie_domain.as_deref();
 
+    let op_cookie =
+        establish_op_session(&oidc_provider, &req, user.id, secure, cookie_domain).await;
+
     let response = AuthResponse {
         user,
         expires_in: tokens.expires_in,
@@ -1034,23 +1115,25 @@ pub async fn setup_admin(
     for cookie in AuthCookies::clear_stale(secure) {
         resp.cookie(cookie);
     }
-    Ok(resp
-        .cookie(AuthCookies::access_token(
-            &tokens.access_token,
-            secure,
-            cookie_domain,
-        ))
-        .cookie(AuthCookies::refresh_token(
-            &tokens.refresh_token,
-            secure,
-            false,
-            cookie_domain,
-        ))
-        .json(crate::responses::ApiResponse {
-            success: true,
-            data: Some(response),
-            meta: crate::responses::ResponseMeta::new(request_id),
-        }))
+    resp.cookie(AuthCookies::access_token(
+        &tokens.access_token,
+        secure,
+        cookie_domain,
+    ))
+    .cookie(AuthCookies::refresh_token(
+        &tokens.refresh_token,
+        secure,
+        false,
+        cookie_domain,
+    ));
+    if let Some(op) = op_cookie {
+        resp.cookie(op);
+    }
+    Ok(resp.json(crate::responses::ApiResponse {
+        success: true,
+        data: Some(response),
+        meta: crate::responses::ResponseMeta::new(request_id),
+    }))
 }
 
 // ── /v1/auth/memberships ────────────────────────────────────────────────────
