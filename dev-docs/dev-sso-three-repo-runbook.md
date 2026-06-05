@@ -122,45 +122,45 @@ After the dunite rebuild, **bunyip-api is itself an OIDC issuer**
 `./secrets/oidc`). Missing keys = boot failure. `just ensure-oidc-keys` now generates
 them (added this session).
 
-### 3.8 The OIDC direction is in transition (read this carefully)
-There are currently **two issuers** in play and the wiring is mid-migration:
-- `bunyip-api` IS an OIDC issuer (`OIDC_ISSUER=:4401`, serves `/oauth2/*` +
-  `/.well-known/*`) and owns its own `/v1/auth/*` (email+password register/login).
-- yet `bunyip-web` is still configured as a **client of mokosh-server**
-  (`BUNYIP_OIDC_ISSUER=https://<user>-mokosh-api.a8n.run` + the
-  `register-bunyip-client` flow above).
+### 3.8 The OIDC direction (cutover landed: bunyip-api IS the OP)
+The reversed wiring scaffold step 8 flagged is now converged in dev-sso. There is ONE issuer: `bunyip-api` (`OIDC_ISSUER=https://<user>-bunyip-api.a8n.run`, serves `/oauth2/*` + `/.well-known/*` + its own `/v1/auth/*` email+password login). Both relying parties consume it:
+- `bunyip-web` (the hub): `BUNYIP_OIDC_ISSUER=https://<user>-bunyip-api.a8n.run`, client `bunyip-web-dev`.
+- the mokosh SPA: `MOKOSH_OIDC_ISSUER=https://<user>-bunyip-api.a8n.run`, client `mokosh-apps-dev`.
 
-So the dev-sso SSO bridge points the SPA at mokosh-server as IdP, even though
-bunyip can now be its own IdP. `dev-docs/bunyip-on-dunite-scaffold.md` step 8
-explicitly flags this as "reversed OIDC wiring" to fix: bunyip-web should
-eventually consume Bunyip's own issuer. Until that converges, the
-`register-bunyip-client` + `BUNYIP_OIDC_*` dance is the supported dev-sso path.
+`mokosh-server` is a **Resource Server**: its auth middleware's BunyipVerifier (`src/modules/auth/oidc_rs.rs`) validates the at+jwt bunyip mints by fetching bunyip's discovery + JWKS and JIT-provisioning the user, activated by `OIDC_ISSUER` + `OIDC_AUDIENCE`. Because the issuer host resolves to dev-01's public edge (self-signed + 404 on the OP path) from inside the container, mokosh-server's compose pins it to the LOCAL Traefik via `extra_hosts` (`<user>-bunyip-api.a8n.run:${BUNYIP_OP_TRAEFIK_IP:-172.30.0.11}`), which serves the OP with a valid Let's Encrypt cert.
+
+bunyip-api's OP is exposed on its own Traefik host `<user>-bunyip-api.a8n.run` (port 4401); register the two dev clients with `just register-dev-clients`. The old `register-bunyip-client` (mokosh-server) flow is retired.
 
 ## 4. Spin-up procedure (the happy path, once a box is set up)
 
 On **desktop-02**, in dependency order:
 
 ```nu
-# 1. IdP first
+# 1. The OP (bunyip-api) + hub first
+cd /home/long/bunyip; just dev-sso
+
+# 2. Register the two dev OIDC clients in bunyip-api (idempotent; prints UUIDs)
+just register-dev-clients
+#    -> hub UUID  -> /home/long/bunyip/.env as BUNYIP_OIDC_CLIENT_ID
+#    -> SPA UUID  -> /home/long/mokosh-apps/.env as MOKOSH_OIDC_CLIENT_ID
+
+# 3. The Resource Server (mokosh-server)
 cd /home/long/mokosh-server; just dev-sso
 
-# 2. Register bunyip-web as an OIDC client (ONE TIME; prints a UUID)
-just register-bunyip-client
-#    -> paste the UUID into /home/long/bunyip/.env as BUNYIP_OIDC_CLIENT_ID
-
-# 3. The client SPA
+# 4. The client SPA
 cd /home/long/mokosh-apps; just dev-sso
 
-# 4. The hub
+# 5. Re-up the hub so it reads the client_id you just set
 cd /home/long/bunyip; just dev-sso
 ```
 
 bunyip `.env` must have (resolve `${USER}` to your username):
 ```
-BUNYIP_OIDC_ISSUER=https://long-mokosh-api.a8n.run
-BUNYIP_OIDC_CLIENT_ID=<uuid from step 2>
+BUNYIP_OIDC_ISSUER=https://long-bunyip-api.a8n.run
+BUNYIP_OIDC_CLIENT_ID=b0000000-0000-4000-8000-0000000000d1
 BUNYIP_OIDC_REDIRECT_URI=https://long-bunyip.a8n.run/auth/callback
 ```
+mokosh-apps `.env` needs `MOKOSH_OIDC_CLIENT_ID=b0000000-0000-4000-8000-0000000000d2`; mokosh-server reads the RS env from its compose overlay (`OIDC_ISSUER` + `OIDC_AUDIENCE` + the `extra_hosts` pin).
 
 Optionally, to also serve the distribution proxy (member downloads + the OCI
 registry on `<user>-bunyip-registry.a8n.run`), add the Forgejo service
@@ -273,8 +273,9 @@ See 3.7.
 
 ## 8. Open / transitional items
 
-- **Reversed OIDC wiring** (3.8): bunyip-web is a client of mokosh-server while
-  bunyip-api is its own issuer. Converge per scaffold step 8.
+- ~~**Reversed OIDC wiring** (3.8): bunyip-web is a client of mokosh-server while
+  bunyip-api is its own issuer.~~ DONE: bunyip-api is now the sole OP; bunyip-web
+  and the mokosh SPA are its clients; mokosh-server is a Resource Server (see 3.8).
 - **dev-01 must serve on `nebula-secure`** for the entrypoint change to be correct
   there too; confirm with the foundation owner (the work was done on desktop-02).
 - **Open PRs** from this session: `fix/dev-sso-nebula-secure-list` (bunyip +

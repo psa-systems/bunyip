@@ -8,20 +8,24 @@
 #   - bunyip-web gets Traefik labels for ${USER}-bunyip.a8n.run.
 #   - bunyip-api gets Traefik labels for the OCI registry on
 #     ${USER}-bunyip-registry.a8n.run (docker login/pull need real TLS, which
-#     Traefik terminates; the api's other endpoints stay internal).
+#     Traefik terminates) AND for the OIDC OP on ${USER}-bunyip-api.a8n.run
+#     (the SPA + hub reach /oauth2/* + /.well-known/* there).
 #   - The shared `network-traefik-public` network is joined.
 #   - BUNYIP_OIDC_* are passed as runtime CONTAINER env. bunyip-web is an
 #     Axum SSR server that reads them at startup (see bunyip-web/src/config.rs).
 #
-# The frontend reaches the OIDC issuer (mokosh-server) per the BUNYIP_OIDC_*
-# vars below.
+# bunyip-as-OP cutover (runbook 3.8 / scaffold step 8): bunyip-api IS the
+# issuer. bunyip-web and the mokosh SPA are both relying parties of it, so
+# BUNYIP_OIDC_ISSUER in .env points at ${USER}-bunyip-api.a8n.run, NOT
+# mokosh-server. mokosh-server runs as a Resource Server validating the tokens
+# bunyip-api mints.
 
 services:
   web:
     ports: !reset []
     environment:
       BUNYIP_OIDC_ISSUER: ${BUNYIP_OIDC_ISSUER:?BUNYIP_OIDC_ISSUER missing - copy .env.example to .env and fill in}
-      BUNYIP_OIDC_CLIENT_ID: ${BUNYIP_OIDC_CLIENT_ID:?BUNYIP_OIDC_CLIENT_ID missing - run `just register-bunyip-client` in mokosh-server and paste the UUID into .env}
+      BUNYIP_OIDC_CLIENT_ID: ${BUNYIP_OIDC_CLIENT_ID:?BUNYIP_OIDC_CLIENT_ID missing - run `just register-dev-clients` (registers the hub + SPA clients in bunyip-api) and paste the hub UUID into .env}
       BUNYIP_OIDC_REDIRECT_URI: ${BUNYIP_OIDC_REDIRECT_URI:?BUNYIP_OIDC_REDIRECT_URI missing - copy .env.example to .env}
       BUNYIP_OIDC_SCOPES: ${BUNYIP_OIDC_SCOPES:-openid email offline_access}
     networks:
@@ -58,6 +62,20 @@ services:
       # localhost realm that compose.dev.yml sets for plain `just dev`.
       OCI_REGISTRY_SERVICE: ${USER:?USER missing - run via just dev-sso}-bunyip-registry.a8n.run
       OCI_REGISTRY_REALM: ""
+      # bunyip-api is the OIDC OP (bunyip-as-OP cutover). Advertise the public
+      # Traefik hostname as the issuer so the discovery doc and every endpoint
+      # it emits (authorize/token/jwks) are browser-reachable, not localhost.
+      OIDC_ISSUER: https://${USER}-bunyip-api.a8n.run
+      # Login UI host the OP bounces unauthenticated /oauth2/authorize to
+      # (bunyip-oidc builds `{web_origin}/login?redirect=...`).
+      BUNYIP_WEB_ORIGIN: https://${USER}-bunyip.a8n.run
+      # Share the OP session cookie across every *.a8n.run dev host so the
+      # session bunyip-web's /login establishes is sent back to the OP on the
+      # subsequent authorize, and the SPA round-trip completes.
+      COOKIE_DOMAIN: .a8n.run
+      # Credentialed CORS allow-list for the relying parties that POST to the
+      # token/userinfo endpoints: the hub and the mokosh SPA (comma-list).
+      CORS_ORIGIN: https://${USER}-bunyip.a8n.run,https://${USER}-mokosh.a8n.run
     networks:
       - private
       - traefik-public
@@ -69,7 +87,19 @@ services:
       - traefik.http.routers.bunyip-registry-${USER}.rule=Host(`${USER}-bunyip-registry.a8n.run`)
       - traefik.http.routers.bunyip-registry-${USER}.entrypoints=web-secure,nebula-secure
       - traefik.http.routers.bunyip-registry-${USER}.tls.certresolver=cert-cloudflare
+      # This container now exposes TWO services (registry + OP), so each router
+      # MUST name its service explicitly; without it Traefik refuses to
+      # auto-link ("cannot be linked automatically with multiple Services") and
+      # BOTH hosts 404.
+      - traefik.http.routers.bunyip-registry-${USER}.service=bunyip-registry-${USER}
       - traefik.http.services.bunyip-registry-${USER}.loadbalancer.server.port=18081
+      # Expose the OP (app port 4401) on its own per-developer hostname so the
+      # SPA + hub can reach /oauth2/* and /.well-known/* over real TLS.
+      - traefik.http.routers.bunyip-api-${USER}.rule=Host(`${USER}-bunyip-api.a8n.run`)
+      - traefik.http.routers.bunyip-api-${USER}.entrypoints=web-secure,nebula-secure
+      - traefik.http.routers.bunyip-api-${USER}.tls.certresolver=cert-cloudflare
+      - traefik.http.routers.bunyip-api-${USER}.service=bunyip-api-${USER}
+      - traefik.http.services.bunyip-api-${USER}.loadbalancer.server.port=4401
 
 networks:
   traefik-public:
