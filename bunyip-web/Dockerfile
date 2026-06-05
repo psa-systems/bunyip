@@ -11,11 +11,19 @@ FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.0-rust1.94-trixie
 ARG CARGO_BUILD_JOBS=2
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
-# The base image now ships /usr/local/bin/bun as a real, world-readable file
-# (mode 755) with /usr/local/bin/bunx symlinked to it, so the host user (see
-# USER below) can execute it directly. The earlier symlink-into-/root/.bun
-# workaround (BUNYIP-37) is gone, along with the /root traversal problem it
-# fixed.
+# In this base-image tag, /usr/local/bin/bun is a symlink into /root/.bun/bin/bun
+# and bunx is missing entirely. /root is mode 0700, so the unprivileged host user
+# (see USER below) cannot traverse it: the exec fails with "bun: Permission
+# denied", and `bunx` (used by the package.json css scripts) is not found at all.
+# Both are a regression of BUNYIP-37. While still root, materialize the real bun
+# binary into a world-readable path outside /root and recreate bunx as a symlink
+# to it (bun runs `bun x` when invoked as argv0 `bunx`), so the host user can run
+# both. (Canonical fix belongs in the rust-builder base image; tracked by BUNYIP-54.)
+RUN cp -L /usr/local/bin/bun /usr/local/bin/bun.bin \
+ && rm /usr/local/bin/bun \
+ && mv /usr/local/bin/bun.bin /usr/local/bin/bun \
+ && chmod 0755 /usr/local/bin/bun \
+ && ln -s /usr/local/bin/bun /usr/local/bin/bunx
 
 WORKDIR /app
 
