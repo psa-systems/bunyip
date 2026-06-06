@@ -260,7 +260,15 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                         div class="p-6 pt-0" {
                             p class="text-sm text-muted-foreground mb-4" { (app_url) }
                             @if app.is_accessible {
-                                a href=(format!("https://{app_url}")) target="_blank" rel="noopener noreferrer" {
+                                // `/dashboard`, not `/`, so the child app's
+                                // AuthGuard sees a protected route and kicks
+                                // off the OIDC code flow against the user's
+                                // existing OP session. Landing on the public
+                                // homepage instead just shows the marketing
+                                // page; the user has to click "Sign in"
+                                // before the SSO bridge fires. Matches the
+                                // launcher on the main `/dashboard` page.
+                                a href=(format!("https://{app_url}/dashboard")) target="_blank" rel="noopener noreferrer" {
                                     span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md", app_gradient(i)))) { "Launch" (icon("external-link", "ml-2 h-4 w-4")) }
                                 }
                             } @else {
