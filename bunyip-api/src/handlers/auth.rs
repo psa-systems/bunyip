@@ -690,9 +690,23 @@ pub async fn logout(
 }
 
 /// GET /v1/auth/logout?url=<url>
-/// SSO logout for child apps — clears cookies and redirects to the login page.
-/// The child app URL is passed through as ?redirect= so the user can log back in
-/// and be sent to the right place.
+///
+/// SSO logout endpoint for child apps and the bunyip-web BFF. Clears
+/// the auth cookies on `.{cookie_domain}` and 302s the browser to
+/// `url`, which becomes the user's final landing page (no bounce
+/// through `/login`). Pre-fix, this redirected to
+/// `{web_origin}/login?redirect={url}&checked=1`, which forced every
+/// logout to land on the bunyip login form even when the caller
+/// explicitly wanted "log me out and send me home"; child apps
+/// (mokosh-clients) end up back on a Bunyip login screen instead of
+/// their own landing page. The new semantics match what the param
+/// name `url` already implies, and matches the OIDC RP-initiated
+/// logout pattern (`post_logout_redirect_uri`).
+///
+/// `url` is still validated against `cookie_domain` (or, when
+/// unset, the parsed host of `web_origin`) so logouts can only
+/// redirect to the bunyip apex or one of its subdomains; anything
+/// else is rejected with 422.
 pub async fn logout_redirect(
     req: HttpRequest,
     query: web::Query<RedirectQuery>,
@@ -750,20 +764,13 @@ pub async fn logout_redirect(
     let cookie_domain = config.cookie_domain.as_deref();
     let clear_cookies = AuthCookies::clear(secure, cookie_domain);
 
-    // Redirect to the login page with the child app URL as the redirect param
-    let login_url = format!(
-        "{}/login?redirect={}&checked=1",
-        config.web_origin.trim_end_matches('/'),
-        urlencoding::encode(target_url)
-    );
-
     let mut builder = HttpResponse::Found();
     for cookie in clear_cookies {
         builder.cookie(cookie);
     }
 
     Ok(builder
-        .insert_header(("Location", login_url.as_str()))
+        .insert_header(("Location", target_url.as_str()))
         .finish())
 }
 
