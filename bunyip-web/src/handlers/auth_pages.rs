@@ -203,9 +203,15 @@ pub async fn logout(
         .unwrap_or_default();
     // Also drop any pending-2FA cookie.
     cleared.push("bunyip_2fa=; Path=/; Max-Age=0".to_string());
+    // Logout lands on the public homepage by default: a user who
+    // clicked "Logout" wanted to be done, not be shown another login
+    // form. Callers that DO want the post-logout login-then-redirect
+    // chain (e.g. session-timeout banners) can still pass ?redirect=
+    // and bunyip routes them to /login with that path as the next
+    // destination.
     let target = match q.redirect {
         Some(r) if r.starts_with('/') && !r.starts_with("//") => format!("/login?redirect={r}"),
-        _ => "/login".to_string(),
+        _ => "/".to_string(),
     };
     redirect_cookies(&target, &cleared)
 }
