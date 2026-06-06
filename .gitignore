@@ -2,9 +2,6 @@
 # Application specific
 ################################################################################
 
-# Local-only Claude / AI context (not committed)
-For AI/
-
 # Tailwind output: committed (built by `bun run build:css`) so the SSR server
 # serves it without a build step on host runs / fresh clones, matching menkent.
 # The dev container + prod image rebuild it; commit the regenerated file.
@@ -19,6 +16,10 @@ For AI/
 *.swp
 *.swo
 
+# =============================================================================
+# AI
+# =============================================================================
+.claude/
 
 ################################################################################
 # Generated
@@ -458,6 +459,3 @@ $RECYCLE.BIN/
 
 # End of https://www.toptal.com/developers/gitignore/api/linux
 
-
-# Claude Code session artifacts
-.claude/
