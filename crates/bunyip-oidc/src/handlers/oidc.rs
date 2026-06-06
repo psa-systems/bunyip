@@ -533,8 +533,8 @@ pub async fn userinfo(
     let token_str = extract_bearer_token(&req)
         .ok_or_else(|| AppError::OidcInvalidToken("missing Bearer token".into()))?;
 
-    let sub_str = verify_at_jwt_get_sub(provider, &token_str)?;
-    let user_id = Uuid::parse_str(&sub_str)
+    let at_claims = provider.verify_at_jwt_claims(&token_str)?;
+    let user_id = Uuid::parse_str(&at_claims.sub)
         .map_err(|_| AppError::OidcInvalidToken("invalid sub in access token".into()))?;
 
     let user = UserRepository::find_by_id(&pool, user_id)
@@ -754,44 +754,6 @@ fn authenticate_client(
     Argon2::default()
         .verify_password(secret.as_bytes(), &parsed)
         .map_err(|_| AppError::OidcInvalidClient("invalid client_secret".into()))
-}
-
-/// Verify an `at+jwt` access token and return its `sub` claim.
-fn verify_at_jwt_get_sub(provider: &OidcProvider, token: &str) -> Result<String, AppError> {
-    use jsonwebtoken::{Algorithm, Validation};
-
-    // Peek at the header to get kid and validate typ
-    let header = jsonwebtoken::decode_header(token)
-        .map_err(|_| AppError::OidcInvalidToken("malformed JWT header".into()))?;
-
-    if header.typ.as_deref() != Some("at+jwt") {
-        return Err(AppError::OidcInvalidToken("JWT typ must be at+jwt".into()));
-    }
-
-    let kid = header
-        .kid
-        .as_deref()
-        .ok_or_else(|| AppError::OidcInvalidToken("JWT header missing kid".into()))?;
-
-    let decoding_key = provider
-        .keys
-        .decoding_key(kid)
-        .ok_or_else(|| AppError::OidcInvalidToken(format!("unknown kid: {kid}")))?;
-
-    let mut validation = Validation::new(Algorithm::EdDSA);
-    validation.set_issuer(&[provider.issuer()]);
-    validation.validate_exp = true;
-    validation.leeway = 30;
-
-    let data = jsonwebtoken::decode::<serde_json::Value>(token, decoding_key, &validation)
-        .map_err(|e| {
-            AppError::OidcInvalidToken(format!("access token verification failed: {e}"))
-        })?;
-
-    data.claims["sub"]
-        .as_str()
-        .map(String::from)
-        .ok_or_else(|| AppError::OidcInvalidToken("access token missing sub claim".into()))
 }
 
 /// Extract `Authorization: Bearer <token>` from the request.
