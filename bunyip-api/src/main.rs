@@ -352,6 +352,18 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // Register the OIDC provider as an `AtJwtVerifier` so the auth
+    // extractors (`AuthenticatedUser`, `AdminUser`, `MemberUser`,
+    // `OptionalUser`) accept OIDC at+jwt tokens in addition to legacy
+    // HS256 access tokens (BUNYIP-55). The extractor peeks at the JWT
+    // header's `typ` claim and routes to whichever verifier matches;
+    // when OIDC is disabled, `None` here means the extractor falls
+    // back to HS256-only, preserving the pre-BUNYIP-55 behaviour.
+    let at_jwt_verifier: Option<Arc<dyn bunyip_domain::middleware::auth::AtJwtVerifier>> =
+        oidc_provider
+            .as_ref()
+            .map(|p| Arc::clone(p) as Arc<dyn bunyip_domain::middleware::auth::AtJwtVerifier>);
+
     // Initialize auto-ban service
     let auto_ban_service = Arc::new(AutoBanService::new(config.auto_ban.clone(), pool.clone()));
 
@@ -543,6 +555,17 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::Data::new(pool.clone()))
             // Add services to app state
             .app_data(jwt_service.clone())
+            // Register the at+jwt verifier (BUNYIP-55) as an
+            // `Arc<dyn AtJwtVerifier>` so the auth extractors can
+            // accept OIDC at+jwt tokens. Cloned per worker; the
+            // underlying `OidcProvider` is shared (it owns `Arc`s
+            // internally). When OIDC is disabled (`oidc_provider ==
+            // None`), this call is a no-op and the extractor falls
+            // back to legacy HS256-only verification.
+            .app_data(at_jwt_verifier.clone().unwrap_or_else(|| {
+                Arc::new(bunyip_domain::middleware::auth::DisabledAtJwtVerifier)
+                    as Arc<dyn bunyip_domain::middleware::auth::AtJwtVerifier>
+            }))
             .app_data(web::Data::new(auth_service.clone()))
             .app_data(web::Data::new(email_service.clone()))
             .app_data(web::Data::new(stripe_service.clone()))

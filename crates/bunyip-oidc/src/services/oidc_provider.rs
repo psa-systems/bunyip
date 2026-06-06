@@ -999,3 +999,83 @@ fn sha256_bytes(input: &[u8]) -> Vec<u8> {
     h.update(input);
     h.finalize().to_vec()
 }
+
+// ── at+jwt verification (BUNYIP-55) ──────────────────────────────────────────
+
+impl OidcProvider {
+    /// Verify an `at+jwt` access token's signature, type, issuer, and
+    /// expiry, then return its full RFC 9068 claim set.
+    ///
+    /// Used by:
+    /// - The OIDC userinfo handler (resolves `sub` -> user lookup).
+    /// - The [`AtJwtVerifier`] impl below (resolves `sub` -> user
+    ///   lookup -> [`AccessTokenClaims`] for the actix extractors).
+    ///
+    /// Rejects:
+    /// - JWT header `typ` != `"at+jwt"` (RFC 9068 §2.1).
+    /// - Missing or unknown `kid` (no matching public key in the JWKS).
+    /// - Wrong `iss` (must match this OP's issuer).
+    /// - Expired `exp` (30s leeway, same as the existing userinfo
+    ///   verifier the legacy `verify_at_jwt_get_sub` helper used).
+    ///
+    /// Does not check `aud` — the access token is bunyip-scoped (an
+    /// inbound RP token is meant to authenticate to bunyip's own API),
+    /// so any client_id under this issuer is acceptable. Per-handler
+    /// authorization stays the handler's job.
+    pub fn verify_at_jwt_claims(&self, token: &str) -> Result<AtClaims, AppError> {
+        use jsonwebtoken::{Algorithm, Validation};
+
+        let header = jsonwebtoken::decode_header(token)
+            .map_err(|_| AppError::OidcInvalidToken("malformed JWT header".into()))?;
+
+        if header.typ.as_deref() != Some("at+jwt") {
+            return Err(AppError::OidcInvalidToken("JWT typ must be at+jwt".into()));
+        }
+
+        let kid = header
+            .kid
+            .as_deref()
+            .ok_or_else(|| AppError::OidcInvalidToken("JWT header missing kid".into()))?;
+
+        let decoding_key = self
+            .keys
+            .decoding_key(kid)
+            .ok_or_else(|| AppError::OidcInvalidToken(format!("unknown kid: {kid}")))?;
+
+        let mut validation = Validation::new(Algorithm::EdDSA);
+        validation.set_issuer(&[self.issuer()]);
+        validation.validate_exp = true;
+        validation.leeway = 30;
+        // RFC 9068 does not require an `aud` check on inbound bunyip-API
+        // calls; we rely on the issuer + signature + expiry guarantees.
+        validation.validate_aud = false;
+
+        let data =
+            jsonwebtoken::decode::<AtClaims>(token, decoding_key, &validation).map_err(|e| {
+                AppError::OidcInvalidToken(format!("access token verification failed: {e}"))
+            })?;
+
+        Ok(data.claims)
+    }
+}
+
+#[async_trait::async_trait]
+impl bunyip_domain::middleware::auth::AtJwtVerifier for OidcProvider {
+    async fn verify_and_resolve(
+        &self,
+        token: &str,
+    ) -> Result<bunyip_domain::services::AccessTokenClaims, AppError> {
+        let claims = self.verify_at_jwt_claims(token)?;
+        let user = bunyip_domain::middleware::auth::resolve_user_for_atjwt(&self.pool, &claims.sub)
+            .await?;
+        Ok(
+            bunyip_domain::services::AccessTokenClaims::from_atjwt_and_user(
+                &claims.iss,
+                claims.iat,
+                claims.exp,
+                &claims.jti,
+                &user,
+            ),
+        )
+    }
+}

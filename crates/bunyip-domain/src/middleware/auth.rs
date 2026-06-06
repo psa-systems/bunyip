@@ -2,8 +2,34 @@
 //!
 //! This module provides JWT-based authentication middleware and extractors
 //! for securing API endpoints.
+//!
+//! Two access-token shapes are accepted (BUNYIP-55):
+//!
+//! 1. Legacy HS256 access tokens issued by `bunyip-api`'s password-login
+//!    path and stored in the `access_token` cookie. Verified by
+//!    [`JwtService::verify_access_token`].
+//! 2. OIDC EdDSA `at+jwt` access tokens minted by `bunyip-oidc`'s
+//!    `/oauth2/token` endpoint and presented as
+//!    `Authorization: Bearer <token>`. Verified by an
+//!    [`AtJwtVerifier`] implementation registered in actix `app_data`
+//!    (in practice, `bunyip-oidc`'s `OidcProvider`).
+//!
+//! The extractor peeks at the JWT header's `typ` claim to route: `typ
+//! == "at+jwt"` goes through the EdDSA verifier (async path: signature
+//! verify + DB user lookup), anything else goes through the legacy
+//! HS256 verifier (sync path). Both paths produce the same
+//! [`AccessTokenClaims`] so downstream handlers cannot tell which one
+//! authenticated the caller. The HS256 path is unchanged from before
+//! BUNYIP-55 landed.
+//!
+//! Endpoints that do not (or cannot) register an `AtJwtVerifier` keep
+//! the legacy HS256-only behaviour: an `at+jwt` token presented at such
+//! an endpoint is rejected with `AppError::Unauthorized`, identical to
+//! the pre-BUNYIP-55 behaviour.
 
 use crate::errors::AppError;
+use crate::models::User;
+use crate::repositories::user::UserRepository;
 use crate::services::{AccessTokenClaims, JwtService};
 use actix_web::{
     cookie::{Cookie, SameSite},
@@ -11,8 +37,112 @@ use actix_web::{
     http::header,
     FromRequest, HttpMessage, HttpRequest,
 };
-use std::future::{ready, Ready};
+use async_trait::async_trait;
+use sqlx::PgPool;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use uuid::Uuid;
+
+/// Verifier for OIDC EdDSA `at+jwt` access tokens.
+///
+/// Implemented by the OIDC vertical (`bunyip-oidc::OidcProvider`).
+/// Defined here in `bunyip-domain` so the extractor can call into it
+/// without `bunyip-domain` taking a dependency on `bunyip-oidc` (the
+/// dependency direction goes the other way).
+///
+/// Implementations are expected to:
+///
+/// 1. Verify the token's EdDSA signature against the OP's JWKS (no
+///    network round-trip; keys are in-process).
+/// 2. Validate `typ == "at+jwt"`, `iss == <this OP's issuer>`, and
+///    `exp > now` (with the standard ~30s leeway).
+/// 3. Look up the user identified by `sub` in the `users` table and
+///    populate `email`, `role`, `membership_status`, etc. The at+jwt
+///    payload itself is RFC 9068 minimal and does not carry profile
+///    claims, so the DB lookup is the only way to fill them in.
+///
+/// Returns the same [`AccessTokenClaims`] shape `JwtService` returns,
+/// so downstream extractors (`AdminUser`, `MemberUser`) are unchanged.
+#[async_trait]
+pub trait AtJwtVerifier: Send + Sync {
+    async fn verify_and_resolve(&self, token: &str) -> Result<AccessTokenClaims, AppError>;
+}
+
+/// Stub verifier that rejects every at+jwt with `Unauthorized`. Wired
+/// in by `bunyip-api`'s `main.rs` when the OIDC provider is disabled
+/// (no `OIDC_ISSUER` env), so the extractor logic can call
+/// `verify_and_resolve` unconditionally without a runtime branch. The
+/// observable behaviour matches the pre-BUNYIP-55 world: an `at+jwt`
+/// presented to a non-OIDC bunyip deployment is rejected, while HS256
+/// tokens are still accepted.
+pub struct DisabledAtJwtVerifier;
+
+#[async_trait]
+impl AtJwtVerifier for DisabledAtJwtVerifier {
+    async fn verify_and_resolve(&self, _token: &str) -> Result<AccessTokenClaims, AppError> {
+        Err(AppError::Unauthorized)
+    }
+}
+
+impl AccessTokenClaims {
+    /// Build the legacy [`AccessTokenClaims`] shape from a verified
+    /// at+jwt's standard claims plus a `User` row fetched from the DB.
+    /// Used by [`AtJwtVerifier`] implementations to bridge between
+    /// RFC 9068 minimal at+jwt and bunyip's richer per-handler claim
+    /// view. BUNYIP-55.
+    pub fn from_atjwt_and_user(
+        token_iss: &str,
+        token_iat: i64,
+        token_exp: i64,
+        token_jti: &str,
+        user: &User,
+    ) -> Self {
+        Self {
+            sub: user.id,
+            email: user.email.clone(),
+            role: user.role.clone(),
+            membership_status: user.membership_status.clone(),
+            price_locked: user.price_locked,
+            price_id: user.locked_price_id.clone(),
+            lifetime_member: user.lifetime_member,
+            trial_ends_at: user.trial_ends_at.map(|t| t.timestamp()),
+            iat: token_iat,
+            exp: token_exp,
+            jti: token_jti.to_string(),
+            iss: token_iss.to_string(),
+        }
+    }
+}
+
+/// Look up a user by `sub` for the at+jwt resolution path. Pulled into
+/// the domain crate so any future verifier implementation can reuse it
+/// without duplicating the repo call. Returns `AppError::Unauthorized`
+/// (not `NotFound`) when the user row is missing, because the only
+/// reason `sub` would not resolve is a stale or forged token.
+pub async fn resolve_user_for_atjwt(pool: &PgPool, sub: &str) -> Result<User, AppError> {
+    let user_id = Uuid::parse_str(sub).map_err(|_| AppError::Unauthorized)?;
+    UserRepository::find_by_id(pool, user_id)
+        .await?
+        .ok_or(AppError::Unauthorized)
+}
+
+/// True when the JWT's header `typ` is `at+jwt`. Used by the extractors
+/// to route between the legacy HS256 verifier and the EdDSA verifier
+/// without needing to know either format ahead of time.
+fn token_is_atjwt(token: &str) -> bool {
+    jsonwebtoken::decode_header(token)
+        .ok()
+        .and_then(|h| h.typ)
+        .as_deref()
+        == Some("at+jwt")
+}
+
+/// Type alias for the boxed-future shape every extractor in this
+/// module shares. Necessary because the at+jwt path does an async DB
+/// lookup; the HS256 path is sync but gets wrapped in the same future
+/// so both extractors compose under one [`FromRequest::Future`].
+type ExtractorFuture<T> = Pin<Box<dyn Future<Output = Result<T, AppError>>>>;
 
 /// Key for storing authenticated user claims in request extensions
 #[derive(Debug, Clone)]
@@ -24,35 +154,22 @@ pub struct AuthenticatedUser(pub AccessTokenClaims);
 
 impl FromRequest for AuthenticatedUser {
     type Error = AppError;
-    type Future = Ready<Result<Self, Self::Error>>;
+    type Future = ExtractorFuture<Self>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        // Try to get JWT service from app data
-        let jwt_service = match req.app_data::<Arc<JwtService>>() {
-            Some(service) => service.clone(),
-            None => {
-                tracing::error!("JwtService not found in app data");
-                return ready(Err(AppError::internal(
-                    "Authentication service not available",
-                )));
-            }
-        };
-
-        // Try to extract token from cookie first, then Authorization header
+        let jwt_service = req.app_data::<Arc<JwtService>>().cloned();
+        let at_jwt_verifier = req.app_data::<Arc<dyn AtJwtVerifier>>().cloned();
         let token = extract_token(req);
+        let req = req.clone();
 
-        match token {
-            Some(token) => match jwt_service.verify_access_token(&token) {
-                Ok(claims) => {
-                    // Store claims in request extensions for later use
-                    req.extensions_mut()
-                        .insert(AuthenticatedClaims(claims.clone()));
-                    ready(Ok(AuthenticatedUser(claims)))
-                }
-                Err(e) => ready(Err(e)),
-            },
-            None => ready(Err(AppError::Unauthorized)),
-        }
+        Box::pin(async move {
+            let token = token.ok_or(AppError::Unauthorized)?;
+            let claims =
+                verify_either(&token, jwt_service.as_ref(), at_jwt_verifier.as_ref()).await?;
+            req.extensions_mut()
+                .insert(AuthenticatedClaims(claims.clone()));
+            Ok(AuthenticatedUser(claims))
+        })
     }
 }
 
@@ -62,38 +179,31 @@ pub struct OptionalUser(pub Option<AccessTokenClaims>);
 
 impl FromRequest for OptionalUser {
     type Error = AppError;
-    type Future = Ready<Result<Self, Self::Error>>;
+    type Future = ExtractorFuture<Self>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        // Try to get JWT service from app data
-        let jwt_service = match req.app_data::<Arc<JwtService>>() {
-            Some(service) => service.clone(),
-            None => {
-                tracing::warn!("JwtService not found in app data for optional auth");
-                return ready(Ok(OptionalUser(None)));
-            }
-        };
-
-        // Try to extract token
+        let jwt_service = req.app_data::<Arc<JwtService>>().cloned();
+        let at_jwt_verifier = req.app_data::<Arc<dyn AtJwtVerifier>>().cloned();
         let token = extract_token(req);
+        let req = req.clone();
 
-        match token {
-            Some(token) => match jwt_service.verify_access_token(&token) {
+        Box::pin(async move {
+            let Some(token) = token else {
+                tracing::debug!(path = %req.path(), "OptionalUser: no token in request");
+                return Ok(OptionalUser(None));
+            };
+            match verify_either(&token, jwt_service.as_ref(), at_jwt_verifier.as_ref()).await {
                 Ok(claims) => {
                     req.extensions_mut()
                         .insert(AuthenticatedClaims(claims.clone()));
-                    ready(Ok(OptionalUser(Some(claims))))
+                    Ok(OptionalUser(Some(claims)))
                 }
                 Err(e) => {
                     tracing::debug!(error = %e, path = %req.path(), "OptionalUser: token present but verification failed");
-                    ready(Ok(OptionalUser(None)))
+                    Ok(OptionalUser(None))
                 }
-            },
-            None => {
-                tracing::debug!(path = %req.path(), "OptionalUser: no token in request");
-                ready(Ok(OptionalUser(None)))
             }
-        }
+        })
     }
 }
 
@@ -103,37 +213,25 @@ pub struct AdminUser(pub AccessTokenClaims);
 
 impl FromRequest for AdminUser {
     type Error = AppError;
-    type Future = Ready<Result<Self, Self::Error>>;
+    type Future = ExtractorFuture<Self>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        // Try to get JWT service from app data
-        let jwt_service = match req.app_data::<Arc<JwtService>>() {
-            Some(service) => service.clone(),
-            None => {
-                tracing::error!("JwtService not found in app data");
-                return ready(Err(AppError::internal(
-                    "Authentication service not available",
-                )));
-            }
-        };
-
-        // Try to extract token
+        let jwt_service = req.app_data::<Arc<JwtService>>().cloned();
+        let at_jwt_verifier = req.app_data::<Arc<dyn AtJwtVerifier>>().cloned();
         let token = extract_token(req);
+        let req = req.clone();
 
-        match token {
-            Some(token) => match jwt_service.verify_access_token(&token) {
-                Ok(claims) => {
-                    if claims.role != "admin" {
-                        return ready(Err(AppError::Forbidden));
-                    }
-                    req.extensions_mut()
-                        .insert(AuthenticatedClaims(claims.clone()));
-                    ready(Ok(AdminUser(claims)))
-                }
-                Err(e) => ready(Err(e)),
-            },
-            None => ready(Err(AppError::Unauthorized)),
-        }
+        Box::pin(async move {
+            let token = token.ok_or(AppError::Unauthorized)?;
+            let claims =
+                verify_either(&token, jwt_service.as_ref(), at_jwt_verifier.as_ref()).await?;
+            if claims.role != "admin" {
+                return Err(AppError::Forbidden);
+            }
+            req.extensions_mut()
+                .insert(AuthenticatedClaims(claims.clone()));
+            Ok(AdminUser(claims))
+        })
     }
 }
 
@@ -143,35 +241,68 @@ pub struct MemberUser(pub AccessTokenClaims);
 
 impl FromRequest for MemberUser {
     type Error = AppError;
-    type Future = Ready<Result<Self, Self::Error>>;
+    type Future = ExtractorFuture<Self>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        let jwt_service = match req.app_data::<Arc<JwtService>>() {
-            Some(service) => service.clone(),
+        let jwt_service = req.app_data::<Arc<JwtService>>().cloned();
+        let at_jwt_verifier = req.app_data::<Arc<dyn AtJwtVerifier>>().cloned();
+        let token = extract_token(req);
+        let req = req.clone();
+
+        Box::pin(async move {
+            let token = token.ok_or(AppError::Unauthorized)?;
+            let claims =
+                verify_either(&token, jwt_service.as_ref(), at_jwt_verifier.as_ref()).await?;
+            if !claims.has_member_access() {
+                return Err(AppError::Forbidden);
+            }
+            req.extensions_mut()
+                .insert(AuthenticatedClaims(claims.clone()));
+            Ok(MemberUser(claims))
+        })
+    }
+}
+
+/// Route the token through the right verifier and produce a unified
+/// [`AccessTokenClaims`]. Peeks at the JWT's header `typ` claim so an
+/// `at+jwt` is never passed to the HS256 verifier (which would reject
+/// it with a misleading "invalid credentials") and vice versa. Both
+/// extractors and the optional variant share this helper.
+///
+/// Behaviour matrix when both verifiers are registered:
+///
+/// | Header `typ`     | Path                    | Failure mapped to |
+/// |------------------|-------------------------|-------------------|
+/// | `"at+jwt"`       | [`AtJwtVerifier`] async | verifier's error  |
+/// | anything else    | [`JwtService`] sync     | HS256 error       |
+///
+/// When `at_jwt_verifier` is `None` (the OIDC vertical is disabled or
+/// the binary did not register one), an `at+jwt` token is rejected
+/// with `AppError::Unauthorized`, identical to the pre-BUNYIP-55
+/// behaviour where the HS256 verifier would reject it.
+async fn verify_either(
+    token: &str,
+    jwt_service: Option<&Arc<JwtService>>,
+    at_jwt_verifier: Option<&Arc<dyn AtJwtVerifier>>,
+) -> Result<AccessTokenClaims, AppError> {
+    if token_is_atjwt(token) {
+        match at_jwt_verifier {
+            Some(v) => v.verify_and_resolve(token).await,
+            None => {
+                tracing::debug!(
+                    "at+jwt token presented but no AtJwtVerifier registered; \
+                     falling back to Unauthorized"
+                );
+                Err(AppError::Unauthorized)
+            }
+        }
+    } else {
+        match jwt_service {
+            Some(svc) => svc.verify_access_token(token),
             None => {
                 tracing::error!("JwtService not found in app data");
-                return ready(Err(AppError::internal(
-                    "Authentication service not available",
-                )));
+                Err(AppError::internal("Authentication service not available"))
             }
-        };
-
-        let token = extract_token(req);
-
-        match token {
-            Some(token) => match jwt_service.verify_access_token(&token) {
-                Ok(claims) => {
-                    if !claims.has_member_access() {
-                        return ready(Err(AppError::Forbidden));
-                    }
-
-                    req.extensions_mut()
-                        .insert(AuthenticatedClaims(claims.clone()));
-                    ready(Ok(MemberUser(claims)))
-                }
-                Err(e) => ready(Err(e)),
-            },
-            None => ready(Err(AppError::Unauthorized)),
         }
     }
 }
@@ -464,5 +595,202 @@ mod tests {
     fn test_refresh_token_with_domain() {
         let cookie = AuthCookies::refresh_token("ref123", true, true, Some(".a8n.run"));
         assert_eq!(cookie.domain(), Some(".a8n.run"));
+    }
+
+    // ── BUNYIP-55: dual-path token verification ────────────────────────────
+
+    /// Craft a JWT shell with the given header `typ` value. The body
+    /// and signature segments are filler; only the header is decoded
+    /// by [`token_is_atjwt`]. Sufficient for routing-logic tests.
+    fn jwt_with_typ(typ: &str) -> String {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        let header = format!(r#"{{"alg":"EdDSA","typ":"{typ}","kid":"k1"}}"#);
+        let body = r#"{"sub":"00000000-0000-0000-0000-000000000001"}"#;
+        format!(
+            "{}.{}.{}",
+            URL_SAFE_NO_PAD.encode(header),
+            URL_SAFE_NO_PAD.encode(body),
+            URL_SAFE_NO_PAD.encode("filler"),
+        )
+    }
+
+    #[test]
+    fn token_is_atjwt_recognises_rfc9068_typ() {
+        assert!(token_is_atjwt(&jwt_with_typ("at+jwt")));
+    }
+
+    #[test]
+    fn token_is_atjwt_rejects_legacy_jwt_typ() {
+        assert!(!token_is_atjwt(&jwt_with_typ("JWT")));
+    }
+
+    #[test]
+    fn token_is_atjwt_rejects_malformed_token() {
+        // Garbage in is never an at+jwt; the routing falls through to
+        // the HS256 path so the legacy verifier reports the real error.
+        assert!(!token_is_atjwt("not-even-a-jwt"));
+        assert!(!token_is_atjwt(""));
+        assert!(!token_is_atjwt("a.b.c"));
+    }
+
+    /// Stub verifier that returns a fixed `Ok` payload and records the
+    /// call count. Used by `verify_either` tests so we can assert the
+    /// routing decision without standing up a real EdDSA keyset or a
+    /// database. `AppError` is not `Clone`, so we hand the success
+    /// payload by clone and skip the error case here (the no-verifier
+    /// rejection case is covered by a separate test that does not need
+    /// a stub).
+    struct RecordingOkVerifier {
+        claims: AccessTokenClaims,
+        calls: std::sync::Mutex<u32>,
+    }
+
+    impl RecordingOkVerifier {
+        fn new(claims: AccessTokenClaims) -> Self {
+            Self {
+                claims,
+                calls: std::sync::Mutex::new(0),
+            }
+        }
+        fn call_count(&self) -> u32 {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    #[async_trait]
+    impl AtJwtVerifier for RecordingOkVerifier {
+        async fn verify_and_resolve(&self, _token: &str) -> Result<AccessTokenClaims, AppError> {
+            *self.calls.lock().unwrap() += 1;
+            Ok(self.claims.clone())
+        }
+    }
+
+    fn stub_claims(role: &str) -> AccessTokenClaims {
+        AccessTokenClaims {
+            sub: uuid::Uuid::from_u128(1),
+            email: "e2e@example.com".to_string(),
+            role: role.to_string(),
+            membership_status: "active".to_string(),
+            price_locked: false,
+            price_id: None,
+            lifetime_member: false,
+            trial_ends_at: None,
+            iat: 0,
+            exp: i64::MAX,
+            jti: "jti-1".to_string(),
+            iss: "https://api.example.test".to_string(),
+        }
+    }
+
+    #[actix_rt::test]
+    async fn verify_either_routes_atjwt_to_verifier_when_present() {
+        let recording = Arc::new(RecordingOkVerifier::new(stub_claims("admin")));
+        // Same Arc behind both handles: the trait-object reference the
+        // helper consumes, and the concrete-type reference the test
+        // reads the counter through afterwards.
+        let verifier: Arc<dyn AtJwtVerifier> = recording.clone();
+        let token = jwt_with_typ("at+jwt");
+        let claims = verify_either(&token, None, Some(&verifier))
+            .await
+            .expect("at+jwt verifier returns claims");
+        assert_eq!(claims.role, "admin");
+        assert_eq!(
+            recording.call_count(),
+            1,
+            "at+jwt token should hit the AtJwtVerifier once"
+        );
+    }
+
+    #[actix_rt::test]
+    async fn verify_either_rejects_atjwt_when_no_verifier_registered() {
+        let token = jwt_with_typ("at+jwt");
+        let err = verify_either(&token, None, None)
+            .await
+            .expect_err("at+jwt with no verifier must reject");
+        assert!(
+            matches!(err, AppError::Unauthorized),
+            "expected Unauthorized, got {err:?}"
+        );
+    }
+
+    #[actix_rt::test]
+    async fn verify_either_routes_legacy_jwt_to_jwt_service() {
+        // No JWT service registered and the at+jwt verifier is irrelevant
+        // because the token is NOT an at+jwt; the legacy path must be
+        // taken AND must surface "service not available" rather than
+        // accidentally falling into the at+jwt path.
+        let token = jwt_with_typ("JWT");
+        let err = verify_either(&token, None, None)
+            .await
+            .expect_err("legacy token with no JwtService must error");
+        // The pre-BUNYIP-55 message; pinning the exact text keeps the
+        // operator-facing diagnostic stable across this refactor.
+        assert!(
+            format!("{err:?}").contains("Authentication service not available"),
+            "expected legacy-path internal error, got {err:?}"
+        );
+    }
+
+    #[actix_rt::test]
+    async fn disabled_atjwt_verifier_always_rejects() {
+        let v = DisabledAtJwtVerifier;
+        let err = v
+            .verify_and_resolve(&jwt_with_typ("at+jwt"))
+            .await
+            .expect_err("DisabledAtJwtVerifier must reject every token");
+        assert!(matches!(err, AppError::Unauthorized));
+    }
+
+    #[test]
+    fn access_token_claims_from_atjwt_and_user_maps_fields() {
+        // Build a User row with the exact fields `from_atjwt_and_user`
+        // reads. Pin the mapping; a future refactor that drops or
+        // renames one of these fields will break this test before it
+        // reaches a handler.
+        let user = User {
+            id: uuid::Uuid::from_u128(42),
+            email: "e2e-admin@example.com".to_string(),
+            email_verified: true,
+            password_hash: None,
+            role: "admin".to_string(),
+            stripe_customer_id: None,
+            stripe_payment_method_id: None,
+            membership_status: "active".to_string(),
+            price_locked: true,
+            locked_price_id: Some("price_42".to_string()),
+            locked_price_amount: Some(4200),
+            grace_period_start: None,
+            grace_period_end: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            two_factor_enabled: false,
+            last_login_at: None,
+            deleted_at: None,
+            subscription_tier: "lifetime".to_string(),
+            trial_ends_at: None,
+            lifetime_member: true,
+            subscription_override_by: None,
+        };
+
+        let claims = AccessTokenClaims::from_atjwt_and_user(
+            "https://api.example.test",
+            1_700_000_000,
+            1_700_000_900,
+            "jti-99",
+            &user,
+        );
+
+        assert_eq!(claims.sub, uuid::Uuid::from_u128(42));
+        assert_eq!(claims.email, "e2e-admin@example.com");
+        assert_eq!(claims.role, "admin");
+        assert_eq!(claims.membership_status, "active");
+        assert!(claims.price_locked);
+        assert_eq!(claims.price_id, Some("price_42".to_string()));
+        assert!(claims.lifetime_member);
+        assert_eq!(claims.trial_ends_at, None);
+        assert_eq!(claims.iss, "https://api.example.test");
+        assert_eq!(claims.iat, 1_700_000_000);
+        assert_eq!(claims.exp, 1_700_000_900);
+        assert_eq!(claims.jti, "jti-99");
     }
 }
