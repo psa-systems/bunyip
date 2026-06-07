@@ -14,7 +14,7 @@
 
 # ---- Stage 1: build ---------------------------------------------------------
 # bun + cargo ship in the builder image; nothing to install.
-FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.0-rust1.94-trixie AS build
+FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie AS build
 
 # nproc/2 concurrency cap (per governance CI.md).
 ARG CARGO_BUILD_JOBS=2

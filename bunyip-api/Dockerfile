@@ -7,7 +7,7 @@
 # the build needs no credentials, but an optional DUNITE_GIT_TOKEN (passed
 # through by compose.dev.yml) is honoured for mirrors that require auth.
 
-FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.0-rust1.94-trixie
+FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie
 
 # nproc/2 concurrency cap (per governance CI.md); default keeps small hosts sane.
 ARG CARGO_BUILD_JOBS=2
