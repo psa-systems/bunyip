@@ -118,6 +118,31 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Register the browser SPA OIDC clients with redirect/post-logout/audience
+    // values correct for THIS environment (BUNYIP-57). The static migration
+    // 20260603000010 seeds env-blind staging (a8n.systems) URIs that break the
+    // PKCE flow on every other host; this env-driven startup upsert is
+    // authoritative and self-healing, correcting the stale row in place. Each
+    // client is env-gated: unset vars -> skip + log (mirrors SETUP_DEFAULT_ADMIN).
+    upsert_spa_oidc_client(
+        &pool,
+        "b0000000-0000-4000-8000-000000000002",
+        "mokosh-apps",
+        "MOKOSH_APPS_REDIRECT_URIS",
+        "MOKOSH_APPS_POST_LOGOUT_REDIRECT_URIS",
+        "MOKOSH_APPS_AUDIENCE",
+    )
+    .await?;
+    upsert_spa_oidc_client(
+        &pool,
+        "b0000000-0000-4000-8000-000000000003",
+        "drillmark",
+        "DRILLMARK_REDIRECT_URIS",
+        "DRILLMARK_POST_LOGOUT_REDIRECT_URIS",
+        "DRILLMARK_AUDIENCE",
+    )
+    .await?;
+
     // Test database connection
     sqlx::query("SELECT 1").execute(&pool).await.map_err(|e| {
         error!(error = %e, "Database health check failed");
@@ -664,6 +689,92 @@ async fn main() -> anyhow::Result<()> {
         info!("OCI registry server disabled (requires OCI_REGISTRY_ENABLED=true + FORGEJO_BASE_URL + FORGEJO_API_TOKEN)");
         primary.await?;
     }
+
+    Ok(())
+}
+
+/// Env-driven, idempotent upsert of a browser SPA OIDC client (BUNYIP-57).
+///
+/// Reads the per-client env vars (via `secret_env`, so the `{NAME}_FILE`
+/// compose-secret convention works and empty counts as unset). Registration is
+/// gated on the two vars login actually requires: `*_REDIRECT_URIS` and
+/// `*_AUDIENCE`. When both are present it upserts the row keyed on the fixed
+/// `client_id` UUID, writing only `redirect_uris`, `post_logout_redirect_uris`,
+/// and `audience`; every other column (`client_type`, `name`, scopes, grant
+/// types, auth method, `require_pkce`, TTL) keeps its migration-defined value
+/// via `DO UPDATE` of only those three columns. `*_POST_LOGOUT_REDIRECT_URIS`
+/// is optional (the column is `TEXT[] DEFAULT '{}'`); when unset it upserts an
+/// empty array rather than skipping the whole client, so a partial config can
+/// never silently leave the stale staging row in place. The `*_REDIRECT_URIS` /
+/// `*_POST_LOGOUT_REDIRECT_URIS` vars are comma-separated. When either required
+/// var is unset the client is skipped with a log line (env-gated, like
+/// SETUP_DEFAULT_ADMIN) so an undeployed client never resurfaces a stale row.
+async fn upsert_spa_oidc_client(
+    pool: &sqlx::PgPool,
+    client_id: &str,
+    name: &str,
+    redirect_uris_var: &str,
+    post_logout_var: &str,
+    audience_var: &str,
+) -> anyhow::Result<()> {
+    let (Some(redirect_uris), Some(audience)) =
+        (secret_env(redirect_uris_var), secret_env(audience_var))
+    else {
+        info!(
+            client = name,
+            "SPA OIDC client redirect/audience env vars unset, skipping registration"
+        );
+        return Ok(());
+    };
+    // Optional: a client with no post-logout URIs upserts an empty array.
+    let post_logout = secret_env(post_logout_var).unwrap_or_default();
+
+    let split_csv = |s: &str| -> Vec<String> {
+        s.split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let redirect_list = split_csv(&redirect_uris);
+    let post_logout_list = split_csv(&post_logout);
+
+    sqlx::query(
+        r#"
+        INSERT INTO oauth_clients (
+            client_id, client_type, name,
+            redirect_uris, post_logout_redirect_uris,
+            allowed_scopes, allowed_grant_types,
+            token_endpoint_auth_method, require_pkce,
+            audience, access_token_ttl_seconds
+        ) VALUES (
+            $1::uuid, 'public', $2,
+            $3, $4,
+            ARRAY['openid', 'email', 'offline_access'],
+            ARRAY['authorization_code', 'refresh_token'],
+            'none', TRUE,
+            $5, 600
+        )
+        ON CONFLICT (client_id) DO UPDATE SET
+            redirect_uris = EXCLUDED.redirect_uris,
+            post_logout_redirect_uris = EXCLUDED.post_logout_redirect_uris,
+            audience = EXCLUDED.audience
+        "#,
+    )
+    .bind(client_id)
+    .bind(name)
+    .bind(&redirect_list)
+    .bind(&post_logout_list)
+    .bind(&audience)
+    .execute(pool)
+    .await?;
+
+    info!(
+        client = name,
+        redirect_uris = ?redirect_list,
+        audience = %audience,
+        "SPA OIDC client registered from environment"
+    );
 
     Ok(())
 }
