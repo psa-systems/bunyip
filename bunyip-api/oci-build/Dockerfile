@@ -91,13 +91,29 @@ RUN --mount=type=secret,id=dunite_token \
 # ---- Real sources ----
 COPY . .
 
+# `COPY . .` restores host mtimes that are OLDER than the stub-built artifacts
+# above, so cargo can judge the workspace up-to-date and ship the stub instead
+# of the real binary (this is exactly how v0.2.0 shipped a 557 KB `fn main() {}`
+# stub - BUNYIP-58). Touch every source so it is newer than any cached artifact,
+# forcing a real recompile regardless of host mtimes.
 RUN --mount=type=secret,id=dunite_token \
     --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     sh -c 'if [ -s /run/secrets/dunite_token ]; then \
               git config --global url."https://oauth2:$(cat /run/secrets/dunite_token)@dev.a8n.run/".insteadOf "https://dev.a8n.run/"; \
            fi' \
+    && find . -name '*.rs' -exec touch {} + \
     && cargo build --locked --release --bin bunyip-api
+
+# Belt-and-suspenders: a stub bunyip-api is ~0.5 MB, the real server is tens of
+# MB. Fail the build loudly here rather than let a stub reach the registry and
+# silently restart-loop in production (BUNYIP-58).
+RUN sz="$(stat -c%s target/release/bunyip-api)"; \
+    echo "bunyip-api release binary: $sz bytes"; \
+    if [ "$sz" -lt 5000000 ]; then \
+        echo "FATAL: bunyip-api binary is $sz bytes (< 5 MB) - stub build leaked; aborting." >&2; \
+        exit 1; \
+    fi
 
 # ---- Export stage -----------------------------------------------------------
 # `docker buildx build --target export --output type=local,dest=<dir>` extracts
