@@ -46,8 +46,11 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Build
-        run: cargo build --workspace --all-targets
+      - name: Verify Cargo.lock is in sync
+        # --locked errors if the lockfile would need updating, catching a
+        # manifest bump (e.g. a release) that forgot to sync Cargo.lock
+        # (BUNYIP-59).
+        run: cargo build --workspace --all-targets --locked
 
       - name: Unit tests
         run: cargo test --workspace --lib
