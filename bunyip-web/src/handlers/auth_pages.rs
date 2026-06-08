@@ -75,6 +75,14 @@ fn safe_redirect(raw: Option<&str>, oidc_issuer: &str) -> String {
 #[derive(Deserialize)]
 pub struct RedirectQuery {
     pub redirect: Option<String>,
+    /// Set by `/oauth2/authorize` when it bounced the user here because it
+    /// found no valid OP session. Its presence means "the IdP already checked
+    /// and there is no server-side session", so `login_get` must NOT trust a
+    /// surviving hub session and redirect back to `authorize` (that is the
+    /// redirect loop). It renders the login form instead, forcing a
+    /// credentialed re-login that mints a fresh OP session.
+    #[serde(default)]
+    pub checked: Option<String>,
 }
 
 fn login_content(error: Option<&str>, redirect: &str) -> Markup {
@@ -133,7 +141,12 @@ pub async fn login_get(
     Query(q): Query<RedirectQuery>,
 ) -> Response {
     let (c, fwd) = ctx(&st, &headers).await;
-    if c.is_signed_in() {
+    // `checked` is set only when `/oauth2/authorize` redirected here after
+    // finding no valid OP session. In that case a hub session can still look
+    // "signed in" (the 30-day refresh cookie outlives the 7-day OP session),
+    // but redirecting back to `authorize` would loop forever. Fall through to
+    // the login form so the POST re-establishes the OP session.
+    if c.is_signed_in() && q.checked.is_none() {
         return redirect(&safe_redirect(q.redirect.as_deref(), &st.cfg.oidc_issuer));
     }
     let apps = calls::applications(&st.api, fwd.as_deref())
