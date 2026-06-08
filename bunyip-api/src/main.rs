@@ -695,16 +695,20 @@ async fn main() -> anyhow::Result<()> {
 
 /// Env-driven, idempotent upsert of a browser SPA OIDC client (BUNYIP-57).
 ///
-/// Reads the three per-client env vars (via `secret_env`, so the `{NAME}_FILE`
-/// compose-secret convention works and empty counts as unset). When all three
-/// are present, it upserts the row keyed on the fixed `client_id` UUID, writing
-/// only `redirect_uris`, `post_logout_redirect_uris`, and `audience`; every
-/// other column (`client_type`, `name`, scopes, grant types, auth method,
-/// `require_pkce`, TTL) keeps its migration-defined value via `DO UPDATE` of
-/// only the three URI columns. `*_REDIRECT_URIS` / `*_POST_LOGOUT_REDIRECT_URIS`
-/// are comma-separated (the columns are `TEXT[]`). When any var is unset the
-/// client is skipped with a log line (env-gated, like SETUP_DEFAULT_ADMIN) so
-/// an undeployed client never resurfaces a stale staging row.
+/// Reads the per-client env vars (via `secret_env`, so the `{NAME}_FILE`
+/// compose-secret convention works and empty counts as unset). Registration is
+/// gated on the two vars login actually requires: `*_REDIRECT_URIS` and
+/// `*_AUDIENCE`. When both are present it upserts the row keyed on the fixed
+/// `client_id` UUID, writing only `redirect_uris`, `post_logout_redirect_uris`,
+/// and `audience`; every other column (`client_type`, `name`, scopes, grant
+/// types, auth method, `require_pkce`, TTL) keeps its migration-defined value
+/// via `DO UPDATE` of only those three columns. `*_POST_LOGOUT_REDIRECT_URIS`
+/// is optional (the column is `TEXT[] DEFAULT '{}'`); when unset it upserts an
+/// empty array rather than skipping the whole client, so a partial config can
+/// never silently leave the stale staging row in place. The `*_REDIRECT_URIS` /
+/// `*_POST_LOGOUT_REDIRECT_URIS` vars are comma-separated. When either required
+/// var is unset the client is skipped with a log line (env-gated, like
+/// SETUP_DEFAULT_ADMIN) so an undeployed client never resurfaces a stale row.
 async fn upsert_spa_oidc_client(
     pool: &sqlx::PgPool,
     client_id: &str,
@@ -713,17 +717,17 @@ async fn upsert_spa_oidc_client(
     post_logout_var: &str,
     audience_var: &str,
 ) -> anyhow::Result<()> {
-    let (Some(redirect_uris), Some(post_logout), Some(audience)) = (
-        secret_env(redirect_uris_var),
-        secret_env(post_logout_var),
-        secret_env(audience_var),
-    ) else {
+    let (Some(redirect_uris), Some(audience)) =
+        (secret_env(redirect_uris_var), secret_env(audience_var))
+    else {
         info!(
             client = name,
-            "SPA OIDC client env vars unset, skipping registration"
+            "SPA OIDC client redirect/audience env vars unset, skipping registration"
         );
         return Ok(());
     };
+    // Optional: a client with no post-logout URIs upserts an empty array.
+    let post_logout = secret_env(post_logout_var).unwrap_or_default();
 
     let split_csv = |s: &str| -> Vec<String> {
         s.split(',')
