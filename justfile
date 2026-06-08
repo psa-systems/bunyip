@@ -439,10 +439,23 @@ create-release bump:
     let tag = $"v($bare)"
     let release_branch = $"release/($tag)"
 
+    # Abort if the target tag already exists. A stale manifest version must never
+    # target an already-published release (BUNYIP-59).
+    let existing_tag = (do { ^git rev-parse -q --verify $"refs/tags/($tag)" } | complete)
+    if $existing_tag.exit_code == 0 {
+        print $"(ansi red)Tag ($tag) already exists. Bump past it or delete the stale tag first.(ansi reset)"
+        exit 1
+    }
+
     # Create release branch, bump the workspace version, and commit
     git checkout -b $release_branch
     open Cargo.toml | update workspace.package.version $bare | to toml | collect | save --force Cargo.toml
     git add Cargo.toml
+    # The workspace crates inherit version.workspace, so the bump changes their
+    # Cargo.lock entries; sync the lock in the same commit or CI's --locked build
+    # fails (BUNYIP-59).
+    cargo update --workspace
+    git add Cargo.lock
     git commit --signoff --message $"Release ($tag)"
 
     # Push release branch
