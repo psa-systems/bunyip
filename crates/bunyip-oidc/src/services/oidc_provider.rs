@@ -41,6 +41,47 @@ pub struct AtClaims {
     pub auth_time: i64,
     pub acr: String,
     pub amr: Vec<String>,
+    /// The user's Bunyip system role (`UserRole::as_str()`: `subscriber` |
+    /// `admin`). Identity-level, emitted on every mint regardless of scope.
+    /// Resource servers translate this to their own authorization model
+    /// (BUNYIP-66); Bunyip exposes only its own role, never a consumer's.
+    pub bunyip_role: String,
+}
+
+impl AtClaims {
+    /// Assemble the RFC 9068 access-token claim set. Pure (no signing, keys, or
+    /// DB) so the claim mapping - notably `bunyip_role` from the user's role
+    /// (BUNYIP-66) - is unit-testable; `mint_access_token` signs the result.
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        issuer: &str,
+        user: &User,
+        client: &OAuthClient,
+        scope: &[String],
+        now: DateTime<Utc>,
+        exp: DateTime<Utc>,
+        auth_time: DateTime<Utc>,
+        acr: &str,
+        amr: &[String],
+    ) -> Self {
+        AtClaims {
+            iss: issuer.to_string(),
+            sub: user.id.to_string(),
+            aud: client.audience.clone(),
+            client_id: client.client_id.to_string(),
+            scope: scope.join(" "),
+            jti: Uuid::new_v4().to_string(),
+            iat: now.timestamp(),
+            nbf: now.timestamp(),
+            exp: exp.timestamp(),
+            auth_time: auth_time.timestamp(),
+            acr: acr.to_string(),
+            amr: amr.to_vec(),
+            // Identity-level: the user's Bunyip role string straight from the
+            // DB column (already constrained to UserRole::as_str() values).
+            bunyip_role: user.role.clone(),
+        }
+    }
 }
 
 // ── ID token claims ───────────────────────────────────────────────────────────
@@ -374,20 +415,17 @@ impl OidcProvider {
         header.kid = Some(self.keys.active_kid.clone());
         header.typ = Some("at+jwt".to_string());
 
-        let claims = AtClaims {
-            iss: self.issuer().to_string(),
-            sub: user.id.to_string(),
-            aud: client.audience.clone(),
-            client_id: client.client_id.to_string(),
-            scope: scope.join(" "),
-            jti: Uuid::new_v4().to_string(),
-            iat: now.timestamp(),
-            nbf: now.timestamp(),
-            exp: exp.timestamp(),
-            auth_time: auth_time.timestamp(),
-            acr: acr.to_string(),
-            amr: amr.to_vec(),
-        };
+        let claims = AtClaims::build(
+            self.issuer(),
+            user,
+            client,
+            scope,
+            now,
+            exp,
+            auth_time,
+            acr,
+            amr,
+        );
 
         let token = jsonwebtoken::encode(&header, &claims, &self.keys.encoding_key)
             .map_err(|e| AppError::internal(format!("Failed to mint access token: {e}")))?;
@@ -1077,5 +1115,115 @@ impl bunyip_domain::middleware::auth::AtJwtVerifier for OidcProvider {
                 &user,
             ),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_user(role: &str) -> User {
+        User {
+            id: Uuid::new_v4(),
+            email: "test@example.com".to_string(),
+            email_verified: true,
+            password_hash: Some("hash".to_string()),
+            role: role.to_string(),
+            stripe_customer_id: None,
+            stripe_payment_method_id: None,
+            membership_status: "active".to_string(),
+            price_locked: false,
+            locked_price_id: None,
+            locked_price_amount: None,
+            grace_period_start: None,
+            grace_period_end: None,
+            two_factor_enabled: false,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_login_at: None,
+            deleted_at: None,
+            subscription_tier: "standard".to_string(),
+            trial_ends_at: None,
+            lifetime_member: false,
+            subscription_override_by: None,
+        }
+    }
+
+    fn test_client() -> OAuthClient {
+        OAuthClient {
+            id: Uuid::new_v4(),
+            client_id: Uuid::new_v4(),
+            client_secret_hash: None,
+            client_type: "public".to_string(),
+            name: "test-client".to_string(),
+            redirect_uris: vec!["https://app.example.com/callback".to_string()],
+            post_logout_redirect_uris: vec![],
+            backchannel_logout_uri: None,
+            lifecycle_event_uri: None,
+            allowed_scopes: vec!["openid".to_string()],
+            allowed_grant_types: vec!["authorization_code".to_string()],
+            token_endpoint_auth_method: "none".to_string(),
+            require_pkce: true,
+            access_token_ttl_seconds: 600,
+            refresh_token_ttl_seconds: 2_592_000,
+            refresh_idle_ttl_seconds: 1_209_600,
+            audience: "https://api.example.com".to_string(),
+            dpop_bound: false,
+            created_at: Utc::now(),
+            disabled_at: None,
+        }
+    }
+
+    fn build_claims_for(role: &str) -> AtClaims {
+        let now = Utc::now();
+        AtClaims::build(
+            "https://issuer.example.com",
+            &test_user(role),
+            &test_client(),
+            &["openid".to_string()],
+            now,
+            now + Duration::seconds(600),
+            now,
+            "urn:mace:incommon:iap:silver",
+            &["pwd".to_string()],
+        )
+    }
+
+    // BUNYIP-66: the at+jwt carries the user's Bunyip system role verbatim,
+    // on every mint, regardless of requested scope.
+    #[test]
+    fn at_claims_carry_admin_bunyip_role() {
+        assert_eq!(build_claims_for("admin").bunyip_role, "admin");
+    }
+
+    #[test]
+    fn at_claims_carry_subscriber_bunyip_role() {
+        assert_eq!(build_claims_for("subscriber").bunyip_role, "subscriber");
+    }
+
+    #[test]
+    fn bunyip_role_emitted_without_any_scope() {
+        let now = Utc::now();
+        let claims = AtClaims::build(
+            "https://issuer.example.com",
+            &test_user("admin"),
+            &test_client(),
+            &[],
+            now,
+            now + Duration::seconds(600),
+            now,
+            "urn:mace:incommon:iap:silver",
+            &[],
+        );
+        assert!(claims.scope.is_empty());
+        assert_eq!(claims.bunyip_role, "admin");
+    }
+
+    // The claim must serialize under the literal key `bunyip_role` so the
+    // mokosh RS parses it (PMS-172).
+    #[test]
+    fn bunyip_role_serializes_under_expected_key() {
+        let json = serde_json::to_value(build_claims_for("admin")).unwrap();
+        assert_eq!(json["bunyip_role"], "admin");
     }
 }
