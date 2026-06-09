@@ -6,6 +6,11 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+# The crate ships a second binary (bunyip-e2e-bootstrap), which makes a bare
+# `cargo run -p bunyip-api` ambiguous (and breaks `just dev` / the dev
+# container's `cargo watch -x 'run -p bunyip-api'`). Pin the server as the
+# default so `cargo run` resolves to it.
+default-run = "bunyip-api"
 
 [lints]
 workspace = true
