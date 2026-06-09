@@ -141,6 +141,25 @@ impl Api {
         self.send(Method::DELETE, path, cookie, body).await
     }
 
+    /// GET returning the raw `reqwest::Response` for streaming a binary body
+    /// (the download proxy). Unlike `send`, the body is neither read nor parsed
+    /// as JSON here, so a large asset streams through to the browser rather than
+    /// buffering in memory. Cookie is forwarded verbatim, same as `send`.
+    pub async fn get_stream(
+        &self,
+        path: &str,
+        cookie: Option<&str>,
+    ) -> Result<reqwest::Response, ApiError> {
+        let url = format!("{}{}", self.base_v1, path);
+        let mut rb = self.http.request(Method::GET, &url);
+        if let Some(c) = cookie {
+            rb = rb.header(COOKIE, c);
+        }
+        rb.send()
+            .await
+            .map_err(|e| ApiError::network(e.to_string()))
+    }
+
     /// POST a multipart form (feedback submission).
     pub async fn post_form(
         &self,

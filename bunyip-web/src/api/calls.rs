@@ -84,6 +84,27 @@ pub async fn downloads_all(
     Ok(g.groups)
 }
 
+/// Proxy a single application download asset. Streams the raw bytes from the
+/// API's `/applications/{slug}/downloads/{asset}` (which gates on membership +
+/// entitlement) so the BFF can relay them to the browser. Returns the raw
+/// `reqwest::Response` untouched; the handler maps status/headers/body. The
+/// browser cannot hit the API directly (different origin, cookie scoped here),
+/// so this hop is what makes the download link actually serve the binary
+/// instead of the web origin's HTML 404 fallback (BUNYIP-64).
+pub async fn download_asset(
+    api: &Api,
+    slug: &str,
+    asset_name: &str,
+    cookie: Option<&str>,
+) -> Result<reqwest::Response, ApiError> {
+    let path = format!(
+        "/applications/{}/downloads/{}",
+        urlencoding::encode(slug),
+        urlencoding::encode(asset_name),
+    );
+    api.get_stream(&path, cookie).await
+}
+
 pub async fn downloads_for_app(
     api: &Api,
     cookie: Option<&str>,
