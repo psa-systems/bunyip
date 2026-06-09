@@ -91,7 +91,8 @@ pub async fn discovery(provider: web::Data<Option<Arc<OidcProvider>>>) -> HttpRe
         ],
         "claims_supported": [
             "iss", "sub", "aud", "exp", "iat", "auth_time", "nonce", "azp",
-            "email", "email_verified", "membership_status", "has_member_access"
+            "email", "email_verified", "membership_status", "has_member_access",
+            "bunyip_role"
         ],
         "code_challenge_methods_supported": ["S256"],
         "require_pkce": true,
