@@ -395,6 +395,51 @@ impl AuthCookies {
         builder.finish()
     }
 
+    /// Cookies that clear ONLY the OP session cookie (preserving
+    /// access_token and refresh_token, which may still be valid hub
+    /// auth state). Used by `/oauth2/authorize` when it detects the
+    /// browser is sending a `bunyip_op_session` cookie whose sid does
+    /// not resolve to a live `op_sessions` row: the cookie is stale,
+    /// and leaving it in the jar causes every subsequent request to
+    /// repeat the "load op_session -> None -> redirect to /login"
+    /// dance with no progress. Aggressively clearing it removes the
+    /// cookie from the equation immediately, and the next OIDC handshake
+    /// runs through the no-cookie branch cleanly (cleaner code path,
+    /// no stale state).
+    ///
+    /// Returns both a no-domain clear (matches a stale hostname-scoped
+    /// cookie issued before COOKIE_DOMAIN was configured) and a
+    /// domain-scoped clear when `cookie_domain` is set. Mirrors the
+    /// `clear_stale` + `clear` two-axis pattern the existing helpers
+    /// use, so a freshly-misconfigured deployment still recovers.
+    pub fn clear_op_session_only(
+        secure: bool,
+        cookie_domain: Option<&str>,
+    ) -> Vec<Cookie<'static>> {
+        let mut cookies = vec![Cookie::build(Self::OP_SESSION_COOKIE, "")
+            .path("/")
+            .http_only(true)
+            .secure(secure)
+            .same_site(SameSite::Lax)
+            .max_age(actix_web::cookie::time::Duration::seconds(0))
+            .finish()];
+
+        if let Some(domain) = cookie_domain {
+            cookies.push(
+                Cookie::build(Self::OP_SESSION_COOKIE, "")
+                    .path("/")
+                    .domain(domain.to_owned())
+                    .http_only(true)
+                    .secure(secure)
+                    .same_site(SameSite::Lax)
+                    .max_age(actix_web::cookie::time::Duration::seconds(0))
+                    .finish(),
+            );
+        }
+
+        cookies
+    }
+
     /// Create cookies to clear stale hostname-scoped tokens.
     /// When COOKIE_DOMAIN is set (e.g. `.example.com`), any old cookies set
     /// without a domain attribute (scoped to the exact hostname like `api.example.com`)
@@ -529,6 +574,62 @@ mod tests {
         assert!(domain_cookies
             .iter()
             .any(|c| c.name() == AuthCookies::OP_SESSION_COOKIE));
+    }
+
+    #[test]
+    fn test_clear_op_session_only_no_domain() {
+        // Single no-domain clear (matches a hostname-scoped stale cookie).
+        let cookies = AuthCookies::clear_op_session_only(false, None);
+        assert_eq!(cookies.len(), 1);
+        assert_eq!(cookies[0].name(), AuthCookies::OP_SESSION_COOKIE);
+        assert!(
+            cookies[0].value().is_empty(),
+            "cleared cookie has empty value"
+        );
+        assert_eq!(
+            cookies[0].max_age(),
+            Some(actix_web::cookie::time::Duration::seconds(0)),
+            "cleared cookie has Max-Age=0",
+        );
+        assert!(
+            cookies[0].domain().is_none(),
+            "no-domain branch leaves Domain unset"
+        );
+    }
+
+    #[test]
+    fn test_clear_op_session_only_with_domain() {
+        // No-domain clear (for hostname-scoped stale cookies) PLUS the
+        // domain-scoped clear that matches the live cookie shape.
+        let cookies = AuthCookies::clear_op_session_only(true, Some(".a8n.systems"));
+        assert_eq!(cookies.len(), 2);
+        assert!(cookies
+            .iter()
+            .all(|c| c.name() == AuthCookies::OP_SESSION_COOKIE));
+        assert_eq!(
+            cookies
+                .iter()
+                .filter(|c| c.domain() == Some(".a8n.systems"))
+                .count(),
+            1,
+            "exactly one domain-scoped clear",
+        );
+        assert_eq!(
+            cookies.iter().filter(|c| c.domain().is_none()).count(),
+            1,
+            "exactly one no-domain clear",
+        );
+        // Critical: neither access_token nor refresh_token appear; only the
+        // OP session cookie is touched. The hub session stays intact so
+        // `/login` can still identify the user when they re-authenticate.
+        assert!(
+            !cookies.iter().any(|c| c.name() == "access_token"),
+            "must not clear access_token",
+        );
+        assert!(
+            !cookies.iter().any(|c| c.name() == "refresh_token"),
+            "must not clear refresh_token",
+        );
     }
 
     #[test]
