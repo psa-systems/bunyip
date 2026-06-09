@@ -14,6 +14,12 @@ workspace = true
 name = "bunyip-api"
 path = "src/main.rs"
 
+# E2E test-account seeder (BUNYIP-52). Standalone tool, not a server subcommand;
+# reuses the bunyip-api lib (config, repositories, services).
+[[bin]]
+name = "bunyip-e2e-bootstrap"
+path = "src/bin/bunyip_e2e_bootstrap.rs"
+
 # bunyip owns the domain (bunyip-domain) and the verticals (bunyip-oci,
 # bunyip-oidc). The generic kernel comes from dunite-core, which bunyip-domain
 # pulls from the dunite framework repo on Forgejo.
