@@ -76,6 +76,26 @@ pub async fn delete_user(api: &Api, cookie: Option<&str>, user_id: &str) -> Resu
     ok_data(&r).map(|_| ())
 }
 
+/// Hard-delete an application. The API gates this on the admin's password + 2FA
+/// code (DELETE /admin/applications/{id} with a JSON body), so both are required
+/// and an invalid value surfaces as a validation ApiError.
+pub async fn delete_application(
+    api: &Api,
+    cookie: Option<&str>,
+    app_id: &str,
+    password: &str,
+    totp_code: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .delete(
+            &format!("/admin/applications/{app_id}"),
+            cookie,
+            Some(json!({ "password": password, "totp_code": totp_code })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
 /// Single-user details for the admin user-detail page. Wraps GET /admin/users/{id}.
 pub async fn get_user(
     api: &Api,
