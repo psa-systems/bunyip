@@ -23,7 +23,7 @@ tower-http = { version = "0.6", features = ["fs", "compression-gzip", "trace"] }
 maud = "0.26"
 
 # Server-side HTTP client for the /v1 API. rustls to avoid a native OpenSSL dep.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "stream"] }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
