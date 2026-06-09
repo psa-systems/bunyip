@@ -113,6 +113,51 @@ pub struct IdTokenClaims {
     pub membership_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_member_access: Option<bool>,
+    /// The user's Bunyip system role (`subscriber` | `admin`), mirrored from
+    /// the access token's `bunyip_role` (BUNYIP-66) so a relying party that
+    /// only reads the ID token can display / translate the role without an
+    /// extra userinfo call. Emitted on every mint regardless of scope.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bunyip_role: Option<String>,
+}
+
+impl IdTokenClaims {
+    /// Assemble the ID-token claim set. Pure (no signing, keys, or DB) so the
+    /// claim mapping - notably `bunyip_role` from the user's role - is
+    /// unit-testable; `mint_id_token` computes `at_hash`, calls this, and signs.
+    /// Profile claims are gated on the `email` scope; `bunyip_role` is not.
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        issuer: &str,
+        user: &User,
+        client: &OAuthClient,
+        scope: &[String],
+        nonce: &str,
+        now: DateTime<Utc>,
+        exp: DateTime<Utc>,
+        auth_time: DateTime<Utc>,
+        at_hash: String,
+    ) -> Self {
+        let include_profile = scope.iter().any(|s| s == "email");
+        IdTokenClaims {
+            iss: issuer.to_string(),
+            sub: user.id.to_string(),
+            aud: client.client_id.to_string(),
+            exp: exp.timestamp(),
+            iat: now.timestamp(),
+            auth_time: auth_time.timestamp(),
+            nonce: nonce.to_string(),
+            azp: client.client_id.to_string(),
+            at_hash,
+            email: include_profile.then(|| user.email.clone()),
+            email_verified: include_profile.then_some(user.email_verified),
+            membership_status: include_profile.then(|| user.membership_status.clone()),
+            has_member_access: include_profile.then(|| user.is_access_allowed()),
+            // Identity-level: the user's Bunyip role string straight from the
+            // DB column, mirroring the access token's `bunyip_role`.
+            bunyip_role: Some(user.role.clone()),
+        }
+    }
 }
 
 // ── Lifecycle event token claims ─────────────────────────────────────────────
@@ -465,38 +510,17 @@ impl OidcProvider {
         header.kid = Some(self.keys.active_kid.clone());
         // typ defaults to "JWT" for ID tokens
 
-        let include_profile = scope.iter().any(|s| s == "email");
-        let claims = IdTokenClaims {
-            iss: self.issuer().to_string(),
-            sub: user.id.to_string(),
-            aud: client.client_id.to_string(),
-            exp: exp.timestamp(),
-            iat: now.timestamp(),
-            auth_time: auth_time.timestamp(),
-            nonce: nonce.to_string(),
-            azp: client.client_id.to_string(),
+        let claims = IdTokenClaims::build(
+            self.issuer(),
+            user,
+            client,
+            scope,
+            nonce,
+            now,
+            exp,
+            auth_time,
             at_hash,
-            email: if include_profile {
-                Some(user.email.clone())
-            } else {
-                None
-            },
-            email_verified: if include_profile {
-                Some(user.email_verified)
-            } else {
-                None
-            },
-            membership_status: if include_profile {
-                Some(user.membership_status.clone())
-            } else {
-                None
-            },
-            has_member_access: if include_profile {
-                Some(user.is_access_allowed())
-            } else {
-                None
-            },
-        };
+        );
 
         jsonwebtoken::encode(&header, &claims, &self.keys.encoding_key)
             .map_err(|e| AppError::internal(format!("Failed to mint ID token: {e}")))
@@ -1250,5 +1274,60 @@ mod tests {
         });
         let claims: AtClaims = serde_json::from_value(legacy).unwrap();
         assert_eq!(claims.bunyip_role, "");
+    }
+
+    fn build_id_claims_for(role: &str, scope: &[String]) -> IdTokenClaims {
+        let now = Utc::now();
+        IdTokenClaims::build(
+            "https://issuer.example.com",
+            &test_user(role),
+            &test_client(),
+            scope,
+            "nonce-123",
+            now,
+            now + Duration::seconds(600),
+            now,
+            "at_hash_value".to_string(),
+        )
+    }
+
+    // The ID token mirrors the access token's `bunyip_role`, on every mint,
+    // regardless of scope, so an RP reading only the ID token sees the role.
+    #[test]
+    fn id_token_carries_bunyip_role() {
+        assert_eq!(
+            build_id_claims_for("admin", &["openid".to_string()]).bunyip_role,
+            Some("admin".to_string())
+        );
+    }
+
+    #[test]
+    fn id_token_bunyip_role_emitted_without_email_scope() {
+        let claims = build_id_claims_for("subscriber", &["openid".to_string()]);
+        // No `email` scope: profile claims are absent, but the role is not.
+        assert!(claims.email.is_none());
+        assert_eq!(claims.bunyip_role, Some("subscriber".to_string()));
+    }
+
+    #[test]
+    fn id_token_bunyip_role_serializes_under_expected_key() {
+        let json = serde_json::to_value(build_id_claims_for("admin", &[])).unwrap();
+        assert_eq!(json["bunyip_role"], "admin");
+    }
+
+    // Backward compatibility: an ID token without the claim still deserializes
+    // (to `None`) rather than failing.
+    #[test]
+    fn id_token_deserializes_without_bunyip_role() {
+        let legacy = serde_json::json!({
+            "iss": "https://issuer.example.com",
+            "sub": Uuid::new_v4().to_string(),
+            "aud": Uuid::new_v4().to_string(),
+            "exp": 0, "iat": 0, "auth_time": 0,
+            "nonce": "n", "azp": Uuid::new_v4().to_string(),
+            "at_hash": "h",
+        });
+        let claims: IdTokenClaims = serde_json::from_value(legacy).unwrap();
+        assert_eq!(claims.bunyip_role, None);
     }
 }
