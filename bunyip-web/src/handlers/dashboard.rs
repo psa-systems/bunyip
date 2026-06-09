@@ -379,11 +379,32 @@ pub async fn download_asset(
                 .get(header::CONTENT_DISPOSITION)
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string)
-                .unwrap_or_else(|| format!("attachment; filename=\"{asset_name}\""));
-            Response::builder()
-                .status(StatusCode::OK)
+                // Fallback only: the API always sends Content-Disposition. Escape
+                // backslash/quote so a stray char in the name can't break out of
+                // the quoted filename (a newline is already rejected by
+                // HeaderValue, which fails the build into the redirect below).
+                .unwrap_or_else(|| {
+                    let safe = asset_name.replace('\\', "\\\\").replace('"', "\\\"");
+                    format!("attachment; filename=\"{safe}\"")
+                });
+            // Forward the upstream status (always 200 here) and Content-Length so
+            // the browser can show download progress. When the CompressionLayer
+            // compresses for the browser it drops the stale length itself; on the
+            // identity path the forwarded length is correct.
+            let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
+            let content_length = resp
+                .headers()
+                .get(header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            let mut builder = Response::builder()
+                .status(status)
                 .header(header::CONTENT_TYPE, content_type)
-                .header(header::CONTENT_DISPOSITION, disposition)
+                .header(header::CONTENT_DISPOSITION, disposition);
+            if let Some(len) = content_length {
+                builder = builder.header(header::CONTENT_LENGTH, len);
+            }
+            builder
                 .body(Body::from_stream(resp.bytes_stream()))
                 .unwrap_or_else(|_| redirect_cookies("/downloads", &c.set_cookies))
         }
