@@ -2,8 +2,9 @@
 //! dashboard pages (applications, membership, billing, settings, ...) arrive in
 //! phase 3.
 
-use axum::extract::{Query, State};
-use axum::http::HeaderMap;
+use axum::body::Body;
+use axum::extract::{Path, Query, State};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::Response;
 use axum::Form;
 use maud::{html, Markup, PreEscaped};
@@ -345,6 +346,56 @@ pub async fn downloads(State(st): State<AppState>, headers: HeaderMap) -> Respon
     dashboard_response(&c, &user, "/downloads", "Downloads · Bunyip", content)
 }
 
+/// GET /downloads/{slug}/{asset_name}
+///
+/// BFF download proxy. The browser must never hit bunyip-api directly (separate
+/// origin, the session cookie is scoped to this app), so the asset link points
+/// here. We re-auth the session, forward the cookie to the API's
+/// `/v1/applications/{slug}/downloads/{asset}`, and stream the bytes back with
+/// the upstream Content-Type / Content-Disposition. Without this hop the anchor
+/// resolved against the web origin, fell through to the HTML 404 fallback, and
+/// the browser saved that HTML page under the asset's filename (BUNYIP-64).
+pub async fn download_asset(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path((slug, asset_name)): Path<(String, String)>,
+) -> Response {
+    let (_user, c) = match guard(&st, &headers, "/downloads").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let fwd = c.forward.as_deref();
+    match calls::download_asset(&st.api, &slug, &asset_name, fwd).await {
+        Ok(resp) if resp.status().is_success() => {
+            // Read the relay headers before consuming `resp` into a stream.
+            let content_type = resp
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            let disposition = resp
+                .headers()
+                .get(header::CONTENT_DISPOSITION)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("attachment; filename=\"{asset_name}\""));
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, content_type)
+                .header(header::CONTENT_DISPOSITION, disposition)
+                .body(Body::from_stream(resp.bytes_stream()))
+                .unwrap_or_else(|_| redirect_cookies("/downloads", &c.set_cookies))
+        }
+        // Any non-2xx (expired session, lost entitlement, upstream outage) must
+        // NOT be saved as the asset. The anchor carries no `download` attribute,
+        // so navigating the browser back renders HTML instead of downloading it:
+        // sign-in on 401, the downloads page otherwise.
+        Ok(resp) if resp.status().as_u16() == 401 => redirect_cookies("/login", &c.set_cookies),
+        _ => redirect_cookies("/downloads", &c.set_cookies),
+    }
+}
+
 /// One product section on the downloads page: header with the (pinned, hence
 /// latest) version, binary assets, and OCI pull instructions.
 fn download_group(g: &AppDownloadGroup, has_membership: bool) -> Markup {
@@ -378,7 +429,12 @@ fn download_group(g: &AppDownloadGroup, has_membership: bool) -> Markup {
                                 div class="text-xs text-muted-foreground" { (format_size(a.size_bytes)) }
                             }
                             @if has_membership {
-                                a href=(a.download_url) download=(a.asset_name) class="px-3 py-1 rounded bg-primary text-primary-foreground text-sm" { "Download" }
+                                // Link to the BFF proxy on this origin (not the API's
+                                // `a.download_url`, which the browser cannot reach). No
+                                // `download` attribute: the proxy's Content-Disposition
+                                // drives the save, and an error response navigates rather
+                                // than being saved as the file (BUNYIP-64).
+                                a href=(format!("/downloads/{}/{}", urlencoding::encode(&g.app_slug), urlencoding::encode(&a.asset_name))) class="px-3 py-1 rounded bg-primary text-primary-foreground text-sm" { "Download" }
                             } @else {
                                 (upgrade_link())
                             }

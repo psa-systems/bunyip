@@ -74,6 +74,7 @@ async fn main() {
         .route("/dashboard", get(dash::dashboard))
         .route("/applications", get(dash::applications))
         .route("/downloads", get(dash::downloads))
+        .route("/downloads/:slug/:asset", get(dash::download_asset))
         .route("/billing", get(dash::billing))
         .route("/checkout/success", get(dash::checkout_success))
         .route("/membership-required", get(dash::membership_required))
