@@ -849,10 +849,18 @@ pub struct DistributionForm {
 }
 
 /// GET /admin/applications/{id}/edit
+/// Query params on the edit page. `error` is set when a delete attempt bounces
+/// back (bad password / 2FA code) so the danger zone can show why.
+#[derive(Deserialize)]
+pub struct AppEditQuery {
+    pub error: Option<String>,
+}
+
 pub async fn application_edit(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    Query(q): Query<AppEditQuery>,
 ) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
@@ -893,15 +901,18 @@ pub async fn application_edit(
                 oci_image_name: app.oci_image_name.as_deref().unwrap_or_default(),
                 pinned_image_tag: app.pinned_image_tag.as_deref().unwrap_or_default(),
             };
-            application_form(
-                &format!("/admin/applications/{id}/distribution"),
-                &format!("Edit {}", app.display_name),
-                "Set the Forgejo binary and OCI container coordinates. Blank fields keep their current value.",
-                None,
-                app.is_hosted,
-                &v,
-                None,
-            )
+            html! {
+                (application_form(
+                    &format!("/admin/applications/{id}/distribution"),
+                    &format!("Edit {}", app.display_name),
+                    "Set the Forgejo binary and OCI container coordinates. Blank fields keep their current value.",
+                    None,
+                    app.is_hosted,
+                    &v,
+                    None,
+                ))
+                (app_danger_zone(&id, q.error.as_deref()))
+            }
         }
     };
     admin_response(
@@ -911,6 +922,28 @@ pub async fn application_edit(
         "Edit application · Bunyip",
         content,
     )
+}
+
+/// Danger zone on the edit page: hard-delete the application. Mirrors the
+/// account self-delete UI; the API requires the admin's password + 2FA code, so
+/// both fields are collected and posted to the delete handler.
+fn app_danger_zone(id: &str, error: Option<&str>) -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm border-red-200 dark:border-red-900 mt-8 max-w-2xl" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                h3 class="text-2xl font-semibold leading-none tracking-tight text-red-600 dark:text-red-400 flex items-center gap-2" { (icon("alert-triangle", "h-5 w-5")) "Danger Zone" }
+                p class="text-sm text-muted-foreground" { "Permanently delete this application. Its entitlements, price links, and download caches are removed with it. This cannot be undone." }
+            }
+            div class="p-6 pt-0" {
+                @if let Some(e) = error { (error_box(e)) }
+                form method="post" action=(format!("/admin/applications/{id}/delete")) class="space-y-3 max-w-md mt-2" onsubmit="return confirm('Permanently delete this application? This cannot be undone.')" {
+                    div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" placeholder="Enter your password to confirm" class=(dashboard_input()); }
+                    div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" placeholder="6-digit code" class=(dashboard_input()); }
+                    button type="submit" class=(button_class("destructive", "default", "")) { (icon("trash", "mr-2 h-4 w-4")) "Delete application" }
+                }
+            }
+        }
+    }
 }
 
 /// POST /admin/applications/{id}/distribution
@@ -946,6 +979,50 @@ pub async fn application_distribution_save(
                 content,
             )
         }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct DeleteAppForm {
+    #[serde(default)]
+    pub password: String,
+    #[serde(default)]
+    pub totp_code: String,
+}
+
+/// POST /admin/applications/{id}/delete
+pub async fn application_delete(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<DeleteAppForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match admin_api::delete_application(
+        &st.api,
+        c.forward.as_deref(),
+        &id,
+        &f.password,
+        &f.totp_code,
+    )
+    .await
+    {
+        // Relay any cookie the guard rotated on both paths (mirrors user_delete);
+        // a plain redirect would drop a refreshed session.
+        Ok(()) => redirect_cookies("/admin/applications", &c.set_cookies),
+        // Bad password / 2FA code (or any failure): bounce back to this app's
+        // danger zone with the API's message rather than dropping the admin on a
+        // blank page.
+        Err(e) => redirect_cookies(
+            &format!(
+                "/admin/applications/{id}/edit?error={}",
+                urlenc(&e.user_message())
+            ),
+            &c.set_cookies,
+        ),
     }
 }
 

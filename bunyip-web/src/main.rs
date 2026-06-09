@@ -165,6 +165,10 @@ async fn main() {
             axum::routing::post(handlers::admin::application_distribution_save),
         )
         .route(
+            "/admin/applications/:id/delete",
+            axum::routing::post(handlers::admin::application_delete),
+        )
+        .route(
             "/admin/applications/:id/field",
             axum::routing::post(handlers::admin::application_field),
         )
