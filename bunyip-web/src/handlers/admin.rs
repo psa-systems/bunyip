@@ -16,7 +16,7 @@ use crate::api::types::{AdminAuditLog, FeedbackStatus, UserEntitlement};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::relative_time;
 use crate::views::ui::{badge, button_class, error_box, icon};
-use crate::web::{redirect, redirect_cookies, AppState};
+use crate::web::{redirect_cookies, AppState};
 
 fn title_case(action: &str) -> String {
     action
@@ -600,7 +600,7 @@ pub async fn feedback_status(
         _ => FeedbackStatus::New,
     };
     let _ = admin_api::update_feedback_status(&st.api, c.forward.as_deref(), &id, status).await;
-    redirect("/admin/feedback")
+    redirect_cookies("/admin/feedback", &c.set_cookies)
 }
 
 // ===========================================================================
@@ -681,7 +681,7 @@ pub async fn application_field(
     map.insert(f.field.clone(), json!(val));
     let body = serde_json::Value::Object(map);
     let _ = admin_api::update_application(&st.api, c.forward.as_deref(), &id, body).await;
-    redirect("/admin/applications")
+    redirect_cookies("/admin/applications", &c.set_cookies)
 }
 
 // --- application distribution edit / create --------------------------------
@@ -959,7 +959,7 @@ pub async fn application_distribution_save(
     };
     let body = distribution_update_body(&f);
     match admin_api::update_application(&st.api, c.forward.as_deref(), &id, body).await {
-        Ok(()) => redirect("/admin/applications"),
+        Ok(()) => redirect_cookies("/admin/applications", &c.set_cookies),
         Err(e) => {
             let v = dist_view_from_form(&f);
             let content = application_form(
@@ -1142,7 +1142,7 @@ pub async fn application_create(
     };
     let body = create_app_body(&f);
     match admin_api::create_application(&st.api, c.forward.as_deref(), body).await {
-        Ok(()) => redirect("/admin/applications"),
+        Ok(()) => redirect_cookies("/admin/applications", &c.set_cookies),
         Err(e) => {
             let id = IdentityView {
                 name: &f.name,
@@ -1249,7 +1249,7 @@ pub async fn set_app_restricted(
         requires_entitlement,
     )
     .await;
-    redirect("/admin/entitlements")
+    redirect_cookies("/admin/entitlements", &c.set_cookies)
 }
 
 pub async fn user_entitlements(
@@ -1347,7 +1347,10 @@ pub async fn grant_user_entitlement_h(
     };
     let _ =
         admin_api::grant_user_entitlement(&st.api, c.forward.as_deref(), &user_id, &f.slug).await;
-    redirect(&format!("/admin/users/{user_id}/entitlements"))
+    redirect_cookies(
+        &format!("/admin/users/{user_id}/entitlements"),
+        &c.set_cookies,
+    )
 }
 pub async fn revoke_user_entitlement_h(
     State(st): State<AppState>,
@@ -1361,7 +1364,10 @@ pub async fn revoke_user_entitlement_h(
     };
     let _ =
         admin_api::revoke_user_entitlement(&st.api, c.forward.as_deref(), &user_id, &f.slug).await;
-    redirect(&format!("/admin/users/{user_id}/entitlements"))
+    redirect_cookies(
+        &format!("/admin/users/{user_id}/entitlements"),
+        &c.set_cookies,
+    )
 }
 
 // ===========================================================================
@@ -1424,7 +1430,7 @@ pub async fn tier_settings_save(
     };
     let body = json!({ "lifetime_slots": f.lifetime_slots, "early_adopter_slots": f.early_adopter_slots, "early_adopter_trial_days": f.early_adopter_trial_days, "standard_trial_days": f.standard_trial_days });
     let _ = admin_api::update_tier_config(&st.api, c.forward.as_deref(), body).await;
-    redirect("/admin/tier-settings")
+    redirect_cookies("/admin/tier-settings", &c.set_cookies)
 }
 
 // ===========================================================================
@@ -1487,7 +1493,7 @@ pub async fn stripe_save(
         body["webhook_secret"] = json!(f.webhook_secret);
     }
     let _ = admin_api::update_stripe_config(&st.api, c.forward.as_deref(), body).await;
-    redirect("/admin/stripe")
+    redirect_cookies("/admin/stripe", &c.set_cookies)
 }
 
 fn urlenc(s: &str) -> String {
