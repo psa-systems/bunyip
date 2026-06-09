@@ -1010,14 +1010,19 @@ pub async fn application_delete(
     )
     .await
     {
-        Ok(()) => redirect("/admin/applications"),
+        // Relay any cookie the guard rotated on both paths (mirrors user_delete);
+        // a plain redirect would drop a refreshed session.
+        Ok(()) => redirect_cookies("/admin/applications", &c.set_cookies),
         // Bad password / 2FA code (or any failure): bounce back to this app's
         // danger zone with the API's message rather than dropping the admin on a
         // blank page.
-        Err(e) => redirect(&format!(
-            "/admin/applications/{id}/edit?error={}",
-            urlenc(&e.user_message())
-        )),
+        Err(e) => redirect_cookies(
+            &format!(
+                "/admin/applications/{id}/edit?error={}",
+                urlenc(&e.user_message())
+            ),
+            &c.set_cookies,
+        ),
     }
 }
 
