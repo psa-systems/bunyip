@@ -363,6 +363,15 @@ migrate: ensure-env
 migrate-revert: ensure-env
     {{ compose }}exec api cargo sqlx migrate revert --source bunyip-api/migrations
 
+# Seed the BUNYIP-52 E2E test accounts (e2e-user@a8n.run, e2e-admin@a8n.run).
+# Idempotent; runs inside the api container against the dev database. Requires
+# BUNYIP_E2E_BOOTSTRAP_ALLOW=true and BUNYIP_E2E_TEST_USER_PASSWORD in the
+# container env. Pass flags through, e.g. `just e2e-bootstrap --dry-run` or
+# `just e2e-bootstrap --cleanup`.
+[group: 'database']
+e2e-bootstrap *args: ensure-env
+    {{ compose }}exec api cargo run --bin bunyip-e2e-bootstrap -- {{ args }}
+
 # ── Images ──────────────────────────────────────────────────────────────────────
 
 # Build both production images.
