@@ -111,6 +111,15 @@ async fn main() -> anyhow::Result<()> {
 
 /// Refuse to run against anything that could be production. Both checks live
 /// here so a single missing guard cannot let the tool through.
+///
+/// Residual risk (accepted): the gate keys on `ENVIRONMENT`, not on
+/// `DATABASE_URL`. A misconfiguration that sets a non-production `ENVIRONMENT`
+/// while pointing `DATABASE_URL` at a production database would NOT be caught
+/// here. Validating that would mean teaching the tool which DB hosts are
+/// production, which is brittle and drifts. The blast radius is bounded: the
+/// tool only ever touches the two known `e2e-*@a8n.run` rows and `--cleanup`
+/// deletes only those exact emails, so a misfire cannot harm real user data.
+/// If that ever stops holding, add a DATABASE_URL allow-list here.
 fn enforce_guards(config: &Config) -> anyhow::Result<()> {
     let allowed = secret_env("BUNYIP_E2E_BOOTSTRAP_ALLOW")
         .map(|v| v.trim() == "true")
