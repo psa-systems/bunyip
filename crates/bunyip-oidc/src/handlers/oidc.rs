@@ -150,7 +150,8 @@ pub async fn authorize(
     // Authentication is gated on a server-validated OP session, NOT on the
     // stateless hub access_token. logout revokes the op_sessions row, so a
     // surviving/replayed access_token cookie can no longer mint a code.
-    let op_session = match req.cookie(crate::middleware::auth::AuthCookies::OP_SESSION_COOKIE) {
+    let op_session_cookie = req.cookie(crate::middleware::auth::AuthCookies::OP_SESSION_COOKIE);
+    let op_session = match &op_session_cookie {
         Some(c) => provider.load_op_session(c.value()).await?,
         None => None,
     };
@@ -158,12 +159,21 @@ pub async fn authorize(
         Some(s) => s,
         None => {
             let authorize_url = format!("{}{}", provider.issuer(), req.uri());
+            // Distinguish the two failure modes: "no cookie at all" (first
+            // visit, freshly logged out, browser expired the 7-day MaxAge)
+            // vs. "cookie present but DB row gone" (user logged out
+            // elsewhere, op_sessions cleanup ran, sid was forged). The
+            // second case is the one that needs the cookie cleared:
+            // without that, every subsequent request keeps sending the
+            // stale sid and runs through this same branch indefinitely.
+            let stale_cookie_present = op_session_cookie.is_some();
             tracing::info!(
-                has_op_session = req
-                    .cookie(crate::middleware::auth::AuthCookies::OP_SESSION_COOKIE)
-                    .is_some(),
+                client_id = %query.0.client_id,
+                redirect_uri = %query.0.redirect_uri,
+                has_op_session_cookie = stale_cookie_present,
                 has_access_token = req.cookie("access_token").is_some(),
-                "authorize: no active OP session, redirecting to login",
+                "authorize: no active OP session, redirecting to login{}",
+                if stale_cookie_present { " (and clearing stale op_session cookie)" } else { "" },
             );
             // Use web_origin (single absolute URL of bunyip-web) rather than
             // cors_origin (which is now a comma-list once multiple RPs are
@@ -173,9 +183,26 @@ pub async fn authorize(
                 config.web_origin.trim_end_matches('/'),
                 urlencoding::encode(&authorize_url),
             );
-            return Ok(HttpResponse::Found()
-                .insert_header(("Location", login_url))
-                .finish());
+            let mut response = HttpResponse::Found();
+            response.insert_header(("Location", login_url));
+            // Aggressively clear a stale op_session cookie so the next
+            // request lands on the clean "no cookie" branch instead of
+            // repeating "load_op_session -> None -> redirect" forever.
+            // Both `access_token` and `refresh_token` cookies are left
+            // intact: they may still authenticate the hub session, and
+            // `/login` needs them to know who the user is when offering
+            // the re-login form.
+            if stale_cookie_present {
+                let secure = config.is_production();
+                let cookie_domain = config.cookie_domain.as_deref();
+                for clear_cookie in crate::middleware::auth::AuthCookies::clear_op_session_only(
+                    secure,
+                    cookie_domain,
+                ) {
+                    response.cookie(clear_cookie);
+                }
+            }
+            return Ok(response.finish());
         }
     };
 
