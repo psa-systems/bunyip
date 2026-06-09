@@ -45,6 +45,11 @@ pub struct AtClaims {
     /// `admin`). Identity-level, emitted on every mint regardless of scope.
     /// Resource servers translate this to their own authorization model
     /// (BUNYIP-66); Bunyip exposes only its own role, never a consumer's.
+    ///
+    /// `#[serde(default)]` so verifying an at+jwt minted by a pre-BUNYIP-66
+    /// build (which lacks this claim) does not fail deserialization during a
+    /// rolling deploy; mint always populates it, so emission is unaffected.
+    #[serde(default)]
     pub bunyip_role: String,
 }
 
@@ -1225,5 +1230,25 @@ mod tests {
     fn bunyip_role_serializes_under_expected_key() {
         let json = serde_json::to_value(build_claims_for("admin")).unwrap();
         assert_eq!(json["bunyip_role"], "admin");
+    }
+
+    // Backward compatibility: an at+jwt minted by a pre-BUNYIP-66 build has no
+    // `bunyip_role` claim; verifying it must still deserialize (default "")
+    // rather than fail, so a rolling deploy does not 401 in-flight tokens.
+    #[test]
+    fn at_claims_deserialize_without_bunyip_role() {
+        let legacy = serde_json::json!({
+            "iss": "https://issuer.example.com",
+            "sub": Uuid::new_v4().to_string(),
+            "aud": "https://api.example.com",
+            "client_id": Uuid::new_v4().to_string(),
+            "scope": "openid",
+            "jti": Uuid::new_v4().to_string(),
+            "iat": 0, "nbf": 0, "exp": 0, "auth_time": 0,
+            "acr": "urn:mace:incommon:iap:silver",
+            "amr": ["pwd"],
+        });
+        let claims: AtClaims = serde_json::from_value(legacy).unwrap();
+        assert_eq!(claims.bunyip_role, "");
     }
 }
