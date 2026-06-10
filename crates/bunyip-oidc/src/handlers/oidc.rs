@@ -145,6 +145,7 @@ pub async fn authorize(
     _pool: web::Data<sqlx::PgPool>,
     query: web::Query<AuthorizeQuery>,
     config: web::Data<crate::config::Config>,
+    jwt_service: web::Data<Arc<crate::services::JwtService>>,
 ) -> Result<HttpResponse, AppError> {
     let provider = require_provider!(provider);
 
@@ -156,55 +157,87 @@ pub async fn authorize(
         Some(c) => provider.load_op_session(c.value()).await?,
         None => None,
     };
+    // When `op_session` is missing we get one more silent-SSO chance before
+    // bouncing the user to /login: a valid hub `access_token` cookie proves the
+    // browser already authenticated this user against bunyip (the JWT is HS256-
+    // signed by `JwtService` and stateless), so we mint a fresh op_session for
+    // them and continue the OIDC flow without forcing a credentialed re-login.
+    //
+    // Closes the two failure modes the user kept hitting:
+    //   - DMARC-21: user returns after a few days. op_session has expired (7
+    //     day Max-Age) but the hub refresh_token cookie (30 day) keeps the
+    //     access_token cookie fresh on every bunyip-web visit. Without this
+    //     fallback the SPA fires /authorize, finds no op_session, redirects to
+    //     /login, the user types creds for no reason, and any subsequent /api
+    //     401 from the SPA reloops the chain.
+    //   - Bunyip launcher: user is actively in bunyip-web with a valid
+    //     access_token cookie, clicks "Open Drillmark"/"Open Mokosh", and
+    //     drillmark/mokosh-clients fires /authorize. Without this fallback
+    //     they get bounced to /login even though they JUST logged in.
+    //
+    // Security posture: identical to the legacy `/v1/auth/login -> create
+    // op_session` path. Logout already (a) clears the access_token cookie via
+    // AuthCookies::clear and (b) revokes existing op_sessions, so a logged-out
+    // user has neither input available to this branch.
+    let silent_op_cookie: Option<actix_web::cookie::Cookie<'static>>;
     let session = match op_session {
-        Some(s) => s,
-        None => {
-            let authorize_url = format!("{}{}", provider.issuer(), req.uri());
-            // Distinguish the two failure modes: "no cookie at all" (first
-            // visit, freshly logged out, browser expired the 7-day MaxAge)
-            // vs. "cookie present but DB row gone" (user logged out
-            // elsewhere, op_sessions cleanup ran, sid was forged). The
-            // second case is the one that needs the cookie cleared:
-            // without that, every subsequent request keeps sending the
-            // stale sid and runs through this same branch indefinitely.
-            let stale_cookie_present = op_session_cookie.is_some();
-            tracing::info!(
-                client_id = %query.0.client_id,
-                redirect_uri = %query.0.redirect_uri,
-                has_op_session_cookie = stale_cookie_present,
-                has_access_token = req.cookie("access_token").is_some(),
-                "authorize: no active OP session, redirecting to login{}",
-                if stale_cookie_present { " (and clearing stale op_session cookie)" } else { "" },
-            );
-            // Use web_origin (single absolute URL of bunyip-web) rather than
-            // cors_origin (which is now a comma-list once multiple RPs are
-            // registered; concatenating that onto `/login` produces garbage).
-            let login_url = format!(
-                "{}/login?redirect={}&checked=1",
-                config.web_origin.trim_end_matches('/'),
-                urlencoding::encode(&authorize_url),
-            );
-            let mut response = HttpResponse::Found();
-            response.insert_header(("Location", login_url));
-            // Aggressively clear a stale op_session cookie so the next
-            // request lands on the clean "no cookie" branch instead of
-            // repeating "load_op_session -> None -> redirect" forever.
-            // Both `access_token` and `refresh_token` cookies are left
-            // intact: they may still authenticate the hub session, and
-            // `/login` needs them to know who the user is when offering
-            // the re-login form.
-            if stale_cookie_present {
-                let secure = config.is_production();
-                let cookie_domain = config.cookie_domain.as_deref();
-                for clear_cookie in crate::middleware::auth::AuthCookies::clear_op_session_only(
-                    secure,
-                    cookie_domain,
-                ) {
-                    response.cookie(clear_cookie);
-                }
-            }
-            return Ok(response.finish());
+        Some(s) => {
+            silent_op_cookie = None;
+            s
         }
+        None => match try_silent_sso(&req, provider, &jwt_service, &config).await? {
+            Some((s, cookie)) => {
+                silent_op_cookie = Some(cookie);
+                s
+            }
+            None => {
+                let authorize_url = format!("{}{}", provider.issuer(), req.uri());
+                // Distinguish the two failure modes: "no cookie at all" (first
+                // visit, freshly logged out, browser expired the 7-day MaxAge)
+                // vs. "cookie present but DB row gone" (user logged out
+                // elsewhere, op_sessions cleanup ran, sid was forged). The
+                // second case is the one that needs the cookie cleared:
+                // without that, every subsequent request keeps sending the
+                // stale sid and runs through this same branch indefinitely.
+                let stale_cookie_present = op_session_cookie.is_some();
+                tracing::info!(
+                    client_id = %query.0.client_id,
+                    redirect_uri = %query.0.redirect_uri,
+                    has_op_session_cookie = stale_cookie_present,
+                    has_access_token = req.cookie("access_token").is_some(),
+                    "authorize: no active OP session, redirecting to login{}",
+                    if stale_cookie_present { " (and clearing stale op_session cookie)" } else { "" },
+                );
+                // Use web_origin (single absolute URL of bunyip-web) rather than
+                // cors_origin (which is now a comma-list once multiple RPs are
+                // registered; concatenating that onto `/login` produces garbage).
+                let login_url = format!(
+                    "{}/login?redirect={}&checked=1",
+                    config.web_origin.trim_end_matches('/'),
+                    urlencoding::encode(&authorize_url),
+                );
+                let mut response = HttpResponse::Found();
+                response.insert_header(("Location", login_url));
+                // Aggressively clear a stale op_session cookie so the next
+                // request lands on the clean "no cookie" branch instead of
+                // repeating "load_op_session -> None -> redirect" forever.
+                // Both `access_token` and `refresh_token` cookies are left
+                // intact: they may still authenticate the hub session, and
+                // `/login` needs them to know who the user is when offering
+                // the re-login form.
+                if stale_cookie_present {
+                    let secure = config.is_production();
+                    let cookie_domain = config.cookie_domain.as_deref();
+                    for clear_cookie in crate::middleware::auth::AuthCookies::clear_op_session_only(
+                        secure,
+                        cookie_domain,
+                    ) {
+                        response.cookie(clear_cookie);
+                    }
+                }
+                return Ok(response.finish());
+            }
+        },
     };
 
     let q = &query.0;
@@ -305,9 +338,72 @@ pub async fn authorize(
         urlencoding::encode(&q.state),
     );
 
-    Ok(HttpResponse::Found()
-        .append_header(("Location", redirect))
-        .finish())
+    let mut response = HttpResponse::Found();
+    response.append_header(("Location", redirect));
+    // When the silent-SSO branch above minted a fresh op_session we attach the
+    // matching cookie to the 302 carrying the auth code so the browser starts
+    // sending it on subsequent requests (same lifecycle as a /v1/auth/login
+    // response cookie). No-op when an existing op_session was reused.
+    if let Some(cookie) = silent_op_cookie {
+        response.cookie(cookie);
+    }
+    Ok(response.finish())
+}
+
+/// Silent-SSO fallback for `/oauth2/authorize` when no `op_session` cookie
+/// resolves. Reads the hub `access_token` cookie; if it verifies, mints a
+/// fresh op_session for that user and returns the row plus the Set-Cookie that
+/// should ride on the eventual code-mint response. Returns `Ok(None)` for
+/// every "no, fall back to /login" branch (no cookie, expired/forged JWT,
+/// missing JwtService config). The caller is responsible for the redirect to
+/// `/login` in that case.
+async fn try_silent_sso(
+    req: &HttpRequest,
+    provider: &OidcProvider,
+    jwt_service: &Arc<crate::services::JwtService>,
+    config: &crate::config::Config,
+) -> Result<
+    Option<(
+        crate::services::oidc_provider::OpSession,
+        actix_web::cookie::Cookie<'static>,
+    )>,
+    AppError,
+> {
+    let Some(access_token) = req.cookie("access_token") else {
+        return Ok(None);
+    };
+    let claims = match jwt_service.verify_access_token(access_token.value()) {
+        Ok(c) => c,
+        Err(_) => return Ok(None),
+    };
+    let user_agent = req
+        .headers()
+        .get("User-Agent")
+        .and_then(|v| v.to_str().ok());
+    // IP is best-effort here: the OIDC crate does not own client-IP extraction
+    // (lives in bunyip-api), and the op_sessions.ip column is nullable. Leave
+    // it None on this path; the audit signal "session established via silent
+    // SSO from access_token" is the warn log below, not the IP column.
+    let session = provider
+        .create_op_session(
+            claims.sub,
+            user_agent,
+            None,
+            "urn:bunyip:loa:pwd",
+            &["pwd".to_string()],
+        )
+        .await?;
+    let cookie = crate::middleware::auth::AuthCookies::op_session(
+        &session.sid,
+        config.is_production(),
+        config.cookie_domain.as_deref(),
+    );
+    tracing::info!(
+        user_id = %claims.sub,
+        sid = %session.sid,
+        "authorize: silently established op_session from valid access_token cookie"
+    );
+    Ok(Some((session, cookie)))
 }
 
 // ── Token endpoint ────────────────────────────────────────────────────────────
