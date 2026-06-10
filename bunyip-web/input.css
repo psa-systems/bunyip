@@ -85,6 +85,14 @@
   --ring: 110 23% 50%;
 }
 
+/* Light high-contrast palette. The previous values nudged everything a few
+   percentage points toward pure white / pure black, but the default light
+   theme is already a pale reed-tinted pastel, so toggling produced a
+   sub-perceptual change (auditor finding 12: "didn't produce any visible
+   change in light mode"). Push every token to maximum-contrast B&W so the
+   toggle actually transforms the page: pure black text and chrome on pure
+   white, with the green/teal tint drained out entirely. The `--ring` and
+   `--primary` go black so buttons + focus rings stand out unambiguously. */
 .high-contrast {
   --background: 0 0% 100%;
   --foreground: 0 0% 0%;
@@ -95,24 +103,41 @@
   --popover: 0 0% 100%;
   --popover-foreground: 0 0% 0%;
 
-  --primary: 117 30% 18%;
+  --primary: 0 0% 0%;
   --primary-foreground: 0 0% 100%;
 
-  --secondary: 0 0% 92%;
+  --secondary: 0 0% 95%;
   --secondary-foreground: 0 0% 0%;
 
-  --muted: 0 0% 92%;
-  --muted-foreground: 0 0% 25%;
+  --muted: 0 0% 95%;
+  --muted-foreground: 0 0% 0%;
 
-  --accent: 0 0% 92%;
+  --accent: 0 0% 90%;
   --accent-foreground: 0 0% 0%;
 
-  --destructive: 0 100% 35%;
+  --destructive: 0 100% 30%;
   --destructive-foreground: 0 0% 100%;
 
   --border: 0 0% 0%;
   --input: 0 0% 0%;
-  --ring: 117 30% 18%;
+  --ring: 0 0% 0%;
+}
+
+/* Bunyip's cards lean heavily on `border-border/50` (50% opacity of the
+   border token) for soft separators. Under `.high-contrast` that resolves
+   to half-strength black - still grayish, which neutered the palette change
+   above. Force full opacity on every border-token-with-alpha class so the
+   pure-black border tokens actually render as pure black. The attribute
+   selector matches every `border-border/<n>` Tailwind variant. */
+.high-contrast [class*="border-border/"] {
+  border-color: hsl(var(--border)) !important;
+}
+
+/* And bump body weight one notch so text reads heavier (an a11y win that
+   pairs with the colour overhaul, not a substitute for it). Headings keep
+   their declared weight - they were already bold. */
+.high-contrast {
+  font-weight: 500;
 }
 
 .dark.high-contrast {
