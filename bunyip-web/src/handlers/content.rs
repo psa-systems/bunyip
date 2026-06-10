@@ -9,6 +9,8 @@ use serde::Deserialize;
 
 use crate::api::auth as auth_api;
 use crate::api::calls::{self, FeedbackInput};
+use crate::api::types::SubscriptionTier;
+use crate::handlers::dashboard::tier_name;
 use crate::handlers::{public_ctx, public_response};
 use crate::views::ui::{button_class, icon};
 use crate::web::AppState;
@@ -23,8 +25,12 @@ const PERSONAL: [&str; 6] = [
     "In-app feedback widget",
     "Cancel anytime",
 ];
+// First bullet phrasing is intentionally tier-name-agnostic ("the personal
+// plan" instead of "Starter") so a rename of `SubscriptionTier::Standard`
+// via the canonical `tier_name` helper does not desync this feature list
+// from the card heading above it.
 const BUSINESS: [&str; 6] = [
-    "Everything in Starter",
+    "Everything in the personal plan",
     "Unlimited members and orgs",
     "Org switching and role management",
     "Admin console and audit logs",
@@ -104,7 +110,12 @@ pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response
                     p class="mt-4 text-lg text-muted-foreground" { "The business layer for your PSA. Start free for 14 days, no credit card required." }
                 }
                 div class={ "mt-16 grid gap-8 mx-auto " (grid) } {
-                    (pricing_card("Starter", "For a single team getting set up", "$3", &PERSONAL, false, stripe, cta_href, cta_label))
+                    // Route the personal-tier title through tier_name so this
+                    // marketing page and the in-app Membership / Settings
+                    // labels are byte-identical. Renaming the tier (e.g.
+                    // "Standard" -> "Starter") is a one-line change in
+                    // `handlers::dashboard::tier_name`.
+                    (pricing_card(tier_name(&SubscriptionTier::Standard), "For a single team getting set up", "$3", &PERSONAL, false, stripe, cta_href, cta_label))
                     @if show_business {
                         (pricing_card("Business", "For MSPs running multiple orgs", "$15", &BUSINESS, true, stripe, cta_href, cta_label))
                     }
