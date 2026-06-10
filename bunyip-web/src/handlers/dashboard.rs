@@ -499,12 +499,20 @@ fn command_block(cmd: &str) -> Markup {
     // Clipboard API needs a secure context (HTTPS / localhost). When it is
     // unavailable, select the command text so the user can copy manually;
     // otherwise report success/failure on the button label.
+    // The in-button label swap ("Copy" -> "Copied") still fires for the local
+    // feedback affordance, AND a toast pops top-right via `window.bunyipToast`
+    // so the confirmation is visible regardless of where the user's cursor
+    // lands after clicking. The `if(window.bunyipToast)` guard keeps the
+    // button usable if the toast script failed to load (or if a future
+    // refactor drops it).
     let copy_js = format!(
         "var b=this;var t=b.innerText;\
          if(navigator.clipboard){{\
            navigator.clipboard.writeText({cmd_js}).then(\
-             function(){{b.innerText='Copied';setTimeout(function(){{b.innerText=t}},1500)}},\
-             function(){{b.innerText='Copy failed';setTimeout(function(){{b.innerText=t}},1500)}});\
+             function(){{b.innerText='Copied';setTimeout(function(){{b.innerText=t}},1500);\
+                          if(window.bunyipToast)window.bunyipToast('Copied to clipboard','success');}},\
+             function(){{b.innerText='Copy failed';setTimeout(function(){{b.innerText=t}},1500);\
+                          if(window.bunyipToast)window.bunyipToast('Copy failed','error');}});\
          }}else{{\
            window.getSelection().selectAllChildren(b.previousElementSibling);\
            b.innerText='Press Ctrl+C';setTimeout(function(){{b.innerText=t}},3000);\
