@@ -13,6 +13,12 @@ use crate::handlers::{public_ctx, public_response};
 use crate::views::ui::{button_class, icon};
 use crate::web::AppState;
 
+/// Displayed at the top of /terms and /privacy. Bump this string the SAME
+/// COMMIT you review the policy body for accuracy - do not bump it reflexively
+/// to make the page look fresh. The bump is a signal to anyone reading the
+/// commit that the policy text was re-read and confirmed current.
+const POLICY_LAST_UPDATED: &str = "June 2026";
+
 // --- pricing ----------------------------------------------------------------
 
 const PERSONAL: [&str; 6] = [
@@ -164,7 +170,7 @@ pub async fn terms(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let content = html! {
         div class="container max-w-4xl py-12" {
             h1 class="text-4xl font-bold mb-8" { "Terms of Service" }
-            p class="text-muted-foreground mb-8" { "Last updated: January 2025" }
+            p class="text-muted-foreground mb-8" { "Last updated: " (POLICY_LAST_UPDATED) }
             div class="max-w-none space-y-8" {
                 (legal_p("1. Acceptance of Terms", html! { "By accessing or using " (d) " (\"the Service\"), you agree to be bound by these Terms of Service. If you do not agree to these terms, please do not use the Service." }))
                 (legal_p("2. Description of Service", html! { (d) " provides a membership-based platform offering access to developer productivity tools." }))
@@ -197,7 +203,7 @@ pub async fn privacy(State(st): State<AppState>, headers: HeaderMap) -> Response
     let content = html! {
         div class="container max-w-4xl py-12" {
             h1 class="text-4xl font-bold mb-8" { "Privacy Policy" }
-            p class="text-muted-foreground mb-8" { "Last updated: January 2025" }
+            p class="text-muted-foreground mb-8" { "Last updated: " (POLICY_LAST_UPDATED) }
             div class="max-w-none space-y-8" {
                 (legal_p("1. Introduction", html! { "This Privacy Policy describes how " (d) " collects, uses, and protects your personal information when you use our services." }))
                 (legal_ul("2. Information We Collect", &[
