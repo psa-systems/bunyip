@@ -5,7 +5,7 @@
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::Form;
 use maud::{html, Markup, PreEscaped};
 use serde::Deserialize;
@@ -524,49 +524,14 @@ fn command_block(cmd: &str) -> Markup {
 // Billing
 // ===========================================================================
 
-pub async fn billing(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match guard(&st, &headers, "/billing").await {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
-    let fwd = c.forward.as_deref();
-    let invoices = calls::invoices(&st.api, fwd).await.unwrap_or_default();
-
-    let content = html! {
-        div class="space-y-6" {
-            div { h1 class="text-2xl font-bold" { "Billing" } p class="text-muted-foreground" { "View and download your invoices." } }
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Invoices" } p class="text-sm text-muted-foreground" { "Your billing history" } }
-                div class="p-6 pt-0" {
-                    @if invoices.is_empty() {
-                        div class="flex flex-col items-center justify-center py-12 text-center" {
-                            (icon("file-text", "h-10 w-10 text-muted-foreground mb-3"))
-                            p class="text-muted-foreground" { "No invoices yet." }
-                        }
-                    } @else {
-                        div class="divide-y" {
-                            @for inv in &invoices {
-                                div class="flex items-center justify-between py-4" {
-                                    div class="space-y-1" {
-                                        @if let Some(n) = &inv.number { p class="font-medium text-sm" { (n) } }
-                                        @if let Some(d) = &inv.description { p class="text-sm text-muted-foreground" { (d) } }
-                                        p class="text-xs text-muted-foreground" { (fmt_ts(inv.created)) }
-                                    }
-                                    div class="flex items-center gap-4" {
-                                        span class="text-sm font-medium" { (fmt_currency(inv.amount_paid, &inv.currency)) }
-                                        @if let Some(u) = inv.hosted_invoice_url.clone().or_else(|| inv.invoice_pdf.clone()) {
-                                            a href=(u) target="_blank" rel="noopener noreferrer" class=(button_class("outline", "sm", "")) { (icon("external-link", "h-4 w-4 mr-1")) "View" }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    };
-    dashboard_response(&c, &user, "/billing", "Billing · Bunyip", content)
+/// Permanent redirect to `/membership` (HTTP 308). The two pages used to be
+/// separate but rendered the same "no payment history yet" empty state and
+/// confused users navigating between them; the membership page now absorbs the
+/// invoices table and the sidebar drops the standalone Billing entry. The
+/// route stays mapped so existing bookmarks land somewhere sensible. See
+/// `docs/bunyip-upgrade/01-membership-plan-data.md`.
+pub async fn billing(_: State<AppState>, _: HeaderMap) -> Response {
+    axum::response::Redirect::permanent("/membership").into_response()
 }
 
 // ===========================================================================
@@ -579,11 +544,9 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
         Ok(v) => v,
         Err(r) => return r,
     };
-    let tier = match user.subscription_tier {
-        SubscriptionTier::EarlyAdopter => "Early Adopter",
-        SubscriptionTier::Lifetime => "Lifetime",
-        _ => "Standard",
-    };
+    // Route through the same canonical helper the Membership card uses so
+    // the user sees the same plan label here, on /membership, and on /pricing.
+    let tier = tier_name(&user.subscription_tier);
     let content = html! {
         div class="flex items-center justify-center min-h-[70vh]" {
             div class="rounded-lg border bg-card text-card-foreground shadow-sm max-w-lg w-full border-border/50 overflow-hidden" {
@@ -651,7 +614,13 @@ pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap)
 // Membership (view + actions)
 // ===========================================================================
 
-fn tier_name(t: &SubscriptionTier) -> &'static str {
+/// Canonical plan-name helper. The Membership card, the Settings "Account
+/// Type" cell, and the public Pricing card all route through this so the
+/// in-app name and the marketing-facing name never disagree. Renaming a tier
+/// is a one-line change here that updates every consumer. Closes audit
+/// finding 1 (plan name inconsistency). See
+/// `docs/bunyip-upgrade/01-membership-plan-data.md`.
+pub fn tier_name(t: &SubscriptionTier) -> &'static str {
     match t {
         SubscriptionTier::Lifetime => "Lifetime",
         SubscriptionTier::Free => "Free",
@@ -680,16 +649,27 @@ pub async fn membership(State(st): State<AppState>, headers: HeaderMap) -> Respo
     let payments = calls::payment_history(&st.api, fwd)
         .await
         .unwrap_or_default();
+    // The page now absorbs the invoices table that used to live on /billing;
+    // /billing is a 308 redirect into this page. See docs/bunyip-upgrade/
+    // 01-membership-plan-data.md.
+    let invoices = calls::invoices(&st.api, fwd).await.unwrap_or_default();
     let stripe = auth_api::setup_status(&st.api)
         .await
         .map(|s| s.stripe_enabled)
         .unwrap_or(true);
     let tier = user.subscription_tier.clone();
     let status = current.as_ref().map(|m| m.status.clone());
-    let has = matches!(
-        status,
-        Some(MembershipStatus::Active) | Some(MembershipStatus::PastDue)
-    );
+    // Lifetime members get a stripped-down card: plan name + an explanatory
+    // line, NO price, NO next-billing field, NO cancel buttons. Subscribers
+    // keep the existing card shape. The `has` guard explicitly excludes
+    // lifetime so a lifetime user with a stray Active row from the legacy
+    // billing flow never sees Cancel UI either (defense in depth).
+    let lifetime = user.lifetime_member;
+    let has = !lifetime
+        && matches!(
+            status,
+            Some(MembershipStatus::Active) | Some(MembershipStatus::PastDue)
+        );
     let past_due = matches!(status, Some(MembershipStatus::PastDue));
     let will_cancel = current
         .as_ref()
@@ -698,7 +678,7 @@ pub async fn membership(State(st): State<AppState>, headers: HeaderMap) -> Respo
 
     let content = html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Membership" } p class="mt-2 text-muted-foreground" { "Manage your membership and billing." } }
+            div { h1 class="text-3xl font-bold" { "Membership & Billing" } p class="mt-2 text-muted-foreground" { "Your plan, status, and invoices." } }
             @if past_due {
                 div class="rounded-lg border border-destructive/50 p-4 text-sm text-destructive flex items-center gap-2" {
                     (icon("alert-triangle", "h-4 w-4")) "Your payment failed. Update your payment method within 30 days to avoid losing access."
@@ -716,7 +696,16 @@ pub async fn membership(State(st): State<AppState>, headers: HeaderMap) -> Respo
                     }
                 }
                 div class="p-6 pt-0 space-y-4" {
-                    @if has {
+                    @if lifetime {
+                        // No price line, no next-billing field, no cancel
+                        // forms - everything that would render time-bound
+                        // billing info is omitted. Just the plan name and a
+                        // one-line note. Closes audit finding 2.
+                        div class="grid gap-4 md:grid-cols-2" {
+                            div { p class="text-sm text-muted-foreground" { "Plan" } p class="font-medium" { (tier_name(&tier)) } }
+                            div { p class="text-sm text-muted-foreground" { "Access" } p class="font-medium" { "Lifetime - no billing" } }
+                        }
+                    } @else if has {
                         @let m = current.clone().unwrap();
                         div class="grid gap-4 md:grid-cols-2" {
                             div { p class="text-sm text-muted-foreground" { "Plan" } p class="font-medium" { (tier_name(&tier)) } }
@@ -752,6 +741,38 @@ pub async fn membership(State(st): State<AppState>, headers: HeaderMap) -> Respo
                     }
                 }
             }
+            // Invoices (lifted from the retired /billing page). Always
+            // renders so a one-off charge or refund still surfaces;
+            // empty-state copy covers the common lifetime-member case.
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
+                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Invoices" } p class="text-sm text-muted-foreground" { "Your billing history" } }
+                div class="p-6 pt-0" {
+                    @if invoices.is_empty() {
+                        div class="flex flex-col items-center justify-center py-12 text-center" {
+                            (icon("file-text", "h-10 w-10 text-muted-foreground mb-3"))
+                            p class="text-muted-foreground" { "No invoices yet." }
+                        }
+                    } @else {
+                        div class="divide-y" {
+                            @for inv in &invoices {
+                                div class="flex items-center justify-between py-4" {
+                                    div class="space-y-1" {
+                                        @if let Some(n) = &inv.number { p class="font-medium text-sm" { (n) } }
+                                        @if let Some(d) = &inv.description { p class="text-sm text-muted-foreground" { (d) } }
+                                        p class="text-xs text-muted-foreground" { (fmt_ts(inv.created)) }
+                                    }
+                                    div class="flex items-center gap-4" {
+                                        span class="text-sm font-medium" { (fmt_currency(inv.amount_paid, &inv.currency)) }
+                                        @if let Some(u) = inv.hosted_invoice_url.clone().or_else(|| inv.invoice_pdf.clone()) {
+                                            a href=(u) target="_blank" rel="noopener noreferrer" class=(button_class("outline", "sm", "")) { (icon("external-link", "h-4 w-4 mr-1")) "View" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Payment History" } }
                 div class="p-6 pt-0" {
@@ -773,7 +794,13 @@ pub async fn membership(State(st): State<AppState>, headers: HeaderMap) -> Respo
             }
         }
     };
-    dashboard_response(&c, &user, "/membership", "Membership · Bunyip", content)
+    dashboard_response(
+        &c,
+        &user,
+        "/membership",
+        "Membership & Billing · Bunyip",
+        content,
+    )
 }
 
 pub async fn membership_subscribe(State(st): State<AppState>, headers: HeaderMap) -> Response {
@@ -867,7 +894,7 @@ pub async fn settings(
                 div class="p-6 pt-0 space-y-4" {
                     div class="grid gap-4 md:grid-cols-2" {
                         div { p class="text-sm text-muted-foreground" { "Email" } p class="font-medium" { (user.email) } }
-                        div { p class="text-sm text-muted-foreground" { "Account Type" } p class="font-medium flex items-center gap-2" { @if is_admin { "admin" (badge("default", "Admin")) } @else { "subscriber" } } }
+                        div { p class="text-sm text-muted-foreground" { "Account Type" } p class="font-medium flex items-center gap-2" { @if is_admin { "admin" (badge("default", "Admin")) } @else { (tier_name(&user.subscription_tier)) } } }
                         div { p class="text-sm text-muted-foreground" { "Email Verified" } p class="font-medium flex items-center gap-2" { @if user.email_verified { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) "Verified" } @else { (icon("alert-circle", "h-4 w-4 text-yellow-600")) "Not Verified" } } }
                         div { p class="text-sm text-muted-foreground" { "Membership Status" } p class="font-medium" { (status_label(&user.membership_status)) } }
                     }

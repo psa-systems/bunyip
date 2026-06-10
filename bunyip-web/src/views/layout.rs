@@ -203,15 +203,14 @@ fn dashboard_items() -> Vec<NavItem> {
             href: "/downloads",
             icon: "download",
         },
+        // Single nav entry covering plan, status, invoices, and payment
+        // history. The standalone "Billing" item went away when /billing
+        // became a 302 redirect into /membership. See
+        // docs/bunyip-upgrade/01-membership-plan-data.md.
         NavItem {
-            title: "Membership",
+            title: "Membership & Billing",
             href: "/membership",
             icon: "credit-card",
-        },
-        NavItem {
-            title: "Billing",
-            href: "/billing",
-            icon: "receipt",
         },
         NavItem {
             title: "Settings",
