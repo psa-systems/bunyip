@@ -909,21 +909,30 @@ pub async fn settings(
                 }
             }
 
-            // Change email
+            // Change email. autocomplete="off" on the form + value="" on the
+            // new-email input defeat the password-manager's "fill in the
+            // saved username" heuristic that was leaving the field already
+            // populated with the user's current email (audit finding 3).
+            // current_password also takes autocomplete="off" here - this is
+            // confirmation-of-identity, not a sign-in form, so we don't want
+            // the manager filling it.
             (settings_card("mail", "from-primary to-teal-500", "Change Email", html! {
-                form method="post" action="/settings/email" class="space-y-4 max-w-md" {
-                    div class="space-y-2" { label class="text-sm font-medium" { "New Email Address" } input name="new_email" type="email" placeholder="Enter your new email" class=(crate::handlers::dashboard_input()); }
-                    div class="space-y-2" { label class="text-sm font-medium" { "Current Password" } input name="current_password" type="password" placeholder="Enter your current password" class=(crate::handlers::dashboard_input()); }
+                form method="post" action="/settings/email" autocomplete="off" class="space-y-4 max-w-md" {
+                    div class="space-y-2" { label class="text-sm font-medium" { "New Email Address" } input name="new_email" type="email" value="" autocomplete="off" placeholder="Enter your new email" class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label class="text-sm font-medium" { "Current Password" } input name="current_password" type="password" autocomplete="off" placeholder="Enter your current password" class=(crate::handlers::dashboard_input()); }
                     button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-teal-500 text-white border-0")) { "Change Email" }
                 }
             }))
 
-            // Change password
+            // Change password. This is the one Settings form where the
+            // password manager SHOULD help: current-password lets it fill
+            // the saved value, new-password lets it offer to save the
+            // updated credential after submit.
             (settings_card("lock", "from-indigo-500 to-teal-500", "Change Password", html! {
                 form method="post" action="/settings/password" class="space-y-4 max-w-md" {
-                    div class="space-y-2" { label class="text-sm font-medium" { "Current Password" } input name="current_password" type="password" class=(crate::handlers::dashboard_input()); }
-                    div class="space-y-2" { label class="text-sm font-medium" { "New Password" } input name="new_password" type="password" class=(crate::handlers::dashboard_input()); }
-                    div class="space-y-2" { label class="text-sm font-medium" { "Confirm Password" } input name="confirm" type="password" class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label class="text-sm font-medium" { "Current Password" } input name="current_password" type="password" autocomplete="current-password" class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label class="text-sm font-medium" { "New Password" } input name="new_password" type="password" autocomplete="new-password" class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label class="text-sm font-medium" { "Confirm Password" } input name="confirm" type="password" autocomplete="new-password" class=(crate::handlers::dashboard_input()); }
                     button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Update Password" }
                 }
             }))
@@ -952,9 +961,16 @@ pub async fn settings(
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-red-200 dark:border-red-900" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight text-red-600 dark:text-red-400 flex items-center gap-2" { (icon("alert-triangle", "h-5 w-5")) "Danger Zone" } p class="text-sm text-muted-foreground" { "Permanently delete your account and all associated data." } }
                 div class="p-6 pt-0" {
-                    form method="post" action="/settings/account/delete" class="space-y-3 max-w-md" onsubmit="return confirm('Permanently delete your account? This cannot be undone.')" {
-                        div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" placeholder="Enter your password to confirm" class=(crate::handlers::dashboard_input()); }
-                        @if user.two_factor_enabled { div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
+                    // Delete account. autocomplete="off" on the form + on the
+                    // password input together suppress the password-manager
+                    // pre-fill that auditor finding 4 flagged on this danger-
+                    // zone form. TOTP gets the spec-aligned one-time-code
+                    // hint so the manager (or iOS / Chrome AutoFill) can
+                    // surface a freshly-arrived SMS / TOTP code from a sibling
+                    // tab WITHOUT pre-filling the password field.
+                    form method="post" action="/settings/account/delete" autocomplete="off" class="space-y-3 max-w-md" onsubmit="return confirm('Permanently delete your account? This cannot be undone.')" {
+                        div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" autocomplete="off" placeholder="Enter your password to confirm" class=(crate::handlers::dashboard_input()); }
+                        @if user.two_factor_enabled { div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
                         button type="submit" class=(button_class("destructive", "default", "")) { (icon("trash", "mr-2 h-4 w-4")) "Delete My Account" }
                     }
                 }
