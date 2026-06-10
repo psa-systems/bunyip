@@ -145,10 +145,21 @@ pub async fn authorize(
     _pool: web::Data<sqlx::PgPool>,
     query: web::Query<AuthorizeQuery>,
     config: web::Data<crate::config::Config>,
-    jwt_service: web::Data<Arc<crate::services::JwtService>>,
     auth_service: web::Data<Arc<crate::services::AuthService>>,
 ) -> Result<HttpResponse, AppError> {
     let provider = require_provider!(provider);
+
+    // JwtService is registered in main.rs as a bare `Arc<JwtService>`
+    // via `.app_data(jwt_service.clone())` (not wrapped in
+    // `web::Data::new(...)`), so the `web::Data<Arc<JwtService>>`
+    // extractor would 500 with "Requested application data is not
+    // configured correctly" if used as a handler param. Match the
+    // existing middleware pattern (`crates/bunyip-domain/src/middleware/auth.rs:160`)
+    // and read it out of `app_data` directly.
+    let jwt_service = req
+        .app_data::<Arc<crate::services::JwtService>>()
+        .cloned()
+        .ok_or_else(|| AppError::internal("JwtService not configured"))?;
 
     // Authentication is gated on a server-validated OP session, NOT on the
     // stateless hub access_token. logout revokes the op_sessions row, so a
