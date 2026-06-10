@@ -28,6 +28,19 @@ jobs:
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
     env:
       SQLX_OFFLINE: "true"
+      # Disk-footprint controls. CI doesn't need full DWARF debug info -
+      # nothing here runs a debugger - and `-C debuginfo=2` (cargo's dev
+      # default) bloats `target/` past 10GB per workspace. `line-tables-only`
+      # keeps enough info for readable test panics and rustc backtraces while
+      # cutting the on-disk size ~50%. Combined with disabling incremental
+      # (which builds a separate per-job dep tree that gets thrown away on
+      # the next runner allocation anyway), this keeps the runner's
+      # /workspace from filling up between consecutive PR jobs - the
+      # ENOSPC failures we hit on three back-to-back bunyip-upgrade PRs
+      # were all this. See docs/bunyip-upgrade/00-overview.md for the
+      # surrounding context.
+      CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+      CARGO_INCREMENTAL: "0"
     steps:
       - name: Clone the repository
         uses: https://code.forgejo.org/actions/checkout@v5
