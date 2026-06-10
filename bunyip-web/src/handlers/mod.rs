@@ -133,8 +133,13 @@ pub fn dashboard_response(
     title: &str,
     content: Markup,
 ) -> Response {
+    // `title` carries the browser tab title (e.g. "Settings · Bunyip"); the
+    // top bar wants just "Settings" with no brand suffix. Strip the suffix
+    // here so every handler keeps its existing call shape. A handler that
+    // somehow passes a title without the suffix falls through unchanged.
+    let topbar_title = topbar_title(title);
     html_cookies(
-        document(title, dashboard_shell(user, active, content)),
+        document(title, dashboard_shell(user, active, topbar_title, content)),
         &c.set_cookies,
     )
 }
@@ -146,8 +151,16 @@ pub fn admin_response(
     title: &str,
     content: Markup,
 ) -> Response {
+    let topbar_title = topbar_title(title);
     html_cookies(
-        document(title, admin_shell(user, active, content)),
+        document(title, admin_shell(user, active, topbar_title, content)),
         &c.set_cookies,
     )
+}
+
+/// Strip the `" · Bunyip"` brand suffix from a browser-tab title so the
+/// in-page top bar can render just the page name. Title-without-suffix passes
+/// through unchanged.
+fn topbar_title(title: &str) -> &str {
+    title.strip_suffix(" · Bunyip").unwrap_or(title)
 }

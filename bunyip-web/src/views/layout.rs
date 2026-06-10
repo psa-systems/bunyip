@@ -330,13 +330,18 @@ fn app_topbar(title: &str, user: &User) -> Markup {
     }
 }
 
-pub fn dashboard_shell(user: &User, active: &str, content: Markup) -> Markup {
+/// `topbar_title` is the heading rendered in the top bar (NOT the browser
+/// `<title>`). `dashboard_response` derives it from the page-title argument by
+/// stripping the ` · Bunyip` brand suffix - that suffix is redundant in the
+/// visual header but is still expected on the browser tab. Pre-stripped here
+/// so every handler keeps its existing `dashboard_response(...)` call shape.
+pub fn dashboard_shell(user: &User, active: &str, topbar_title: &str, content: Markup) -> Markup {
     let is_admin = user.role == UserRole::Admin;
     html! {
         div class="flex min-h-screen" {
             (sidebar(false, is_admin, active))
             div class="flex flex-1 flex-col" {
-                (app_topbar("Dashboard", user))
+                (app_topbar(topbar_title, user))
                 main class="relative flex-1 overflow-auto p-6" {
                     div class="pointer-events-none absolute inset-0 bg-gradient-to-br from-indigo-500/[0.02] via-transparent to-teal-500/[0.02]" {}
                     div class="relative" { (content) }
@@ -347,12 +352,12 @@ pub fn dashboard_shell(user: &User, active: &str, content: Markup) -> Markup {
     }
 }
 
-pub fn admin_shell(user: &User, active: &str, content: Markup) -> Markup {
+pub fn admin_shell(user: &User, active: &str, topbar_title: &str, content: Markup) -> Markup {
     html! {
         div class="flex min-h-screen" {
             (sidebar(true, true, active))
             div class="flex flex-1 flex-col" {
-                (app_topbar("Admin", user))
+                (app_topbar(topbar_title, user))
                 main class="relative flex-1 overflow-auto p-6" {
                     div class="relative" { (content) }
                 }
