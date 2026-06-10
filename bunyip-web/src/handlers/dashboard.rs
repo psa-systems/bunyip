@@ -12,7 +12,9 @@ use serde::Deserialize;
 
 use crate::api::auth as auth_api;
 use crate::api::calls;
-use crate::api::types::{AppDownloadGroup, Membership, MembershipStatus, SubscriptionTier, User};
+use crate::api::types::{
+    AppDownloadGroup, Membership, MembershipStatus, SubscriptionTier, TwoFactorSetupResponse, User,
+};
 use crate::handlers::{dashboard_response, guard, password_ok, rotating_index};
 use crate::util::{app_gradient, days_until, has_active_membership};
 use crate::views::ui::{badge, button_class, error_box, icon};
@@ -1153,6 +1155,40 @@ fn qr_svg(uri: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Single Maud renderer for the 2FA enrollment view: QR + manual key + the
+/// verification-code form. Used by BOTH the GET handler (no error) and the
+/// POST error path (error banner above the code input). Keeping a single
+/// renderer means the QR / manual key / submit button are guaranteed to
+/// match across the entry render and any retry render, which is the whole
+/// point of audit finding 6: a wrong code MUST NOT make the QR disappear.
+///
+/// Caller passes `setup` (the bunyip-api `/v1/auth/2fa/setup` response, which
+/// the upstream handler MUST return the SAME in-progress secret for during
+/// enrollment - see `docs/bunyip-upgrade/04-2fa-error-state-preserves-form.md`).
+fn twofa_setup_view(setup: &TwoFactorSetupResponse, error: Option<&str>) -> Markup {
+    html! {
+        div class="mx-auto max-w-lg space-y-6" {
+            div { h1 class="text-3xl font-bold" { "Set Up Two-Factor Authentication" } p class="mt-2 text-muted-foreground" { "Scan the QR code, then enter a code to confirm." } }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
+                div class="p-6 space-y-6" {
+                    div class="flex justify-center rounded-lg bg-white p-4" { div class="[&_svg]:h-[200px] [&_svg]:w-[200px]" { (PreEscaped(qr_svg(&setup.otpauth_uri))) } }
+                    div class="space-y-2" {
+                        label class="text-sm text-muted-foreground" { "Or enter this key manually:" }
+                        code class="block rounded bg-muted px-3 py-2 text-sm font-mono break-all" { (setup.secret) }
+                    }
+                    @if let Some(msg) = error {
+                        (error_box(msg))
+                    }
+                    form method="post" action="/settings/2fa/setup" class="space-y-4" {
+                        div class="space-y-2" { label class="text-sm font-medium" { "Verification Code" } input name="code" inputmode="numeric" placeholder="000000" autocomplete="one-time-code" class=(crate::handlers::dashboard_input()); }
+                        button type="submit" class=(button_class("default", "default", "w-full")) { "Verify & Enable" }
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub async fn twofa_setup_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match guard(&st, &headers, "/settings/2fa/setup").await {
         Ok(v) => v,
@@ -1160,24 +1196,7 @@ pub async fn twofa_setup_get(State(st): State<AppState>, headers: HeaderMap) -> 
     };
     let fwd = c.forward.as_deref();
     let content = match auth_api::setup_2fa(&st.api, fwd).await {
-        Ok(s) => html! {
-            div class="mx-auto max-w-lg space-y-6" {
-                div { h1 class="text-3xl font-bold" { "Set Up Two-Factor Authentication" } p class="mt-2 text-muted-foreground" { "Scan the QR code, then enter a code to confirm." } }
-                div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
-                    div class="p-6 space-y-6" {
-                        div class="flex justify-center rounded-lg bg-white p-4" { div class="[&_svg]:h-[200px] [&_svg]:w-[200px]" { (PreEscaped(qr_svg(&s.otpauth_uri))) } }
-                        div class="space-y-2" {
-                            label class="text-sm text-muted-foreground" { "Or enter this key manually:" }
-                            code class="block rounded bg-muted px-3 py-2 text-sm font-mono break-all" { (s.secret) }
-                        }
-                        form method="post" action="/settings/2fa/setup" class="space-y-4" {
-                            div class="space-y-2" { label class="text-sm font-medium" { "Verification Code" } input name="code" inputmode="numeric" placeholder="000000" class=(crate::handlers::dashboard_input()); }
-                            button type="submit" class=(button_class("default", "default", "w-full")) { "Verify & Enable" }
-                        }
-                    }
-                }
-            }
-        },
+        Ok(setup) => twofa_setup_view(&setup, None),
         Err(e) => html! { div class="mx-auto max-w-lg" { (error_box(&e.user_message())) } },
     };
     dashboard_response(&c, &user, "/settings", "Two-factor setup · Bunyip", content)
@@ -1211,7 +1230,24 @@ pub async fn twofa_setup_post(
             }
         },
         Err(e) => {
-            html! { div class="mx-auto max-w-lg space-y-4" { (error_box(&e.user_message())) a href="/settings/2fa/setup" class=(button_class("outline","default","")) { "Try again" } } }
+            // Re-fetch the in-progress secret so the QR + manual key render
+            // identically to what the user is currently scanning. bunyip-api
+            // returns the SAME pending secret while an enrollment is in
+            // flight (see the API-side note in
+            // docs/bunyip-upgrade/04-2fa-error-state-preserves-form.md). If
+            // that re-fetch itself fails (network blip, session timeout),
+            // fall through to the legacy banner-only error so the user can
+            // restart enrollment manually.
+            let err_msg = e.user_message();
+            match auth_api::setup_2fa(&st.api, fwd).await {
+                Ok(setup) => twofa_setup_view(&setup, Some(&err_msg)),
+                Err(_) => html! {
+                    div class="mx-auto max-w-lg space-y-4" {
+                        (error_box(&err_msg))
+                        a href="/settings/2fa/setup" class=(button_class("outline", "default", "")) { "Try again" }
+                    }
+                },
+            }
         }
     };
     dashboard_response(&c, &user, "/settings", "Two-factor setup · Bunyip", content)
