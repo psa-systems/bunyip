@@ -556,15 +556,44 @@ pub async fn feedback(
                 div class="p-6 pt-0" {
                     div class="divide-y" {
                         @for f in &items {
+                            // The Reviewed button doubles as "Un-review": if
+                            // the row is already marked reviewed, clicking
+                            // posts status=new so admins have a way back to
+                            // the triage queue without the round-trip through
+                            // a row-detail page. Closed rows still show the
+                            // Reviewed button so a closed row can be re-
+                            // opened by going closed -> reviewed -> new.
+                            @let already_reviewed = matches!(f.status, FeedbackStatus::Reviewed);
+                            @let review_action = if already_reviewed { "new" } else { "reviewed" };
+                            @let review_label = if already_reviewed { "Un-review" } else { "Reviewed" };
+                            // Name + email_masked from the bunyip-api summary
+                            // DTO so admins can see who sent each row without
+                            // opening a detail view. Both are Option: name is
+                            // optional on the public form, and email_masked
+                            // is null when the submitter left email blank.
+                            // Render as a `Name · email` line under the
+                            // subject, suppressed entirely when both are
+                            // missing.
+                            @let name = f.name.clone().filter(|s| !s.trim().is_empty());
+                            @let email = f.email_masked.clone().filter(|s| !s.trim().is_empty());
+                            @let identity = match (name.as_deref(), email.as_deref()) {
+                                (Some(n), Some(e)) => Some(format!("{n} · {e}")),
+                                (Some(n), None) => Some(n.to_string()),
+                                (None, Some(e)) => Some(e.to_string()),
+                                (None, None) => None,
+                            };
                             div class="py-3 flex items-start justify-between gap-4" {
                                 div class="min-w-0" {
                                     p class="font-medium truncate" { (f.subject.clone().unwrap_or_else(|| "(no subject)".into())) }
+                                    @if let Some(line) = &identity {
+                                        p class="text-xs text-muted-foreground truncate" { (line) }
+                                    }
                                     p class="text-sm text-muted-foreground truncate" { (f.message_excerpt) }
                                     p class="text-xs text-muted-foreground" { (relative_time(&f.created_at)) }
                                 }
                                 div class="flex items-center gap-2 shrink-0" {
                                     (badge("outline", admin_api::feedback_status_str(f.status.clone())))
-                                    form method="post" action=(format!("/admin/feedback/{}/status", f.id)) { input type="hidden" name="status" value="reviewed"; button type="submit" class=(button_class("outline", "sm", "")) { "Reviewed" } }
+                                    form method="post" action=(format!("/admin/feedback/{}/status", f.id)) { input type="hidden" name="status" value=(review_action); button type="submit" class=(button_class("outline", "sm", "")) { (review_label) } }
                                     form method="post" action=(format!("/admin/feedback/{}/status", f.id)) { input type="hidden" name="status" value="closed"; button type="submit" class=(button_class("outline", "sm", "")) { "Close" } }
                                 }
                             }
