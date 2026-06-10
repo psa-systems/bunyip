@@ -776,6 +776,7 @@ version = "0.2.1"
 dependencies = [
  "axum",
  "chrono",
+ "form_urlencoded",
  "maud",
  "qrcode",
  "reqwest 0.12.28",
