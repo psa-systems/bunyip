@@ -3,9 +3,7 @@
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
-use axum::Form;
 use maud::{html, Markup};
-use serde::Deserialize;
 
 use crate::api::auth as auth_api;
 use crate::api::calls::{self, FeedbackInput};
@@ -317,38 +315,61 @@ pub async fn feedback_get(State(st): State<AppState>, headers: HeaderMap) -> Res
     )
 }
 
-#[derive(Deserialize)]
-pub struct FeedbackForm {
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub email: String,
-    #[serde(default)]
-    pub subject: String,
-    #[serde(default)]
-    pub message: String,
-    #[serde(default)]
-    pub website: String,
-    #[serde(default)]
-    pub tags: Vec<String>,
+/// Parse the raw `application/x-www-form-urlencoded` body into a
+/// [`FeedbackInput`] without going through axum's `Form` extractor.
+///
+/// Two-part fix for the feedback page hard-failing with
+/// `Failed to deserialize form body: invalid type: string "Bug", expected a
+/// sequence`:
+///
+///   - **Repeated-keys decode.** `serde_urlencoded` (the deserializer behind
+///     axum's `Form`) cannot turn `tags=Bug&tags=Feature` into
+///     `Vec<String>`; checking even one tag was enough to 422 the page. We
+///     decode with `form_urlencoded::parse` and collect repeats into a Vec
+///     manually so the natural HTML shape of `<input type="checkbox" name="tags">`
+///     just works.
+///   - **Graceful inline error.** The handler accepts the body as raw
+///     `Bytes` and ALWAYS returns the feedback page - parse errors render as
+///     an inline error banner above the form (same surface as the existing
+///     "Please enter a message." path), rather than the user landing on
+///     axum's bare 422 text.
+fn parse_feedback_form(body: &[u8]) -> FeedbackInput {
+    let mut input = FeedbackInput {
+        name: String::new(),
+        email: String::new(),
+        subject: String::new(),
+        message: String::new(),
+        tags: Vec::new(),
+        page_path: "/feedback".into(),
+        website: String::new(),
+    };
+    for (k, v) in form_urlencoded::parse(body) {
+        match k.as_ref() {
+            "name" => input.name = v.into_owned(),
+            "email" => input.email = v.into_owned(),
+            "subject" => input.subject = v.into_owned(),
+            "message" => input.message = v.into_owned(),
+            "website" => input.website = v.into_owned(),
+            "tags" => {
+                let s = v.trim();
+                if !s.is_empty() {
+                    input.tags.push(s.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    input
 }
 
 pub async fn feedback_post(
     State(st): State<AppState>,
     headers: HeaderMap,
-    Form(f): Form<FeedbackForm>,
+    body: axum::body::Bytes,
 ) -> Response {
     let (c, apps) = public_ctx(&st, &headers).await;
     let cookie = c.forward.clone();
-    let input = FeedbackInput {
-        name: f.name,
-        email: f.email,
-        subject: f.subject,
-        message: f.message,
-        tags: f.tags,
-        page_path: "/feedback".into(),
-        website: f.website,
-    };
+    let input = parse_feedback_form(&body);
     let (submitted, error) = if input.message.trim().is_empty() {
         (false, Some("Please enter a message.".to_string()))
     } else {
