@@ -400,6 +400,30 @@ pub struct AdminFeedbackDetail {
     pub status: FeedbackStatus,
     pub admin_response: Option<String>,
     pub created_at: String,
+    /// Wall-clock timestamp the admin replied at, populated by the API on
+    /// successful respond. `#[serde(default)]` keeps an older API that
+    /// does not send the field deserialize-compatible.
+    #[serde(default)]
+    pub responded_at: Option<String>,
+}
+
+/// Mirror of bunyip-api's `ArchivedFeedbackItem`. Powers the dedicated
+/// archive list page; only the fields the SSR row needs are bound.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArchivedFeedback {
+    pub id: String,
+    pub archived_at: String,
+    pub name: Option<String>,
+    /// API returns the unmasked email here. Admins can already see it on
+    /// the active list once they open the detail page, so exposing it on
+    /// the archive list is consistent.
+    pub email: Option<String>,
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub message_excerpt: String,
+    pub original_status: Option<String>,
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

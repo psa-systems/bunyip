@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::api::admin as admin_api;
-use crate::api::types::{AdminAuditLog, FeedbackStatus, UserEntitlement};
+use crate::api::types::{AdminAuditLog, AdminFeedbackDetail, FeedbackStatus, UserEntitlement};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::relative_time;
 use crate::views::ui::{badge, button_class, error_box, icon};
@@ -533,6 +533,32 @@ pub async fn memberships(
 // Feedback
 // ===========================================================================
 
+/// Top-of-page tab pair that switches between the active feedback list
+/// (`/admin/feedback`) and the archive (`/admin/feedback/archive`). Keeps
+/// the navigation flat instead of nesting "show archived" inside the
+/// status filter, so the URLs stay shareable and bookmarkable.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum FeedbackTab {
+    Active,
+    Archive,
+}
+
+fn feedback_tabs(current: FeedbackTab) -> Markup {
+    let tab_class = |selected: bool| {
+        if selected {
+            "border-b-2 border-primary px-3 py-2 text-sm font-semibold text-foreground"
+        } else {
+            "border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground hover:text-foreground"
+        }
+    };
+    html! {
+        nav class="flex items-center gap-2 border-b border-border/50" aria-label="Feedback view" {
+            a href="/admin/feedback" class=(tab_class(current == FeedbackTab::Active)) { "Active" }
+            a href="/admin/feedback/archive" class=(tab_class(current == FeedbackTab::Archive)) { "Archive" }
+        }
+    }
+}
+
 pub async fn feedback(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -561,6 +587,7 @@ pub async fn feedback(
                 div { h1 class="text-3xl font-bold" { "Feedback" } p class="mt-2 text-muted-foreground" { "Triage submitted feedback." } }
                 a href="/admin/feedback/export" class=(button_class("outline", "sm", "")) { "Export CSV" }
             }
+            (feedback_tabs(FeedbackTab::Active))
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Submissions" } }
                 div class="p-6 pt-0" {
@@ -602,7 +629,15 @@ pub async fn feedback(
                                 .filter(|s| !s.is_empty() && *s != "/feedback");
                             div class="py-3 flex items-start justify-between gap-4" {
                                 div class="min-w-0" {
-                                    p class="font-medium truncate" { (f.subject.clone().unwrap_or_else(|| "(no subject)".into())) }
+                                    // Subject doubles as the open-detail link.
+                                    // Keeps the row chrome the same shape; the
+                                    // entire title stays clickable + truncates
+                                    // identically.
+                                    p class="font-medium truncate" {
+                                        a href=(format!("/admin/feedback/{}", f.id)) class="hover:underline" {
+                                            (f.subject.clone().unwrap_or_else(|| "(no subject)".into()))
+                                        }
+                                    }
                                     @if let Some(line) = &identity {
                                         p class="text-xs text-muted-foreground truncate" { (line) }
                                     }
@@ -708,6 +743,239 @@ pub async fn feedback_export(State(st): State<AppState>, headers: HeaderMap) -> 
         Ok(resp) if resp.status().as_u16() == 401 => redirect_cookies("/login", &c.set_cookies),
         _ => redirect_cookies("/admin/feedback", &c.set_cookies),
     }
+}
+
+/// GET /admin/feedback/:id
+///
+/// Detail subpage for a single feedback submission. Shows the unmasked
+/// email (callers already pass `admin_guard`), full message, captured
+/// `page_path`, current status, and either the existing admin response
+/// or an inline form to send one.
+pub async fn feedback_detail(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let detail = match admin_api::feedback_detail(&st.api, c.forward.as_deref(), &id).await {
+        Ok(d) => d,
+        Err(_) => return redirect_cookies("/admin/feedback", &c.set_cookies),
+    };
+    let content = feedback_detail_view(&detail);
+    admin_response(&c, &user, "/admin/feedback", "Feedback · Bunyip", content)
+}
+
+fn feedback_detail_view(f: &AdminFeedbackDetail) -> Markup {
+    let identity_line = match (
+        f.name.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        f.email.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+    ) {
+        (Some(n), Some(e)) => Some(format!("{n} · {e}")),
+        (Some(n), None) => Some(n.to_string()),
+        (None, Some(e)) => Some(e.to_string()),
+        (None, None) => None,
+    };
+    let from_path = f
+        .page_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "/feedback");
+    html! {
+        div class="space-y-6 max-w-3xl" {
+            div class="flex items-center justify-between gap-4" {
+                div {
+                    h1 class="text-3xl font-bold" { (f.subject.clone().unwrap_or_else(|| "(no subject)".into())) }
+                    p class="mt-2 text-muted-foreground text-sm" {
+                        a href="/admin/feedback" class="hover:underline" { "← Back to feedback" }
+                    }
+                }
+                (badge("outline", admin_api::feedback_status_str(f.status.clone())))
+            }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="p-6 space-y-4" {
+                    @if let Some(line) = &identity_line {
+                        div { h3 class="text-sm font-semibold" { "From" } p class="text-sm text-muted-foreground" { (line) } }
+                    }
+                    @if let Some(p) = from_path {
+                        div { h3 class="text-sm font-semibold" { "Page" } p class="text-sm text-muted-foreground" { (p) } }
+                    }
+                    @if !f.tags.is_empty() {
+                        div {
+                            h3 class="text-sm font-semibold" { "Tags" }
+                            div class="mt-1 flex flex-wrap gap-1.5" {
+                                @for t in &f.tags { (badge("outline", t)) }
+                            }
+                        }
+                    }
+                    div {
+                        h3 class="text-sm font-semibold" { "Message" }
+                        // Preserve newlines from the original submission; the
+                        // submitter's paragraph breaks carry meaning when
+                        // describing a repro.
+                        p class="text-sm whitespace-pre-wrap" { (f.message) }
+                    }
+                    div { h3 class="text-sm font-semibold" { "Received" } p class="text-sm text-muted-foreground" { (relative_time(&f.created_at)) } }
+                }
+            }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Response" } }
+                div class="p-6 pt-0 space-y-4" {
+                    @match f.admin_response.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                        Some(resp) => {
+                            // Already responded: lock the box and surface
+                            // when. A future "edit response" affordance can
+                            // ship as its own change.
+                            p class="text-sm whitespace-pre-wrap" { (resp) }
+                            @if let Some(at) = &f.responded_at {
+                                p class="text-xs text-muted-foreground" { "Sent " (relative_time(at)) }
+                            }
+                        }
+                        None => {
+                            // No reply yet: render the response form. The
+                            // submit-target POSTs to the BFF respond route
+                            // and bounces back to this same detail page on
+                            // success (with a `?toast_ok=` confirmation).
+                            // No-email guard: `respond_to_feedback` on the
+                            // API side just skips the email send when the
+                            // submitter did not leave an address, so the
+                            // form does NOT need to gate on email_present
+                            // here. The status update still happens either
+                            // way.
+                            form method="post" action=(format!("/admin/feedback/{}/respond", f.id)) class="space-y-3" {
+                                div class="grid gap-2" {
+                                    label for="response" class="text-sm font-medium" { "Reply to the submitter" }
+                                    textarea id="response" name="response" rows="6" required placeholder="Type a response. The submitter will receive this verbatim by email." class="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" {}
+                                }
+                                div class="flex justify-end" {
+                                    button type="submit" class=(button_class("default", "default", "gap-2")) { "Send response" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RespondForm {
+    pub response: String,
+}
+
+/// POST /admin/feedback/:id/respond
+pub async fn feedback_respond(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(body): Form<RespondForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let response = body.response.trim();
+    if response.is_empty() {
+        // Empty body: short-circuit and reload the detail page; the user
+        // can re-type. No toast - they will see the empty textarea and
+        // figure it out.
+        return redirect_cookies(&format!("/admin/feedback/{id}"), &c.set_cookies);
+    }
+    let target =
+        match admin_api::respond_to_feedback(&st.api, c.forward.as_deref(), &id, response).await {
+            Ok(()) => format!("/admin/feedback/{id}?toast_ok=Response%20sent"),
+            Err(_) => format!("/admin/feedback/{id}?toast_err=Could%20not%20send%20response"),
+        };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// GET /admin/feedback/archive
+pub async fn feedback_archive(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<PageQuery>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let page = q.page.unwrap_or(1).max(1);
+    let data = admin_api::feedback_archive(&st.api, c.forward.as_deref(), page, 20)
+        .await
+        .ok();
+    let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
+    let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
+
+    let content = html! {
+        div class="space-y-6" {
+            div class="flex items-start justify-between gap-4" {
+                div { h1 class="text-3xl font-bold" { "Feedback" } p class="mt-2 text-muted-foreground" { "Archived submissions. Restore moves a row back to the active list." } }
+                a href="/admin/feedback/export" class=(button_class("outline", "sm", "")) { "Export CSV" }
+            }
+            (feedback_tabs(FeedbackTab::Archive))
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Archived" } }
+                div class="p-6 pt-0" {
+                    div class="divide-y" {
+                        @for a in &items {
+                            @let name = a.name.clone().filter(|s| !s.trim().is_empty());
+                            @let email = a.email.clone().filter(|s| !s.trim().is_empty());
+                            @let identity = match (name.as_deref(), email.as_deref()) {
+                                (Some(n), Some(e)) => Some(format!("{n} · {e}")),
+                                (Some(n), None) => Some(n.to_string()),
+                                (None, Some(e)) => Some(e.to_string()),
+                                (None, None) => None,
+                            };
+                            div class="py-3 flex items-start justify-between gap-4" {
+                                div class="min-w-0" {
+                                    p class="font-medium truncate" { (a.subject.clone().unwrap_or_else(|| "(no subject)".into())) }
+                                    @if let Some(line) = &identity {
+                                        p class="text-xs text-muted-foreground truncate" { (line) }
+                                    }
+                                    p class="text-sm text-muted-foreground truncate" { (a.message_excerpt) }
+                                    p class="text-xs text-muted-foreground" {
+                                        "Archived " (relative_time(&a.archived_at))
+                                        @if let Some(orig) = &a.original_status {
+                                            " · was " (orig)
+                                        }
+                                    }
+                                }
+                                div class="flex items-center gap-2 shrink-0" {
+                                    form method="post" action=(format!("/admin/feedback/archive/{}/restore", a.id)) {
+                                        button type="submit" class=(button_class("outline", "sm", "")) { "Restore" }
+                                    }
+                                }
+                            }
+                        }
+                        @if items.is_empty() { p class="text-center text-muted-foreground py-8" { "Archive is empty" } }
+                    }
+                    (pager("/admin/feedback/archive", page, total_pages))
+                }
+            }
+        }
+    };
+    admin_response(&c, &user, "/admin/feedback", "Feedback · Bunyip", content)
+}
+
+/// POST /admin/feedback/archive/:archive_id/restore
+pub async fn feedback_restore(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(archive_id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::restore_feedback(&st.api, c.forward.as_deref(), &archive_id).await
+    {
+        Ok(()) => "/admin/feedback/archive?toast_ok=Restored".to_string(),
+        Err(_) => "/admin/feedback/archive?toast_err=Could%20not%20restore".to_string(),
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 // ===========================================================================

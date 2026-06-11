@@ -148,6 +148,21 @@ async fn main() {
             "/admin/feedback/export",
             get(handlers::admin::feedback_export),
         )
+        // Archive routes register BEFORE the `:id` detail route so axum's
+        // matcher does not interpret the literal `archive` as a feedback id.
+        .route(
+            "/admin/feedback/archive",
+            get(handlers::admin::feedback_archive),
+        )
+        .route(
+            "/admin/feedback/archive/:archive_id/restore",
+            axum::routing::post(handlers::admin::feedback_restore),
+        )
+        .route("/admin/feedback/:id", get(handlers::admin::feedback_detail))
+        .route(
+            "/admin/feedback/:id/respond",
+            axum::routing::post(handlers::admin::feedback_respond),
+        )
         .route(
             "/admin/feedback/:id/status",
             axum::routing::post(handlers::admin::feedback_status),

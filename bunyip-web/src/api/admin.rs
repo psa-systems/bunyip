@@ -3,9 +3,9 @@
 use serde_json::{json, Value};
 
 use super::types::{
-    AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeedbackSummary, AdminMembership,
-    AdminStatsResponse, AdminUser, FeedbackStatus, PaginatedResponse, StripeConfigResponse,
-    TierConfigResponse, UserEntitlement,
+    AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeedbackDetail,
+    AdminFeedbackSummary, AdminMembership, AdminStatsResponse, AdminUser, ArchivedFeedback,
+    FeedbackStatus, PaginatedResponse, StripeConfigResponse, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 
@@ -317,6 +317,67 @@ pub async fn update_feedback_status(
             &format!("/admin/feedback/{id}/status"),
             cookie,
             Some(json!({ "status": feedback_status_str(status) })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn feedback_detail(
+    api: &Api,
+    cookie: Option<&str>,
+    id: &str,
+) -> Result<AdminFeedbackDetail, ApiError> {
+    parse(api.get(&format!("/admin/feedback/{id}"), cookie).await?)
+}
+
+/// POST `/v1/admin/feedback/{id}/respond` with `{response, status?}`. When
+/// `status` is `None` the API defaults the row to `Responded`; we pass the
+/// explicit `Responded` for clarity. The bunyip-api handler sends an email
+/// to the original submitter when they left an email address.
+pub async fn respond_to_feedback(
+    api: &Api,
+    cookie: Option<&str>,
+    id: &str,
+    response: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            &format!("/admin/feedback/{id}/respond"),
+            cookie,
+            Some(json!({
+                "response": response,
+                "status": feedback_status_str(FeedbackStatus::Responded),
+            })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn feedback_archive(
+    api: &Api,
+    cookie: Option<&str>,
+    page: u32,
+    page_size: u32,
+) -> Result<PaginatedResponse<ArchivedFeedback>, ApiError> {
+    parse(
+        api.get(
+            &format!("/admin/feedback/archive?page={page}&page_size={page_size}"),
+            cookie,
+        )
+        .await?,
+    )
+}
+
+pub async fn restore_feedback(
+    api: &Api,
+    cookie: Option<&str>,
+    archive_id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            &format!("/admin/feedback/archive/{archive_id}/restore"),
+            cookie,
+            None,
         )
         .await?;
     ok_data(&r).map(|_| ())
