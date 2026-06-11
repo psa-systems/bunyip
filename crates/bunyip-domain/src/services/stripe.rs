@@ -14,12 +14,31 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
 /// Metadata key used to tag Stripe products belonging to this application.
 const APP_TAG_KEY: &str = "app";
+
+/// Per-request timeout for raw `reqwest` calls into the Stripe REST API.
+/// Without this, `reqwest::Client::new()` has no timeout and a hung Stripe
+/// upstream would block the awaiting actix worker indefinitely (BUNYIP-82).
+/// Ten seconds covers the p99 of the Stripe operations these helpers make
+/// (webhook endpoint CRUD); user-facing checkout/cancel flows run through
+/// the `async-stripe` client and inherit its own timeouts.
+const STRIPE_API_TIMEOUT_SECS: u64 = 10;
+
+/// Build a `reqwest` client with the Stripe API timeout applied. Use this
+/// at every site that talks to `api.stripe.com` directly rather than
+/// `reqwest::Client::new()` (which has no timeout).
+fn stripe_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(STRIPE_API_TIMEOUT_SECS))
+        .build()
+        .expect("reqwest client builder cannot fail for static config")
+}
 
 /// Stripe configuration
 #[derive(Clone, Debug)]
@@ -613,7 +632,7 @@ impl StripeService {
 
         // Use raw reqwest — async-stripe may not expose WebhookEndpoint in current features
         let url = "https://api.stripe.com/v1/webhook_endpoints?limit=100";
-        let resp = reqwest::Client::new()
+        let resp = stripe_http_client()
             .get(url)
             .bearer_auth(&config.secret_key)
             .send()
@@ -663,7 +682,7 @@ impl StripeService {
             form_params.push((format!("enabled_events[{}]", i), event.clone()));
         }
 
-        let resp = reqwest::Client::new()
+        let resp = stripe_http_client()
             .post("https://api.stripe.com/v1/webhook_endpoints")
             .bearer_auth(&config.secret_key)
             .form(&form_params)
@@ -717,7 +736,7 @@ impl StripeService {
             endpoint_id
         );
 
-        let resp = reqwest::Client::new()
+        let resp = stripe_http_client()
             .delete(&url)
             .bearer_auth(&config.secret_key)
             .send()
