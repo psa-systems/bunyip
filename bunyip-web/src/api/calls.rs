@@ -126,6 +126,17 @@ pub struct FeedbackInput {
     pub tags: Vec<String>,
     pub page_path: String,
     pub website: String,
+    /// Zero or more files chosen by the submitter. The API caps at 3 files
+    /// of up to 5 MB each (bunyip-api/src/handlers/feedback.rs:161, 151);
+    /// the SSR layer enforces the same limits upstream of this struct and
+    /// returns an inline error before getting here.
+    pub attachments: Vec<FeedbackAttachment>,
+}
+
+pub struct FeedbackAttachment {
+    pub filename: String,
+    pub mime: String,
+    pub bytes: Vec<u8>,
 }
 
 pub async fn submit_feedback(
@@ -151,6 +162,16 @@ pub async fn submit_feedback(
     }
     for tag in &input.tags {
         form = form.text("tags[]", tag.clone());
+    }
+    // Files. The API identifies file parts by the presence of a
+    // `file_name` on the content-disposition (not by part name), so the
+    // `attachments` part name is purely descriptive.
+    for a in &input.attachments {
+        let part = reqwest::multipart::Part::bytes(a.bytes.clone())
+            .file_name(a.filename.clone())
+            .mime_str(&a.mime)
+            .map_err(|e| ApiError::network(format!("invalid attachment mime: {e}")))?;
+        form = form.part("attachments", part);
     }
     let r = api.post_form("/feedback", cookie, form).await?;
     let _: &Value = ok_data(&r)?;

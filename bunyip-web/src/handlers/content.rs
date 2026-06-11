@@ -1,13 +1,13 @@
 //! Content + marketing pages: pricing, our story, terms, privacy, feedback.
 
-use axum::extract::{Query, State};
+use axum::extract::{Multipart, Query, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use maud::{html, Markup};
 use serde::Deserialize;
 
 use crate::api::auth as auth_api;
-use crate::api::calls::{self, FeedbackInput};
+use crate::api::calls::{self, FeedbackAttachment, FeedbackInput};
 use crate::api::types::SubscriptionTier;
 use crate::handlers::dashboard::tier_name;
 use crate::handlers::{public_ctx, public_response};
@@ -249,6 +249,25 @@ const FEEDBACK_TAGS: [&str; 4] = ["Bug", "Feature", "Flow", "Idea"];
 
 const FEEDBACK_DEFAULT_PATH: &str = "/feedback";
 
+/// Mirrors bunyip-api's per-form limits (`bunyip-api/src/handlers/feedback.rs:29-35`
+/// and lines 151, 161). Enforced upstream of the multipart -> reqwest
+/// hop so the user sees an inline error banner rather than the API's
+/// bare 422 text after upload completes.
+const FEEDBACK_MAX_ATTACHMENTS: usize = 3;
+const FEEDBACK_MAX_ATTACHMENT_BYTES: usize = 5 * 1024 * 1024;
+const FEEDBACK_ALLOWED_MIMES: [&str; 5] = [
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+    "text/plain",
+];
+/// Per-route axum body limit on `/feedback`. The default is 2 MB and
+/// would reject any reasonable file. Cap at 3 files × 5 MB + ~1 MB of
+/// form overhead, rounded up. Applied only to this route in
+/// `main.rs`; the rest of the app stays on the default.
+pub const FEEDBACK_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
+
 /// Validate a candidate `page_path` value (from a `?from=` query or from a
 /// previously-rendered hidden form field) before round-tripping it back into
 /// the markup. Trims, then requires it to start with `/` and stay under the
@@ -298,7 +317,10 @@ fn feedback_form(submitted: bool, error: Option<&str>, page_path: Option<&str>) 
                         @if let Some(e) = error {
                             div class="mb-6 rounded-lg border border-destructive/50 p-4 text-sm text-destructive" { (e) }
                         }
-                        form method="post" action="/feedback" class="space-y-5" {
+                        // `enctype="multipart/form-data"` is required so the
+                        // file input below can carry binary file parts. The
+                        // form-handler reads via axum's Multipart extractor.
+                        form method="post" action="/feedback" enctype="multipart/form-data" class="space-y-5" {
                             div class="grid gap-5 md:grid-cols-2" {
                                 div class="grid gap-2" { label for="name" class="text-sm font-medium" { "Name" } input id="name" name="name" placeholder="Optional" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"; }
                                 div class="grid gap-2" { label for="email" class="text-sm font-medium" { "Email" } input id="email" name="email" type="email" placeholder="you@example.com" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"; }
@@ -321,6 +343,13 @@ fn feedback_form(submitted: bool, error: Option<&str>, page_path: Option<&str>) 
                             div class="grid gap-2" {
                                 label for="message" class="text-sm font-medium" { "Message" }
                                 textarea id="message" name="message" rows="7" required placeholder="What would you like to see improved?" class="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" {}
+                            }
+                            div class="grid gap-2" {
+                                label for="attachments" class="text-sm font-medium" { "Attachments " span class="text-muted-foreground font-normal" { "(optional)" } }
+                                input id="attachments" name="attachments" type="file" multiple
+                                    accept="image/png,image/jpeg,image/webp,image/gif,text/plain"
+                                    class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm file:mr-3 file:rounded file:border-0 file:bg-muted file:px-3 file:py-1 file:text-sm";
+                                p class="text-xs text-muted-foreground" { "PNG, JPEG, WebP, GIF, or plain text. Up to 3 files, 5 MB each." }
                             }
                             div class="flex justify-end" {
                                 button type="submit" class=(button_class("default", "default", "gap-2")) { "Send feedback" }
@@ -350,25 +379,22 @@ pub async fn feedback_get(
     )
 }
 
-/// Parse the raw `application/x-www-form-urlencoded` body into a
-/// [`FeedbackInput`] without going through axum's `Form` extractor.
+/// Consume the multipart body into a [`FeedbackInput`].
 ///
-/// Two-part fix for the feedback page hard-failing with
-/// `Failed to deserialize form body: invalid type: string "Bug", expected a
-/// sequence`:
+/// On a per-form ceiling violation (too many files, oversize file,
+/// disallowed MIME) returns `Err(message)` so the caller can re-render
+/// the form with the standard inline error banner. Skips files
+/// produced by an empty input (the browser sends a zero-length
+/// `application/octet-stream` part for empty file slots), preserves
+/// repeated `tags` keys for the multi-checkbox row, sanitizes
+/// `page_path` the same way the previous `application/x-www-form-urlencoded`
+/// parser did, and tolerates unknown text fields silently.
 ///
-///   - **Repeated-keys decode.** `serde_urlencoded` (the deserializer behind
-///     axum's `Form`) cannot turn `tags=Bug&tags=Feature` into
-///     `Vec<String>`; checking even one tag was enough to 422 the page. We
-///     decode with `form_urlencoded::parse` and collect repeats into a Vec
-///     manually so the natural HTML shape of `<input type="checkbox" name="tags">`
-///     just works.
-///   - **Graceful inline error.** The handler accepts the body as raw
-///     `Bytes` and ALWAYS returns the feedback page - parse errors render as
-///     an inline error banner above the form (same surface as the existing
-///     "Please enter a message." path), rather than the user landing on
-///     axum's bare 422 text.
-fn parse_feedback_form(body: &[u8]) -> FeedbackInput {
+/// Pure I/O error path: an underlying multipart read failure (likely
+/// a malformed body or a connection drop mid-upload) also becomes an
+/// inline `Err`, mirroring the BUNYIP-79 "graceful 422 -> inline"
+/// posture for the old text-only form.
+async fn read_feedback_multipart(multipart: &mut Multipart) -> Result<FeedbackInput, String> {
     let mut input = FeedbackInput {
         name: String::new(),
         email: String::new(),
@@ -377,21 +403,71 @@ fn parse_feedback_form(body: &[u8]) -> FeedbackInput {
         tags: Vec::new(),
         page_path: FEEDBACK_DEFAULT_PATH.into(),
         website: String::new(),
+        attachments: Vec::new(),
     };
-    for (k, v) in form_urlencoded::parse(body) {
-        match k.as_ref() {
-            "name" => input.name = v.into_owned(),
-            "email" => input.email = v.into_owned(),
-            "subject" => input.subject = v.into_owned(),
-            "message" => input.message = v.into_owned(),
-            "website" => input.website = v.into_owned(),
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => return Err(format!("Could not read form: {e}")),
+        };
+        let field_name = field.name().map(str::to_string).unwrap_or_default();
+        let file_name = field.file_name().map(str::to_string);
+        let content_type = field.content_type().map(str::to_string);
+        let bytes = match field.bytes().await {
+            Ok(b) => b,
+            Err(e) => return Err(format!("Could not read field: {e}")),
+        };
+        if let Some(filename) = file_name {
+            // File field. The browser sends a zero-length part for
+            // every empty file input slot; skip those instead of
+            // turning them into a "0-byte file" the API would reject.
+            if bytes.is_empty() {
+                continue;
+            }
+            if bytes.len() > FEEDBACK_MAX_ATTACHMENT_BYTES {
+                return Err(format!(
+                    "Each attachment must be {} MB or smaller. \"{filename}\" exceeds the limit.",
+                    FEEDBACK_MAX_ATTACHMENT_BYTES / (1024 * 1024)
+                ));
+            }
+            if input.attachments.len() >= FEEDBACK_MAX_ATTACHMENTS {
+                return Err(format!(
+                    "Up to {FEEDBACK_MAX_ATTACHMENTS} attachments only."
+                ));
+            }
+            let mime = content_type.unwrap_or_else(|| "application/octet-stream".to_string());
+            if !FEEDBACK_ALLOWED_MIMES.contains(&mime.as_str()) {
+                return Err("Only PNG, JPEG, WebP, GIF, and plain text files are allowed.".into());
+            }
+            // Strip path separators - safe filename only. Matches the
+            // API's sanitization at `bunyip-api/src/handlers/feedback.rs:177-181`.
+            let safe = std::path::Path::new(&filename)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("attachment")
+                .to_string();
+            input.attachments.push(FeedbackAttachment {
+                filename: safe,
+                mime,
+                bytes: bytes.to_vec(),
+            });
+            continue;
+        }
+        let value = String::from_utf8_lossy(&bytes).to_string();
+        match field_name.as_str() {
+            "name" => input.name = value,
+            "email" => input.email = value,
+            "subject" => input.subject = value,
+            "message" => input.message = value,
+            "website" => input.website = value,
             "page_path" => {
-                if let Some(p) = sanitize_page_path(v.as_ref()) {
+                if let Some(p) = sanitize_page_path(&value) {
                     input.page_path = p;
                 }
             }
             "tags" => {
-                let s = v.trim();
+                let s = value.trim();
                 if !s.is_empty() {
                     input.tags.push(s.to_string());
                 }
@@ -399,31 +475,40 @@ fn parse_feedback_form(body: &[u8]) -> FeedbackInput {
             _ => {}
         }
     }
-    input
+    Ok(input)
 }
 
 pub async fn feedback_post(
     State(st): State<AppState>,
     headers: HeaderMap,
-    body: axum::body::Bytes,
+    mut multipart: Multipart,
 ) -> Response {
     let (c, apps) = public_ctx(&st, &headers).await;
     let cookie = c.forward.clone();
-    let input = parse_feedback_form(&body);
-    // Round-trip the captured path on error redraw so the next submit
-    // attempt keeps the context (otherwise a typo on the message field would
-    // strip the `?from=` context after the first failed submit).
-    let render_path = if input.page_path == FEEDBACK_DEFAULT_PATH {
-        None
-    } else {
-        Some(input.page_path.clone())
-    };
-    let (submitted, error) = if input.message.trim().is_empty() {
-        (false, Some("Please enter a message.".to_string()))
-    } else {
-        match calls::submit_feedback(&st.api, cookie.as_deref(), &input).await {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(e.user_message())),
+    let parsed = read_feedback_multipart(&mut multipart).await;
+    let (submitted, error, render_path) = match parsed {
+        Err(msg) => (false, Some(msg), None),
+        Ok(input) => {
+            // Round-trip the captured path on error redraw so the next submit
+            // attempt keeps the context (otherwise a typo on the message field
+            // would strip the `?from=` context after the first failed submit).
+            let render_path = if input.page_path == FEEDBACK_DEFAULT_PATH {
+                None
+            } else {
+                Some(input.page_path.clone())
+            };
+            if input.message.trim().is_empty() {
+                (
+                    false,
+                    Some("Please enter a message.".to_string()),
+                    render_path,
+                )
+            } else {
+                match calls::submit_feedback(&st.api, cookie.as_deref(), &input).await {
+                    Ok(()) => (true, None, render_path),
+                    Err(e) => (false, Some(e.user_message()), render_path),
+                }
+            }
         }
     };
     public_response(
