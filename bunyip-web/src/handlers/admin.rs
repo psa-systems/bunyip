@@ -718,6 +718,17 @@ fn feedback_row(f: &crate::api::types::AdminFeedbackSummary, tab: FeedbackTab) -
             }
             div class="flex items-center gap-2 shrink-0" {
                 (badge("outline", admin_api::feedback_status_str(f.status.clone())))
+                // BUNYIP-93: "Reply" is a discoverability fix, not a new
+                // action. The reply form lives on the detail subpage
+                // (BUNYIP-85); the row subject already links there but
+                // wasn't obvious. The Reply anchor makes the path one
+                // explicit click. Hidden on Spam and Archive tabs:
+                // replying to spam is meaningless and archived rows are
+                // out-of-queue.
+                @if matches!(tab, FeedbackTab::Active | FeedbackTab::Closed) {
+                    a href=(format!("/admin/feedback/{}", f.id))
+                      class=(button_class("default", "sm", "")) { "Reply" }
+                }
                 @match tab {
                     FeedbackTab::Active => {
                         form method="post" action=(format!("/admin/feedback/{}/status", f.id)) {
@@ -730,6 +741,10 @@ fn feedback_row(f: &crate::api::types::AdminFeedbackSummary, tab: FeedbackTab) -
                             input type="hidden" name="from" value=(from);
                             button type="submit" class=(button_class("outline", "sm", "")) { "Close" }
                         }
+                        form method="post" action=(format!("/admin/feedback/{}/archive", f.id)) {
+                            input type="hidden" name="from" value=(from);
+                            button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                        }
                         form method="post" action=(format!("/admin/feedback/{}/mark-spam", f.id)) {
                             input type="hidden" name="from" value=(from);
                             button type="submit" class=(button_class("outline", "sm", "")) { "Spam" }
@@ -741,6 +756,10 @@ fn feedback_row(f: &crate::api::types::AdminFeedbackSummary, tab: FeedbackTab) -
                             input type="hidden" name="from" value=(from);
                             button type="submit" class=(button_class("outline", "sm", "")) { "Re-open" }
                         }
+                        form method="post" action=(format!("/admin/feedback/{}/archive", f.id)) {
+                            input type="hidden" name="from" value=(from);
+                            button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                        }
                         form method="post" action=(format!("/admin/feedback/{}/mark-spam", f.id)) {
                             input type="hidden" name="from" value=(from);
                             button type="submit" class=(button_class("outline", "sm", "")) { "Spam" }
@@ -750,6 +769,10 @@ fn feedback_row(f: &crate::api::types::AdminFeedbackSummary, tab: FeedbackTab) -
                         form method="post" action=(format!("/admin/feedback/{}/unmark-spam", f.id)) {
                             input type="hidden" name="from" value=(from);
                             button type="submit" class=(button_class("outline", "sm", "")) { "Not spam" }
+                        }
+                        form method="post" action=(format!("/admin/feedback/{}/archive", f.id)) {
+                            input type="hidden" name="from" value=(from);
+                            button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
                         }
                     }
                     FeedbackTab::Archive => {}
@@ -871,6 +894,29 @@ pub async fn feedback_unmark_spam(
         ),
         Err(_) => format!(
             "{}?toast_err=Could%20not%20unmark%20spam",
+            from_tab_path(f.from.as_deref()),
+        ),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// POST /admin/feedback/:id/archive (BUNYIP-93). Per-row archive: the
+/// row moves out of `feedback` and into `feedback_archive`. Reversible
+/// from the Archive tab via the existing Restore button (BUNYIP-85).
+pub async fn feedback_archive_action(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<FromForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::archive_feedback(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => format!("{}?toast_ok=Archived", from_tab_path(f.from.as_deref()),),
+        Err(_) => format!(
+            "{}?toast_err=Could%20not%20archive",
             from_tab_path(f.from.as_deref()),
         ),
     };
@@ -1069,6 +1115,10 @@ fn feedback_detail_view(f: &AdminFeedbackDetail) -> Markup {
             // most context lives, not on a detail page for a row they
             // just deleted.
             div class="flex flex-wrap items-center gap-2" {
+                form method="post" action=(format!("/admin/feedback/{}/archive", f.id)) {
+                    input type="hidden" name="from" value="active";
+                    button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                }
                 form method="post" action=(format!("/admin/feedback/{}/mark-spam", f.id)) {
                     input type="hidden" name="from" value="active";
                     button type="submit" class=(button_class("outline", "sm", "")) { "Mark as spam" }

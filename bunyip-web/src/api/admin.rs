@@ -417,6 +417,15 @@ pub async fn delete_feedback(api: &Api, cookie: Option<&str>, id: &str) -> Resul
     ok_data(&r).map(|_| ())
 }
 
+/// BUNYIP-93: move a single row from `feedback` to `feedback_archive`.
+/// Reversible via the existing archive-restore endpoint.
+pub async fn archive_feedback(api: &Api, cookie: Option<&str>, id: &str) -> Result<(), ApiError> {
+    let r = api
+        .post(&format!("/admin/feedback/{id}/archive"), cookie, None)
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
 // --- stripe + tier config ---------------------------------------------------
 
 pub async fn stripe_config(

@@ -194,6 +194,10 @@ async fn main() {
             axum::routing::post(handlers::admin::feedback_unmark_spam),
         )
         .route(
+            "/admin/feedback/:id/archive",
+            axum::routing::post(handlers::admin::feedback_archive_action),
+        )
+        .route(
             "/admin/feedback/:id/delete",
             axum::routing::post(handlers::admin::feedback_delete),
         )
