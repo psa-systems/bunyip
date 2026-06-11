@@ -3,8 +3,9 @@
 //! baseline works without JS). Mirrors the Dioxus admin pages; the heavyweight
 //! Stripe product/price/webhook managers remain condensed (see ROADMAP.md).
 
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::Response;
 use axum::Form;
 use maud::{html, Markup};
@@ -550,7 +551,16 @@ pub async fn feedback(
 
     let content = html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Feedback" } p class="mt-2 text-muted-foreground" { "Triage submitted feedback." } }
+            // Header row: title + description on the left, CSV export on the
+            // right. Export points at the bunyip-web proxy at
+            // `/admin/feedback/export` which forwards to the API with the
+            // admin's session cookie and streams the response back; the
+            // browser drives the download via the upstream
+            // `Content-Disposition: attachment` header.
+            div class="flex items-start justify-between gap-4" {
+                div { h1 class="text-3xl font-bold" { "Feedback" } p class="mt-2 text-muted-foreground" { "Triage submitted feedback." } }
+                a href="/admin/feedback/export" class=(button_class("outline", "sm", "")) { "Export CSV" }
+            }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Submissions" } }
                 div class="p-6 pt-0" {
@@ -582,11 +592,22 @@ pub async fn feedback(
                                 (None, Some(e)) => Some(e.to_string()),
                                 (None, None) => None,
                             };
+                            // page_path from the bunyip-api summary DTO so
+                            // triagers can see which surface the feedback
+                            // was filed from without opening a detail view.
+                            // Suppress the default `/feedback` (the form's
+                            // own URL is noise) and any empty value.
+                            @let from_path = f.page_path.as_deref()
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty() && *s != "/feedback");
                             div class="py-3 flex items-start justify-between gap-4" {
                                 div class="min-w-0" {
                                     p class="font-medium truncate" { (f.subject.clone().unwrap_or_else(|| "(no subject)".into())) }
                                     @if let Some(line) = &identity {
                                         p class="text-xs text-muted-foreground truncate" { (line) }
+                                    }
+                                    @if let Some(p) = from_path {
+                                        p class="text-xs text-muted-foreground truncate" { "From: " (p) }
                                     }
                                     p class="text-sm text-muted-foreground truncate" { (f.message_excerpt) }
                                     p class="text-xs text-muted-foreground" { (relative_time(&f.created_at)) }
@@ -630,6 +651,63 @@ pub async fn feedback_status(
     };
     let _ = admin_api::update_feedback_status(&st.api, c.forward.as_deref(), &id, status).await;
     redirect_cookies("/admin/feedback", &c.set_cookies)
+}
+
+/// GET /admin/feedback/export
+///
+/// BFF proxy for the bunyip-api CSV export. The browser cannot hit
+/// `<api>/v1/admin/feedback/export` directly (separate origin, the
+/// session cookie is scoped to this app), so the "Export CSV" anchor on
+/// the admin feedback page points here. We re-auth via `admin_guard`,
+/// forward the session cookie to the API at `/admin/feedback/export`,
+/// and stream the response body back with the upstream `Content-Type`
+/// and `Content-Disposition` so the browser drives the download.
+///
+/// Pattern mirrors `dashboard::download_asset`; see its doc comment for
+/// the upstream-status / fallback rationale.
+pub async fn feedback_export(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (_user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let fwd = c.forward.as_deref();
+    match st.api.get_stream("/admin/feedback/export", fwd).await {
+        Ok(resp) if resp.status().is_success() => {
+            let content_type = resp
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("text/csv")
+                .to_string();
+            let disposition = resp
+                .headers()
+                .get(header::CONTENT_DISPOSITION)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+                .unwrap_or_else(|| "attachment; filename=\"feedback.csv\"".to_string());
+            let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
+            let content_length = resp
+                .headers()
+                .get(header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            let mut builder = Response::builder()
+                .status(status)
+                .header(header::CONTENT_TYPE, content_type)
+                .header(header::CONTENT_DISPOSITION, disposition);
+            if let Some(len) = content_length {
+                builder = builder.header(header::CONTENT_LENGTH, len);
+            }
+            builder
+                .body(Body::from_stream(resp.bytes_stream()))
+                .unwrap_or_else(|_| redirect_cookies("/admin/feedback", &c.set_cookies))
+        }
+        // 401 forces re-auth; everything else bounces back to the list
+        // (lost privileges, upstream outage) so the browser never saves an
+        // error blob as `feedback.csv`.
+        Ok(resp) if resp.status().as_u16() == 401 => redirect_cookies("/login", &c.set_cookies),
+        _ => redirect_cookies("/admin/feedback", &c.set_cookies),
+    }
 }
 
 // ===========================================================================

@@ -145,6 +145,10 @@ async fn main() {
         .route("/admin/memberships", get(handlers::admin::memberships))
         .route("/admin/feedback", get(handlers::admin::feedback))
         .route(
+            "/admin/feedback/export",
+            get(handlers::admin::feedback_export),
+        )
+        .route(
             "/admin/feedback/:id/status",
             axum::routing::post(handlers::admin::feedback_status),
         )

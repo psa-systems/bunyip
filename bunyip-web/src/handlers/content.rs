@@ -1,9 +1,10 @@
 //! Content + marketing pages: pricing, our story, terms, privacy, feedback.
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use maud::{html, Markup};
+use serde::Deserialize;
 
 use crate::api::auth as auth_api;
 use crate::api::calls::{self, FeedbackInput};
@@ -246,7 +247,33 @@ pub async fn privacy(State(st): State<AppState>, headers: HeaderMap) -> Response
 
 const FEEDBACK_TAGS: [&str; 4] = ["Bug", "Feature", "Flow", "Idea"];
 
-fn feedback_form(submitted: bool, error: Option<&str>) -> Markup {
+const FEEDBACK_DEFAULT_PATH: &str = "/feedback";
+
+/// Validate a candidate `page_path` value (from a `?from=` query or from a
+/// previously-rendered hidden form field) before round-tripping it back into
+/// the markup. Trims, then requires it to start with `/` and stay under the
+/// API's 255-char limit (matches the validation at
+/// `bunyip-api/src/handlers/feedback.rs:223`). Anything else is treated as
+/// missing - cheap open-redirect-style guard for the hidden field.
+fn sanitize_page_path(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.starts_with('/') && trimmed.len() <= 255 {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+#[derive(Deserialize)]
+pub struct FeedbackQuery {
+    /// Path the visitor came from when they opened the feedback page (e.g.
+    /// from the floating launcher or a deep link). Rendered as a hidden
+    /// `page_path` input so the submit round-trips it to the API.
+    #[serde(default)]
+    pub from: Option<String>,
+}
+
+fn feedback_form(submitted: bool, error: Option<&str>, page_path: Option<&str>) -> Markup {
     html! {
         div class="relative overflow-hidden py-20" {
             div class="container relative" {
@@ -288,6 +315,9 @@ fn feedback_form(submitted: bool, error: Option<&str>) -> Markup {
                                 }
                             }
                             div class="hidden" { input name="website" autocomplete="off" tabindex="-1"; }
+                            @if let Some(p) = page_path {
+                                input type="hidden" name="page_path" value=(p);
+                            }
                             div class="grid gap-2" {
                                 label for="message" class="text-sm font-medium" { "Message" }
                                 textarea id="message" name="message" rows="7" required placeholder="What would you like to see improved?" class="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" {}
@@ -303,15 +333,20 @@ fn feedback_form(submitted: bool, error: Option<&str>) -> Markup {
     }
 }
 
-pub async fn feedback_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
+pub async fn feedback_get(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<FeedbackQuery>,
+) -> Response {
     let (c, apps) = public_ctx(&st, &headers).await;
+    let from = q.from.as_deref().and_then(sanitize_page_path);
     public_response(
         &st,
         &c,
         &apps,
         "Feedback · Bunyip",
         false,
-        feedback_form(false, None),
+        feedback_form(false, None, from.as_deref()),
     )
 }
 
@@ -340,7 +375,7 @@ fn parse_feedback_form(body: &[u8]) -> FeedbackInput {
         subject: String::new(),
         message: String::new(),
         tags: Vec::new(),
-        page_path: "/feedback".into(),
+        page_path: FEEDBACK_DEFAULT_PATH.into(),
         website: String::new(),
     };
     for (k, v) in form_urlencoded::parse(body) {
@@ -350,6 +385,11 @@ fn parse_feedback_form(body: &[u8]) -> FeedbackInput {
             "subject" => input.subject = v.into_owned(),
             "message" => input.message = v.into_owned(),
             "website" => input.website = v.into_owned(),
+            "page_path" => {
+                if let Some(p) = sanitize_page_path(v.as_ref()) {
+                    input.page_path = p;
+                }
+            }
             "tags" => {
                 let s = v.trim();
                 if !s.is_empty() {
@@ -370,6 +410,14 @@ pub async fn feedback_post(
     let (c, apps) = public_ctx(&st, &headers).await;
     let cookie = c.forward.clone();
     let input = parse_feedback_form(&body);
+    // Round-trip the captured path on error redraw so the next submit
+    // attempt keeps the context (otherwise a typo on the message field would
+    // strip the `?from=` context after the first failed submit).
+    let render_path = if input.page_path == FEEDBACK_DEFAULT_PATH {
+        None
+    } else {
+        Some(input.page_path.clone())
+    };
     let (submitted, error) = if input.message.trim().is_empty() {
         (false, Some("Please enter a message.".to_string()))
     } else {
@@ -384,6 +432,6 @@ pub async fn feedback_post(
         &apps,
         "Feedback · Bunyip",
         false,
-        feedback_form(submitted, error.as_deref()),
+        feedback_form(submitted, error.as_deref(), render_path.as_deref()),
     )
 }

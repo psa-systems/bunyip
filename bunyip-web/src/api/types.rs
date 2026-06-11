@@ -376,6 +376,12 @@ pub struct AdminFeedbackSummary {
     #[serde(default)]
     pub tags: Vec<String>,
     pub message_excerpt: String,
+    /// Mirrors the bunyip-api summary field added in BUNYIP-84 so the admin
+    /// row can show the captured `?from=` path. `#[serde(default)]` keeps
+    /// rolling-deploy compatibility: an older API that does not emit the
+    /// field deserializes as `None`.
+    #[serde(default)]
+    pub page_path: Option<String>,
     pub status: FeedbackStatus,
     pub created_at: String,
     pub responded_at: Option<String>,
