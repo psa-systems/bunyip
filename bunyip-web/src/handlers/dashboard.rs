@@ -303,8 +303,12 @@ pub async fn downloads(State(st): State<AppState>, headers: HeaderMap) -> Respon
     // doesn't masquerade as revoked entitlements.
     let groups_result = calls::downloads_all(&st.api, fwd).await;
 
+    // `pb-24` keeps the bottom-most download CTA out from under the floating
+    // feedback launcher (fixed bottom-right, ~64px tall + 16-24px margin). Only
+    // needed on pages whose primary action lands in the bottom-right; other
+    // dashboard pages do not collide.
     let content = html! {
-        div class="space-y-6" {
+        div class="space-y-6 pb-24" {
             h1 class="text-2xl font-semibold" { "Downloads" }
             @match &groups_result {
                 Err(e) => {
