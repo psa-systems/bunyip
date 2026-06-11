@@ -732,6 +732,7 @@ pub async fn feedback_export(State(st): State<AppState>, headers: HeaderMap) -> 
                 .status(status)
                 .header(header::CONTENT_TYPE, content_type)
                 .header(header::CONTENT_DISPOSITION, disposition);
+            builder = with_attachment_hardening(builder);
             if let Some(len) = content_length {
                 builder = builder.header(header::CONTENT_LENGTH, len);
             }
@@ -745,6 +746,34 @@ pub async fn feedback_export(State(st): State<AppState>, headers: HeaderMap) -> 
         Ok(resp) if resp.status().as_u16() == 401 => redirect_cookies("/login", &c.set_cookies),
         _ => redirect_cookies("/admin/feedback", &c.set_cookies),
     }
+}
+
+/// Apply the BUNYIP-90 hardening header triple to any binary-proxy
+/// response (attachment download, CSV export). Keep the helper next to
+/// the two callers so future binary-serving routes get the same
+/// treatment by reference.
+///
+/// `X-Content-Type-Options: nosniff` forces the browser to respect the
+/// upstream Content-Type and skip its own MIME sniffing - a text/plain
+/// attachment that happens to contain `<script>` markup never becomes
+/// HTML, even on legacy browsers.
+///
+/// `Content-Security-Policy: sandbox` sandboxes any inline-rendered
+/// content (the strictest sandbox: no scripts, no forms, no
+/// same-origin). Belt-and-suspenders defence in depth alongside
+/// nosniff; if a future binary type accidentally lands HTML-ish into
+/// this proxy, the sandbox neuters it.
+///
+/// `Referrer-Policy: no-referrer` prevents the attachment URL (which
+/// contains feedback id + attachment id) from leaking via the Referer
+/// header when the admin then navigates elsewhere.
+fn with_attachment_hardening(
+    builder: axum::http::response::Builder,
+) -> axum::http::response::Builder {
+    builder
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Content-Security-Policy", "sandbox")
+        .header("Referrer-Policy", "no-referrer")
 }
 
 /// GET /admin/feedback/:id
@@ -1055,6 +1084,7 @@ pub async fn feedback_attachment(
                 .status(status)
                 .header(header::CONTENT_TYPE, content_type)
                 .header(header::CONTENT_DISPOSITION, disposition);
+            builder = with_attachment_hardening(builder);
             if let Some(len) = content_length {
                 builder = builder.header(header::CONTENT_LENGTH, len);
             }

@@ -81,6 +81,14 @@ validator = { version = "0.18", features = ["derive"] }
 # Billing.
 async-stripe = { version = "0.37", features = ["runtime-tokio-hyper", "checkout", "billing", "webhook-events"] }
 
+# Attachment-upload security (BUNYIP-90). Both are tiny, zero-/few-dep
+# crates that read only the header bytes of a file - no decoder, no
+# decompression. `infer` sniffs the magic bytes to identify the file
+# type; `imagesize` reads image dimensions without decoding the pixels,
+# which is the cheap defence against decompression bombs.
+infer = "0.16"
+imagesize = "0.13"
+
 [dev-dependencies]
 actix-rt = "2"
 wiremock = "0.6"
