@@ -1055,15 +1055,31 @@ pub async fn feedback_detail(
 }
 
 fn feedback_detail_view(f: &AdminFeedbackDetail) -> Markup {
+    // BUNYIP-94: render the masked email, never the raw one. Admins do
+    // not need the raw address to reply (the API holds it and routes the
+    // response server-side); leaking the raw address on the detail page
+    // would violate the same masking posture the row list already uses.
     let identity_line = match (
         f.name.as_deref().map(str::trim).filter(|s| !s.is_empty()),
-        f.email.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        f.email_masked
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
     ) {
         (Some(n), Some(e)) => Some(format!("{n} · {e}")),
         (Some(n), None) => Some(n.to_string()),
         (None, Some(e)) => Some(e.to_string()),
         (None, None) => None,
     };
+    // BUNYIP-94: explicit signal when the row has no email at all. The
+    // reply form will still save the response to the DB, but no email
+    // can be delivered. Surfacing this means an admin does not silently
+    // assume the submitter received the reply.
+    let has_email = f
+        .email
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty());
     let from_path = f
         .page_path
         .as_deref()
@@ -1132,6 +1148,15 @@ fn feedback_detail_view(f: &AdminFeedbackDetail) -> Markup {
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Response" } }
                 div class="p-6 pt-0 space-y-4" {
+                    // BUNYIP-94: when the submitter left no email, the
+                    // reply form still saves the response to the DB but
+                    // no email goes out. Make that explicit so admins do
+                    // not silently assume the submitter received it.
+                    @if !has_email {
+                        div class="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300" {
+                            "No email on record - the submitter did not provide an address. Your response will be saved but cannot be delivered."
+                        }
+                    }
                     @match f.admin_response.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
                         Some(resp) => {
                             // Already responded: lock the box and surface

@@ -392,6 +392,14 @@ pub struct AdminFeedbackDetail {
     pub id: String,
     pub name: Option<String>,
     pub email: Option<String>,
+    /// BUNYIP-94: the API also emits a masked form (e.g.
+    /// `y***@niceguyit.biz`) alongside the raw email. The detail view
+    /// renders the masked form because admins do not need the unmasked
+    /// address to reply (the API holds the address and routes the
+    /// response email server-side). `#[serde(default)]` keeps an older
+    /// API that does not emit the field deserialize-compatible.
+    #[serde(default)]
+    pub email_masked: Option<String>,
     pub subject: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
