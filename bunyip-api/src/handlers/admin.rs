@@ -1712,7 +1712,16 @@ pub async fn get_key_health(
         if check.status == "unhealthy" {
             any_unhealthy = true;
         }
-        checks.insert(key_id.to_string(), serde_json::to_value(&check).unwrap());
+        // `to_value` is practically infallible for the `KeyHealthCheck`
+        // struct today (only string + enum fields), but the contract leaks
+        // a panic surface that a future numeric field would expose (e.g.
+        // an `f64` would serialise NaN as Err). Fail-soft with a null and
+        // an error log instead of taking down the whole endpoint.
+        let value = serde_json::to_value(&check).unwrap_or_else(|e| {
+            tracing::error!(key_id = %key_id, error = %e, "Failed to serialize key health check; emitting null");
+            serde_json::Value::Null
+        });
+        checks.insert(key_id.to_string(), value);
     }
 
     let overall_status = if any_unhealthy { "degraded" } else { "healthy" };

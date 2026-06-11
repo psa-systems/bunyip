@@ -716,21 +716,30 @@ pub async fn membership(State(st): State<AppState>, headers: HeaderMap) -> Respo
                             div { p class="text-sm text-muted-foreground" { "Access" } p class="font-medium" { "Lifetime - no billing" } }
                         }
                     } @else if has {
-                        @let m = current.clone().unwrap();
-                        div class="grid gap-4 md:grid-cols-2" {
-                            div { p class="text-sm text-muted-foreground" { "Plan" } p class="font-medium" { (tier_name(&tier)) } }
-                            div { p class="text-sm text-muted-foreground" { "Price" } p class="font-medium" { @if m.price_locked { @if let Some(a)=m.locked_price_amount { "$" (a/100) "/month" } @else { "$3/month" } } @else { "$3/month" } } }
-                            div { p class="text-sm text-muted-foreground" { "Status" } p class="font-medium" { (status_label(&m.status)) } }
-                            div { p class="text-sm text-muted-foreground" { "Next Billing" } p class="font-medium" {
-                                @let end = m.current_period_end.as_deref().map(fmt_date_iso).unwrap_or_else(|| "N/A".into());
-                                @if will_cancel { "Canceled - ends " (end) } @else { (end) } } }
-                        }
-                        div class="flex gap-4 pt-4" {
-                            @if will_cancel {
-                                form method="post" action="/membership/reactivate" { button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Reactivate Membership" } }
-                            } @else {
-                                form method="post" action="/membership/cancel" { button type="submit" class=(button_class("outline", "default", "")) { "Cancel Membership" } }
-                                form method="post" action="/membership/cancel-now" onsubmit="return confirm('Cancel immediately? You will lose access right now.')" { button type="submit" class=(button_class("destructive", "default", "")) { "Cancel Now" } }
+                        // `has` is driven by membership_status (Active or
+                        // PastDue) but `current` is loaded separately from
+                        // the API. A successful status + missing current row
+                        // is rare but representable, so the unwrap previously
+                        // here was brittle: a future API hiccup could panic
+                        // the Maud thread. Couple the field access to a
+                        // matching guard; a missing `current` simply renders
+                        // nothing in this branch.
+                        @if let Some(m) = current.clone() {
+                            div class="grid gap-4 md:grid-cols-2" {
+                                div { p class="text-sm text-muted-foreground" { "Plan" } p class="font-medium" { (tier_name(&tier)) } }
+                                div { p class="text-sm text-muted-foreground" { "Price" } p class="font-medium" { @if m.price_locked { @if let Some(a)=m.locked_price_amount { "$" (a/100) "/month" } @else { "$3/month" } } @else { "$3/month" } } }
+                                div { p class="text-sm text-muted-foreground" { "Status" } p class="font-medium" { (status_label(&m.status)) } }
+                                div { p class="text-sm text-muted-foreground" { "Next Billing" } p class="font-medium" {
+                                    @let end = m.current_period_end.as_deref().map(fmt_date_iso).unwrap_or_else(|| "N/A".into());
+                                    @if will_cancel { "Canceled - ends " (end) } @else { (end) } } }
+                            }
+                            div class="flex gap-4 pt-4" {
+                                @if will_cancel {
+                                    form method="post" action="/membership/reactivate" { button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Reactivate Membership" } }
+                                } @else {
+                                    form method="post" action="/membership/cancel" { button type="submit" class=(button_class("outline", "default", "")) { "Cancel Membership" } }
+                                    form method="post" action="/membership/cancel-now" onsubmit="return confirm('Cancel immediately? You will lose access right now.')" { button type="submit" class=(button_class("destructive", "default", "")) { "Cancel Now" } }
+                                }
                             }
                         }
                     } @else {
