@@ -76,6 +76,11 @@ pub enum AuditAction {
     AdminEntitlementRevoked,
     AdminApplicationRestrictionChanged,
     AdminStripePriceMappingChanged,
+    /// A refresh token was presented for exchange that had already been
+    /// used or revoked. The whole token family is revoked at the same
+    /// time. Emitted by `bunyip-oidc` after the family revocation
+    /// commits (BUNYIP-88).
+    AuthRefreshReuseDetected,
 }
 
 impl AuditAction {
@@ -150,6 +155,7 @@ impl AuditAction {
                 "admin_application_restriction_changed"
             }
             AuditAction::AdminStripePriceMappingChanged => "admin_stripe_price_mapping_changed",
+            AuditAction::AuthRefreshReuseDetected => "auth_refresh_reuse_detected",
         }
     }
 
