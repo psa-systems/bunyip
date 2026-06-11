@@ -656,6 +656,35 @@ pub async fn mark_feedback_spam(
     Ok(success(updated.to_admin_detail(attachments), request_id))
 }
 
+/// POST /v1/admin/feedback/{id}/archive
+///
+/// Move a single feedback row out of `feedback` and into
+/// `feedback_archive` (BUNYIP-93). The same end-state the batch
+/// 90-day `archive_and_purge_closed` job produces, but on demand.
+/// Restore happens through the existing
+/// `POST /admin/feedback/archive/{archive_id}/restore` route.
+pub async fn archive_feedback(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let feedback_id = path.into_inner();
+
+    FeedbackRepository::archive_one(&pool, feedback_id).await?;
+
+    AuditLogRepository::create(
+        &pool,
+        CreateAuditLog::new(AuditAction::FeedbackArchived)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+            .with_resource("feedback", feedback_id),
+    )
+    .await?;
+
+    Ok(success(serde_json::json!({}), request_id))
+}
+
 /// POST /v1/admin/feedback/{id}/unmark-spam
 ///
 /// Reverse `mark_feedback_spam`. False-positive recovery for the case

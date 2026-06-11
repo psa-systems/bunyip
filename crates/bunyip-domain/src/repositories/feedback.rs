@@ -281,6 +281,42 @@ impl FeedbackRepository {
         }))
     }
 
+    /// Archive a single feedback row on demand (BUNYIP-93). Mirrors the
+    /// SQL pattern in `archive_and_purge_closed` (INSERT INTO
+    /// feedback_archive ... DELETE FROM feedback) but scoped to one id
+    /// and wrapped in a transaction so a crash mid-way cannot leave the
+    /// row in both tables or in neither. Attachments cascade-delete
+    /// with the source row, same as the batch path; restoring an
+    /// archived row does not restore attachments (existing
+    /// trade-off). Returns `AppError::not_found` when the id is not
+    /// present in `feedback`.
+    pub async fn archive_one(pool: &PgPool, id: Uuid) -> Result<(), AppError> {
+        let mut tx = pool.begin().await?;
+        let result = sqlx::query(
+            r#"
+            WITH archived AS (
+                INSERT INTO feedback_archive (id, data)
+                SELECT f.id, row_to_json(f)::jsonb
+                FROM feedback f
+                WHERE f.id = $1
+                ON CONFLICT (id) DO NOTHING
+                RETURNING id
+            )
+            DELETE FROM feedback f
+            USING archived a
+            WHERE f.id = a.id
+            "#,
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Err(AppError::not_found("Feedback"));
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn archive_and_purge_closed(pool: &PgPool) -> Result<u64, AppError> {
         let result = sqlx::query(
             r#"

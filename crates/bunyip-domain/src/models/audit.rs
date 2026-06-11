@@ -88,6 +88,11 @@ pub enum AuditAction {
     /// Admin flipped `feedback.is_spam` back to FALSE. False-positive
     /// recovery path for `FeedbackMarkedSpam`.
     FeedbackUnmarkedSpam,
+    /// Admin moved a single feedback row out of `feedback` and into
+    /// `feedback_archive` (BUNYIP-93). The same end-state the batch
+    /// 90-day `archive_and_purge_closed` job produces, but on-demand.
+    /// Reversible via the existing `FeedbackRestored` action.
+    FeedbackArchived,
 }
 
 impl AuditAction {
@@ -165,6 +170,7 @@ impl AuditAction {
             AuditAction::AuthRefreshReuseDetected => "auth_refresh_reuse_detected",
             AuditAction::FeedbackMarkedSpam => "feedback_marked_spam",
             AuditAction::FeedbackUnmarkedSpam => "feedback_unmarked_spam",
+            AuditAction::FeedbackArchived => "feedback_archived",
         }
     }
 
@@ -188,6 +194,7 @@ impl AuditAction {
                 | AuditAction::FeedbackRestored
                 | AuditAction::FeedbackMarkedSpam
                 | AuditAction::FeedbackUnmarkedSpam
+                | AuditAction::FeedbackArchived
                 | AuditAction::AdminInviteCreated
                 | AuditAction::AdminInviteAccepted
                 | AuditAction::AdminInviteRevoked

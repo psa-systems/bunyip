@@ -147,6 +147,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 web::post().to(handlers::unmark_feedback_spam),
             )
             .route(
+                "/feedback/{feedback_id}/archive",
+                web::post().to(handlers::archive_feedback),
+            )
+            .route(
                 "/feedback/{feedback_id}",
                 web::delete().to(handlers::delete_feedback),
             )
