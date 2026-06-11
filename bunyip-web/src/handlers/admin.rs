@@ -13,7 +13,9 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::api::admin as admin_api;
-use crate::api::types::{AdminAuditLog, AdminFeedbackDetail, FeedbackStatus, UserEntitlement};
+use crate::api::types::{
+    AdminAuditLog, AdminFeedbackDetail, FeedbackAttachmentMeta, FeedbackStatus, UserEntitlement,
+};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::relative_time;
 use crate::views::ui::{badge, button_class, error_box, icon};
@@ -939,6 +941,7 @@ pub async fn feedback_export(State(st): State<AppState>, headers: HeaderMap) -> 
                 .status(status)
                 .header(header::CONTENT_TYPE, content_type)
                 .header(header::CONTENT_DISPOSITION, disposition);
+            builder = with_attachment_hardening(builder);
             if let Some(len) = content_length {
                 builder = builder.header(header::CONTENT_LENGTH, len);
             }
@@ -952,6 +955,34 @@ pub async fn feedback_export(State(st): State<AppState>, headers: HeaderMap) -> 
         Ok(resp) if resp.status().as_u16() == 401 => redirect_cookies("/login", &c.set_cookies),
         _ => redirect_cookies("/admin/feedback", &c.set_cookies),
     }
+}
+
+/// Apply the BUNYIP-90 hardening header triple to any binary-proxy
+/// response (attachment download, CSV export). Keep the helper next to
+/// the two callers so future binary-serving routes get the same
+/// treatment by reference.
+///
+/// `X-Content-Type-Options: nosniff` forces the browser to respect the
+/// upstream Content-Type and skip its own MIME sniffing - a text/plain
+/// attachment that happens to contain `<script>` markup never becomes
+/// HTML, even on legacy browsers.
+///
+/// `Content-Security-Policy: sandbox` sandboxes any inline-rendered
+/// content (the strictest sandbox: no scripts, no forms, no
+/// same-origin). Belt-and-suspenders defence in depth alongside
+/// nosniff; if a future binary type accidentally lands HTML-ish into
+/// this proxy, the sandbox neuters it.
+///
+/// `Referrer-Policy: no-referrer` prevents the attachment URL (which
+/// contains feedback id + attachment id) from leaking via the Referer
+/// header when the admin then navigates elsewhere.
+fn with_attachment_hardening(
+    builder: axum::http::response::Builder,
+) -> axum::http::response::Builder {
+    builder
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Content-Security-Policy", "sandbox")
+        .header("Referrer-Policy", "no-referrer")
 }
 
 /// GET /admin/feedback/:id
@@ -1025,6 +1056,9 @@ fn feedback_detail_view(f: &AdminFeedbackDetail) -> Markup {
                         // submitter's paragraph breaks carry meaning when
                         // describing a repro.
                         p class="text-sm whitespace-pre-wrap" { (f.message) }
+                    }
+                    @if !f.attachments.is_empty() {
+                        (feedback_attachments_view(&f.id, &f.attachments))
                     }
                     div { h3 class="text-sm font-semibold" { "Received" } p class="text-sm text-muted-foreground" { (relative_time(&f.created_at)) } }
                 }
@@ -1183,6 +1217,111 @@ pub async fn feedback_archive(
         }
     };
     admin_response(&c, &user, "/admin/feedback", "Feedback · Bunyip", content)
+}
+
+/// Render the attachments block on the feedback detail page. Image
+/// MIMEs get an inline `<img>` thumbnail loaded from the same BFF
+/// proxy URL; other MIMEs (text/plain) stay as a plain download link
+/// with the filename and a human-readable size.
+fn feedback_attachments_view(feedback_id: &str, atts: &[FeedbackAttachmentMeta]) -> Markup {
+    html! {
+        div {
+            h3 class="text-sm font-semibold" { "Attachments" }
+            div class="mt-2 grid gap-3 sm:grid-cols-2" {
+                @for a in atts {
+                    @let href = format!(
+                        "/admin/feedback/{}/attachments/{}",
+                        feedback_id, a.id,
+                    );
+                    @let is_image = a.mime_type.starts_with("image/");
+                    div class="rounded-md border border-border/60 p-3 flex gap-3 items-start" {
+                        @if is_image {
+                            a href=(href) target="_blank" rel="noopener" class="shrink-0" {
+                                img src=(href) alt=(a.filename)
+                                    class="h-20 w-20 rounded object-cover bg-muted";
+                            }
+                        }
+                        div class="min-w-0 flex-1" {
+                            a href=(href) class="text-sm font-medium hover:underline truncate block" { (a.filename) }
+                            p class="text-xs text-muted-foreground" { (format_size(a.size_bytes)) " · " (a.mime_type) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Render byte count as KB / MB with one decimal. Bytes-only for tiny
+/// (rare) values. Used in the attachments list.
+fn format_size(bytes: i64) -> String {
+    let b = bytes as f64;
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", b / 1024.0)
+    } else {
+        format!("{:.1} MB", b / (1024.0 * 1024.0))
+    }
+}
+
+/// GET /admin/feedback/:id/attachments/:attachment_id
+///
+/// BFF proxy for a single feedback attachment. The browser cannot hit
+/// bunyip-api directly (cross-origin cookie), so the `<img>` and
+/// download anchors on the detail page point here. Re-auth via
+/// `admin_guard`, forward to the API at
+/// `/admin/feedback/{id}/attachments/{attachment_id}`, stream the
+/// response body back with the upstream `Content-Type` and
+/// `Content-Disposition`. Pattern mirrors `feedback_export` and
+/// `dashboard::download_asset`.
+pub async fn feedback_attachment(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path((feedback_id, attachment_id)): Path<(String, String)>,
+) -> Response {
+    let (_user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let path = format!("/admin/feedback/{feedback_id}/attachments/{attachment_id}");
+    match st.api.get_stream(&path, c.forward.as_deref()).await {
+        Ok(resp) if resp.status().is_success() => {
+            let content_type = resp
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            let disposition = resp
+                .headers()
+                .get(header::CONTENT_DISPOSITION)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+                .unwrap_or_else(|| "attachment".to_string());
+            let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
+            let content_length = resp
+                .headers()
+                .get(header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            let mut builder = Response::builder()
+                .status(status)
+                .header(header::CONTENT_TYPE, content_type)
+                .header(header::CONTENT_DISPOSITION, disposition);
+            builder = with_attachment_hardening(builder);
+            if let Some(len) = content_length {
+                builder = builder.header(header::CONTENT_LENGTH, len);
+            }
+            builder
+                .body(Body::from_stream(resp.bytes_stream()))
+                .unwrap_or_else(|_| {
+                    redirect_cookies(&format!("/admin/feedback/{feedback_id}"), &c.set_cookies)
+                })
+        }
+        Ok(resp) if resp.status().as_u16() == 401 => redirect_cookies("/login", &c.set_cookies),
+        _ => redirect_cookies(&format!("/admin/feedback/{feedback_id}"), &c.set_cookies),
+    }
 }
 
 /// POST /admin/feedback/archive/:archive_id/restore

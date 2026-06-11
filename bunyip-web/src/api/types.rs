@@ -405,6 +405,21 @@ pub struct AdminFeedbackDetail {
     /// does not send the field deserialize-compatible.
     #[serde(default)]
     pub responded_at: Option<String>,
+    /// Files attached to the submission. `#[serde(default)]` so an older
+    /// API that does not emit the field deserializes as an empty list.
+    #[serde(default)]
+    pub attachments: Vec<FeedbackAttachmentMeta>,
+}
+
+/// Per-file metadata on a feedback detail response. Mirrors bunyip-api's
+/// `FeedbackAttachmentMeta`. The binary is fetched on demand through the
+/// BFF proxy at `/admin/feedback/{id}/attachments/{attachment_id}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FeedbackAttachmentMeta {
+    pub id: String,
+    pub filename: String,
+    pub mime_type: String,
+    pub size_bytes: i64,
 }
 
 /// Mirror of bunyip-api's `ArchivedFeedbackItem`. Powers the dedicated

@@ -101,12 +101,56 @@ pub async fn stripe_webhook(
         .as_str()
         .ok_or(AppError::validation("type", "Missing event type"))?;
 
-    tracing::info!(event_type = %event_type, "Processing Stripe webhook");
+    // BUNYIP-89: idempotency on event.id. Stripe delivers at-least-once,
+    // so without this gate every retry re-fires emails, audit-log rows,
+    // and entitlement syncs. Insert ON CONFLICT DO NOTHING; if the row
+    // already existed the handlers were already run, return 200 so
+    // Stripe stops retrying.
+    let event_id = event["id"]
+        .as_str()
+        .ok_or(AppError::validation("id", "Missing event id"))?;
+    // Runtime sqlx (the rest of bunyip-api uses runtime queries; the
+    // compile-time `sqlx::query!` macro lives in bunyip-oidc per
+    // `.sqlx/` offline cache convention).
+    let inserted: Option<(String,)> = sqlx::query_as(
+        r#"
+        INSERT INTO stripe_webhook_events (event_id, event_type)
+        VALUES ($1, $2)
+        ON CONFLICT (event_id) DO NOTHING
+        RETURNING event_id
+        "#,
+    )
+    .bind(event_id)
+    .bind(event_type)
+    .fetch_optional(pool.get_ref())
+    .await
+    .map_err(|e| AppError::internal(format!("DB error recording webhook event: {e}")))?;
+    if inserted.is_none() {
+        tracing::debug!(
+            event_id = %event_id,
+            event_type = %event_type,
+            "Stripe event already processed; skipping handlers"
+        );
+        return Ok(HttpResponse::Ok().finish());
+    }
 
-    let tc = tier_config
-        .read()
-        .expect("TierConfig lock poisoned")
-        .clone();
+    tracing::info!(event_type = %event_type, event_id = %event_id, "Processing Stripe webhook");
+
+    // RwLock::read() returns Err only when the lock is poisoned (a writer
+    // panicked while holding it). Poisoning is just a marker: the inner
+    // data is structurally intact, so recovering through `PoisonError::into_inner`
+    // is safe here because this path only reads. Logging once gives ops a
+    // signal that the tier-settings write path panicked, without taking
+    // down every subsequent webhook delivery.
+    let tc = match tier_config.read() {
+        Ok(guard) => guard.clone(),
+        Err(poison) => {
+            tracing::error!(
+                "TierConfig read lock was poisoned by a previous panic; recovering through poison"
+            );
+            poison.into_inner().clone()
+        }
+    };
 
     // Route to appropriate handler
     match event_type {

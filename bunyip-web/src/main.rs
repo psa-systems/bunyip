@@ -41,7 +41,15 @@ async fn main() {
         .route("/privacy", get(content::privacy))
         .route(
             "/feedback",
-            get(content::feedback_get).post(content::feedback_post),
+            get(content::feedback_get)
+                .post(content::feedback_post)
+                .layer(
+                    // Raise the default axum 2 MB body limit for this route only
+                    // so file attachments fit. The cap matches the API's per-form
+                    // ceiling (3 files × 5 MB + form overhead). Other routes stay
+                    // on the default.
+                    axum::extract::DefaultBodyLimit::max(content::FEEDBACK_BODY_LIMIT_BYTES),
+                ),
         )
         // Auth
         .route("/login", get(ap::login_get).post(ap::login_post))
@@ -168,6 +176,10 @@ async fn main() {
         .route(
             "/admin/feedback/:id/respond",
             axum::routing::post(handlers::admin::feedback_respond),
+        )
+        .route(
+            "/admin/feedback/:id/attachments/:attachment_id",
+            get(handlers::admin::feedback_attachment),
         )
         .route(
             "/admin/feedback/:id/status",

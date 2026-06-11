@@ -303,8 +303,12 @@ pub async fn downloads(State(st): State<AppState>, headers: HeaderMap) -> Respon
     // doesn't masquerade as revoked entitlements.
     let groups_result = calls::downloads_all(&st.api, fwd).await;
 
+    // `pb-24` keeps the bottom-most download CTA out from under the floating
+    // feedback launcher (fixed bottom-right, ~64px tall + 16-24px margin). Only
+    // needed on pages whose primary action lands in the bottom-right; other
+    // dashboard pages do not collide.
     let content = html! {
-        div class="space-y-6" {
+        div class="space-y-6 pb-24" {
             h1 class="text-2xl font-semibold" { "Downloads" }
             @match &groups_result {
                 Err(e) => {
@@ -707,30 +711,39 @@ pub async fn membership(State(st): State<AppState>, headers: HeaderMap) -> Respo
                 }
                 div class="p-6 pt-0 space-y-4" {
                     @if lifetime {
-                        // No price line, no next-billing field, no cancel
-                        // forms - everything that would render time-bound
-                        // billing info is omitted. Just the plan name and a
-                        // one-line note. Closes audit finding 2.
-                        div class="grid gap-4 md:grid-cols-2" {
-                            div { p class="text-sm text-muted-foreground" { "Plan" } p class="font-medium" { (tier_name(&tier)) } }
-                            div { p class="text-sm text-muted-foreground" { "Access" } p class="font-medium" { "Lifetime - no billing" } }
-                        }
+                        // Lifetime members already see the "Lifetime" badge
+                        // top-right of the card, so repeating it in a
+                        // "Plan: Lifetime" and "Access: Lifetime - no billing"
+                        // grid is a stutter. The badge carries the identity;
+                        // the body just has to convey what makes lifetime
+                        // different from a paid plan: no billing, no expiry.
+                        // (BUNYIP-91.)
+                        p class="text-sm text-muted-foreground" { "No billing. Access never expires." }
                     } @else if has {
-                        @let m = current.clone().unwrap();
-                        div class="grid gap-4 md:grid-cols-2" {
-                            div { p class="text-sm text-muted-foreground" { "Plan" } p class="font-medium" { (tier_name(&tier)) } }
-                            div { p class="text-sm text-muted-foreground" { "Price" } p class="font-medium" { @if m.price_locked { @if let Some(a)=m.locked_price_amount { "$" (a/100) "/month" } @else { "$3/month" } } @else { "$3/month" } } }
-                            div { p class="text-sm text-muted-foreground" { "Status" } p class="font-medium" { (status_label(&m.status)) } }
-                            div { p class="text-sm text-muted-foreground" { "Next Billing" } p class="font-medium" {
-                                @let end = m.current_period_end.as_deref().map(fmt_date_iso).unwrap_or_else(|| "N/A".into());
-                                @if will_cancel { "Canceled - ends " (end) } @else { (end) } } }
-                        }
-                        div class="flex gap-4 pt-4" {
-                            @if will_cancel {
-                                form method="post" action="/membership/reactivate" { button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Reactivate Membership" } }
-                            } @else {
-                                form method="post" action="/membership/cancel" { button type="submit" class=(button_class("outline", "default", "")) { "Cancel Membership" } }
-                                form method="post" action="/membership/cancel-now" onsubmit="return confirm('Cancel immediately? You will lose access right now.')" { button type="submit" class=(button_class("destructive", "default", "")) { "Cancel Now" } }
+                        // `has` is driven by membership_status (Active or
+                        // PastDue) but `current` is loaded separately from
+                        // the API. A successful status + missing current row
+                        // is rare but representable, so the unwrap previously
+                        // here was brittle: a future API hiccup could panic
+                        // the Maud thread. Couple the field access to a
+                        // matching guard; a missing `current` simply renders
+                        // nothing in this branch.
+                        @if let Some(m) = current.clone() {
+                            div class="grid gap-4 md:grid-cols-2" {
+                                div { p class="text-sm text-muted-foreground" { "Plan" } p class="font-medium" { (tier_name(&tier)) } }
+                                div { p class="text-sm text-muted-foreground" { "Price" } p class="font-medium" { @if m.price_locked { @if let Some(a)=m.locked_price_amount { "$" (a/100) "/month" } @else { "$3/month" } } @else { "$3/month" } } }
+                                div { p class="text-sm text-muted-foreground" { "Status" } p class="font-medium" { (status_label(&m.status)) } }
+                                div { p class="text-sm text-muted-foreground" { "Next Billing" } p class="font-medium" {
+                                    @let end = m.current_period_end.as_deref().map(fmt_date_iso).unwrap_or_else(|| "N/A".into());
+                                    @if will_cancel { "Canceled - ends " (end) } @else { (end) } } }
+                            }
+                            div class="flex gap-4 pt-4" {
+                                @if will_cancel {
+                                    form method="post" action="/membership/reactivate" { button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Reactivate Membership" } }
+                                } @else {
+                                    form method="post" action="/membership/cancel" { button type="submit" class=(button_class("outline", "default", "")) { "Cancel Membership" } }
+                                    form method="post" action="/membership/cancel-now" onsubmit="return confirm('Cancel immediately? You will lose access right now.')" { button type="submit" class=(button_class("destructive", "default", "")) { "Cancel Now" } }
+                                }
                             }
                         }
                     } @else {
