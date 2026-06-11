@@ -613,7 +613,36 @@ impl OidcProvider {
             .ok(); // best-effort; don't mask the primary error
             tx.commit().await.ok();
 
-            // TODO: emit audit event auth.refresh_reuse_detected
+            // BUNYIP-88: emit a Critical audit-log row for the replay so
+            // the security event is queryable through /admin/audit-logs
+            // instead of only living in stdout. Best-effort: if the
+            // insert fails we still return the InvalidGrant to the
+            // caller; a tracing::warn! gives ops a single line to
+            // correlate against.
+            // Set actor_id directly so /admin/audit-logs?actor_id=... can
+            // surface the affected user; do not look up the email + role
+            // (an extra DB hit in a security-event hot path), the metadata
+            // already carries enough triage context.
+            let mut audit = crate::models::CreateAuditLog::new(
+                crate::models::AuditAction::AuthRefreshReuseDetected,
+            )
+            .with_resource("refresh_token_family", old.family_id)
+            .with_metadata(serde_json::json!({
+                "client_id": old.client_id,
+                "jti_used_at": old.used_at,
+                "jti_revoked_at": old.revoked_at,
+            }))
+            .with_severity(crate::models::AuditSeverity::Critical);
+            audit.actor_id = Some(old.user_id);
+            if let Err(e) = crate::repositories::AuditLogRepository::create(&self.pool, audit).await
+            {
+                tracing::warn!(
+                    error = %e,
+                    family_id = %old.family_id,
+                    user_id = %old.user_id,
+                    "Failed to write auth_refresh_reuse_detected audit log; security event was still enforced",
+                );
+            }
             return Err(AppError::OidcInvalidGrant(
                 "refresh token already used — possible replay attack".into(),
             ));
