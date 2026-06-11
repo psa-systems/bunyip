@@ -556,13 +556,26 @@ pub async fn respond_to_feedback(
     .await?;
 
     if let Some(email) = updated.email.clone() {
-        let email_svc = email_service.get_ref().clone();
-        let detail = updated.clone();
-        tokio::spawn(async move {
-            if let Err(e) = email_svc.send_feedback_response(&email, &detail).await {
-                tracing::error!(error = %e, feedback_id = %detail.id, "Failed to send feedback response email");
-            }
-        });
+        // BUNYIP-94: await the send instead of fire-and-forget. The
+        // previous tokio::spawn detached the task so any SMTP / config
+        // / template failure ended up in a different tracing span from
+        // the surrounding request and was invisible to admins
+        // confirming "did my reply go out." Awaiting keeps the error on
+        // the same request_id; the response is still considered
+        // successful even if email send fails because the row is
+        // already in the DB with admin_response set.
+        if let Err(e) = email_service
+            .get_ref()
+            .send_feedback_response(&email, &updated)
+            .await
+        {
+            tracing::error!(
+                error = %e,
+                feedback_id = %updated.id,
+                recipient = %email,
+                "Failed to send feedback response email"
+            );
+        }
     }
 
     let attachments = FeedbackRepository::find_attachments(&pool, updated.id).await?;
