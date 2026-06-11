@@ -711,14 +711,14 @@ pub async fn membership(State(st): State<AppState>, headers: HeaderMap) -> Respo
                 }
                 div class="p-6 pt-0 space-y-4" {
                     @if lifetime {
-                        // No price line, no next-billing field, no cancel
-                        // forms - everything that would render time-bound
-                        // billing info is omitted. Just the plan name and a
-                        // one-line note. Closes audit finding 2.
-                        div class="grid gap-4 md:grid-cols-2" {
-                            div { p class="text-sm text-muted-foreground" { "Plan" } p class="font-medium" { (tier_name(&tier)) } }
-                            div { p class="text-sm text-muted-foreground" { "Access" } p class="font-medium" { "Lifetime - no billing" } }
-                        }
+                        // Lifetime members already see the "Lifetime" badge
+                        // top-right of the card, so repeating it in a
+                        // "Plan: Lifetime" and "Access: Lifetime - no billing"
+                        // grid is a stutter. The badge carries the identity;
+                        // the body just has to convey what makes lifetime
+                        // different from a paid plan: no billing, no expiry.
+                        // (BUNYIP-91.)
+                        p class="text-sm text-muted-foreground" { "No billing. Access never expires." }
                     } @else if has {
                         // `has` is driven by membership_status (Active or
                         // PastDue) but `current` is loaded separately from
