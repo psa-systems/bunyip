@@ -96,25 +96,34 @@ fn theme_controls(icon_class: &str) -> Markup {
     }
 }
 
-/// Top-bar "open feedback" icon button. Replaces the floating launcher that
-/// used to sit `fixed bottom-right` and overlap Vervain Agent Download buttons
-/// on `/downloads`. Visually mirrors `theme_controls` so the row stays
-/// consistent. Mounted by every shell that wants the feedback affordance.
-fn feedback_top_button(icon_class: &str) -> Markup {
+/// Floating "open feedback" launcher pinned to the bottom-right of the
+/// viewport. Mounted by `dashboard_shell` (always on for authenticated
+/// users) and by `public_shell` (gated by `show_feedback`, kept off on
+/// the login / register flow). Pages whose primary action lands in the
+/// bottom-right (currently `/downloads`) add their own `pb-24` so the
+/// launcher does not occlude content; see the wrapper in the Downloads
+/// handler.
+fn feedback_launcher() -> Markup {
     html! {
-        a href="/feedback" aria-label="Open feedback page"
-          class=(button_class("ghost", "icon", "")) {
-            (icon("smile-plus", icon_class))
+        div class="pointer-events-none fixed bottom-4 right-4 z-40 sm:bottom-6 sm:right-6" {
+            a href="/feedback" aria-label="Open feedback page"
+              class="pointer-events-auto group flex h-14 w-[60px] items-center overflow-hidden rounded-2xl border border-border/70 bg-background/85 text-primary shadow-xl shadow-primary/10 backdrop-blur-md transition-all duration-300 hover:w-[204px] hover:border-primary/50 hover:bg-background dark:bg-card/90 sm:h-16 sm:w-16 sm:hover:w-[214px]" {
+                span class="relative inline-flex h-14 w-[60px] shrink-0 items-center justify-center rounded-2xl sm:h-16 sm:w-16" {
+                    span class="absolute inset-0 rounded-2xl bg-gradient-to-br from-primary/18 via-indigo-500/12 to-teal-500/18 opacity-80" {}
+                    (icon("smile-plus", "feedback-launcher__icon-bounce relative z-10 h-7 w-7 sm:h-8 sm:w-8"))
+                }
+                span class="max-w-0 whitespace-nowrap pl-0 pr-0 text-sm font-medium text-foreground opacity-0 transition-all duration-300 group-hover:max-w-[130px] group-hover:pl-4 group-hover:pr-4 group-hover:opacity-100" { "Have feedback?" }
+            }
         }
     }
 }
 
-/// `show_feedback` mirrors the legacy `launcher: bool` flag on `public_shell`:
-/// login / register pages keep the chrome minimal and pass `false`; the
-/// marketing pages (Pricing / Our Story / Terms / Privacy) pass `true`. The
-/// flag now toggles the top-bar feedback button instead of the floating
-/// launcher widget.
-fn header(user: Option<&User>, show_feedback: bool) -> Markup {
+/// `_show_feedback` is the public-shell flag that gates whether the floating
+/// launcher is mounted; the header itself no longer renders any feedback
+/// affordance (the launcher lives below the page content, mounted by the
+/// shell). Parameter is kept so call sites do not change; the underscore
+/// silences the unused-arg lint.
+fn header(user: Option<&User>, _show_feedback: bool) -> Markup {
     let is_admin = user.map(|u| u.role == UserRole::Admin).unwrap_or(false);
     html! {
         header class="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60" {
@@ -128,7 +137,6 @@ fn header(user: Option<&User>, show_feedback: bool) -> Markup {
                 }
                 div class="flex items-center gap-4" {
                     (theme_controls("h-5 w-5"))
-                    @if show_feedback { (feedback_top_button("h-5 w-5")) }
                     @if user.is_some() {
                         a href="/dashboard" class=(button_class("ghost", "sm", "")) { "Dashboard" }
                         @if is_admin { a href="/admin" class=(button_class("ghost", "sm", "")) { "Admin" } }
@@ -205,6 +213,7 @@ pub fn public_shell(
             (header(user, show_feedback))
             main class="flex-1" { (content) }
             (footer(cfg, apps))
+            @if show_feedback { (feedback_launcher()) }
         }
     }
 }
@@ -352,7 +361,6 @@ fn app_topbar(title: &str, user: &User) -> Markup {
                     span { (user.email) }
                 }
                 (theme_controls("h-4 w-4"))
-                (feedback_top_button("h-4 w-4"))
                 a href="/logout" class=(button_class("ghost", "sm", "")) { (icon("log-out", "h-4 w-4")) }
             }
         }
@@ -376,6 +384,7 @@ pub fn dashboard_shell(user: &User, active: &str, topbar_title: &str, content: M
                     div class="relative" { (content) }
                 }
             }
+            (feedback_launcher())
         }
     }
 }
