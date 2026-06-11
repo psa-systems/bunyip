@@ -27,8 +27,8 @@ pub use billing::{create_setup_intent, download_invoice, list_invoices};
 pub use download::{admin_refresh_release, download_asset, list_all_downloads, list_app_downloads};
 pub use feedback::{
     delete_feedback, export_feedback, get_attachment, get_feedback, list_feedback,
-    list_feedback_archive, respond_to_feedback, restore_feedback, submit_feedback,
-    update_feedback_status,
+    list_feedback_archive, mark_feedback_spam, respond_to_feedback, restore_feedback,
+    submit_feedback, unmark_feedback_spam, update_feedback_status,
 };
 pub use membership::{
     billing_portal, cancel_membership, cancel_membership_immediate, create_checkout,

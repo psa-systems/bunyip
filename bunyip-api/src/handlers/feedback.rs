@@ -314,7 +314,18 @@ pub struct ListFeedbackQuery {
     pub page: Option<i32>,
     pub per_page: Option<i32>,
     pub page_size: Option<i32>,
+    /// Legacy single-status filter kept for compatibility; ignored when
+    /// `bucket` is set. New callers should use `bucket` instead so
+    /// is_spam filtering and "everything except closed" are reachable
+    /// in one parameter.
     pub status: Option<String>,
+    /// BUNYIP-92: tab-aware filtering. Accepts `active` / `closed` /
+    /// `spam`. The repository layer maps each value to a static SQL
+    /// predicate; unknown values produce an unfiltered list (preserves
+    /// pre-BUNYIP-92 behaviour for any caller that does not yet pass
+    /// it). The `archive` view has its own endpoint and does not enter
+    /// here.
+    pub bucket: Option<String>,
 }
 
 pub async fn list_feedback(
@@ -332,8 +343,24 @@ pub async fn list_feedback(
             .map_err(|_| AppError::validation("status", "Invalid feedback status"))?;
     }
 
+    // Validate the bucket value against the known set so we can hand it
+    // straight through to the repository; an unknown value here would
+    // silently fall through to the no-filter branch and re-expose the
+    // pre-BUNYIP-92 spam-in-active-queue bug.
+    if let Some(b) = query.bucket.as_deref() {
+        match b {
+            "active" | "closed" | "spam" => {}
+            _ => {
+                return Err(AppError::validation(
+                    "bucket",
+                    "Bucket must be one of active|closed|spam",
+                ));
+            }
+        }
+    }
+
     let (feedback, total) =
-        FeedbackRepository::list_paginated(&pool, page, per_page, query.status.as_deref()).await?;
+        FeedbackRepository::list_paginated(&pool, page, per_page, query.bucket.as_deref()).await?;
 
     let items = feedback
         .into_iter()
@@ -480,6 +507,63 @@ pub async fn delete_feedback(
     .await?;
 
     Ok(success(serde_json::json!({}), request_id))
+}
+
+/// POST /v1/admin/feedback/{id}/mark-spam
+///
+/// Flip `is_spam` to TRUE so the row leaves the admin's active queue
+/// and lands in the Spam tab. Writes a `FeedbackMarkedSpam` audit log;
+/// reversible via `unmark_feedback_spam`. The auto-spam path on intake
+/// (the honeypot field on submission) is independent of this manual
+/// flag and uses the same column.
+pub async fn mark_feedback_spam(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let feedback_id = path.into_inner();
+
+    let updated = FeedbackRepository::set_is_spam(&pool, feedback_id, true).await?;
+
+    AuditLogRepository::create(
+        &pool,
+        CreateAuditLog::new(AuditAction::FeedbackMarkedSpam)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+            .with_resource("feedback", feedback_id),
+    )
+    .await?;
+
+    let attachments = FeedbackRepository::find_attachments(&pool, updated.id).await?;
+    Ok(success(updated.to_admin_detail(attachments), request_id))
+}
+
+/// POST /v1/admin/feedback/{id}/unmark-spam
+///
+/// Reverse `mark_feedback_spam`. False-positive recovery for the case
+/// where the admin flagged a real row by mistake.
+pub async fn unmark_feedback_spam(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let feedback_id = path.into_inner();
+
+    let updated = FeedbackRepository::set_is_spam(&pool, feedback_id, false).await?;
+
+    AuditLogRepository::create(
+        &pool,
+        CreateAuditLog::new(AuditAction::FeedbackUnmarkedSpam)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+            .with_resource("feedback", feedback_id),
+    )
+    .await?;
+
+    let attachments = FeedbackRepository::find_attachments(&pool, updated.id).await?;
+    Ok(success(updated.to_admin_detail(attachments), request_id))
 }
 
 fn csv_field(value: &str) -> String {

@@ -76,6 +76,13 @@ pub enum AuditAction {
     AdminEntitlementRevoked,
     AdminApplicationRestrictionChanged,
     AdminStripePriceMappingChanged,
+    /// Admin flipped `feedback.is_spam` to TRUE (BUNYIP-92). Moves the
+    /// row from the admin's active queue into the Spam tab; reversible
+    /// via `FeedbackUnmarkedSpam`.
+    FeedbackMarkedSpam,
+    /// Admin flipped `feedback.is_spam` back to FALSE. False-positive
+    /// recovery path for `FeedbackMarkedSpam`.
+    FeedbackUnmarkedSpam,
 }
 
 impl AuditAction {
@@ -150,6 +157,8 @@ impl AuditAction {
                 "admin_application_restriction_changed"
             }
             AuditAction::AdminStripePriceMappingChanged => "admin_stripe_price_mapping_changed",
+            AuditAction::FeedbackMarkedSpam => "feedback_marked_spam",
+            AuditAction::FeedbackUnmarkedSpam => "feedback_unmarked_spam",
         }
     }
 
@@ -171,6 +180,8 @@ impl AuditAction {
                 | AuditAction::FeedbackResponded
                 | AuditAction::FeedbackDeleted
                 | AuditAction::FeedbackRestored
+                | AuditAction::FeedbackMarkedSpam
+                | AuditAction::FeedbackUnmarkedSpam
                 | AuditAction::AdminInviteCreated
                 | AuditAction::AdminInviteAccepted
                 | AuditAction::AdminInviteRevoked
