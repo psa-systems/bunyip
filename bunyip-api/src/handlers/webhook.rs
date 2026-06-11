@@ -103,10 +103,21 @@ pub async fn stripe_webhook(
 
     tracing::info!(event_type = %event_type, "Processing Stripe webhook");
 
-    let tc = tier_config
-        .read()
-        .expect("TierConfig lock poisoned")
-        .clone();
+    // RwLock::read() returns Err only when the lock is poisoned (a writer
+    // panicked while holding it). Poisoning is just a marker: the inner
+    // data is structurally intact, so recovering through `PoisonError::into_inner`
+    // is safe here because this path only reads. Logging once gives ops a
+    // signal that the tier-settings write path panicked, without taking
+    // down every subsequent webhook delivery.
+    let tc = match tier_config.read() {
+        Ok(guard) => guard.clone(),
+        Err(poison) => {
+            tracing::error!(
+                "TierConfig read lock was poisoned by a previous panic; recovering through poison"
+            );
+            poison.into_inner().clone()
+        }
+    };
 
     // Route to appropriate handler
     match event_type {
