@@ -81,6 +81,13 @@ pub enum AuditAction {
     /// time. Emitted by `bunyip-oidc` after the family revocation
     /// commits (BUNYIP-88).
     AuthRefreshReuseDetected,
+    /// Admin flipped `feedback.is_spam` to TRUE (BUNYIP-92). Moves the
+    /// row from the admin's active queue into the Spam tab; reversible
+    /// via `FeedbackUnmarkedSpam`.
+    FeedbackMarkedSpam,
+    /// Admin flipped `feedback.is_spam` back to FALSE. False-positive
+    /// recovery path for `FeedbackMarkedSpam`.
+    FeedbackUnmarkedSpam,
 }
 
 impl AuditAction {
@@ -156,6 +163,8 @@ impl AuditAction {
             }
             AuditAction::AdminStripePriceMappingChanged => "admin_stripe_price_mapping_changed",
             AuditAction::AuthRefreshReuseDetected => "auth_refresh_reuse_detected",
+            AuditAction::FeedbackMarkedSpam => "feedback_marked_spam",
+            AuditAction::FeedbackUnmarkedSpam => "feedback_unmarked_spam",
         }
     }
 
@@ -177,6 +186,8 @@ impl AuditAction {
                 | AuditAction::FeedbackResponded
                 | AuditAction::FeedbackDeleted
                 | AuditAction::FeedbackRestored
+                | AuditAction::FeedbackMarkedSpam
+                | AuditAction::FeedbackUnmarkedSpam
                 | AuditAction::AdminInviteCreated
                 | AuditAction::AdminInviteAccepted
                 | AuditAction::AdminInviteRevoked

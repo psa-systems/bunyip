@@ -291,15 +291,20 @@ pub async fn audit_logs(
 
 // --- feedback ---------------------------------------------------------------
 
+/// Feedback list bucketed by admin tab (BUNYIP-92). Bucket strings map
+/// 1:1 to the API's accepted set: `active` (default, excludes closed +
+/// spam), `closed` (closed and not spam), `spam` (is_spam=true, any
+/// status). The `archive` view has its own endpoint.
 pub async fn feedback(
     api: &Api,
     cookie: Option<&str>,
     page: u32,
     page_size: u32,
+    bucket: &str,
 ) -> Result<PaginatedResponse<AdminFeedbackSummary>, ApiError> {
     parse(
         api.get(
-            &format!("/admin/feedback?page={page}&page_size={page_size}"),
+            &format!("/admin/feedback?page={page}&page_size={page_size}&bucket={bucket}"),
             cookie,
         )
         .await?,
@@ -379,6 +384,35 @@ pub async fn restore_feedback(
             cookie,
             None,
         )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-92: flip `is_spam` to TRUE.
+pub async fn mark_feedback_spam(api: &Api, cookie: Option<&str>, id: &str) -> Result<(), ApiError> {
+    let r = api
+        .post(&format!("/admin/feedback/{id}/mark-spam"), cookie, None)
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-92: flip `is_spam` back to FALSE (false-positive recovery).
+pub async fn unmark_feedback_spam(
+    api: &Api,
+    cookie: Option<&str>,
+    id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(&format!("/admin/feedback/{id}/unmark-spam"), cookie, None)
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-92: hard delete. Writes a `FeedbackDeleted` audit row on the
+/// API; the row is unrecoverable after this returns.
+pub async fn delete_feedback(api: &Api, cookie: Option<&str>, id: &str) -> Result<(), ApiError> {
+    let r = api
+        .delete(&format!("/admin/feedback/{id}"), cookie, None)
         .await?;
     ok_data(&r).map(|_| ())
 }

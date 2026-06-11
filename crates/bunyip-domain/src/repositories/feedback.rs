@@ -46,16 +46,31 @@ impl FeedbackRepository {
         pool: &PgPool,
         page: i32,
         per_page: i32,
-        status: Option<&str>,
+        bucket: Option<&str>,
     ) -> Result<(Vec<Feedback>, i64), AppError> {
         let offset = (page - 1) * per_page;
+
+        // BUNYIP-92: bucket is the admin-tab dispatcher. Each bucket maps
+        // to a SQL predicate baked into a static string here (not a bound
+        // value), so the filter is closed against SQL injection by
+        // construction. Unknown bucket -> no filter, which preserves the
+        // pre-BUNYIP-92 (buggy) behaviour for any caller that does not
+        // yet pass one. All bucket strings exclude `is_spam = TRUE`
+        // EXCEPT the explicit "spam" bucket; the active queue never
+        // surfaces spam.
+        let bucket_predicate: Option<&'static str> = match bucket.unwrap_or("active") {
+            "active" => Some(" WHERE is_spam = FALSE AND status <> 'closed'"),
+            "closed" => Some(" WHERE is_spam = FALSE AND status = 'closed'"),
+            "spam" => Some(" WHERE is_spam = TRUE"),
+            _ => None,
+        };
 
         let mut query = QueryBuilder::new("SELECT * FROM feedback");
         let mut count_query = QueryBuilder::new("SELECT COUNT(*)::BIGINT FROM feedback");
 
-        if let Some(status) = status {
-            query.push(" WHERE status = ").push_bind(status);
-            count_query.push(" WHERE status = ").push_bind(status);
+        if let Some(predicate) = bucket_predicate {
+            query.push(predicate);
+            count_query.push(predicate);
         }
 
         query
@@ -69,6 +84,20 @@ impl FeedbackRepository {
         let total: (i64,) = count_query.build_query_as().fetch_one(pool).await?;
 
         Ok((feedback, total.0))
+    }
+
+    /// Flip `is_spam` on a feedback row (BUNYIP-92). Used by both the
+    /// mark-spam and unmark-spam admin actions; the caller writes the
+    /// matching audit-log row.
+    pub async fn set_is_spam(pool: &PgPool, id: Uuid, is_spam: bool) -> Result<Feedback, AppError> {
+        let feedback = sqlx::query_as::<_, Feedback>(
+            "UPDATE feedback SET is_spam = $1, updated_at = NOW() WHERE id = $2 RETURNING *",
+        )
+        .bind(is_spam)
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+        Ok(feedback)
     }
 
     pub async fn update_status(
@@ -173,7 +202,13 @@ impl FeedbackRepository {
     }
 
     pub async fn delete(pool: &PgPool, id: Uuid) -> Result<(), AppError> {
-        let result = sqlx::query("DELETE FROM feedback WHERE id = $1 AND status = 'closed'")
+        // BUNYIP-92: dropped the legacy `AND status = 'closed'` constraint.
+        // The admin-only gate + the JS confirm() in the SSR layer + the
+        // FeedbackDeleted audit log already provide three independent
+        // safety layers; the closed-only check blocked legitimate
+        // workflows (e.g. delete a spam row directly from the Spam tab
+        // without first reopening + closing it).
+        let result = sqlx::query("DELETE FROM feedback WHERE id = $1")
             .bind(id)
             .execute(pool)
             .await?;

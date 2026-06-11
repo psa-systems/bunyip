@@ -156,8 +156,14 @@ async fn main() {
             "/admin/feedback/export",
             get(handlers::admin::feedback_export),
         )
-        // Archive routes register BEFORE the `:id` detail route so axum's
-        // matcher does not interpret the literal `archive` as a feedback id.
+        // Tab + archive routes register BEFORE the `:id` detail route so
+        // axum's matcher does not interpret the literal `closed` / `spam`
+        // / `archive` as a feedback id.
+        .route(
+            "/admin/feedback/closed",
+            get(handlers::admin::feedback_closed),
+        )
+        .route("/admin/feedback/spam", get(handlers::admin::feedback_spam))
         .route(
             "/admin/feedback/archive",
             get(handlers::admin::feedback_archive),
@@ -178,6 +184,18 @@ async fn main() {
         .route(
             "/admin/feedback/:id/status",
             axum::routing::post(handlers::admin::feedback_status),
+        )
+        .route(
+            "/admin/feedback/:id/mark-spam",
+            axum::routing::post(handlers::admin::feedback_mark_spam),
+        )
+        .route(
+            "/admin/feedback/:id/unmark-spam",
+            axum::routing::post(handlers::admin::feedback_unmark_spam),
+        )
+        .route(
+            "/admin/feedback/:id/delete",
+            axum::routing::post(handlers::admin::feedback_delete),
         )
         .route(
             "/admin/applications",
