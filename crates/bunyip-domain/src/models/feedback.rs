@@ -135,6 +135,11 @@ pub struct AdminFeedbackSummary {
     pub subject: Option<String>,
     pub tags: Vec<String>,
     pub message_excerpt: String,
+    /// Path the submitter was on when they opened the feedback form, so
+    /// admins triaging the list can see context without opening a detail
+    /// view. `None` when the submission predates the field; `"/feedback"`
+    /// (the default) is suppressed by the renderer to avoid noise.
+    pub page_path: Option<String>,
     pub status: String,
     pub created_at: DateTime<Utc>,
     pub responded_at: Option<DateTime<Utc>>,
@@ -192,6 +197,7 @@ impl Feedback {
             subject: self.subject.clone(),
             tags: self.tags.clone(),
             message_excerpt: Self::excerpt(&self.message),
+            page_path: self.page_path.clone(),
             status: self.status.clone(),
             created_at: self.created_at,
             responded_at: self.responded_at,
