@@ -34,6 +34,121 @@ const ALLOWED_MIME_TYPES: &[&str] = &[
     "text/plain",
 ];
 
+/// Filename length cap (BUNYIP-90). Belt-and-suspenders alongside the
+/// control-character rejection: a 5000-character filename would survive
+/// the basename strip and end up in the DB row + admin UI + log lines.
+const MAX_FILENAME_LEN: usize = 200;
+
+/// Maximum decoded image dimension in pixels (BUNYIP-90). The byte size
+/// cap already rejects most decompression bombs, but a 5 MB PNG can
+/// declare a billion-pixel dimension that blows up the admin browser
+/// when it tries to render the thumbnail. 10000 covers any plausible
+/// real-world screenshot (typical 4K is 3840px wide); anything beyond
+/// is hostile.
+const MAX_IMAGE_DIMENSION: usize = 10000;
+
+/// Validate `filename` for length and absence of control characters
+/// (BUNYIP-90). Returns the trimmed-to-basename filename on success.
+/// NULL bytes and other control characters can break logging, CSV
+/// export, and downstream callers' shell-command boundaries; we reject
+/// at the front door instead of patching every consumer.
+fn validate_filename(fname: &str) -> Result<String, AppError> {
+    let safe = std::path::Path::new(fname)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("attachment")
+        .to_string();
+    if safe.is_empty() {
+        return Err(AppError::validation("attachment", "Empty filename"));
+    }
+    if safe.len() > MAX_FILENAME_LEN {
+        return Err(AppError::validation(
+            "attachment",
+            "Filename exceeds 200 characters",
+        ));
+    }
+    if safe.chars().any(|c| c.is_control()) {
+        return Err(AppError::validation(
+            "attachment",
+            "Filename contains control characters",
+        ));
+    }
+    Ok(safe)
+}
+
+/// Sniff `bytes` for a known file signature and derive the canonical
+/// MIME (BUNYIP-90). For files whose magic bytes are recognised, the
+/// returned MIME OVERRIDES whatever the browser sent in the multipart
+/// part's Content-Type - the sniffer is authoritative. For files with
+/// no magic-byte signature (text), the only accepted shape is a UTF-8
+/// blob declared as text/plain by the browser; everything else is
+/// rejected so an attacker cannot smuggle a binary in by claiming
+/// text/plain.
+fn derive_canonical_mime(bytes: &[u8], declared_mime: &str) -> Result<String, AppError> {
+    if let Some(kind) = infer::get(bytes) {
+        let sniffed = kind.mime_type();
+        if !ALLOWED_MIME_TYPES.contains(&sniffed) {
+            tracing::warn!(
+                declared_mime = %declared_mime,
+                sniffed_mime = %sniffed,
+                "Feedback attachment rejected: sniffed MIME not in allowlist"
+            );
+            return Err(AppError::validation(
+                "attachment",
+                "File content is not an allowed type",
+            ));
+        }
+        return Ok(sniffed.to_string());
+    }
+    // No magic bytes recognized. Only `text/plain` is allowed here; the
+    // payload must also be valid UTF-8 so an attacker can't ship a
+    // binary by claiming text/plain.
+    if declared_mime != "text/plain" {
+        tracing::warn!(
+            declared_mime = %declared_mime,
+            "Feedback attachment rejected: could not verify file type from content"
+        );
+        return Err(AppError::validation(
+            "attachment",
+            "Could not verify file type from content",
+        ));
+    }
+    if std::str::from_utf8(bytes).is_err() {
+        return Err(AppError::validation(
+            "attachment",
+            "text/plain attachment is not valid UTF-8",
+        ));
+    }
+    Ok("text/plain".to_string())
+}
+
+/// Reject decompression-bomb images by reading just the header
+/// (BUNYIP-90). `imagesize::blob_size` parses dimensions without
+/// decoding any pixels, so a billion-pixel "PNG" fails here before any
+/// rendering ever happens. No-op for non-image MIMEs.
+fn enforce_image_dimensions(mime: &str, bytes: &[u8]) -> Result<(), AppError> {
+    if !mime.starts_with("image/") {
+        return Ok(());
+    }
+    let size = imagesize::blob_size(bytes).map_err(|e| {
+        tracing::warn!(mime = %mime, error = %e, "Feedback image rejected: could not parse dimensions");
+        AppError::validation("attachment", "Could not parse image dimensions")
+    })?;
+    if size.width > MAX_IMAGE_DIMENSION || size.height > MAX_IMAGE_DIMENSION {
+        tracing::warn!(
+            mime = %mime,
+            width = size.width,
+            height = size.height,
+            "Feedback image rejected: dimensions exceed limit"
+        );
+        return Err(AppError::validation(
+            "attachment",
+            "Image dimensions exceed limit",
+        ));
+    }
+    Ok(())
+}
+
 fn normalize_optional(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let trimmed = value.trim();
@@ -157,30 +272,32 @@ pub async fn submit_feedback(
         }
 
         if let Some(fname) = filename {
-            // File field
+            // File field. BUNYIP-90 hardening: every check runs against
+            // file CONTENT, never the declared MIME or claimed filename:
+            //  - count + size: see byte-chunk loop above
+            //  - filename: length + control-char guard (rejects NULL,
+            //    newline, tab, etc. that would break logging / CSV)
+            //  - MIME: magic-byte sniff overrides the browser's claim;
+            //    only the sniffed type ends up stored. text/plain has
+            //    no magic and is accepted only when the bytes parse as
+            //    UTF-8
+            //  - image dimensions: header-only parse via imagesize so
+            //    we never instantiate a decoder against adversarial
+            //    input. Blocks 1000000x1000000 "PNG" bombs.
             if attachment_parts.len() >= MAX_ATTACHMENTS {
                 return Err(AppError::validation(
                     "attachment",
                     "Maximum 3 attachments allowed",
                 ));
             }
-            let mime = field
+            let safe_name = validate_filename(&fname)?;
+            let declared_mime = field
                 .content_type()
                 .map(|m| m.to_string())
                 .unwrap_or_else(|| "application/octet-stream".to_string());
-            if !ALLOWED_MIME_TYPES.contains(&mime.as_str()) {
-                return Err(AppError::validation(
-                    "attachment",
-                    "Only PNG, JPEG, WebP, GIF, and plain text files are allowed",
-                ));
-            }
-            // Sanitize filename: keep only the basename, strip path separators
-            let safe_name = std::path::Path::new(&fname)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("attachment")
-                .to_string();
-            attachment_parts.push((safe_name, mime, bytes));
+            let canonical_mime = derive_canonical_mime(&bytes, &declared_mime)?;
+            enforce_image_dimensions(&canonical_mime, &bytes)?;
+            attachment_parts.push((safe_name, canonical_mime, bytes));
         } else {
             // Text field
             let value = String::from_utf8_lossy(&bytes).to_string();
