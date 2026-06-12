@@ -35,7 +35,7 @@ use actix_web::{
     cookie::{Cookie, SameSite},
     dev::Payload,
     http::header,
-    FromRequest, HttpMessage, HttpRequest,
+    FromRequest, HttpRequest,
 };
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -134,8 +134,10 @@ fn token_is_atjwt(token: &str) -> bool {
     jsonwebtoken::decode_header(token)
         .ok()
         .and_then(|h| h.typ)
-        .as_deref()
-        == Some("at+jwt")
+        // RFC 9068 media types are case-insensitive, so a mixed-case
+        // `At+JWT` must route to the EdDSA verifier, not silently fall
+        // back to the HS256 path.
+        .is_some_and(|typ| typ.eq_ignore_ascii_case("at+jwt"))
 }
 
 /// Type alias for the boxed-future shape every extractor in this
@@ -143,10 +145,6 @@ fn token_is_atjwt(token: &str) -> bool {
 /// lookup; the HS256 path is sync but gets wrapped in the same future
 /// so both extractors compose under one [`FromRequest::Future`].
 type ExtractorFuture<T> = Pin<Box<dyn Future<Output = Result<T, AppError>>>>;
-
-/// Key for storing authenticated user claims in request extensions
-#[derive(Debug, Clone)]
-pub struct AuthenticatedClaims(pub AccessTokenClaims);
 
 /// Extractor for authenticated users - returns 401 if not authenticated
 #[derive(Debug, Clone)]
@@ -160,14 +158,11 @@ impl FromRequest for AuthenticatedUser {
         let jwt_service = req.app_data::<Arc<JwtService>>().cloned();
         let at_jwt_verifier = req.app_data::<Arc<dyn AtJwtVerifier>>().cloned();
         let token = extract_token(req);
-        let req = req.clone();
 
         Box::pin(async move {
             let token = token.ok_or(AppError::Unauthorized)?;
             let claims =
                 verify_either(&token, jwt_service.as_ref(), at_jwt_verifier.as_ref()).await?;
-            req.extensions_mut()
-                .insert(AuthenticatedClaims(claims.clone()));
             Ok(AuthenticatedUser(claims))
         })
     }
@@ -193,11 +188,7 @@ impl FromRequest for OptionalUser {
                 return Ok(OptionalUser(None));
             };
             match verify_either(&token, jwt_service.as_ref(), at_jwt_verifier.as_ref()).await {
-                Ok(claims) => {
-                    req.extensions_mut()
-                        .insert(AuthenticatedClaims(claims.clone()));
-                    Ok(OptionalUser(Some(claims)))
-                }
+                Ok(claims) => Ok(OptionalUser(Some(claims))),
                 Err(e) => {
                     tracing::debug!(error = %e, path = %req.path(), "OptionalUser: token present but verification failed");
                     Ok(OptionalUser(None))
@@ -219,7 +210,6 @@ impl FromRequest for AdminUser {
         let jwt_service = req.app_data::<Arc<JwtService>>().cloned();
         let at_jwt_verifier = req.app_data::<Arc<dyn AtJwtVerifier>>().cloned();
         let token = extract_token(req);
-        let req = req.clone();
 
         Box::pin(async move {
             let token = token.ok_or(AppError::Unauthorized)?;
@@ -228,8 +218,6 @@ impl FromRequest for AdminUser {
             if claims.role != "admin" {
                 return Err(AppError::Forbidden);
             }
-            req.extensions_mut()
-                .insert(AuthenticatedClaims(claims.clone()));
             Ok(AdminUser(claims))
         })
     }
@@ -247,7 +235,6 @@ impl FromRequest for MemberUser {
         let jwt_service = req.app_data::<Arc<JwtService>>().cloned();
         let at_jwt_verifier = req.app_data::<Arc<dyn AtJwtVerifier>>().cloned();
         let token = extract_token(req);
-        let req = req.clone();
 
         Box::pin(async move {
             let token = token.ok_or(AppError::Unauthorized)?;
@@ -256,8 +243,6 @@ impl FromRequest for MemberUser {
             if !claims.has_member_access() {
                 return Err(AppError::Forbidden);
             }
-            req.extensions_mut()
-                .insert(AuthenticatedClaims(claims.clone()));
             Ok(MemberUser(claims))
         })
     }
@@ -500,32 +485,55 @@ impl AuthCookies {
     }
 }
 
-/// Extract client IP address from request
+/// Extract the client IP address from a request.
+///
+/// `X-Forwarded-For` (first hop) and `X-Real-IP` are spoofable: any client can
+/// set them. They are therefore honoured ONLY when the immediate socket peer is
+/// itself a configured trusted reverse proxy (`Config::trusted_proxies`, env
+/// `TRUSTED_PROXY_CIDR`). For every other peer - and when no `Config` is
+/// registered in app data - the real socket address is used. This keeps client
+/// IPs correct behind the real ingress while closing the spoofing vector that
+/// let any client evade the auto-ban or ban a victim by forging their IP.
 pub fn extract_client_ip(req: &HttpRequest) -> Option<std::net::IpAddr> {
-    // Try X-Forwarded-For header first (for proxied requests)
-    if let Some(forwarded) = req.headers().get("X-Forwarded-For") {
-        if let Ok(forwarded_str) = forwarded.to_str() {
-            if let Some(first_ip) = forwarded_str.split(',').next() {
-                if let Ok(ip) = first_ip.trim().parse() {
+    let peer_ip = req.peer_addr().map(|addr| addr.ip());
+
+    // Trust forwarding headers only when the immediate peer is a trusted proxy.
+    let peer_is_trusted_proxy = match (peer_ip, trusted_proxies(req)) {
+        (Some(peer), Some(proxies)) => proxies.iter().any(|net| net.contains(peer)),
+        _ => false,
+    };
+
+    if peer_is_trusted_proxy {
+        // X-Forwarded-For: first entry is the original client.
+        if let Some(forwarded) = req.headers().get("X-Forwarded-For") {
+            if let Ok(forwarded_str) = forwarded.to_str() {
+                if let Some(first_ip) = forwarded_str.split(',').next() {
+                    if let Ok(ip) = first_ip.trim().parse() {
+                        return Some(ip);
+                    }
+                }
+            }
+        }
+
+        // X-Real-IP fallback (still only from a trusted proxy).
+        if let Some(real_ip) = req.headers().get("X-Real-IP") {
+            if let Ok(ip_str) = real_ip.to_str() {
+                if let Ok(ip) = ip_str.parse() {
                     return Some(ip);
                 }
             }
         }
     }
 
-    // Try X-Real-IP header
-    if let Some(real_ip) = req.headers().get("X-Real-IP") {
-        if let Ok(ip_str) = real_ip.to_str() {
-            if let Ok(ip) = ip_str.parse() {
-                return Some(ip);
-            }
-        }
-    }
+    peer_ip
+}
 
-    // Fall back to connection info
-    req.connection_info()
-        .realip_remote_addr()
-        .and_then(|addr| addr.parse().ok())
+/// Read the configured trusted-proxy CIDRs from request app data. Returns
+/// `None` when no [`Config`](crate::config::Config) is registered (e.g. in unit
+/// tests), in which case forwarding headers are never trusted.
+fn trusted_proxies(req: &HttpRequest) -> Option<&[ipnetwork::IpNetwork]> {
+    req.app_data::<actix_web::web::Data<crate::config::Config>>()
+        .map(|cfg| cfg.trusted_proxies.as_slice())
 }
 
 /// Extract device info from User-Agent header
@@ -723,6 +731,16 @@ mod tests {
     #[test]
     fn token_is_atjwt_rejects_legacy_jwt_typ() {
         assert!(!token_is_atjwt(&jwt_with_typ("JWT")));
+    }
+
+    #[test]
+    fn token_is_atjwt_matches_case_insensitively() {
+        // RFC 9068 media types are case-insensitive: a mixed-case `typ`
+        // must still route to the EdDSA path, never silently fall back
+        // to HS256.
+        assert!(token_is_atjwt(&jwt_with_typ("AT+JWT")));
+        assert!(token_is_atjwt(&jwt_with_typ("At+Jwt")));
+        assert!(token_is_atjwt(&jwt_with_typ("at+JWT")));
     }
 
     #[test]
