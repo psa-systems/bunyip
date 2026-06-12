@@ -3,8 +3,8 @@
 use serde_json::{json, Value};
 
 use super::types::{
-    AppDownloadGroup, AppDownloadsResponse, Application, ApplicationList, CheckoutSessionResponse,
-    DownloadGroups, Membership, StripeInvoice, StripePaymentResponse,
+    AppDownloadGroup, Application, ApplicationList, CheckoutSessionResponse, DownloadGroups,
+    Membership, StripeInvoice, StripePaymentResponse,
 };
 use super::{ok_data, parse, Api, ApiError};
 
@@ -103,17 +103,6 @@ pub async fn download_asset(
         urlencoding::encode(asset_name),
     );
     api.get_stream(&path, cookie).await
-}
-
-pub async fn downloads_for_app(
-    api: &Api,
-    cookie: Option<&str>,
-    slug: &str,
-) -> Result<AppDownloadsResponse, ApiError> {
-    parse(
-        api.get(&format!("/applications/{slug}/downloads"), cookie)
-            .await?,
-    )
 }
 
 // --- feedback ---------------------------------------------------------------

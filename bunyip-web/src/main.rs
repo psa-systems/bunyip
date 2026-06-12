@@ -21,13 +21,12 @@ async fn main() {
         )
         .init();
 
-    let cfg = config::Config::from_env();
+    let cfg = Arc::new(config::Config::from_env());
     let api = api::Api::new(&cfg.api_url);
     let bind_addr = cfg.bind_addr.clone();
-    let api_url = cfg.api_url.clone();
     let state = web::AppState {
         api,
-        cfg: Arc::new(cfg),
+        cfg: Arc::clone(&cfg),
     };
 
     use handlers::{auth_pages as ap, content, dashboard as dash, public};
@@ -265,7 +264,7 @@ async fn main() {
     println!("  ===================================================");
     println!("   bunyip-web  (Bunyip · Surfaces what matters.)");
     println!("   Web listening on  http://{bind_addr}");
-    println!("   API backend       {api_url}");
+    println!("   API backend       {}", cfg.api_url);
     println!("  ===================================================");
     println!();
 

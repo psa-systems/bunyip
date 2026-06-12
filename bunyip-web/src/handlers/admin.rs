@@ -17,7 +17,7 @@ use crate::api::types::{
     AdminAuditLog, AdminFeedbackDetail, FeedbackAttachmentMeta, FeedbackStatus, UserEntitlement,
 };
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
-use crate::util::relative_time;
+use crate::util::{relative_time, urlenc};
 use crate::views::ui::{badge, button_class, error_box, icon};
 use crate::web::{redirect_cookies, AppState};
 
@@ -717,7 +717,7 @@ fn feedback_row(f: &crate::api::types::AdminFeedbackSummary, tab: FeedbackTab) -
                 p class="text-xs text-muted-foreground" { (relative_time(&f.created_at)) }
             }
             div class="flex items-center gap-2 shrink-0" {
-                (badge("outline", admin_api::feedback_status_str(f.status.clone())))
+                (badge("outline", f.status.as_str()))
                 // BUNYIP-93: "Reply" is a discoverability fix, not a new
                 // action. The reply form lives on the detail subpage
                 // (BUNYIP-85); the row subject already links there but
@@ -1094,7 +1094,7 @@ fn feedback_detail_view(f: &AdminFeedbackDetail) -> Markup {
                         a href="/admin/feedback" class="hover:underline" { "← Back to feedback" }
                     }
                 }
-                (badge("outline", admin_api::feedback_status_str(f.status.clone())))
+                (badge("outline", f.status.as_str()))
             }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="p-6 space-y-4" {
@@ -2308,20 +2308,6 @@ pub async fn stripe_save(
     }
     let _ = admin_api::update_stripe_config(&st.api, c.forward.as_deref(), body).await;
     redirect_cookies("/admin/stripe", &c.set_cookies)
-}
-
-fn urlenc(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            b' ' => out.push('+'),
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
 }
 
 #[cfg(test)]
