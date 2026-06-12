@@ -82,7 +82,15 @@ pub async fn issue_token(
     )
     .await?
     {
-        return Err(too_many(pool.get_ref(), &rate_key, &email, ip, "rate_limited").await);
+        return Err(too_many(
+            pool.get_ref(),
+            &rate_key,
+            &RateLimitConfig::OCI_TOKEN_FAILURES,
+            &email,
+            ip,
+            "rate_limited",
+        )
+        .await);
     }
 
     // Per-IP failure cap (distributed-guessing brake). Skipped when no client
@@ -95,7 +103,15 @@ pub async fn issue_token(
         )
         .await?
         {
-            return Err(too_many(pool.get_ref(), ip_key, &email, ip, "rate_limited_ip").await);
+            return Err(too_many(
+                pool.get_ref(),
+                ip_key,
+                &RateLimitConfig::OCI_TOKEN_IP_FAILURES,
+                &email,
+                ip,
+                "rate_limited_ip",
+            )
+            .await);
         }
     }
 
@@ -110,6 +126,7 @@ pub async fn issue_token(
         return Err(too_many(
             pool.get_ref(),
             &rate_key,
+            &RateLimitConfig::OCI_TOKEN_THROUGHPUT,
             &email,
             ip,
             "rate_limited_throughput",
@@ -266,21 +283,23 @@ async fn failures_at_cap(
 
 /// Build a 429 for an exceeded limit: look up the reset window, audit, and
 /// return the error. `key` is the counter key that tripped (email or IP);
+/// `config` is the limit that tripped (failures / IP-failures / throughput);
 /// `email`/`ip` are for the audit record.
 async fn too_many(
     pool: &PgPool,
     key: &str,
+    config: &RateLimitConfig,
     email: &str,
     ip: Option<IpNetwork>,
     reason: &str,
 ) -> OciError {
-    // get_retry_after needs the config to compute the window; the failure and
-    // throughput windows are both 60s, so any of the OCI token configs gives
-    // the right answer. Use FAILURES as the representative 60s window.
-    let retry_after =
-        RateLimitRepository::get_retry_after(pool, key, &RateLimitConfig::OCI_TOKEN_FAILURES)
-            .await
-            .unwrap_or(60);
+    // `get_retry_after` reads the window row keyed by (key, config.action), so it
+    // MUST get the config that actually tripped. Passing a fixed FAILURES config
+    // for a throughput or per-IP denial looked up the wrong (key, action) pair,
+    // found no row, and returned Retry-After: 0.
+    let retry_after = RateLimitRepository::get_retry_after(pool, key, config)
+        .await
+        .unwrap_or(60);
     audit_failed(pool, email, ip, reason).await;
     OciError::TooManyRequests {
         retry_after_secs: Some(retry_after),

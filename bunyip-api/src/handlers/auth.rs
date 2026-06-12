@@ -12,23 +12,11 @@ use crate::middleware::{
     extract_client_ip, extract_device_info, AuthCookies, AuthenticatedUser, OptionalUser,
 };
 use crate::models::{CreateUser, RateLimitConfig, UserResponse, UserRole};
-use crate::repositories::{RateLimitRepository, UserRepository};
+use crate::repositories::UserRepository;
 use crate::responses::{get_request_id, success};
 use crate::services::{AcceptInviteResult, AuthService, LoginResult, PasswordService};
 
-/// Check rate limit and return RateLimited error if exceeded
-async fn check_rate_limit(
-    pool: &PgPool,
-    key: &str,
-    config: &RateLimitConfig,
-) -> Result<(), AppError> {
-    let (_count, exceeded) = RateLimitRepository::check_and_increment(pool, key, config).await?;
-    if exceeded {
-        let retry_after = RateLimitRepository::get_retry_after(pool, key, config).await?;
-        return Err(AppError::RateLimited { retry_after });
-    }
-    Ok(())
-}
+use super::check_rate_limit;
 
 /// Injected OIDC provider (present only when bunyip-api runs as the OP).
 pub type OidcProviderData =
@@ -918,22 +906,24 @@ pub async fn auth_redirect(
 ) -> Result<HttpResponse, AppError> {
     let target_url = &query.url;
 
-    tracing::info!(
+    tracing::debug!(
         target_url = %target_url,
         has_access_token = req.cookie("access_token").is_some(),
         has_refresh_token = req.cookie("refresh_token").is_some(),
         user_authenticated = optional_user.0.is_some(),
         cookie_domain = ?config.cookie_domain,
-        cors_origin = %config.cors_origin,
+        web_origin = %config.web_origin,
         "auth_redirect: request received"
     );
 
-    // Validate the redirect URL is on an allowed domain
+    // Validate the redirect URL is on an allowed domain. Validate against
+    // web_origin (a single absolute URL) like logout_redirect does; cors_origin
+    // is a comma-list that Url::parse cannot handle, which 422'd every redirect
+    // whenever COOKIE_DOMAIN was unset.
     let allowed = match url::Url::parse(target_url) {
         Ok(parsed) => {
             if let Some(host) = parsed.host_str() {
-                // Extract base domain from CORS origin for comparison
-                let cors_domain = url::Url::parse(&config.cors_origin)
+                let web_domain = url::Url::parse(&config.web_origin)
                     .ok()
                     .and_then(|u| u.host_str().map(|h| h.to_string()));
 
@@ -942,7 +932,7 @@ pub async fn auth_redirect(
                     .cookie_domain
                     .as_deref()
                     .map(|d| d.trim_start_matches('.'))
-                    .or(cors_domain.as_deref());
+                    .or(web_domain.as_deref());
 
                 match base_domain {
                     Some(domain) => host == domain || host.ends_with(&format!(".{domain}")),
@@ -955,7 +945,7 @@ pub async fn auth_redirect(
         Err(_) => false,
     };
 
-    tracing::info!(allowed = allowed, "auth_redirect: URL validation result");
+    tracing::debug!(allowed = allowed, "auth_redirect: URL validation result");
 
     if !allowed {
         return Err(AppError::validation("url", "Invalid redirect URL"));
@@ -969,7 +959,7 @@ pub async fn auth_redirect(
 
     // If access token is valid, redirect immediately
     if optional_user.0.is_some() {
-        tracing::info!(location = %target_url, "auth_redirect: user authenticated, redirecting to target");
+        tracing::debug!(location = %target_url, "auth_redirect: user authenticated, redirecting to target");
         return Ok(HttpResponse::Found()
             .insert_header(("Location", target_url.as_str()))
             .finish());
@@ -979,7 +969,7 @@ pub async fn auth_redirect(
     let refresh_token = req.cookie("refresh_token").map(|c| c.value().to_string());
 
     if let Some(ref refresh_token) = refresh_token {
-        tracing::info!("auth_redirect: attempting token refresh");
+        tracing::debug!("auth_redirect: attempting token refresh");
         let ip_address = extract_client_ip(&req);
         let device_info = extract_device_info(&req);
 
@@ -988,7 +978,7 @@ pub async fn auth_redirect(
             .await
         {
             Ok(tokens) => {
-                tracing::info!(location = %target_url, "auth_redirect: refresh succeeded, redirecting to target");
+                tracing::debug!(location = %target_url, "auth_redirect: refresh succeeded, redirecting to target");
                 let secure = config.is_production();
                 let cookie_domain = config.cookie_domain.as_deref();
 
@@ -1016,11 +1006,11 @@ pub async fn auth_redirect(
             }
         }
     } else {
-        tracing::info!("auth_redirect: no refresh token cookie found");
+        tracing::debug!("auth_redirect: no refresh token cookie found");
     }
 
     // Not authenticated — redirect to login
-    tracing::info!(location = %login_url, "auth_redirect: not authenticated, redirecting to login");
+    tracing::debug!(location = %login_url, "auth_redirect: not authenticated, redirecting to login");
     Ok(HttpResponse::Found()
         .insert_header(("Location", login_url.as_str()))
         .finish())

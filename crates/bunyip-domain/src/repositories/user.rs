@@ -429,6 +429,26 @@ impl UserRepository {
         Ok(())
     }
 
+    /// Reactivate a soft-deleted user by clearing `deleted_at`.
+    ///
+    /// Returns `true` when a previously-deleted row was restored, `false` when
+    /// no matching soft-deleted user exists (already active or unknown id), so
+    /// the caller can distinguish a real reactivation from a no-op.
+    pub async fn restore(pool: &PgPool, user_id: Uuid) -> Result<bool, AppError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE users
+            SET deleted_at = NULL, updated_at = NOW()
+            WHERE id = $1 AND deleted_at IS NOT NULL
+            "#,
+        )
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Set two_factor_enabled flag on a user
     pub async fn set_two_factor_enabled(
         pool: &PgPool,
