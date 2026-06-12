@@ -35,6 +35,14 @@ pub struct Config {
     pub cookie_domain: Option<String>,
     /// Auto-ban configuration
     pub auto_ban: AutoBanConfig,
+    /// CIDR ranges of trusted reverse proxies. `X-Forwarded-For` / `X-Real-IP`
+    /// are honoured only when the immediate socket peer falls inside one of
+    /// these ranges; otherwise the real socket address is used. This closes the
+    /// IP-spoofing vector where any client could forge its IP to evade the
+    /// auto-ban or to ban a victim. Parsed from `TRUSTED_PROXY_CIDR`
+    /// (comma-separated CIDRs); empty by default, meaning forwarding headers
+    /// are never trusted.
+    pub trusted_proxies: Vec<ipnetwork::IpNetwork>,
     /// TOTP encryption key (32 bytes) for encrypting TOTP secrets at rest
     pub totp_encryption_key: [u8; 32],
     /// Previous TOTP encryption key for rotation (optional)
@@ -174,6 +182,24 @@ fn parse_smtp_from_name(smtp_from: &str) -> String {
         }
     }
     "localhost".to_string()
+}
+
+/// Parse a comma-separated list of CIDR ranges into trusted-proxy networks.
+/// Invalid entries are logged and skipped rather than aborting startup, so a
+/// single typo cannot take the whole service down; an empty or all-invalid
+/// list means no proxy is trusted and forwarding headers are ignored.
+fn parse_trusted_proxies(raw: &str) -> Vec<ipnetwork::IpNetwork> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter_map(|entry| match entry.parse::<ipnetwork::IpNetwork>() {
+            Ok(net) => Some(net),
+            Err(e) => {
+                tracing::warn!(entry, error = %e, "ignoring invalid TRUSTED_PROXY_CIDR entry");
+                None
+            }
+        })
+        .collect()
 }
 
 /// Auto-ban configuration
@@ -607,6 +633,8 @@ impl Config {
         let cookie_domain = env::var("COOKIE_DOMAIN").ok().filter(|s| !s.is_empty());
 
         let auto_ban = AutoBanConfig::from_env();
+        let trusted_proxies =
+            parse_trusted_proxies(&env::var("TRUSTED_PROXY_CIDR").unwrap_or_default());
 
         let totp_encryption_key = Self::load_totp_encryption_key(&environment);
         let stripe_encryption_key = Self::load_stripe_encryption_key(&environment);
@@ -640,6 +668,7 @@ impl Config {
             email,
             cookie_domain,
             auto_ban,
+            trusted_proxies,
             totp_encryption_key,
             totp_encryption_key_prev,
             totp_key_version,

@@ -393,6 +393,11 @@ pub async fn delete_account(
     // Revoke all refresh tokens
     TokenRepository::revoke_all_user_refresh_tokens(pool.get_ref(), user.0.sub).await?;
 
+    // Revoke OIDC OP sessions so SSO into downstream clients dies with the
+    // account (as logout_all does); otherwise a live op_session keeps minting
+    // codes for a user who just deleted themselves.
+    crate::handlers::auth::revoke_op_sessions(&oidc_provider, user.0.sub).await;
+
     // Audit log
     let ip = ip_address.map(ipnetwork::IpNetwork::from);
     AuditLogRepository::create(

@@ -18,8 +18,7 @@ use crate::models::{
     RespondToFeedbackRequest, UpdateFeedbackStatusRequest,
 };
 use crate::repositories::{
-    AuditLogRepository, FeedbackRepository, NotificationRepository, RateLimitRepository,
-    UserRepository,
+    AuditLogRepository, FeedbackRepository, NotificationRepository, UserRepository,
 };
 use crate::responses::{created, get_request_id, paginated, success};
 use crate::services::EmailService;
@@ -207,12 +206,7 @@ async fn check_feedback_rate_limit(pool: &PgPool, key: &str) -> Result<(), AppEr
         max_requests: 5,
         window_seconds: 3600,
     };
-    let (_count, exceeded) = RateLimitRepository::check_and_increment(pool, key, &config).await?;
-    if exceeded {
-        let retry_after = RateLimitRepository::get_retry_after(pool, key, &config).await?;
-        return Err(AppError::RateLimited { retry_after });
-    }
-    Ok(())
+    super::check_rate_limit(pool, key, &config).await
 }
 
 pub async fn submit_feedback(
@@ -430,7 +424,6 @@ pub async fn submit_feedback(
 pub struct ListFeedbackQuery {
     pub page: Option<i32>,
     pub per_page: Option<i32>,
-    pub page_size: Option<i32>,
     /// Legacy single-status filter kept for compatibility; ignored when
     /// `bucket` is set. New callers should use `bucket` instead so
     /// is_spam filtering and "everything except closed" are reachable
@@ -453,7 +446,7 @@ pub async fn list_feedback(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.or(query.page_size).unwrap_or(20).min(100);
+    let per_page = query.per_page.unwrap_or(20).min(100);
 
     if let Some(status) = query.status.as_deref() {
         FeedbackStatus::from_str(status)
@@ -742,7 +735,7 @@ pub async fn export_feedback(
     _admin: AdminUser,
     pool: web::Data<PgPool>,
 ) -> Result<HttpResponse, AppError> {
-    let _ = get_request_id(&req);
+    let request_id = get_request_id(&req);
     let feedback = FeedbackRepository::list_all(&pool).await?;
 
     let mut csv = String::from(
@@ -776,6 +769,7 @@ pub async fn export_feedback(
             "Content-Disposition",
             "attachment; filename=\"feedback.csv\"",
         ))
+        .insert_header(("x-request-id", request_id))
         .body(csv))
 }
 
