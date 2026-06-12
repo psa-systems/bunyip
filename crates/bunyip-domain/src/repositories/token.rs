@@ -97,14 +97,6 @@ impl TokenRepository {
         Ok(tokens)
     }
 
-    /// Alias for find_user_refresh_tokens
-    pub async fn find_active_refresh_tokens_for_user(
-        pool: &PgPool,
-        user_id: Uuid,
-    ) -> Result<Vec<RefreshToken>, AppError> {
-        Self::find_user_refresh_tokens(pool, user_id).await
-    }
-
     /// Find refresh token by ID
     pub async fn find_refresh_token_by_id(
         pool: &PgPool,

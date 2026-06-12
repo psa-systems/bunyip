@@ -75,19 +75,6 @@ pub struct RespondToFeedback {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CreateFeedbackRequest {
-    pub name: Option<String>,
-    pub email: Option<String>,
-    pub subject: Option<String>,
-    #[serde(default)]
-    pub tags: Vec<String>,
-    pub message: String,
-    pub page_path: Option<String>,
-    #[serde(default)]
-    pub website: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct RespondToFeedbackRequest {
     pub response: String,
     pub status: Option<String>,

@@ -373,6 +373,82 @@ pub struct SwapApplicationOrderRequest {
     pub target_app_id: Uuid,
 }
 
+/// Data for updating an application (admin only)
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateApplication {
+    pub display_name: Option<String>,
+    pub description: Option<String>,
+    pub icon_url: Option<String>,
+    pub source_code_url: Option<String>,
+    pub version: Option<String>,
+    pub subdomain: Option<String>,
+    pub container_name: Option<String>,
+    pub health_check_url: Option<String>,
+    pub is_active: Option<bool>,
+    /// Whether this is a hosted app (hub launch tile) or a catalog-only
+    /// distribution product.
+    pub is_hosted: Option<bool>,
+    pub maintenance_mode: Option<bool>,
+    pub maintenance_message: Option<String>,
+    pub webhook_url: Option<String>,
+    pub forgejo_owner: Option<String>,
+    pub forgejo_repo: Option<String>,
+    pub pinned_release_tag: Option<String>,
+    /// Must be one of [`ARTIFACT_SOURCE_RELEASE`] / [`ARTIFACT_SOURCE_GENERIC_PACKAGE`].
+    pub artifact_source: Option<String>,
+    /// Set to `""` (empty string) to clear back to NULL (falling back to
+    /// `forgejo_repo`); `null`/omitted keeps the current value.
+    pub forgejo_package: Option<String>,
+    pub oci_image_owner: Option<String>,
+    pub oci_image_name: Option<String>,
+    pub pinned_image_tag: Option<String>,
+}
+
+impl UpdateApplication {
+    /// The distribution fields of this request MERGED over the existing row,
+    /// for validation: every field falls back to `old`'s value when the
+    /// request omits it. An empty-string `forgejo_package` (the documented
+    /// clear-to-NULL sentinel) is treated as absent rather than as a value.
+    pub fn distribution_merged<'a>(&'a self, old: &'a Application) -> DistributionConfig<'a> {
+        DistributionConfig {
+            artifact_source: Some(
+                self.artifact_source
+                    .as_deref()
+                    .unwrap_or(old.artifact_source.as_str()),
+            ),
+            forgejo_owner: self
+                .forgejo_owner
+                .as_deref()
+                .or(old.forgejo_owner.as_deref()),
+            forgejo_repo: self.forgejo_repo.as_deref().or(old.forgejo_repo.as_deref()),
+            // Three states: Some("") = explicit clear (validate against the
+            // cleared state, since the UPDATE will NULLIF it), Some(p) =
+            // explicit new value, None = keep the old value.
+            forgejo_package: match self.forgejo_package.as_deref() {
+                Some("") => None,
+                Some(p) => Some(p),
+                None => old.forgejo_package.as_deref(),
+            },
+            pinned_release_tag: self
+                .pinned_release_tag
+                .as_deref()
+                .or(old.pinned_release_tag.as_deref()),
+            oci_image_owner: self
+                .oci_image_owner
+                .as_deref()
+                .or(old.oci_image_owner.as_deref()),
+            oci_image_name: self
+                .oci_image_name
+                .as_deref()
+                .or(old.oci_image_name.as_deref()),
+            pinned_image_tag: self
+                .pinned_image_tag
+                .as_deref()
+                .or(old.pinned_image_tag.as_deref()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -740,81 +816,5 @@ mod tests {
         app.maintenance_message = Some("leftover message".to_string());
         let response = ApplicationResponse::from_application(app, true);
         assert!(response.maintenance_message.is_none());
-    }
-}
-
-/// Data for updating an application (admin only)
-#[derive(Debug, Clone, Deserialize)]
-pub struct UpdateApplication {
-    pub display_name: Option<String>,
-    pub description: Option<String>,
-    pub icon_url: Option<String>,
-    pub source_code_url: Option<String>,
-    pub version: Option<String>,
-    pub subdomain: Option<String>,
-    pub container_name: Option<String>,
-    pub health_check_url: Option<String>,
-    pub is_active: Option<bool>,
-    /// Whether this is a hosted app (hub launch tile) or a catalog-only
-    /// distribution product.
-    pub is_hosted: Option<bool>,
-    pub maintenance_mode: Option<bool>,
-    pub maintenance_message: Option<String>,
-    pub webhook_url: Option<String>,
-    pub forgejo_owner: Option<String>,
-    pub forgejo_repo: Option<String>,
-    pub pinned_release_tag: Option<String>,
-    /// Must be one of [`ARTIFACT_SOURCE_RELEASE`] / [`ARTIFACT_SOURCE_GENERIC_PACKAGE`].
-    pub artifact_source: Option<String>,
-    /// Set to `""` (empty string) to clear back to NULL (falling back to
-    /// `forgejo_repo`); `null`/omitted keeps the current value.
-    pub forgejo_package: Option<String>,
-    pub oci_image_owner: Option<String>,
-    pub oci_image_name: Option<String>,
-    pub pinned_image_tag: Option<String>,
-}
-
-impl UpdateApplication {
-    /// The distribution fields of this request MERGED over the existing row,
-    /// for validation: every field falls back to `old`'s value when the
-    /// request omits it. An empty-string `forgejo_package` (the documented
-    /// clear-to-NULL sentinel) is treated as absent rather than as a value.
-    pub fn distribution_merged<'a>(&'a self, old: &'a Application) -> DistributionConfig<'a> {
-        DistributionConfig {
-            artifact_source: Some(
-                self.artifact_source
-                    .as_deref()
-                    .unwrap_or(old.artifact_source.as_str()),
-            ),
-            forgejo_owner: self
-                .forgejo_owner
-                .as_deref()
-                .or(old.forgejo_owner.as_deref()),
-            forgejo_repo: self.forgejo_repo.as_deref().or(old.forgejo_repo.as_deref()),
-            // Three states: Some("") = explicit clear (validate against the
-            // cleared state, since the UPDATE will NULLIF it), Some(p) =
-            // explicit new value, None = keep the old value.
-            forgejo_package: match self.forgejo_package.as_deref() {
-                Some("") => None,
-                Some(p) => Some(p),
-                None => old.forgejo_package.as_deref(),
-            },
-            pinned_release_tag: self
-                .pinned_release_tag
-                .as_deref()
-                .or(old.pinned_release_tag.as_deref()),
-            oci_image_owner: self
-                .oci_image_owner
-                .as_deref()
-                .or(old.oci_image_owner.as_deref()),
-            oci_image_name: self
-                .oci_image_name
-                .as_deref()
-                .or(old.oci_image_name.as_deref()),
-            pinned_image_tag: self
-                .pinned_image_tag
-                .as_deref()
-                .or(old.pinned_image_tag.as_deref()),
-        }
     }
 }

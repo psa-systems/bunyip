@@ -2,7 +2,7 @@
 
 use chrono::{self, DateTime, Utc};
 use sqlx::postgres::Postgres;
-use sqlx::PgPool;
+use sqlx::{PgPool, QueryBuilder};
 use uuid::Uuid;
 
 use crate::errors::AppError;
@@ -494,91 +494,45 @@ impl UserRepository {
         status_filter: Option<MembershipStatus>,
     ) -> Result<(Vec<User>, i64), AppError> {
         let offset = (page - 1) * per_page;
+        let search_pattern = search.map(|s| format!("%{}%", s));
 
-        // Build dynamic query based on filters
-        let mut conditions = vec!["deleted_at IS NULL".to_string()];
+        // Build the filter clause once on both the page query and the count
+        // query via QueryBuilder so the placeholders always match the bindings
+        // (the previous hand-numbered `$3`/`$4` count query bound `$1`/`$2`).
+        let mut query = QueryBuilder::new("SELECT * FROM users WHERE deleted_at IS NULL");
+        let mut count_query =
+            QueryBuilder::new("SELECT COUNT(*) FROM users WHERE deleted_at IS NULL");
 
-        if search.is_some() {
-            conditions.push("LOWER(email) LIKE LOWER($3)".to_string());
+        if let Some(pattern) = &search_pattern {
+            query
+                .push(" AND LOWER(email) LIKE LOWER(")
+                .push_bind(pattern.as_str())
+                .push(")");
+            count_query
+                .push(" AND LOWER(email) LIKE LOWER(")
+                .push_bind(pattern.as_str())
+                .push(")");
         }
 
-        if let Some(_status) = &status_filter {
-            let idx = if search.is_some() { 4 } else { 3 };
-            conditions.push(format!("subscription_status = ${}", idx));
+        if let Some(status) = &status_filter {
+            query
+                .push(" AND subscription_status = ")
+                .push_bind(status.as_str());
+            count_query
+                .push(" AND subscription_status = ")
+                .push_bind(status.as_str());
         }
 
-        let where_clause = conditions.join(" AND ");
-        let query = format!(
-            "SELECT * FROM users WHERE {} ORDER BY created_at DESC LIMIT $1 OFFSET $2",
-            where_clause
-        );
-        let count_query = format!("SELECT COUNT(*) FROM users WHERE {}", where_clause);
+        query
+            .push(" ORDER BY created_at DESC LIMIT ")
+            .push_bind(per_page)
+            .push(" OFFSET ")
+            .push_bind(offset);
 
-        // Execute queries based on filters
-        let (users, total): (Vec<User>, i64) = match (search, &status_filter) {
-            (Some(s), Some(status)) => {
-                let search_pattern = format!("%{}%", s);
-                let users = sqlx::query_as::<_, User>(&query)
-                    .bind(per_page)
-                    .bind(offset)
-                    .bind(&search_pattern)
-                    .bind(status.as_str())
-                    .fetch_all(pool)
-                    .await?;
+        let users = query.build_query_as::<User>().fetch_all(pool).await?;
+        let total: (i64,) = count_query.build_query_as().fetch_one(pool).await?;
 
-                let total: (i64,) = sqlx::query_as(&count_query)
-                    .bind(&search_pattern)
-                    .bind(status.as_str())
-                    .fetch_one(pool)
-                    .await?;
-
-                (users, total.0)
-            }
-            (Some(s), None) => {
-                let search_pattern = format!("%{}%", s);
-                let users = sqlx::query_as::<_, User>(&query)
-                    .bind(per_page)
-                    .bind(offset)
-                    .bind(&search_pattern)
-                    .fetch_all(pool)
-                    .await?;
-
-                let total: (i64,) = sqlx::query_as(&count_query)
-                    .bind(&search_pattern)
-                    .fetch_one(pool)
-                    .await?;
-
-                (users, total.0)
-            }
-            (None, Some(status)) => {
-                let users = sqlx::query_as::<_, User>(&query)
-                    .bind(per_page)
-                    .bind(offset)
-                    .bind(status.as_str())
-                    .fetch_all(pool)
-                    .await?;
-
-                let total: (i64,) = sqlx::query_as(&count_query)
-                    .bind(status.as_str())
-                    .fetch_one(pool)
-                    .await?;
-
-                (users, total.0)
-            }
-            (None, None) => {
-                let users = sqlx::query_as::<_, User>(&query)
-                    .bind(per_page)
-                    .bind(offset)
-                    .fetch_all(pool)
-                    .await?;
-
-                let total: (i64,) = sqlx::query_as(&count_query).fetch_one(pool).await?;
-
-                (users, total.0)
-            }
-        };
-
-        Ok((users, total))
+        Ok((users, total.0))
     }
 
     /// Atomically assign a subscription tier to a user.
