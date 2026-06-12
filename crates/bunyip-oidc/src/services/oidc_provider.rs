@@ -291,10 +291,13 @@ impl OidcProvider {
 
     // ── OAuth client lookup ───────────────────────────────────────────────────
 
-    /// Load an active OAuth client by its UUID client_id.
+    /// Load an active OAuth client by its UUID client_id. Runtime
+    /// `query_as` so this query does not need a `.sqlx/` cache
+    /// regeneration every time the `oauth_clients` table gains a new
+    /// column (BUNYIP-61 added `tenant_claim_name` here; further
+    /// columns land the same way).
     pub async fn load_client(&self, client_id: Uuid) -> Result<Option<OAuthClient>, AppError> {
-        sqlx::query_as!(
-            OAuthClient,
+        sqlx::query_as::<_, OAuthClient>(
             r#"
             SELECT
                 id, client_id, client_secret_hash, client_type, name,
@@ -304,12 +307,13 @@ impl OidcProvider {
                 token_endpoint_auth_method, require_pkce,
                 access_token_ttl_seconds, refresh_token_ttl_seconds,
                 refresh_idle_ttl_seconds, audience,
-                dpop_bound, created_at, disabled_at
+                dpop_bound, created_at, disabled_at,
+                tenant_claim_name
             FROM oauth_clients
             WHERE client_id = $1 AND disabled_at IS NULL
             "#,
-            client_id,
         )
+        .bind(client_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| AppError::internal(format!("Failed to load oauth_client: {e}")))
@@ -317,7 +321,12 @@ impl OidcProvider {
 
     // ── Authorization code ────────────────────────────────────────────────────
 
-    /// Issue an authorization code.  Returns the raw opaque code (never stored).
+    /// Issue an authorization code. Returns the raw opaque code (never stored).
+    /// `selected_tenant_id` is BUNYIP-62: when the client has a non-null
+    /// `tenant_claim_name`, this is the tenant the user chose (auto-selected
+    /// for one-assignment users, picker-chosen for multi). NULL otherwise.
+    /// /token reads it in BUNYIP-63 to emit the tenant claim.
+    #[allow(clippy::too_many_arguments)]
     pub async fn issue_authorization_code(
         &self,
         client: &OAuthClient,
@@ -330,32 +339,38 @@ impl OidcProvider {
         auth_time: DateTime<Utc>,
         acr: &str,
         amr: &[String],
+        selected_tenant_id: Option<Uuid>,
     ) -> Result<String, AppError> {
         let raw = generate_opaque_token(32);
         let code_hash = sha256_bytes(raw.as_bytes());
         let expires_at = Utc::now() + Duration::seconds(self.config.code_ttl_secs as i64);
 
-        sqlx::query!(
+        // Runtime query so we do not have to regenerate the `.sqlx/`
+        // cache when the auth-code shape grows (selected_tenant_id is
+        // the first such growth; future per-RP fields land the same
+        // way).
+        sqlx::query(
             r#"
             INSERT INTO oauth_authorization_codes
                 (code_hash, client_id, user_id, op_session_id, redirect_uri,
                  scope, code_challenge, code_challenge_method, nonce,
-                 auth_time, acr, amr, issued_at, expires_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'S256', $8, $9, $10, $11, NOW(), $12)
+                 auth_time, acr, amr, issued_at, expires_at, selected_tenant_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'S256', $8, $9, $10, $11, NOW(), $12, $13)
             "#,
-            code_hash as Vec<u8>,
-            client.client_id,
-            user_id,
-            op_session_id,
-            redirect_uri,
-            scope as &[String],
-            code_challenge,
-            nonce,
-            auth_time,
-            acr,
-            amr as &[String],
-            expires_at,
         )
+        .bind(code_hash)
+        .bind(client.client_id)
+        .bind(user_id)
+        .bind(op_session_id)
+        .bind(redirect_uri)
+        .bind(scope)
+        .bind(code_challenge)
+        .bind(nonce)
+        .bind(auth_time)
+        .bind(acr)
+        .bind(amr)
+        .bind(expires_at)
+        .bind(selected_tenant_id)
         .execute(&self.pool)
         .await
         .map_err(|e| AppError::internal(format!("Failed to insert authorization code: {e}")))?;
@@ -697,9 +712,10 @@ impl OidcProvider {
         .await
         .map_err(|e| AppError::internal(format!("Failed to mark refresh token used: {e}")))?;
 
-        // Load client for TTL values
-        let client = sqlx::query_as!(
-            OAuthClient,
+        // Load client for TTL values. Runtime query so the BUNYIP-61
+        // `tenant_claim_name` column addition does not force a
+        // `.sqlx/` cache regen here.
+        let client = sqlx::query_as::<_, OAuthClient>(
             r#"
             SELECT id, client_id, client_secret_hash, client_type, name,
                    redirect_uris, post_logout_redirect_uris,
@@ -708,12 +724,13 @@ impl OidcProvider {
                    token_endpoint_auth_method, require_pkce,
                    access_token_ttl_seconds, refresh_token_ttl_seconds,
                    refresh_idle_ttl_seconds, audience,
-                   dpop_bound, created_at, disabled_at
+                   dpop_bound, created_at, disabled_at,
+                   tenant_claim_name
             FROM oauth_clients
             WHERE client_id = $1 AND disabled_at IS NULL
             "#,
-            old.client_id,
         )
+        .bind(old.client_id)
         .fetch_optional(&mut *tx)
         .await
         .map_err(|e| AppError::internal(format!("Failed to load client during rotation: {e}")))?
@@ -1012,8 +1029,12 @@ impl OidcProvider {
 
 // ── Supporting structs ────────────────────────────────────────────────────────
 
-/// Loaded OAuth client row.
-#[derive(Debug, Clone)]
+/// Loaded OAuth client row. The `sqlx::FromRow` derive lets
+/// `load_client` issue a runtime `query_as` against the `oauth_clients`
+/// table without re-registering this struct in the workspace's
+/// compile-time `.sqlx/` cache every time a column lands. The single
+/// callsite is `load_client`.
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct OAuthClient {
     pub id: Uuid,
     pub client_id: Uuid,
@@ -1035,6 +1056,13 @@ pub struct OAuthClient {
     pub dpop_bound: bool,
     pub created_at: DateTime<Utc>,
     pub disabled_at: Option<DateTime<Utc>>,
+    /// BUNYIP-61: when non-null, /authorize gates on
+    /// `oauth_client_user_tenants` for this client and /token emits
+    /// the selected tenant_id on the at+jwt and id_token under this
+    /// claim name. NULL = legacy single-tenant behaviour: no claim, no
+    /// gate, no picker. Per-client so multi-RP OPs can keep claim
+    /// namespaces from colliding (mokosh_tenant_id vs. letschat_tenant_id).
+    pub tenant_claim_name: Option<String>,
 }
 
 /// Active IdP session row.
@@ -1229,6 +1257,7 @@ mod tests {
             dpop_bound: false,
             created_at: Utc::now(),
             disabled_at: None,
+            tenant_claim_name: None,
         }
     }
 
