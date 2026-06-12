@@ -677,6 +677,11 @@ impl AuthService {
         let new_hash = self.password.hash(&new_password)?;
         UserRepository::update_password(&self.pool, user_id, &new_hash).await?;
 
+        // Revoke every outstanding refresh token (legacy + OIDC) so a changed
+        // password logs the user out everywhere, matching the password-reset
+        // path. revoke_all_user_refresh_tokens unifies both surfaces.
+        TokenRepository::revoke_all_user_refresh_tokens(&self.pool, user_id).await?;
+
         // Audit log
         let ip = ip_address.map(IpNetwork::from);
         AuditLogRepository::create(

@@ -58,10 +58,20 @@ CREATE TABLE IF NOT EXISTS lifecycle_event_outbox (
         'user.suspended', 'user.unsuspended', 'user.deleted',
         'entitlement.granted', 'entitlement.revoked'
     )),
+    -- INTENTIONALLY has no FK to users(id). A 'user.deleted' event must survive
+    -- the deletion of the very user it describes: the outbox row is the durable
+    -- record that the back-channel notification still has to be delivered to
+    -- relying parties. A REFERENCES users(id) ON DELETE CASCADE would erase the
+    -- event together with the user (losing the notification), and ON DELETE
+    -- RESTRICT would block the deletion outright. So the column is decoupled by
+    -- design; readers must tolerate a user_id with no live users row.
     user_id     UUID        NOT NULL,
     payload     JSONB       NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+COMMENT ON COLUMN lifecycle_event_outbox.user_id IS
+    'Subject user. Intentionally NOT a foreign key: lifecycle events (notably user.deleted) must outlive the referenced user so the back-channel notification can still be delivered.';
 
 -- One delivery attempt row per (event, target client)
 CREATE TABLE IF NOT EXISTS lifecycle_event_delivery (
