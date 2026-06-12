@@ -16,6 +16,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -51,12 +52,31 @@ pub struct AtClaims {
     /// rolling deploy; mint always populates it, so emission is unaffected.
     #[serde(default)]
     pub bunyip_role: String,
+    /// BUNYIP-63: per-client extension claims. Today this carries the
+    /// tenant claim emitted under the name configured on
+    /// `oauth_clients.tenant_claim_name` (e.g. `mokosh_tenant_id`).
+    /// `#[serde(flatten)]` lifts each entry to a top-level claim in
+    /// the JWT JSON; `skip_serializing_if = "BTreeMap::is_empty"` keeps
+    /// the wire shape byte-identical to pre-BUNYIP-63 for any client
+    /// whose tenant_claim_name is NULL. Verifiers consume the well-
+    /// known fields via the named struct fields and ignore extras
+    /// they do not recognise.
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 impl AtClaims {
     /// Assemble the RFC 9068 access-token claim set. Pure (no signing, keys, or
     /// DB) so the claim mapping - notably `bunyip_role` from the user's role
-    /// (BUNYIP-66) - is unit-testable; `mint_access_token` signs the result.
+    /// (BUNYIP-66) and the per-client tenant claim (BUNYIP-63) - is
+    /// unit-testable; `mint_access_token` signs the result.
+    ///
+    /// `selected_tenant_id` is the tenant the user picked at /authorize
+    /// (BUNYIP-62); `client.tenant_claim_name` is the per-client name
+    /// (e.g. `mokosh_tenant_id`) under which it lands in `extra`.
+    /// Both must be Some for the claim to appear; either being None
+    /// leaves `extra` empty and the wire shape byte-identical to a
+    /// legacy single-tenant client.
     #[allow(clippy::too_many_arguments)]
     fn build(
         issuer: &str,
@@ -68,7 +88,12 @@ impl AtClaims {
         auth_time: DateTime<Utc>,
         acr: &str,
         amr: &[String],
+        selected_tenant_id: Option<Uuid>,
     ) -> Self {
+        let mut extra = BTreeMap::new();
+        if let (Some(name), Some(tid)) = (client.tenant_claim_name.as_deref(), selected_tenant_id) {
+            extra.insert(name.to_string(), serde_json::Value::String(tid.to_string()));
+        }
         AtClaims {
             iss: issuer.to_string(),
             sub: user.id.to_string(),
@@ -85,6 +110,7 @@ impl AtClaims {
             // Identity-level: the user's Bunyip role string straight from the
             // DB column (already constrained to UserRole::as_str() values).
             bunyip_role: user.role.clone(),
+            extra,
         }
     }
 }
@@ -119,13 +145,21 @@ pub struct IdTokenClaims {
     /// extra userinfo call. Emitted on every mint regardless of scope.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bunyip_role: Option<String>,
+    /// BUNYIP-63: per-client extension claims (e.g. `mokosh_tenant_id`).
+    /// Mirrored from the access token so an SPA reading only the id_token
+    /// can display "you're in tenant X" without an extra `at+jwt`
+    /// introspection. `#[serde(flatten)]` + `skip_serializing_if` keeps
+    /// the wire shape byte-identical for clients with no tenant claim.
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 impl IdTokenClaims {
     /// Assemble the ID-token claim set. Pure (no signing, keys, or DB) so the
-    /// claim mapping - notably `bunyip_role` from the user's role - is
-    /// unit-testable; `mint_id_token` computes `at_hash`, calls this, and signs.
-    /// Profile claims are gated on the `email` scope; `bunyip_role` is not.
+    /// claim mapping - notably `bunyip_role` from the user's role and the
+    /// per-client tenant claim (BUNYIP-63) - is unit-testable; `mint_id_token`
+    /// computes `at_hash`, calls this, and signs. Profile claims are gated
+    /// on the `email` scope; `bunyip_role` and the tenant claim are not.
     #[allow(clippy::too_many_arguments)]
     fn build(
         issuer: &str,
@@ -137,8 +171,13 @@ impl IdTokenClaims {
         exp: DateTime<Utc>,
         auth_time: DateTime<Utc>,
         at_hash: String,
+        selected_tenant_id: Option<Uuid>,
     ) -> Self {
         let include_profile = scope.iter().any(|s| s == "email");
+        let mut extra = BTreeMap::new();
+        if let (Some(name), Some(tid)) = (client.tenant_claim_name.as_deref(), selected_tenant_id) {
+            extra.insert(name.to_string(), serde_json::Value::String(tid.to_string()));
+        }
         IdTokenClaims {
             iss: issuer.to_string(),
             sub: user.id.to_string(),
@@ -156,6 +195,7 @@ impl IdTokenClaims {
             // Identity-level: the user's Bunyip role string straight from the
             // DB column, mirroring the access token's `bunyip_role`.
             bunyip_role: Some(user.role.clone()),
+            extra,
         }
     }
 }
@@ -393,18 +433,20 @@ impl OidcProvider {
         let code_hash = sha256_bytes(raw_code.as_bytes());
 
         // Load the row — single round-trip, we'll mark consumed after verification.
-        let row = sqlx::query_as!(
-            AuthCodeRow,
+        // Runtime query so the BUNYIP-62 `selected_tenant_id` column does not
+        // force a `.sqlx/` cache regen here.
+        let row = sqlx::query_as::<_, AuthCodeRow>(
             r#"
             SELECT
                 code_hash, client_id, user_id, op_session_id, redirect_uri,
                 scope, code_challenge, nonce, auth_time, acr, amr,
-                issued_at, expires_at, consumed_at, revoked_at
+                issued_at, expires_at, consumed_at, revoked_at,
+                selected_tenant_id
             FROM oauth_authorization_codes
             WHERE code_hash = $1
             "#,
-            code_hash.clone() as Vec<u8>,
         )
+        .bind(code_hash.clone())
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| AppError::internal(format!("DB error loading auth code: {e}")))?
@@ -448,11 +490,12 @@ impl OidcProvider {
             ));
         }
 
-        // Mark consumed
-        sqlx::query!(
+        // Mark consumed. Runtime query to keep the BUNYIP-62 column
+        // addition off the `.sqlx/` regen path.
+        sqlx::query(
             "UPDATE oauth_authorization_codes SET consumed_at = NOW() WHERE code_hash = $1",
-            code_hash as Vec<u8>,
         )
+        .bind(code_hash)
         .execute(&self.pool)
         .await
         .map_err(|e| AppError::internal(format!("Failed to mark code consumed: {e}")))?;
@@ -462,7 +505,14 @@ impl OidcProvider {
 
     // ── Access token ──────────────────────────────────────────────────────────
 
-    /// Mint a signed RFC 9068 JWT access token.
+    /// Mint a signed RFC 9068 JWT access token. `selected_tenant_id` is
+    /// the tenant the user picked at /authorize (BUNYIP-62), carried
+    /// forward on the auth-code row and through refresh-token
+    /// rotation. When both this AND `client.tenant_claim_name` are
+    /// Some, the at+jwt carries the tenant under that claim name
+    /// (BUNYIP-63). Either being None leaves the claim off and the
+    /// wire shape unchanged from pre-BUNYIP-63.
+    #[allow(clippy::too_many_arguments)]
     pub fn mint_access_token(
         &self,
         user: &User,
@@ -471,6 +521,7 @@ impl OidcProvider {
         auth_time: DateTime<Utc>,
         acr: &str,
         amr: &[String],
+        selected_tenant_id: Option<Uuid>,
     ) -> Result<(String, DateTime<Utc>), AppError> {
         let now = Utc::now();
         let ttl = Duration::seconds(client.access_token_ttl_seconds as i64);
@@ -490,6 +541,7 @@ impl OidcProvider {
             auth_time,
             acr,
             amr,
+            selected_tenant_id,
         );
 
         let token = jsonwebtoken::encode(&header, &claims, &self.keys.encoding_key)
@@ -503,6 +555,10 @@ impl OidcProvider {
     /// Mint an OIDC ID token.
     ///
     /// `at_hash` is computed from the bound access token.
+    /// `selected_tenant_id` is mirrored from the matching at+jwt so an
+    /// SPA reading only the id_token can display tenant context
+    /// without an extra round-trip (BUNYIP-63).
+    #[allow(clippy::too_many_arguments)]
     pub fn mint_id_token(
         &self,
         user: &User,
@@ -511,6 +567,7 @@ impl OidcProvider {
         nonce: &str,
         auth_time: DateTime<Utc>,
         access_token: &str,
+        selected_tenant_id: Option<Uuid>,
     ) -> Result<String, AppError> {
         let now = Utc::now();
         let exp = now + Duration::seconds(client.access_token_ttl_seconds as i64);
@@ -535,6 +592,7 @@ impl OidcProvider {
             exp,
             auth_time,
             at_hash,
+            selected_tenant_id,
         );
 
         jsonwebtoken::encode(&header, &claims, &self.keys.encoding_key)
@@ -544,6 +602,9 @@ impl OidcProvider {
     // ── Refresh token ─────────────────────────────────────────────────────────
 
     /// Issue the first refresh token in a new family (called after code exchange).
+    /// BUNYIP-63: `selected_tenant_id` is carried on every row in the family
+    /// so the rotated at+jwt always emits the original tenant claim.
+    #[allow(clippy::too_many_arguments)]
     pub async fn issue_refresh_token(
         &self,
         client: &OAuthClient,
@@ -552,6 +613,7 @@ impl OidcProvider {
         scope: &[String],
         ip: Option<std::net::IpAddr>,
         user_agent: Option<&str>,
+        selected_tenant_id: Option<Uuid>,
     ) -> Result<(String, Uuid), AppError> {
         // Create the family
         let family_id = sqlx::query_scalar!(
@@ -569,7 +631,16 @@ impl OidcProvider {
         .map_err(|e| AppError::internal(format!("Failed to create refresh token family: {e}")))?;
 
         let (raw, token_id) = self
-            .insert_refresh_token(client, user_id, family_id, None, scope, ip, user_agent)
+            .insert_refresh_token(
+                client,
+                user_id,
+                family_id,
+                None,
+                scope,
+                ip,
+                user_agent,
+                selected_tenant_id,
+            )
             .await?;
         Ok((raw, token_id))
     }
@@ -601,17 +672,20 @@ impl OidcProvider {
             .await
             .map_err(|e| AppError::internal(format!("Failed to set isolation level: {e}")))?;
 
-        // Load the old token with a row-level lock.
-        let old = sqlx::query!(
+        // Load the old token with a row-level lock. Runtime query so
+        // the BUNYIP-63 `selected_tenant_id` column addition does not
+        // force a `.sqlx/` cache regen. `RefreshTokenRow` is an ad-hoc
+        // struct local to this rotation; mapped via FromRow below.
+        let old = sqlx::query_as::<_, RefreshTokenRotationRow>(
             r#"
             SELECT id, family_id, client_id, user_id, scope, used_at, revoked_at,
-                   idle_expires_at, absolute_expires_at
+                   idle_expires_at, absolute_expires_at, selected_tenant_id
             FROM refresh_tokens_v2
             WHERE token_hash = $1
             FOR UPDATE
             "#,
-            old_hash as Vec<u8>,
         )
+        .bind(old_hash)
         .fetch_optional(&mut *tx)
         .await
         .map_err(|e| AppError::internal(format!("DB error loading refresh token: {e}")))?
@@ -747,25 +821,31 @@ impl OidcProvider {
         let new_idle_exp = now + idle_ttl;
         let new_abs_exp = now + abs_ttl;
 
-        let new_token_id = sqlx::query_scalar!(
+        // Runtime query: the BUNYIP-63 `selected_tenant_id` column is
+        // mirrored from `old` so every row in the family carries the
+        // tenant the user picked at /authorize, and the next /token
+        // rotation mints an at+jwt with the same tenant claim.
+        let new_token_id: Uuid = sqlx::query_scalar(
             r#"
             INSERT INTO refresh_tokens_v2
                 (token_hash, family_id, parent_id, client_id, user_id, scope,
-                 issued_at, idle_expires_at, absolute_expires_at, ip, user_agent)
-            VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9::inet, $10)
+                 issued_at, idle_expires_at, absolute_expires_at, ip, user_agent,
+                 selected_tenant_id)
+            VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9::inet, $10, $11)
             RETURNING id
             "#,
-            new_hash as Vec<u8>,
-            old.family_id,
-            old.id,
-            old.client_id,
-            old.user_id,
-            &effective_scope as &[String],
-            new_idle_exp,
-            new_abs_exp,
-            ip_str as Option<String>,
-            user_agent,
         )
+        .bind(new_hash)
+        .bind(old.family_id)
+        .bind(old.id)
+        .bind(old.client_id)
+        .bind(old.user_id)
+        .bind(&effective_scope)
+        .bind(new_idle_exp)
+        .bind(new_abs_exp)
+        .bind(ip_str)
+        .bind(user_agent)
+        .bind(old.selected_tenant_id)
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| AppError::internal(format!("Failed to insert new refresh token: {e}")))?;
@@ -780,6 +860,7 @@ impl OidcProvider {
             user_id: old.user_id,
             scope: effective_scope,
             client,
+            selected_tenant_id: old.selected_tenant_id,
         })
     }
 
@@ -983,6 +1064,7 @@ impl OidcProvider {
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     async fn insert_refresh_token(
         &self,
         client: &OAuthClient,
@@ -992,6 +1074,7 @@ impl OidcProvider {
         scope: &[String],
         ip: Option<std::net::IpAddr>,
         user_agent: Option<&str>,
+        selected_tenant_id: Option<Uuid>,
     ) -> Result<(String, Uuid), AppError> {
         let raw = generate_opaque_token(32);
         let token_hash = sha256_bytes(raw.as_bytes());
@@ -1000,25 +1083,29 @@ impl OidcProvider {
         let abs_exp = now + Duration::seconds(client.refresh_token_ttl_seconds as i64);
         let ip_str: Option<String> = ip.map(|a| a.to_string());
 
-        let token_id = sqlx::query_scalar!(
+        // Runtime query (BUNYIP-63 added selected_tenant_id; keep this
+        // off the workspace `.sqlx/` regen path).
+        let token_id: Uuid = sqlx::query_scalar(
             r#"
             INSERT INTO refresh_tokens_v2
                 (token_hash, family_id, parent_id, client_id, user_id, scope,
-                 issued_at, idle_expires_at, absolute_expires_at, ip, user_agent)
-            VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9::inet, $10)
+                 issued_at, idle_expires_at, absolute_expires_at, ip, user_agent,
+                 selected_tenant_id)
+            VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9::inet, $10, $11)
             RETURNING id
             "#,
-            token_hash as Vec<u8>,
-            family_id,
-            parent_id,
-            client.client_id,
-            user_id,
-            scope as &[String],
-            idle_exp,
-            abs_exp,
-            ip_str as Option<String>,
-            user_agent,
         )
+        .bind(token_hash)
+        .bind(family_id)
+        .bind(parent_id)
+        .bind(client.client_id)
+        .bind(user_id)
+        .bind(scope)
+        .bind(idle_exp)
+        .bind(abs_exp)
+        .bind(ip_str)
+        .bind(user_agent)
+        .bind(selected_tenant_id)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| AppError::internal(format!("Failed to insert refresh token: {e}")))?;
@@ -1080,7 +1167,12 @@ pub struct OpSession {
     pub amr: Option<Vec<String>>,
 }
 
-/// Authorization code row (consumed view).
+/// Authorization code row (consumed view). `sqlx::FromRow` so
+/// `consume_authorization_code` can pull every column with a runtime
+/// query without re-registering the struct in the workspace `.sqlx/`
+/// cache every time the table grows (BUNYIP-62 added
+/// `selected_tenant_id`; future per-RP fields land the same way).
+#[derive(sqlx::FromRow)]
 pub struct AuthCodeRow {
     pub code_hash: Vec<u8>,
     pub client_id: Uuid,
@@ -1097,6 +1189,11 @@ pub struct AuthCodeRow {
     pub expires_at: DateTime<Utc>,
     pub consumed_at: Option<DateTime<Utc>>,
     pub revoked_at: Option<DateTime<Utc>>,
+    /// BUNYIP-62: the tenant the user picked at /authorize (or
+    /// auto-selected for single-assignment users). NULL for clients
+    /// whose `oauth_clients.tenant_claim_name` is NULL. /token reads
+    /// this in BUNYIP-63 to emit the tenant claim on at+jwt + id_token.
+    pub selected_tenant_id: Option<Uuid>,
 }
 
 /// Result of a successful refresh token rotation.
@@ -1106,6 +1203,30 @@ pub struct RotatedTokens {
     pub user_id: Uuid,
     pub scope: Vec<String>,
     pub client: OAuthClient,
+    /// BUNYIP-63: the tenant the user picked at the original
+    /// `/authorize`, carried forward on every refresh-token rotation.
+    /// `handle_refresh_grant` feeds this into the next at+jwt mint so
+    /// the rotated token emits the same tenant claim.
+    pub selected_tenant_id: Option<Uuid>,
+}
+
+/// Ad-hoc row used by the rotation transaction. Only fields the
+/// rotation reads are mapped; columns the rest of the system uses
+/// (`token_hash`, `parent_id`, `cnf_jkt`, `issued_at`, `ip`,
+/// `user_agent`) are intentionally absent so a future column
+/// addition does not force a struct change here.
+#[derive(sqlx::FromRow)]
+struct RefreshTokenRotationRow {
+    id: Uuid,
+    family_id: Uuid,
+    client_id: Uuid,
+    user_id: Uuid,
+    scope: Vec<String>,
+    used_at: Option<DateTime<Utc>>,
+    revoked_at: Option<DateTime<Utc>>,
+    idle_expires_at: DateTime<Utc>,
+    absolute_expires_at: DateTime<Utc>,
+    selected_tenant_id: Option<Uuid>,
 }
 
 // ── Crypto helpers ────────────────────────────────────────────────────────────
@@ -1273,6 +1394,7 @@ mod tests {
             now,
             "urn:mace:incommon:iap:silver",
             &["pwd".to_string()],
+            None,
         )
     }
 
@@ -1301,6 +1423,7 @@ mod tests {
             now,
             "urn:mace:incommon:iap:silver",
             &[],
+            None,
         );
         assert!(claims.scope.is_empty());
         assert_eq!(claims.bunyip_role, "admin");
@@ -1346,6 +1469,7 @@ mod tests {
             now + Duration::seconds(600),
             now,
             "at_hash_value".to_string(),
+            None,
         )
     }
 

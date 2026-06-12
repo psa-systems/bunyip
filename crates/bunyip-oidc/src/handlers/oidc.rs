@@ -795,14 +795,18 @@ async fn handle_authorization_code_grant(
         ));
     }
 
-    // Mint tokens
+    // Mint tokens. BUNYIP-63: pass `selected_tenant_id` so the at+jwt
+    // and id_token carry the per-client tenant claim. The refresh row
+    // takes the same value so the next rotation mints the same
+    // tenant.
     let (access_token, at_exp) = provider.mint_access_token(
         &user,
         client,
         &code_row.scope,
         code_row.auth_time,
         code_row.acr.as_deref().unwrap_or("urn:bunyip:loa:pwd"),
-        &code_row.amr.unwrap_or_default(),
+        &code_row.amr.clone().unwrap_or_default(),
+        code_row.selected_tenant_id,
     )?;
 
     let id_token = provider.mint_id_token(
@@ -812,6 +816,7 @@ async fn handle_authorization_code_grant(
         &code_row.nonce,
         code_row.auth_time,
         &access_token,
+        code_row.selected_tenant_id,
     )?;
 
     let (raw_refresh, _) = provider
@@ -822,6 +827,7 @@ async fn handle_authorization_code_grant(
             &code_row.scope,
             ip,
             user_agent,
+            code_row.selected_tenant_id,
         )
         .await?;
 
@@ -886,6 +892,7 @@ async fn handle_refresh_grant(
         chrono::Utc::now(), // auth_time not re-established on refresh
         "urn:bunyip:loa:pwd",
         &["pwd".to_string()],
+        rotated.selected_tenant_id,
     )?;
 
     let expires_in = (at_exp - chrono::Utc::now()).num_seconds();
