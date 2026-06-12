@@ -635,6 +635,12 @@ impl UserRepository {
     /// Counts are based on how many users have actually been assigned each tier,
     /// not total verified users. This ensures tier slots are filled correctly even
     /// if users existed before the tier system was introduced.
+    ///
+    /// Admin-granted lifetimes (`subscription_override_by IS NOT NULL`) are counted
+    /// the same as organically-claimed ones: they occupy a real lifetime slot, so they
+    /// must count against the configured cap and be reflected in the admin slot-usage
+    /// display. Excluding them let the count read 0 while active lifetimes existed,
+    /// defeating the cap and misleading the Tier Settings page (BUNYIP-96).
     pub async fn count_tier_assignments<'e, E>(executor: E) -> Result<(i64, i64), AppError>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
@@ -642,7 +648,7 @@ impl UserRepository {
         let row: (i64, i64) = sqlx::query_as(
             r#"
             SELECT
-                COUNT(*) FILTER (WHERE subscription_tier = 'lifetime' AND subscription_override_by IS NULL) AS lifetime_count,
+                COUNT(*) FILTER (WHERE subscription_tier = 'lifetime') AS lifetime_count,
                 COUNT(*) FILTER (WHERE subscription_tier = 'early_adopter') AS early_adopter_count
             FROM users
             WHERE email_verified = true AND deleted_at IS NULL
