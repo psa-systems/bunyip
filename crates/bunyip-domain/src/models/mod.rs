@@ -8,6 +8,7 @@ pub mod download;
 pub mod entitlement;
 pub mod feedback;
 pub mod membership;
+pub mod oauth_client_user_tenant;
 pub mod rate_limit;
 pub mod stripe;
 pub mod tier;
@@ -39,6 +40,7 @@ pub use feedback::{
 pub use membership::{
     AdminMembershipResponse, MembershipResponse, PaymentStatus, StripeSubscriptionStatus,
 };
+pub use oauth_client_user_tenant::{CreateUserTenantAssignment, OAuthClientUserTenant};
 pub use rate_limit::{RateLimit, RateLimitConfig};
 pub use stripe::{
     StripeConfig, StripeConfigResponse, StripeInvoiceResponse, StripePriceResponse,
