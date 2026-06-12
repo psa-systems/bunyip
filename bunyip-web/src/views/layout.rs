@@ -21,12 +21,18 @@ function bunyipToggleContrast(){var on=document.documentElement.classList.toggle
 /// where `kind` is `"success" | "error" | "info"` (default `"info"`). Each call
 /// appends an auto-dismissing pill into `#bunyip-toast-root`.
 ///
+/// Visible-pill cap (BUNYIP-98): a tight `while (root.children.length >= 5)`
+/// before the append evicts the oldest so the column never grows past 5 even
+/// under rapid-fire calls (e.g. spamming a "Copy" button). The existing
+/// auto-dismiss `setTimeout` chain is untouched and guards on `pill.parentNode`,
+/// so a manually evicted pill does not double-remove.
+///
 /// Also drains `?toast_ok=` / `?toast_err=` from the URL on page load so any
 /// handler that wants to surface a confirmation can do it via a 302 redirect:
 /// `Location: /settings?toast_ok=Email%20updated`. The query params are stripped
 /// from the URL bar via `history.replaceState` so a reload does not re-fire the
 /// toast. See docs/bunyip-upgrade/05-toast-system-and-copy-feedback.md.
-const TOAST_JS: &str = r#"window.bunyipToast=function(msg,kind){var root=document.getElementById('bunyip-toast-root');if(!root)return;kind=kind||'info';var palette={success:'bg-emerald-600 text-white',error:'bg-red-600 text-white',info:'bg-slate-800 text-white'}[kind]||'bg-slate-800 text-white';var pill=document.createElement('div');pill.className='pointer-events-auto rounded-md px-4 py-2 text-sm shadow-lg '+palette;pill.setAttribute('role','status');pill.textContent=msg;pill.style.transition='opacity 200ms ease, transform 200ms ease';pill.style.opacity='0';pill.style.transform='translateY(-8px)';root.appendChild(pill);requestAnimationFrame(function(){pill.style.opacity='1';pill.style.transform='translateY(0)';});setTimeout(function(){pill.style.opacity='0';pill.style.transform='translateY(-8px)';setTimeout(function(){if(pill.parentNode)pill.parentNode.removeChild(pill);},250);},2500);};
+const TOAST_JS: &str = r#"window.bunyipToast=function(msg,kind){var root=document.getElementById('bunyip-toast-root');if(!root)return;while(root.children.length>=5){root.removeChild(root.firstChild);}kind=kind||'info';var palette={success:'bg-emerald-600 text-white',error:'bg-red-600 text-white',info:'bg-slate-800 text-white'}[kind]||'bg-slate-800 text-white';var pill=document.createElement('div');pill.className='pointer-events-auto rounded-md px-4 py-2 text-sm shadow-lg '+palette;pill.setAttribute('role','status');pill.textContent=msg;pill.style.transition='opacity 200ms ease, transform 200ms ease';pill.style.opacity='0';pill.style.transform='translateY(-8px)';root.appendChild(pill);requestAnimationFrame(function(){pill.style.opacity='1';pill.style.transform='translateY(0)';});setTimeout(function(){pill.style.opacity='0';pill.style.transform='translateY(-8px)';setTimeout(function(){if(pill.parentNode)pill.parentNode.removeChild(pill);},250);},2500);};
 (function(){try{var url=new URL(window.location.href);var ok=url.searchParams.get('toast_ok');var err=url.searchParams.get('toast_err');if(ok||err){url.searchParams.delete('toast_ok');url.searchParams.delete('toast_err');history.replaceState(null,'',url.pathname+(url.search||'')+url.hash);if(ok)window.bunyipToast(ok,'success');if(err)window.bunyipToast(err,'error');}}catch(e){}})();"#;
 
 pub fn document(title: &str, body: Markup) -> Markup {
