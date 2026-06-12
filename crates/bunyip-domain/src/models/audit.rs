@@ -93,6 +93,15 @@ pub enum AuditAction {
     /// 90-day `archive_and_purge_closed` job produces, but on-demand.
     /// Reversible via the existing `FeedbackRestored` action.
     FeedbackArchived,
+    /// Admin created (or upserted) an `oauth_client_user_tenants`
+    /// assignment for a relying party (BUNYIP-61). Metadata carries
+    /// `user_id`, `tenant_id`, `role`, and the new `assignment_id`.
+    OauthUserTenantAssigned,
+    /// Admin deleted an `oauth_client_user_tenants` assignment.
+    /// Metadata carries the `assignment_id` (the row is gone so the
+    /// (user, tenant) it pointed at is recoverable only from prior
+    /// audit log rows).
+    OauthUserTenantUnassigned,
 }
 
 impl AuditAction {
@@ -171,6 +180,8 @@ impl AuditAction {
             AuditAction::FeedbackMarkedSpam => "feedback_marked_spam",
             AuditAction::FeedbackUnmarkedSpam => "feedback_unmarked_spam",
             AuditAction::FeedbackArchived => "feedback_archived",
+            AuditAction::OauthUserTenantAssigned => "oauth_user_tenant_assigned",
+            AuditAction::OauthUserTenantUnassigned => "oauth_user_tenant_unassigned",
         }
     }
 
@@ -195,6 +206,8 @@ impl AuditAction {
                 | AuditAction::FeedbackMarkedSpam
                 | AuditAction::FeedbackUnmarkedSpam
                 | AuditAction::FeedbackArchived
+                | AuditAction::OauthUserTenantAssigned
+                | AuditAction::OauthUserTenantUnassigned
                 | AuditAction::AdminInviteCreated
                 | AuditAction::AdminInviteAccepted
                 | AuditAction::AdminInviteRevoked

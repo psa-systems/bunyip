@@ -156,6 +156,19 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             )
             // Test email
             .route("/test-email", web::post().to(handlers::send_test_email))
+            // OIDC per-RP user-tenant assignments (BUNYIP-61).
+            .route(
+                "/oauth-clients/{client_id}/user-tenants",
+                web::get().to(handlers::list_client_assignments),
+            )
+            .route(
+                "/oauth-clients/{client_id}/user-tenants",
+                web::post().to(handlers::assign_user_tenant),
+            )
+            .route(
+                "/oauth-clients/{client_id}/user-tenants/{assignment_id}",
+                web::delete().to(handlers::unassign_user_tenant),
+            )
             // Admin Invites
             .route("/invites", web::post().to(handlers::create_admin_invite))
             .route("/invites", web::get().to(handlers::list_admin_invites))
