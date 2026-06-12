@@ -534,6 +534,10 @@ async fn main() -> anyhow::Result<()> {
     let pool_oci_server = pool.clone();
     let cfg_oci_server = config_data.oci.clone();
 
+    // Process start instant, surfaced as SystemHealth.uptime_seconds. `Instant`
+    // is `Copy`, so the per-worker `move` factory closure just copies it.
+    let server_start = std::time::Instant::now();
+
     let primary = HttpServer::new(move || {
         // Configure CORS
         let domain = cors_domain.clone();
@@ -578,6 +582,8 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::JsonConfig::default().limit(32_768))
             // Add database pool to app state
             .app_data(web::Data::new(pool.clone()))
+            // Server start instant for uptime reporting
+            .app_data(web::Data::new(server_start))
             // Add services to app state
             .app_data(jwt_service.clone())
             // Register the at+jwt verifier (BUNYIP-55) as an

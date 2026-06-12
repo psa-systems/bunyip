@@ -8,23 +8,11 @@ use std::sync::Arc;
 use crate::errors::AppError;
 use crate::middleware::{extract_client_ip, extract_device_info, AuthCookies, AuthenticatedUser};
 use crate::models::{AuditAction, CreateAuditLog, RateLimitConfig};
-use crate::repositories::{AuditLogRepository, RateLimitRepository, UserRepository};
+use crate::repositories::{AuditLogRepository, UserRepository};
 use crate::responses::{get_request_id, success};
 use crate::services::{AuthService, PasswordService, TotpService};
 
-/// Check rate limit and return RateLimited error if exceeded
-async fn check_rate_limit(
-    pool: &PgPool,
-    key: &str,
-    config: &RateLimitConfig,
-) -> Result<(), AppError> {
-    let (_count, exceeded) = RateLimitRepository::check_and_increment(pool, key, config).await?;
-    if exceeded {
-        let retry_after = RateLimitRepository::get_retry_after(pool, key, config).await?;
-        return Err(AppError::RateLimited { retry_after });
-    }
-    Ok(())
-}
+use super::check_rate_limit;
 
 // --- Request/Response types ---
 

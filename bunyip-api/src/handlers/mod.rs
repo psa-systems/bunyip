@@ -2,6 +2,31 @@
 //!
 //! This module contains all HTTP request handlers organized by domain.
 
+use sqlx::PgPool;
+
+use crate::errors::AppError;
+use crate::models::RateLimitConfig;
+use crate::repositories::RateLimitRepository;
+
+/// Check a rate limit and return `RateLimited` when the window is exceeded.
+///
+/// Single shared implementation for every handler that gates on a
+/// `RateLimitConfig` (auth, totp, feedback). Increments the counter and, when
+/// the cap is hit, looks up the reset window so the error carries an accurate
+/// `Retry-After`.
+pub(crate) async fn check_rate_limit(
+    pool: &PgPool,
+    key: &str,
+    config: &RateLimitConfig,
+) -> Result<(), AppError> {
+    let (_count, exceeded) = RateLimitRepository::check_and_increment(pool, key, config).await?;
+    if exceeded {
+        let retry_after = RateLimitRepository::get_retry_after(pool, key, config).await?;
+        return Err(AppError::RateLimited { retry_after });
+    }
+    Ok(())
+}
+
 pub mod admin;
 pub mod admin_entitlements;
 pub mod admin_oauth_tenants;
@@ -33,7 +58,7 @@ pub use feedback::{
 };
 pub use membership::{
     billing_portal, cancel_membership, cancel_membership_immediate, create_checkout,
-    get_membership, get_payment_history, reactivate_membership, subscribe,
+    get_membership, get_payment_history, reactivate_membership,
 };
 pub use totp::{
     confirm_2fa, disable_2fa, get_2fa_status, regenerate_recovery_codes, setup_2fa, verify_2fa,
