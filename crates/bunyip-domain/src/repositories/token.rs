@@ -171,10 +171,13 @@ impl TokenRepository {
     }
 
     /// Revoke all refresh tokens for a user
-    pub async fn revoke_all_user_refresh_tokens(
-        pool: &PgPool,
+    pub async fn revoke_all_user_refresh_tokens<'e, E>(
+        executor: E,
         user_id: Uuid,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), AppError>
+    where
+        E: sqlx::Executor<'e, Database = Postgres>,
+    {
         sqlx::query(
             r#"
             UPDATE refresh_tokens SET revoked_at = NOW()
@@ -182,7 +185,7 @@ impl TokenRepository {
             "#,
         )
         .bind(user_id)
-        .execute(pool)
+        .execute(executor)
         .await?;
 
         Ok(())
@@ -411,17 +414,20 @@ impl TokenRepository {
     }
 
     /// Confirm an email change request
-    pub async fn confirm_email_change_request(
-        pool: &PgPool,
+    pub async fn confirm_email_change_request<'e, E>(
+        executor: E,
         request_id: Uuid,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), AppError>
+    where
+        E: sqlx::Executor<'e, Database = Postgres>,
+    {
         sqlx::query(
             r#"
             UPDATE email_change_requests SET confirmed_at = NOW() WHERE id = $1
             "#,
         )
         .bind(request_id)
-        .execute(pool)
+        .execute(executor)
         .await?;
 
         Ok(())

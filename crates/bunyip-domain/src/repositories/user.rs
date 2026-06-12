@@ -324,12 +324,15 @@ impl UserRepository {
     }
 
     /// Update user's email address
-    pub async fn update_email(
-        pool: &PgPool,
+    pub async fn update_email<'e, E>(
+        executor: E,
         user_id: Uuid,
         new_email: &str,
         set_verified: bool,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), AppError>
+    where
+        E: sqlx::Executor<'e, Database = Postgres>,
+    {
         sqlx::query(
             r#"
             UPDATE users
@@ -340,10 +343,58 @@ impl UserRepository {
         .bind(new_email)
         .bind(set_verified)
         .bind(user_id)
-        .execute(pool)
+        .execute(executor)
         .await?;
 
         Ok(())
+    }
+
+    /// Lock a user row `FOR UPDATE` to serialize concurrent mutations within a
+    /// transaction. Returns whether a (non-deleted) row was locked.
+    pub async fn lock_for_update<'e, E>(executor: E, user_id: Uuid) -> Result<bool, AppError>
+    where
+        E: sqlx::Executor<'e, Database = Postgres>,
+    {
+        let row: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_optional(executor)
+            .await?;
+
+        Ok(row.is_some())
+    }
+
+    /// Lock and fetch a non-deleted user row `FOR UPDATE` within a transaction.
+    pub async fn find_by_id_for_update<'e, E>(
+        executor: E,
+        user_id: Uuid,
+    ) -> Result<Option<User>, AppError>
+    where
+        E: sqlx::Executor<'e, Database = Postgres>,
+    {
+        let user = sqlx::query_as::<_, User>(
+            "SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+        )
+        .bind(user_id)
+        .fetch_optional(executor)
+        .await?;
+
+        Ok(user)
+    }
+
+    /// Check whether an email is already registered to a non-deleted user.
+    /// Accepts any executor so it can run inside a transaction.
+    pub async fn email_exists<'e, E>(executor: E, email: &str) -> Result<bool, AppError>
+    where
+        E: sqlx::Executor<'e, Database = Postgres>,
+    {
+        let row: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL",
+        )
+        .bind(email)
+        .fetch_optional(executor)
+        .await?;
+
+        Ok(row.is_some())
     }
 
     /// Update last login timestamp
