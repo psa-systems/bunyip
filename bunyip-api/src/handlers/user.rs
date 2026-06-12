@@ -391,7 +391,7 @@ pub async fn delete_account(
     UserRepository::soft_delete(&pool, user.0.sub).await?;
 
     // Revoke all refresh tokens
-    TokenRepository::revoke_all_user_refresh_tokens(&pool, user.0.sub).await?;
+    TokenRepository::revoke_all_user_refresh_tokens(pool.get_ref(), user.0.sub).await?;
 
     // Audit log
     let ip = ip_address.map(ipnetwork::IpNetwork::from);

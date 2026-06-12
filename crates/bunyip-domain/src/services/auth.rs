@@ -788,34 +788,17 @@ impl AuthService {
             let mut tx = self.pool.begin().await?;
 
             // Lock the user row to prevent concurrent email changes
-            sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
-                .bind(user_id)
-                .execute(&mut *tx)
-                .await?;
+            UserRepository::lock_for_update(&mut *tx, user_id).await?;
 
             // Re-check email availability inside the transaction
-            let existing: Option<(Uuid,)> = sqlx::query_as(
-                "SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL",
-            )
-            .bind(&new_email)
-            .fetch_optional(&mut *tx)
-            .await?;
-            if existing.is_some() {
+            if UserRepository::email_exists(&mut *tx, &new_email).await? {
                 return Err(AppError::conflict("Email already registered"));
             }
 
-            sqlx::query("UPDATE users SET email = $1, email_verified = $2, updated_at = NOW() WHERE id = $3")
-                .bind(&new_email)
-                .bind(false)
-                .bind(user_id)
-                .execute(&mut *tx)
-                .await?;
+            UserRepository::update_email(&mut *tx, user_id, &new_email, false).await?;
 
             // Revoke all refresh tokens (force re-login with new email)
-            sqlx::query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL")
-                .bind(user_id)
-                .execute(&mut *tx)
-                .await?;
+            TokenRepository::revoke_all_user_refresh_tokens(&mut *tx, user_id).await?;
 
             tx.commit().await?;
 
@@ -861,46 +844,25 @@ impl AuthService {
         let mut tx = self.pool.begin().await?;
 
         // Lock the user row to prevent concurrent email changes
-        let user: User =
-            sqlx::query_as("SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE")
-                .bind(request.user_id)
-                .fetch_optional(&mut *tx)
-                .await?
-                .ok_or(AppError::not_found("User"))?;
+        let user: User = UserRepository::find_by_id_for_update(&mut *tx, request.user_id)
+            .await?
+            .ok_or(AppError::not_found("User"))?;
 
         let old_email = user.email.clone();
 
         // Re-check email availability inside the transaction
-        let existing: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL",
-        )
-        .bind(&new_email)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if existing.is_some() {
+        if UserRepository::email_exists(&mut *tx, &new_email).await? {
             return Err(AppError::conflict("Email already registered"));
         }
 
         // Update email (set verified since they proved ownership)
-        sqlx::query(
-            "UPDATE users SET email = $1, email_verified = TRUE, updated_at = NOW() WHERE id = $2",
-        )
-        .bind(&new_email)
-        .bind(user.id)
-        .execute(&mut *tx)
-        .await?;
+        UserRepository::update_email(&mut *tx, user.id, &new_email, true).await?;
 
         // Confirm the request
-        sqlx::query("UPDATE email_change_requests SET confirmed_at = NOW() WHERE id = $1")
-            .bind(request.id)
-            .execute(&mut *tx)
-            .await?;
+        TokenRepository::confirm_email_change_request(&mut *tx, request.id).await?;
 
         // Revoke all refresh tokens (force re-login)
-        sqlx::query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL")
-            .bind(user.id)
-            .execute(&mut *tx)
-            .await?;
+        TokenRepository::revoke_all_user_refresh_tokens(&mut *tx, user.id).await?;
 
         tx.commit().await?;
 
@@ -922,7 +884,7 @@ impl AuthService {
     /// Request email verification
     ///
     /// Generates a token and returns it so the caller can send the verification email.
-    /// Requires 2FA to be enabled and email to not already be verified.
+    /// Requires email to not already be verified.
     pub async fn request_email_verification(
         &self,
         user_id: Uuid,
@@ -936,13 +898,6 @@ impl AuthService {
 
         if user.email_verified {
             return Err(AppError::validation("email", "Email is already verified"));
-        }
-
-        if !user.two_factor_enabled {
-            return Err(AppError::validation(
-                "two_factor",
-                "Two-factor authentication must be enabled to verify your email",
-            ));
         }
 
         // Rate limit: 3 requests per hour
