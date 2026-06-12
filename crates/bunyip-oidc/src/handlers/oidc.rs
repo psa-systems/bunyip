@@ -57,6 +57,122 @@ fn oidc_unauthorized(error: &str, description: &str) -> HttpResponse {
     }))
 }
 
+/// HTML-escape `s` for safe embedding in attribute values and text
+/// nodes. Bunyip does not pull in a template engine for the OIDC
+/// pages, so this hand-rolled escaper is what stops a forged client
+/// `name` or a forged `redirect_uri` from injecting markup into the
+/// picker page (BUNYIP-62). Covers the five characters that matter
+/// for both attribute (`"`, `'`) and content (`<`, `>`, `&`) contexts.
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Render the tenant picker for the multi-tenant `/authorize` branch
+/// (BUNYIP-62). Returns an HTML page with one radio per assignment;
+/// the form re-submits to `/oauth2/authorize` (GET) with every
+/// original `AuthorizeQuery` field preserved as a hidden input plus
+/// the chosen `selected_tenant_id`. The handler then re-enters its
+/// multi-tenant branch, validates the pick is one of the user's
+/// assignments, and proceeds to mint the auth code.
+///
+/// `silent_cookies` are forwarded so a Set-Cookie that the silent-SSO
+/// branch emitted (rotated access + refresh + op_session) is preserved
+/// across the picker round-trip; without this the user would lose
+/// their newly-minted session if they happened to land in the picker
+/// branch on first hit.
+fn render_tenant_picker(
+    q: &AuthorizeQuery,
+    client: &crate::services::OAuthClient,
+    assignments: &[bunyip_domain::models::OAuthClientUserTenant],
+    silent_cookies: &[actix_web::cookie::Cookie<'static>],
+) -> HttpResponse {
+    let mut body = String::new();
+    body.push_str("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">");
+    body.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
+    body.push_str("<title>Choose a tenant</title>");
+    body.push_str("<style>");
+    body.push_str("body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;color:#0f172a;}");
+    body.push_str("h1{font-size:1.5rem;margin-bottom:0.25rem;}");
+    body.push_str("p{color:#475569;line-height:1.5;}");
+    body.push_str("form{margin-top:2rem;display:flex;flex-direction:column;gap:0.75rem;}");
+    body.push_str("label.choice{display:flex;align-items:center;gap:0.5rem;padding:0.75rem 1rem;border:1px solid #e2e8f0;border-radius:0.5rem;cursor:pointer;}");
+    body.push_str("label.choice:hover{border-color:#94a3b8;}");
+    body.push_str("button{margin-top:1rem;padding:0.6rem 1rem;border:0;border-radius:0.5rem;background:#0f172a;color:#fff;font-weight:600;cursor:pointer;}");
+    body.push_str(
+        ".tenant-id{color:#94a3b8;font-size:0.75rem;font-family:ui-monospace,monospace;}",
+    );
+    body.push_str("</style></head><body>");
+    body.push_str(&format!(
+        "<h1>Choose a tenant for {}</h1>",
+        html_escape(&client.name)
+    ));
+    body.push_str(
+        "<p>You belong to more than one tenant on this app. Pick the one to sign in to. \
+         You can switch tenants later by signing in again.</p>",
+    );
+    body.push_str("<form method=\"GET\" action=\"/oauth2/authorize\">");
+    // Preserve every original AuthorizeQuery field as a hidden input
+    // so the handler re-runs with the same context after the user picks.
+    let hidden = [
+        ("response_type", q.response_type.as_str()),
+        ("client_id", q.client_id.as_str()),
+        ("redirect_uri", q.redirect_uri.as_str()),
+        ("scope", q.scope.as_str()),
+        ("state", q.state.as_str()),
+        ("nonce", q.nonce.as_str()),
+        ("code_challenge", q.code_challenge.as_str()),
+        ("code_challenge_method", q.code_challenge_method.as_str()),
+    ];
+    for (k, v) in hidden {
+        body.push_str(&format!(
+            "<input type=\"hidden\" name=\"{}\" value=\"{}\">",
+            k,
+            html_escape(v)
+        ));
+    }
+    if let Some(p) = q.prompt.as_deref() {
+        body.push_str(&format!(
+            "<input type=\"hidden\" name=\"prompt\" value=\"{}\">",
+            html_escape(p)
+        ));
+    }
+    for (i, a) in assignments.iter().enumerate() {
+        let role = a.role.as_deref().unwrap_or("");
+        let role_suffix = if role.is_empty() {
+            String::new()
+        } else {
+            format!(" - {}", html_escape(role))
+        };
+        body.push_str(&format!(
+            "<label class=\"choice\"><input type=\"radio\" name=\"selected_tenant_id\" value=\"{}\"{}><span>Tenant{}</span> <span class=\"tenant-id\">{}</span></label>",
+            a.tenant_id,
+            if i == 0 { " checked" } else { "" },
+            role_suffix,
+            a.tenant_id,
+        ));
+    }
+    body.push_str("<button type=\"submit\">Continue</button>");
+    body.push_str("</form></body></html>");
+
+    let mut response = HttpResponse::Ok();
+    response.content_type("text/html; charset=utf-8");
+    for cookie in silent_cookies {
+        response.cookie(cookie.clone());
+    }
+    response.body(body)
+}
+
 // ── Discovery ─────────────────────────────────────────────────────────────────
 
 /// GET /.well-known/openid-configuration
@@ -132,6 +248,13 @@ pub struct AuthorizeQuery {
     pub code_challenge_method: String,
     #[serde(default)]
     pub prompt: Option<String>,
+    /// BUNYIP-62: when the resolved client gates on
+    /// `oauth_client_user_tenants` AND the user has more than one
+    /// assignment, the picker page submits the chosen tenant as
+    /// `selected_tenant_id` and the handler re-runs with this set.
+    /// Validated against the user's assignments before use.
+    #[serde(default)]
+    pub selected_tenant_id: Option<Uuid>,
 }
 
 /// GET /oauth2/authorize
@@ -321,6 +444,53 @@ pub async fn authorize(
             .await?;
     }
 
+    // BUNYIP-62: per-RP tenant gating. When the client has a non-null
+    // `tenant_claim_name`, the user MUST have an `oauth_client_user_tenants`
+    // assignment for this client. Zero assignments => `access_denied`.
+    // One => auto-select. More than one => render the tenant picker;
+    // on submit the same handler re-runs with `selected_tenant_id` set.
+    //
+    // Clients with `tenant_claim_name = NULL` (existing seeded clients
+    // pre-BUNYIP-61) skip this block entirely and behave exactly as
+    // before: no tenant claim, no picker, no assignment check. The
+    // gate is opt-in per client.
+    let selected_tenant_id = if client.tenant_claim_name.is_some() {
+        let assignments = crate::repositories::OAuthClientUserTenantRepository::assignments_for(
+            &provider.pool,
+            client.client_id,
+            session.user_id,
+        )
+        .await?;
+        match (assignments.len(), q.selected_tenant_id) {
+            (0, _) => {
+                return Ok(oidc_error(
+                    "access_denied",
+                    "no tenant assigned for this client",
+                ));
+            }
+            (1, _) => Some(assignments[0].tenant_id),
+            (_, Some(picked)) => {
+                if !assignments.iter().any(|a| a.tenant_id == picked) {
+                    return Ok(oidc_error(
+                        "access_denied",
+                        "selected tenant is not assigned to this user",
+                    ));
+                }
+                Some(picked)
+            }
+            (_, None) => {
+                return Ok(render_tenant_picker(
+                    q,
+                    &client,
+                    &assignments,
+                    &silent_cookies,
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
     // Reuse the existing OP session established at login; auth_time/acr/amr come
     // from that session rather than being re-minted per authorize request.
     let acr = session.acr.as_deref().unwrap_or("urn:bunyip:loa:pwd");
@@ -342,6 +512,7 @@ pub async fn authorize(
             session.created_at,
             acr,
             &amr,
+            selected_tenant_id,
         )
         .await?;
 
