@@ -168,14 +168,6 @@ dev-stop: ensure-env
 dev-stop-sso: ensure-env
     {{ compose_sso }}down --remove-orphans
 
-# Stop the stack, remove its named volumes, and delete the generated dev .env.
-[group: 'dev']
-dev-clean:
-    #!/usr/bin/env nu
-    # Named volumes are per-user suffixed on shared hosts; ensure-env recreates .env.
-    {{ compose }}down --volumes
-    [".env"] | where ($it | path exists) | each {|f| rm $f; print $"Removed ($f)" } | ignore
-
 # Automated OCI registry verification against the running dev stack (BUNYIP-31).
 # Prerequisites: `just dev-detach` already up with the distribution proxy enabled
 # in .env (FORGEJO_BASE_URL, FORGEJO_API_TOKEN, OCI_REGISTRY_ENABLED=true) and a
@@ -413,6 +405,55 @@ build-docker-export:
         --target export \
         --output type=local,dest=dist \
         .
+
+# ── Cleanup ──────────────────────────────────────────────────────────────────
+
+# Tear down this repo's dev footprint: stop the compose.dev.yml stack (drops the default network and orphans), remove this repo's per-developer named volumes (postgres data, cargo-target, web node_modules, download/oci caches) plus the bunyip-specific check-container target cache, delete local build artifacts (target/, bunyip-web/node_modules/), and remove the generated dev .env (ensure-env recreates it). Scoped to this repo; safe on a shared host (no host-global prune; shared dunite registry cache left intact).
+[group: 'cleanup']
+dev-clean:
+    #!/usr/bin/env nu
+    {{ compose }}down --remove-orphans
+    let suffix = $env.USER
+    let vols = [
+        $"dev-bunyip-postgres-($suffix)"
+        $"dev-bunyip-cargo-target-($suffix)"
+        $"dev-bunyip-web-node-modules-($suffix)"
+        $"dev-bunyip-download-cache-($suffix)"
+        $"dev-bunyip-oci-cache-($suffix)"
+        "bunyip-check-target"
+    ]
+    let existing = docker volume ls --quiet | lines
+    for vol in $vols {
+        if $vol in $existing {
+            docker volume rm $vol
+        }
+    }
+    let paths = [target bunyip-web/node_modules .env]
+    for p in $paths {
+        if ($p | path exists) {
+            rm --recursive $p
+            print $"removed ($p)"
+        }
+    }
+    print "dev-clean: done"
+
+# Everything dev-clean does, plus remove the Docker images this repo builds and prune its buildx cache. Run for a from-scratch rebuild.
+[group: 'cleanup']
+dev-clean-all: dev-clean
+    #!/usr/bin/env nu
+    let images = [
+        "bunyip-api:latest"
+        "bunyip-web:latest"
+        "bunyip-api-builder:check"
+    ]
+    for img in $images {
+        let present = (do { ^docker image inspect $img } | complete).exit_code == 0
+        if $present {
+            docker image rm $img
+        }
+    }
+    docker buildx prune --force
+    print "dev-clean-all: done"
 
 # ── Release ─────────────────────────────────────────────────────────────────────
 
