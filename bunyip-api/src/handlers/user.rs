@@ -108,7 +108,7 @@ pub async fn list_sessions(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
-    let tokens = TokenRepository::find_active_refresh_tokens_for_user(&pool, user.0.sub).await?;
+    let tokens = TokenRepository::find_user_refresh_tokens(&pool, user.0.sub).await?;
 
     // Map to response format (hide sensitive fields)
     let sessions: Vec<_> = tokens

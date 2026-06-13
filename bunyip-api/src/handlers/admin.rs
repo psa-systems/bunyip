@@ -1925,13 +1925,15 @@ pub async fn reencrypt_key(
                 _ => None,
             };
 
-            StripeConfigRepository::update_encryption(
+            StripeConfigRepository::update(
                 &pool,
                 new_sk.as_ref().map(|(ct, _)| ct.clone()),
                 new_sk.as_ref().map(|(_, n)| n.clone()),
                 new_wh.as_ref().map(|(ct, _)| ct.clone()),
                 new_wh.as_ref().map(|(_, n)| n.clone()),
+                admin.0.sub,
                 current_version,
+                None,
             )
             .await?;
 

@@ -225,6 +225,9 @@ impl FeedbackRepository {
         feedback_id: Uuid,
         attachments: Vec<(String, String, Vec<u8>)>,
     ) -> Result<(), AppError> {
+        // All-or-nothing: a failure partway through must not leave a feedback
+        // row with only some of its attachments persisted.
+        let mut tx = pool.begin().await?;
         for (filename, mime_type, data) in attachments {
             let size_bytes = data.len() as i32;
             sqlx::query(
@@ -238,9 +241,10 @@ impl FeedbackRepository {
             .bind(mime_type)
             .bind(size_bytes)
             .bind(data)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
         }
+        tx.commit().await?;
         Ok(())
     }
 

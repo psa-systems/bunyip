@@ -70,7 +70,8 @@ impl StripeConfig {
                 .unwrap_or_else(|_| format!("{base}/checkout/success")),
             cancel_url: std::env::var("STRIPE_CANCEL_URL")
                 .unwrap_or_else(|_| format!("{base}/pricing?checkout=canceled")),
-            free_price_id: std::env::var("STRIPE_FREE_PRICE_ID").ok(),
+            // Single source shared with `TierConfig` so the two cannot diverge.
+            free_price_id: crate::config::free_price_id_from_env(),
             app_tag: std::env::var("STRIPE_APP_TAG")
                 .ok()
                 .filter(|s| !s.is_empty())

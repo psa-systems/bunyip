@@ -92,7 +92,7 @@ impl ApplicationRepository {
         app_id: Uuid,
         requires_entitlement: bool,
     ) -> Result<(), AppError> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE applications
             SET requires_entitlement = $1, updated_at = NOW()
@@ -104,6 +104,10 @@ impl ApplicationRepository {
         .execute(pool)
         .await?;
 
+        if result.rows_affected() == 0 {
+            return Err(AppError::not_found("Application"));
+        }
+
         Ok(())
     }
 
@@ -114,7 +118,7 @@ impl ApplicationRepository {
         maintenance: bool,
         message: Option<&str>,
     ) -> Result<(), AppError> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE applications
             SET maintenance_mode = $1, maintenance_message = $2, updated_at = NOW()
@@ -127,12 +131,16 @@ impl ApplicationRepository {
         .execute(pool)
         .await?;
 
+        if result.rows_affected() == 0 {
+            return Err(AppError::not_found("Application"));
+        }
+
         Ok(())
     }
 
     /// Toggle active status
     pub async fn set_active(pool: &PgPool, app_id: Uuid, active: bool) -> Result<(), AppError> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE applications
             SET is_active = $1, updated_at = NOW()
@@ -144,6 +152,10 @@ impl ApplicationRepository {
         .execute(pool)
         .await?;
 
+        if result.rows_affected() == 0 {
+            return Err(AppError::not_found("Application"));
+        }
+
         Ok(())
     }
 
@@ -153,7 +165,7 @@ impl ApplicationRepository {
         app_id: Uuid,
         version: &str,
     ) -> Result<(), AppError> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE applications
             SET version = $1, updated_at = NOW()
@@ -164,6 +176,10 @@ impl ApplicationRepository {
         .bind(app_id)
         .execute(pool)
         .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(AppError::not_found("Application"));
+        }
 
         Ok(())
     }
@@ -298,7 +314,7 @@ impl ApplicationRepository {
         app_id_a: Uuid,
         app_id_b: Uuid,
     ) -> Result<(), AppError> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE applications AS a
             SET sort_order = b.sort_order, updated_at = NOW()
@@ -311,6 +327,13 @@ impl ApplicationRepository {
         .bind(&[app_id_a, app_id_b][..])
         .execute(pool)
         .await?;
+
+        // Each id pins to the OTHER row's sort_order, so a real swap touches
+        // both rows. Zero rows means one (or both) ids were missing or equal;
+        // report that instead of silently succeeding.
+        if result.rows_affected() == 0 {
+            return Err(AppError::not_found("Application"));
+        }
 
         Ok(())
     }

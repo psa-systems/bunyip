@@ -165,7 +165,8 @@ pub struct User {
     pub subscription_tier: String,
     /// Null for lifetime members; set for trial members
     pub trial_ends_at: Option<DateTime<Utc>>,
-    /// True for the first 20 verified users and admin-granted lifetime members
+    /// True for the first `lifetime_slots` verified users (the `TIER_LIFETIME_SLOTS`
+    /// config, default 5) and admin-granted lifetime members
     pub lifetime_member: bool,
     /// Set when an admin manually granted lifetime membership
     pub subscription_override_by: Option<Uuid>,

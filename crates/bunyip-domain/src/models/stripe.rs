@@ -114,7 +114,7 @@ pub fn mask_secret(s: &str) -> String {
     // show prefix through the last underscore plus *** plus last 4 chars.
     let prefix_end = s.rfind('_').map(|i| i + 1).unwrap_or(0);
     let suffix = &s[s.len() - 4..];
-    if prefix_end > 0 && prefix_end + 4 < s.len() {
+    if prefix_end > 0 && prefix_end + 4 <= s.len() {
         format!("{}***{}", &s[..prefix_end], suffix)
     } else {
         format!("***{}", suffix)
