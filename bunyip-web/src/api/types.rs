@@ -58,8 +58,6 @@ pub struct User {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuthResponse {
     pub user: User,
-    #[serde(default)]
-    pub access_token: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -101,8 +99,6 @@ pub struct PaginatedResponse<T> {
     pub page: i64,
     #[serde(default)]
     pub page_size: Option<i64>,
-    #[serde(default)]
-    pub per_page: Option<i64>,
     pub total_pages: i64,
 }
 
@@ -161,10 +157,23 @@ pub enum FeedbackStatus {
     Closed,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FeedbackSubmissionResponse {
-    pub id: String,
-    pub message: String,
+impl FeedbackStatus {
+    /// snake_case wire value, matching the serde discriminant. Single source
+    /// for the status string the BFF sends to bunyip-api.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FeedbackStatus::New => "new",
+            FeedbackStatus::Reviewed => "reviewed",
+            FeedbackStatus::Responded => "responded",
+            FeedbackStatus::Closed => "closed",
+        }
+    }
+}
+
+impl AsRef<str> for FeedbackStatus {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -198,12 +207,6 @@ pub struct DownloadAsset {
     pub size_bytes: i64,
     pub content_type: String,
     pub download_url: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AppDownloadsResponse {
-    pub release_tag: Option<String>,
-    pub assets: Vec<DownloadAsset>,
 }
 
 /// OCI pull coordinates for a product (mirrors the API's `AppOciImage`).

@@ -10,19 +10,17 @@ use serde::Deserialize;
 
 use crate::api::auth::{self as auth_api, LoginOutcome};
 use crate::api::calls;
-use crate::handlers::{auth_page, cookie_of, cookie_value, ctx, password_ok};
+use crate::handlers::{auth_page, cookie_of, cookie_value, ctx, dashboard_input, password_ok};
 use crate::views::common::auth_card;
 use crate::views::layout::{document, public_shell};
 use crate::views::ui::{button_class, error_box};
 use crate::web::{html, redirect, redirect_cookies, AppState};
 
-const INPUT_CLASS: &str = "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
-
 fn field(id: &str, label: &str, ty: &str, placeholder: &str, autocomplete: &str) -> Markup {
     html! {
         div class="space-y-2" {
             label for=(id) class="text-sm font-medium leading-none" { (label) }
-            input id=(id) name=(id) type=(ty) placeholder=(placeholder) autocomplete=(autocomplete) class=(INPUT_CLASS);
+            input id=(id) name=(id) type=(ty) placeholder=(placeholder) autocomplete=(autocomplete) class=(dashboard_input());
         }
     }
 }
@@ -100,7 +98,7 @@ fn login_content(error: Option<&str>, redirect: &str) -> Markup {
                         div class="space-y-2" {
                             label for="email" class="text-sm font-medium leading-none" { "Email" }
                             input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="email"
-                                class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+                                class=(dashboard_input());
                         }
                         div class="space-y-2" {
                             div class="flex items-center justify-between" {
@@ -108,7 +106,7 @@ fn login_content(error: Option<&str>, redirect: &str) -> Markup {
                                 a href="/password-reset" class="text-sm text-primary hover:underline" { "Forgot password?" }
                             }
                             input id="password" name="password" type="password" autocomplete="current-password"
-                                class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+                                class=(dashboard_input());
                         }
                         div class="flex items-center space-x-2" {
                             input id="remember" name="remember" type="checkbox" value="on" class="h-4 w-4 rounded border-border";
@@ -147,7 +145,12 @@ pub async fn login_get(
     // but redirecting back to `authorize` would loop forever. Fall through to
     // the login form so the POST re-establishes the OP session.
     if c.is_signed_in() && q.checked.is_none() {
-        return redirect(&safe_redirect(q.redirect.as_deref(), &st.cfg.oidc_issuer));
+        // Relay any cookie `authenticate()` refreshed (a rotated session JWT)
+        // so the already-signed-in bounce doesn't drop it.
+        return redirect_cookies(
+            &safe_redirect(q.redirect.as_deref(), &st.cfg.oidc_issuer),
+            &c.set_cookies,
+        );
     }
     let apps = calls::applications(&st.api, fwd.as_deref())
         .await
@@ -273,7 +276,8 @@ fn register_card(error: Option<&str>) -> Markup {
 pub async fn register_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (c, _) = ctx(&st, &headers).await;
     if c.is_signed_in() {
-        return redirect("/dashboard");
+        // Relay any refreshed session cookie on the already-signed-in bounce.
+        return redirect_cookies("/dashboard", &c.set_cookies);
     }
     auth_page(
         &st,
@@ -593,7 +597,7 @@ fn twofa_card(error: Option<&str>, redirect: Option<&str>) -> Markup {
                 @if let Some(e) = error { (error_box(e)) }
                 div class="space-y-2" {
                     label for="code" class="text-sm font-medium leading-none" { "Authentication Code" }
-                    input id="code" name="code" type="text" inputmode="numeric" placeholder="000 000" autocomplete="one-time-code" class={ (INPUT_CLASS) " text-center text-lg tracking-widest" };
+                    input id="code" name="code" type="text" inputmode="numeric" placeholder="000 000" autocomplete="one-time-code" class={ (dashboard_input()) " text-center text-lg tracking-widest" };
                 }
                 (submit_btn("Verify"))
             }
@@ -886,9 +890,7 @@ pub async fn confirm_email(
             ),
         },
     };
-    // Clear any local session cookie too (the API revoked sessions on email change).
-    let resp = auth_page(&st, &headers, "Confirm email · Bunyip", card).await;
-    resp
+    auth_page(&st, &headers, "Confirm email · Bunyip", card).await
 }
 
 pub async fn verify_email(

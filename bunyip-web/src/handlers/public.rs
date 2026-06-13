@@ -3,10 +3,9 @@
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
-use maud::{html, Markup};
+use maud::html;
 
 use crate::api::calls;
-use crate::config::Config;
 use crate::handlers::ctx;
 use crate::util::{app_gradient, app_link};
 use crate::views::layout::{document, public_shell};
@@ -187,17 +186,6 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
         document("Bunyip · Surfaces what matters.", body),
         &c.set_cookies,
     )
-}
-
-/// Static legal/marketing copy block shared shape.
-pub fn simple_page(cfg: &Config, title: &str, body: Markup) -> Markup {
-    let _ = cfg;
-    html! {
-        div class="container max-w-4xl py-12" {
-            h1 class="text-4xl font-bold mb-8" { (title) }
-            (body)
-        }
-    }
 }
 
 pub async fn not_found(State(st): State<AppState>, headers: HeaderMap) -> Response {

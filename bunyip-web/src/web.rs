@@ -52,15 +52,3 @@ pub fn redirect_cookies(path: &str, cookies: &[String]) -> Response {
     attach_cookies(&mut resp, cookies);
     resp
 }
-
-/// htmx-friendly redirect: sets `HX-Redirect` so htmx navigates the whole page,
-/// and a `Location` fallback for non-htmx requests.
-pub fn hx_redirect(path: &str, cookies: &[String]) -> Response {
-    let mut resp = StatusCode::OK.into_response();
-    if let Ok(v) = HeaderValue::from_str(path) {
-        resp.headers_mut().insert("HX-Redirect", v.clone());
-        resp.headers_mut().insert(LOCATION, v);
-    }
-    attach_cookies(&mut resp, cookies);
-    resp
-}

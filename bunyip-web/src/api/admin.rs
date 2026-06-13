@@ -8,28 +8,7 @@ use super::types::{
     FeedbackStatus, PaginatedResponse, StripeConfigResponse, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
-
-fn urlencode(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
-
-pub fn feedback_status_str(s: FeedbackStatus) -> &'static str {
-    match s {
-        FeedbackStatus::New => "new",
-        FeedbackStatus::Reviewed => "reviewed",
-        FeedbackStatus::Responded => "responded",
-        FeedbackStatus::Closed => "closed",
-    }
-}
+use crate::util::urlenc;
 
 // --- stats ------------------------------------------------------------------
 
@@ -48,7 +27,7 @@ pub async fn users(
 ) -> Result<PaginatedResponse<AdminUser>, ApiError> {
     let mut path = format!("/admin/users?page={page}&page_size={page_size}");
     if !search.is_empty() {
-        path.push_str(&format!("&search={}", urlencode(search)));
+        path.push_str(&format!("&search={}", urlenc(search)));
     }
     parse(api.get(&path, cookie).await?)
 }
@@ -321,7 +300,7 @@ pub async fn update_feedback_status(
         .put(
             &format!("/admin/feedback/{id}/status"),
             cookie,
-            Some(json!({ "status": feedback_status_str(status) })),
+            Some(json!({ "status": status.as_str() })),
         )
         .await?;
     ok_data(&r).map(|_| ())
@@ -351,7 +330,7 @@ pub async fn respond_to_feedback(
             cookie,
             Some(json!({
                 "response": response,
-                "status": feedback_status_str(FeedbackStatus::Responded),
+                "status": FeedbackStatus::Responded.as_str(),
             })),
         )
         .await?;
