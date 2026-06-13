@@ -2,6 +2,8 @@
 -- This allows admins to configure a custom subdomain (e.g., 'go' instead of 'rus')
 ALTER TABLE applications ADD COLUMN subdomain VARCHAR(100);
 
--- Seed existing applications with their known subdomains
-UPDATE applications SET subdomain = 'go' WHERE slug = 'rus';
-UPDATE applications SET subdomain = 'links' WHERE slug = 'rustylinks';
+-- NOTE: the original 'rus'/'rustylinks' subdomain backfills were removed. They
+-- targeted slugs seeded by 20241230000008_seed_applications.sql, which was
+-- deleted (see the position-8 gap documented in README.md). With no seed
+-- migration creating those rows, the UPDATEs matched zero rows on every fresh
+-- database. Admins set the subdomain through the admin API instead.

@@ -59,8 +59,16 @@ CREATE TABLE IF NOT EXISTS user_application_access (
 CREATE INDEX IF NOT EXISTS user_application_access_active
     ON user_application_access(user_id) WHERE revoked_at IS NULL;
 
--- Grant every existing user access to every seeded client with full scopes.
--- New users are granted access automatically at login (JIT provisioning path).
+-- Backfill access rows for the (user x client) pairs that exist AT THIS POINT
+-- in the migration chain. NOTE: no clients are seeded yet - oauth_clients
+-- (20260417000040) ships with zero rows and the relying-party seeds
+-- (20260502000048 onward) run LATER - so on a fresh database this CROSS JOIN
+-- matches zero clients and inserts zero rows. It is retained only to grant
+-- access to any clients an operator inserted manually before this migration.
+-- The authoritative grant paths are: per-client seed migrations (which insert
+-- their own access rows) and JIT provisioning at login for new users. This is
+-- deliberately NOT a no-op error: it is correct for the manual-insert case and
+-- harmless (zero rows) otherwise.
 INSERT INTO user_application_access (user_id, client_id, granted_scopes, granted_at)
 SELECT
     u.id,

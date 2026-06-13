@@ -20,6 +20,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - ".sqlx/**"
+      - "scripts/**"
       - ".forgejo/workflows/check.yml"
 
 jobs:
@@ -44,6 +45,11 @@ jobs:
     steps:
       - name: Clone the repository
         uses: https://code.forgejo.org/actions/checkout@v5
+
+      - name: Check migration version numbers
+        # Unique + strictly increasing migration versions; blocks the suffix
+        # collisions that parallel branches reintroduce (BUNYIP-79).
+        run: ./scripts/check-migration-versions.sh
 
       - name: Install Rust toolchain components
         run: rustup component add clippy rustfmt

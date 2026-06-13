@@ -29,7 +29,7 @@ CREATE TABLE application_entitlements (
     granted_by     UUID        REFERENCES users(id) ON DELETE SET NULL,
     -- Provenance so a Stripe-driven revoke never clobbers an admin grant and
     -- vice versa: 'admin' | 'stripe' | 'backfill'.
-    source         TEXT        NOT NULL,
+    source         TEXT        NOT NULL CHECK (source IN ('admin', 'stripe', 'backfill')),
     -- NULL = active. Set on revoke; a later grant clears it (UPSERT below).
     revoked_at     TIMESTAMPTZ,
     PRIMARY KEY (user_id, application_id)

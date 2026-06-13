@@ -14,6 +14,15 @@
 --
 -- Additional relying parties (e.g. the mokosh-clients SPA as a public PKCE
 -- client) follow this same INSERT shape in their own seed migrations.
+--
+-- SOFT-DELETED: this registration was never completed (placeholder redirect
+-- URIs, NULL client_secret_hash) and was superseded by the real relying-party
+-- seeds in 20260603000010_register_mokosh_apps_and_drillmark_oidc_clients.sql
+-- (client_ids ...0002 / ...0003). The documented follow-up to finish it never
+-- landed, so the row is inserted already-disabled (disabled_at set) to keep it
+-- out of the oauth_clients_active partial index and stop it from appearing as
+-- an active client. Re-enable by clearing disabled_at and setting a real
+-- secret/redirect URIs if mokosh-server is ever onboarded under this id.
 
 INSERT INTO oauth_clients (
     client_id, client_type, name,
@@ -21,7 +30,8 @@ INSERT INTO oauth_clients (
     allowed_scopes, allowed_grant_types,
     token_endpoint_auth_method, require_pkce,
     client_secret_hash,
-    audience
+    audience,
+    disabled_at
 ) VALUES (
     'b0000000-0000-4000-8000-000000000001',
     'confidential',
@@ -40,6 +50,7 @@ INSERT INTO oauth_clients (
     ARRAY['authorization_code', 'refresh_token'],
     'client_secret_basic', TRUE,
     NULL,
-    'https://msp-api.localhost/api'
+    'https://msp-api.localhost/api',
+    NOW()
 )
 ON CONFLICT (client_id) DO NOTHING;

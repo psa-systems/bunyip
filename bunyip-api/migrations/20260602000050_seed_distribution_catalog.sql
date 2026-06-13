@@ -32,7 +32,11 @@
 ALTER TABLE applications
     ADD COLUMN is_hosted BOOLEAN NOT NULL DEFAULT TRUE;
 
-CREATE INDEX idx_applications_is_hosted ON applications(is_hosted) WHERE is_hosted;
+-- Plain (non-partial) index: the hub lists WHERE is_hosted, but the downloads
+-- and OCI surfaces list catalog rows WHERE NOT is_hosted. A partial index on
+-- TRUE only would leave the catalog-side queries unindexed, so index the whole
+-- boolean and serve both predicates.
+CREATE INDEX idx_applications_is_hosted ON applications(is_hosted);
 
 -- Mokosh Server: the self-hosted PSA platform (OCI image).
 INSERT INTO applications

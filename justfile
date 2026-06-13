@@ -296,7 +296,12 @@ build:
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-build check-clippy check-fmt check-docker
+check: check-migrations check-build check-clippy check-fmt check-docker
+
+# Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
+[group: 'checks']
+check-migrations:
+    ./scripts/check-migration-versions.sh
 
 # Build every target in the workspace.
 [group: 'checks']

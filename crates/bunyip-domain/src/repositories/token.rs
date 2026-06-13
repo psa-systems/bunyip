@@ -170,14 +170,33 @@ impl TokenRepository {
         Ok(())
     }
 
-    /// Revoke all refresh tokens for a user
-    pub async fn revoke_all_user_refresh_tokens<'e, E>(
-        executor: E,
+    /// Revoke all refresh tokens for a user across BOTH refresh-token surfaces.
+    ///
+    /// Bunyip carries two parallel refresh-token schemes: the legacy
+    /// `refresh_tokens` table (HS256 session tokens) and the OIDC scheme in
+    /// `refresh_tokens_v2` gated by `refresh_token_families`. A security event
+    /// such as a password change, password reset, "log out everywhere", or
+    /// account deletion must invalidate every outstanding refresh token, so this
+    /// revokes all three relations in one transaction. Revoking the family is
+    /// what blocks the OIDC refresh endpoint (it checks the family); the v2 rows
+    /// are revoked too so per-token bookkeeping stays consistent.
+    ///
+    /// Generic over [`sqlx::Acquire`] so callers can pass either a `&PgPool`
+    /// (the revocation runs in its own transaction) or an existing
+    /// `&mut Transaction` (the revocation joins the caller's transaction, e.g.
+    /// the email-change flows that must revoke atomically with the email
+    /// update). In the latter case `begin` opens a nested transaction
+    /// (savepoint) so the three statements still commit or roll back together.
+    pub async fn revoke_all_user_refresh_tokens<'a, A>(
+        executor: A,
         user_id: Uuid,
     ) -> Result<(), AppError>
     where
-        E: sqlx::Executor<'e, Database = Postgres>,
+        A: sqlx::Acquire<'a, Database = Postgres>,
     {
+        let mut tx = executor.begin().await?;
+
+        // Legacy HS256 refresh tokens.
         sqlx::query(
             r#"
             UPDATE refresh_tokens SET revoked_at = NOW()
@@ -185,8 +204,34 @@ impl TokenRepository {
             "#,
         )
         .bind(user_id)
-        .execute(executor)
+        .execute(&mut *tx)
         .await?;
+
+        // OIDC refresh-token families (the surface the OIDC refresh endpoint
+        // consults to reject a whole login session).
+        sqlx::query(
+            r#"
+            UPDATE refresh_token_families
+            SET revoked_at = NOW(), revoke_reason = 'security_event'
+            WHERE user_id = $1 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+        // OIDC refresh tokens themselves.
+        sqlx::query(
+            r#"
+            UPDATE refresh_tokens_v2 SET revoked_at = NOW()
+            WHERE user_id = $1 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
 
         Ok(())
     }
