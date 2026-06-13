@@ -16,7 +16,7 @@ use crate::api::types::{
     AppDownloadGroup, Membership, MembershipStatus, SubscriptionTier, TwoFactorSetupResponse, User,
 };
 use crate::handlers::{dashboard_response, guard, password_ok, rotating_index};
-use crate::util::{app_gradient, days_until, has_active_membership};
+use crate::util::{app_gradient, days_until, has_active_membership, urlenc};
 use crate::views::ui::{badge, button_class, error_box, icon};
 use crate::web::{redirect_cookies, AppState};
 
@@ -145,6 +145,7 @@ pub fn membership_badge(user: &User) -> Markup {
     }
     match user.membership_status {
         MembershipStatus::Active => badge("success", "Active"),
+        MembershipStatus::GracePeriod => badge("warning", "Grace Period"),
         MembershipStatus::PastDue => badge("warning", "Past Due"),
         MembershipStatus::Canceled => badge("destructive", "Canceled"),
         MembershipStatus::Incomplete => badge("secondary", "Incomplete"),
@@ -186,9 +187,6 @@ fn subscription_status(user: &User) -> Markup {
 // shared formatting
 // ===========================================================================
 
-fn base_domain(st: &AppState) -> String {
-    st.cfg.domain_or_localhost()
-}
 fn fmt_ts(ts: i64) -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
         .map(|d| d.format("%B %-d, %Y").to_string())
@@ -227,7 +225,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
         .map(|s| s.stripe_enabled)
         .unwrap_or(true);
     let is_member = has_active_membership(Some(&user));
-    let domain = base_domain(&st);
+    let domain = st.cfg.domain_or_localhost();
 
     let content = html! {
         div class="space-y-6" {
@@ -496,38 +494,44 @@ fn upgrade_link() -> Markup {
     }
 }
 
+/// Static click handler shared by every copy button. It reads the command
+/// from the button's own `data-copy` attribute at click time; no value is ever
+/// spliced into this string, so it is identical for every block.
+///
+/// Clipboard API needs a secure context (HTTPS / localhost). When it is
+/// unavailable, select the command text so the user can copy manually;
+/// otherwise report success/failure on the button label. The in-button label
+/// swap ("Copy" -> "Copied") fires for the local feedback affordance, AND a
+/// toast pops top-right via `window.bunyipToast`. The `if(window.bunyipToast)`
+/// guard keeps the button usable if the toast script failed to load.
+const COPY_CMD_JS: &str = "var b=this;var t=b.innerText;var c=b.dataset.copy;\
+     if(navigator.clipboard){\
+       navigator.clipboard.writeText(c).then(\
+         function(){b.innerText='Copied';setTimeout(function(){b.innerText=t},1500);\
+                      if(window.bunyipToast)window.bunyipToast('Copied to clipboard','success');},\
+         function(){b.innerText='Copy failed';setTimeout(function(){b.innerText=t},1500);\
+                      if(window.bunyipToast)window.bunyipToast('Copy failed','error');});\
+     }else{\
+       window.getSelection().selectAllChildren(b.previousElementSibling);\
+       b.innerText='Press Ctrl+C';setTimeout(function(){b.innerText=t},3000);\
+     }";
+
 /// A copy-pasteable shell command with a copy-to-clipboard button.
+///
+/// Trust model: `cmd` may carry API-sourced values (the registry host and
+/// image reference that bunyip-api returns for a product). Those values are
+/// rendered ONLY as passive, Maud-escaped content: the visible `<code>` text
+/// and the button's `data-copy` attribute. The click handler is the static
+/// `COPY_CMD_JS` constant, which reads the command from `this.dataset.copy` at
+/// click time and never has API data interpolated into executable JS. This
+/// removes the prior BFF-trust pattern where the command was spliced into the
+/// inline onclick (the earlier `serde_json::to_string` only blocked raw-string
+/// injection; it still shipped API data as executable content).
 fn command_block(cmd: &str) -> Markup {
-    // JSON-encode the command so it is a valid JS string literal inside the
-    // onclick handler (Maud HTML-escapes the attribute value; the browser
-    // un-escapes it before executing). Serializing a &str cannot fail.
-    let cmd_js = serde_json::to_string(cmd).expect("serializing a string to JSON is infallible");
-    // Clipboard API needs a secure context (HTTPS / localhost). When it is
-    // unavailable, select the command text so the user can copy manually;
-    // otherwise report success/failure on the button label.
-    // The in-button label swap ("Copy" -> "Copied") still fires for the local
-    // feedback affordance, AND a toast pops top-right via `window.bunyipToast`
-    // so the confirmation is visible regardless of where the user's cursor
-    // lands after clicking. The `if(window.bunyipToast)` guard keeps the
-    // button usable if the toast script failed to load (or if a future
-    // refactor drops it).
-    let copy_js = format!(
-        "var b=this;var t=b.innerText;\
-         if(navigator.clipboard){{\
-           navigator.clipboard.writeText({cmd_js}).then(\
-             function(){{b.innerText='Copied';setTimeout(function(){{b.innerText=t}},1500);\
-                          if(window.bunyipToast)window.bunyipToast('Copied to clipboard','success');}},\
-             function(){{b.innerText='Copy failed';setTimeout(function(){{b.innerText=t}},1500);\
-                          if(window.bunyipToast)window.bunyipToast('Copy failed','error');}});\
-         }}else{{\
-           window.getSelection().selectAllChildren(b.previousElementSibling);\
-           b.innerText='Press Ctrl+C';setTimeout(function(){{b.innerText=t}},3000);\
-         }}"
-    );
     html! {
         div class="flex items-center gap-2" {
             code class="flex-1 rounded bg-muted px-3 py-2 font-mono text-sm overflow-x-auto whitespace-nowrap" { (cmd) }
-            button type="button" aria-label="Copy command" class=(button_class("outline", "sm", "shrink-0 w-28")) onclick=(copy_js) {
+            button type="button" aria-label="Copy command" data-copy=(cmd) class=(button_class("outline", "sm", "shrink-0 w-28")) onclick=(COPY_CMD_JS) {
                 "Copy"
             }
         }
@@ -682,7 +686,9 @@ pub async fn membership(State(st): State<AppState>, headers: HeaderMap) -> Respo
     let has = !lifetime
         && matches!(
             status,
-            Some(MembershipStatus::Active) | Some(MembershipStatus::PastDue)
+            Some(MembershipStatus::Active)
+                | Some(MembershipStatus::PastDue)
+                | Some(MembershipStatus::GracePeriod)
         );
     let past_due = matches!(status, Some(MembershipStatus::PastDue));
     let will_cancel = current
@@ -905,8 +911,8 @@ pub async fn settings(
     let content = html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Settings" } p class="mt-2 text-muted-foreground" { "Manage your account settings and preferences." } }
-            @if let Some(ok) = &q.ok { div class="rounded-lg border p-3 text-sm flex items-center gap-2" { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) (ok) } }
-            @if let Some(e) = &q.error { (error_box(e)) }
+            @if let Some(ok) = &q.ok { div class="rounded-lg border p-3 text-sm flex items-center gap-2" { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) (clamp_msg(ok)) } }
+            @if let Some(e) = &q.error { (error_box(&clamp_msg(e))) }
 
             // Account info
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50 overflow-hidden" {
@@ -1139,18 +1145,21 @@ pub async fn settings_delete(
     }
 }
 
-fn urlenc(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            b' ' => out.push('+'),
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
+/// Cap a user-supplied `?ok=`/`?error=` query-param message before it is
+/// rendered. The value is already Maud-escaped (so this is not an XSS guard);
+/// it bounds a hand-crafted link that stuffs the param with kilobytes of text
+/// to blow up the page. ~256 bytes is ample for the short status strings these
+/// params legitimately carry. Truncation lands on a char boundary.
+fn clamp_msg(s: &str) -> String {
+    const MAX: usize = 256;
+    if s.len() <= MAX {
+        return s.to_string();
     }
-    out
+    let mut end = MAX;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_string()
 }
 
 // ===========================================================================
