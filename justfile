@@ -509,3 +509,31 @@ create-release bump:
         print $"fj output: ($fj_result.stdout | str trim)"
     }
     print $"After merging, the create-release workflow will tag and release ($tag) automatically."
+
+# ── Hooks ──────────────────────────────────────────────────────────────────
+
+# Install the git pre-commit hook (run once per fresh clone). Writes a stub at .git/hooks/pre-commit that execs `just pre-commit`. Bypass with `git commit --no-verify`.
+[group: 'hooks']
+install-hooks:
+    #!/usr/bin/env nu
+    let hook = ".git/hooks/pre-commit"
+    # Remove first so a leftover symlink from an older install does not get
+    # written through to its target file. `try` swallows the not-found case.
+    try { rm $hook }
+    "#!/usr/bin/env sh\nexec just pre-commit\n" | save $hook
+    ^chmod +x $hook
+    print $"Wrote ($hook) -> just pre-commit"
+
+# Run the same checks as .forgejo/workflows/check.yml inside the dev compose `api` container.
+[group: 'hooks']
+pre-commit: ensure-env
+    #!/usr/bin/env nu
+    print "\n[pre-commit] cargo fmt --all --check"
+    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo fmt --all --check
+    print "\n[pre-commit] cargo clippy --workspace --all-targets -- -D warnings"
+    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo clippy --workspace --all-targets -- -D warnings
+    print "\n[pre-commit] cargo build --workspace --all-targets --locked"
+    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo build --workspace --all-targets --locked
+    print "\n[pre-commit] cargo test --workspace --lib"
+    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo test --workspace --lib
+    print "\n[pre-commit] all checks passed"
