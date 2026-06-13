@@ -187,10 +187,14 @@ async fn handle_checkout_completed(
 ) -> Result<(), AppError> {
     let session = &event["data"]["object"];
 
-    // Get user ID from metadata
-    let user_id_str = session["metadata"]["user_id"]
-        .as_str()
-        .ok_or(AppError::validation("metadata", "Missing user_id"))?;
+    // Get user ID from metadata. A checkout session without our `user_id`
+    // metadata is not one we can act on (e.g. created outside this app); skip it
+    // and return Ok so Stripe records a 2xx and stops retrying the delivery
+    // forever instead of hammering this endpoint.
+    let Some(user_id_str) = session["metadata"]["user_id"].as_str() else {
+        tracing::warn!("checkout.session.completed missing user_id metadata; skipping");
+        return Ok(());
+    };
 
     let user_id: uuid::Uuid = user_id_str
         .parse()
@@ -208,8 +212,11 @@ async fn handle_checkout_completed(
     // Update user membership status and lock price
     UserRepository::update_membership_status(pool, user_id, MembershipStatus::Active).await?;
 
-    // Lock the price for life
-    let price_id = session["subscription"]
+    // Lock the price for life. The price id lives on the session's line items;
+    // `session["subscription"]` is the SUBSCRIPTION id (sub_...), which must not
+    // be stored in the price column. Fall back to the legacy default when line
+    // items are not present on the payload.
+    let price_id = session["line_items"]["data"][0]["price"]["id"]
         .as_str()
         .map(|s| s.to_string())
         .unwrap_or_else(|| "price_default".to_string());

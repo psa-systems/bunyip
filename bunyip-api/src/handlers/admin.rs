@@ -12,7 +12,7 @@ use chrono::{Duration, Utc};
 
 use crate::config::Config;
 use crate::errors::AppError;
-use crate::middleware::{AdminUser, AuthenticatedUser};
+use crate::middleware::AdminUser;
 use crate::models::stripe::encrypt_secret;
 use crate::models::{
     AuditAction, CreateApplication, CreateAuditLog, CreatePasswordResetToken, CreateRefreshToken,
@@ -113,12 +113,18 @@ pub async fn update_user_status(
     let user_id = path.into_inner();
 
     if body.active {
-        // Reactivate: clear deleted_at (would need new method)
-        // For now, we can't reactivate soft-deleted users through this API
-        return Err(AppError::validation(
-            "active",
-            "Cannot reactivate deleted users through this endpoint",
-        ));
+        // Reactivate: clear deleted_at. `restore` returns false when the user
+        // is not a soft-deleted row (already active or unknown id) so we can
+        // 404 instead of silently succeeding.
+        let restored = UserRepository::restore(&pool, user_id).await?;
+        if !restored {
+            return Err(AppError::not_found("Deleted user"));
+        }
+
+        let audit_log = CreateAuditLog::new(AuditAction::AdminUserActivated)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+            .with_resource("user", user_id);
+        AuditLogRepository::create(&pool, audit_log).await?;
     } else {
         let target_user = UserRepository::find_by_id(&pool, user_id)
             .await?
@@ -776,6 +782,52 @@ pub struct DashboardStats {
 
 /// GET /v1/admin/stats
 /// Get dashboard statistics
+/// Collect the dashboard user/application counts. Shared by `get_dashboard_stats`
+/// and `get_system_health` so the two never drift, and every DB error propagates
+/// (no `.ok().flatten()` swallowing).
+async fn collect_dashboard_stats(pool: &PgPool) -> Result<DashboardStats, AppError> {
+    // Get user counts by status
+    let total_users: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE deleted_at IS NULL")
+        .fetch_one(pool)
+        .await?;
+
+    let active_members: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM users WHERE subscription_status = 'active' AND deleted_at IS NULL",
+    )
+    .fetch_one(pool)
+    .await?;
+
+    let past_due_members: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM users WHERE subscription_status = 'past_due' AND deleted_at IS NULL",
+    )
+    .fetch_one(pool)
+    .await?;
+
+    let grace_period_members: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM users WHERE subscription_status = 'grace_period' AND deleted_at IS NULL",
+    )
+    .fetch_one(pool)
+    .await?;
+
+    let total_applications: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM applications")
+        .fetch_one(pool)
+        .await?;
+
+    let active_applications: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM applications WHERE is_active = TRUE")
+            .fetch_one(pool)
+            .await?;
+
+    Ok(DashboardStats {
+        total_users: total_users.0,
+        active_members: active_members.0,
+        past_due_members: past_due_members.0,
+        grace_period_members: grace_period_members.0,
+        total_applications: total_applications.0,
+        active_applications: active_applications.0,
+    })
+}
+
 pub async fn get_dashboard_stats(
     req: HttpRequest,
     _admin: AdminUser,
@@ -783,46 +835,7 @@ pub async fn get_dashboard_stats(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
-    // Get user counts by status
-    let total_users: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE deleted_at IS NULL")
-        .fetch_one(pool.get_ref())
-        .await?;
-
-    let active_members: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM users WHERE subscription_status = 'active' AND deleted_at IS NULL",
-    )
-    .fetch_one(pool.get_ref())
-    .await?;
-
-    let past_due_members: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM users WHERE subscription_status = 'past_due' AND deleted_at IS NULL",
-    )
-    .fetch_one(pool.get_ref())
-    .await?;
-
-    let grace_period_members: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM users WHERE subscription_status = 'grace_period' AND deleted_at IS NULL",
-    )
-    .fetch_one(pool.get_ref())
-    .await?;
-
-    let total_applications: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM applications")
-        .fetch_one(pool.get_ref())
-        .await?;
-
-    let active_applications: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM applications WHERE is_active = TRUE")
-            .fetch_one(pool.get_ref())
-            .await?;
-
-    let stats = DashboardStats {
-        total_users: total_users.0,
-        active_members: active_members.0,
-        past_due_members: past_due_members.0,
-        grace_period_members: grace_period_members.0,
-        total_applications: total_applications.0,
-        active_applications: active_applications.0,
-    };
+    let stats = collect_dashboard_stats(pool.get_ref()).await?;
 
     Ok(success(stats, request_id))
 }
@@ -837,13 +850,18 @@ pub async fn admin_reset_password(
     req: HttpRequest,
     admin: AdminUser,
     pool: web::Data<PgPool>,
-    jwt_service: web::Data<Arc<JwtService>>,
     email_service: web::Data<Arc<EmailService>>,
     path: web::Path<uuid::Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let user_id = path.into_inner();
     let admin_user_id = admin.0.sub;
+
+    // JwtService is registered as a bare `Arc<JwtService>` (not `web::Data`),
+    // so read it from app_data directly - the documented canonical path.
+    let jwt_service = req
+        .app_data::<Arc<JwtService>>()
+        .ok_or_else(|| AppError::internal("JWT service not configured"))?;
 
     // Find the user
     let user = UserRepository::find_by_id(&pool, user_id)
@@ -890,12 +908,17 @@ pub async fn impersonate_user(
     req: HttpRequest,
     admin: AdminUser,
     pool: web::Data<PgPool>,
-    jwt_service: web::Data<Arc<JwtService>>,
     path: web::Path<uuid::Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let target_user_id = path.into_inner();
     let admin_user_id = admin.0.sub;
+
+    // JwtService is registered as a bare `Arc<JwtService>` (not `web::Data`),
+    // so read it from app_data directly - the documented canonical path.
+    let jwt_service = req
+        .app_data::<Arc<JwtService>>()
+        .ok_or_else(|| AppError::internal("JWT service not configured"))?;
 
     // Prevent self-impersonation
     if admin_user_id == target_user_id {
@@ -1025,14 +1048,14 @@ pub async fn mark_all_notifications_read(
 /// Send a test welcome email to the authenticated user
 pub async fn send_test_email(
     req: HttpRequest,
-    user: AuthenticatedUser,
+    admin: AdminUser,
     email_service: web::Data<Arc<EmailService>>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
-    email_service.send_welcome(&user.0.email, 300).await?;
+    email_service.send_welcome(&admin.0.email, 300).await?;
 
-    tracing::info!(email = %user.0.email, "Test email sent");
+    tracing::info!(email = %admin.0.email, "Test email sent");
 
     Ok(success_no_data(request_id))
 }
@@ -1157,6 +1180,7 @@ pub async fn get_system_health(
     req: HttpRequest,
     _admin: AdminUser,
     pool: web::Data<PgPool>,
+    server_start: web::Data<std::time::Instant>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
@@ -1175,19 +1199,16 @@ pub async fn get_system_health(
         },
     };
 
-    // Get database stats
-    let db_stats: Option<(i64, i64, i64)> = sqlx::query_as(
-        r#"
-        SELECT
-            (SELECT COUNT(*) FROM users WHERE deleted_at IS NULL) as users,
-            (SELECT COUNT(*) FROM users WHERE subscription_status = 'active') as active_subs,
-            (SELECT COUNT(*) FROM audit_logs WHERE created_at > NOW() - INTERVAL '1 hour') as recent_logs
-        "#
+    // Reuse the dashboard counts (no duplicated SQL) and surface the recent
+    // audit-log volume. Errors propagate rather than being swallowed by
+    // `.ok().flatten()`, so a failing stats query degrades the health report
+    // honestly instead of silently dropping the stats block.
+    let stats = collect_dashboard_stats(pool.get_ref()).await?;
+    let recent_logs: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM audit_logs WHERE created_at > NOW() - INTERVAL '1 hour'",
     )
-    .fetch_optional(pool.get_ref())
-    .await
-    .ok()
-    .flatten();
+    .fetch_one(pool.get_ref())
+    .await?;
 
     let overall_status = if db_health.status == "healthy" {
         "healthy"
@@ -1198,21 +1219,18 @@ pub async fn get_system_health(
     let health = SystemHealth {
         status: overall_status.to_string(),
         database: db_health,
-        uptime_seconds: 0, // Would need to track startup time
+        uptime_seconds: server_start.elapsed().as_secs(),
         version: env!("CARGO_PKG_VERSION").to_string(),
     };
 
-    let mut response = serde_json::json!({
+    let response = serde_json::json!({
         "health": health,
+        "stats": {
+            "total_users": stats.total_users,
+            "active_members": stats.active_members,
+            "audit_logs_last_hour": recent_logs.0,
+        },
     });
-
-    if let Some((users, active_members, recent_logs)) = db_stats {
-        response["stats"] = serde_json::json!({
-            "total_users": users,
-            "active_members": active_members,
-            "audit_logs_last_hour": recent_logs
-        });
-    }
 
     Ok(success(response, request_id))
 }

@@ -297,7 +297,7 @@ fn feedback_form(submitted: bool, error: Option<&str>, page_path: Option<&str>) 
         div class="relative overflow-hidden py-20" {
             div class="container relative" {
                 div class="mx-auto max-w-3xl text-center" {
-                    div class="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-4 py-1.5 text-sm text-primary" {
+                    div class="inline-flex items-center gap-2 rounded-full bg-bunyip-reed-100 dark:bg-bunyip-reed-800 px-4 py-1.5 text-sm font-medium text-bunyip-reed-800 dark:text-bunyip-reed-100" {
                         (icon("smile-plus", "h-4 w-4")) "Help shape what ships next"
                     }
                     h1 class="mt-6 text-4xl font-bold tracking-tight sm:text-5xl" {
