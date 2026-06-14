@@ -14,7 +14,8 @@ use serde_json::json;
 
 use crate::api::admin as admin_api;
 use crate::api::types::{
-    AdminAuditLog, AdminFeedbackDetail, FeedbackAttachmentMeta, FeedbackStatus, UserEntitlement,
+    AdminApplication, AdminAuditLog, AdminFeedbackDetail, FeedbackAttachmentMeta, FeedbackStatus,
+    UserEntitlement,
 };
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{relative_time, urlenc};
@@ -1442,7 +1443,11 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                     div class="divide-y" {
                         @for app in &apps {
                             div class="py-3 flex items-center justify-between gap-4" {
-                                div { p class="font-medium" { (app.display_name) } p class="text-xs text-muted-foreground" { (app.slug) } }
+                                div class="space-y-1" {
+                                    p class="font-medium" { (app.display_name) }
+                                    p class="text-xs text-muted-foreground" { (app.slug) }
+                                    (surface_tags(&SurfaceVisibility::of(app)))
+                                }
                                 div class="flex items-center gap-6" {
                                     form method="post" action=(format!("/admin/applications/{}/field", app.id)) class="flex items-center gap-2" {
                                         input type="hidden" name="field" value="is_active";
@@ -1550,8 +1555,78 @@ fn distribution_fields(v: &DistView) -> Markup {
     }
 }
 
+/// At-a-glance visibility of an application across the three distribution
+/// surfaces shown in the admin UI. Each field MIRRORS the canonical predicate
+/// in `bunyip-domain` (`crates/bunyip-domain/src/models/application.rs`) so the
+/// badges cannot silently disagree with what users actually see; if a domain
+/// rule changes, update it here too:
+/// - `hub`: the user Applications section / hub launch tile, listed by
+///   `ApplicationRepository::list_active_hosted` (`is_active && is_hosted`).
+/// - `binary`: `Application::is_downloadable` / `download_source` (forgejo_owner
+///   + pinned_release_tag + repo-or-package depending on `artifact_source`).
+/// - `oci`: `Application::is_pullable` (is_active + all three OCI fields set).
+///
+/// `None` and empty/whitespace string fields are both treated as absent.
+struct SurfaceVisibility {
+    hub: bool,
+    binary: bool,
+    oci: bool,
+}
+
+impl SurfaceVisibility {
+    fn of(app: &AdminApplication) -> Self {
+        fn present(field: &Option<String>) -> bool {
+            field.as_deref().is_some_and(|s| !s.trim().is_empty())
+        }
+        // Mirrors `Application::download_source`: the `generic_package` source
+        // accepts a package name or falls back to the repo; every other source
+        // (including the `release` default) requires the repo.
+        let binary = present(&app.forgejo_owner)
+            && present(&app.pinned_release_tag)
+            && if app.artifact_source.as_deref() == Some("generic_package") {
+                present(&app.forgejo_package) || present(&app.forgejo_repo)
+            } else {
+                present(&app.forgejo_repo)
+            };
+        let oci = app.is_active
+            && present(&app.oci_image_owner)
+            && present(&app.oci_image_name)
+            && present(&app.pinned_image_tag);
+        Self {
+            hub: app.is_active && app.is_hosted,
+            binary,
+            oci,
+        }
+    }
+}
+
+/// One surface badge: a colored `on_variant` when the app reaches the surface,
+/// a muted outline `off_label` ("No X") when it does not.
+fn surface_badge(on: bool, on_variant: &str, on_label: &str, off_label: &str) -> Markup {
+    if on {
+        badge(on_variant, on_label)
+    } else {
+        badge("outline", off_label)
+    }
+}
+
+/// The Hub / Binary / OCI surface badges for one application. Rendered on the
+/// admin Applications list and the edit page so an admin can see at a glance
+/// which surfaces an app is (and is not) served in.
+fn surface_tags(s: &SurfaceVisibility) -> Markup {
+    html! {
+        div class="flex flex-wrap items-center gap-1.5" {
+            (surface_badge(s.hub, "success", "Hub", "No Hub"))
+            (surface_badge(s.binary, "secondary", "Binary", "No Binary"))
+            (surface_badge(s.oci, "secondary", "OCI", "No OCI"))
+        }
+    }
+}
+
 /// Render the application create/edit form. `identity` is `Some` only for
-/// create (the edit form posts distribution fields only). `error` renders a
+/// create (the edit form posts distribution fields only). `surfaces` is `Some`
+/// only on the edit page of a persisted app, where the Hub/Binary/OCI badges
+/// can be derived; create and error re-renders pass `None`. `error` renders a
 /// banner and the form keeps the submitted values for correction.
 fn application_form(
     action: &str,
@@ -1560,11 +1635,16 @@ fn application_form(
     identity: Option<&IdentityView>,
     is_hosted: bool,
     v: &DistView,
+    surfaces: Option<&SurfaceVisibility>,
     error: Option<&str>,
 ) -> Markup {
     html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { (heading) } p class="mt-2 text-muted-foreground" { (blurb) } }
+            div {
+                h1 class="text-3xl font-bold" { (heading) }
+                p class="mt-2 text-muted-foreground" { (blurb) }
+                @if let Some(s) = surfaces { div class="mt-3" { (surface_tags(s)) } }
+            }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="p-6" {
                     form method="post" action=(action) class="space-y-4 max-w-md" {
@@ -1715,6 +1795,7 @@ pub async fn application_edit(
                 oci_image_name: app.oci_image_name.as_deref().unwrap_or_default(),
                 pinned_image_tag: app.pinned_image_tag.as_deref().unwrap_or_default(),
             };
+            let surfaces = SurfaceVisibility::of(app);
             html! {
                 (application_form(
                     &format!("/admin/applications/{id}/distribution"),
@@ -1723,6 +1804,7 @@ pub async fn application_edit(
                     None,
                     app.is_hosted,
                     &v,
+                    Some(&surfaces),
                     None,
                 ))
                 (app_danger_zone(&id, q.error.as_deref()))
@@ -1783,6 +1865,7 @@ pub async fn application_distribution_save(
                 None,
                 checkbox_on(&f.is_hosted),
                 &v,
+                None,
                 Some(&e.user_message()),
             );
             admin_response(
@@ -1934,6 +2017,7 @@ pub async fn application_new(State(st): State<AppState>, headers: HeaderMap) -> 
         true,
         &v,
         None,
+        None,
     );
     admin_response(
         &c,
@@ -1981,6 +2065,7 @@ pub async fn application_create(
                 Some(&id),
                 checkbox_on(&f.is_hosted),
                 &v,
+                None,
                 Some(&e.user_message()),
             );
             admin_response(
