@@ -39,7 +39,7 @@
 --    already gone). Only the checksum needs reconciling.
 -- ─────────────────────────────────────────────────────────────────────────
 UPDATE _sqlx_migrations
-   SET checksum = decode('e22c60e6c8a9a572c341b933d5c14c797a5125e69cb8faee4bfdbd8d8bfb7af992266365adafa6532e63f602b4a1cfc2', 'hex')
+   SET checksum = decode('200f652329b161a252e47f1fdd29cace60bbb89dd3ce28fc9fcf4d0955cba8b8315cda3b6d0c646a36b89eebad253a69', 'hex')
  WHERE version = 20260319000025;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -71,7 +71,7 @@ BEGIN
 END $$;
 
 UPDATE _sqlx_migrations
-   SET checksum = decode('fe758aa402cf20c74c080d353ea17f4f8ce59efd0fb871d4007d3178e8a1b2cbe0baaa4eb383aa9766465792fe388d6a', 'hex')
+   SET checksum = decode('3656ea35943c6ec7cc1ee9f41b7410519a0e29b4714e853d3f7007c4bcd47390c6ba8a4dfd6b82e4e2ded55641b11a99', 'hex')
  WHERE version = 20260313000021;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -92,7 +92,7 @@ BEGIN
 END $$;
 
 UPDATE _sqlx_migrations
-   SET checksum = decode('14fddc4a09df80aef5d7269d72f607f4fa5d829d374b72cfe62347b66765413c593dedee3a91e33a18cfd3a51a92bb04', 'hex')
+   SET checksum = decode('aee9ee36eb144bb21cc0666a984d0c639d01108dc3379ad6c7dae485887f7c52f9ccfe9a020faee00c48b0ff7fb0dd6a', 'hex')
  WHERE version = 20260605000010;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -131,7 +131,7 @@ BEGIN
 END $$;
 
 UPDATE _sqlx_migrations
-   SET checksum = decode('fad39fb3656fd2cc6f1e2fb5fcd8d4ac008d970dd16d356252a3744790fd954ed3b3146f4cdbdea4add856a724c05cd9', 'hex')
+   SET checksum = decode('c0397dc83f2431bbad141bc87960c596667288075adb0b173b709242ee77c1d8175d735dcbb25ca68859ed738913ae2a', 'hex')
  WHERE version = 20241230000014;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -166,7 +166,7 @@ BEGIN
 END $$;
 
 UPDATE _sqlx_migrations
-   SET checksum = decode('b1d9250685ac0713e3c611d1543b953e5e5d92684254f401dcac2b8c021fe3e01a7a87b8ed14c184ed8d11eed7c4e315', 'hex')
+   SET checksum = decode('5e620f65d78348c962aaa952fb36947995880528a78d56182a0e89bd8a9c9b477d04ba1b42cce1ddb812870d1eec423b', 'hex')
  WHERE version = 20260417000040;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -177,7 +177,7 @@ ALTER TABLE tier_config
     ADD COLUMN IF NOT EXISTS lifetime_price_id TEXT;
 
 UPDATE _sqlx_migrations
-   SET checksum = decode('65feb61908e7a4d0e8a128f5faed23264ad18c159ef64554bc8e5ebb1461ba57a03e86bca2a8e69d32230014e58fb1df', 'hex')
+   SET checksum = decode('917ecbf6048240fa76ebf69085850452cedecf33411c916e362352c7e90404be298c08e2b11f70b14186f79f168d67f7', 'hex')
  WHERE version = 20260429000045;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -190,7 +190,7 @@ COMMENT ON COLUMN lifecycle_event_outbox.user_id IS
     'Subject user. Intentionally NOT a foreign key: lifecycle events (notably user.deleted) must outlive the referenced user so the back-channel notification can still be delivered.';
 
 UPDATE _sqlx_migrations
-   SET checksum = decode('d6b8b6e871c334b30199729c52ac6cb6c694f4ad1c2d80c9dbcae055229ea9b0b276361097679f94573ddcd7df4d1b7f', 'hex')
+   SET checksum = decode('6348f042f25fc8463c9a6d84cbee7995c65a1dcd167759832fafe4b82209814fae24ea064af54dee0af201b7aef895e2', 'hex')
  WHERE version = 20260417000042;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -216,7 +216,7 @@ EXCEPTION WHEN undefined_table THEN
 END $$;
 
 UPDATE _sqlx_migrations
-   SET checksum = decode('1b105a3b6cf5401bb7329fb7d29003b1e52c363ad008e1a21be6d2bd8cd5686df30fd6ddf4ab13ad381757b6feacbe6b', 'hex')
+   SET checksum = decode('6cb22db653e1253bf4e840c5039e848d62c7b035cd9558b9370c4197f8092bb5a3c6f18d236a5d7d514ae7dd223c2240', 'hex')
  WHERE version = 20260602000050;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -225,7 +225,7 @@ UPDATE _sqlx_migrations
 --    schema change). Only the checksum needs reconciling.
 -- ─────────────────────────────────────────────────────────────────────────
 UPDATE _sqlx_migrations
-   SET checksum = decode('eeabf66beb4eacd5facf23d8c796b49d2074073db55fc0b8734a44374f42aa3f02867435b0ec815cff7578444c3609d5', 'hex')
+   SET checksum = decode('9b9f3095b6ebed64bf98ae08c03f83761e5e1801f7d93d3e50be66f7d5b9fe440c781696b7a7f2851467153fc360014d', 'hex')
  WHERE version = 20260417000041;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -240,7 +240,7 @@ UPDATE oauth_clients
  WHERE client_id = 'b0000000-0000-4000-8000-000000000001';
 
 UPDATE _sqlx_migrations
-   SET checksum = decode('7def758bb5f82900f679b9acd796eaaf0d8c22f5042a4322b6e57efaed0b1063434879ab08d05beb1dc73b74a881269c', 'hex')
+   SET checksum = decode('6bb3d91d625e7538f872fbab5bc97e80b2984b67cf7bd03bcb907ad2ea48dae3da5cdcb9d7c1415589e417f258c0b092', 'hex')
  WHERE version = 20260502000048;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -250,7 +250,7 @@ UPDATE _sqlx_migrations
 --     so the live DB has zero rows that those UPDATEs would have touched.
 -- ─────────────────────────────────────────────────────────────────────────
 UPDATE _sqlx_migrations
-   SET checksum = decode('31faddfdffa04e5a2b318078dc3760a65101ca01e059f99031ab25f62e83d269fcca12af524066e39d843a122668b5fc', 'hex')
+   SET checksum = decode('0e15e09723d11c194762c0aabde41050531ac96090654a1a20c9a3992c34b30b8e50b5df7eaa3f772358740506013501', 'hex')
  WHERE version = 20241230000017;
 
 -- ─────────────────────────────────────────────────────────────────────────
