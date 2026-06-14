@@ -287,6 +287,11 @@ fn admin_items() -> Vec<NavItem> {
             icon: "app-window",
         },
         NavItem {
+            title: "Groups",
+            href: "/admin/application-groups",
+            icon: "layers",
+        },
+        NavItem {
             title: "Entitlements",
             href: "/admin/entitlements",
             icon: "key",

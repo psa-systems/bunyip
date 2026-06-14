@@ -3,6 +3,7 @@
 //! This module contains all database models and data transfer objects.
 
 pub mod application;
+pub mod application_group;
 pub mod audit;
 pub mod download;
 pub mod entitlement;
@@ -21,6 +22,9 @@ pub use application::{
     Application, ApplicationResponse, CreateApplication, DeleteApplicationRequest,
     DistributionConfig, SwapApplicationOrderRequest, UpdateApplication,
     ARTIFACT_SOURCE_GENERIC_PACKAGE, ARTIFACT_SOURCE_RELEASE,
+};
+pub use application_group::{
+    ApplicationGroup, CreateApplicationGroup, SetApplicationGroupRequest, UpdateApplicationGroup,
 };
 pub use audit::{
     AdminNotification, AuditAction, AuditLog, AuditSeverity, CreateAdminNotification,

@@ -14,8 +14,8 @@ use serde_json::json;
 
 use crate::api::admin as admin_api;
 use crate::api::types::{
-    AdminApplication, AdminAuditLog, AdminFeedbackDetail, FeedbackAttachmentMeta, FeedbackStatus,
-    UserEntitlement,
+    AdminApplication, AdminAuditLog, AdminFeedbackDetail, ApplicationGroup, FeedbackAttachmentMeta,
+    FeedbackStatus, UserEntitlement,
 };
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{relative_time, urlenc};
@@ -1780,6 +1780,11 @@ pub async fn application_edit(
             );
         }
     };
+    // Groups for the assignment selector. A failed fetch degrades to no groups
+    // (the selector still offers "Ungrouped") rather than blocking the edit.
+    let groups = admin_api::application_groups(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
     let content = match apps.iter().find(|a| a.id == id) {
         None => {
             html! { div class="space-y-6" { h1 class="text-3xl font-bold" { "Edit application" } p class="text-muted-foreground" { "Application not found." } } }
@@ -1807,6 +1812,7 @@ pub async fn application_edit(
                     Some(&surfaces),
                     None,
                 ))
+                (group_assignment_form(&id, app.group_id.as_deref(), &groups))
                 (app_danger_zone(&id, q.error.as_deref()))
             }
         }
@@ -2077,6 +2083,308 @@ pub async fn application_create(
             )
         }
     }
+}
+
+// ===========================================================================
+// Application Groups (BUNYIP-100)
+// ===========================================================================
+
+#[derive(Deserialize, Default)]
+pub struct GroupForm {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub icon_url: String,
+    #[serde(default)]
+    pub sort_order: String,
+}
+
+/// JSON body for create/update of a group. Required identity fields are always
+/// sent; description / icon_url collapse empty to null; sort_order parses to an
+/// integer (0 on a blank or unparseable value).
+fn group_body(f: &GroupForm) -> serde_json::Value {
+    let opt = |s: &str| -> serde_json::Value {
+        let t = s.trim();
+        if t.is_empty() {
+            serde_json::Value::Null
+        } else {
+            json!(t)
+        }
+    };
+    json!({
+        "name": f.name.trim(),
+        "slug": f.slug.trim(),
+        "display_name": f.display_name.trim(),
+        "description": opt(&f.description),
+        "icon_url": opt(&f.icon_url),
+        "sort_order": f.sort_order.trim().parse::<i64>().unwrap_or(0),
+    })
+}
+
+/// Shared create/edit form for a group.
+fn group_form(
+    action: &str,
+    heading: &str,
+    g: Option<&ApplicationGroup>,
+    error: Option<&str>,
+) -> Markup {
+    let name = g.map(|g| g.name.as_str()).unwrap_or_default();
+    let slug = g.map(|g| g.slug.as_str()).unwrap_or_default();
+    let display_name = g.map(|g| g.display_name.as_str()).unwrap_or_default();
+    let description = g.and_then(|g| g.description.as_deref()).unwrap_or_default();
+    let icon_url = g.and_then(|g| g.icon_url.as_deref()).unwrap_or_default();
+    let sort_order = g.map(|g| g.sort_order).unwrap_or(0);
+    html! {
+        div class="space-y-6" {
+            div { h1 class="text-3xl font-bold" { (heading) } p class="mt-2 text-muted-foreground" { "Group related applications under one heading on the Applications page." } }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="p-6" {
+                    form method="post" action=(action) class="space-y-4 max-w-md" {
+                        @if let Some(err) = error { (error_box(err)) }
+                        div class="space-y-2" { label class="text-sm font-medium" { "Name" } input name="name" value=(name) required class=(dashboard_input()); }
+                        div class="space-y-2" { label class="text-sm font-medium" { "Slug" } input name="slug" value=(slug) required class=(dashboard_input()); }
+                        div class="space-y-2" { label class="text-sm font-medium" { "Display name" } input name="display_name" value=(display_name) required class=(dashboard_input()); }
+                        div class="space-y-2" { label class="text-sm font-medium" { "Description" } input name="description" value=(description) class=(dashboard_input()); }
+                        div class="space-y-2" { label class="text-sm font-medium" { "Icon URL" } input name="icon_url" value=(icon_url) class=(dashboard_input()); }
+                        div class="space-y-2" { label class="text-sm font-medium" { "Sort order" } input name="sort_order" type="number" value=(sort_order) class=(dashboard_input()); }
+                        div class="flex items-center gap-2 pt-2" {
+                            button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
+                            a href="/admin/application-groups" class=(button_class("outline", "default", "")) { "Cancel" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A group `<select>` + save button for the application edit page. Posts to the
+/// dedicated set-group endpoint so it never collides with the distribution save
+/// (which COALESCEs and cannot clear group_id).
+fn group_assignment_form(
+    app_id: &str,
+    current: Option<&str>,
+    groups: &[ApplicationGroup],
+) -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="p-6" {
+                h4 class="text-lg font-semibold" { "Group" }
+                p class="text-xs text-muted-foreground mb-3" { "Assign this application to a group, or leave it ungrouped." }
+                form method="post" action=(format!("/admin/applications/{app_id}/group")) class="flex items-end gap-2 max-w-md" {
+                    select name="group_id" class=(dashboard_input()) {
+                        option value="" selected[current.is_none()] { "Ungrouped" }
+                        @for g in groups {
+                            option value=(g.id) selected[current == Some(g.id.as_str())] { (g.display_name) }
+                        }
+                    }
+                    button type="submit" class=(button_class("default", "default", "")) { "Save" }
+                }
+            }
+        }
+    }
+}
+
+/// GET /admin/application-groups
+pub async fn application_groups(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let groups = admin_api::application_groups(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
+    let content = html! {
+        div class="space-y-6" {
+            div class="flex items-center justify-between gap-4" {
+                div { h1 class="text-3xl font-bold" { "Application Groups" } p class="mt-2 text-muted-foreground" { "Group related applications under one heading." } }
+                a href="/admin/application-groups/new" class=(button_class("default", "default", "")) { "New group" }
+            }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="p-6 pt-0" {
+                    div class="divide-y" {
+                        @for g in &groups {
+                            div class="py-3 flex items-center justify-between gap-4" {
+                                div { p class="font-medium" { (g.display_name) } p class="text-xs text-muted-foreground" { (g.slug) } }
+                                div class="flex items-center gap-2" {
+                                    a href=(format!("/admin/application-groups/{}/edit", g.id)) class=(button_class("outline", "sm", "")) { "Edit" }
+                                    form method="post" action=(format!("/admin/application-groups/{}/delete", g.id)) {
+                                        button type="submit" class=(button_class("outline", "sm", "")) { "Delete" }
+                                    }
+                                }
+                            }
+                        }
+                        @if groups.is_empty() { p class="text-center text-muted-foreground py-8" { "No groups" } }
+                    }
+                }
+            }
+        }
+    };
+    admin_response(
+        &c,
+        &user,
+        "/admin/application-groups",
+        "Application Groups · Bunyip",
+        content,
+    )
+}
+
+/// GET /admin/application-groups/new
+pub async fn application_group_new(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let content = group_form("/admin/application-groups", "New group", None, None);
+    admin_response(
+        &c,
+        &user,
+        "/admin/application-groups",
+        "New group · Bunyip",
+        content,
+    )
+}
+
+/// POST /admin/application-groups
+pub async fn application_group_create(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<GroupForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match admin_api::create_application_group(&st.api, c.forward.as_deref(), group_body(&f)).await {
+        Ok(()) => redirect_cookies("/admin/application-groups", &c.set_cookies),
+        Err(e) => {
+            let content = group_form(
+                "/admin/application-groups",
+                "New group",
+                None,
+                Some(&e.user_message()),
+            );
+            admin_response(
+                &c,
+                &user,
+                "/admin/application-groups",
+                "New group · Bunyip",
+                content,
+            )
+        }
+    }
+}
+
+/// GET /admin/application-groups/{id}/edit
+pub async fn application_group_edit(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let groups = admin_api::application_groups(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
+    let content = match groups.iter().find(|g| g.id == id) {
+        None => {
+            html! { div class="space-y-6" { h1 class="text-3xl font-bold" { "Edit group" } p class="text-muted-foreground" { "Group not found." } } }
+        }
+        Some(g) => group_form(
+            &format!("/admin/application-groups/{id}"),
+            &format!("Edit {}", g.display_name),
+            Some(g),
+            None,
+        ),
+    };
+    admin_response(
+        &c,
+        &user,
+        "/admin/application-groups",
+        "Edit group · Bunyip",
+        content,
+    )
+}
+
+/// POST /admin/application-groups/{id}
+pub async fn application_group_save(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<GroupForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match admin_api::update_application_group(&st.api, c.forward.as_deref(), &id, group_body(&f))
+        .await
+    {
+        Ok(()) => redirect_cookies("/admin/application-groups", &c.set_cookies),
+        Err(e) => {
+            let content = group_form(
+                &format!("/admin/application-groups/{id}"),
+                "Edit group",
+                None,
+                Some(&e.user_message()),
+            );
+            admin_response(
+                &c,
+                &user,
+                "/admin/application-groups",
+                "Edit group · Bunyip",
+                content,
+            )
+        }
+    }
+}
+
+/// POST /admin/application-groups/{id}/delete
+pub async fn application_group_delete(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::delete_application_group(&st.api, c.forward.as_deref(), &id).await;
+    redirect_cookies("/admin/application-groups", &c.set_cookies)
+}
+
+#[derive(Deserialize)]
+pub struct SetGroupForm {
+    #[serde(default)]
+    pub group_id: String,
+}
+
+/// POST /admin/applications/{id}/group
+pub async fn application_set_group(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<SetGroupForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let group_id = if f.group_id.trim().is_empty() {
+        None
+    } else {
+        Some(f.group_id.trim())
+    };
+    let _ = admin_api::set_application_group(&st.api, c.forward.as_deref(), &id, group_id).await;
+    redirect_cookies(&format!("/admin/applications/{id}/edit"), &c.set_cookies)
 }
 
 // ===========================================================================

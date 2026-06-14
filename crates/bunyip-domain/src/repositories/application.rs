@@ -159,6 +159,36 @@ impl ApplicationRepository {
         Ok(())
     }
 
+    /// Assign an application to a group, or clear it (`group_id = None`).
+    ///
+    /// Deliberately separate from [`Self::update`]: that method COALESCEs every
+    /// field and is called with partial bodies (e.g. an is_active toggle), so
+    /// it can neither clear `group_id` to NULL nor be trusted to leave it
+    /// untouched. A direct `SET group_id = $1` here both sets and clears.
+    pub async fn set_group(
+        pool: &PgPool,
+        app_id: Uuid,
+        group_id: Option<Uuid>,
+    ) -> Result<(), AppError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE applications
+            SET group_id = $1, updated_at = NOW()
+            WHERE id = $2
+            "#,
+        )
+        .bind(group_id)
+        .bind(app_id)
+        .execute(pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(AppError::not_found("Application"));
+        }
+
+        Ok(())
+    }
+
     /// Update application version
     pub async fn update_version(
         pool: &PgPool,

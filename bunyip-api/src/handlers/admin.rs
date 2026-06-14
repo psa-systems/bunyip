@@ -15,13 +15,15 @@ use crate::errors::AppError;
 use crate::middleware::AdminUser;
 use crate::models::stripe::encrypt_secret;
 use crate::models::{
-    AuditAction, CreateApplication, CreateAuditLog, CreatePasswordResetToken, CreateRefreshToken,
-    DeleteApplicationRequest, MembershipStatus, StripeConfigResponse, SwapApplicationOrderRequest,
-    UpdateApplication, UserResponse,
+    AuditAction, CreateApplication, CreateApplicationGroup, CreateAuditLog,
+    CreatePasswordResetToken, CreateRefreshToken, DeleteApplicationRequest, MembershipStatus,
+    SetApplicationGroupRequest, StripeConfigResponse, SwapApplicationOrderRequest,
+    UpdateApplication, UpdateApplicationGroup, UserResponse,
 };
 use crate::repositories::{
-    ApplicationRepository, AuditLogRepository, InviteRepository, NotificationRepository,
-    StripeConfigRepository, TokenRepository, TotpRepository, UserRepository,
+    ApplicationGroupRepository, ApplicationRepository, AuditLogRepository, InviteRepository,
+    NotificationRepository, StripeConfigRepository, TokenRepository, TotpRepository,
+    UserRepository,
 };
 use crate::responses::{created, get_request_id, paginated, success, success_no_data};
 use crate::services::{
@@ -720,6 +722,142 @@ pub async fn delete_application(
         }));
     AuditLogRepository::create(&pool, audit_log).await?;
 
+    Ok(success_no_data(request_id))
+}
+
+// =============================================================================
+// Application Groups (BUNYIP-100)
+// =============================================================================
+
+/// GET /v1/admin/application-groups
+/// List all application groups.
+pub async fn list_all_application_groups(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let groups = ApplicationGroupRepository::list(&pool).await?;
+    Ok(success(serde_json::json!({ "groups": groups }), request_id))
+}
+
+/// POST /v1/admin/application-groups
+/// Create an application group.
+pub async fn create_application_group(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+    body: web::Json<CreateApplicationGroup>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+
+    if body.name.trim().is_empty() {
+        return Err(AppError::validation("name", "Name is required"));
+    }
+    if body.display_name.trim().is_empty() {
+        return Err(AppError::validation(
+            "display_name",
+            "Display name is required",
+        ));
+    }
+    validation::validate_slug(&body.slug).map_err(|_| {
+        AppError::validation(
+            "slug",
+            "Slug must contain only lowercase letters, numbers, and hyphens",
+        )
+    })?;
+    if ApplicationGroupRepository::find_by_slug(&pool, &body.slug)
+        .await?
+        .is_some()
+    {
+        return Err(AppError::conflict(
+            "An application group with this slug already exists",
+        ));
+    }
+
+    let group = ApplicationGroupRepository::create(&pool, &body).await?;
+    Ok(created(group, request_id))
+}
+
+/// PUT /v1/admin/application-groups/{group_id}
+/// Update an application group.
+pub async fn update_application_group(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+    body: web::Json<UpdateApplicationGroup>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let group_id = path.into_inner();
+
+    ApplicationGroupRepository::find_by_id(&pool, group_id)
+        .await?
+        .ok_or(AppError::not_found("Application group"))?;
+
+    if let Some(slug) = body.slug.as_deref() {
+        validation::validate_slug(slug).map_err(|_| {
+            AppError::validation(
+                "slug",
+                "Slug must contain only lowercase letters, numbers, and hyphens",
+            )
+        })?;
+        // A slug change must not collide with a different group.
+        if let Some(existing) = ApplicationGroupRepository::find_by_slug(&pool, slug).await? {
+            if existing.id != group_id {
+                return Err(AppError::conflict(
+                    "An application group with this slug already exists",
+                ));
+            }
+        }
+    }
+
+    let group = ApplicationGroupRepository::update(&pool, group_id, &body).await?;
+    Ok(success(group, request_id))
+}
+
+/// DELETE /v1/admin/application-groups/{group_id}
+/// Delete an application group. Members are ungrouped (FK ON DELETE SET NULL).
+pub async fn delete_application_group(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let group_id = path.into_inner();
+
+    ApplicationGroupRepository::find_by_id(&pool, group_id)
+        .await?
+        .ok_or(AppError::not_found("Application group"))?;
+
+    ApplicationGroupRepository::delete(&pool, group_id).await?;
+    Ok(success_no_data(request_id))
+}
+
+/// PUT /v1/admin/applications/{app_id}/group
+/// Assign an application to a group, or clear it (`group_id = null`).
+pub async fn set_application_group(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+    body: web::Json<SetApplicationGroupRequest>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let app_id = path.into_inner();
+
+    ApplicationRepository::find_by_id(&pool, app_id)
+        .await?
+        .ok_or(AppError::not_found("Application"))?;
+
+    if let Some(group_id) = body.group_id {
+        ApplicationGroupRepository::find_by_id(&pool, group_id)
+            .await?
+            .ok_or(AppError::not_found("Application group"))?;
+    }
+
+    ApplicationRepository::set_group(&pool, app_id, body.group_id).await?;
     Ok(success_no_data(request_id))
 }
 

@@ -102,6 +102,27 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 web::delete().to(handlers::delete_application),
             )
             .route(
+                "/applications/{app_id}/group",
+                web::put().to(handlers::set_application_group),
+            )
+            // Application groups (BUNYIP-100)
+            .route(
+                "/application-groups",
+                web::get().to(handlers::list_all_application_groups),
+            )
+            .route(
+                "/application-groups",
+                web::post().to(handlers::create_application_group),
+            )
+            .route(
+                "/application-groups/{group_id}",
+                web::put().to(handlers::update_application_group),
+            )
+            .route(
+                "/application-groups/{group_id}",
+                web::delete().to(handlers::delete_application_group),
+            )
+            .route(
                 "/applications/{slug}/downloads/refresh",
                 web::post().to(handlers::admin_refresh_release),
             )
