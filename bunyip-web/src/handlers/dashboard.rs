@@ -216,7 +216,13 @@ fn format_size(bytes: i64) -> String {
 
 /// One application card on the Applications page. `idx` only drives the
 /// gradient accent so cards stay visually varied across groups.
-fn app_card(idx: usize, app: &Application, domain: &str, is_member: bool) -> Markup {
+fn app_card(
+    idx: usize,
+    app: &Application,
+    domain: &str,
+    is_member: bool,
+    downloads: Option<&AppDownloadGroup>,
+) -> Markup {
     let subdomain = app
         .subdomain
         .clone()
@@ -251,6 +257,7 @@ fn app_card(idx: usize, app: &Application, domain: &str, is_member: bool) -> Mar
                         @if !is_member { "Membership Required" } @else if app.maintenance_mode { "Under Maintenance" } @else { "Not Available" }
                     }
                 }
+                @if let Some(g) = downloads { (download_affordance(g, is_member)) }
             }
         }
     }
@@ -267,6 +274,10 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
     let groups = calls::application_groups(&st.api, fwd)
         .await
         .unwrap_or_default();
+    // Per-product downloads (BUNYIP-100), joined onto each card by slug so
+    // downloads live on the Applications page (the standalone Downloads page is
+    // retired). A failed fetch degrades to cards with no Download affordance.
+    let download_groups = calls::downloads_all(&st.api, fwd).await.unwrap_or_default();
     let stripe = auth_api::setup_status(&st.api)
         .await
         .map(|s| s.stripe_enabled)
@@ -300,6 +311,13 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
         .copied()
         .collect();
     let has_groups = !group_sections.is_empty();
+    // Catalog-only products: download groups whose slug matches no hosted app.
+    // These had only the Downloads page before; surface them here so retiring
+    // that page loses nothing.
+    let catalog_only: Vec<&AppDownloadGroup> = download_groups
+        .iter()
+        .filter(|g| !apps.iter().any(|a| a.slug == g.app_slug))
+        .collect();
 
     let content = html! {
         div class="space-y-6" {
@@ -321,7 +339,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                 section class="space-y-3" {
                     h2 class="text-xl font-semibold tracking-tight" { (name) }
                     div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
-                        @for &(idx, app) in members { (app_card(idx, app, &domain, is_member)) }
+                        @for &(idx, app) in members { (app_card(idx, app, &domain, is_member, download_groups.iter().find(|g| g.app_slug == app.slug))) }
                     }
                 }
             }
@@ -329,7 +347,15 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                 section class="space-y-3" {
                     @if has_groups { h2 class="text-xl font-semibold tracking-tight" { "Other" } }
                     div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
-                        @for &(idx, app) in &ungrouped { (app_card(idx, app, &domain, is_member)) }
+                        @for &(idx, app) in &ungrouped { (app_card(idx, app, &domain, is_member, download_groups.iter().find(|g| g.app_slug == app.slug))) }
+                    }
+                }
+            }
+            @if !catalog_only.is_empty() {
+                section class="space-y-3" {
+                    h2 class="text-xl font-semibold tracking-tight" { "More downloads" }
+                    div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
+                        @for &g in &catalog_only { (download_only_card(g, is_member)) }
                     }
                 }
             }
@@ -342,64 +368,12 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
 // Downloads
 // ===========================================================================
 
-pub async fn downloads(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match guard(&st, &headers, "/downloads").await {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
-    let fwd = c.forward.as_deref();
-    let has_membership = has_active_membership(Some(&user));
-    // Keep the error distinct from "genuinely empty catalog" so an API outage
-    // doesn't masquerade as revoked entitlements.
-    let groups_result = calls::downloads_all(&st.api, fwd).await;
-
-    // `pb-24` keeps the bottom-most download CTA out from under the floating
-    // feedback launcher (fixed bottom-right, ~64px tall + 16-24px margin). Only
-    // needed on pages whose primary action lands in the bottom-right; other
-    // dashboard pages do not collide.
-    let content = html! {
-        div class="space-y-6 pb-24" {
-            h1 class="text-2xl font-semibold" { "Downloads" }
-            @match &groups_result {
-                Err(e) => {
-                    @if e.status == 403 {
-                        // Authenticated but not permitted: the API gates
-                        // /v1/downloads behind active membership. Say so (and
-                        // link to upgrade) rather than implying a transient
-                        // outage the user could refresh away.
-                        div class="space-y-2" {
-                            (error_box("Downloads are available with an active membership."))
-                            (upgrade_link())
-                        }
-                    } @else if e.status == 401 {
-                        // The API rejected the session even though this page
-                        // loaded; a refresh won't fix a stale session, so point
-                        // at sign-in instead.
-                        div class="space-y-2" {
-                            (error_box("Your session has expired. Please sign in again to view downloads."))
-                            a href="/login" class="text-sm text-primary underline" { "Sign in" }
-                        }
-                    } @else if e.status == 404 {
-                        // Downloads are disabled server-side: a config state, not
-                        // a transient outage, so don't suggest a refresh.
-                        (error_box("Downloads aren't available on this server."))
-                    } @else {
-                        (error_box("Downloads are temporarily unavailable. Refresh the page to try again."))
-                    }
-                }
-                Ok(groups) => {
-                    @if groups.is_empty() {
-                        p class="text-sm text-muted-foreground" { "No downloads available" }
-                    } @else {
-                        @for g in groups {
-                            (download_group(g, has_membership))
-                        }
-                    }
-                }
-            }
-        }
-    };
-    dashboard_response(&c, &user, "/downloads", "Downloads · Bunyip", content)
+/// The standalone Downloads page is retired (BUNYIP-100): downloads now live on
+/// each application card via the per-card Download affordance. Old links and
+/// bookmarks land on the Applications page. The `/downloads/{slug}/{asset}`
+/// proxy below stays: the card download links still route through it.
+pub async fn downloads(_: State<AppState>, _: HeaderMap) -> Response {
+    axum::response::Redirect::permanent("/applications").into_response()
 }
 
 /// GET /downloads/{slug}/{asset_name}
@@ -473,67 +447,122 @@ pub async fn download_asset(
     }
 }
 
-/// One product section on the downloads page: header with the (pinned, hence
-/// latest) version, binary assets, and OCI pull instructions.
-fn download_group(g: &AppDownloadGroup, has_membership: bool) -> Markup {
-    // Pinned-version distribution model: exactly one version is available per
-    // product, so the version shown is by definition the latest. release_tag
-    // is empty (not absent) for OCI-only products; see api/types.rs.
-    let version = if g.release_tag.is_empty() {
-        g.oci.as_ref().map(|o| o.tag.as_str())
-    } else {
-        Some(g.release_tag.as_str())
-    };
+/// A single download option for a product, kept as a typed enum so the dialog
+/// is data-driven: adding a new distribution channel is one new variant plus
+/// one render arm in `download_option_row`, nothing else. BUNYIP-100.
+enum DownloadOption {
+    /// A binary asset fetchable in one click via the BFF proxy.
+    DirectLink {
+        name: String,
+        size: String,
+        href: String,
+    },
+    /// A copy-pasteable shell command (e.g. `docker login` / `docker pull`).
+    CopyBlock { command: String },
+}
+
+/// Map a product's downloads to the ordered option list shown in its dialog:
+/// every binary asset becomes a click-to-download link (via the BFF proxy on
+/// this origin, not the API's `download_url` which the browser cannot reach);
+/// an OCI image becomes the `docker login` + `docker pull` copy blocks.
+fn download_options(g: &AppDownloadGroup) -> Vec<DownloadOption> {
+    let mut opts = Vec::new();
+    for a in &g.assets {
+        opts.push(DownloadOption::DirectLink {
+            name: a.asset_name.clone(),
+            size: format_size(a.size_bytes),
+            href: format!(
+                "/downloads/{}/{}",
+                urlencoding::encode(&g.app_slug),
+                urlencoding::encode(&a.asset_name)
+            ),
+        });
+    }
+    if let Some(oci) = &g.oci {
+        opts.push(DownloadOption::CopyBlock {
+            command: format!("docker login {}", oci.registry),
+        });
+        opts.push(DownloadOption::CopyBlock {
+            command: format!("docker pull {}", oci.reference),
+        });
+    }
+    opts
+}
+
+/// Render one option inside the download dialog.
+fn download_option_row(opt: &DownloadOption) -> Markup {
+    match opt {
+        // No `download` attribute: the proxy's Content-Disposition drives the
+        // save, and an error response navigates rather than being saved as the
+        // file (BUNYIP-64).
+        DownloadOption::DirectLink { name, size, href } => html! {
+            li class="flex items-center justify-between gap-3" {
+                div { div class="font-mono text-sm break-all" { (name) } div class="text-xs text-muted-foreground" { (size) } }
+                a href=(href) class="px-3 py-1 rounded bg-primary text-primary-foreground text-sm shrink-0" { "Download" }
+            }
+        },
+        DownloadOption::CopyBlock { command } => html! { li { (command_block(command)) } },
+    }
+}
+
+/// The Download affordance for an application card. With exactly one binary and
+/// nothing else it is a one-click link; otherwise it is a button that opens a
+/// `<dialog>` listing every option (binary links plus OCI copy blocks). Members
+/// only; non-members get an upgrade prompt. Renders nothing when the product
+/// has no downloads. BUNYIP-100.
+fn download_affordance(g: &AppDownloadGroup, is_member: bool) -> Markup {
+    let opts = download_options(g);
+    if opts.is_empty() {
+        return html! {};
+    }
+    if !is_member {
+        return html! { div class="mt-2 text-center" { (upgrade_link()) } };
+    }
+    // One binary and nothing else: a direct download link, no dialog.
+    if opts.len() == 1 {
+        if let DownloadOption::DirectLink { href, .. } = &opts[0] {
+            return html! {
+                a href=(href) class=(button_class("outline", "default", "w-full mt-2")) { (icon("download", "mr-2 h-4 w-4")) "Download" }
+            };
+        }
+    }
+    // The slug is validated lowercase/digits/hyphens, so it is a safe element id
+    // and a safe literal inside the inline open handler.
+    let dialog_id = format!("dl-{}", g.app_slug);
     html! {
-        section class="border rounded p-4" {
-            div class="flex items-center gap-2" {
-                @if let Some(ic) = &g.icon_url { img src=(ic) alt="" class="w-6 h-6"; }
-                h2 class="font-semibold" { (g.app_display_name) }
-                @if let Some(v) = version {
-                    span class="font-mono text-xs text-muted-foreground" { (v) }
-                    (badge("success", "Latest"))
+        button type="button" class=(button_class("outline", "default", "w-full mt-2"))
+            onclick=(format!("document.getElementById('{dialog_id}').showModal()")) {
+            (icon("download", "mr-2 h-4 w-4")) "Download"
+        }
+        dialog id=(dialog_id) class="rounded-lg border bg-card text-card-foreground p-0 w-full max-w-lg backdrop:bg-black/50" {
+            div class="p-6 space-y-4" {
+                div class="flex items-center justify-between gap-4" {
+                    h3 class="text-lg font-semibold" { (g.app_display_name) " downloads" }
+                    button type="button" aria-label="Close" class=(button_class("outline", "sm", "shrink-0")) onclick="this.closest('dialog').close()" { (icon("x", "h-4 w-4")) }
+                }
+                ul class="space-y-3" {
+                    @for opt in &opts { (download_option_row(opt)) }
                 }
             }
+        }
+    }
+}
 
-            // Binary downloads (Forgejo release / package assets)
-            @if !g.assets.is_empty() {
-                h3 class="text-sm font-medium mt-4 mb-2" { "Binary downloads" }
-                ul class="space-y-2" {
-                    @for a in &g.assets {
-                        li class="flex items-center justify-between" {
-                            div {
-                                div class="font-mono text-sm" { (a.asset_name) }
-                                div class="text-xs text-muted-foreground" { (format_size(a.size_bytes)) }
-                            }
-                            @if has_membership {
-                                // Link to the BFF proxy on this origin (not the API's
-                                // `a.download_url`, which the browser cannot reach). No
-                                // `download` attribute: the proxy's Content-Disposition
-                                // drives the save, and an error response navigates rather
-                                // than being saved as the file (BUNYIP-64).
-                                a href=(format!("/downloads/{}/{}", urlencoding::encode(&g.app_slug), urlencoding::encode(&a.asset_name))) class="px-3 py-1 rounded bg-primary text-primary-foreground text-sm" { "Download" }
-                            } @else {
-                                (upgrade_link())
-                            }
-                        }
-                    }
+/// A download-only card for a catalog product that is not a hosted hub tile
+/// (so it has no Launch action). Keeps catalog-only distribution products
+/// visible on the Applications page now that the standalone Downloads page is
+/// retired. BUNYIP-100.
+fn download_only_card(g: &AppDownloadGroup, is_member: bool) -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50 transition-all hover:shadow-lg" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                div class="flex h-12 w-12 items-center justify-center rounded-lg bg-muted" {
+                    @if let Some(ic) = &g.icon_url { img src=(ic) alt=(g.app_display_name) class="h-6 w-6"; } @else { (icon("package", "h-6 w-6 text-muted-foreground")) }
                 }
+                h3 class="text-2xl font-semibold leading-none tracking-tight mt-4" { (g.app_display_name) }
             }
-
-            // Container image (docker login / pull instructions)
-            @if let Some(oci) = &g.oci {
-                h3 class="text-sm font-medium mt-4 mb-2" { "Container image" }
-                @if has_membership {
-                    div class="space-y-2" {
-                        p class="text-xs text-muted-foreground" {
-                            "Log in to the registry with your account email and password, then pull the image:"
-                        }
-                        (command_block(&format!("docker login {}", oci.registry)))
-                        (command_block(&format!("docker pull {}", oci.reference)))
-                    }
-                } @else {
-                    (upgrade_link())
-                }
+            div class="p-6 pt-0" {
+                (download_affordance(g, is_member))
             }
         }
     }

@@ -242,11 +242,8 @@ fn dashboard_items() -> Vec<NavItem> {
             href: "/applications",
             icon: "app-window",
         },
-        NavItem {
-            title: "Downloads",
-            href: "/downloads",
-            icon: "download",
-        },
+        // Downloads moved onto each application card (BUNYIP-100); the
+        // standalone /downloads page is now a redirect to /applications.
         // Single nav entry covering plan, status, invoices, and payment
         // history. The standalone "Billing" item went away when /billing
         // became a 302 redirect into /membership. See
