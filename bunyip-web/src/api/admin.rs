@@ -4,8 +4,9 @@ use serde_json::{json, Value};
 
 use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeedbackDetail,
-    AdminFeedbackSummary, AdminMembership, AdminStatsResponse, AdminUser, ArchivedFeedback,
-    FeedbackStatus, PaginatedResponse, StripeConfigResponse, TierConfigResponse, UserEntitlement,
+    AdminFeedbackSummary, AdminMembership, AdminStatsResponse, AdminUser, ApplicationGroup,
+    ApplicationGroupList, ArchivedFeedback, FeedbackStatus, PaginatedResponse,
+    StripeConfigResponse, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -188,6 +189,75 @@ pub async fn create_application(
     body: Value,
 ) -> Result<(), ApiError> {
     let r = api.post("/admin/applications", cookie, Some(body)).await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// Assign an application to a group, or clear it (`group_id = null`). BUNYIP-100.
+pub async fn set_application_group(
+    api: &Api,
+    cookie: Option<&str>,
+    app_id: &str,
+    group_id: Option<&str>,
+) -> Result<(), ApiError> {
+    let r = api
+        .put(
+            &format!("/admin/applications/{app_id}/group"),
+            cookie,
+            Some(json!({ "group_id": group_id })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+// --- application groups (BUNYIP-100) ----------------------------------------
+
+pub async fn application_groups(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Vec<ApplicationGroup>, ApiError> {
+    let list: ApplicationGroupList = parse(api.get("/admin/application-groups", cookie).await?)?;
+    Ok(list.groups)
+}
+
+pub async fn create_application_group(
+    api: &Api,
+    cookie: Option<&str>,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api
+        .post("/admin/application-groups", cookie, Some(body))
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn update_application_group(
+    api: &Api,
+    cookie: Option<&str>,
+    group_id: &str,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api
+        .put(
+            &format!("/admin/application-groups/{group_id}"),
+            cookie,
+            Some(body),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn delete_application_group(
+    api: &Api,
+    cookie: Option<&str>,
+    group_id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .delete(
+            &format!("/admin/application-groups/{group_id}"),
+            cookie,
+            None,
+        )
+        .await?;
     ok_data(&r).map(|_| ())
 }
 

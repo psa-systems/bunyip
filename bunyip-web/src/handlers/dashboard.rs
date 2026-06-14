@@ -13,7 +13,8 @@ use serde::Deserialize;
 use crate::api::auth as auth_api;
 use crate::api::calls;
 use crate::api::types::{
-    AppDownloadGroup, Membership, MembershipStatus, SubscriptionTier, TwoFactorSetupResponse, User,
+    AppDownloadGroup, Application, Membership, MembershipStatus, SubscriptionTier,
+    TwoFactorSetupResponse, User,
 };
 use crate::handlers::{dashboard_response, guard, password_ok, rotating_index};
 use crate::util::{app_gradient, days_until, has_active_membership, urlenc};
@@ -213,6 +214,48 @@ fn format_size(bytes: i64) -> String {
 // Applications
 // ===========================================================================
 
+/// One application card on the Applications page. `idx` only drives the
+/// gradient accent so cards stay visually varied across groups.
+fn app_card(idx: usize, app: &Application, domain: &str, is_member: bool) -> Markup {
+    let subdomain = app
+        .subdomain
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| app.slug.clone());
+    let app_url = format!("{subdomain}.{domain}");
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50 transition-all hover:shadow-lg" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                div class="flex items-start justify-between" {
+                    div class={ "flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-to-br " (app_gradient(idx)) } {
+                        @if let Some(ic) = &app.icon_url { img src=(ic) alt=(app.display_name) class="h-6 w-6"; } @else { (icon("link-2", "h-6 w-6 text-white")) }
+                    }
+                    @if app.maintenance_mode { (badge("warning", "Maintenance")) }
+                }
+                h3 class="text-2xl font-semibold leading-none tracking-tight mt-4" { (app.display_name) }
+                p class="text-sm text-muted-foreground" { (app.description.clone().unwrap_or_default()) }
+            }
+            div class="p-6 pt-0" {
+                p class="text-sm text-muted-foreground mb-4" { (app_url) }
+                @if app.is_accessible {
+                    // `/dashboard`, not `/`, so the child app's AuthGuard sees a
+                    // protected route and kicks off the OIDC code flow against
+                    // the user's existing OP session. Landing on the public
+                    // homepage instead just shows the marketing page; the user
+                    // has to click "Sign in" before the SSO bridge fires.
+                    a href=(format!("https://{app_url}/dashboard")) target="_blank" rel="noopener noreferrer" {
+                        span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md", app_gradient(idx)))) { "Launch" (icon("external-link", "ml-2 h-4 w-4")) }
+                    }
+                } @else {
+                    button type="button" disabled class=(button_class("default", "default", "w-full")) {
+                        @if !is_member { "Membership Required" } @else if app.maintenance_mode { "Under Maintenance" } @else { "Not Available" }
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match guard(&st, &headers, "/applications").await {
         Ok(v) => v,
@@ -220,12 +263,43 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
     };
     let fwd = c.forward.as_deref();
     let apps = calls::applications(&st.api, fwd).await.unwrap_or_default();
+    // Groups (BUNYIP-100). A failed fetch degrades to a flat ungrouped list.
+    let groups = calls::application_groups(&st.api, fwd)
+        .await
+        .unwrap_or_default();
     let stripe = auth_api::setup_status(&st.api)
         .await
         .map(|s| s.stripe_enabled)
         .unwrap_or(true);
     let is_member = has_active_membership(Some(&user));
     let domain = st.cfg.domain_or_localhost();
+
+    // Build display sections: each group (in API sort order) with its members,
+    // then an "ungrouped" bucket. The global enumerate index is carried into
+    // each card so gradient accents stay varied across sections. An app whose
+    // group_id references a missing group falls into the ungrouped bucket.
+    let indexed: Vec<(usize, &Application)> = apps.iter().enumerate().collect();
+    let mut group_sections: Vec<(&str, Vec<(usize, &Application)>)> = Vec::new();
+    for g in &groups {
+        let members: Vec<(usize, &Application)> = indexed
+            .iter()
+            .filter(|(_, a)| a.group_id.as_deref() == Some(g.id.as_str()))
+            .copied()
+            .collect();
+        if !members.is_empty() {
+            group_sections.push((g.display_name.as_str(), members));
+        }
+    }
+    let ungrouped: Vec<(usize, &Application)> = indexed
+        .iter()
+        .filter(|(_, a)| {
+            !groups
+                .iter()
+                .any(|g| Some(g.id.as_str()) == a.group_id.as_deref())
+        })
+        .copied()
+        .collect();
+    let has_groups = !group_sections.is_empty();
 
     let content = html! {
         div class="space-y-6" {
@@ -243,41 +317,19 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                     }
                 }
             }
-            div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
-                @for (i, app) in apps.iter().enumerate() {
-                    @let subdomain = app.subdomain.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| app.slug.clone());
-                    @let app_url = format!("{subdomain}.{domain}");
-                    div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50 transition-all hover:shadow-lg" {
-                        div class="flex flex-col space-y-1.5 p-6" {
-                            div class="flex items-start justify-between" {
-                                div class={ "flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-to-br " (app_gradient(i)) } {
-                                    @if let Some(ic) = &app.icon_url { img src=(ic) alt=(app.display_name) class="h-6 w-6"; } @else { (icon("link-2", "h-6 w-6 text-white")) }
-                                }
-                                @if app.maintenance_mode { (badge("warning", "Maintenance")) }
-                            }
-                            h3 class="text-2xl font-semibold leading-none tracking-tight mt-4" { (app.display_name) }
-                            p class="text-sm text-muted-foreground" { (app.description.clone().unwrap_or_default()) }
-                        }
-                        div class="p-6 pt-0" {
-                            p class="text-sm text-muted-foreground mb-4" { (app_url) }
-                            @if app.is_accessible {
-                                // `/dashboard`, not `/`, so the child app's
-                                // AuthGuard sees a protected route and kicks
-                                // off the OIDC code flow against the user's
-                                // existing OP session. Landing on the public
-                                // homepage instead just shows the marketing
-                                // page; the user has to click "Sign in"
-                                // before the SSO bridge fires. Matches the
-                                // launcher on the main `/dashboard` page.
-                                a href=(format!("https://{app_url}/dashboard")) target="_blank" rel="noopener noreferrer" {
-                                    span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md", app_gradient(i)))) { "Launch" (icon("external-link", "ml-2 h-4 w-4")) }
-                                }
-                            } @else {
-                                button type="button" disabled class=(button_class("default", "default", "w-full")) {
-                                    @if !is_member { "Membership Required" } @else if app.maintenance_mode { "Under Maintenance" } @else { "Not Available" }
-                                }
-                            }
-                        }
+            @for (name, members) in &group_sections {
+                section class="space-y-3" {
+                    h2 class="text-xl font-semibold tracking-tight" { (name) }
+                    div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
+                        @for &(idx, app) in members { (app_card(idx, app, &domain, is_member)) }
+                    }
+                }
+            }
+            @if !ungrouped.is_empty() {
+                section class="space-y-3" {
+                    @if has_groups { h2 class="text-xl font-semibold tracking-tight" { "Other" } }
+                    div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
+                        @for &(idx, app) in &ungrouped { (app_card(idx, app, &domain, is_member)) }
                     }
                 }
             }

@@ -3,6 +3,7 @@
 //! This module contains all database access logic organized by domain.
 
 pub mod application;
+pub mod application_group;
 pub mod audit;
 pub mod download_cache;
 pub mod download_daily_count;
@@ -20,6 +21,7 @@ pub mod user;
 
 // Re-export repositories
 pub use application::ApplicationRepository;
+pub use application_group::ApplicationGroupRepository;
 pub use audit::AuditLogRepository;
 pub use download_cache::DownloadCacheRepository;
 pub use download_daily_count::DownloadDailyCountRepository;

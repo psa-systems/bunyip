@@ -42,7 +42,7 @@ pub mod user;
 pub mod webhook;
 
 // Re-export handler functions for convenience
-pub use application::{get_application, list_applications};
+pub use application::{get_application, list_application_groups, list_applications};
 pub use auth::{
     accept_admin_invite, auth_redirect, confirm_password_reset, get_memberships, login, logout,
     logout_all, logout_redirect, refresh_token, register, request_magic_link,
@@ -72,14 +72,16 @@ pub use webhook::stripe_webhook;
 
 // Admin handlers
 pub use admin::{
-    admin_reset_password, create_admin_invite, create_application, delete_application, delete_user,
-    get_dashboard_stats, get_key_health, get_key_health_by_id, get_stripe_config,
-    get_system_health, get_tier_config, get_user, grant_lifetime_membership, grant_membership,
-    impersonate_user, key_rotation_status, list_admin_invites, list_all_applications,
-    list_audit_logs, list_memberships, list_notifications, list_users, mark_all_notifications_read,
+    admin_reset_password, create_admin_invite, create_application, create_application_group,
+    delete_application, delete_application_group, delete_user, get_dashboard_stats, get_key_health,
+    get_key_health_by_id, get_stripe_config, get_system_health, get_tier_config, get_user,
+    grant_lifetime_membership, grant_membership, impersonate_user, key_rotation_status,
+    list_admin_invites, list_all_application_groups, list_all_applications, list_audit_logs,
+    list_memberships, list_notifications, list_users, mark_all_notifications_read,
     mark_notification_read, reencrypt_key, revoke_admin_invite, revoke_lifetime_membership,
-    revoke_membership, send_test_email, swap_application_order, update_application,
-    update_stripe_config, update_tier_config, update_user_role, update_user_status,
+    revoke_membership, send_test_email, set_application_group, swap_application_order,
+    update_application, update_application_group, update_stripe_config, update_tier_config,
+    update_user_role, update_user_status,
 };
 pub use admin_entitlements::{
     add_price_mapping, grant_entitlement, list_user_entitlements, remove_price_mapping,

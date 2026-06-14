@@ -224,6 +224,32 @@ async fn main() {
             "/admin/applications/:id/field",
             axum::routing::post(handlers::admin::application_field),
         )
+        .route(
+            "/admin/applications/:id/group",
+            axum::routing::post(handlers::admin::application_set_group),
+        )
+        // Application groups (BUNYIP-100)
+        .route(
+            "/admin/application-groups",
+            get(handlers::admin::application_groups)
+                .post(handlers::admin::application_group_create),
+        )
+        .route(
+            "/admin/application-groups/new",
+            get(handlers::admin::application_group_new),
+        )
+        .route(
+            "/admin/application-groups/:id/edit",
+            get(handlers::admin::application_group_edit),
+        )
+        .route(
+            "/admin/application-groups/:id",
+            axum::routing::post(handlers::admin::application_group_save),
+        )
+        .route(
+            "/admin/application-groups/:id/delete",
+            axum::routing::post(handlers::admin::application_group_delete),
+        )
         .route("/admin/entitlements", get(handlers::admin::entitlements))
         .route(
             "/admin/applications/:slug/restricted-toggle",

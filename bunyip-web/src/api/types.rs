@@ -80,6 +80,10 @@ pub struct Application {
     pub is_accessible: bool,
     pub maintenance_mode: bool,
     pub maintenance_message: Option<String>,
+    /// Group membership (BUNYIP-100); `None` = ungrouped. Used to group the
+    /// applications page under group headings.
+    #[serde(default)]
+    pub group_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -352,6 +356,10 @@ pub struct AdminApplication {
     pub oci_image_name: Option<String>,
     #[serde(default)]
     pub pinned_image_tag: Option<String>,
+    // Group membership (BUNYIP-100); `None` = ungrouped. Prefills the group
+    // selector on the application edit form.
+    #[serde(default)]
+    pub group_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -368,6 +376,27 @@ pub struct UserEntitlement {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminApplicationList {
     pub applications: Vec<AdminApplication>,
+}
+
+/// An application group (BUNYIP-100). Shared by the admin management page and
+/// the user-facing grouping of the applications list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApplicationGroup {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub icon_url: Option<String>,
+    #[serde(default)]
+    pub sort_order: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApplicationGroupList {
+    pub groups: Vec<ApplicationGroup>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

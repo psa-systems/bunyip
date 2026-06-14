@@ -3,8 +3,8 @@
 use serde_json::{json, Value};
 
 use super::types::{
-    AppDownloadGroup, Application, ApplicationList, CheckoutSessionResponse, DownloadGroups,
-    Membership, StripeInvoice, StripePaymentResponse,
+    AppDownloadGroup, Application, ApplicationGroup, ApplicationGroupList, ApplicationList,
+    CheckoutSessionResponse, DownloadGroups, Membership, StripeInvoice, StripePaymentResponse,
 };
 use super::{ok_data, parse, Api, ApiError};
 
@@ -13,6 +13,15 @@ use super::{ok_data, parse, Api, ApiError};
 pub async fn applications(api: &Api, cookie: Option<&str>) -> Result<Vec<Application>, ApiError> {
     let list: ApplicationList = parse(api.get("/applications", cookie).await?)?;
     Ok(list.applications)
+}
+
+/// Application groups for grouping the applications page (BUNYIP-100).
+pub async fn application_groups(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Vec<ApplicationGroup>, ApiError> {
+    let list: ApplicationGroupList = parse(api.get("/application-groups", cookie).await?)?;
+    Ok(list.groups)
 }
 
 // --- membership -------------------------------------------------------------

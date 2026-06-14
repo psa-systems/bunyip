@@ -8,8 +8,23 @@ use sqlx::PgPool;
 use crate::errors::AppError;
 use crate::middleware::OptionalUser;
 use crate::models::ApplicationResponse;
-use crate::repositories::{ApplicationRepository, EntitlementRepository};
+use crate::repositories::{
+    ApplicationGroupRepository, ApplicationRepository, EntitlementRepository,
+};
 use crate::responses::{get_request_id, success};
+
+/// GET /v1/application-groups
+/// List application groups (display metadata) so the web layer can render
+/// applications grouped under their group heading. Public: groups carry no
+/// sensitive data, and membership/entitlement gating stays on the apps.
+pub async fn list_application_groups(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let groups = ApplicationGroupRepository::list(&pool).await?;
+    Ok(success(serde_json::json!({ "groups": groups }), request_id))
+}
 
 /// GET /v1/applications
 /// List active HOSTED applications (hub launch tiles). Catalog-only

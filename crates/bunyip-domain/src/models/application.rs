@@ -46,6 +46,8 @@ pub struct Application {
     pub oci_image_name: Option<String>,
     pub pinned_image_tag: Option<String>,
     pub sort_order: i32,
+    /// Nullable FK to `application_groups` (BUNYIP-100). `None` = ungrouped.
+    pub group_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -64,6 +66,9 @@ pub struct ApplicationResponse {
     pub is_accessible: bool,
     pub maintenance_mode: bool,
     pub maintenance_message: Option<String>,
+    /// Group membership (BUNYIP-100), so the web layer can group apps under
+    /// their group heading. `None` = ungrouped.
+    pub group_id: Option<Uuid>,
 }
 
 impl ApplicationResponse {
@@ -85,6 +90,7 @@ impl ApplicationResponse {
             } else {
                 None
             },
+            group_id: app.group_id,
         }
     }
 }
@@ -482,6 +488,7 @@ mod tests {
             oci_image_name: None,
             pinned_image_tag: None,
             sort_order: 0,
+            group_id: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
