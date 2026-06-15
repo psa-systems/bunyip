@@ -138,6 +138,14 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
 }
 
 pub fn membership_badge(user: &User) -> Markup {
+    // Admins have all-access regardless of membership status (mirrors
+    // `has_active_membership`, which treats role == Admin as access-granted).
+    // Without this, an admin whose `membership_status` is None/Canceled/etc.
+    // gets a "No Membership" pill next to "You have access to all
+    // applications" - a direct contradiction (BUNYIP-108).
+    if matches!(user.role, crate::api::types::UserRole::Admin) {
+        return badge("default", "Admin");
+    }
     if user.lifetime_member {
         return badge("success", "Lifetime");
     }
@@ -1354,4 +1362,53 @@ pub async fn twofa_setup_post(
         }
     };
     dashboard_response(&c, &user, "/settings", "Two-factor setup · Bunyip", content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::types::{MembershipStatus, SubscriptionTier, User, UserRole};
+
+    fn user(role: UserRole, status: MembershipStatus) -> User {
+        User {
+            id: "u1".into(),
+            email: "u@example.com".into(),
+            role,
+            email_verified: true,
+            two_factor_enabled: false,
+            membership_status: status,
+            price_locked: false,
+            locked_price_id: None,
+            locked_price_amount: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+            subscription_tier: SubscriptionTier::Free,
+            trial_ends_at: None,
+            lifetime_member: false,
+        }
+    }
+
+    #[test]
+    fn admin_badge_shows_admin_not_no_membership() {
+        // BUNYIP-108: an admin has all-access, so the badge must not read
+        // "No Membership" (which contradicted "You have access to all
+        // applications" on the dashboard).
+        let markup = membership_badge(&user(UserRole::Admin, MembershipStatus::None)).into_string();
+        assert!(markup.contains("Admin"));
+        assert!(!markup.contains("No Membership"));
+    }
+
+    #[test]
+    fn non_admin_without_membership_still_shows_no_membership() {
+        let markup =
+            membership_badge(&user(UserRole::Subscriber, MembershipStatus::None)).into_string();
+        assert!(markup.contains("No Membership"));
+    }
+
+    #[test]
+    fn non_admin_active_shows_active() {
+        let markup =
+            membership_badge(&user(UserRole::Subscriber, MembershipStatus::Active)).into_string();
+        assert!(markup.contains("Active"));
+    }
 }
