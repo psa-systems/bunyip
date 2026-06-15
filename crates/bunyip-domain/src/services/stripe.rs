@@ -1030,9 +1030,20 @@ impl StripeService {
         let mut mac = HmacSha256::new_from_slice(config.webhook_secret.as_bytes())
             .map_err(|_| AppError::internal("Invalid webhook secret key"))?;
         mac.update(signed_payload.as_bytes());
-        let expected = hex::encode(mac.finalize().into_bytes());
 
-        if signatures.iter().any(|sig| sig == &expected) {
+        // BUNYIP-107: compare in constant time. Decode each provided `v1`
+        // signature from hex and verify it against the computed MAC with
+        // hmac's `verify_slice` (constant-time), instead of hex-encoding the
+        // expected MAC and string-comparing it (which short-circuits on the
+        // first differing byte and leaks timing on a billing-grant path).
+        // `verify_slice` consumes the MAC, so clone it per candidate signature.
+        let verified = signatures.iter().any(|sig| {
+            hex::decode(sig)
+                .map(|bytes| mac.clone().verify_slice(&bytes).is_ok())
+                .unwrap_or(false)
+        });
+
+        if verified {
             Ok(())
         } else {
             tracing::warn!("Webhook signature verification failed");
@@ -1129,6 +1140,20 @@ mod tests {
         let payload = b"{\"type\":\"test\"}";
         let timestamp = chrono::Utc::now().timestamp().to_string();
         let header = format!("t={},v1=invalid_signature", timestamp);
+
+        assert!(service.verify_webhook_signature(payload, &header).is_err());
+    }
+
+    #[test]
+    fn verify_webhook_signature_wrong_but_valid_hex() {
+        // BUNYIP-107: a correctly hex-encoded but incorrect signature must be
+        // rejected. Unlike `..._invalid` (non-hex, rejected at decode), this
+        // exercises the constant-time `verify_slice` rejection path.
+        let service = test_service();
+        let payload = b"{\"type\":\"test\"}";
+        let timestamp = chrono::Utc::now().timestamp().to_string();
+        let wrong = hex::encode([0u8; 32]);
+        let header = format!("t={},v1={}", timestamp, wrong);
 
         assert!(service.verify_webhook_signature(payload, &header).is_err());
     }
