@@ -255,7 +255,7 @@ pub async fn users(
                                 div class="flex items-center gap-2 flex-wrap" {
                                     a href=(format!("/admin/users/{}", u.id)) class=(button_class("outline", "sm", "")) { "View" }
                                     a href=(format!("/admin/users/{}/entitlements", u.id)) class=(button_class("outline", "sm", "")) { "Entitlements" }
-                                    form method="post" action=(format!("/admin/users/{}/role", u.id)) {
+                                    form method="post" action=(format!("/admin/users/{}/role", u.id)) onsubmit="return confirm('Change this user role? Admins have full platform access.')" {
                                         input type="hidden" name="role" value=(if is_admin { "subscriber" } else { "admin" });
                                         button type="submit" class=(button_class("outline", "sm", "")) { @if is_admin { "Demote" } @else { "Make Admin" } }
                                     }
@@ -449,7 +449,7 @@ pub async fn user_detail(
                 }
                 div class="p-6 pt-2 flex flex-wrap gap-2" {
                     a href=(format!("/admin/users/{}/entitlements", target.id)) class=(button_class("outline", "default", "")) { "Manage Entitlements" }
-                    form method="post" action=(format!("/admin/users/{}/role", target.id)) {
+                    form method="post" action=(format!("/admin/users/{}/role", target.id)) onsubmit="return confirm('Change this user role? Admins have full platform access.')" {
                         input type="hidden" name="role" value=(if is_admin_target { "subscriber" } else { "admin" });
                         button type="submit" class=(button_class("outline", "default", "")) { @if is_admin_target { "Demote to subscriber" } @else { "Promote to admin" } }
                     }
@@ -2214,7 +2214,7 @@ pub async fn application_groups(State(st): State<AppState>, headers: HeaderMap) 
                                 div { p class="font-medium" { (g.display_name) } p class="text-xs text-muted-foreground" { (g.slug) } }
                                 div class="flex items-center gap-2" {
                                     a href=(format!("/admin/application-groups/{}/edit", g.id)) class=(button_class("outline", "sm", "")) { "Edit" }
-                                    form method="post" action=(format!("/admin/application-groups/{}/delete", g.id)) {
+                                    form method="post" action=(format!("/admin/application-groups/{}/delete", g.id)) onsubmit="return confirm('Delete this application group? This cannot be undone.')" {
                                         button type="submit" class=(button_class("outline", "sm", "")) { "Delete" }
                                     }
                                 }
