@@ -109,10 +109,20 @@ fn theme_controls(icon_class: &str) -> Markup {
 /// bottom-right (currently `/downloads`) add their own `pb-24` so the
 /// launcher does not occlude content; see the wrapper in the Downloads
 /// handler.
+///
+/// The link carries the originating page to the feedback form via a `?from=`
+/// query param. It is set client-side in an `onclick` from
+/// `location.pathname + location.search` (the launcher is shared by all shells
+/// and has no server-side access to the request path; threading it through
+/// every shell + response helper + handler call site would be far more
+/// invasive). The static `href="/feedback"` remains a no-JS fallback. The
+/// `/feedback` GET handler reads `?from=`, sanitizes it (must start with `/`),
+/// and round-trips it into the hidden `page_path` input.
 fn feedback_launcher() -> Markup {
     html! {
         div class="pointer-events-none fixed bottom-4 right-4 z-40 sm:bottom-6 sm:right-6" {
             a href="/feedback" aria-label="Open feedback page"
+              onclick="this.href='/feedback?from=' + encodeURIComponent(location.pathname + location.search)"
               class="pointer-events-auto group flex h-14 w-[60px] items-center overflow-hidden rounded-2xl border border-border/70 bg-background/85 text-primary shadow-xl shadow-primary/10 backdrop-blur-md transition-all duration-300 hover:w-[204px] hover:border-primary/50 hover:bg-background dark:bg-card/90 sm:h-16 sm:w-16 sm:hover:w-[214px]" {
                 span class="relative inline-flex h-14 w-[60px] shrink-0 items-center justify-center rounded-2xl sm:h-16 sm:w-16" {
                     span class="absolute inset-0 rounded-2xl bg-gradient-to-br from-primary/18 via-indigo-500/12 to-teal-500/18 opacity-80" {}
