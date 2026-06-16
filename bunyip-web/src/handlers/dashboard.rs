@@ -1216,6 +1216,17 @@ pub async fn settings_delete(
         Ok(v) => v,
         Err(r) => return r,
     };
+    // Account deletion is irreversible; require a non-empty password at the
+    // edge instead of forwarding a blank credential to the API (BUNYIP-116).
+    if f.password.trim().is_empty() {
+        return redirect_cookies(
+            &format!(
+                "/settings?error={}",
+                urlenc("Enter your current password to confirm account deletion.")
+            ),
+            &c.set_cookies,
+        );
+    }
     let totp = if f.totp_code.is_empty() {
         None
     } else {
