@@ -1316,10 +1316,14 @@ impl AuthService {
     /// `refresh_expires_at` carries an existing session's absolute deadline
     /// across a refresh rotation. On a fresh login it is `None` and the
     /// deadline is computed from the role's absolute TTL. On refresh the caller
-    /// passes the rotated-out token's `expires_at`: for admins this is honored
-    /// so the 12-hour ceiling is not reset every refresh (a true absolute cap);
-    /// for subscribers the deadline is recomputed (rolling 30-day window, the
-    /// historical behavior) so subscriber sessions are unchanged (BUNYIP-137).
+    /// passes the rotated-out token's `expires_at`: for admins the deadline is
+    /// the STRICTER of that existing value and a fresh admin TTL, so the
+    /// 12-hour ceiling is not reset every refresh (a true absolute cap) and a
+    /// deadline that was somehow issued under a looser policy (e.g. a 30-day
+    /// subscriber window that escaped role-change revocation) can only ever be
+    /// tightened, never extended, once the account is an admin. For subscribers
+    /// the deadline is recomputed (rolling 30-day window, the historical
+    /// behavior) so subscriber sessions are unchanged (BUNYIP-137).
     async fn create_tokens(
         &self,
         user: &User,
@@ -1331,9 +1335,12 @@ impl AuthService {
         let (refresh_token, token_hash) = self.jwt.create_refresh_token(user.id)?;
 
         let ip = ip_address.map(IpNetwork::from);
+        let fresh_deadline = Utc::now() + refresh_absolute_ttl(&user.role);
         let expires_at = match refresh_expires_at {
-            Some(existing) if user.role == UserRole::Admin.as_str() => existing,
-            _ => Utc::now() + refresh_absolute_ttl(&user.role),
+            // Admins: clamp to the stricter of the carried deadline and a fresh
+            // admin window, so the cap can only tighten across rotation.
+            Some(existing) if user.role == UserRole::Admin.as_str() => existing.min(fresh_deadline),
+            _ => fresh_deadline,
         };
 
         // Store refresh token
