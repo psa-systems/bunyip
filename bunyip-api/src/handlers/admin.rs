@@ -267,6 +267,150 @@ pub async fn update_user_role(
     Ok(success(UserResponse::from(updated_user), request_id))
 }
 
+/// Request body for admin email correction (BUNYIP-119).
+#[derive(Debug, Deserialize)]
+pub struct UpdateUserEmailRequest {
+    pub email: String,
+    /// When true the corrected address is stored already-verified; when
+    /// false (the default) the user keeps an unverified address until they
+    /// complete the verification flow.
+    #[serde(default)]
+    pub verified: bool,
+}
+
+/// PUT /v1/admin/users/{user_id}/email
+/// Correct a user's email address (BUNYIP-119). Admin-only override of the
+/// normal user-initiated, email-confirmed change flow: the new address is
+/// written directly, optionally marked verified in the same edit.
+pub async fn update_user_email(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+    body: web::Json<UpdateUserEmailRequest>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let user_id = path.into_inner();
+
+    // Normalize like the rest of the auth surface (lower-cased, trimmed).
+    let new_email = body.email.trim().to_lowercase();
+    crate::validation::validate_email(&new_email)?;
+
+    let target_user = UserRepository::find_by_id(&pool, user_id)
+        .await?
+        .ok_or(AppError::not_found("User"))?;
+    let old_email = target_user.email.clone();
+
+    // No-op edits that only flip verification are still allowed, but a real
+    // address change must not collide with another live account.
+    if new_email != old_email.to_lowercase() {
+        if let Some(existing) = UserRepository::find_by_email(&pool, &new_email).await? {
+            if existing.id != user_id {
+                return Err(AppError::conflict("Email already registered"));
+            }
+        }
+    }
+
+    UserRepository::update_email(pool.get_ref(), user_id, &new_email, body.verified).await?;
+
+    tracing::info!(
+        admin_id = %admin.0.sub,
+        target_user_id = %user_id,
+        verified = body.verified,
+        "Admin changed user email"
+    );
+
+    let audit_log = CreateAuditLog::new(AuditAction::AdminUserEmailChanged)
+        .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+        .with_resource("user", user_id)
+        .with_old_values(serde_json::json!({ "email": old_email }))
+        .with_new_values(
+            serde_json::json!({ "email": new_email, "email_verified": body.verified }),
+        );
+    AuditLogRepository::create(&pool, audit_log).await?;
+
+    let updated_user = UserRepository::find_by_id(&pool, user_id)
+        .await?
+        .ok_or(AppError::not_found("User"))?;
+
+    Ok(success(UserResponse::from(updated_user), request_id))
+}
+
+/// POST /v1/admin/users/{user_id}/email/verify
+/// Force-verify a user's email address without the user completing the
+/// email-verification flow (BUNYIP-119).
+pub async fn verify_user_email(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let user_id = path.into_inner();
+
+    let target_user = UserRepository::find_by_id(&pool, user_id)
+        .await?
+        .ok_or(AppError::not_found("User"))?;
+
+    UserRepository::set_email_verified(&pool, user_id).await?;
+
+    tracing::info!(
+        admin_id = %admin.0.sub,
+        target_user_id = %user_id,
+        "Admin force-verified user email"
+    );
+
+    let audit_log = CreateAuditLog::new(AuditAction::AdminUserEmailVerified)
+        .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+        .with_resource("user", user_id)
+        .with_metadata(serde_json::json!({
+            "target_email": target_user.email,
+        }));
+    AuditLogRepository::create(&pool, audit_log).await?;
+
+    Ok(success_no_data(request_id))
+}
+
+/// POST /v1/admin/users/{user_id}/two-factor/reset
+/// Clear a user's two-factor authentication (BUNYIP-119): delete their TOTP
+/// secret + recovery codes and flip `two_factor_enabled` off so a locked-out
+/// user can re-enrol from scratch.
+pub async fn reset_user_two_factor(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let user_id = path.into_inner();
+
+    let target_user = UserRepository::find_by_id(&pool, user_id)
+        .await?
+        .ok_or(AppError::not_found("User"))?;
+
+    // Drop the TOTP secret + recovery codes first, then clear the flag. Either
+    // order leaves a consistent "2FA off" state; doing the delete first means a
+    // mid-way failure never leaves the flag off while a stale secret lingers.
+    TotpRepository::delete_by_user_id(&pool, user_id).await?;
+    UserRepository::set_two_factor_enabled(&pool, user_id, false).await?;
+
+    tracing::info!(
+        admin_id = %admin.0.sub,
+        target_user_id = %user_id,
+        "Admin reset user two-factor authentication"
+    );
+
+    let audit_log = CreateAuditLog::new(AuditAction::AdminUserTwoFactorReset)
+        .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+        .with_resource("user", user_id)
+        .with_metadata(serde_json::json!({
+            "target_email": target_user.email,
+        }));
+    AuditLogRepository::create(&pool, audit_log).await?;
+
+    Ok(success_no_data(request_id))
+}
+
 // =============================================================================
 // Membership Management
 // =============================================================================

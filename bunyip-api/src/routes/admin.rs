@@ -30,6 +30,18 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 web::put().to(handlers::update_user_role),
             )
             .route(
+                "/users/{user_id}/email",
+                web::put().to(handlers::update_user_email),
+            )
+            .route(
+                "/users/{user_id}/email/verify",
+                web::post().to(handlers::verify_user_email),
+            )
+            .route(
+                "/users/{user_id}/two-factor/reset",
+                web::post().to(handlers::reset_user_two_factor),
+            )
+            .route(
                 "/users/{user_id}/reset-password",
                 web::post().to(handlers::admin_reset_password),
             )

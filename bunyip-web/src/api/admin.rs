@@ -49,6 +49,59 @@ pub async fn update_user_role(
     ok_data(&r).map(|_| ())
 }
 
+/// Correct a user's email address (BUNYIP-119). PUT /admin/users/{id}/email
+/// with `{email, verified}`; the API normalizes + validates the address and
+/// rejects a collision with another live account.
+pub async fn update_user_email(
+    api: &Api,
+    cookie: Option<&str>,
+    user_id: &str,
+    email: &str,
+    verified: bool,
+) -> Result<(), ApiError> {
+    let r = api
+        .put(
+            &format!("/admin/users/{user_id}/email"),
+            cookie,
+            Some(json!({ "email": email, "verified": verified })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// Force-verify a user's email (BUNYIP-119). POST /admin/users/{id}/email/verify.
+pub async fn verify_user_email(
+    api: &Api,
+    cookie: Option<&str>,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            &format!("/admin/users/{user_id}/email/verify"),
+            cookie,
+            None,
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// Clear a user's two-factor authentication (BUNYIP-119), letting a locked-out
+/// user re-enrol. POST /admin/users/{id}/two-factor/reset.
+pub async fn reset_user_two_factor(
+    api: &Api,
+    cookie: Option<&str>,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            &format!("/admin/users/{user_id}/two-factor/reset"),
+            cookie,
+            None,
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
 pub async fn delete_user(api: &Api, cookie: Option<&str>, user_id: &str) -> Result<(), ApiError> {
     let r = api
         .delete(&format!("/admin/users/{user_id}"), cookie, None)
