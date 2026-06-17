@@ -15,8 +15,9 @@ use serde_json::json;
 use crate::api::admin as admin_api;
 use crate::api::types::{
     AdminApplication, AdminAuditLog, AdminFeedbackDetail, ApplicationGroup, FeedbackAttachmentMeta,
-    FeedbackStatus, UserEntitlement,
+    FeedbackStatus, User, UserEntitlement,
 };
+use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{relative_time, urlenc};
 use crate::views::ui::{badge, button_class, error_box, icon};
@@ -209,6 +210,10 @@ pub async fn audit_logs(
 pub struct UserQuery {
     pub page: Option<u32>,
     pub search: Option<String>,
+    /// `suspended` switches the list to soft-deleted accounts so an admin can
+    /// reactivate them; anything else (incl. absent) shows live accounts
+    /// (BUNYIP-120).
+    pub status: Option<String>,
 }
 
 pub async fn users(
@@ -222,15 +227,31 @@ pub async fn users(
     };
     let page = q.page.unwrap_or(1).max(1);
     let search = q.search.unwrap_or_default();
-    let data = admin_api::users(&st.api, c.forward.as_deref(), page, 20, &search)
+    let suspended = q.status.as_deref() == Some("suspended");
+    let data = admin_api::users(&st.api, c.forward.as_deref(), page, 20, &search, suspended)
         .await
         .ok();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
     let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
-    let base = if search.is_empty() {
+    // Preserve the active filters across pager links.
+    let mut params: Vec<String> = Vec::new();
+    if !search.is_empty() {
+        params.push(format!("search={}", urlenc(&search)));
+    }
+    if suspended {
+        params.push("status=suspended".to_string());
+    }
+    let base = if params.is_empty() {
         "/admin/users".to_string()
     } else {
-        format!("/admin/users?search={}", urlenc(&search))
+        format!("/admin/users?{}", params.join("&"))
+    };
+    let active_tab = |on: bool| {
+        if on {
+            button_class("secondary", "sm", "")
+        } else {
+            button_class("outline", "sm", "")
+        }
     };
 
     let content = html! {
@@ -239,8 +260,15 @@ pub async fn users(
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" {
                     div class="flex items-center justify-between gap-4" {
-                        h3 class="text-2xl font-semibold leading-none tracking-tight" { "All Users" }
-                        form method="get" action="/admin/users" class="w-64" { input name="search" value=(search) placeholder="Search by email…" class=(dashboard_input()); }
+                        h3 class="text-2xl font-semibold leading-none tracking-tight" { @if suspended { "Suspended Users" } @else { "All Users" } }
+                        form method="get" action="/admin/users" class="w-64" {
+                            @if suspended { input type="hidden" name="status" value="suspended"; }
+                            input name="search" value=(search) placeholder="Search by email…" class=(dashboard_input());
+                        }
+                    }
+                    div class="flex items-center gap-2 text-sm" {
+                        a href="/admin/users" class=(active_tab(!suspended)) { "Active" }
+                        a href="/admin/users?status=suspended" class=(active_tab(suspended)) { "Suspended" }
                     }
                 }
                 div class="p-6 pt-0" {
@@ -249,38 +277,44 @@ pub async fn users(
                             @let is_admin = matches!(u.role, crate::api::types::UserRole::Admin);
                             div class="flex items-center justify-between py-3" {
                                 div {
-                                    p class="font-medium flex items-center gap-2" { (u.email) @if is_admin { (badge("default", "Admin")) } @if !u.email_verified { (badge("outline", "Unverified")) } }
+                                    p class="font-medium flex items-center gap-2" { (u.email) @if is_admin { (badge("default", "Admin")) } @if suspended { (badge("outline", "Suspended")) } @if !u.email_verified { (badge("outline", "Unverified")) } }
                                     p class="text-xs text-muted-foreground" { "Joined " (relative_time(&u.created_at)) }
                                 }
                                 div class="flex items-center gap-2 flex-wrap" {
-                                    a href=(format!("/admin/users/{}", u.id)) class=(button_class("outline", "sm", "")) { "View" }
-                                    a href=(format!("/admin/users/{}/entitlements", u.id)) class=(button_class("outline", "sm", "")) { "Entitlements" }
-                                    form method="post" action=(format!("/admin/users/{}/role", u.id)) onsubmit="return confirm('Change this user role? Admins have full platform access.')" {
-                                        input type="hidden" name="role" value=(if is_admin { "subscriber" } else { "admin" });
-                                        button type="submit" class=(button_class("outline", "sm", "")) { @if is_admin { "Demote" } @else { "Make Admin" } }
-                                    }
-                                    form method="post" action=(format!("/admin/users/{}/reset-password", u.id)) onsubmit="return confirm('Send a password reset email to this user?')" {
-                                        button type="submit" class=(button_class("outline", "sm", "")) { "Reset Password" }
-                                    }
-                                    @if u.lifetime_member {
-                                        form method="post" action=(format!("/admin/users/{}/lifetime/revoke", u.id)) onsubmit="return confirm('Revoke lifetime membership? User will be returned to standard tier with no active subscription.')" {
-                                            button type="submit" class=(button_class("outline", "sm", "")) { "Revoke Lifetime" }
+                                    @if suspended {
+                                        form method="post" action=(format!("/admin/users/{}/reactivate", u.id)) onsubmit="return confirm('Reactivate this user? They will be able to sign in again.')" {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Reactivate" }
                                         }
                                     } @else {
-                                        form method="post" action=(format!("/admin/users/{}/lifetime", u.id)) onsubmit="return confirm('Grant lifetime membership? Creates a $0 Stripe subscription.')" {
-                                            button type="submit" class=(button_class("outline", "sm", "")) { "Lifetime" }
+                                        a href=(format!("/admin/users/{}", u.id)) class=(button_class("outline", "sm", "")) { "View" }
+                                        a href=(format!("/admin/users/{}/entitlements", u.id)) class=(button_class("outline", "sm", "")) { "Entitlements" }
+                                        form method="post" action=(format!("/admin/users/{}/role", u.id)) onsubmit="return confirm('Change this user role? Admins have full platform access.')" {
+                                            input type="hidden" name="role" value=(if is_admin { "subscriber" } else { "admin" });
+                                            button type="submit" class=(button_class("outline", "sm", "")) { @if is_admin { "Demote" } @else { "Make Admin" } }
                                         }
-                                    }
-                                    form method="post" action=(format!("/admin/users/{}/suspend", u.id)) onsubmit="return confirm('Suspend (soft-delete) this user?')" {
-                                        button type="submit" class=(button_class("outline", "sm", "")) { "Suspend" }
-                                    }
-                                    form method="post" action=(format!("/admin/users/{}/delete", u.id)) onsubmit="return confirm('Delete this user? This cannot be undone.')" {
-                                        button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("trash", "h-4 w-4")) }
+                                        form method="post" action=(format!("/admin/users/{}/reset-password", u.id)) onsubmit="return confirm('Send a password reset email to this user?')" {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Reset Password" }
+                                        }
+                                        @if u.lifetime_member {
+                                            form method="post" action=(format!("/admin/users/{}/lifetime/revoke", u.id)) onsubmit="return confirm('Revoke lifetime membership? User will be returned to standard tier with no active subscription.')" {
+                                                button type="submit" class=(button_class("outline", "sm", "")) { "Revoke Lifetime" }
+                                            }
+                                        } @else {
+                                            form method="post" action=(format!("/admin/users/{}/lifetime", u.id)) onsubmit="return confirm('Grant lifetime membership? Creates a $0 Stripe subscription.')" {
+                                                button type="submit" class=(button_class("outline", "sm", "")) { "Lifetime" }
+                                            }
+                                        }
+                                        form method="post" action=(format!("/admin/users/{}/suspend", u.id)) onsubmit="return confirm('Suspend (soft-delete) this user?')" {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Suspend" }
+                                        }
+                                        form method="post" action=(format!("/admin/users/{}/delete", u.id)) onsubmit="return confirm('Delete this user? This cannot be undone.')" {
+                                            button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("trash", "h-4 w-4")) }
+                                        }
                                     }
                                 }
                             }
                         }
-                        @if items.is_empty() { p class="text-center text-muted-foreground py-8" { "No users found" } }
+                        @if items.is_empty() { p class="text-center text-muted-foreground py-8" { @if suspended { "No suspended users" } @else { "No users found" } } }
                     }
                     (pager(&base, page, total_pages))
                 }
@@ -339,6 +373,21 @@ pub async fn user_suspend(
     redirect_cookies("/admin/users", &c.set_cookies)
 }
 
+/// Reactivate a suspended user, then return to the suspended list so the admin
+/// stays in the same view (BUNYIP-120).
+pub async fn user_reactivate(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::reactivate_user(&st.api, c.forward.as_deref(), &id).await;
+    redirect_cookies("/admin/users?status=suspended", &c.set_cookies)
+}
+
 pub async fn user_reset_password(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -350,6 +399,78 @@ pub async fn user_reset_password(
     };
     let _ = admin_api::admin_reset_password(&st.api, c.forward.as_deref(), &id).await;
     redirect_cookies(&format!("/admin/users/{id}"), &c.set_cookies)
+}
+
+/// Admin email correction (BUNYIP-119). `verified` is an HTML checkbox, so it
+/// only arrives in the body when ticked; absence means "leave unverified".
+#[derive(Deserialize)]
+pub struct EmailForm {
+    pub email: String,
+    #[serde(default)]
+    pub verified: Option<String>,
+}
+
+/// POST /admin/users/{id}/email - correct a user's email (BUNYIP-119).
+pub async fn user_email(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<EmailForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let email = f.email.trim();
+    if email.is_empty() {
+        return redirect_cookies(
+            &format!("/admin/users/{id}?toast_err=Email%20is%20required"),
+            &c.set_cookies,
+        );
+    }
+    let verified = f.verified.is_some();
+    let target =
+        match admin_api::update_user_email(&st.api, c.forward.as_deref(), &id, email, verified)
+            .await
+        {
+            Ok(()) => format!("/admin/users/{id}?toast_ok=Email%20updated"),
+            Err(_) => format!("/admin/users/{id}?toast_err=Could%20not%20update%20email"),
+        };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// POST /admin/users/{id}/email/verify - force-verify a user's email (BUNYIP-119).
+pub async fn user_verify_email(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::verify_user_email(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => format!("/admin/users/{id}?toast_ok=Email%20verified"),
+        Err(_) => format!("/admin/users/{id}?toast_err=Could%20not%20verify%20email"),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// POST /admin/users/{id}/two-factor/reset - clear a user's 2FA (BUNYIP-119).
+pub async fn user_reset_2fa(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::reset_user_two_factor(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => format!("/admin/users/{id}?toast_ok=Two-factor%20cleared"),
+        Err(_) => format!("/admin/users/{id}?toast_err=Could%20not%20clear%20two-factor"),
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 pub async fn user_grant_lifetime(
@@ -443,6 +564,44 @@ pub async fn user_detail(
                     @if target.lifetime_member { div { span class="text-muted-foreground" { "Lifetime: " } "Yes" } }
                     @if let Some(grace) = target.grace_period_end.as_deref() {
                         div { span class="text-muted-foreground" { "Grace ends: " } (relative_time(grace)) }
+                    }
+                }
+            }
+
+            // Identity & security card (BUNYIP-119): the email, email-verified,
+            // and two-factor fields are shown read-only above; this card makes
+            // them editable so an admin can correct an address, force-verify
+            // it, or clear a stuck second factor.
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6 pb-2" {
+                    h3 class="text-base font-semibold leading-none tracking-tight" { "Identity & security" }
+                    p class="text-xs text-muted-foreground" { "Correct the email, force-verify it, or clear a stuck second factor. All actions write an audit-log entry." }
+                }
+                div class="p-6 pt-2 space-y-4" {
+                    form method="post" action=(format!("/admin/users/{}/email", target.id)) class="space-y-2" {
+                        label class="text-sm font-medium" for="admin-email" { "Email" }
+                        div class="flex flex-col sm:flex-row gap-2" {
+                            input id="admin-email" name="email" type="email" required value=(target.email) class=(dashboard_input());
+                            button type="submit" class=(button_class("default", "default", "")) { "Save email" }
+                        }
+                        label class="flex items-center gap-2 text-sm text-muted-foreground" {
+                            input type="checkbox" name="verified" value="true" class="h-4 w-4";
+                            "Mark this address verified (leave unchecked to require the user to re-verify)"
+                        }
+                    }
+                    div class="flex flex-wrap gap-2" {
+                        @if !target.email_verified {
+                            form method="post" action=(format!("/admin/users/{}/email/verify", target.id)) onsubmit="return confirm('Force-verify this email without the user confirming it?')" {
+                                button type="submit" class=(button_class("outline", "default", "")) { "Force-verify email" }
+                            }
+                        }
+                        @if target.two_factor_enabled {
+                            form method="post" action=(format!("/admin/users/{}/two-factor/reset", target.id)) onsubmit="return confirm('Clear this user 2FA? Their authenticator and recovery codes are removed and they must re-enrol.')" {
+                                button type="submit" class=(button_class("outline", "default", "text-destructive hover:text-destructive")) { "Clear 2FA" }
+                            }
+                        } @else {
+                            span class="text-xs text-muted-foreground self-center" { "Two-factor is not enabled for this user." }
+                        }
                     }
                 }
             }
@@ -1273,6 +1432,20 @@ pub async fn feedback_respond(
         // figure it out.
         return redirect_cookies(&format!("/admin/feedback/{id}"), &c.set_cookies);
     }
+    // BUNYIP-117: bound the admin response at the web edge. The body is
+    // emailed verbatim and stored in feedback_responses (TEXT); 16k chars
+    // is generous for a support reply while still rejecting a runaway
+    // paste. Authoritative validation happens in
+    // `services::feedback::respond` once the API tightens its own bound.
+    const RESPONSE_MAX: usize = 16_000;
+    if response.len() > RESPONSE_MAX {
+        return redirect_cookies(
+            &format!(
+                "/admin/feedback/{id}?toast_err=Response%20must%20be%20{RESPONSE_MAX}%20characters%20or%20fewer"
+            ),
+            &c.set_cookies,
+        );
+    }
     let target =
         match admin_api::respond_to_feedback(&st.api, c.forward.as_deref(), &id, response).await {
             Ok(()) => format!("/admin/feedback/{id}?toast_ok=Response%20sent"),
@@ -2019,12 +2192,21 @@ pub struct CreateAppForm {
 /// validation). `forgejo_package` is only sent on a `generic_package` source
 /// (it is invalid on `release`). `is_hosted` reflects the checkbox so a
 /// catalog-only product (unchecked) is not forced to the DB default of hosted.
-fn create_app_body(f: &CreateAppForm) -> serde_json::Value {
+fn create_app_body(f: &CreateAppForm) -> Result<serde_json::Value, String> {
+    use crate::handlers::validate;
+    // BUNYIP-112: identity fields are bounded + slug-checked at the edge.
+    // `slug` is load-bearing for OCI repo paths in
+    // `Application::oci_pull_image`, so an unconstrained value would
+    // silently end up in pull URLs.
+    let name = validate::trim_bounded(&f.name, "Name", 200)?;
+    let slug = validate::slug(&f.slug, "Slug")?;
+    let display_name = validate::trim_bounded(&f.display_name, "Display name", 200)?;
+    let container_name = validate::trim_bounded(&f.container_name, "Container name", 200)?;
     let mut m = serde_json::Map::new();
-    m.insert("name".into(), json!(f.name.trim()));
-    m.insert("slug".into(), json!(f.slug.trim()));
-    m.insert("display_name".into(), json!(f.display_name.trim()));
-    m.insert("container_name".into(), json!(f.container_name.trim()));
+    m.insert("name".into(), json!(name));
+    m.insert("slug".into(), json!(slug));
+    m.insert("display_name".into(), json!(display_name));
+    m.insert("container_name".into(), json!(container_name));
     m.insert("is_hosted".into(), json!(checkbox_on(&f.is_hosted)));
     if !f.artifact_source.trim().is_empty() {
         m.insert("artifact_source".into(), json!(f.artifact_source.trim()));
@@ -2037,14 +2219,15 @@ fn create_app_body(f: &CreateAppForm) -> serde_json::Value {
         ("oci_image_name", &f.oci_image_name),
         ("pinned_image_tag", &f.pinned_image_tag),
     ] {
-        if !val.trim().is_empty() {
-            m.insert(k.into(), json!(val.trim()));
+        if let Some(v) = validate::trim_bounded_opt(val, k, 200)? {
+            m.insert(k.into(), json!(v));
         }
     }
     if f.artifact_source.trim() == "generic_package" && !f.forgejo_package.trim().is_empty() {
-        m.insert("forgejo_package".into(), json!(f.forgejo_package.trim()));
+        let pkg = validate::trim_bounded(&f.forgejo_package, "forgejo_package", 200)?;
+        m.insert("forgejo_package".into(), json!(pkg));
     }
-    serde_json::Value::Object(m)
+    Ok(serde_json::Value::Object(m))
 }
 
 /// GET /admin/applications/new
@@ -2098,44 +2281,50 @@ pub async fn application_create(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let body = create_app_body(&f);
+    // Render helper so the validation-error and API-error paths share the
+    // identical reconstruction of the form view (BUNYIP-112).
+    let render_form_error = |err: &str| -> Response {
+        let id = IdentityView {
+            name: &f.name,
+            slug: &f.slug,
+            display_name: &f.display_name,
+            container_name: &f.container_name,
+        };
+        let v = DistView {
+            artifact_source: &f.artifact_source,
+            forgejo_owner: &f.forgejo_owner,
+            forgejo_repo: &f.forgejo_repo,
+            forgejo_package: &f.forgejo_package,
+            pinned_release_tag: &f.pinned_release_tag,
+            oci_image_owner: &f.oci_image_owner,
+            oci_image_name: &f.oci_image_name,
+            pinned_image_tag: &f.pinned_image_tag,
+        };
+        let content = application_form(
+            "/admin/applications",
+            "New application",
+            "Create a catalog application and (optionally) its Forgejo binary and OCI container coordinates.",
+            Some(&id),
+            checkbox_on(&f.is_hosted),
+            &v,
+            None,
+            Some(err),
+        );
+        admin_response(
+            &c,
+            &user,
+            "/admin/applications",
+            "New application · Bunyip",
+            content,
+        )
+    };
+    let body = match create_app_body(&f) {
+        Ok(b) => b,
+        Err(msg) => return render_form_error(&msg),
+    };
     match admin_api::create_application(&st.api, c.forward.as_deref(), body).await {
         Ok(()) => redirect_cookies("/admin/applications", &c.set_cookies),
-        Err(e) => {
-            let id = IdentityView {
-                name: &f.name,
-                slug: &f.slug,
-                display_name: &f.display_name,
-                container_name: &f.container_name,
-            };
-            let v = DistView {
-                artifact_source: &f.artifact_source,
-                forgejo_owner: &f.forgejo_owner,
-                forgejo_repo: &f.forgejo_repo,
-                forgejo_package: &f.forgejo_package,
-                pinned_release_tag: &f.pinned_release_tag,
-                oci_image_owner: &f.oci_image_owner,
-                oci_image_name: &f.oci_image_name,
-                pinned_image_tag: &f.pinned_image_tag,
-            };
-            let content = application_form(
-                "/admin/applications",
-                "New application",
-                "Create a catalog application and (optionally) its Forgejo binary and OCI container coordinates.",
-                Some(&id),
-                checkbox_on(&f.is_hosted),
-                &v,
-                None,
-                Some(&e.user_message()),
-            );
-            admin_response(
-                &c,
-                &user,
-                "/admin/applications",
-                "New application · Bunyip",
-                content,
-            )
-        }
+        Err(e) => render_form_error(&e.user_message()),
     }
 }
 
@@ -2159,26 +2348,28 @@ pub struct GroupForm {
     pub sort_order: String,
 }
 
-/// JSON body for create/update of a group. Required identity fields are always
-/// sent; description / icon_url collapse empty to null; sort_order parses to an
-/// integer (0 on a blank or unparseable value).
-fn group_body(f: &GroupForm) -> serde_json::Value {
-    let opt = |s: &str| -> serde_json::Value {
-        let t = s.trim();
-        if t.is_empty() {
-            serde_json::Value::Null
-        } else {
-            json!(t)
-        }
-    };
-    json!({
-        "name": f.name.trim(),
-        "slug": f.slug.trim(),
-        "display_name": f.display_name.trim(),
-        "description": opt(&f.description),
-        "icon_url": opt(&f.icon_url),
-        "sort_order": f.sort_order.trim().parse::<i64>().unwrap_or(0),
-    })
+/// JSON body for create/update of a group. Required identity fields are
+/// bounded and slug-checked; description / icon_url collapse empty to null;
+/// sort_order is parsed as a bounded `i32` so non-numeric and out-of-INTEGER
+/// inputs surface as inline errors instead of silently becoming 0 or
+/// truncating (BUNYIP-113). Name / slug / icon_url validation lands here as
+/// part of the BUNYIP-112 sweep so create + edit share the same edge.
+fn group_body(f: &GroupForm) -> Result<serde_json::Value, String> {
+    use crate::handlers::validate;
+    let name = validate::trim_bounded(&f.name, "Name", 200)?;
+    let slug = validate::slug(&f.slug, "Slug")?;
+    let display_name = validate::trim_bounded(&f.display_name, "Display name", 200)?;
+    let description = validate::trim_bounded_opt(&f.description, "Description", 1000)?;
+    let icon_url = validate::url_opt(&f.icon_url, "Icon URL", 512)?;
+    let sort_order = validate::parse_i32(&f.sort_order, "Sort order")?;
+    Ok(json!({
+        "name": name,
+        "slug": slug,
+        "display_name": display_name,
+        "description": description,
+        "icon_url": icon_url,
+        "sort_order": sort_order,
+    }))
 }
 
 /// Shared create/edit form for a group.
@@ -2315,7 +2506,20 @@ pub async fn application_group_create(
         Ok(v) => v,
         Err(r) => return r,
     };
-    match admin_api::create_application_group(&st.api, c.forward.as_deref(), group_body(&f)).await {
+    let body = match group_body(&f) {
+        Ok(b) => b,
+        Err(msg) => {
+            let content = group_form("/admin/application-groups", "New group", None, Some(&msg));
+            return admin_response(
+                &c,
+                &user,
+                "/admin/application-groups",
+                "New group · Bunyip",
+                content,
+            );
+        }
+    };
+    match admin_api::create_application_group(&st.api, c.forward.as_deref(), body).await {
         Ok(()) => redirect_cookies("/admin/application-groups", &c.set_cookies),
         Err(e) => {
             let content = group_form(
@@ -2379,9 +2583,25 @@ pub async fn application_group_save(
         Ok(v) => v,
         Err(r) => return r,
     };
-    match admin_api::update_application_group(&st.api, c.forward.as_deref(), &id, group_body(&f))
-        .await
-    {
+    let body = match group_body(&f) {
+        Ok(b) => b,
+        Err(msg) => {
+            let content = group_form(
+                &format!("/admin/application-groups/{id}"),
+                "Edit group",
+                None,
+                Some(&msg),
+            );
+            return admin_response(
+                &c,
+                &user,
+                "/admin/application-groups",
+                "Edit group · Bunyip",
+                content,
+            );
+        }
+    };
+    match admin_api::update_application_group(&st.api, c.forward.as_deref(), &id, body).await {
         Ok(()) => redirect_cookies("/admin/application-groups", &c.set_cookies),
         Err(e) => {
             let content = group_form(
@@ -2635,16 +2855,69 @@ pub async fn revoke_user_entitlement_h(
 // Tier settings
 // ===========================================================================
 
-pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
-    let cfg = admin_api::tier_config(&st.api, c.forward.as_deref())
-        .await
-        .ok();
+/// Upper bounds for tier-settings fields. Slots and trial days are i64 with no
+/// business meaning beyond these caps; rejecting larger input keeps obvious
+/// typos and overflow probes out of the config.
+const MAX_TIER_SLOTS: i64 = 1_000_000;
+const MAX_TRIAL_DAYS: i64 = 3_650;
 
-    let content = html! {
+/// Field values shown in the tier-settings form. Kept as strings so a failed
+/// save can echo back exactly what the admin typed, including junk that did not
+/// parse as an integer.
+struct TierFormValues {
+    lifetime_slots: String,
+    early_adopter_slots: String,
+    early_adopter_trial_days: String,
+    standard_trial_days: String,
+    // BUNYIP-122: Stripe catalog IDs echoed back on a failed save so the admin
+    // does not lose what they typed when a numeric field fails validation.
+    free_price_id: String,
+    early_adopter_price_id: String,
+    standard_price_id: String,
+    lifetime_product_id: String,
+    early_adopter_product_id: String,
+    standard_product_id: String,
+}
+
+impl TierFormValues {
+    fn from_config(c: &crate::api::types::TierConfigResponse) -> Self {
+        TierFormValues {
+            lifetime_slots: c.lifetime_slots.to_string(),
+            early_adopter_slots: c.early_adopter_slots.to_string(),
+            early_adopter_trial_days: c.early_adopter_trial_days.to_string(),
+            standard_trial_days: c.standard_trial_days.to_string(),
+            free_price_id: c.free_price_id.clone().unwrap_or_default(),
+            early_adopter_price_id: c.early_adopter_price_id.clone().unwrap_or_default(),
+            standard_price_id: c.standard_price_id.clone().unwrap_or_default(),
+            lifetime_product_id: c.lifetime_product_id.clone().unwrap_or_default(),
+            early_adopter_product_id: c.early_adopter_product_id.clone().unwrap_or_default(),
+            standard_product_id: c.standard_product_id.clone().unwrap_or_default(),
+        }
+    }
+}
+
+/// Parse one tier-settings field: require a base-10 integer in `[0, max]`.
+/// Returns a user-facing message naming the field on failure.
+fn parse_tier_field(raw: &str, label: &str, max: i64) -> Result<i64, String> {
+    let n: i64 = raw
+        .trim()
+        .parse()
+        .map_err(|_| format!("{label} must be a whole number."))?;
+    if n < 0 {
+        return Err(format!("{label} must be zero or greater."));
+    }
+    if n > max {
+        return Err(format!("{label} must be at most {max}."));
+    }
+    Ok(n)
+}
+
+fn tier_settings_content(
+    cfg: Option<&crate::api::types::TierConfigResponse>,
+    values: &TierFormValues,
+    error: Option<&str>,
+) -> Markup {
+    html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Tier Settings" } p class="mt-2 text-muted-foreground" { "Configure pricing tiers, trials, and slot limits." } }
             @match cfg {
@@ -2653,17 +2926,67 @@ pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Re
                     div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Tiers & Slots" } p class="text-sm text-muted-foreground" { (c.lifetime_slots_used) " lifetime and " (c.early_adopter_slots_used) " early-adopter slots used." } }
                     div class="p-6 pt-0" {
                         form method="post" action="/admin/tier-settings" class="space-y-4 max-w-md" {
-                            div class="space-y-2" { label class="text-sm font-medium" { "Lifetime slots" } input name="lifetime_slots" type="number" value=(c.lifetime_slots) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter slots" } input name="early_adopter_slots" type="number" value=(c.early_adopter_slots) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter trial days" } input name="early_adopter_trial_days" type="number" value=(c.early_adopter_trial_days) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Standard trial days" } input name="standard_trial_days" type="number" value=(c.standard_trial_days) class=(dashboard_input()); }
+                            @if let Some(e) = error { (error_box(e)) }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Lifetime slots" } input name="lifetime_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.lifetime_slots) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter slots" } input name="early_adopter_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.early_adopter_slots) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter trial days" } input name="early_adopter_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.early_adopter_trial_days) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Standard trial days" } input name="standard_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.standard_trial_days) class=(dashboard_input()); }
+                            // BUNYIP-122: surface the Stripe price + product
+                            // IDs so admins can wire each tier to its Stripe
+                            // catalog row from this page. Blank submissions
+                            // leave the persisted value untouched (the API
+                            // treats empty string as "no change"); explicit
+                            // empty-by-clear is left for v2 once the API
+                            // grows a tri-state shape. Values echo the
+                            // submitted input so a failed save keeps them.
+                            div class="mt-2 pt-4 border-t border-border space-y-1" {
+                                p class="text-sm font-semibold" { "Stripe catalog (free / lifetime tier)" }
+                            }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Free price ID" } input name="free_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.free_price_id) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Lifetime product ID" } input name="lifetime_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.lifetime_product_id) class=(dashboard_input()); }
+                            div class="mt-2 pt-4 border-t border-border space-y-1" {
+                                p class="text-sm font-semibold" { "Stripe catalog (early adopter tier)" }
+                            }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter price ID" } input name="early_adopter_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.early_adopter_price_id) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter product ID" } input name="early_adopter_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.early_adopter_product_id) class=(dashboard_input()); }
+                            div class="mt-2 pt-4 border-t border-border space-y-1" {
+                                p class="text-sm font-semibold" { "Stripe catalog (standard tier)" }
+                            }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Standard price ID" } input name="standard_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.standard_price_id) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Standard product ID" } input name="standard_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.standard_product_id) class=(dashboard_input()); }
                             button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
                         }
                     }
                 },
             }
         }
+    }
+}
+
+pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
     };
+    let cfg = admin_api::tier_config(&st.api, c.forward.as_deref())
+        .await
+        .ok();
+    let values = cfg
+        .as_ref()
+        .map(TierFormValues::from_config)
+        .unwrap_or_else(|| TierFormValues {
+            lifetime_slots: String::new(),
+            early_adopter_slots: String::new(),
+            early_adopter_trial_days: String::new(),
+            standard_trial_days: String::new(),
+            free_price_id: String::new(),
+            early_adopter_price_id: String::new(),
+            standard_price_id: String::new(),
+            lifetime_product_id: String::new(),
+            early_adopter_product_id: String::new(),
+            standard_product_id: String::new(),
+        });
+    let content = tier_settings_content(cfg.as_ref(), &values, None);
     admin_response(
         &c,
         &user,
@@ -2675,23 +2998,136 @@ pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Re
 
 #[derive(Deserialize)]
 pub struct TierForm {
-    pub lifetime_slots: i64,
-    pub early_adopter_slots: i64,
-    pub early_adopter_trial_days: i64,
-    pub standard_trial_days: i64,
+    // BUNYIP-111: kept as raw strings so a non-integer submission can be
+    // echoed back and re-validated inline instead of failing Form extraction
+    // with a bare 422.
+    #[serde(default)]
+    pub lifetime_slots: String,
+    #[serde(default)]
+    pub early_adopter_slots: String,
+    #[serde(default)]
+    pub early_adopter_trial_days: String,
+    #[serde(default)]
+    pub standard_trial_days: String,
+    // BUNYIP-122: Stripe price + product IDs. Optional - blank ("" after
+    // form parse) leaves the persisted value untouched. We send the field
+    // only when non-empty so the API's tri-state-by-omission semantics
+    // line up.
+    #[serde(default)]
+    pub free_price_id: String,
+    #[serde(default)]
+    pub early_adopter_price_id: String,
+    #[serde(default)]
+    pub standard_price_id: String,
+    #[serde(default)]
+    pub lifetime_product_id: String,
+    #[serde(default)]
+    pub early_adopter_product_id: String,
+    #[serde(default)]
+    pub standard_product_id: String,
 }
 pub async fn tier_settings_save(
     State(st): State<AppState>,
     headers: HeaderMap,
     Form(f): Form<TierForm>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let body = json!({ "lifetime_slots": f.lifetime_slots, "early_adopter_slots": f.early_adopter_slots, "early_adopter_trial_days": f.early_adopter_trial_days, "standard_trial_days": f.standard_trial_days });
-    let _ = admin_api::update_tier_config(&st.api, c.forward.as_deref(), body).await;
-    redirect_cookies("/admin/tier-settings", &c.set_cookies)
+
+    // Echo back exactly what was submitted (trimmed) if we have to re-render.
+    let values = TierFormValues {
+        lifetime_slots: f.lifetime_slots.trim().to_string(),
+        early_adopter_slots: f.early_adopter_slots.trim().to_string(),
+        early_adopter_trial_days: f.early_adopter_trial_days.trim().to_string(),
+        standard_trial_days: f.standard_trial_days.trim().to_string(),
+        free_price_id: f.free_price_id.trim().to_string(),
+        early_adopter_price_id: f.early_adopter_price_id.trim().to_string(),
+        standard_price_id: f.standard_price_id.trim().to_string(),
+        lifetime_product_id: f.lifetime_product_id.trim().to_string(),
+        early_adopter_product_id: f.early_adopter_product_id.trim().to_string(),
+        standard_product_id: f.standard_product_id.trim().to_string(),
+    };
+
+    // Validate the numeric fields and build the request body before calling the
+    // API, then surface any API-side rejection instead of discarding it. `?`
+    // short-circuits on the first bad field so the message names the offending
+    // input. The Stripe catalog IDs (BUNYIP-122) are sent only when non-empty
+    // and within the 255-char column limit, so an omitted field leaves the
+    // persisted value untouched.
+    let validated = (|| {
+        let mut body = serde_json::Map::new();
+        body.insert(
+            "lifetime_slots".into(),
+            json!(parse_tier_field(
+                &f.lifetime_slots,
+                "Lifetime slots",
+                MAX_TIER_SLOTS
+            )?),
+        );
+        body.insert(
+            "early_adopter_slots".into(),
+            json!(parse_tier_field(
+                &f.early_adopter_slots,
+                "Early-adopter slots",
+                MAX_TIER_SLOTS
+            )?),
+        );
+        body.insert(
+            "early_adopter_trial_days".into(),
+            json!(parse_tier_field(
+                &f.early_adopter_trial_days,
+                "Early-adopter trial days",
+                MAX_TRIAL_DAYS
+            )?),
+        );
+        body.insert(
+            "standard_trial_days".into(),
+            json!(parse_tier_field(
+                &f.standard_trial_days,
+                "Standard trial days",
+                MAX_TRIAL_DAYS
+            )?),
+        );
+        for (k, v) in [
+            ("free_price_id", &f.free_price_id),
+            ("early_adopter_price_id", &f.early_adopter_price_id),
+            ("standard_price_id", &f.standard_price_id),
+            ("lifetime_product_id", &f.lifetime_product_id),
+            ("early_adopter_product_id", &f.early_adopter_product_id),
+            ("standard_product_id", &f.standard_product_id),
+        ] {
+            let t = v.trim();
+            if !t.is_empty() && t.len() <= 255 {
+                body.insert(k.into(), json!(t));
+            }
+        }
+        Ok::<_, String>(serde_json::Value::Object(body))
+    })();
+
+    let error = match validated {
+        Ok(body) => {
+            match admin_api::update_tier_config(&st.api, c.forward.as_deref(), body).await {
+                Ok(()) => return redirect_cookies("/admin/tier-settings", &c.set_cookies),
+                Err(e) => e.user_message(),
+            }
+        }
+        Err(msg) => msg,
+    };
+
+    // Re-render the form inline with the error and the submitted values.
+    let cfg = admin_api::tier_config(&st.api, c.forward.as_deref())
+        .await
+        .ok();
+    let content = tier_settings_content(cfg.as_ref(), &values, Some(&error));
+    admin_response(
+        &c,
+        &user,
+        "/admin/tier-settings",
+        "Tier settings · Bunyip",
+        content,
+    )
 }
 
 // ===========================================================================
@@ -2742,19 +3178,70 @@ pub async fn stripe_save(
     headers: HeaderMap,
     Form(f): Form<StripeForm>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let mut body = json!({ "app_tag": f.app_tag });
-    if !f.secret_key.is_empty() {
-        body["secret_key"] = json!(f.secret_key);
+    // BUNYIP-117: validate at the edge. app_tag is bounded (200 chars
+    // covers any sane Stripe metadata key); the two secrets are format-
+    // checked against their Stripe-documented prefixes when present
+    // (`sk_` / `rk_` for secret keys, `whsec_` for webhook secrets).
+    // Empty inputs leave the persisted value untouched (the API treats
+    // omission as "no change"). Replaces the prior `let _ = ...` that
+    // swallowed API rejections so the operator now sees an inline error.
+    use crate::handlers::validate;
+    let render_error = |err: &str| -> Response { stripe_error_page(&c, &user, err) };
+    let app_tag = match validate::trim_bounded_opt(&f.app_tag, "App tag", 200) {
+        Ok(Some(t)) => t.to_string(),
+        Ok(None) => String::new(),
+        Err(msg) => return render_error(&msg),
+    };
+    let secret_key = f.secret_key.trim();
+    if !secret_key.is_empty() {
+        if !(secret_key.starts_with("sk_") || secret_key.starts_with("rk_")) {
+            return render_error("Secret key must start with 'sk_' or 'rk_'");
+        }
+        if secret_key.len() > 255 {
+            return render_error("Secret key must be 255 characters or fewer");
+        }
     }
-    if !f.webhook_secret.is_empty() {
-        body["webhook_secret"] = json!(f.webhook_secret);
+    let webhook_secret = f.webhook_secret.trim();
+    if !webhook_secret.is_empty() {
+        if !webhook_secret.starts_with("whsec_") {
+            return render_error("Webhook secret must start with 'whsec_'");
+        }
+        if webhook_secret.len() > 255 {
+            return render_error("Webhook secret must be 255 characters or fewer");
+        }
     }
-    let _ = admin_api::update_stripe_config(&st.api, c.forward.as_deref(), body).await;
-    redirect_cookies("/admin/stripe", &c.set_cookies)
+    let mut body = json!({ "app_tag": app_tag });
+    if !secret_key.is_empty() {
+        body["secret_key"] = json!(secret_key);
+    }
+    if !webhook_secret.is_empty() {
+        body["webhook_secret"] = json!(webhook_secret);
+    }
+    match admin_api::update_stripe_config(&st.api, c.forward.as_deref(), body).await {
+        Ok(()) => redirect_cookies("/admin/stripe", &c.set_cookies),
+        Err(e) => render_error(&e.user_message()),
+    }
+}
+
+/// Re-render the Stripe settings page with the supplied inline error so a
+/// failed save surfaces context instead of the prior silent 200 + redirect.
+fn stripe_error_page(c: &AuthCtx, user: &User, err: &str) -> Response {
+    // We deliberately do NOT re-fetch the upstream Stripe config here -
+    // the failure path runs in a sync render context, mirroring the
+    // posture other admin save handlers take for their error surface.
+    let content = html! {
+        div class="space-y-6" {
+            div { h1 class="text-3xl font-bold" { "Stripe" } p class="mt-2 text-muted-foreground" { "Connect and configure Stripe billing." } }
+            (error_box(err))
+            p class="text-sm text-muted-foreground" { "Re-open the Stripe page to retry with the persisted values." }
+            a href="/admin/stripe" class=(button_class("default", "default", "")) { "Back to Stripe" }
+        }
+    };
+    admin_response(c, user, "/admin/stripe", "Stripe · Bunyip", content)
 }
 
 #[cfg(test)]
@@ -2818,7 +3305,7 @@ mod tests {
             container_name: "mokosh".into(),
             ..Default::default()
         };
-        let body = create_app_body(&f);
+        let body = create_app_body(&f).expect("create_app_body");
         assert_eq!(body["name"], json!("Mokosh"));
         assert_eq!(body["slug"], json!("mokosh"));
         assert_eq!(body["display_name"], json!("Mokosh"));
@@ -2842,8 +3329,25 @@ mod tests {
             is_hosted: "true".into(),
             ..Default::default()
         };
-        let body = create_app_body(&f);
+        let body = create_app_body(&f).expect("create_app_body");
         assert_eq!(body["forgejo_package"], json!("mokosh-cli"));
         assert_eq!(body["is_hosted"], json!(true));
+    }
+
+    #[test]
+    fn create_body_rejects_junk_slug_and_oversize_name() {
+        // BUNYIP-112: junk slug and over-length name surface as inline edge
+        // errors, not raw 500s on a DB cap or silent acceptance.
+        let mut f = CreateAppForm {
+            name: "Mokosh".into(),
+            slug: " $$$ ".into(),
+            display_name: "Mokosh".into(),
+            container_name: "mokosh".into(),
+            ..Default::default()
+        };
+        assert!(create_app_body(&f).is_err());
+        f.slug = "mokosh".into();
+        f.name = "a".repeat(300);
+        assert!(create_app_body(&f).is_err());
     }
 }

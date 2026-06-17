@@ -597,7 +597,11 @@ fn twofa_card(error: Option<&str>, redirect: Option<&str>) -> Markup {
                 @if let Some(e) = error { (error_box(e)) }
                 div class="space-y-2" {
                     label for="code" class="text-sm font-medium leading-none" { "Authentication Code" }
-                    input id="code" name="code" type="text" inputmode="numeric" placeholder="000 000" autocomplete="one-time-code" class={ (dashboard_input()) " text-center text-lg tracking-widest" };
+                    // BUNYIP-117: maxlength + pattern so the browser bounds
+                    // and format-checks the 6-digit TOTP before submit.
+                    // Authoritative validation still happens in the domain
+                    // (services::totp::verify_code).
+                    input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000 000" autocomplete="one-time-code" class={ (dashboard_input()) " text-center text-lg tracking-widest" };
                 }
                 (submit_btn("Verify"))
             }

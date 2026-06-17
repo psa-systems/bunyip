@@ -25,10 +25,16 @@ pub async fn users(
     page: u32,
     page_size: u32,
     search: &str,
+    suspended: bool,
 ) -> Result<PaginatedResponse<AdminUser>, ApiError> {
     let mut path = format!("/admin/users?page={page}&page_size={page_size}");
     if !search.is_empty() {
         path.push_str(&format!("&search={}", urlenc(search)));
+    }
+    // `active=false` flips the API to the soft-deleted side so suspended users
+    // can be listed and reactivated (BUNYIP-120).
+    if suspended {
+        path.push_str("&active=false");
     }
     parse(api.get(&path, cookie).await?)
 }
@@ -44,6 +50,59 @@ pub async fn update_user_role(
             &format!("/admin/users/{user_id}/role"),
             cookie,
             Some(json!({ "role": role })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// Correct a user's email address (BUNYIP-119). PUT /admin/users/{id}/email
+/// with `{email, verified}`; the API normalizes + validates the address and
+/// rejects a collision with another live account.
+pub async fn update_user_email(
+    api: &Api,
+    cookie: Option<&str>,
+    user_id: &str,
+    email: &str,
+    verified: bool,
+) -> Result<(), ApiError> {
+    let r = api
+        .put(
+            &format!("/admin/users/{user_id}/email"),
+            cookie,
+            Some(json!({ "email": email, "verified": verified })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// Force-verify a user's email (BUNYIP-119). POST /admin/users/{id}/email/verify.
+pub async fn verify_user_email(
+    api: &Api,
+    cookie: Option<&str>,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            &format!("/admin/users/{user_id}/email/verify"),
+            cookie,
+            None,
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// Clear a user's two-factor authentication (BUNYIP-119), letting a locked-out
+/// user re-enrol. POST /admin/users/{id}/two-factor/reset.
+pub async fn reset_user_two_factor(
+    api: &Api,
+    cookie: Option<&str>,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            &format!("/admin/users/{user_id}/two-factor/reset"),
+            cookie,
+            None,
         )
         .await?;
     ok_data(&r).map(|_| ())
@@ -85,15 +144,31 @@ pub async fn get_user(
     parse(api.get(&format!("/admin/users/{user_id}"), cookie).await?)
 }
 
-/// Soft-delete a user. (PUT /admin/users/{id}/status with active=false.) The
-/// backend rejects active=true today, so this only handles the suspend
-/// direction; reactivation is a follow-up that needs a new endpoint.
+/// Soft-delete a user. (PUT /admin/users/{id}/status with active=false.)
 pub async fn suspend_user(api: &Api, cookie: Option<&str>, user_id: &str) -> Result<(), ApiError> {
     let r = api
         .put(
             &format!("/admin/users/{user_id}/status"),
             cookie,
             Some(json!({ "active": false })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// Reactivate a suspended user. (PUT /admin/users/{id}/status with active=true.)
+/// The API clears `deleted_at`; it 404s when the id is not a soft-deleted row
+/// (already active or unknown), so reactivation cannot silently no-op (BUNYIP-120).
+pub async fn reactivate_user(
+    api: &Api,
+    cookie: Option<&str>,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .put(
+            &format!("/admin/users/{user_id}/status"),
+            cookie,
+            Some(json!({ "active": true })),
         )
         .await?;
     ok_data(&r).map(|_| ())
