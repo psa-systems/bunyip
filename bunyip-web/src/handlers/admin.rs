@@ -15,8 +15,9 @@ use serde_json::json;
 use crate::api::admin as admin_api;
 use crate::api::types::{
     AdminApplication, AdminAuditLog, AdminFeedbackDetail, ApplicationGroup, FeedbackAttachmentMeta,
-    FeedbackStatus, UserEntitlement,
+    FeedbackStatus, User, UserEntitlement,
 };
+use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{relative_time, urlenc};
 use crate::views::ui::{badge, button_class, error_box, icon};
@@ -1225,6 +1226,20 @@ pub async fn feedback_respond(
         // figure it out.
         return redirect_cookies(&format!("/admin/feedback/{id}"), &c.set_cookies);
     }
+    // BUNYIP-117: bound the admin response at the web edge. The body is
+    // emailed verbatim and stored in feedback_responses (TEXT); 16k chars
+    // is generous for a support reply while still rejecting a runaway
+    // paste. Authoritative validation happens in
+    // `services::feedback::respond` once the API tightens its own bound.
+    const RESPONSE_MAX: usize = 16_000;
+    if response.len() > RESPONSE_MAX {
+        return redirect_cookies(
+            &format!(
+                "/admin/feedback/{id}?toast_err=Response%20must%20be%20{RESPONSE_MAX}%20characters%20or%20fewer"
+            ),
+            &c.set_cookies,
+        );
+    }
     let target =
         match admin_api::respond_to_feedback(&st.api, c.forward.as_deref(), &id, response).await {
             Ok(()) => format!("/admin/feedback/{id}?toast_ok=Response%20sent"),
@@ -1971,12 +1986,21 @@ pub struct CreateAppForm {
 /// validation). `forgejo_package` is only sent on a `generic_package` source
 /// (it is invalid on `release`). `is_hosted` reflects the checkbox so a
 /// catalog-only product (unchecked) is not forced to the DB default of hosted.
-fn create_app_body(f: &CreateAppForm) -> serde_json::Value {
+fn create_app_body(f: &CreateAppForm) -> Result<serde_json::Value, String> {
+    use crate::handlers::validate;
+    // BUNYIP-112: identity fields are bounded + slug-checked at the edge.
+    // `slug` is load-bearing for OCI repo paths in
+    // `Application::oci_pull_image`, so an unconstrained value would
+    // silently end up in pull URLs.
+    let name = validate::trim_bounded(&f.name, "Name", 200)?;
+    let slug = validate::slug(&f.slug, "Slug")?;
+    let display_name = validate::trim_bounded(&f.display_name, "Display name", 200)?;
+    let container_name = validate::trim_bounded(&f.container_name, "Container name", 200)?;
     let mut m = serde_json::Map::new();
-    m.insert("name".into(), json!(f.name.trim()));
-    m.insert("slug".into(), json!(f.slug.trim()));
-    m.insert("display_name".into(), json!(f.display_name.trim()));
-    m.insert("container_name".into(), json!(f.container_name.trim()));
+    m.insert("name".into(), json!(name));
+    m.insert("slug".into(), json!(slug));
+    m.insert("display_name".into(), json!(display_name));
+    m.insert("container_name".into(), json!(container_name));
     m.insert("is_hosted".into(), json!(checkbox_on(&f.is_hosted)));
     if !f.artifact_source.trim().is_empty() {
         m.insert("artifact_source".into(), json!(f.artifact_source.trim()));
@@ -1989,14 +2013,15 @@ fn create_app_body(f: &CreateAppForm) -> serde_json::Value {
         ("oci_image_name", &f.oci_image_name),
         ("pinned_image_tag", &f.pinned_image_tag),
     ] {
-        if !val.trim().is_empty() {
-            m.insert(k.into(), json!(val.trim()));
+        if let Some(v) = validate::trim_bounded_opt(val, k, 200)? {
+            m.insert(k.into(), json!(v));
         }
     }
     if f.artifact_source.trim() == "generic_package" && !f.forgejo_package.trim().is_empty() {
-        m.insert("forgejo_package".into(), json!(f.forgejo_package.trim()));
+        let pkg = validate::trim_bounded(&f.forgejo_package, "forgejo_package", 200)?;
+        m.insert("forgejo_package".into(), json!(pkg));
     }
-    serde_json::Value::Object(m)
+    Ok(serde_json::Value::Object(m))
 }
 
 /// GET /admin/applications/new
@@ -2050,44 +2075,50 @@ pub async fn application_create(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let body = create_app_body(&f);
+    // Render helper so the validation-error and API-error paths share the
+    // identical reconstruction of the form view (BUNYIP-112).
+    let render_form_error = |err: &str| -> Response {
+        let id = IdentityView {
+            name: &f.name,
+            slug: &f.slug,
+            display_name: &f.display_name,
+            container_name: &f.container_name,
+        };
+        let v = DistView {
+            artifact_source: &f.artifact_source,
+            forgejo_owner: &f.forgejo_owner,
+            forgejo_repo: &f.forgejo_repo,
+            forgejo_package: &f.forgejo_package,
+            pinned_release_tag: &f.pinned_release_tag,
+            oci_image_owner: &f.oci_image_owner,
+            oci_image_name: &f.oci_image_name,
+            pinned_image_tag: &f.pinned_image_tag,
+        };
+        let content = application_form(
+            "/admin/applications",
+            "New application",
+            "Create a catalog application and (optionally) its Forgejo binary and OCI container coordinates.",
+            Some(&id),
+            checkbox_on(&f.is_hosted),
+            &v,
+            None,
+            Some(err),
+        );
+        admin_response(
+            &c,
+            &user,
+            "/admin/applications",
+            "New application · Bunyip",
+            content,
+        )
+    };
+    let body = match create_app_body(&f) {
+        Ok(b) => b,
+        Err(msg) => return render_form_error(&msg),
+    };
     match admin_api::create_application(&st.api, c.forward.as_deref(), body).await {
         Ok(()) => redirect_cookies("/admin/applications", &c.set_cookies),
-        Err(e) => {
-            let id = IdentityView {
-                name: &f.name,
-                slug: &f.slug,
-                display_name: &f.display_name,
-                container_name: &f.container_name,
-            };
-            let v = DistView {
-                artifact_source: &f.artifact_source,
-                forgejo_owner: &f.forgejo_owner,
-                forgejo_repo: &f.forgejo_repo,
-                forgejo_package: &f.forgejo_package,
-                pinned_release_tag: &f.pinned_release_tag,
-                oci_image_owner: &f.oci_image_owner,
-                oci_image_name: &f.oci_image_name,
-                pinned_image_tag: &f.pinned_image_tag,
-            };
-            let content = application_form(
-                "/admin/applications",
-                "New application",
-                "Create a catalog application and (optionally) its Forgejo binary and OCI container coordinates.",
-                Some(&id),
-                checkbox_on(&f.is_hosted),
-                &v,
-                None,
-                Some(&e.user_message()),
-            );
-            admin_response(
-                &c,
-                &user,
-                "/admin/applications",
-                "New application · Bunyip",
-                content,
-            )
-        }
+        Err(e) => render_form_error(&e.user_message()),
     }
 }
 
@@ -2111,26 +2142,28 @@ pub struct GroupForm {
     pub sort_order: String,
 }
 
-/// JSON body for create/update of a group. Required identity fields are always
-/// sent; description / icon_url collapse empty to null; sort_order parses to an
-/// integer (0 on a blank or unparseable value).
-fn group_body(f: &GroupForm) -> serde_json::Value {
-    let opt = |s: &str| -> serde_json::Value {
-        let t = s.trim();
-        if t.is_empty() {
-            serde_json::Value::Null
-        } else {
-            json!(t)
-        }
-    };
-    json!({
-        "name": f.name.trim(),
-        "slug": f.slug.trim(),
-        "display_name": f.display_name.trim(),
-        "description": opt(&f.description),
-        "icon_url": opt(&f.icon_url),
-        "sort_order": f.sort_order.trim().parse::<i64>().unwrap_or(0),
-    })
+/// JSON body for create/update of a group. Required identity fields are
+/// bounded and slug-checked; description / icon_url collapse empty to null;
+/// sort_order is parsed as a bounded `i32` so non-numeric and out-of-INTEGER
+/// inputs surface as inline errors instead of silently becoming 0 or
+/// truncating (BUNYIP-113). Name / slug / icon_url validation lands here as
+/// part of the BUNYIP-112 sweep so create + edit share the same edge.
+fn group_body(f: &GroupForm) -> Result<serde_json::Value, String> {
+    use crate::handlers::validate;
+    let name = validate::trim_bounded(&f.name, "Name", 200)?;
+    let slug = validate::slug(&f.slug, "Slug")?;
+    let display_name = validate::trim_bounded(&f.display_name, "Display name", 200)?;
+    let description = validate::trim_bounded_opt(&f.description, "Description", 1000)?;
+    let icon_url = validate::url_opt(&f.icon_url, "Icon URL", 512)?;
+    let sort_order = validate::parse_i32(&f.sort_order, "Sort order")?;
+    Ok(json!({
+        "name": name,
+        "slug": slug,
+        "display_name": display_name,
+        "description": description,
+        "icon_url": icon_url,
+        "sort_order": sort_order,
+    }))
 }
 
 /// Shared create/edit form for a group.
@@ -2267,7 +2300,20 @@ pub async fn application_group_create(
         Ok(v) => v,
         Err(r) => return r,
     };
-    match admin_api::create_application_group(&st.api, c.forward.as_deref(), group_body(&f)).await {
+    let body = match group_body(&f) {
+        Ok(b) => b,
+        Err(msg) => {
+            let content = group_form("/admin/application-groups", "New group", None, Some(&msg));
+            return admin_response(
+                &c,
+                &user,
+                "/admin/application-groups",
+                "New group · Bunyip",
+                content,
+            );
+        }
+    };
+    match admin_api::create_application_group(&st.api, c.forward.as_deref(), body).await {
         Ok(()) => redirect_cookies("/admin/application-groups", &c.set_cookies),
         Err(e) => {
             let content = group_form(
@@ -2331,9 +2377,25 @@ pub async fn application_group_save(
         Ok(v) => v,
         Err(r) => return r,
     };
-    match admin_api::update_application_group(&st.api, c.forward.as_deref(), &id, group_body(&f))
-        .await
-    {
+    let body = match group_body(&f) {
+        Ok(b) => b,
+        Err(msg) => {
+            let content = group_form(
+                &format!("/admin/application-groups/{id}"),
+                "Edit group",
+                None,
+                Some(&msg),
+            );
+            return admin_response(
+                &c,
+                &user,
+                "/admin/application-groups",
+                "Edit group · Bunyip",
+                content,
+            );
+        }
+    };
+    match admin_api::update_application_group(&st.api, c.forward.as_deref(), &id, body).await {
         Ok(()) => redirect_cookies("/admin/application-groups", &c.set_cookies),
         Err(e) => {
             let content = group_form(
@@ -2601,6 +2663,14 @@ struct TierFormValues {
     early_adopter_slots: String,
     early_adopter_trial_days: String,
     standard_trial_days: String,
+    // BUNYIP-122: Stripe catalog IDs echoed back on a failed save so the admin
+    // does not lose what they typed when a numeric field fails validation.
+    free_price_id: String,
+    early_adopter_price_id: String,
+    standard_price_id: String,
+    lifetime_product_id: String,
+    early_adopter_product_id: String,
+    standard_product_id: String,
 }
 
 impl TierFormValues {
@@ -2610,6 +2680,12 @@ impl TierFormValues {
             early_adopter_slots: c.early_adopter_slots.to_string(),
             early_adopter_trial_days: c.early_adopter_trial_days.to_string(),
             standard_trial_days: c.standard_trial_days.to_string(),
+            free_price_id: c.free_price_id.clone().unwrap_or_default(),
+            early_adopter_price_id: c.early_adopter_price_id.clone().unwrap_or_default(),
+            standard_price_id: c.standard_price_id.clone().unwrap_or_default(),
+            lifetime_product_id: c.lifetime_product_id.clone().unwrap_or_default(),
+            early_adopter_product_id: c.early_adopter_product_id.clone().unwrap_or_default(),
+            standard_product_id: c.standard_product_id.clone().unwrap_or_default(),
         }
     }
 }
@@ -2649,6 +2725,29 @@ fn tier_settings_content(
                             div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter slots" } input name="early_adopter_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.early_adopter_slots) class=(dashboard_input()); }
                             div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter trial days" } input name="early_adopter_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.early_adopter_trial_days) class=(dashboard_input()); }
                             div class="space-y-2" { label class="text-sm font-medium" { "Standard trial days" } input name="standard_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.standard_trial_days) class=(dashboard_input()); }
+                            // BUNYIP-122: surface the Stripe price + product
+                            // IDs so admins can wire each tier to its Stripe
+                            // catalog row from this page. Blank submissions
+                            // leave the persisted value untouched (the API
+                            // treats empty string as "no change"); explicit
+                            // empty-by-clear is left for v2 once the API
+                            // grows a tri-state shape. Values echo the
+                            // submitted input so a failed save keeps them.
+                            div class="mt-2 pt-4 border-t border-border space-y-1" {
+                                p class="text-sm font-semibold" { "Stripe catalog (free / lifetime tier)" }
+                            }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Free price ID" } input name="free_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.free_price_id) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Lifetime product ID" } input name="lifetime_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.lifetime_product_id) class=(dashboard_input()); }
+                            div class="mt-2 pt-4 border-t border-border space-y-1" {
+                                p class="text-sm font-semibold" { "Stripe catalog (early adopter tier)" }
+                            }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter price ID" } input name="early_adopter_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.early_adopter_price_id) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter product ID" } input name="early_adopter_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.early_adopter_product_id) class=(dashboard_input()); }
+                            div class="mt-2 pt-4 border-t border-border space-y-1" {
+                                p class="text-sm font-semibold" { "Stripe catalog (standard tier)" }
+                            }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Standard price ID" } input name="standard_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.standard_price_id) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Standard product ID" } input name="standard_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.standard_product_id) class=(dashboard_input()); }
                             button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
                         }
                     }
@@ -2674,6 +2773,12 @@ pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Re
             early_adopter_slots: String::new(),
             early_adopter_trial_days: String::new(),
             standard_trial_days: String::new(),
+            free_price_id: String::new(),
+            early_adopter_price_id: String::new(),
+            standard_price_id: String::new(),
+            lifetime_product_id: String::new(),
+            early_adopter_product_id: String::new(),
+            standard_product_id: String::new(),
         });
     let content = tier_settings_content(cfg.as_ref(), &values, None);
     admin_response(
@@ -2687,6 +2792,9 @@ pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Re
 
 #[derive(Deserialize)]
 pub struct TierForm {
+    // BUNYIP-111: kept as raw strings so a non-integer submission can be
+    // echoed back and re-validated inline instead of failing Form extraction
+    // with a bare 422.
     #[serde(default)]
     pub lifetime_slots: String,
     #[serde(default)]
@@ -2695,6 +2803,22 @@ pub struct TierForm {
     pub early_adopter_trial_days: String,
     #[serde(default)]
     pub standard_trial_days: String,
+    // BUNYIP-122: Stripe price + product IDs. Optional - blank ("" after
+    // form parse) leaves the persisted value untouched. We send the field
+    // only when non-empty so the API's tri-state-by-omission semantics
+    // line up.
+    #[serde(default)]
+    pub free_price_id: String,
+    #[serde(default)]
+    pub early_adopter_price_id: String,
+    #[serde(default)]
+    pub standard_price_id: String,
+    #[serde(default)]
+    pub lifetime_product_id: String,
+    #[serde(default)]
+    pub early_adopter_product_id: String,
+    #[serde(default)]
+    pub standard_product_id: String,
 }
 pub async fn tier_settings_save(
     State(st): State<AppState>,
@@ -2712,18 +2836,68 @@ pub async fn tier_settings_save(
         early_adopter_slots: f.early_adopter_slots.trim().to_string(),
         early_adopter_trial_days: f.early_adopter_trial_days.trim().to_string(),
         standard_trial_days: f.standard_trial_days.trim().to_string(),
+        free_price_id: f.free_price_id.trim().to_string(),
+        early_adopter_price_id: f.early_adopter_price_id.trim().to_string(),
+        standard_price_id: f.standard_price_id.trim().to_string(),
+        lifetime_product_id: f.lifetime_product_id.trim().to_string(),
+        early_adopter_product_id: f.early_adopter_product_id.trim().to_string(),
+        standard_product_id: f.standard_product_id.trim().to_string(),
     };
 
-    // Validate every field before calling the API, then surface any API-side
-    // rejection instead of discarding it. `?` short-circuits on the first bad
-    // field so the message names the offending input.
+    // Validate the numeric fields and build the request body before calling the
+    // API, then surface any API-side rejection instead of discarding it. `?`
+    // short-circuits on the first bad field so the message names the offending
+    // input. The Stripe catalog IDs (BUNYIP-122) are sent only when non-empty
+    // and within the 255-char column limit, so an omitted field leaves the
+    // persisted value untouched.
     let validated = (|| {
-        Ok::<_, String>(json!({
-            "lifetime_slots": parse_tier_field(&f.lifetime_slots, "Lifetime slots", MAX_TIER_SLOTS)?,
-            "early_adopter_slots": parse_tier_field(&f.early_adopter_slots, "Early-adopter slots", MAX_TIER_SLOTS)?,
-            "early_adopter_trial_days": parse_tier_field(&f.early_adopter_trial_days, "Early-adopter trial days", MAX_TRIAL_DAYS)?,
-            "standard_trial_days": parse_tier_field(&f.standard_trial_days, "Standard trial days", MAX_TRIAL_DAYS)?,
-        }))
+        let mut body = serde_json::Map::new();
+        body.insert(
+            "lifetime_slots".into(),
+            json!(parse_tier_field(
+                &f.lifetime_slots,
+                "Lifetime slots",
+                MAX_TIER_SLOTS
+            )?),
+        );
+        body.insert(
+            "early_adopter_slots".into(),
+            json!(parse_tier_field(
+                &f.early_adopter_slots,
+                "Early-adopter slots",
+                MAX_TIER_SLOTS
+            )?),
+        );
+        body.insert(
+            "early_adopter_trial_days".into(),
+            json!(parse_tier_field(
+                &f.early_adopter_trial_days,
+                "Early-adopter trial days",
+                MAX_TRIAL_DAYS
+            )?),
+        );
+        body.insert(
+            "standard_trial_days".into(),
+            json!(parse_tier_field(
+                &f.standard_trial_days,
+                "Standard trial days",
+                MAX_TRIAL_DAYS
+            )?),
+        );
+        for (k, v) in [
+            ("free_price_id", &f.free_price_id),
+            ("early_adopter_price_id", &f.early_adopter_price_id),
+            ("standard_price_id", &f.standard_price_id),
+            ("lifetime_product_id", &f.lifetime_product_id),
+            ("early_adopter_product_id", &f.early_adopter_product_id),
+            ("standard_product_id", &f.standard_product_id),
+        ] {
+            let t = v.trim();
+            if !t.is_empty() && t.len() <= 255 {
+                body.insert(k.into(), json!(t));
+            }
+        }
+        Ok::<_, String>(serde_json::Value::Object(body))
     })();
 
     let error = match validated {
@@ -2798,19 +2972,70 @@ pub async fn stripe_save(
     headers: HeaderMap,
     Form(f): Form<StripeForm>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let mut body = json!({ "app_tag": f.app_tag });
-    if !f.secret_key.is_empty() {
-        body["secret_key"] = json!(f.secret_key);
+    // BUNYIP-117: validate at the edge. app_tag is bounded (200 chars
+    // covers any sane Stripe metadata key); the two secrets are format-
+    // checked against their Stripe-documented prefixes when present
+    // (`sk_` / `rk_` for secret keys, `whsec_` for webhook secrets).
+    // Empty inputs leave the persisted value untouched (the API treats
+    // omission as "no change"). Replaces the prior `let _ = ...` that
+    // swallowed API rejections so the operator now sees an inline error.
+    use crate::handlers::validate;
+    let render_error = |err: &str| -> Response { stripe_error_page(&c, &user, err) };
+    let app_tag = match validate::trim_bounded_opt(&f.app_tag, "App tag", 200) {
+        Ok(Some(t)) => t.to_string(),
+        Ok(None) => String::new(),
+        Err(msg) => return render_error(&msg),
+    };
+    let secret_key = f.secret_key.trim();
+    if !secret_key.is_empty() {
+        if !(secret_key.starts_with("sk_") || secret_key.starts_with("rk_")) {
+            return render_error("Secret key must start with 'sk_' or 'rk_'");
+        }
+        if secret_key.len() > 255 {
+            return render_error("Secret key must be 255 characters or fewer");
+        }
     }
-    if !f.webhook_secret.is_empty() {
-        body["webhook_secret"] = json!(f.webhook_secret);
+    let webhook_secret = f.webhook_secret.trim();
+    if !webhook_secret.is_empty() {
+        if !webhook_secret.starts_with("whsec_") {
+            return render_error("Webhook secret must start with 'whsec_'");
+        }
+        if webhook_secret.len() > 255 {
+            return render_error("Webhook secret must be 255 characters or fewer");
+        }
     }
-    let _ = admin_api::update_stripe_config(&st.api, c.forward.as_deref(), body).await;
-    redirect_cookies("/admin/stripe", &c.set_cookies)
+    let mut body = json!({ "app_tag": app_tag });
+    if !secret_key.is_empty() {
+        body["secret_key"] = json!(secret_key);
+    }
+    if !webhook_secret.is_empty() {
+        body["webhook_secret"] = json!(webhook_secret);
+    }
+    match admin_api::update_stripe_config(&st.api, c.forward.as_deref(), body).await {
+        Ok(()) => redirect_cookies("/admin/stripe", &c.set_cookies),
+        Err(e) => render_error(&e.user_message()),
+    }
+}
+
+/// Re-render the Stripe settings page with the supplied inline error so a
+/// failed save surfaces context instead of the prior silent 200 + redirect.
+fn stripe_error_page(c: &AuthCtx, user: &User, err: &str) -> Response {
+    // We deliberately do NOT re-fetch the upstream Stripe config here -
+    // the failure path runs in a sync render context, mirroring the
+    // posture other admin save handlers take for their error surface.
+    let content = html! {
+        div class="space-y-6" {
+            div { h1 class="text-3xl font-bold" { "Stripe" } p class="mt-2 text-muted-foreground" { "Connect and configure Stripe billing." } }
+            (error_box(err))
+            p class="text-sm text-muted-foreground" { "Re-open the Stripe page to retry with the persisted values." }
+            a href="/admin/stripe" class=(button_class("default", "default", "")) { "Back to Stripe" }
+        }
+    };
+    admin_response(c, user, "/admin/stripe", "Stripe · Bunyip", content)
 }
 
 #[cfg(test)]
@@ -2874,7 +3099,7 @@ mod tests {
             container_name: "mokosh".into(),
             ..Default::default()
         };
-        let body = create_app_body(&f);
+        let body = create_app_body(&f).expect("create_app_body");
         assert_eq!(body["name"], json!("Mokosh"));
         assert_eq!(body["slug"], json!("mokosh"));
         assert_eq!(body["display_name"], json!("Mokosh"));
@@ -2898,8 +3123,25 @@ mod tests {
             is_hosted: "true".into(),
             ..Default::default()
         };
-        let body = create_app_body(&f);
+        let body = create_app_body(&f).expect("create_app_body");
         assert_eq!(body["forgejo_package"], json!("mokosh-cli"));
         assert_eq!(body["is_hosted"], json!(true));
+    }
+
+    #[test]
+    fn create_body_rejects_junk_slug_and_oversize_name() {
+        // BUNYIP-112: junk slug and over-length name surface as inline edge
+        // errors, not raw 500s on a DB cap or silent acceptance.
+        let mut f = CreateAppForm {
+            name: "Mokosh".into(),
+            slug: " $$$ ".into(),
+            display_name: "Mokosh".into(),
+            container_name: "mokosh".into(),
+            ..Default::default()
+        };
+        assert!(create_app_body(&f).is_err());
+        f.slug = "mokosh".into();
+        f.name = "a".repeat(300);
+        assert!(create_app_body(&f).is_err());
     }
 }
