@@ -2587,16 +2587,55 @@ pub async fn revoke_user_entitlement_h(
 // Tier settings
 // ===========================================================================
 
-pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
-    let cfg = admin_api::tier_config(&st.api, c.forward.as_deref())
-        .await
-        .ok();
+/// Upper bounds for tier-settings fields. Slots and trial days are i64 with no
+/// business meaning beyond these caps; rejecting larger input keeps obvious
+/// typos and overflow probes out of the config.
+const MAX_TIER_SLOTS: i64 = 1_000_000;
+const MAX_TRIAL_DAYS: i64 = 3_650;
 
-    let content = html! {
+/// Field values shown in the tier-settings form. Kept as strings so a failed
+/// save can echo back exactly what the admin typed, including junk that did not
+/// parse as an integer.
+struct TierFormValues {
+    lifetime_slots: String,
+    early_adopter_slots: String,
+    early_adopter_trial_days: String,
+    standard_trial_days: String,
+}
+
+impl TierFormValues {
+    fn from_config(c: &crate::api::types::TierConfigResponse) -> Self {
+        TierFormValues {
+            lifetime_slots: c.lifetime_slots.to_string(),
+            early_adopter_slots: c.early_adopter_slots.to_string(),
+            early_adopter_trial_days: c.early_adopter_trial_days.to_string(),
+            standard_trial_days: c.standard_trial_days.to_string(),
+        }
+    }
+}
+
+/// Parse one tier-settings field: require a base-10 integer in `[0, max]`.
+/// Returns a user-facing message naming the field on failure.
+fn parse_tier_field(raw: &str, label: &str, max: i64) -> Result<i64, String> {
+    let n: i64 = raw
+        .trim()
+        .parse()
+        .map_err(|_| format!("{label} must be a whole number."))?;
+    if n < 0 {
+        return Err(format!("{label} must be zero or greater."));
+    }
+    if n > max {
+        return Err(format!("{label} must be at most {max}."));
+    }
+    Ok(n)
+}
+
+fn tier_settings_content(
+    cfg: Option<&crate::api::types::TierConfigResponse>,
+    values: &TierFormValues,
+    error: Option<&str>,
+) -> Markup {
+    html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Tier Settings" } p class="mt-2 text-muted-foreground" { "Configure pricing tiers, trials, and slot limits." } }
             @match cfg {
@@ -2605,17 +2644,38 @@ pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Re
                     div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Tiers & Slots" } p class="text-sm text-muted-foreground" { (c.lifetime_slots_used) " lifetime and " (c.early_adopter_slots_used) " early-adopter slots used." } }
                     div class="p-6 pt-0" {
                         form method="post" action="/admin/tier-settings" class="space-y-4 max-w-md" {
-                            div class="space-y-2" { label class="text-sm font-medium" { "Lifetime slots" } input name="lifetime_slots" type="number" value=(c.lifetime_slots) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter slots" } input name="early_adopter_slots" type="number" value=(c.early_adopter_slots) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter trial days" } input name="early_adopter_trial_days" type="number" value=(c.early_adopter_trial_days) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Standard trial days" } input name="standard_trial_days" type="number" value=(c.standard_trial_days) class=(dashboard_input()); }
+                            @if let Some(e) = error { (error_box(e)) }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Lifetime slots" } input name="lifetime_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.lifetime_slots) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter slots" } input name="early_adopter_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.early_adopter_slots) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter trial days" } input name="early_adopter_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.early_adopter_trial_days) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Standard trial days" } input name="standard_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.standard_trial_days) class=(dashboard_input()); }
                             button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
                         }
                     }
                 },
             }
         }
+    }
+}
+
+pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
     };
+    let cfg = admin_api::tier_config(&st.api, c.forward.as_deref())
+        .await
+        .ok();
+    let values = cfg
+        .as_ref()
+        .map(TierFormValues::from_config)
+        .unwrap_or_else(|| TierFormValues {
+            lifetime_slots: String::new(),
+            early_adopter_slots: String::new(),
+            early_adopter_trial_days: String::new(),
+            standard_trial_days: String::new(),
+        });
+    let content = tier_settings_content(cfg.as_ref(), &values, None);
     admin_response(
         &c,
         &user,
@@ -2627,23 +2687,67 @@ pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Re
 
 #[derive(Deserialize)]
 pub struct TierForm {
-    pub lifetime_slots: i64,
-    pub early_adopter_slots: i64,
-    pub early_adopter_trial_days: i64,
-    pub standard_trial_days: i64,
+    #[serde(default)]
+    pub lifetime_slots: String,
+    #[serde(default)]
+    pub early_adopter_slots: String,
+    #[serde(default)]
+    pub early_adopter_trial_days: String,
+    #[serde(default)]
+    pub standard_trial_days: String,
 }
 pub async fn tier_settings_save(
     State(st): State<AppState>,
     headers: HeaderMap,
     Form(f): Form<TierForm>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let body = json!({ "lifetime_slots": f.lifetime_slots, "early_adopter_slots": f.early_adopter_slots, "early_adopter_trial_days": f.early_adopter_trial_days, "standard_trial_days": f.standard_trial_days });
-    let _ = admin_api::update_tier_config(&st.api, c.forward.as_deref(), body).await;
-    redirect_cookies("/admin/tier-settings", &c.set_cookies)
+
+    // Echo back exactly what was submitted (trimmed) if we have to re-render.
+    let values = TierFormValues {
+        lifetime_slots: f.lifetime_slots.trim().to_string(),
+        early_adopter_slots: f.early_adopter_slots.trim().to_string(),
+        early_adopter_trial_days: f.early_adopter_trial_days.trim().to_string(),
+        standard_trial_days: f.standard_trial_days.trim().to_string(),
+    };
+
+    // Validate every field before calling the API, then surface any API-side
+    // rejection instead of discarding it. `?` short-circuits on the first bad
+    // field so the message names the offending input.
+    let validated = (|| {
+        Ok::<_, String>(json!({
+            "lifetime_slots": parse_tier_field(&f.lifetime_slots, "Lifetime slots", MAX_TIER_SLOTS)?,
+            "early_adopter_slots": parse_tier_field(&f.early_adopter_slots, "Early-adopter slots", MAX_TIER_SLOTS)?,
+            "early_adopter_trial_days": parse_tier_field(&f.early_adopter_trial_days, "Early-adopter trial days", MAX_TRIAL_DAYS)?,
+            "standard_trial_days": parse_tier_field(&f.standard_trial_days, "Standard trial days", MAX_TRIAL_DAYS)?,
+        }))
+    })();
+
+    let error = match validated {
+        Ok(body) => {
+            match admin_api::update_tier_config(&st.api, c.forward.as_deref(), body).await {
+                Ok(()) => return redirect_cookies("/admin/tier-settings", &c.set_cookies),
+                Err(e) => e.user_message(),
+            }
+        }
+        Err(msg) => msg,
+    };
+
+    // Re-render the form inline with the error and the submitted values.
+    let cfg = admin_api::tier_config(&st.api, c.forward.as_deref())
+        .await
+        .ok();
+    let content = tier_settings_content(cfg.as_ref(), &values, Some(&error));
+    admin_response(
+        &c,
+        &user,
+        "/admin/tier-settings",
+        "Tier settings · Bunyip",
+        content,
+    )
 }
 
 // ===========================================================================
