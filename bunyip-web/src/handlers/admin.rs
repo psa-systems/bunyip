@@ -676,9 +676,25 @@ pub async fn memberships(
                 div class="p-6 pt-0" {
                     div class="divide-y" {
                         @for m in &items {
-                            div class="flex items-center justify-between py-3" {
-                                div { p class="font-medium" { (m.user_email) } p class="text-xs text-muted-foreground" { (m.subscription_tier) } }
-                                (badge("outline", &m.status))
+                            @let has_override = m.subscription_override_by.is_some();
+                            div class="flex items-center justify-between py-3 gap-4" {
+                                div {
+                                    p class="font-medium flex items-center gap-2" { (m.user_email) @if has_override { (badge("default", "Admin override")) } }
+                                    p class="text-xs text-muted-foreground" { (m.subscription_tier) }
+                                }
+                                div class="flex items-center gap-2 flex-wrap" {
+                                    (badge("outline", &m.status))
+                                    a href=(format!("/admin/users/{}", m.user_id)) class=(button_class("outline", "sm", "")) { "View" }
+                                    @if has_override {
+                                        form method="post" action=(format!("/admin/memberships/{}/revoke", m.user_id)) onsubmit="return confirm('Revoke this admin-granted membership? The user returns to the standard tier with no active subscription.')" {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Revoke" }
+                                        }
+                                    } @else {
+                                        form method="post" action=(format!("/admin/memberships/{}/grant", m.user_id)) onsubmit="return confirm('Grant a free admin-override membership to this user?')" {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Grant" }
+                                        }
+                                    }
+                                }
                             }
                         }
                         @if items.is_empty() { p class="text-center text-muted-foreground py-8" { "No memberships found" } }
@@ -695,6 +711,38 @@ pub async fn memberships(
         "Memberships · Bunyip",
         content,
     )
+}
+
+/// POST /admin/memberships/{user_id}/grant - grant a free admin-override
+/// membership (sets `subscription_override_by`). Forwards to the existing API
+/// endpoint; redirects back to the listing. BUNYIP-118.
+pub async fn membership_grant(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::grant_membership(&st.api, c.forward.as_deref(), &user_id).await;
+    redirect_cookies("/admin/memberships", &c.set_cookies)
+}
+
+/// POST /admin/memberships/{user_id}/revoke - revoke an admin-override
+/// membership (resets tier to standard, clears `subscription_override_by`).
+/// BUNYIP-118.
+pub async fn membership_revoke(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::revoke_membership(&st.api, c.forward.as_deref(), &user_id).await;
+    redirect_cookies("/admin/memberships", &c.set_cookies)
 }
 
 // ===========================================================================

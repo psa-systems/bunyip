@@ -166,6 +166,14 @@ async fn main() {
             axum::routing::post(handlers::admin::user_revoke_lifetime),
         )
         .route("/admin/memberships", get(handlers::admin::memberships))
+        .route(
+            "/admin/memberships/:user_id/grant",
+            axum::routing::post(handlers::admin::membership_grant),
+        )
+        .route(
+            "/admin/memberships/:user_id/revoke",
+            axum::routing::post(handlers::admin::membership_revoke),
+        )
         .route("/admin/feedback", get(handlers::admin::feedback))
         .route(
             "/admin/feedback/export",

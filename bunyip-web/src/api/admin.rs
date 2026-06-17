@@ -236,6 +236,41 @@ pub async fn memberships(
     parse(api.get(&path, cookie).await?)
 }
 
+/// Grant an admin-override membership (free tier, `subscription_override_by` set
+/// to the acting admin). Wraps POST /admin/memberships/grant. BUNYIP-118.
+pub async fn grant_membership(
+    api: &Api,
+    cookie: Option<&str>,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            "/admin/memberships/grant",
+            cookie,
+            Some(json!({ "user_id": user_id })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// Revoke an admin-override membership: cancels status, resets tier to standard
+/// and clears `subscription_override_by`. Wraps POST /admin/memberships/revoke.
+/// BUNYIP-118.
+pub async fn revoke_membership(
+    api: &Api,
+    cookie: Option<&str>,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            "/admin/memberships/revoke",
+            cookie,
+            Some(json!({ "user_id": user_id })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
 // --- applications -----------------------------------------------------------
 
 pub async fn applications(
