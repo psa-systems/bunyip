@@ -485,23 +485,35 @@ impl UserRepository {
         Ok(user)
     }
 
-    /// List users with pagination
+    /// List users with pagination.
+    ///
+    /// `active` selects which side of the soft-delete boundary to return:
+    /// `None`/`Some(true)` lists live accounts (the default admin view),
+    /// `Some(false)` lists suspended (soft-deleted) accounts so an admin can
+    /// find and reactivate them (BUNYIP-120).
     pub async fn list_paginated(
         pool: &PgPool,
         page: i32,
         per_page: i32,
         search: Option<&str>,
         status_filter: Option<MembershipStatus>,
+        active: Option<bool>,
     ) -> Result<(Vec<User>, i64), AppError> {
         let offset = (page - 1) * per_page;
         let search_pattern = search.map(|s| format!("%{}%", s));
 
+        let deleted_clause = if active == Some(false) {
+            " WHERE deleted_at IS NOT NULL"
+        } else {
+            " WHERE deleted_at IS NULL"
+        };
+
         // Build the filter clause once on both the page query and the count
         // query via QueryBuilder so the placeholders always match the bindings
         // (the previous hand-numbered `$3`/`$4` count query bound `$1`/`$2`).
-        let mut query = QueryBuilder::new("SELECT * FROM users WHERE deleted_at IS NULL");
+        let mut query = QueryBuilder::new(format!("SELECT * FROM users{deleted_clause}"));
         let mut count_query =
-            QueryBuilder::new("SELECT COUNT(*) FROM users WHERE deleted_at IS NULL");
+            QueryBuilder::new(format!("SELECT COUNT(*) FROM users{deleted_clause}"));
 
         if let Some(pattern) = &search_pattern {
             query

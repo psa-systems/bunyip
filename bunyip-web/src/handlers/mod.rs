@@ -3,6 +3,10 @@ pub mod auth_pages;
 pub mod content;
 pub mod dashboard;
 pub mod public;
+/// BUNYIP-112/113/115/117: shared web-edge field validators that bound and
+/// shape user input before it hits the API. Replaces per-form ad-hoc trims
+/// and silent `unwrap_or(0)` numeric coercions.
+pub mod validate;
 
 use axum::http::HeaderMap;
 use axum::response::Response;
