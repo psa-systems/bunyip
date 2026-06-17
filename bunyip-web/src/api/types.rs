@@ -501,6 +501,20 @@ pub struct TierConfigResponse {
     pub free_price_id: Option<String>,
     pub early_adopter_price_id: Option<String>,
     pub standard_price_id: Option<String>,
+    // BUNYIP-122: surface the Stripe product IDs that match the price IDs
+    // above so the admin tier-settings form can read + render them. The
+    // bunyip-api side already returns these fields (see
+    // bunyip-api/src/handlers/admin.rs:1577 UpdateTierConfigRequest and
+    // crates/bunyip-domain/src/models/tier.rs:35 TierConfigResponse).
+    // Note the naming asymmetry the model carries: `free_price_id` /
+    // `lifetime_product_id` both refer to the same tier (the "free" /
+    // "lifetime" plan); we mirror it verbatim rather than re-aliasing.
+    #[serde(default)]
+    pub lifetime_product_id: Option<String>,
+    #[serde(default)]
+    pub early_adopter_product_id: Option<String>,
+    #[serde(default)]
+    pub standard_product_id: Option<String>,
     pub source: String,
     pub lifetime_slots_used: i64,
     pub early_adopter_slots_used: i64,
