@@ -999,6 +999,14 @@ pub async fn settings(
     // Active sessions (BUNYIP-137). A failure here must not break the rest of
     // the settings page, so fall back to an empty list.
     let sessions = calls::list_sessions(&st.api, fwd).await.unwrap_or_default();
+    // Trusted devices (BUNYIP-138). Only 2FA users have any; fetch lazily.
+    let trusted_devices = if twofa_enabled {
+        auth_api::list_trusted_devices(&st.api, fwd)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
 
     let content = html! {
         div class="space-y-6" {
@@ -1037,6 +1045,7 @@ pub async fn settings(
                     // is still in `services::auth::request_email_change`.
                     div class="space-y-2" { label class="text-sm font-medium" { "New Email Address" } input name="new_email" type="email" value="" autocomplete="off" maxlength="254" required placeholder="Enter your new email" class=(crate::handlers::dashboard_input()); }
                     div class="space-y-2" { label class="text-sm font-medium" { "Current Password" } input name="current_password" type="password" autocomplete="off" required placeholder="Enter your current password" class=(crate::handlers::dashboard_input()); }
+                    @if twofa_enabled { div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
                     button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-teal-500 text-white border-0")) { "Change Email" }
                 }
             }))
@@ -1050,6 +1059,7 @@ pub async fn settings(
                     div class="space-y-2" { label class="text-sm font-medium" { "Current Password" } input name="current_password" type="password" autocomplete="current-password" class=(crate::handlers::dashboard_input()); }
                     div class="space-y-2" { label class="text-sm font-medium" { "New Password" } input name="new_password" type="password" autocomplete="new-password" class=(crate::handlers::dashboard_input()); }
                     div class="space-y-2" { label class="text-sm font-medium" { "Confirm Password" } input name="confirm" type="password" autocomplete="new-password" class=(crate::handlers::dashboard_input()); }
+                    @if twofa_enabled { div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
                     button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Update Password" }
                 }
             }))
@@ -1076,6 +1086,11 @@ pub async fn settings(
 
             // Active sessions (BUNYIP-137)
             (settings_card("key", "from-indigo-500 to-primary", "Active Sessions", sessions_card_body(&sessions)))
+
+            // Trusted devices (BUNYIP-138). Only meaningful with 2FA on.
+            @if twofa_enabled {
+                (settings_card("shield-check", "from-teal-500 to-primary", "Trusted Devices", trusted_devices_card_body(&trusted_devices)))
+            }
 
             // Danger zone
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-red-200 dark:border-red-900" {
@@ -1210,11 +1225,61 @@ pub async fn settings_revoke_other_sessions(
     }
 }
 
+/// Body of the "Trusted Devices" card (BUNYIP-138): devices that skip the TOTP
+/// prompt at login, each with a revoke action.
+fn trusted_devices_card_body(devices: &[crate::api::types::TrustedDeviceInfo]) -> Markup {
+    html! {
+        p class="text-sm text-muted-foreground mb-4" { "Devices that skip the two-factor prompt when you sign in. Revoke any you do not recognize." }
+        @if devices.is_empty() {
+            p class="text-sm text-muted-foreground" { "No trusted devices." }
+        } @else {
+            ul class="space-y-3" {
+                @for d in devices {
+                    li class="flex items-center justify-between gap-4 rounded-lg border border-border/50 p-4" {
+                        div class="min-w-0" {
+                            p class="font-medium truncate" { (d.label.as_deref().unwrap_or("Unknown device")) }
+                            p class="text-sm text-muted-foreground" {
+                                @if let Some(ip) = &d.ip_address { (ip) " · " }
+                                "added " (time_ago(&d.created_at))
+                            }
+                        }
+                        form method="post" action=(format!("/settings/trusted-devices/{}/revoke", urlenc(&d.id))) {
+                            button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("trash", "mr-2 h-4 w-4")) "Revoke" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// POST /settings/trusted-devices/{id}/revoke - forget a trusted device.
+pub async fn settings_revoke_trusted_device(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match auth_api::revoke_trusted_device(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => redirect_cookies("/settings?ok=Trusted+device+revoked", &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct EmailChangeForm {
     pub new_email: String,
     #[serde(default)]
     pub current_password: String,
+    /// TOTP/recovery code, required by the API when 2FA is on (BUNYIP-138).
+    #[serde(default)]
+    pub totp_code: String,
 }
 pub async fn settings_email(
     State(st): State<AppState>,
@@ -1247,6 +1312,7 @@ pub async fn settings_email(
         c.forward.as_deref(),
         f.new_email.trim(),
         &f.current_password,
+        f.totp_code.trim(),
     )
     .await
     {
@@ -1271,6 +1337,9 @@ pub struct PasswordChangeForm {
     pub current_password: String,
     pub new_password: String,
     pub confirm: String,
+    /// TOTP/recovery code, required by the API when 2FA is on (BUNYIP-138).
+    #[serde(default)]
+    pub totp_code: String,
 }
 pub async fn settings_password(
     State(st): State<AppState>,
@@ -1294,6 +1363,7 @@ pub async fn settings_password(
         c.forward.as_deref(),
         &f.current_password,
         &f.new_password,
+        f.totp_code.trim(),
     )
     .await
     {

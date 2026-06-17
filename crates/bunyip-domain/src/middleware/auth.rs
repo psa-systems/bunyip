@@ -359,6 +359,32 @@ impl AuthCookies {
         builder.finish()
     }
 
+    /// Name of the trusted-device cookie (BUNYIP-138). Holds the opaque secret
+    /// matched (hashed) against `trusted_devices.token_hash` to skip the login
+    /// TOTP prompt for a remembered device.
+    pub const TRUSTED_DEVICE_COOKIE: &'static str = "bunyip_trusted_device";
+
+    /// Create the trusted-device cookie. Max-Age mirrors the 30-day
+    /// `trusted_devices.expires_at` set at creation.
+    pub fn trusted_device(
+        token: &str,
+        secure: bool,
+        cookie_domain: Option<&str>,
+    ) -> Cookie<'static> {
+        let mut builder = Cookie::build(Self::TRUSTED_DEVICE_COOKIE, token.to_owned())
+            .path("/")
+            .http_only(true)
+            .secure(secure)
+            .same_site(SameSite::Lax)
+            .max_age(actix_web::cookie::time::Duration::days(30));
+
+        if let Some(domain) = cookie_domain {
+            builder = builder.domain(domain.to_owned());
+        }
+
+        builder.finish()
+    }
+
     /// Name of the OIDC OP session cookie. Holds the opaque `op_sessions.sid`
     /// value that `/oauth2/authorize` validates server-side.
     pub const OP_SESSION_COOKIE: &'static str = "bunyip_op_session";

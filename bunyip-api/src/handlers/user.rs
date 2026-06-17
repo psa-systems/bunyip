@@ -10,8 +10,12 @@ use tokio;
 
 use crate::errors::AppError;
 use crate::middleware::{extract_client_ip, AuthCookies, AuthenticatedUser};
-use crate::models::{AuditAction, CreateAuditLog, SubscriptionTier, UserResponse};
-use crate::repositories::{AuditLogRepository, TokenRepository, UserRepository};
+use crate::models::{
+    AuditAction, CreateAuditLog, SubscriptionTier, TrustedDeviceInfo, UserResponse,
+};
+use crate::repositories::{
+    AuditLogRepository, TokenRepository, TrustedDeviceRepository, UserRepository,
+};
 use crate::responses::{get_request_id, success, success_no_data};
 use crate::services::{AuthService, EmailService, PasswordService, StripeService, TotpService};
 use crate::validation::validate_email;
@@ -28,6 +32,9 @@ pub struct DeleteAccountRequest {
 pub struct ChangePasswordRequest {
     pub current_password: String,
     pub new_password: String,
+    /// Fresh TOTP/recovery code, required when the account has 2FA (BUNYIP-138).
+    #[serde(default)]
+    pub totp_code: Option<String>,
 }
 
 /// Request body for requesting email change
@@ -35,6 +42,9 @@ pub struct ChangePasswordRequest {
 pub struct RequestEmailChangeBody {
     pub new_email: String,
     pub current_password: Option<String>,
+    /// Fresh TOTP/recovery code, required when the account has 2FA (BUNYIP-138).
+    #[serde(default)]
+    pub totp_code: Option<String>,
 }
 
 /// Request body for confirming email change
@@ -71,12 +81,23 @@ pub async fn get_current_user(
 pub async fn change_password(
     req: HttpRequest,
     user: AuthenticatedUser,
+    pool: web::Data<PgPool>,
     auth_service: web::Data<Arc<AuthService>>,
     email_service: web::Data<Arc<EmailService>>,
+    totp_service: web::Data<Arc<TotpService>>,
     body: web::Json<ChangePasswordRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let ip_address = extract_client_ip(&req);
+
+    // Sensitive op: require a fresh TOTP code when 2FA is on (BUNYIP-138).
+    crate::handlers::require_totp_if_enabled(
+        &pool,
+        &totp_service,
+        user.0.sub,
+        body.totp_code.as_deref(),
+    )
+    .await?;
 
     auth_service
         .change_password(
@@ -213,8 +234,10 @@ pub async fn revoke_other_sessions(
 pub async fn request_email_change(
     req: HttpRequest,
     user: AuthenticatedUser,
+    pool: web::Data<PgPool>,
     auth_service: web::Data<Arc<AuthService>>,
     email_service: web::Data<Arc<EmailService>>,
+    totp_service: web::Data<Arc<TotpService>>,
     body: web::Json<RequestEmailChangeBody>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -222,6 +245,15 @@ pub async fn request_email_change(
 
     // Validate email format
     validate_email(&body.new_email)?;
+
+    // Sensitive op: require a fresh TOTP code when 2FA is on (BUNYIP-138).
+    crate::handlers::require_totp_if_enabled(
+        &pool,
+        &totp_service,
+        user.0.sub,
+        body.totp_code.as_deref(),
+    )
+    .await?;
 
     let (_old_email, token) = auth_service
         .request_email_change(
@@ -491,4 +523,43 @@ pub async fn delete_account(
     }
 
     Ok(response)
+}
+
+/// GET /v1/users/me/trusted-devices
+/// List the caller's active trusted devices (BUNYIP-138).
+pub async fn list_trusted_devices(
+    req: HttpRequest,
+    user: AuthenticatedUser,
+    pool: web::Data<PgPool>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let devices = TrustedDeviceRepository::find_user_devices(&pool, user.0.sub).await?;
+    let out: Vec<TrustedDeviceInfo> = devices.into_iter().map(Into::into).collect();
+    Ok(success(serde_json::json!({ "devices": out }), request_id))
+}
+
+/// POST /v1/users/me/trusted-devices/{id}/revoke
+/// Revoke a single trusted device. Only the caller's own devices may be
+/// revoked; revoking re-arms the TOTP prompt on that device.
+pub async fn revoke_trusted_device(
+    req: HttpRequest,
+    user: AuthenticatedUser,
+    path: web::Path<uuid::Uuid>,
+    pool: web::Data<PgPool>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let id = path.into_inner();
+
+    let device = TrustedDeviceRepository::find_by_id(&pool, id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Trusted device"))?;
+
+    // Ownership guard: return 404 (not 403) for a foreign id so it is not
+    // confirmed to exist.
+    if device.user_id != user.0.sub {
+        return Err(AppError::not_found("Trusted device"));
+    }
+
+    TrustedDeviceRepository::revoke(&pool, id).await?;
+    Ok(success_no_data(request_id))
 }

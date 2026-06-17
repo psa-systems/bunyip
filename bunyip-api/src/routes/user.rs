@@ -34,6 +34,15 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route(
                 "/me/sessions/{session_id}",
                 web::delete().to(handlers::revoke_session),
+            )
+            // Trusted devices (BUNYIP-138)
+            .route(
+                "/me/trusted-devices",
+                web::get().to(handlers::list_trusted_devices),
+            )
+            .route(
+                "/me/trusted-devices/{id}/revoke",
+                web::post().to(handlers::revoke_trusted_device),
             ),
     );
 }

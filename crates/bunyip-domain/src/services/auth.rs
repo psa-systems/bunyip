@@ -14,10 +14,12 @@ use crate::errors::AppError;
 use crate::models::{
     AuditAction, CreateAdminInvite, CreateAuditLog, CreateEmailChangeRequest,
     CreateEmailVerificationToken, CreateMagicLinkToken, CreatePasswordResetToken,
-    CreateRefreshToken, CreateUser, SubscriptionTier, User, UserResponse, UserRole,
+    CreateRefreshToken, CreateTrustedDevice, CreateUser, SubscriptionTier, User, UserResponse,
+    UserRole,
 };
 use crate::repositories::{
-    AuditLogRepository, InviteRepository, TokenRepository, TotpRepository, UserRepository,
+    AuditLogRepository, InviteRepository, TokenRepository, TotpRepository, TrustedDeviceRepository,
+    UserRepository,
 };
 use crate::services::{JwtService, PasswordService};
 
@@ -98,6 +100,20 @@ fn session_idle_expired(role: &str, last_active: DateTime<Utc>, now: DateTime<Ut
         Some(idle) => now - last_active > idle,
         None => false,
     }
+}
+
+// --- trusted-device policy (BUNYIP-138) -------------------------------------
+
+/// How long a remembered device may skip the login TOTP prompt. Using the
+/// device does not extend this; the deadline is fixed at creation.
+const TRUSTED_DEVICE_TTL_DAYS: i64 = 30;
+
+/// Whether a presented trusted device permits skipping the login TOTP prompt.
+/// Pure decision (unit-testable): only subscribers may skip, and only when a
+/// valid (non-revoked, non-expired, owner-matched) device row was found.
+/// Admins always complete full 2FA.
+fn trusted_device_allows_skip(role: &str, has_valid_device: bool) -> bool {
+    has_valid_device && role == UserRole::Subscriber.as_str()
 }
 
 /// Authentication service
@@ -187,6 +203,7 @@ impl AuthService {
         password: String,
         device_info: Option<String>,
         ip_address: Option<IpAddr>,
+        trusted_device_token: Option<String>,
     ) -> Result<LoginResult, AppError> {
         // Find user
         let user = UserRepository::find_by_email(&self.pool, &email)
@@ -214,6 +231,40 @@ impl AuthService {
             let has_verified_totp = totp_record.map(|r| r.verified).unwrap_or(false);
 
             if has_verified_totp {
+                // Trusted-device skip (BUNYIP-138): the password has already
+                // been verified above; a subscriber presenting a valid trusted-
+                // device cookie may skip the SECOND factor only. The opaque
+                // cookie value is hashed and matched to a non-revoked, non-
+                // expired, owner-matched row. Admins never skip.
+                if let Some(token) = trusted_device_token.as_deref() {
+                    let hash = self.jwt.hash_token(token);
+                    if let Some(device) =
+                        TrustedDeviceRepository::find_valid_by_hash(&self.pool, &hash).await?
+                    {
+                        if device.user_id == user.id && trusted_device_allows_skip(&user.role, true)
+                        {
+                            TrustedDeviceRepository::touch_last_used(&self.pool, device.id).await?;
+                            let tokens = self
+                                .create_tokens(&user, device_info.clone(), ip_address, None)
+                                .await?;
+                            UserRepository::update_last_login(&self.pool, user.id).await?;
+                            let ip = ip_address.map(IpNetwork::from);
+                            AuditLogRepository::create(
+                                &self.pool,
+                                CreateAuditLog::new(AuditAction::UserLogin)
+                                    .with_actor(user.id, &user.email, &user.role)
+                                    .with_ip(ip)
+                                    .with_metadata(serde_json::json!({
+                                        "method": "trusted_device",
+                                        "device_info": device_info,
+                                    })),
+                            )
+                            .await?;
+                            return Ok(LoginResult::Success(tokens, UserResponse::from(user)));
+                        }
+                    }
+                }
+
                 let challenge_token = self.jwt.create_2fa_challenge_token(user.id)?;
                 return Ok(LoginResult::TwoFactorRequired { challenge_token });
             }
@@ -392,6 +443,8 @@ impl AuthService {
         ip_address: Option<IpAddr>,
     ) -> Result<(), AppError> {
         TokenRepository::revoke_all_user_refresh_tokens(&self.pool, user_id).await?;
+        // "Log out everywhere" also drops trusted devices (BUNYIP-138).
+        TrustedDeviceRepository::revoke_all_for_user(&self.pool, user_id).await?;
 
         // Get user for audit log
         if let Some(user) = UserRepository::find_by_id(&self.pool, user_id).await? {
@@ -555,12 +608,18 @@ impl AuthService {
     }
 
     /// Complete 2FA login after challenge token + TOTP/recovery code verification
+    ///
+    /// When `trust_device` is set and the account is a subscriber, a trusted
+    /// device is created and its opaque secret is returned as the third tuple
+    /// element so the handler can set the `bunyip_trusted_device` cookie. It is
+    /// `None` for admins (who never skip 2FA) and when the flag is unset.
     pub async fn complete_2fa_login(
         &self,
         challenge_token: &str,
         device_info: Option<String>,
         ip_address: Option<IpAddr>,
-    ) -> Result<(AuthTokens, UserResponse), AppError> {
+        trust_device: bool,
+    ) -> Result<(AuthTokens, UserResponse, Option<String>), AppError> {
         // Verify challenge token
         let claims = self.jwt.verify_2fa_challenge_token(challenge_token)?;
         let user_id = claims.sub;
@@ -579,6 +638,16 @@ impl AuthService {
             .create_tokens(&user, device_info.clone(), ip_address, None)
             .await?;
 
+        // Issue a trusted device only for subscribers who opted in (BUNYIP-138).
+        let trusted_token = if trust_device && trusted_device_allows_skip(&user.role, true) {
+            Some(
+                self.issue_trusted_device(user.id, device_info.clone(), ip_address)
+                    .await?,
+            )
+        } else {
+            None
+        };
+
         // Update last login
         UserRepository::update_last_login(&self.pool, user.id).await?;
 
@@ -593,7 +662,41 @@ impl AuthService {
         )
         .await?;
 
-        Ok((tokens, UserResponse::from(user)))
+        Ok((tokens, UserResponse::from(user), trusted_token))
+    }
+
+    /// Create a trusted device for a user and return the opaque cookie secret
+    /// (the caller sets it as the `bunyip_trusted_device` cookie). Only the
+    /// SHA-256 hash of the secret is stored (BUNYIP-138).
+    pub async fn issue_trusted_device(
+        &self,
+        user_id: Uuid,
+        label: Option<String>,
+        ip_address: Option<IpAddr>,
+    ) -> Result<String, AppError> {
+        let token = generate_secure_token(32);
+        let token_hash = self.jwt.hash_token(&token);
+        let expires_at = Utc::now() + Duration::days(TRUSTED_DEVICE_TTL_DAYS);
+        let ip = ip_address.map(IpNetwork::from);
+        TrustedDeviceRepository::create(
+            &self.pool,
+            CreateTrustedDevice {
+                user_id,
+                token_hash,
+                label,
+                ip_address: ip,
+                expires_at,
+            },
+        )
+        .await?;
+        Ok(token)
+    }
+
+    /// Revoke all of a user's trusted devices. Called on credential and 2FA
+    /// changes so the TOTP prompt is re-armed on every device.
+    pub async fn revoke_trusted_devices(&self, user_id: Uuid) -> Result<(), AppError> {
+        TrustedDeviceRepository::revoke_all_for_user(&self.pool, user_id).await?;
+        Ok(())
     }
 
     /// Request password reset
@@ -705,6 +808,8 @@ impl AuthService {
 
         // Revoke all refresh tokens (logout everywhere)
         TokenRepository::revoke_all_user_refresh_tokens(&self.pool, user.id).await?;
+        // A password reset also drops trusted devices (BUNYIP-138).
+        TrustedDeviceRepository::revoke_all_for_user(&self.pool, user.id).await?;
 
         // Audit log
         let ip = ip_address.map(IpNetwork::from);
@@ -757,6 +862,8 @@ impl AuthService {
         // password logs the user out everywhere, matching the password-reset
         // path. revoke_all_user_refresh_tokens unifies both surfaces.
         TokenRepository::revoke_all_user_refresh_tokens(&self.pool, user_id).await?;
+        // A password change also drops trusted devices (BUNYIP-138).
+        TrustedDeviceRepository::revoke_all_for_user(&self.pool, user_id).await?;
 
         // Audit log
         let ip = ip_address.map(IpNetwork::from);
@@ -1398,6 +1505,16 @@ mod tests {
         // 10 minutes idle is still within the window.
         let fresh = now - Duration::minutes(10);
         assert!(!session_idle_expired("admin", fresh, now));
+    }
+
+    #[test]
+    fn trusted_device_skip_only_for_subscriber_with_valid_device() {
+        // Subscriber with a valid device skips; admins never skip; no valid
+        // device never skips (BUNYIP-138).
+        assert!(trusted_device_allows_skip("subscriber", true));
+        assert!(!trusted_device_allows_skip("admin", true));
+        assert!(!trusted_device_allows_skip("subscriber", false));
+        assert!(!trusted_device_allows_skip("admin", false));
     }
 
     #[test]

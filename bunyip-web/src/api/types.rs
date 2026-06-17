@@ -57,6 +57,23 @@ pub struct SessionList {
     pub sessions: Vec<SessionInfo>,
 }
 
+/// One trusted device (BUNYIP-138). Mirrors the API's `TrustedDeviceInfo`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrustedDeviceInfo {
+    pub id: String,
+    pub label: Option<String>,
+    pub ip_address: Option<String>,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub expires_at: String,
+}
+
+/// Envelope for `GET /v1/users/me/trusted-devices`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrustedDeviceList {
+    pub devices: Vec<TrustedDeviceInfo>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct User {
     pub id: String,
