@@ -304,6 +304,12 @@ pub async fn user_role(
         Ok(v) => v,
         Err(r) => return r,
     };
+    // Only the known roles are accepted; reject anything else (the UI uses a
+    // dropdown, so an arbitrary role string can only come from a crafted
+    // request) before forwarding it to the API (BUNYIP-114).
+    if !matches!(f.role.as_str(), "admin" | "subscriber") {
+        return redirect_cookies("/admin/users", &c.set_cookies);
+    }
     let _ = admin_api::update_user_role(&st.api, c.forward.as_deref(), &id, &f.role).await;
     redirect_cookies("/admin/users", &c.set_cookies)
 }
