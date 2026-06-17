@@ -32,6 +32,12 @@ chrono = { workspace = true }
 # Percent-encode the OIDC return URL when shuttling it through the 2FA hop.
 urlencoding = "2"
 
+# BUNYIP-112: parse + validate URL fields at the web edge (icon_url,
+# source_code_url, health_check_url, webhook_url) so malformed values never
+# reach the API or render as broken `href`s. Already in tree transitively via
+# reqwest -> url; declared here to use it directly.
+url = "2"
+
 # Server-side QR rendering (otpauth URI -> inline SVG) for 2FA setup.
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 

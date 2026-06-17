@@ -130,6 +130,18 @@ async fn main() {
             axum::routing::post(handlers::admin::user_role),
         )
         .route(
+            "/admin/users/:id/email",
+            axum::routing::post(handlers::admin::user_email),
+        )
+        .route(
+            "/admin/users/:id/email/verify",
+            axum::routing::post(handlers::admin::user_verify_email),
+        )
+        .route(
+            "/admin/users/:id/two-factor/reset",
+            axum::routing::post(handlers::admin::user_reset_2fa),
+        )
+        .route(
             "/admin/users/:id/delete",
             axum::routing::post(handlers::admin::user_delete),
         )
