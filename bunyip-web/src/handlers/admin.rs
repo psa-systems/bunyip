@@ -1371,35 +1371,36 @@ fn feedback_detail_view(f: &AdminFeedbackDetail) -> Markup {
                             "No email on record - the submitter did not provide an address. Your response will be saved but cannot be delivered."
                         }
                     }
-                    @match f.admin_response.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                        Some(resp) => {
-                            // Already responded: lock the box and surface
-                            // when. A future "edit response" affordance can
-                            // ship as its own change.
-                            p class="text-sm whitespace-pre-wrap" { (resp) }
-                            @if let Some(at) = &f.responded_at {
-                                p class="text-xs text-muted-foreground" { "Sent " (relative_time(at)) }
+                    // BUNYIP-123: a sent response is editable and
+                    // resendable rather than one-shot. The respond route
+                    // upserts admin_response, so re-submitting the
+                    // (pre-filled) form overwrites the stored reply and,
+                    // when an email is on record, re-delivers it - letting
+                    // an admin fix a typo or wrong reply. When a response
+                    // already exists, show when it was last sent above the
+                    // form and pre-fill the textarea with the current text.
+                    // No-email guard: `respond_to_feedback` on the API side
+                    // just skips the email send when the submitter left no
+                    // address, so the form does NOT need to gate on
+                    // email_present here. The status update still happens
+                    // either way. On success the POST bounces back to this
+                    // same detail page with a `?toast_ok=` confirmation.
+                    @let existing_response = f.admin_response.as_deref().map(str::trim).filter(|s| !s.is_empty());
+                    @if existing_response.is_some() {
+                        @if let Some(at) = &f.responded_at {
+                            p class="text-xs text-muted-foreground" { "Sent " (relative_time(at)) }
+                        }
+                    }
+                    form method="post" action=(format!("/admin/feedback/{}/respond", f.id)) class="space-y-3" {
+                        div class="grid gap-2" {
+                            label for="response" class="text-sm font-medium" { "Reply to the submitter" }
+                            textarea id="response" name="response" rows="6" required placeholder="Type a response. The submitter will receive this verbatim by email." class="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" {
+                                @if let Some(resp) = existing_response { (resp) }
                             }
                         }
-                        None => {
-                            // No reply yet: render the response form. The
-                            // submit-target POSTs to the BFF respond route
-                            // and bounces back to this same detail page on
-                            // success (with a `?toast_ok=` confirmation).
-                            // No-email guard: `respond_to_feedback` on the
-                            // API side just skips the email send when the
-                            // submitter did not leave an address, so the
-                            // form does NOT need to gate on email_present
-                            // here. The status update still happens either
-                            // way.
-                            form method="post" action=(format!("/admin/feedback/{}/respond", f.id)) class="space-y-3" {
-                                div class="grid gap-2" {
-                                    label for="response" class="text-sm font-medium" { "Reply to the submitter" }
-                                    textarea id="response" name="response" rows="6" required placeholder="Type a response. The submitter will receive this verbatim by email." class="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" {}
-                                }
-                                div class="flex justify-end" {
-                                    button type="submit" class=(button_class("default", "default", "gap-2")) { "Send response" }
-                                }
+                        div class="flex justify-end" {
+                            button type="submit" class=(button_class("default", "default", "gap-2")) {
+                                @if existing_response.is_some() { "Resend response" } @else { "Send response" }
                             }
                         }
                     }
