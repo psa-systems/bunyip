@@ -322,10 +322,10 @@ fn feedback_form(submitted: bool, error: Option<&str>, page_path: Option<&str>) 
                         // form-handler reads via axum's Multipart extractor.
                         form method="post" action="/feedback" enctype="multipart/form-data" class="space-y-5" {
                             div class="grid gap-5 md:grid-cols-2" {
-                                div class="grid gap-2" { label for="name" class="text-sm font-medium" { "Name" } input id="name" name="name" placeholder="Optional" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"; }
-                                div class="grid gap-2" { label for="email" class="text-sm font-medium" { "Email" } input id="email" name="email" type="email" placeholder="you@example.com" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"; }
+                                div class="grid gap-2" { label for="name" class="text-sm font-medium" { "Name" } input id="name" name="name" maxlength="100" placeholder="Optional" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"; }
+                                div class="grid gap-2" { label for="email" class="text-sm font-medium" { "Email" } input id="email" name="email" type="email" maxlength="254" placeholder="you@example.com" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"; }
                             }
-                            div class="grid gap-2" { label for="subject" class="text-sm font-medium" { "Subject" } input id="subject" name="subject" placeholder="Optional" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"; }
+                            div class="grid gap-2" { label for="subject" class="text-sm font-medium" { "Subject" } input id="subject" name="subject" maxlength="200" placeholder="Optional" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"; }
                             div class="grid gap-3" {
                                 label class="text-sm font-medium" { "Tags" }
                                 div class="flex flex-wrap gap-3" {
@@ -342,7 +342,7 @@ fn feedback_form(submitted: bool, error: Option<&str>, page_path: Option<&str>) 
                             }
                             div class="grid gap-2" {
                                 label for="message" class="text-sm font-medium" { "Message" }
-                                textarea id="message" name="message" rows="7" required placeholder="What would you like to see improved?" class="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" {}
+                                textarea id="message" name="message" rows="7" required maxlength="16000" placeholder="What would you like to see improved?" class="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" {}
                             }
                             div class="grid gap-2" {
                                 label for="attachments" class="text-sm font-medium" { "Attachments " span class="text-muted-foreground font-normal" { "(optional)" } }
@@ -497,17 +497,43 @@ pub async fn feedback_post(
             } else {
                 Some(input.page_path.clone())
             };
-            if input.message.trim().is_empty() {
-                (
-                    false,
-                    Some("Please enter a message.".to_string()),
-                    render_path,
-                )
-            } else {
-                match calls::submit_feedback(&st.api, cookie.as_deref(), &input).await {
+            // BUNYIP-115: web-edge validation. Bound each field to its DB
+            // VARCHAR cap (feedback.name VARCHAR(100), subject VARCHAR(200),
+            // email VARCHAR(255), message TEXT/64k cap below) and shape-check
+            // email. Over-length input used to hit the API and surface as a
+            // raw 500 when Postgres rejected the over-length value; malformed
+            // email round-tripped without complaint.
+            use crate::handlers::validate;
+            const MESSAGE_MAX: usize = 16_000;
+            let mut err: Option<String> = None;
+            if !input.name.trim().is_empty() {
+                if let Err(msg) = validate::trim_bounded(&input.name, "Name", 100) {
+                    err = Some(msg);
+                }
+            }
+            if err.is_none() && !input.email.trim().is_empty() {
+                if let Err(msg) = validate::email(&input.email, "Email") {
+                    err = Some(msg);
+                }
+            }
+            if err.is_none() && !input.subject.trim().is_empty() {
+                if let Err(msg) = validate::trim_bounded(&input.subject, "Subject", 200) {
+                    err = Some(msg);
+                }
+            }
+            if err.is_none() {
+                if input.message.trim().is_empty() {
+                    err = Some("Please enter a message.".to_string());
+                } else if input.message.len() > MESSAGE_MAX {
+                    err = Some(format!("Message must be {MESSAGE_MAX} characters or fewer"));
+                }
+            }
+            match err {
+                Some(msg) => (false, Some(msg), render_path),
+                None => match calls::submit_feedback(&st.api, cookie.as_deref(), &input).await {
                     Ok(()) => (true, None, render_path),
                     Err(e) => (false, Some(e.user_message()), render_path),
-                }
+                },
             }
         }
     };

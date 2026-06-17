@@ -1028,8 +1028,12 @@ pub async fn settings(
             // the manager filling it.
             (settings_card("mail", "from-primary to-teal-500", "Change Email", html! {
                 form method="post" action="/settings/email" autocomplete="off" class="space-y-4 max-w-md" {
-                    div class="space-y-2" { label class="text-sm font-medium" { "New Email Address" } input name="new_email" type="email" value="" autocomplete="off" placeholder="Enter your new email" class=(crate::handlers::dashboard_input()); }
-                    div class="space-y-2" { label class="text-sm font-medium" { "Current Password" } input name="current_password" type="password" autocomplete="off" placeholder="Enter your current password" class=(crate::handlers::dashboard_input()); }
+                    // BUNYIP-117: bound the new-email at the edge (254
+                    // chars / RFC 5321 max, required + type=email for the
+                    // browser's own shape check). Authoritative validation
+                    // is still in `services::auth::request_email_change`.
+                    div class="space-y-2" { label class="text-sm font-medium" { "New Email Address" } input name="new_email" type="email" value="" autocomplete="off" maxlength="254" required placeholder="Enter your new email" class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label class="text-sm font-medium" { "Current Password" } input name="current_password" type="password" autocomplete="off" required placeholder="Enter your current password" class=(crate::handlers::dashboard_input()); }
                     button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-teal-500 text-white border-0")) { "Change Email" }
                 }
             }))
@@ -1116,6 +1120,23 @@ pub async fn settings_email(
         Ok(v) => v,
         Err(r) => return r,
     };
+    // BUNYIP-117: web-edge shape + bound check on the email. Authoritative
+    // shape-check still happens in `services::auth::request_email_change`,
+    // but bouncing garbage / over-length values here means the bad-input
+    // user error is "your email is malformed" rather than a generic
+    // upstream rejection.
+    if let Err(msg) = crate::handlers::validate::email(&f.new_email, "New email") {
+        return redirect_cookies(&format!("/settings?error={}", urlenc(&msg)), &c.set_cookies);
+    }
+    if f.current_password.is_empty() {
+        return redirect_cookies(
+            &format!(
+                "/settings?error={}",
+                urlenc("Please enter your current password")
+            ),
+            &c.set_cookies,
+        );
+    }
     match auth_api::request_email_change(
         &st.api,
         c.forward.as_deref(),
@@ -1302,7 +1323,10 @@ fn twofa_setup_view(setup: &TwoFactorSetupResponse, error: Option<&str>) -> Mark
                         (error_box(msg))
                     }
                     form method="post" action="/settings/2fa/setup" class="space-y-4" {
-                        div class="space-y-2" { label class="text-sm font-medium" { "Verification Code" } input name="code" inputmode="numeric" placeholder="000000" autocomplete="one-time-code" class=(crate::handlers::dashboard_input()); }
+                        // BUNYIP-117: bound the TOTP edge before submit
+                        // (maxlength + pattern). Authoritative check is
+                        // still domain-side via `services::totp::verify_code`.
+                        div class="space-y-2" { label class="text-sm font-medium" { "Verification Code" } input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000000" autocomplete="one-time-code" class=(crate::handlers::dashboard_input()); }
                         button type="submit" class=(button_class("default", "default", "w-full")) { "Verify & Enable" }
                     }
                 }
