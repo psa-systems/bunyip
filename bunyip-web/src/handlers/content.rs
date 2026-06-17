@@ -160,6 +160,84 @@ pub async fn our_story(State(st): State<AppState>, headers: HeaderMap) -> Respon
     public_response(&st, &c, &apps, "Our Story · Bunyip", true, content)
 }
 
+// --- roadmap ----------------------------------------------------------------
+
+// Seed roadmap items, grouped by status bucket. Each entry is a (title,
+// one-line description) pair. Editing the page is a one-line change here,
+// the same shape as PERSONAL / BUSINESS above. Placeholder content until a
+// data-backed source lands (see BUNYIP-136); keep copy in American English
+// with no em-dashes.
+const ROADMAP_SHIPPING_SOON: [(&str, &str); 2] = [
+    (
+        "Single sign-on hardening",
+        "Tighter session rotation and trusted-device controls across Bunyip and Mokosh.",
+    ),
+    (
+        "Org switching polish",
+        "Faster switching between orgs with clearer role and membership context.",
+    ),
+];
+const ROADMAP_PLANNED: [(&str, &str); 2] = [
+    (
+        "Org-level billing roles",
+        "Delegate billing and invoices to a finance contact without granting full admin.",
+    ),
+    (
+        "Usage and audit exports",
+        "Download audit logs and membership history as CSV.",
+    ),
+];
+const ROADMAP_EXPLORING: [(&str, &str); 2] = [
+    (
+        "Self-serve org migration",
+        "Move members and entitlements between orgs without support involvement.",
+    ),
+    (
+        "Public status page",
+        "A live view of platform availability and incident history.",
+    ),
+];
+
+fn roadmap_section(title: &str, blurb: &str, items: &[(&str, &str)]) -> Markup {
+    html! {
+        section {
+            h2 class="text-2xl font-semibold mb-2" { (title) }
+            p class="text-muted-foreground mb-6" { (blurb) }
+            div class="grid gap-4 md:grid-cols-2" {
+                @for (name, desc) in items {
+                    div class="rounded-lg border bg-card text-card-foreground shadow-sm p-6" {
+                        div class="flex items-start gap-3" {
+                            (icon("check", "h-5 w-5 text-primary flex-shrink-0 mt-0.5"))
+                            div {
+                                h3 class="font-semibold leading-none tracking-tight" { (name) }
+                                p class="mt-2 text-sm text-muted-foreground" { (desc) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub async fn roadmap(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (c, apps) = public_ctx(&st, &headers).await;
+    let content = html! {
+        div class="container max-w-4xl py-12" {
+            div class="mb-12" {
+                h1 class="text-4xl font-bold mb-4" { "Roadmap" }
+                p class="text-lg text-muted-foreground" { "What we are working on and what is coming next. This is a living view, so expect it to change as we ship." }
+            }
+            div class="space-y-12" {
+                (roadmap_section("Shipping soon", "In progress and landing in the near term.", &ROADMAP_SHIPPING_SOON))
+                (roadmap_section("Planned", "Committed work that has not started yet.", &ROADMAP_PLANNED))
+                (roadmap_section("Exploring", "Ideas we are considering. No commitment yet.", &ROADMAP_EXPLORING))
+            }
+        }
+    };
+    public_response(&st, &c, &apps, "Roadmap · Bunyip", true, content)
+}
+
 // --- legal ------------------------------------------------------------------
 
 fn legal_p(title: &str, body: Markup) -> Markup {
