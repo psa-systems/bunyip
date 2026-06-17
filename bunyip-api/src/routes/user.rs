@@ -24,6 +24,12 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 web::post().to(handlers::confirm_email_verification),
             )
             .route("/me/sessions", web::get().to(handlers::list_sessions))
+            // Registered before the `{session_id}` route; it is a POST so it
+            // would not collide with the DELETE handler regardless (BUNYIP-137).
+            .route(
+                "/me/sessions/revoke-others",
+                web::post().to(handlers::revoke_other_sessions),
+            )
             .route("/me", web::delete().to(handlers::delete_account))
             .route(
                 "/me/sessions/{session_id}",

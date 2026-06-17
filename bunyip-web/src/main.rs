@@ -121,6 +121,17 @@ async fn main() {
             "/settings/verify-email/resend",
             axum::routing::post(dash::settings_resend_verification),
         )
+        // Active sessions (BUNYIP-137). The literal `revoke-others` route is
+        // distinct from `:id/revoke` (different segment count), so ordering is
+        // not load-bearing here, but keep them adjacent for readability.
+        .route(
+            "/settings/sessions/revoke-others",
+            axum::routing::post(dash::settings_revoke_other_sessions),
+        )
+        .route(
+            "/settings/sessions/:id/revoke",
+            axum::routing::post(dash::settings_revoke_session),
+        )
         .route(
             "/settings/2fa/setup",
             get(dash::twofa_setup_get).post(dash::twofa_setup_post),

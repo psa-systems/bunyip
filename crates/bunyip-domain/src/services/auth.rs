@@ -1,6 +1,6 @@
 //! Authentication service
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use ipnetwork::IpNetwork;
 use rand::RngCore;
 use sqlx::PgPool;
@@ -59,6 +59,47 @@ pub enum AcceptInviteResult {
     PasswordRequired { email: String },
 }
 
+// --- session-lifetime policy (BUNYIP-137) -----------------------------------
+//
+// Admin sessions get a much shorter leash than subscriber sessions so an
+// unattended privileged session does not stay usable for weeks. These are the
+// single source of truth for the windows (no inline literals elsewhere). The
+// values are assumptions to revise from real usage, not hard requirements.
+
+/// Absolute refresh-token lifetime by role. Admins: 12 hours. Everyone else:
+/// 30 days (the historical default). For admins this deadline is preserved
+/// across refresh rotation (see `create_tokens`), so it is a true ceiling on
+/// session age, not a rolling window.
+fn refresh_absolute_ttl(role: &str) -> Duration {
+    if role == UserRole::Admin.as_str() {
+        Duration::hours(12)
+    } else {
+        Duration::days(30)
+    }
+}
+
+/// Idle window by role. A refresh is rejected (and the session revoked) once
+/// the session has been inactive longer than this. `None` means no idle limit
+/// (subscriber behavior is unchanged). Admins: 30 minutes.
+fn refresh_idle_ttl(role: &str) -> Option<Duration> {
+    if role == UserRole::Admin.as_str() {
+        Some(Duration::minutes(30))
+    } else {
+        None
+    }
+}
+
+/// Whether a session must be rejected for idle timeout, given its role and the
+/// time it was last active. Pure decision function (BUNYIP-137) so the policy
+/// is unit-testable without a database. Roles with no idle window never expire
+/// on idle.
+fn session_idle_expired(role: &str, last_active: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    match refresh_idle_ttl(role) {
+        Some(idle) => now - last_active > idle,
+        None => false,
+    }
+}
+
 /// Authentication service
 pub struct AuthService {
     pool: PgPool,
@@ -75,6 +116,14 @@ impl AuthService {
             password: PasswordService::new(),
             tier_config,
         }
+    }
+
+    /// Hash a raw refresh token the same way it is stored, so callers (e.g.
+    /// the active-sessions endpoint) can match a presented refresh-token cookie
+    /// to its stored row without reaching into the private JWT service
+    /// (BUNYIP-137).
+    pub fn hash_token(&self, token: &str) -> String {
+        self.jwt.hash_token(token)
     }
 
     /// Hot-reload the tier configuration (e.g. after admin update).
@@ -176,7 +225,7 @@ impl AuthService {
 
         // Create tokens
         let tokens = self
-            .create_tokens(&user, device_info.clone(), ip_address)
+            .create_tokens(&user, device_info.clone(), ip_address, None)
             .await?;
 
         // Update last login
@@ -274,11 +323,36 @@ impl AuthService {
             .await?
             .ok_or(AppError::InvalidCredentials)?;
 
+        // Idle-timeout enforcement (BUNYIP-137). For roles with an idle window
+        // (admins), reject and revoke a session that has been inactive too
+        // long. Activity is measured from `last_used_at`, falling back to
+        // `created_at`; because refresh rotates the row (a new row with
+        // `created_at = NOW()` replaces the old one), this is effectively the
+        // time since the session was last refreshed.
+        let last_active = stored_token.last_used_at.unwrap_or(stored_token.created_at);
+        if session_idle_expired(&user.role, last_active, Utc::now()) {
+            TokenRepository::revoke_refresh_token(&self.pool, stored_token.id).await?;
+            tracing::info!(
+                user_id = %user.id,
+                token_id = %claims.jti,
+                "token_refresh: session idle-timeout exceeded, revoked"
+            );
+            return Err(AppError::TokenExpired);
+        }
+
         // Revoke old token
         TokenRepository::revoke_refresh_token(&self.pool, stored_token.id).await?;
 
-        // Create new tokens
-        let tokens = self.create_tokens(&user, device_info, ip_address).await?;
+        // Create new tokens. Carry the rotated-out token's absolute deadline so
+        // an admin session's 12h ceiling is not reset on every refresh.
+        let tokens = self
+            .create_tokens(
+                &user,
+                device_info,
+                ip_address,
+                Some(stored_token.expires_at),
+            )
+            .await?;
 
         Ok(tokens)
     }
@@ -456,7 +530,9 @@ impl AuthService {
         }
 
         // Create tokens
-        let tokens = self.create_tokens(&user, device_info, ip_address).await?;
+        let tokens = self
+            .create_tokens(&user, device_info, ip_address, None)
+            .await?;
 
         // Update last login
         UserRepository::update_last_login(&self.pool, user.id).await?;
@@ -500,7 +576,7 @@ impl AuthService {
 
         // Create tokens
         let tokens = self
-            .create_tokens(&user, device_info.clone(), ip_address)
+            .create_tokens(&user, device_info.clone(), ip_address, None)
             .await?;
 
         // Update last login
@@ -1122,7 +1198,7 @@ impl AuthService {
 
                 // Create auth tokens
                 let tokens = self
-                    .create_tokens(&updated_user, device_info, ip_address)
+                    .create_tokens(&updated_user, device_info, ip_address, None)
                     .await?;
                 UserRepository::update_last_login(&self.pool, user.id).await?;
 
@@ -1182,7 +1258,9 @@ impl AuthService {
                 InviteRepository::mark_accepted(&self.pool, invite.id).await?;
 
                 // Create auth tokens
-                let tokens = self.create_tokens(&user, device_info, ip_address).await?;
+                let tokens = self
+                    .create_tokens(&user, device_info, ip_address, None)
+                    .await?;
                 UserRepository::update_last_login(&self.pool, user.id).await?;
 
                 // Audit log
@@ -1233,18 +1311,30 @@ impl AuthService {
         Ok(())
     }
 
-    /// Helper to create auth tokens
+    /// Helper to create auth tokens.
+    ///
+    /// `refresh_expires_at` carries an existing session's absolute deadline
+    /// across a refresh rotation. On a fresh login it is `None` and the
+    /// deadline is computed from the role's absolute TTL. On refresh the caller
+    /// passes the rotated-out token's `expires_at`: for admins this is honored
+    /// so the 12-hour ceiling is not reset every refresh (a true absolute cap);
+    /// for subscribers the deadline is recomputed (rolling 30-day window, the
+    /// historical behavior) so subscriber sessions are unchanged (BUNYIP-137).
     async fn create_tokens(
         &self,
         user: &User,
         device_info: Option<String>,
         ip_address: Option<IpAddr>,
+        refresh_expires_at: Option<DateTime<Utc>>,
     ) -> Result<AuthTokens, AppError> {
         let access_token = self.jwt.create_access_token(user)?;
         let (refresh_token, token_hash) = self.jwt.create_refresh_token(user.id)?;
 
         let ip = ip_address.map(IpNetwork::from);
-        let expires_at = Utc::now() + Duration::days(30);
+        let expires_at = match refresh_expires_at {
+            Some(existing) if user.role == UserRole::Admin.as_str() => existing,
+            _ => Utc::now() + refresh_absolute_ttl(&user.role),
+        };
 
         // Store refresh token
         TokenRepository::create_refresh_token(
@@ -1277,6 +1367,40 @@ pub(crate) fn generate_secure_token(length: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admin_gets_shorter_absolute_ttl_than_subscriber() {
+        assert_eq!(refresh_absolute_ttl("admin"), Duration::hours(12));
+        assert_eq!(refresh_absolute_ttl("subscriber"), Duration::days(30));
+        // Unknown roles are treated as non-admin (the safe, unchanged default).
+        assert_eq!(refresh_absolute_ttl("whatever"), Duration::days(30));
+    }
+
+    #[test]
+    fn only_admins_have_an_idle_window() {
+        assert_eq!(refresh_idle_ttl("admin"), Some(Duration::minutes(30)));
+        assert_eq!(refresh_idle_ttl("subscriber"), None);
+    }
+
+    #[test]
+    fn admin_session_expires_after_idle_window() {
+        let now = Utc::now();
+        // 31 minutes idle exceeds the 30-minute admin window.
+        let stale = now - Duration::minutes(31);
+        assert!(session_idle_expired("admin", stale, now));
+        // 10 minutes idle is still within the window.
+        let fresh = now - Duration::minutes(10);
+        assert!(!session_idle_expired("admin", fresh, now));
+    }
+
+    #[test]
+    fn subscriber_session_never_idle_expires() {
+        let now = Utc::now();
+        // Even a 60-day-idle subscriber session is not idle-expired (only the
+        // absolute TTL bounds it, unchanged behavior).
+        let very_stale = now - Duration::days(60);
+        assert!(!session_idle_expired("subscriber", very_stale, now));
+    }
 
     #[test]
     fn generate_secure_token_correct_length() {

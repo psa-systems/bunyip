@@ -996,6 +996,9 @@ pub async fn settings(
         .map(|s| s.enabled)
         .unwrap_or(user.two_factor_enabled);
     let is_admin = matches!(user.role, crate::api::types::UserRole::Admin);
+    // Active sessions (BUNYIP-137). A failure here must not break the rest of
+    // the settings page, so fall back to an empty list.
+    let sessions = calls::list_sessions(&st.api, fwd).await.unwrap_or_default();
 
     let content = html! {
         div class="space-y-6" {
@@ -1071,6 +1074,9 @@ pub async fn settings(
                 }
             }))
 
+            // Active sessions (BUNYIP-137)
+            (settings_card("key", "from-indigo-500 to-primary", "Active Sessions", sessions_card_body(&sessions)))
+
             // Danger zone
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-red-200 dark:border-red-900" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight text-red-600 dark:text-red-400 flex items-center gap-2" { (icon("alert-triangle", "h-5 w-5")) "Danger Zone" } p class="text-sm text-muted-foreground" { "Permanently delete your account and all associated data." } }
@@ -1102,6 +1108,105 @@ fn settings_card(icon_name: &str, gradient: &str, title: &str, body: Markup) -> 
             }
             div class="p-6 pt-0" { (body) }
         }
+    }
+}
+
+/// Human "time ago" from an ISO-8601 timestamp; falls back to the date prefix
+/// if the value does not parse.
+fn time_ago(iso: &str) -> String {
+    match chrono::DateTime::parse_from_rfc3339(iso) {
+        Ok(t) => {
+            let secs = (chrono::Utc::now() - t.with_timezone(&chrono::Utc))
+                .num_seconds()
+                .max(0);
+            if secs < 60 {
+                "just now".to_string()
+            } else if secs < 3600 {
+                format!("{} min ago", secs / 60)
+            } else if secs < 86_400 {
+                format!("{} hr ago", secs / 3600)
+            } else {
+                format!("{} days ago", secs / 86_400)
+            }
+        }
+        Err(_) => iso.chars().take(10).collect(),
+    }
+}
+
+/// Body of the "Active Sessions" card: one row per session with device, IP,
+/// last-active time, a "This device" badge on the current session, a per-row
+/// Revoke action for non-current sessions, and a "log out all other devices"
+/// action when there is at least one other session (BUNYIP-137).
+fn sessions_card_body(sessions: &[crate::api::types::SessionInfo]) -> Markup {
+    let has_others = sessions.iter().any(|s| !s.current);
+    html! {
+        @if sessions.is_empty() {
+            p class="text-sm text-muted-foreground" { "No active sessions found." }
+        } @else {
+            ul class="space-y-3" {
+                @for s in sessions {
+                    li class="flex items-center justify-between gap-4 rounded-lg border border-border/50 p-4" {
+                        div class="min-w-0" {
+                            p class="font-medium truncate flex items-center gap-2" {
+                                (s.device_info.as_deref().unwrap_or("Unknown device"))
+                                @if s.current { (badge("success", "This device")) }
+                            }
+                            p class="text-sm text-muted-foreground" {
+                                @if let Some(ip) = &s.ip_address { (ip) " · " }
+                                "last active " (time_ago(s.last_used_at.as_deref().unwrap_or(&s.created_at)))
+                            }
+                        }
+                        @if !s.current {
+                            form method="post" action=(format!("/settings/sessions/{}/revoke", urlenc(&s.id))) {
+                                button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("log-out", "mr-2 h-4 w-4")) "Revoke" }
+                            }
+                        }
+                    }
+                }
+            }
+            @if has_others {
+                form method="post" action="/settings/sessions/revoke-others" class="mt-4" onsubmit="return confirm('Log out all other devices?')" {
+                    button type="submit" class=(button_class("outline", "sm", "")) { (icon("log-out", "mr-2 h-4 w-4")) "Log out all other devices" }
+                }
+            }
+        }
+    }
+}
+
+/// POST /settings/sessions/{id}/revoke - revoke one of the user's sessions.
+pub async fn settings_revoke_session(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match calls::revoke_session(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => redirect_cookies("/settings?ok=Session+revoked", &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
+    }
+}
+
+/// POST /settings/sessions/revoke-others - log out all other devices.
+pub async fn settings_revoke_other_sessions(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match calls::revoke_other_sessions(&st.api, c.forward.as_deref()).await {
+        Ok(()) => redirect_cookies("/settings?ok=Logged+out+other+devices", &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
     }
 }
 

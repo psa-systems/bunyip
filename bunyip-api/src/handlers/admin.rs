@@ -251,10 +251,21 @@ pub async fn update_user_role(
 
     let updated_user = UserRepository::update_role(&pool, user_id, &body.role).await?;
 
+    // Revoke the target user's existing sessions when the role actually changes
+    // (BUNYIP-137). A privilege change must take effect immediately: otherwise a
+    // demoted admin keeps an admin-claim access token until it expires (up to
+    // 15 min) and an admin-capable refresh token for up to its full lifetime.
+    // Revoking forces a re-login that mints tokens carrying the new role claim.
+    let role_changed = old_role != body.role;
+    if role_changed {
+        TokenRepository::revoke_all_user_refresh_tokens(pool.get_ref(), user_id).await?;
+    }
+
     tracing::info!(
         admin_id = %admin.0.sub,
         target_user_id = %user_id,
         new_role = %body.role,
+        sessions_revoked = role_changed,
         "Admin changed user role"
     );
 
@@ -265,6 +276,7 @@ pub async fn update_user_role(
         .with_new_values(serde_json::json!({ "role": &body.role }))
         .with_metadata(serde_json::json!({
             "target_email": target_user.email,
+            "sessions_revoked": role_changed,
         }));
     AuditLogRepository::create(&pool, audit_log).await?;
 

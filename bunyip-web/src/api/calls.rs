@@ -4,9 +4,38 @@ use serde_json::{json, Value};
 
 use super::types::{
     AppDownloadGroup, Application, ApplicationGroup, ApplicationGroupList, ApplicationList,
-    CheckoutSessionResponse, DownloadGroups, Membership, StripeInvoice, StripePaymentResponse,
+    CheckoutSessionResponse, DownloadGroups, Membership, SessionInfo, SessionList, StripeInvoice,
+    StripePaymentResponse,
 };
 use super::{ok_data, parse, Api, ApiError};
+
+// --- sessions ---------------------------------------------------------------
+
+/// List the signed-in user's active sessions (BUNYIP-137). The API wraps the
+/// list under a `sessions` key.
+pub async fn list_sessions(api: &Api, cookie: Option<&str>) -> Result<Vec<SessionInfo>, ApiError> {
+    let list: SessionList = parse(api.get("/users/me/sessions", cookie).await?)?;
+    Ok(list.sessions)
+}
+
+/// Revoke a single session by id. The API enforces that the session belongs to
+/// the caller.
+pub async fn revoke_session(api: &Api, cookie: Option<&str>, id: &str) -> Result<(), ApiError> {
+    let path = format!("/users/me/sessions/{}", urlencoding::encode(id));
+    let r = api.delete(&path, cookie, None).await?;
+    ok_data(&r)?;
+    Ok(())
+}
+
+/// Revoke every session except the caller's current one ("log out all other
+/// devices").
+pub async fn revoke_other_sessions(api: &Api, cookie: Option<&str>) -> Result<(), ApiError> {
+    let r = api
+        .post("/users/me/sessions/revoke-others", cookie, None)
+        .await?;
+    ok_data(&r)?;
+    Ok(())
+}
 
 // --- applications -----------------------------------------------------------
 

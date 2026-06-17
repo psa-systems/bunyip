@@ -100,13 +100,24 @@ pub async fn change_password(
 }
 
 /// GET /v1/users/me/sessions
-/// List active sessions for current user
+/// List active sessions for current user.
+///
+/// The `current` flag marks the session the presented refresh-token cookie
+/// belongs to, so the UI can label and protect it (BUNYIP-137). The stored
+/// `token_hash` is never returned.
 pub async fn list_sessions(
     req: HttpRequest,
     user: AuthenticatedUser,
     pool: web::Data<PgPool>,
+    auth_service: web::Data<Arc<AuthService>>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
+
+    // Hash the caller's refresh-token cookie (if present) to match it to its
+    // stored row without exposing any hashes to the client.
+    let current_hash = req
+        .cookie("refresh_token")
+        .map(|c| auth_service.hash_token(c.value()));
 
     let tokens = TokenRepository::find_user_refresh_tokens(&pool, user.0.sub).await?;
 
@@ -114,12 +125,14 @@ pub async fn list_sessions(
     let sessions: Vec<_> = tokens
         .into_iter()
         .map(|t| {
+            let current = current_hash.as_deref() == Some(t.token_hash.as_str());
             serde_json::json!({
                 "id": t.id,
                 "device_info": t.device_info,
-                "ip_address": t.ip_address.map(|ip| ip.to_string()),
+                "ip_address": t.ip_address.map(|ip| ip.ip().to_string()),
                 "created_at": t.created_at,
                 "last_used_at": t.last_used_at,
+                "current": current,
             })
         })
         .collect();
@@ -154,6 +167,45 @@ pub async fn revoke_session(
     TokenRepository::revoke_refresh_token(&pool, session_id).await?;
 
     Ok(success_no_data(request_id))
+}
+
+/// POST /v1/users/me/sessions/revoke-others
+/// Revoke every active session for the current user except the one the
+/// presented refresh-token cookie belongs to ("log out all other devices",
+/// BUNYIP-137).
+pub async fn revoke_other_sessions(
+    req: HttpRequest,
+    user: AuthenticatedUser,
+    pool: web::Data<PgPool>,
+    auth_service: web::Data<Arc<AuthService>>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+
+    let current_hash = match req
+        .cookie("refresh_token")
+        .map(|c| auth_service.hash_token(c.value()))
+    {
+        Some(h) => h,
+        None => return Err(AppError::Unauthorized),
+    };
+
+    let sessions = TokenRepository::find_user_refresh_tokens(&pool, user.0.sub).await?;
+    let keep_id = sessions
+        .iter()
+        .find(|t| t.token_hash == current_hash)
+        .map(|t| t.id);
+
+    // If the current session cannot be located among active rows (e.g. it was
+    // just rotated), fall back to a nil keep-id, which revokes every session.
+    // The caller is then logged out on their next refresh and re-authenticates.
+    let keep = keep_id.unwrap_or_else(uuid::Uuid::nil);
+    let revoked =
+        TokenRepository::revoke_other_user_refresh_tokens(pool.get_ref(), user.0.sub, keep).await?;
+
+    Ok(success(
+        serde_json::json!({ "revoked": revoked }),
+        request_id,
+    ))
 }
 
 /// POST /v1/users/me/email
