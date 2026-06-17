@@ -117,6 +117,10 @@ async fn main() {
             axum::routing::post(dash::settings_delete),
         )
         .route(
+            "/settings/verify-email/resend",
+            axum::routing::post(dash::settings_resend_verification),
+        )
+        .route(
             "/settings/2fa/setup",
             get(dash::twofa_setup_get).post(dash::twofa_setup_post),
         )
