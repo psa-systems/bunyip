@@ -437,24 +437,6 @@ async fn main() -> anyhow::Result<()> {
         .map(str::to_string)
         .collect();
 
-    // Subdomain-fallback host derived from BUNYIP_WEB_ORIGIN (single absolute
-    // URL). Used by the allowed_origin_fn closure so any *.{web_origin host}
-    // also passes CORS for self-hosters that haven't enumerated every child
-    // app in CORS_ORIGIN.
-    // e.g. "https://example.net" -> ".example.net"
-    let cors_domain = config
-        .web_origin
-        .split("://")
-        .nth(1)
-        .unwrap_or("")
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .split(':')
-        .next()
-        .map(|host| format!(".{host}"))
-        .unwrap_or_default();
-
     let config_data = config.clone();
 
     // Spawn rate limit cleanup background task
@@ -539,25 +521,22 @@ async fn main() -> anyhow::Result<()> {
     let server_start = std::time::Instant::now();
 
     let primary = HttpServer::new(move || {
-        // Configure CORS
-        let domain = cors_domain.clone();
+        // Configure CORS. Only the explicit CORS_ORIGIN entries are echoed
+        // back with credentials; everything else gets no
+        // Access-Control-Allow-Origin. Per the CORS policy (docs/cors.md /
+        // PSA-21: "No wildcards. Always use an explicit, comma-separated
+        // list"), we deliberately do NOT register an `allowed_origin_fn`:
+        // actix evaluates that closure in addition to the explicit list, and a
+        // prefix/suffix match there (`starts_with("http://localhost")` or a
+        // bare `ends_with(".{apex}")`) reflects credentialed CORS to
+        // attacker-controlled hosts (`http://localhost.attacker.com`, any
+        // `*.{apex}` subdomain). For local dev, enumerate the dev origin (e.g.
+        // `http://localhost:4400`) in CORS_ORIGIN instead. (BUNYIP-124)
         let mut cors = Cors::default();
         for o in &cors_origins {
             cors = cors.allowed_origin(o);
         }
         let cors = cors
-            .allowed_origin_fn(move |origin, _req_head| {
-                let origin = origin.as_bytes();
-                // Allow localhost (development)
-                if origin.starts_with(b"http://localhost") {
-                    return true;
-                }
-                // Allow the configured domain and its subdomains
-                if !domain.is_empty() {
-                    return origin.ends_with(domain.as_bytes());
-                }
-                false
-            })
             .allowed_methods(vec!["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
             .allowed_headers(vec![
                 actix_web::http::header::AUTHORIZATION,
