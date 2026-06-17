@@ -797,15 +797,22 @@ mod tests {
     fn test_config_defaults() {
         let _env = env_lock();
         // Set required env vars
+        // Config::from_env() calls dotenvy::dotenv(), which loads /app/.env when
+        // present. `just ensure-env` generates that .env before pre-commit runs,
+        // so on a clean checkout it would leak APP_PORT/CORS_ORIGIN/etc. into this
+        // process and clobber the code defaults asserted below. dotenvy is
+        // non-overriding: pin the keys this test exercises to their code defaults
+        // BEFORE from_env() so the .env (if any) cannot override them, keeping the
+        // assertions deterministic regardless of the working directory's .env.
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
         // Use development to avoid requiring TOTP_ENCRYPTION_KEY
         env::set_var("ENVIRONMENT", "development");
-        env::remove_var("HOST_IP");
-        env::remove_var("APP_PORT");
-        env::remove_var("RUST_LOG");
-        env::remove_var("CORS_ORIGIN");
+        env::set_var("HOST_IP", "0.0.0.0");
+        env::set_var("APP_PORT", "4000");
+        env::set_var("RUST_LOG", "info");
+        env::set_var("CORS_ORIGIN", "http://localhost:5173");
         env::remove_var("SMTP_HOST");
-        env::remove_var("EMAIL_ENABLED");
+        env::set_var("EMAIL_ENABLED", "false");
         env::remove_var("COOKIE_DOMAIN");
 
         let config = Config::from_env().unwrap();

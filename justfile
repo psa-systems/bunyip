@@ -33,6 +33,14 @@ compose_sso := "docker compose -f compose.dev.yml -f compose.dev-sso.yml "
 [private]
 ensure-env:
     #!/usr/bin/env nu
+    # compose.dev.yml declares the per-developer private network as
+    # `external: true`, so compose will NOT create it. Ensure it exists
+    # (idempotent: inspect returns 0 when present, otherwise create).
+    let user_name = (^whoami | str trim)
+    let net = $"dev-bunyip-private-($user_name)"
+    if (do { ^docker network inspect $net } | complete | get exit_code) != 0 {
+        ^docker network create $net out> /dev/null
+    }
     if (".env" | path exists) { return }
     print "Creating .env with generated dev credentials..."
     open .env.example
