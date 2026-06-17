@@ -1013,7 +1013,7 @@ pub async fn settings(
                     div class="grid gap-4 md:grid-cols-2" {
                         div { p class="text-sm text-muted-foreground" { "Email" } p class="font-medium" { (user.email) } }
                         div { p class="text-sm text-muted-foreground" { "Account Type" } p class="font-medium flex items-center gap-2" { @if is_admin { "admin" (badge("default", "Admin")) } @else { (tier_name(&user.subscription_tier)) } } }
-                        div { p class="text-sm text-muted-foreground" { "Email Verified" } p class="font-medium flex items-center gap-2" { @if user.email_verified { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) "Verified" } @else { (icon("alert-circle", "h-4 w-4 text-yellow-600")) "Not Verified" } } }
+                        div { p class="text-sm text-muted-foreground" { "Email Verified" } p class="font-medium flex items-center gap-2" { @if user.email_verified { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) "Verified" } @else { (icon("alert-circle", "h-4 w-4 text-yellow-600")) "Not Verified" } } @if !user.email_verified { form method="post" action="/settings/verify-email/resend" class="mt-2" { button type="submit" class=(button_class("outline", "sm", "")) { (icon("mail", "mr-2 h-4 w-4")) "Resend verification email" } } } }
                         div { p class="text-sm text-muted-foreground" { "Membership Status" } p class="font-medium" { (status_label(&user.membership_status)) } }
                     }
                 }
@@ -1194,6 +1194,32 @@ pub async fn settings_disable_2fa(
     };
     match auth_api::disable_2fa(&st.api, c.forward.as_deref(), &f.password).await {
         Ok(()) => redirect_cookies("/settings?ok=Two-factor+disabled", &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
+    }
+}
+
+/// Resend the email-verification message for the signed-in user. The domain
+/// layer rate-limits issuance (3 per hour) and rejects an already-verified
+/// account; both surface here as the API error message.
+pub async fn settings_resend_verification(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (user, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match auth_api::request_email_verification(&st.api, c.forward.as_deref()).await {
+        Ok(()) => redirect_cookies(
+            &format!(
+                "/settings?ok={}",
+                urlenc(&format!("Verification email sent to {}", user.email))
+            ),
+            &c.set_cookies,
+        ),
         Err(e) => redirect_cookies(
             &format!("/settings?error={}", urlenc(&e.user_message())),
             &c.set_cookies,
