@@ -15,8 +15,9 @@ use serde_json::json;
 use crate::api::admin as admin_api;
 use crate::api::types::{
     AdminApplication, AdminAuditLog, AdminFeedbackDetail, ApplicationGroup, FeedbackAttachmentMeta,
-    FeedbackStatus, UserEntitlement,
+    FeedbackStatus, User, UserEntitlement,
 };
+use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{relative_time, urlenc};
 use crate::views::ui::{badge, button_class, error_box, icon};
@@ -1224,6 +1225,20 @@ pub async fn feedback_respond(
         // can re-type. No toast - they will see the empty textarea and
         // figure it out.
         return redirect_cookies(&format!("/admin/feedback/{id}"), &c.set_cookies);
+    }
+    // BUNYIP-117: bound the admin response at the web edge. The body is
+    // emailed verbatim and stored in feedback_responses (TEXT); 16k chars
+    // is generous for a support reply while still rejecting a runaway
+    // paste. Authoritative validation happens in
+    // `services::feedback::respond` once the API tightens its own bound.
+    const RESPONSE_MAX: usize = 16_000;
+    if response.len() > RESPONSE_MAX {
+        return redirect_cookies(
+            &format!(
+                "/admin/feedback/{id}?toast_err=Response%20must%20be%20{RESPONSE_MAX}%20characters%20or%20fewer"
+            ),
+            &c.set_cookies,
+        );
     }
     let target =
         match admin_api::respond_to_feedback(&st.api, c.forward.as_deref(), &id, response).await {
@@ -2804,19 +2819,70 @@ pub async fn stripe_save(
     headers: HeaderMap,
     Form(f): Form<StripeForm>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let mut body = json!({ "app_tag": f.app_tag });
-    if !f.secret_key.is_empty() {
-        body["secret_key"] = json!(f.secret_key);
+    // BUNYIP-117: validate at the edge. app_tag is bounded (200 chars
+    // covers any sane Stripe metadata key); the two secrets are format-
+    // checked against their Stripe-documented prefixes when present
+    // (`sk_` / `rk_` for secret keys, `whsec_` for webhook secrets).
+    // Empty inputs leave the persisted value untouched (the API treats
+    // omission as "no change"). Replaces the prior `let _ = ...` that
+    // swallowed API rejections so the operator now sees an inline error.
+    use crate::handlers::validate;
+    let render_error = |err: &str| -> Response { stripe_error_page(&c, &user, err) };
+    let app_tag = match validate::trim_bounded_opt(&f.app_tag, "App tag", 200) {
+        Ok(Some(t)) => t.to_string(),
+        Ok(None) => String::new(),
+        Err(msg) => return render_error(&msg),
+    };
+    let secret_key = f.secret_key.trim();
+    if !secret_key.is_empty() {
+        if !(secret_key.starts_with("sk_") || secret_key.starts_with("rk_")) {
+            return render_error("Secret key must start with 'sk_' or 'rk_'");
+        }
+        if secret_key.len() > 255 {
+            return render_error("Secret key must be 255 characters or fewer");
+        }
     }
-    if !f.webhook_secret.is_empty() {
-        body["webhook_secret"] = json!(f.webhook_secret);
+    let webhook_secret = f.webhook_secret.trim();
+    if !webhook_secret.is_empty() {
+        if !webhook_secret.starts_with("whsec_") {
+            return render_error("Webhook secret must start with 'whsec_'");
+        }
+        if webhook_secret.len() > 255 {
+            return render_error("Webhook secret must be 255 characters or fewer");
+        }
     }
-    let _ = admin_api::update_stripe_config(&st.api, c.forward.as_deref(), body).await;
-    redirect_cookies("/admin/stripe", &c.set_cookies)
+    let mut body = json!({ "app_tag": app_tag });
+    if !secret_key.is_empty() {
+        body["secret_key"] = json!(secret_key);
+    }
+    if !webhook_secret.is_empty() {
+        body["webhook_secret"] = json!(webhook_secret);
+    }
+    match admin_api::update_stripe_config(&st.api, c.forward.as_deref(), body).await {
+        Ok(()) => redirect_cookies("/admin/stripe", &c.set_cookies),
+        Err(e) => render_error(&e.user_message()),
+    }
+}
+
+/// Re-render the Stripe settings page with the supplied inline error so a
+/// failed save surfaces context instead of the prior silent 200 + redirect.
+fn stripe_error_page(c: &AuthCtx, user: &User, err: &str) -> Response {
+    // We deliberately do NOT re-fetch the upstream Stripe config here -
+    // the failure path runs in a sync render context, mirroring the
+    // posture other admin save handlers take for their error surface.
+    let content = html! {
+        div class="space-y-6" {
+            div { h1 class="text-3xl font-bold" { "Stripe" } p class="mt-2 text-muted-foreground" { "Connect and configure Stripe billing." } }
+            (error_box(err))
+            p class="text-sm text-muted-foreground" { "Re-open the Stripe page to retry with the persisted values." }
+            a href="/admin/stripe" class=(button_class("default", "default", "")) { "Back to Stripe" }
+        }
+    };
+    admin_response(c, user, "/admin/stripe", "Stripe · Bunyip", content)
 }
 
 #[cfg(test)]
