@@ -580,6 +580,10 @@ pub async fn password_reset_confirm_post(
 pub struct TwoFactorForm {
     pub code: String,
     pub redirect: Option<String>,
+    /// "Trust this device" checkbox. Present (Some) only when checked
+    /// (BUNYIP-138).
+    #[serde(default)]
+    pub trust_device: Option<String>,
 }
 
 fn twofa_card(error: Option<&str>, redirect: Option<&str>) -> Markup {
@@ -602,6 +606,12 @@ fn twofa_card(error: Option<&str>, redirect: Option<&str>) -> Markup {
                     // Authoritative validation still happens in the domain
                     // (services::totp::verify_code).
                     input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000 000" autocomplete="one-time-code" class={ (dashboard_input()) " text-center text-lg tracking-widest" };
+                }
+                // Trusted device opt-in (BUNYIP-138). Honored only for
+                // subscribers; the API ignores it for admins.
+                label class="flex items-center gap-2 text-sm text-muted-foreground" {
+                    input type="checkbox" name="trust_device" value="on" class="h-4 w-4";
+                    "Trust this device for 30 days (skip codes here)"
                 }
                 (submit_btn("Verify"))
             }
@@ -648,7 +658,16 @@ pub async fn twofa_verify_post(
     };
     let cookie = cookie_of(&headers);
     let target = safe_redirect(f.redirect.as_deref(), &st.cfg.oidc_issuer);
-    match auth_api::verify_2fa(&st.api, cookie.as_deref(), &challenge, f.code.trim()).await {
+    let trust_device = f.trust_device.is_some();
+    match auth_api::verify_2fa(
+        &st.api,
+        cookie.as_deref(),
+        &challenge,
+        f.code.trim(),
+        trust_device,
+    )
+    .await
+    {
         Ok((_, mut cookies)) => {
             cookies.push("bunyip_2fa=; Path=/; Max-Age=0".to_string());
             redirect_cookies(&target, &cookies)

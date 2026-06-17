@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::errors::AppError;
 use crate::middleware::{extract_client_ip, extract_device_info, AuthCookies, AuthenticatedUser};
 use crate::models::{AuditAction, CreateAuditLog, RateLimitConfig};
-use crate::repositories::{AuditLogRepository, UserRepository};
+use crate::repositories::{AuditLogRepository, TrustedDeviceRepository, UserRepository};
 use crate::responses::{get_request_id, success};
 use crate::services::{AuthService, PasswordService, TotpService};
 
@@ -25,11 +25,20 @@ pub struct ConfirmSetupRequest {
 pub struct Verify2FARequest {
     pub challenge_token: String,
     pub code: String,
+    /// Opt-in to remember this device and skip TOTP for 30 days (BUNYIP-138).
+    /// Honored only for subscribers; ignored for admins.
+    #[serde(default)]
+    pub trust_device: bool,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct PasswordConfirmRequest {
     pub password: String,
+    /// Fresh TOTP (or recovery) code. Required by `disable_2fa` for accounts
+    /// with 2FA, so a trusted-device session alone cannot turn 2FA off
+    /// (BUNYIP-138). Unused by other handlers that accept this body.
+    #[serde(default)]
+    pub totp_code: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -175,9 +184,15 @@ pub async fn verify_2fa(
         .await?;
     }
 
-    // Complete login
-    let (tokens, user_response) = auth_service
-        .complete_2fa_login(&body.challenge_token, device_info, ip_address)
+    // Complete login. `trusted_token` is Some only when the user opted in AND
+    // is a subscriber (BUNYIP-138).
+    let (tokens, user_response, trusted_token) = auth_service
+        .complete_2fa_login(
+            &body.challenge_token,
+            device_info,
+            ip_address,
+            body.trust_device,
+        )
         .await?;
 
     let secure = config.is_production();
@@ -212,6 +227,9 @@ pub async fn verify_2fa(
         true,
         cookie_domain,
     ));
+    if let Some(token) = trusted_token {
+        resp.cookie(AuthCookies::trusted_device(&token, secure, cookie_domain));
+    }
     if let Some(op) = op_cookie {
         resp.cookie(op);
     }
@@ -254,7 +272,31 @@ pub async fn disable_2fa(
         return Err(AppError::validation("password", "Invalid password"));
     }
 
+    // Require a fresh TOTP/recovery code in addition to the password
+    // (BUNYIP-138): a trusted-device session must not be able to turn 2FA off
+    // without a live second factor.
+    let code = body
+        .totp_code
+        .as_deref()
+        .map(|c| c.trim().replace(' ', ""))
+        .filter(|c| !c.is_empty())
+        .ok_or_else(|| AppError::validation("totp_code", "Two-factor code required"))?;
+    let code_ok = if code.contains('-') || code.len() > 6 {
+        totp_service.verify_recovery_code(user.0.sub, &code).await?
+    } else {
+        totp_service.verify_code(user.0.sub, &code).await?
+    };
+    if !code_ok {
+        return Err(AppError::validation(
+            "totp_code",
+            "Invalid verification code",
+        ));
+    }
+
     totp_service.disable(user.0.sub).await?;
+
+    // Disabling 2FA drops trusted devices so the protection cannot linger.
+    TrustedDeviceRepository::revoke_all_for_user(&pool, user.0.sub).await?;
 
     // Audit log
     let ip = ip_address.map(ipnetwork::IpNetwork::from);

@@ -5,10 +5,33 @@
 use serde_json::{json, Value};
 
 use super::types::{
-    AuthResponse, RecoveryCodesResponse, SetupStatus, TwoFactorSetupResponse,
-    TwoFactorStatusResponse, User,
+    AuthResponse, RecoveryCodesResponse, SetupStatus, TrustedDeviceInfo, TrustedDeviceList,
+    TwoFactorSetupResponse, TwoFactorStatusResponse, User,
 };
 use super::{ok_data, parse, Api, ApiError};
+
+/// List the signed-in user's trusted devices (BUNYIP-138).
+pub async fn list_trusted_devices(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Vec<TrustedDeviceInfo>, ApiError> {
+    let list: TrustedDeviceList = parse(api.get("/users/me/trusted-devices", cookie).await?)?;
+    Ok(list.devices)
+}
+
+/// Revoke a single trusted device by id.
+pub async fn revoke_trusted_device(
+    api: &Api,
+    cookie: Option<&str>,
+    id: &str,
+) -> Result<(), ApiError> {
+    let path = format!(
+        "/users/me/trusted-devices/{}/revoke",
+        urlencoding::encode(id)
+    );
+    let r = api.post(&path, cookie, None).await?;
+    ok_data(&r).map(|_| ())
+}
 
 pub enum LoginOutcome {
     SignedIn(User),
@@ -87,12 +110,17 @@ pub async fn verify_2fa(
     cookie: Option<&str>,
     challenge_token: &str,
     code: &str,
+    trust_device: bool,
 ) -> Result<(User, Vec<String>), ApiError> {
     let r = api
         .post(
             "/auth/2fa/verify",
             cookie,
-            Some(json!({ "challenge_token": challenge_token, "code": code })),
+            Some(json!({
+                "challenge_token": challenge_token,
+                "code": code,
+                "trust_device": trust_device,
+            })),
         )
         .await?;
     let cookies = r.set_cookies.clone();
@@ -231,14 +259,13 @@ pub async fn change_password(
     cookie: Option<&str>,
     current: &str,
     new: &str,
+    totp_code: &str,
 ) -> Result<(), ApiError> {
-    let r = api
-        .put(
-            "/users/me/password",
-            cookie,
-            Some(json!({ "current_password": current, "new_password": new })),
-        )
-        .await?;
+    let mut body = json!({ "current_password": current, "new_password": new });
+    if !totp_code.is_empty() {
+        body["totp_code"] = json!(totp_code);
+    }
+    let r = api.put("/users/me/password", cookie, Some(body)).await?;
     ok_data(&r).map(|_| ())
 }
 
@@ -248,12 +275,15 @@ pub async fn request_email_change(
     cookie: Option<&str>,
     new_email: &str,
     current_password: &str,
+    totp_code: &str,
 ) -> Result<(bool, Vec<String>), ApiError> {
-    let body = if current_password.is_empty() {
-        json!({ "new_email": new_email })
-    } else {
-        json!({ "new_email": new_email, "current_password": current_password })
-    };
+    let mut body = json!({ "new_email": new_email });
+    if !current_password.is_empty() {
+        body["current_password"] = json!(current_password);
+    }
+    if !totp_code.is_empty() {
+        body["totp_code"] = json!(totp_code);
+    }
     let r = api.post("/users/me/email", cookie, Some(body)).await?;
     let cookies = r.set_cookies.clone();
     let data = ok_data(&r)?;

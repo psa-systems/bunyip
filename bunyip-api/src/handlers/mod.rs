@@ -2,11 +2,14 @@
 //!
 //! This module contains all HTTP request handlers organized by domain.
 
+use std::sync::Arc;
+
 use sqlx::PgPool;
 
 use crate::errors::AppError;
 use crate::models::RateLimitConfig;
-use crate::repositories::RateLimitRepository;
+use crate::repositories::{RateLimitRepository, TotpRepository};
+use crate::services::TotpService;
 
 /// Check a rate limit and return `RateLimited` when the window is exceeded.
 ///
@@ -25,6 +28,60 @@ pub(crate) async fn check_rate_limit(
         return Err(AppError::RateLimited { retry_after });
     }
     Ok(())
+}
+
+/// Require a fresh TOTP (or recovery) code for a sensitive operation when the
+/// account has 2FA enabled (BUNYIP-138). A no-op for accounts without a
+/// verified TOTP. A trusted-device cookie never satisfies this; only a live
+/// code does. Shared by password change and email change.
+/// Whether a sensitive operation must demand a fresh TOTP code, given whether
+/// the account has a verified TOTP. Pure decision (BUNYIP-138, unit-tested): a
+/// trusted-device cookie never enters this; only a live code satisfies the
+/// gate.
+fn totp_reprompt_required(has_verified_totp: bool) -> bool {
+    has_verified_totp
+}
+
+pub(crate) async fn require_totp_if_enabled(
+    pool: &PgPool,
+    totp_service: &Arc<TotpService>,
+    user_id: uuid::Uuid,
+    code: Option<&str>,
+) -> Result<(), AppError> {
+    let totp = TotpRepository::find_by_user_id(pool, user_id).await?;
+    let has_verified = totp.map(|t| t.verified).unwrap_or(false);
+    if !totp_reprompt_required(has_verified) {
+        return Ok(());
+    }
+    let code = code
+        .map(|c| c.trim().replace(' ', ""))
+        .filter(|c| !c.is_empty())
+        .ok_or_else(|| AppError::validation("totp_code", "Two-factor code required"))?;
+    let ok = if code.contains('-') || code.len() > 6 {
+        totp_service.verify_recovery_code(user_id, &code).await?
+    } else {
+        totp_service.verify_code(user_id, &code).await?
+    };
+    if !ok {
+        return Err(AppError::validation(
+            "totp_code",
+            "Invalid verification code",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::totp_reprompt_required;
+
+    #[test]
+    fn totp_reprompt_required_only_when_2fa_enabled() {
+        // A trusted-device cookie does not enter this decision; only whether a
+        // verified TOTP exists does (BUNYIP-138).
+        assert!(totp_reprompt_required(true));
+        assert!(!totp_reprompt_required(false));
+    }
 }
 
 pub mod admin;
@@ -65,8 +122,8 @@ pub use totp::{
 };
 pub use user::{
     change_password, confirm_email_change, confirm_email_verification, delete_account,
-    get_current_user, list_sessions, request_email_change, request_email_verification,
-    revoke_other_sessions, revoke_session,
+    get_current_user, list_sessions, list_trusted_devices, request_email_change,
+    request_email_verification, revoke_other_sessions, revoke_session, revoke_trusted_device,
 };
 pub use webhook::stripe_webhook;
 

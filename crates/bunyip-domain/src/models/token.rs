@@ -283,6 +283,73 @@ pub struct CreateAdminInvite {
     pub expires_at: DateTime<Utc>,
 }
 
+/// Trusted device database model (BUNYIP-138). One row per device a
+/// subscriber has marked trusted at 2FA time. `token_hash` is the SHA-256 hash
+/// of the opaque cookie secret; the secret itself is never stored.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct TrustedDevice {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    #[serde(skip_serializing)]
+    pub token_hash: String,
+    pub label: Option<String>,
+    pub ip_address: Option<IpNetwork>,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub expires_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+impl TrustedDevice {
+    pub fn is_expired(&self) -> bool {
+        self.expires_at < Utc::now()
+    }
+
+    pub fn is_revoked(&self) -> bool {
+        self.revoked_at.is_some()
+    }
+
+    /// Valid = not expired and not revoked. A valid trusted-device row is what
+    /// lets a subscriber skip the TOTP prompt at login.
+    pub fn is_valid(&self) -> bool {
+        !self.is_expired() && !self.is_revoked()
+    }
+}
+
+/// Data for creating a new trusted device.
+#[derive(Debug, Clone)]
+pub struct CreateTrustedDevice {
+    pub user_id: Uuid,
+    pub token_hash: String,
+    pub label: Option<String>,
+    pub ip_address: Option<IpNetwork>,
+    pub expires_at: DateTime<Utc>,
+}
+
+/// Trusted device info for display to users (no hash).
+#[derive(Debug, Clone, Serialize)]
+pub struct TrustedDeviceInfo {
+    pub id: Uuid,
+    pub label: Option<String>,
+    pub ip_address: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub expires_at: DateTime<Utc>,
+}
+
+impl From<TrustedDevice> for TrustedDeviceInfo {
+    fn from(d: TrustedDevice) -> Self {
+        Self {
+            id: d.id,
+            label: d.label,
+            ip_address: d.ip_address.map(|ip| ip.ip().to_string()),
+            created_at: d.created_at,
+            last_used_at: d.last_used_at,
+            expires_at: d.expires_at,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -489,5 +556,44 @@ mod tests {
     fn verification_token_used() {
         let token = make_verification_token(Utc::now() + Duration::hours(1), Some(Utc::now()));
         assert!(!token.is_valid());
+    }
+
+    // -- TrustedDevice --
+
+    fn make_trusted_device(
+        expires_at: DateTime<Utc>,
+        revoked_at: Option<DateTime<Utc>>,
+    ) -> TrustedDevice {
+        TrustedDevice {
+            id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            token_hash: "hash".to_string(),
+            label: None,
+            ip_address: None,
+            created_at: Utc::now(),
+            last_used_at: None,
+            expires_at,
+            revoked_at,
+        }
+    }
+
+    #[test]
+    fn trusted_device_valid() {
+        let d = make_trusted_device(Utc::now() + Duration::days(30), None);
+        assert!(d.is_valid());
+    }
+
+    #[test]
+    fn trusted_device_expired_is_invalid() {
+        let d = make_trusted_device(Utc::now() - Duration::minutes(1), None);
+        assert!(d.is_expired());
+        assert!(!d.is_valid());
+    }
+
+    #[test]
+    fn trusted_device_revoked_is_invalid() {
+        let d = make_trusted_device(Utc::now() + Duration::days(30), Some(Utc::now()));
+        assert!(d.is_revoked());
+        assert!(!d.is_valid());
     }
 }

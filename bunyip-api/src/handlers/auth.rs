@@ -208,6 +208,7 @@ pub async fn register(
             body.password.clone(),
             device_info,
             ip_address,
+            None,
         )
         .await?;
 
@@ -296,12 +297,19 @@ pub async fn login(
     // Rate limit by email
     check_rate_limit(&pool, &body.email.to_lowercase(), &RateLimitConfig::LOGIN).await?;
 
+    // Trusted-device cookie (BUNYIP-138): if present and valid, a subscriber
+    // skips the 2FA prompt. Forwarded verbatim by the web BFF.
+    let trusted_device_token = req
+        .cookie(AuthCookies::TRUSTED_DEVICE_COOKIE)
+        .map(|c| c.value().to_string());
+
     let result = auth_service
         .login(
             body.email.clone(),
             body.password.clone(),
             device_info,
             ip_address,
+            trusted_device_token,
         )
         .await?;
 
@@ -1087,6 +1095,7 @@ pub async fn setup_admin(
             body.password.clone(),
             device_info,
             ip_address,
+            None,
         )
         .await?;
 

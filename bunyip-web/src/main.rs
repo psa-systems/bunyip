@@ -132,6 +132,11 @@ async fn main() {
             "/settings/sessions/:id/revoke",
             axum::routing::post(dash::settings_revoke_session),
         )
+        // Trusted devices (BUNYIP-138)
+        .route(
+            "/settings/trusted-devices/:id/revoke",
+            axum::routing::post(dash::settings_revoke_trusted_device),
+        )
         .route(
             "/settings/2fa/setup",
             get(dash::twofa_setup_get).post(dash::twofa_setup_post),
