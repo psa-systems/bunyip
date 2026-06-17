@@ -209,6 +209,10 @@ pub async fn audit_logs(
 pub struct UserQuery {
     pub page: Option<u32>,
     pub search: Option<String>,
+    /// `suspended` switches the list to soft-deleted accounts so an admin can
+    /// reactivate them; anything else (incl. absent) shows live accounts
+    /// (BUNYIP-120).
+    pub status: Option<String>,
 }
 
 pub async fn users(
@@ -222,15 +226,31 @@ pub async fn users(
     };
     let page = q.page.unwrap_or(1).max(1);
     let search = q.search.unwrap_or_default();
-    let data = admin_api::users(&st.api, c.forward.as_deref(), page, 20, &search)
+    let suspended = q.status.as_deref() == Some("suspended");
+    let data = admin_api::users(&st.api, c.forward.as_deref(), page, 20, &search, suspended)
         .await
         .ok();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
     let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
-    let base = if search.is_empty() {
+    // Preserve the active filters across pager links.
+    let mut params: Vec<String> = Vec::new();
+    if !search.is_empty() {
+        params.push(format!("search={}", urlenc(&search)));
+    }
+    if suspended {
+        params.push("status=suspended".to_string());
+    }
+    let base = if params.is_empty() {
         "/admin/users".to_string()
     } else {
-        format!("/admin/users?search={}", urlenc(&search))
+        format!("/admin/users?{}", params.join("&"))
+    };
+    let active_tab = |on: bool| {
+        if on {
+            button_class("secondary", "sm", "")
+        } else {
+            button_class("outline", "sm", "")
+        }
     };
 
     let content = html! {
@@ -239,8 +259,15 @@ pub async fn users(
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" {
                     div class="flex items-center justify-between gap-4" {
-                        h3 class="text-2xl font-semibold leading-none tracking-tight" { "All Users" }
-                        form method="get" action="/admin/users" class="w-64" { input name="search" value=(search) placeholder="Search by email…" class=(dashboard_input()); }
+                        h3 class="text-2xl font-semibold leading-none tracking-tight" { @if suspended { "Suspended Users" } @else { "All Users" } }
+                        form method="get" action="/admin/users" class="w-64" {
+                            @if suspended { input type="hidden" name="status" value="suspended"; }
+                            input name="search" value=(search) placeholder="Search by email…" class=(dashboard_input());
+                        }
+                    }
+                    div class="flex items-center gap-2 text-sm" {
+                        a href="/admin/users" class=(active_tab(!suspended)) { "Active" }
+                        a href="/admin/users?status=suspended" class=(active_tab(suspended)) { "Suspended" }
                     }
                 }
                 div class="p-6 pt-0" {
@@ -249,38 +276,44 @@ pub async fn users(
                             @let is_admin = matches!(u.role, crate::api::types::UserRole::Admin);
                             div class="flex items-center justify-between py-3" {
                                 div {
-                                    p class="font-medium flex items-center gap-2" { (u.email) @if is_admin { (badge("default", "Admin")) } @if !u.email_verified { (badge("outline", "Unverified")) } }
+                                    p class="font-medium flex items-center gap-2" { (u.email) @if is_admin { (badge("default", "Admin")) } @if suspended { (badge("outline", "Suspended")) } @if !u.email_verified { (badge("outline", "Unverified")) } }
                                     p class="text-xs text-muted-foreground" { "Joined " (relative_time(&u.created_at)) }
                                 }
                                 div class="flex items-center gap-2 flex-wrap" {
-                                    a href=(format!("/admin/users/{}", u.id)) class=(button_class("outline", "sm", "")) { "View" }
-                                    a href=(format!("/admin/users/{}/entitlements", u.id)) class=(button_class("outline", "sm", "")) { "Entitlements" }
-                                    form method="post" action=(format!("/admin/users/{}/role", u.id)) onsubmit="return confirm('Change this user role? Admins have full platform access.')" {
-                                        input type="hidden" name="role" value=(if is_admin { "subscriber" } else { "admin" });
-                                        button type="submit" class=(button_class("outline", "sm", "")) { @if is_admin { "Demote" } @else { "Make Admin" } }
-                                    }
-                                    form method="post" action=(format!("/admin/users/{}/reset-password", u.id)) onsubmit="return confirm('Send a password reset email to this user?')" {
-                                        button type="submit" class=(button_class("outline", "sm", "")) { "Reset Password" }
-                                    }
-                                    @if u.lifetime_member {
-                                        form method="post" action=(format!("/admin/users/{}/lifetime/revoke", u.id)) onsubmit="return confirm('Revoke lifetime membership? User will be returned to standard tier with no active subscription.')" {
-                                            button type="submit" class=(button_class("outline", "sm", "")) { "Revoke Lifetime" }
+                                    @if suspended {
+                                        form method="post" action=(format!("/admin/users/{}/reactivate", u.id)) onsubmit="return confirm('Reactivate this user? They will be able to sign in again.')" {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Reactivate" }
                                         }
                                     } @else {
-                                        form method="post" action=(format!("/admin/users/{}/lifetime", u.id)) onsubmit="return confirm('Grant lifetime membership? Creates a $0 Stripe subscription.')" {
-                                            button type="submit" class=(button_class("outline", "sm", "")) { "Lifetime" }
+                                        a href=(format!("/admin/users/{}", u.id)) class=(button_class("outline", "sm", "")) { "View" }
+                                        a href=(format!("/admin/users/{}/entitlements", u.id)) class=(button_class("outline", "sm", "")) { "Entitlements" }
+                                        form method="post" action=(format!("/admin/users/{}/role", u.id)) onsubmit="return confirm('Change this user role? Admins have full platform access.')" {
+                                            input type="hidden" name="role" value=(if is_admin { "subscriber" } else { "admin" });
+                                            button type="submit" class=(button_class("outline", "sm", "")) { @if is_admin { "Demote" } @else { "Make Admin" } }
                                         }
-                                    }
-                                    form method="post" action=(format!("/admin/users/{}/suspend", u.id)) onsubmit="return confirm('Suspend (soft-delete) this user?')" {
-                                        button type="submit" class=(button_class("outline", "sm", "")) { "Suspend" }
-                                    }
-                                    form method="post" action=(format!("/admin/users/{}/delete", u.id)) onsubmit="return confirm('Delete this user? This cannot be undone.')" {
-                                        button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("trash", "h-4 w-4")) }
+                                        form method="post" action=(format!("/admin/users/{}/reset-password", u.id)) onsubmit="return confirm('Send a password reset email to this user?')" {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Reset Password" }
+                                        }
+                                        @if u.lifetime_member {
+                                            form method="post" action=(format!("/admin/users/{}/lifetime/revoke", u.id)) onsubmit="return confirm('Revoke lifetime membership? User will be returned to standard tier with no active subscription.')" {
+                                                button type="submit" class=(button_class("outline", "sm", "")) { "Revoke Lifetime" }
+                                            }
+                                        } @else {
+                                            form method="post" action=(format!("/admin/users/{}/lifetime", u.id)) onsubmit="return confirm('Grant lifetime membership? Creates a $0 Stripe subscription.')" {
+                                                button type="submit" class=(button_class("outline", "sm", "")) { "Lifetime" }
+                                            }
+                                        }
+                                        form method="post" action=(format!("/admin/users/{}/suspend", u.id)) onsubmit="return confirm('Suspend (soft-delete) this user?')" {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Suspend" }
+                                        }
+                                        form method="post" action=(format!("/admin/users/{}/delete", u.id)) onsubmit="return confirm('Delete this user? This cannot be undone.')" {
+                                            button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("trash", "h-4 w-4")) }
+                                        }
                                     }
                                 }
                             }
                         }
-                        @if items.is_empty() { p class="text-center text-muted-foreground py-8" { "No users found" } }
+                        @if items.is_empty() { p class="text-center text-muted-foreground py-8" { @if suspended { "No suspended users" } @else { "No users found" } } }
                     }
                     (pager(&base, page, total_pages))
                 }
@@ -337,6 +370,21 @@ pub async fn user_suspend(
     };
     let _ = admin_api::suspend_user(&st.api, c.forward.as_deref(), &id).await;
     redirect_cookies("/admin/users", &c.set_cookies)
+}
+
+/// Reactivate a suspended user, then return to the suspended list so the admin
+/// stays in the same view (BUNYIP-120).
+pub async fn user_reactivate(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::reactivate_user(&st.api, c.forward.as_deref(), &id).await;
+    redirect_cookies("/admin/users?status=suspended", &c.set_cookies)
 }
 
 pub async fn user_reset_password(
