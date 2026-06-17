@@ -50,6 +50,17 @@ pub enum AuditAction {
     ApplicationDeleted,
     AdminUserRoleChanged,
     AdminUserDeleted,
+    /// Admin corrected a user's email address from the admin user-detail
+    /// surface (BUNYIP-119). Metadata carries the old + new address and
+    /// whether the new address was marked verified in the same edit.
+    AdminUserEmailChanged,
+    /// Admin force-verified a user's email address without the user
+    /// completing the email-verification flow (BUNYIP-119).
+    AdminUserEmailVerified,
+    /// Admin cleared a user's two-factor authentication (BUNYIP-119),
+    /// deleting their TOTP secret + recovery codes so a locked-out user
+    /// can re-enrol. Distinct from the user-initiated `TwoFactorDisabled`.
+    AdminUserTwoFactorReset,
     ApplicationUpdated,
     AdminInviteCreated,
     AdminInviteAccepted,
@@ -148,6 +159,9 @@ impl AuditAction {
             AuditAction::ApplicationDeleted => "application_deleted",
             AuditAction::AdminUserRoleChanged => "admin_user_role_changed",
             AuditAction::AdminUserDeleted => "admin_user_deleted",
+            AuditAction::AdminUserEmailChanged => "admin_user_email_changed",
+            AuditAction::AdminUserEmailVerified => "admin_user_email_verified",
+            AuditAction::AdminUserTwoFactorReset => "admin_user_two_factor_reset",
             AuditAction::ApplicationUpdated => "application_updated",
             AuditAction::AdminInviteCreated => "admin_invite_created",
             AuditAction::AdminInviteAccepted => "admin_invite_accepted",
@@ -200,6 +214,9 @@ impl AuditAction {
                 | AuditAction::ApplicationUpdated
                 | AuditAction::AdminUserRoleChanged
                 | AuditAction::AdminUserDeleted
+                | AuditAction::AdminUserEmailChanged
+                | AuditAction::AdminUserEmailVerified
+                | AuditAction::AdminUserTwoFactorReset
                 | AuditAction::FeedbackResponded
                 | AuditAction::FeedbackDeleted
                 | AuditAction::FeedbackRestored

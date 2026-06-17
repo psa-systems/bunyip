@@ -353,6 +353,78 @@ pub async fn user_reset_password(
     redirect_cookies(&format!("/admin/users/{id}"), &c.set_cookies)
 }
 
+/// Admin email correction (BUNYIP-119). `verified` is an HTML checkbox, so it
+/// only arrives in the body when ticked; absence means "leave unverified".
+#[derive(Deserialize)]
+pub struct EmailForm {
+    pub email: String,
+    #[serde(default)]
+    pub verified: Option<String>,
+}
+
+/// POST /admin/users/{id}/email - correct a user's email (BUNYIP-119).
+pub async fn user_email(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<EmailForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let email = f.email.trim();
+    if email.is_empty() {
+        return redirect_cookies(
+            &format!("/admin/users/{id}?toast_err=Email%20is%20required"),
+            &c.set_cookies,
+        );
+    }
+    let verified = f.verified.is_some();
+    let target =
+        match admin_api::update_user_email(&st.api, c.forward.as_deref(), &id, email, verified)
+            .await
+        {
+            Ok(()) => format!("/admin/users/{id}?toast_ok=Email%20updated"),
+            Err(_) => format!("/admin/users/{id}?toast_err=Could%20not%20update%20email"),
+        };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// POST /admin/users/{id}/email/verify - force-verify a user's email (BUNYIP-119).
+pub async fn user_verify_email(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::verify_user_email(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => format!("/admin/users/{id}?toast_ok=Email%20verified"),
+        Err(_) => format!("/admin/users/{id}?toast_err=Could%20not%20verify%20email"),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// POST /admin/users/{id}/two-factor/reset - clear a user's 2FA (BUNYIP-119).
+pub async fn user_reset_2fa(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::reset_user_two_factor(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => format!("/admin/users/{id}?toast_ok=Two-factor%20cleared"),
+        Err(_) => format!("/admin/users/{id}?toast_err=Could%20not%20clear%20two-factor"),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
 pub async fn user_grant_lifetime(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -444,6 +516,44 @@ pub async fn user_detail(
                     @if target.lifetime_member { div { span class="text-muted-foreground" { "Lifetime: " } "Yes" } }
                     @if let Some(grace) = target.grace_period_end.as_deref() {
                         div { span class="text-muted-foreground" { "Grace ends: " } (relative_time(grace)) }
+                    }
+                }
+            }
+
+            // Identity & security card (BUNYIP-119): the email, email-verified,
+            // and two-factor fields are shown read-only above; this card makes
+            // them editable so an admin can correct an address, force-verify
+            // it, or clear a stuck second factor.
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6 pb-2" {
+                    h3 class="text-base font-semibold leading-none tracking-tight" { "Identity & security" }
+                    p class="text-xs text-muted-foreground" { "Correct the email, force-verify it, or clear a stuck second factor. All actions write an audit-log entry." }
+                }
+                div class="p-6 pt-2 space-y-4" {
+                    form method="post" action=(format!("/admin/users/{}/email", target.id)) class="space-y-2" {
+                        label class="text-sm font-medium" for="admin-email" { "Email" }
+                        div class="flex flex-col sm:flex-row gap-2" {
+                            input id="admin-email" name="email" type="email" required value=(target.email) class=(dashboard_input());
+                            button type="submit" class=(button_class("default", "default", "")) { "Save email" }
+                        }
+                        label class="flex items-center gap-2 text-sm text-muted-foreground" {
+                            input type="checkbox" name="verified" value="true" class="h-4 w-4";
+                            "Mark this address verified (leave unchecked to require the user to re-verify)"
+                        }
+                    }
+                    div class="flex flex-wrap gap-2" {
+                        @if !target.email_verified {
+                            form method="post" action=(format!("/admin/users/{}/email/verify", target.id)) onsubmit="return confirm('Force-verify this email without the user confirming it?')" {
+                                button type="submit" class=(button_class("outline", "default", "")) { "Force-verify email" }
+                            }
+                        }
+                        @if target.two_factor_enabled {
+                            form method="post" action=(format!("/admin/users/{}/two-factor/reset", target.id)) onsubmit="return confirm('Clear this user 2FA? Their authenticator and recovery codes are removed and they must re-enrol.')" {
+                                button type="submit" class=(button_class("outline", "default", "text-destructive hover:text-destructive")) { "Clear 2FA" }
+                            }
+                        } @else {
+                            span class="text-xs text-muted-foreground self-center" { "Two-factor is not enabled for this user." }
+                        }
                     }
                 }
             }
