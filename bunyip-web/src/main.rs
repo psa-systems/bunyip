@@ -36,6 +36,7 @@ async fn main() {
         .route("/", get(public::landing))
         .route("/pricing", get(content::pricing))
         .route("/our-story", get(content::our_story))
+        .route("/roadmap", get(content::roadmap))
         .route("/terms", get(content::terms))
         .route("/privacy", get(content::privacy))
         .route(

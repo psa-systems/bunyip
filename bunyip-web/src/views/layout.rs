@@ -149,6 +149,7 @@ fn header(user: Option<&User>, _show_feedback: bool) -> Markup {
                     nav class="hidden md:flex items-center gap-6" {
                         a href="/pricing" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Pricing" }
                         a href="/our-story" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Our Story" }
+                        a href="/roadmap" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Roadmap" }
                     }
                 }
                 div class="flex items-center gap-4" {
@@ -183,6 +184,7 @@ fn footer(cfg: &Config, apps: &[Application]) -> Markup {
                         ul class="mt-4 space-y-3 text-sm" {
                             li { a href="/pricing" class="text-muted-foreground hover:text-foreground transition-colors" { "Pricing" } }
                             li { a href="/our-story" class="text-muted-foreground hover:text-foreground transition-colors" { "Our Story" } }
+                            li { a href="/roadmap" class="text-muted-foreground hover:text-foreground transition-colors" { "Roadmap" } }
                             @for app in apps {
                                 li { a href=(app_link(app, &cfg.app_domain)) class="text-muted-foreground hover:text-foreground transition-colors" { (app.display_name) } }
                             }
