@@ -44,6 +44,9 @@ pub struct ListUsersQuery {
     pub per_page: Option<i32>,
     pub search: Option<String>,
     pub status: Option<String>,
+    /// When `Some(false)`, list suspended (soft-deleted) accounts instead of
+    /// live ones, so an admin can find and reactivate them (BUNYIP-120).
+    pub active: Option<bool>,
 }
 
 /// GET /v1/admin/users
@@ -69,6 +72,7 @@ pub async fn list_users(
         per_page,
         query.search.as_deref(),
         status_filter,
+        query.active,
     )
     .await?;
 

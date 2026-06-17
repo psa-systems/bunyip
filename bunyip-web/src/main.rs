@@ -150,6 +150,10 @@ async fn main() {
             axum::routing::post(handlers::admin::user_suspend),
         )
         .route(
+            "/admin/users/:id/reactivate",
+            axum::routing::post(handlers::admin::user_reactivate),
+        )
+        .route(
             "/admin/users/:id/reset-password",
             axum::routing::post(handlers::admin::user_reset_password),
         )
