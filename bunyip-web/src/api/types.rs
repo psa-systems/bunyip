@@ -36,6 +36,27 @@ pub enum SubscriptionTier {
     Standard,
 }
 
+/// One active session in the user's session list (BUNYIP-137). Mirrors the
+/// API's `SessionResponse`. Timestamps stay as ISO-8601 strings per the
+/// module convention; the settings page formats them for display.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionInfo {
+    pub id: String,
+    pub device_info: Option<String>,
+    pub ip_address: Option<String>,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    #[serde(default)]
+    pub current: bool,
+}
+
+/// Envelope for `GET /v1/users/me/sessions`, which wraps the list under a
+/// `sessions` key.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionList {
+    pub sessions: Vec<SessionInfo>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct User {
     pub id: String,

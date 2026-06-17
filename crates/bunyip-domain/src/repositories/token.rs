@@ -228,6 +228,30 @@ impl TokenRepository {
         Ok(())
     }
 
+    /// Revoke all of a user's active refresh tokens EXCEPT one (the caller's
+    /// current session). Powers "log out all other devices" (BUNYIP-137).
+    /// Scoped to the legacy `refresh_tokens` table, which is the surface the
+    /// active-sessions panel lists; OIDC SSO sessions are managed separately.
+    /// Returns the number of sessions revoked.
+    pub async fn revoke_other_user_refresh_tokens(
+        pool: &PgPool,
+        user_id: Uuid,
+        keep_token_id: Uuid,
+    ) -> Result<u64, AppError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE refresh_tokens SET revoked_at = NOW()
+            WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(user_id)
+        .bind(keep_token_id)
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
     // =====================
     // Magic Link Tokens
     // =====================
