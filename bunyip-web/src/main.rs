@@ -273,6 +273,10 @@ async fn main() {
             "/admin/applications/:id/group",
             axum::routing::post(handlers::admin::application_set_group),
         )
+        .route(
+            "/admin/applications/:id/swap-order",
+            axum::routing::post(handlers::admin::application_swap_order),
+        )
         // Application groups (BUNYIP-100)
         .route(
             "/admin/application-groups",
