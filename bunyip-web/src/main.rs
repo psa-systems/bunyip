@@ -104,6 +104,11 @@ async fn main() {
             axum::routing::post(dash::membership_reactivate),
         )
         .route("/settings", get(dash::settings))
+        // BUNYIP-139
+        .route(
+            "/settings/profile",
+            axum::routing::post(dash::settings_profile),
+        )
         .route("/settings/email", axum::routing::post(dash::settings_email))
         .route(
             "/settings/password",

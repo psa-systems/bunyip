@@ -33,6 +33,11 @@ pub async fn revoke_trusted_device(
     ok_data(&r).map(|_| ())
 }
 
+// BUNYIP-139: User grew three Option<String> fields, pushing the size diff
+// between the two variants over clippy's default threshold. The enum is
+// constructed once per login attempt - boxing would change every call site
+// for a non-issue. Allow the lint locally.
+#[allow(clippy::large_enum_variant)]
 pub enum LoginOutcome {
     SignedIn(User),
     TwoFactorRequired { challenge_token: String },
@@ -253,6 +258,38 @@ pub async fn accept_invite(
 }
 
 // --- account / email / password --------------------------------------------
+
+/// BUNYIP-139: persist optional first_name / last_name / phone via
+/// `PUT /v1/users/me/profile`. Each arg follows the API contract:
+/// - `Some("trimmed value")` -> write the value
+/// - `Some("")` -> clear the column to NULL
+/// - `None` -> leave the column unchanged (key absent in the JSON body)
+pub async fn update_profile(
+    api: &Api,
+    cookie: Option<&str>,
+    first_name: Option<&str>,
+    last_name: Option<&str>,
+    phone: Option<&str>,
+) -> Result<(), ApiError> {
+    let mut body = serde_json::Map::new();
+    if let Some(v) = first_name {
+        body.insert("first_name".into(), json!(v));
+    }
+    if let Some(v) = last_name {
+        body.insert("last_name".into(), json!(v));
+    }
+    if let Some(v) = phone {
+        body.insert("phone".into(), json!(v));
+    }
+    let r = api
+        .put(
+            "/users/me/profile",
+            cookie,
+            Some(serde_json::Value::Object(body)),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
 
 pub async fn change_password(
     api: &Api,

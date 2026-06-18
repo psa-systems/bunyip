@@ -915,6 +915,9 @@ mod tests {
             trial_ends_at: None,
             lifetime_member: true,
             subscription_override_by: None,
+            first_name: None,
+            last_name: None,
+            phone: None,
         };
 
         let claims = AccessTokenClaims::from_atjwt_and_user(

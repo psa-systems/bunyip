@@ -91,6 +91,16 @@ pub struct User {
     pub subscription_tier: SubscriptionTier,
     pub trial_ends_at: Option<String>,
     pub lifetime_member: bool,
+    /// BUNYIP-139: optional profile fields surfaced for the Settings page
+    /// Profile panel and the dashboard "fill in your name" banner.
+    /// `Option<String>` here is "absent OR cleared"; the dashboard treats
+    /// empty / whitespace-only strings as empty for banner purposes.
+    #[serde(default)]
+    pub first_name: Option<String>,
+    #[serde(default)]
+    pub last_name: Option<String>,
+    #[serde(default)]
+    pub phone: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

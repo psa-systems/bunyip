@@ -95,6 +95,37 @@ impl UserRepository {
         Ok(())
     }
 
+    /// BUNYIP-139: update the user's optional profile fields (first_name,
+    /// last_name, phone). Each Option is interpreted at the SQL level: `Some`
+    /// writes the value; `None` clears the column to NULL. Whitespace
+    /// normalization (trim, "" -> NULL) is the caller's responsibility - this
+    /// method writes verbatim. Returns the updated user row.
+    pub async fn update_profile(
+        pool: &PgPool,
+        user_id: Uuid,
+        first_name: Option<&str>,
+        last_name: Option<&str>,
+        phone: Option<&str>,
+    ) -> Result<User, AppError> {
+        let user = sqlx::query_as::<_, User>(
+            r#"
+            UPDATE users
+            SET first_name = $1, last_name = $2, phone = $3, updated_at = NOW()
+            WHERE id = $4 AND deleted_at IS NULL
+            RETURNING *
+            "#,
+        )
+        .bind(first_name)
+        .bind(last_name)
+        .bind(phone)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("User"))?;
+
+        Ok(user)
+    }
+
     /// Update email verified status
     pub async fn set_email_verified(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {
         sqlx::query(
