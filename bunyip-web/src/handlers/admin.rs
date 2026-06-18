@@ -1669,12 +1669,28 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "All Applications" } }
                 div class="p-6 pt-0" {
                     div class="divide-y" {
-                        @for app in &apps {
+                        @for (i, app) in apps.iter().enumerate() {
                             div class="py-3 flex items-center justify-between gap-4" {
-                                div class="space-y-1" {
-                                    p class="font-medium" { (app.display_name) }
-                                    p class="text-xs text-muted-foreground" { (app.slug) }
-                                    (surface_tags(&SurfaceVisibility::of(app)))
+                                div class="flex items-center gap-3" {
+                                    div class="flex flex-col gap-1" {
+                                        @if i > 0 {
+                                            form method="post" action=(format!("/admin/applications/{}/swap-order", app.id)) {
+                                                input type="hidden" name="target_app_id" value=(apps[i - 1].id);
+                                                button type="submit" title="Move up" aria-label="Move up" class=(button_class("outline", "sm", "")) { "Up" }
+                                            }
+                                        }
+                                        @if i + 1 < apps.len() {
+                                            form method="post" action=(format!("/admin/applications/{}/swap-order", app.id)) {
+                                                input type="hidden" name="target_app_id" value=(apps[i + 1].id);
+                                                button type="submit" title="Move down" aria-label="Move down" class=(button_class("outline", "sm", "")) { "Down" }
+                                            }
+                                        }
+                                    }
+                                    div class="space-y-1" {
+                                        p class="font-medium" { (app.display_name) }
+                                        p class="text-xs text-muted-foreground" { (app.slug) }
+                                        (surface_tags(&SurfaceVisibility::of(app)))
+                                    }
                                 }
                                 div class="flex items-center gap-6" {
                                     form method="post" action=(format!("/admin/applications/{}/field", app.id)) class="flex items-center gap-2" {
@@ -1755,11 +1771,36 @@ struct IdentityView<'a> {
     container_name: &'a str,
 }
 
+/// The descriptive / metadata fields the API accepts on both create and update
+/// (`UpdateApplication` / `CreateApplication`): everything other than identity
+/// and the distribution coordinates. Shared by the create and edit forms so the
+/// field layout cannot drift between them. Borrowed for rendering.
+struct DetailsView<'a> {
+    description: &'a str,
+    icon_url: &'a str,
+    subdomain: &'a str,
+    version: &'a str,
+    source_code_url: &'a str,
+    maintenance_message: &'a str,
+}
+
 /// An HTML checkbox submits its value only when checked, so an unchecked box is
 /// absent from the form body (serde default `""`). Treat the standard checked
 /// markers as true.
 fn checkbox_on(s: &str) -> bool {
     s == "true" || s == "on"
+}
+
+fn details_fields(v: &DetailsView) -> Markup {
+    html! {
+        h4 class="text-lg font-semibold pt-2" { "Details" }
+        div class="space-y-2" { label class="text-sm font-medium" { "Description" } input name="description" value=(v.description) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Icon URL" } input name="icon_url" value=(v.icon_url) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Subdomain" } input name="subdomain" value=(v.subdomain) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Version" } input name="version" value=(v.version) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Source code URL" } input name="source_code_url" value=(v.source_code_url) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Maintenance message" } p class="text-xs text-muted-foreground" { "Shown to users while maintenance mode is on." } input name="maintenance_message" value=(v.maintenance_message) class=(dashboard_input()); }
+    }
 }
 
 fn distribution_fields(v: &DistView) -> Markup {
@@ -1862,6 +1903,7 @@ fn application_form(
     blurb: &str,
     identity: Option<&IdentityView>,
     is_hosted: bool,
+    details: &DetailsView,
     v: &DistView,
     surfaces: Option<&SurfaceVisibility>,
     error: Option<&str>,
@@ -1888,6 +1930,7 @@ fn application_form(
                             input type="checkbox" name="is_hosted" value="true" checked[is_hosted] id="is_hosted" class="mt-1";
                             label for="is_hosted" class="text-sm font-medium" { "Hosted app" p class="text-xs font-normal text-muted-foreground" { "Checked: shows as a launchable hub tile. Unchecked: catalog-only distribution product (downloads / OCI pulls only)." } }
                         }
+                        (details_fields(details))
                         (distribution_fields(v))
                         div class="flex items-center gap-2 pt-2" {
                             button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
@@ -1910,6 +1953,44 @@ fn dist_view_from_form(f: &DistributionForm) -> DistView<'_> {
         oci_image_owner: &f.oci_image_owner,
         oci_image_name: &f.oci_image_name,
         pinned_image_tag: &f.pinned_image_tag,
+    }
+}
+
+fn details_view_from_dist_form(f: &DistributionForm) -> DetailsView<'_> {
+    DetailsView {
+        description: &f.description,
+        icon_url: &f.icon_url,
+        subdomain: &f.subdomain,
+        version: &f.version,
+        source_code_url: &f.source_code_url,
+        maintenance_message: &f.maintenance_message,
+    }
+}
+
+/// Add every non-empty descriptive field (`DetailsView` columns) to an update /
+/// create body, trimmed. Empty inputs are omitted so the backend keeps the
+/// existing column (its UPDATE COALESCEs a NULL to the old value), matching the
+/// "blank fields keep their current value" contract of the distribution fields.
+fn insert_detail_fields(
+    m: &mut serde_json::Map<String, serde_json::Value>,
+    description: &str,
+    icon_url: &str,
+    subdomain: &str,
+    version: &str,
+    source_code_url: &str,
+    maintenance_message: &str,
+) {
+    for (k, val) in [
+        ("description", description),
+        ("icon_url", icon_url),
+        ("subdomain", subdomain),
+        ("version", version),
+        ("source_code_url", source_code_url),
+        ("maintenance_message", maintenance_message),
+    ] {
+        if !val.trim().is_empty() {
+            m.insert(k.into(), json!(val.trim()));
+        }
     }
 }
 
@@ -1945,11 +2026,32 @@ fn distribution_update_body(f: &DistributionForm) -> serde_json::Value {
     };
     m.insert("forgejo_package".into(), json!(package));
     m.insert("is_hosted".into(), json!(checkbox_on(&f.is_hosted)));
+    insert_detail_fields(
+        &mut m,
+        &f.description,
+        &f.icon_url,
+        &f.subdomain,
+        &f.version,
+        &f.source_code_url,
+        &f.maintenance_message,
+    );
     serde_json::Value::Object(m)
 }
 
 #[derive(Deserialize, Default)]
 pub struct DistributionForm {
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub icon_url: String,
+    #[serde(default)]
+    pub subdomain: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub source_code_url: String,
+    #[serde(default)]
+    pub maintenance_message: String,
     #[serde(default)]
     pub artifact_source: String,
     #[serde(default)]
@@ -2028,14 +2130,23 @@ pub async fn application_edit(
                 oci_image_name: app.oci_image_name.as_deref().unwrap_or_default(),
                 pinned_image_tag: app.pinned_image_tag.as_deref().unwrap_or_default(),
             };
+            let details = DetailsView {
+                description: app.description.as_deref().unwrap_or_default(),
+                icon_url: app.icon_url.as_deref().unwrap_or_default(),
+                subdomain: app.subdomain.as_deref().unwrap_or_default(),
+                version: app.version.as_deref().unwrap_or_default(),
+                source_code_url: app.source_code_url.as_deref().unwrap_or_default(),
+                maintenance_message: app.maintenance_message.as_deref().unwrap_or_default(),
+            };
             let surfaces = SurfaceVisibility::of(app);
             html! {
                 (application_form(
                     &format!("/admin/applications/{id}/distribution"),
                     &format!("Edit {}", app.display_name),
-                    "Set the Forgejo binary and OCI container coordinates. Blank fields keep their current value.",
+                    "Edit the application details, Forgejo binary, and OCI container coordinates. Blank fields keep their current value.",
                     None,
                     app.is_hosted,
+                    &details,
                     &v,
                     Some(&surfaces),
                     None,
@@ -2092,12 +2203,14 @@ pub async fn application_distribution_save(
         Ok(()) => redirect_cookies("/admin/applications", &c.set_cookies),
         Err(e) => {
             let v = dist_view_from_form(&f);
+            let details = details_view_from_dist_form(&f);
             let content = application_form(
                 &format!("/admin/applications/{id}/distribution"),
                 "Edit application",
-                "Set the Forgejo binary and OCI container coordinates. Blank fields keep their current value.",
+                "Edit the application details, Forgejo binary, and OCI container coordinates. Blank fields keep their current value.",
                 None,
                 checkbox_on(&f.is_hosted),
+                &details,
                 &v,
                 None,
                 Some(&e.user_message()),
@@ -2111,6 +2224,31 @@ pub async fn application_distribution_save(
             )
         }
     }
+}
+
+#[derive(Deserialize)]
+pub struct SwapOrderForm {
+    #[serde(default)]
+    pub target_app_id: String,
+}
+
+/// POST /admin/applications/{id}/swap-order
+/// Swap this application's sort order with the neighbour identified by
+/// `target_app_id` (the adjacent row in the admin list), then return to the
+/// list where the new ordering is visible. BUNYIP-121.
+pub async fn application_swap_order(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<SwapOrderForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::swap_application_order(&st.api, c.forward.as_deref(), &id, &f.target_app_id)
+        .await;
+    redirect_cookies("/admin/applications", &c.set_cookies)
 }
 
 #[derive(Deserialize)]
@@ -2168,6 +2306,18 @@ pub struct CreateAppForm {
     #[serde(default)]
     pub container_name: String,
     #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub icon_url: String,
+    #[serde(default)]
+    pub subdomain: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub source_code_url: String,
+    #[serde(default)]
+    pub maintenance_message: String,
+    #[serde(default)]
     pub artifact_source: String,
     #[serde(default)]
     pub forgejo_owner: String,
@@ -2209,6 +2359,15 @@ fn create_app_body(f: &CreateAppForm) -> Result<serde_json::Value, String> {
     m.insert("display_name".into(), json!(display_name));
     m.insert("container_name".into(), json!(container_name));
     m.insert("is_hosted".into(), json!(checkbox_on(&f.is_hosted)));
+    insert_detail_fields(
+        &mut m,
+        &f.description,
+        &f.icon_url,
+        &f.subdomain,
+        &f.version,
+        &f.source_code_url,
+        &f.maintenance_message,
+    );
     if !f.artifact_source.trim().is_empty() {
         m.insert("artifact_source".into(), json!(f.artifact_source.trim()));
     }
@@ -2243,6 +2402,14 @@ pub async fn application_new(State(st): State<AppState>, headers: HeaderMap) -> 
         display_name: "",
         container_name: "",
     };
+    let details = DetailsView {
+        description: "",
+        icon_url: "",
+        subdomain: "",
+        version: "",
+        source_code_url: "",
+        maintenance_message: "",
+    };
     let v = DistView {
         artifact_source: "release",
         forgejo_owner: "",
@@ -2259,6 +2426,7 @@ pub async fn application_new(State(st): State<AppState>, headers: HeaderMap) -> 
         "Create a catalog application and (optionally) its Forgejo binary and OCI container coordinates.",
         Some(&id),
         true,
+        &details,
         &v,
         None,
         None,
@@ -2301,12 +2469,21 @@ pub async fn application_create(
             oci_image_name: &f.oci_image_name,
             pinned_image_tag: &f.pinned_image_tag,
         };
+        let details = DetailsView {
+            description: &f.description,
+            icon_url: &f.icon_url,
+            subdomain: &f.subdomain,
+            version: &f.version,
+            source_code_url: &f.source_code_url,
+            maintenance_message: &f.maintenance_message,
+        };
         let content = application_form(
             "/admin/applications",
             "New application",
             "Create a catalog application and (optionally) its Forgejo binary and OCI container coordinates.",
             Some(&id),
             checkbox_on(&f.is_hosted),
+            &details,
             &v,
             None,
             Some(err),
@@ -3350,5 +3527,47 @@ mod tests {
         f.slug = "mokosh".into();
         f.name = "a".repeat(300);
         assert!(create_app_body(&f).is_err());
+    }
+
+    #[test]
+    fn update_body_sends_detail_fields_trimmed_and_omits_empty() {
+        // The descriptive fields are now editable from the admin form; set ones
+        // are sent (trimmed) and blank ones are omitted so the backend keeps the
+        // existing column value.
+        let f = DistributionForm {
+            description: "  A great app  ".into(),
+            icon_url: "https://example.com/icon.png".into(),
+            maintenance_message: "Back at 5pm".into(),
+            ..Default::default()
+        };
+        let body = distribution_update_body(&f);
+        assert_eq!(body["description"], json!("A great app"));
+        assert_eq!(body["icon_url"], json!("https://example.com/icon.png"));
+        assert_eq!(body["maintenance_message"], json!("Back at 5pm"));
+        assert!(body.get("subdomain").is_none());
+        assert!(body.get("version").is_none());
+        assert!(body.get("source_code_url").is_none());
+    }
+
+    #[test]
+    fn create_body_sends_detail_fields() {
+        let f = CreateAppForm {
+            name: "Mokosh".into(),
+            slug: "mokosh".into(),
+            display_name: "Mokosh".into(),
+            container_name: "mokosh".into(),
+            description: "Identity platform".into(),
+            version: "1.2.3".into(),
+            source_code_url: "https://dev.a8n.run/psa-systems/mokosh".into(),
+            ..Default::default()
+        };
+        let body = create_app_body(&f).expect("create_app_body");
+        assert_eq!(body["description"], json!("Identity platform"));
+        assert_eq!(body["version"], json!("1.2.3"));
+        assert_eq!(
+            body["source_code_url"],
+            json!("https://dev.a8n.run/psa-systems/mokosh")
+        );
+        assert!(body.get("icon_url").is_none());
     }
 }
