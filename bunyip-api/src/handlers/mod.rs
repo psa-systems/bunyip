@@ -122,7 +122,7 @@ pub use totp::{
 };
 pub use user::{
     change_password, confirm_email_change, confirm_email_verification, delete_account,
-    get_current_user, list_sessions, list_trusted_devices, request_email_change,
+    get_current_user, grant_consent, list_sessions, list_trusted_devices, request_email_change,
     request_email_verification, revoke_other_sessions, revoke_session, revoke_trusted_device,
     update_current_user_profile,
 };

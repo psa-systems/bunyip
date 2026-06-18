@@ -29,7 +29,7 @@ async fn main() {
         cfg: Arc::clone(&cfg),
     };
 
-    use handlers::{auth_pages as ap, content, dashboard as dash, public};
+    use handlers::{auth_pages as ap, consent, content, dashboard as dash, public};
 
     let app = Router::new()
         // Public / marketing
@@ -108,6 +108,13 @@ async fn main() {
         .route(
             "/settings/profile",
             axum::routing::post(dash::settings_profile),
+        )
+        // BUNYIP-140: OIDC consent screen (rendered when /oauth2/authorize
+        // on bunyip-api detects a (user, client, scope) combination that has
+        // not been consented to yet).
+        .route(
+            "/oauth2/consent",
+            get(consent::consent_get).post(consent::consent_post),
         )
         .route("/settings/email", axum::routing::post(dash::settings_email))
         .route(

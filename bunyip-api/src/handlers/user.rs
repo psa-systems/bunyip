@@ -118,6 +118,49 @@ fn normalize_profile_field(
     }
 }
 
+/// BUNYIP-140: request body for `POST /v1/users/me/consents`. The web UI
+/// (bunyip-web's consent screen) sends the client_id from the in-flight
+/// authorize round-trip plus the set of newly-granted scopes (the missing
+/// set the authorize handler bounced on).
+#[derive(Debug, Deserialize)]
+pub struct GrantConsentRequest {
+    pub client_id: uuid::Uuid,
+    pub scopes: Vec<String>,
+}
+
+/// POST /v1/users/me/consents (BUNYIP-140)
+///
+/// Persist the user's OIDC scope consents for `client_id`. The new scopes
+/// are unioned into `user_application_access.granted_scopes`; existing
+/// scopes are preserved. The signed-in session cookie authenticates the
+/// caller; the (user, client) pair is the consent's primary key.
+///
+/// Empty `scopes` is allowed and a no-op (returns 200). The handler does
+/// not validate that the scopes are in `client.allowed_scopes` because the
+/// authorize handler already filters that on the next round-trip; storing
+/// a stale scope here is harmless.
+pub async fn grant_consent(
+    req: HttpRequest,
+    user: AuthenticatedUser,
+    pool: web::Data<PgPool>,
+    oidc_provider: web::Data<
+        Option<std::sync::Arc<bunyip_oidc::services::oidc_provider::OidcProvider>>,
+    >,
+    body: web::Json<GrantConsentRequest>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let provider = oidc_provider
+        .as_ref()
+        .as_ref()
+        .ok_or_else(|| AppError::not_found("OIDC provider not configured"))?;
+    let _ = &pool; // pool unused; provider owns its own pool. Kept for symmetry with sibling handlers.
+    provider
+        .add_scopes_to_grant(user.0.sub, body.client_id, &body.scopes)
+        .await
+        .map_err(|e| AppError::internal(format!("consent persist failed: {e}")))?;
+    Ok(success_no_data(request_id))
+}
+
 /// PUT /v1/users/me/profile (BUNYIP-139)
 ///
 /// Persist the optional first_name / last_name / phone columns. Fields absent
