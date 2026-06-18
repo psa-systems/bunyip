@@ -158,8 +158,12 @@ impl IdTokenClaims {
     /// Assemble the ID-token claim set. Pure (no signing, keys, or DB) so the
     /// claim mapping - notably `bunyip_role` from the user's role and the
     /// per-client tenant claim (BUNYIP-63) - is unit-testable; `mint_id_token`
-    /// computes `at_hash`, calls this, and signs. Profile claims are gated
-    /// on the `email` scope; `bunyip_role` and the tenant claim are not.
+    /// computes `at_hash`, calls this, and signs. `email` / `email_verified`
+    /// / `membership_status` / `has_member_access` ride the `email` scope;
+    /// BUNYIP-140 adds `given_name` / `family_name` on the `profile` scope
+    /// and `phone_number` on the `phone` scope (NULL columns omit the key
+    /// rather than emitting empty strings). `bunyip_role` and the tenant
+    /// claim are unconditional.
     #[allow(clippy::too_many_arguments)]
     fn build(
         issuer: &str,
@@ -177,6 +181,23 @@ impl IdTokenClaims {
         let mut extra = BTreeMap::new();
         if let (Some(name), Some(tid)) = (client.tenant_claim_name.as_deref(), selected_tenant_id) {
             extra.insert(name.to_string(), serde_json::Value::String(tid.to_string()));
+        }
+        // BUNYIP-140 standard profile / phone claims. Each gates on (a) the
+        // scope being in the at+jwt's scope set and (b) the source column
+        // being non-NULL + non-empty. NULL columns serialize as absent
+        // claims (no empty strings).
+        if scope.iter().any(|s| s == "profile") {
+            if let Some(v) = user.first_name.as_deref().filter(|s| !s.is_empty()) {
+                extra.insert("given_name".into(), serde_json::Value::String(v.into()));
+            }
+            if let Some(v) = user.last_name.as_deref().filter(|s| !s.is_empty()) {
+                extra.insert("family_name".into(), serde_json::Value::String(v.into()));
+            }
+        }
+        if scope.iter().any(|s| s == "phone") {
+            if let Some(v) = user.phone.as_deref().filter(|s| !s.is_empty()) {
+                extra.insert("phone_number".into(), serde_json::Value::String(v.into()));
+            }
         }
         IdTokenClaims {
             iss: issuer.to_string(),
@@ -1058,6 +1079,71 @@ impl OidcProvider {
         .execute(&self.pool)
         .await
         .map_err(|e| AppError::internal(format!("Failed to grant entitlement: {e}")))?;
+
+        Ok(())
+    }
+
+    /// BUNYIP-140: load the granted_scopes set for an (user, client) pair.
+    /// Returns an empty Vec if no row exists yet OR the row is revoked. The
+    /// authorize handler computes `requested - granted` and renders the
+    /// consent screen when that delta is non-empty.
+    ///
+    /// Runtime-only query (not `query_scalar!`) so this method does not need
+    /// a `.sqlx/` offline-cache regen.
+    pub async fn get_granted_scopes(
+        &self,
+        user_id: Uuid,
+        client_id: Uuid,
+    ) -> Result<Vec<String>, AppError> {
+        let row: Option<Vec<String>> = sqlx::query_scalar(
+            r#"
+            SELECT granted_scopes FROM user_application_access
+            WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(user_id)
+        .bind(client_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| AppError::internal(format!("Failed to read granted scopes: {e}")))?;
+
+        Ok(row.unwrap_or_default())
+    }
+
+    /// BUNYIP-140: persist the consent grant. If the row exists, the new
+    /// scopes are unioned into the existing `granted_scopes` set; if not,
+    /// a new row is inserted with the supplied scopes. Idempotent for any
+    /// (user, client) pair.
+    ///
+    /// Runtime-only query (not `query!`) so this method does not need a
+    /// `.sqlx/` offline-cache regen.
+    pub async fn add_scopes_to_grant(
+        &self,
+        user_id: Uuid,
+        client_id: Uuid,
+        new_scopes: &[String],
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            INSERT INTO user_application_access
+                (user_id, client_id, granted_scopes, granted_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT (user_id, client_id)
+            DO UPDATE SET
+                granted_scopes = ARRAY(
+                    SELECT DISTINCT unnest(
+                        user_application_access.granted_scopes || EXCLUDED.granted_scopes
+                    )
+                ),
+                revoked_at = NULL
+            "#,
+        )
+        .bind(user_id)
+        .bind(client_id)
+        .bind(new_scopes)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| AppError::internal(format!("Failed to persist consent: {e}")))?;
 
         Ok(())
     }

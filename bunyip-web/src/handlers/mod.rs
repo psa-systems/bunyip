@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod auth_pages;
+pub mod consent;
 pub mod content;
 pub mod dashboard;
 pub mod public;

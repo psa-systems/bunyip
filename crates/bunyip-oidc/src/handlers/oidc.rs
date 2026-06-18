@@ -437,11 +437,60 @@ pub async fn authorize(
         .map(|s| s.to_string())
         .collect();
 
-    // Auto-grant entitlement on first login (JIT provisioning)
+    // BUNYIP-140 JIT path: replace the old "grant every allowed_scope"
+    // behaviour with a baseline-only auto-grant. Scopes that disclose
+    // user-profile data (`profile`, `phone`) are no longer auto-granted;
+    // they require the explicit consent screen rendered below.
+    //
+    // The baseline list intentionally hardcodes the no-consent set: openid
+    // (mandatory per OIDC), email (verified mailbox, no PII beyond the
+    // address), offline_access (refresh tokens; client must already be
+    // configured for them via allowed_grant_types). Any scope outside this
+    // set must reach `granted_scopes` only through `/oauth2/consent`.
+    const JIT_BASELINE_SCOPES: &[&str] = &["openid", "email", "offline_access"];
     if !provider.has_entitlement(session.user_id, client_id).await? {
+        let baseline: Vec<String> = client
+            .allowed_scopes
+            .iter()
+            .filter(|s| JIT_BASELINE_SCOPES.contains(&s.as_str()))
+            .cloned()
+            .collect();
         provider
-            .grant_entitlement(session.user_id, client_id, &client.allowed_scopes)
+            .grant_entitlement(session.user_id, client_id, &baseline)
             .await?;
+    }
+
+    // BUNYIP-140 consent gate: any requested scope that isn't already in
+    // `granted_scopes` triggers the consent screen. Returns the user to
+    // bunyip-web's consent page with the original authorize parameters so
+    // Allow can resume the dance.
+    let granted = provider
+        .get_granted_scopes(session.user_id, client_id)
+        .await?;
+    let granted_set: std::collections::HashSet<&str> = granted.iter().map(String::as_str).collect();
+    let missing: Vec<&str> = requested_scopes
+        .iter()
+        .map(String::as_str)
+        .filter(|s| !granted_set.contains(s))
+        .collect();
+    if !missing.is_empty() {
+        // Hand control to bunyip-web. The consent page reads every authorize
+        // parameter back from the URL so a successful Allow can issue a
+        // fresh /oauth2/authorize redirect with the same state / nonce /
+        // code_challenge.
+        let consent_url = format!(
+            "{}/oauth2/consent?client_id={}&missing={}&continue={}",
+            config.web_origin.trim_end_matches('/'),
+            urlencoding::encode(&q.client_id),
+            urlencoding::encode(&missing.join(" ")),
+            urlencoding::encode(&format!("{}{}", provider.issuer(), req.uri())),
+        );
+        let mut response = HttpResponse::Found();
+        response.insert_header(("Location", consent_url));
+        for c in &silent_cookies {
+            response.cookie(c.clone());
+        }
+        return Ok(response.finish());
     }
 
     // BUNYIP-62: per-RP tenant gating. When the client has a non-null
@@ -931,7 +980,17 @@ pub async fn userinfo(
         .await?
         .ok_or_else(|| AppError::OidcInvalidToken("user not found".into()))?;
 
-    Ok(HttpResponse::Ok().json(serde_json::json!({
+    // BUNYIP-140: extend the userinfo response with `profile` and `phone`
+    // standard OIDC claims when (a) the access token's scope set covers them
+    // AND (b) the corresponding column is non-NULL. NULL columns serialize
+    // as ABSENT keys (not empty strings) so a verifying RP can treat
+    // "claim absent" as "user has not filled it in yet" and fall back to
+    // their own onboarding prompt. The scope check is against the at+jwt's
+    // own `scope` claim - the granted-scopes record on bunyip is the source
+    // of truth at authorize time, not at userinfo time.
+    let token_scopes: std::collections::HashSet<&str> =
+        at_claims.scope.split_whitespace().collect();
+    let mut body = serde_json::json!({
         "sub": user.id.to_string(),
         "email": user.email,
         "email_verified": user.email_verified,
@@ -942,7 +1001,25 @@ pub async fn userinfo(
             user.trial_ends_at.map(|t| t.timestamp()),
             &user.membership_status,
         ),
-    })))
+    });
+    if token_scopes.contains("profile") {
+        if let Some(obj) = body.as_object_mut() {
+            if let Some(v) = user.first_name.as_deref().filter(|s| !s.is_empty()) {
+                obj.insert("given_name".into(), serde_json::Value::String(v.into()));
+            }
+            if let Some(v) = user.last_name.as_deref().filter(|s| !s.is_empty()) {
+                obj.insert("family_name".into(), serde_json::Value::String(v.into()));
+            }
+        }
+    }
+    if token_scopes.contains("phone") {
+        if let Some(obj) = body.as_object_mut() {
+            if let Some(v) = user.phone.as_deref().filter(|s| !s.is_empty()) {
+                obj.insert("phone_number".into(), serde_json::Value::String(v.into()));
+            }
+        }
+    }
+    Ok(HttpResponse::Ok().json(body))
 }
 
 // ── Revocation endpoint ───────────────────────────────────────────────────────

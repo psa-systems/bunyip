@@ -14,6 +14,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/me/profile",
                 web::put().to(handlers::update_current_user_profile),
             )
+            // BUNYIP-140: OIDC scope consent grants (consent-screen POST target)
+            .route("/me/consents", web::post().to(handlers::grant_consent))
             .route("/me/password", web::put().to(handlers::change_password))
             .route("/me/email", web::post().to(handlers::request_email_change))
             .route(
