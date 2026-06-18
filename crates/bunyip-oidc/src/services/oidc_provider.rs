@@ -1353,6 +1353,9 @@ mod tests {
             trial_ends_at: None,
             lifetime_member: false,
             subscription_override_by: None,
+            first_name: None,
+            last_name: None,
+            phone: None,
         }
     }
 

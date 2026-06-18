@@ -9,6 +9,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/users")
             .route("/me", web::get().to(handlers::get_current_user))
+            // BUNYIP-139: optional profile fields (first_name / last_name / phone)
+            .route(
+                "/me/profile",
+                web::put().to(handlers::update_current_user_profile),
+            )
             .route("/me/password", web::put().to(handlers::change_password))
             .route("/me/email", web::post().to(handlers::request_email_change))
             .route(

@@ -45,11 +45,42 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
     let tagline = TAGLINES[rotating_index(TAGLINES.len())];
     let base_domain = st.cfg.domain_or_localhost();
 
+    // BUNYIP-139: nudge the user to fill in their name once. The banner
+    // renders only while BOTH first_name and last_name are still
+    // empty - first save makes it disappear (no dismiss-state needed).
+    // Whitespace-only values count as empty; trimming happens at the API
+    // edge so the banner accurately reflects what other apps would see.
+    let profile_empty = user
+        .first_name
+        .as_deref()
+        .map(str::trim)
+        .map(str::is_empty)
+        .unwrap_or(true)
+        || user
+            .last_name
+            .as_deref()
+            .map(str::trim)
+            .map(str::is_empty)
+            .unwrap_or(true);
+
     let content = html! {
         div class="space-y-8" {
             div {
                 h1 class="text-3xl font-bold" { "Welcome back!" }
                 p class="mt-2 text-muted-foreground" { (tagline) }
+            }
+
+            @if profile_empty {
+                div class="rounded-lg border border-primary/30 bg-primary/5 p-4 flex items-center justify-between gap-4" {
+                    div class="flex items-start gap-3" {
+                        (icon("user-cog", "h-5 w-5 text-primary mt-0.5"))
+                        div {
+                            p class="text-sm font-medium" { "Finish setting up your profile" }
+                            p class="text-sm text-muted-foreground" { "Add your name so connected apps can greet you properly." }
+                        }
+                    }
+                    a href="/settings#profile" class=(button_class("default", "sm", "shrink-0 bg-primary text-primary-foreground")) { "Update profile" }
+                }
             }
 
             // Membership status
@@ -1030,6 +1061,22 @@ pub async fn settings(
                 }
             }
 
+            // BUNYIP-139: Profile (first_name, last_name, phone). All three
+            // are optional at the DB level; the Settings form trims input and
+            // empty submission clears the column to NULL. Length is bounded
+            // at 64 per the DB CHECK; the same limit is enforced at the API
+            // edge. Persistence: PUT /v1/users/me/profile via
+            // `auth_api::update_profile`.
+            (settings_card("user-cog", "from-primary to-teal-500", "Profile", html! {
+                form method="post" action="/settings/profile" class="space-y-4 max-w-md" {
+                    div class="space-y-2" { label class="text-sm font-medium" { "First Name" } input name="first_name" type="text" maxlength="64" value=(user.first_name.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label class="text-sm font-medium" { "Last Name" } input name="last_name" type="text" maxlength="64" value=(user.last_name.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label class="text-sm font-medium" { "Phone " span class="text-xs text-muted-foreground" { "(optional)" } } input name="phone" type="tel" maxlength="64" value=(user.phone.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
+                    p class="text-xs text-muted-foreground" { "Apps that connect to your Bunyip account can request these fields. You will be asked to confirm before any new app sees them." }
+                    button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-teal-500 text-white border-0")) { "Save Profile" }
+                }
+            }))
+
             // Change email. autocomplete="off" on the form + value="" on the
             // new-email input defeat the password-manager's "fill in the
             // saved username" heuristic that was leaving the field already
@@ -1281,6 +1328,48 @@ pub struct EmailChangeForm {
     #[serde(default)]
     pub totp_code: String,
 }
+
+/// BUNYIP-139: Settings -> Profile form.
+#[derive(Deserialize)]
+pub struct ProfileForm {
+    #[serde(default)]
+    pub first_name: String,
+    #[serde(default)]
+    pub last_name: String,
+    #[serde(default)]
+    pub phone: String,
+}
+
+/// BUNYIP-139: POST /settings/profile. Persists optional first_name /
+/// last_name / phone via `auth_api::update_profile`. Every field is sent on
+/// every submit (trimmed at the API edge) so a user can clear a value by
+/// erasing the input and saving.
+pub async fn settings_profile(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<ProfileForm>,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match auth_api::update_profile(
+        &st.api,
+        c.forward.as_deref(),
+        Some(f.first_name.as_str()),
+        Some(f.last_name.as_str()),
+        Some(f.phone.as_str()),
+    )
+    .await
+    {
+        Ok(()) => redirect_cookies("/settings?ok=Profile+saved", &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
+    }
+}
+
 pub async fn settings_email(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1621,6 +1710,9 @@ mod tests {
             subscription_tier: SubscriptionTier::Free,
             trial_ends_at: None,
             lifetime_member: false,
+            first_name: None,
+            last_name: None,
+            phone: None,
         }
     }
 

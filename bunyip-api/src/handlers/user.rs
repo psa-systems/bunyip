@@ -76,6 +76,88 @@ pub async fn get_current_user(
     Ok(success(UserResponse::from(user), request_id))
 }
 
+/// BUNYIP-139 (slice A of BUNYIP-103): request body for `PUT /v1/users/me/profile`.
+/// Each `Option<String>` reads as: present + non-empty after trim -> write the
+/// value; present + empty / whitespace-only -> clear to NULL; absent -> leave
+/// the column unchanged. Length is bounded at 64 chars per column to match
+/// the DB CHECK constraint and return a clean 400 instead of a 500.
+#[derive(Debug, Deserialize)]
+pub struct UpdateProfileRequest {
+    #[serde(default)]
+    pub first_name: Option<String>,
+    #[serde(default)]
+    pub last_name: Option<String>,
+    #[serde(default)]
+    pub phone: Option<String>,
+}
+
+const PROFILE_FIELD_MAX_LEN: usize = 64;
+
+fn normalize_profile_field(
+    field: &str,
+    raw: &Option<String>,
+) -> Result<Option<Option<String>>, AppError> {
+    // None at the JSON level = "leave the column unchanged" (outer None).
+    // Some + empty after trim = "clear to NULL" (Some(None)).
+    // Some + non-empty after trim = "write the trimmed value" (Some(Some)).
+    match raw {
+        None => Ok(None),
+        Some(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                Ok(Some(None))
+            } else if trimmed.chars().count() > PROFILE_FIELD_MAX_LEN {
+                Err(AppError::validation(
+                    field,
+                    format!("{field} must be {PROFILE_FIELD_MAX_LEN} characters or fewer"),
+                ))
+            } else {
+                Ok(Some(Some(trimmed.to_string())))
+            }
+        }
+    }
+}
+
+/// PUT /v1/users/me/profile (BUNYIP-139)
+///
+/// Persist the optional first_name / last_name / phone columns. Fields absent
+/// from the request body are left unchanged; fields present + empty are
+/// cleared to NULL. Over-length input returns 400, not 500.
+///
+/// No OIDC claim emission yet - that lands in BUNYIP-140 alongside the
+/// `profile` + `phone` scope plumbing.
+pub async fn update_current_user_profile(
+    req: HttpRequest,
+    user: AuthenticatedUser,
+    pool: web::Data<PgPool>,
+    body: web::Json<UpdateProfileRequest>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+
+    let first_name = normalize_profile_field("first_name", &body.first_name)?;
+    let last_name = normalize_profile_field("last_name", &body.last_name)?;
+    let phone = normalize_profile_field("phone", &body.phone)?;
+
+    let current = UserRepository::find_by_id(&pool, user.0.sub)
+        .await?
+        .ok_or(AppError::not_found("User"))?;
+
+    let next_first = first_name.unwrap_or(current.first_name.clone());
+    let next_last = last_name.unwrap_or(current.last_name.clone());
+    let next_phone = phone.unwrap_or(current.phone.clone());
+
+    let updated = UserRepository::update_profile(
+        &pool,
+        user.0.sub,
+        next_first.as_deref(),
+        next_last.as_deref(),
+        next_phone.as_deref(),
+    )
+    .await?;
+
+    Ok(success(UserResponse::from(updated), request_id))
+}
+
 /// PUT /v1/users/me/password
 /// Change current user's password
 pub async fn change_password(
