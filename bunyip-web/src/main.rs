@@ -24,6 +24,11 @@ async fn main() {
     let cfg = Arc::new(config::Config::from_env());
     let api = api::Api::new(&cfg.api_url);
     let bind_addr = cfg.bind_addr.clone();
+    // BUNYIP-145: pin the browser-facing bunyip-api origin into the layout
+    // module so every authenticated shell can emit an SSE subscriber that
+    // connects to `<api_url>/v1/events` without threading the config through
+    // 45 handler call sites.
+    views::layout::install_sse_api_origin(cfg.api_url.clone());
     let state = web::AppState {
         api,
         cfg: Arc::clone(&cfg),

@@ -31,7 +31,16 @@ use crate::services::{
     ReleaseCache, StripeConfig, StripeService, TotpService, WebhookService,
 };
 use crate::validation;
+use bunyip_domain::services::{BunyipEvent, EventBus};
 use bunyip_oci::services::ManifestCache;
+
+/// BUNYIP-145: publish a `claims_changed` event for the given user. Fire-and-
+/// forget: the event bus drops the event silently when no tabs are subscribed.
+/// Mutation handlers call this AFTER the revoke + audit write so a busy SPA
+/// reacting to the SSE delivery never races a half-applied DB change.
+fn announce_claims_changed(bus: &EventBus, user_id: uuid::Uuid) {
+    bus.publish(BunyipEvent::ClaimsChanged { user_id });
+}
 
 /// BUNYIP-144: revoke every refresh-token family belonging to `user_id` so the
 /// next request from any of their tabs 401s on `/auth/refresh`, bounces to
@@ -128,6 +137,7 @@ pub async fn update_user_status(
     admin: AdminUser,
     pool: web::Data<PgPool>,
     oidc_provider: web::Data<Option<Arc<bunyip_oidc::services::oidc_provider::OidcProvider>>>,
+    bus: web::Data<Arc<EventBus>>,
     path: web::Path<uuid::Uuid>,
     body: web::Json<UpdateUserStatusRequest>,
 ) -> Result<HttpResponse, AppError> {
@@ -156,6 +166,9 @@ pub async fn update_user_status(
                 "sessions_revoked": sessions_revoked,
             }));
         AuditLogRepository::create(&pool, audit_log).await?;
+
+        // BUNYIP-145: tell any open SPA tab the claims set is dirty.
+        announce_claims_changed(bus.as_ref(), user_id);
     } else {
         let target_user = UserRepository::find_by_id(&pool, user_id)
             .await?
@@ -181,6 +194,15 @@ pub async fn update_user_status(
         if let Some(provider) = oidc_provider.as_ref().as_ref().cloned() {
             tokio::spawn(dispatch_lifecycle_event(provider, user_id, "user.deleted"));
         }
+
+        // BUNYIP-145: also publish a session_revoked event so any tabs the
+        // user has open redirect to /login immediately. claims_changed alone
+        // would also catch them on next refresh but session_revoked is the
+        // proactive surface BUNYIP-145's design uses for explicit revoke.
+        bus.publish(BunyipEvent::SessionRevoked {
+            user_id,
+            reason: "admin_deactivate",
+        });
     }
 
     Ok(success_no_data(request_id))
@@ -253,6 +275,7 @@ pub async fn update_user_role(
     req: HttpRequest,
     admin: AdminUser,
     pool: web::Data<PgPool>,
+    bus: web::Data<Arc<EventBus>>,
     path: web::Path<uuid::Uuid>,
     body: web::Json<UpdateUserRoleRequest>,
 ) -> Result<HttpResponse, AppError> {
@@ -291,6 +314,13 @@ pub async fn update_user_role(
     let role_changed = old_role != body.role;
     if role_changed {
         TokenRepository::revoke_all_user_refresh_tokens(pool.get_ref(), user_id).await?;
+        // BUNYIP-145: send a session_revoked event so the user's open tabs
+        // redirect to /login at once (claims_changed would also work but
+        // session_revoked carries the explicit reason the SPA can flash).
+        bus.publish(BunyipEvent::SessionRevoked {
+            user_id,
+            reason: "role_change",
+        });
     }
 
     tracing::info!(
@@ -479,6 +509,7 @@ pub async fn grant_membership(
     admin: AdminUser,
     pool: web::Data<PgPool>,
     stripe: web::Data<Arc<StripeService>>,
+    bus: web::Data<Arc<EventBus>>,
     body: web::Json<GrantMembershipRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -521,6 +552,8 @@ pub async fn grant_membership(
     // grant carry stale claims. Force re-login so the next request mints
     // fresh tokens with the new state.
     let sessions_revoked = revoke_user_sessions(pool.get_ref(), body.user_id).await?;
+    // BUNYIP-145: notify any open SPA tab so it refreshes in place.
+    announce_claims_changed(bus.as_ref(), body.user_id);
 
     let audit_log = CreateAuditLog::new(AuditAction::AdminMembershipGranted)
         .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
@@ -542,6 +575,7 @@ pub async fn revoke_membership(
     req: HttpRequest,
     admin: AdminUser,
     pool: web::Data<PgPool>,
+    bus: web::Data<Arc<EventBus>>,
     body: web::Json<GrantMembershipRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -564,6 +598,10 @@ pub async fn revoke_membership(
     // keeps an admin-or-active-member claim for the full refresh-token TTL
     // (30 days for subscribers) after their membership was canceled.
     let sessions_revoked = revoke_user_sessions(pool.get_ref(), body.user_id).await?;
+    // BUNYIP-145: revoked membership is a privilege-downgrade visible to the
+    // user immediately as "Membership Required" banners. Push the event so
+    // the open tab does not keep flashing the active-member UI.
+    announce_claims_changed(bus.as_ref(), body.user_id);
 
     let audit_log = CreateAuditLog::new(AuditAction::AdminMembershipRevoked)
         .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
@@ -1715,6 +1753,7 @@ pub async fn grant_lifetime_membership(
     admin: AdminUser,
     pool: web::Data<PgPool>,
     stripe: web::Data<Arc<StripeService>>,
+    bus: web::Data<Arc<EventBus>>,
     path: web::Path<uuid::Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -1745,6 +1784,11 @@ pub async fn grant_lifetime_membership(
     // remints stale claims unless every tab triggers a fresh refresh. This
     // is the exact bug the brendon@netcal.com triage on 2026-06-19 hit.
     let sessions_revoked = revoke_user_sessions(pool.get_ref(), user_id).await?;
+    // BUNYIP-145: same brendon@netcal.com bug, UX half. The revoke above
+    // closes the security gap (next request 401s); the publish below
+    // closes the UX gap (open tab updates without the customer having to
+    // hit F5 OR be bounced to /login).
+    announce_claims_changed(bus.as_ref(), user_id);
 
     AuditLogRepository::create(
         &pool,
@@ -1767,6 +1811,7 @@ pub async fn revoke_lifetime_membership(
     req: HttpRequest,
     admin: AdminUser,
     pool: web::Data<PgPool>,
+    bus: web::Data<Arc<EventBus>>,
     path: web::Path<uuid::Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -1779,6 +1824,8 @@ pub async fn revoke_lifetime_membership(
     // revoke (otherwise they'd see "Active" on every app tile for the full
     // refresh-token TTL).
     let sessions_revoked = revoke_user_sessions(pool.get_ref(), user_id).await?;
+    // BUNYIP-145: tell the open tab to update in place.
+    announce_claims_changed(bus.as_ref(), user_id);
 
     AuditLogRepository::create(
         &pool,

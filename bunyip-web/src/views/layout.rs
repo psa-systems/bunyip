@@ -3,12 +3,36 @@
 //! reactive framework): an early flash-prevention block + toggle functions that
 //! flip classes on <html> and persist to the same `theme-storage` key.
 
+use std::sync::OnceLock;
+
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 
 use crate::api::types::{Application, User, UserRole};
 use crate::config::Config;
 use crate::util::app_link;
 use crate::views::ui::{button_class, icon};
+
+/// BUNYIP-145: the public-facing origin of bunyip-api the browser's
+/// `EventSource` connects to. Set once at startup from `Config::api_url`;
+/// read by every authenticated shell so the dashboard / admin pages can
+/// open a long-lived SSE stream without threading the config through 45
+/// handler call sites.
+static SSE_API_ORIGIN: OnceLock<String> = OnceLock::new();
+
+/// BUNYIP-145: install the public-facing bunyip-api origin used by the SSE
+/// subscriber injected into the dashboard / admin shells. Called once from
+/// `main` before any request is served. Idempotent (the underlying
+/// `OnceLock` ignores subsequent sets).
+pub fn install_sse_api_origin(origin: impl Into<String>) {
+    let _ = SSE_API_ORIGIN.set(origin.into().trim_end_matches('/').to_string());
+}
+
+fn sse_api_origin() -> &'static str {
+    SSE_API_ORIGIN
+        .get()
+        .map(String::as_str)
+        .unwrap_or("http://localhost:4401")
+}
 
 const THEME_FLASH: &str = r#"(function(){try{var r=document.documentElement;var theme='system',hc=false;var raw=localStorage.getItem('theme-storage');if(raw){var p=JSON.parse(raw);theme=(p&&p.state&&p.state.theme)||'system';hc=!!(p&&p.state&&p.state.highContrast);}var dark=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;r.classList.add(theme==='system'?(dark?'dark':'light'):theme);if(hc)r.classList.add('high-contrast');}catch(e){}})();"#;
 
@@ -34,6 +58,36 @@ function bunyipToggleContrast(){var on=document.documentElement.classList.toggle
 /// toast. See docs/bunyip-upgrade/05-toast-system-and-copy-feedback.md.
 const TOAST_JS: &str = r#"window.bunyipToast=function(msg,kind){var root=document.getElementById('bunyip-toast-root');if(!root)return;while(root.children.length>=5){root.removeChild(root.firstChild);}kind=kind||'info';var palette={success:'bg-emerald-600 text-white',error:'bg-red-600 text-white',info:'bg-slate-800 text-white'}[kind]||'bg-slate-800 text-white';var pill=document.createElement('div');pill.className='pointer-events-auto rounded-md px-4 py-2 text-sm shadow-lg '+palette;pill.setAttribute('role','status');pill.textContent=msg;pill.style.transition='opacity 200ms ease, transform 200ms ease';pill.style.opacity='0';pill.style.transform='translateY(-8px)';root.appendChild(pill);requestAnimationFrame(function(){pill.style.opacity='1';pill.style.transform='translateY(0)';});setTimeout(function(){pill.style.opacity='0';pill.style.transform='translateY(-8px)';setTimeout(function(){if(pill.parentNode)pill.parentNode.removeChild(pill);},250);},2500);};
 (function(){try{var url=new URL(window.location.href);var ok=url.searchParams.get('toast_ok');var err=url.searchParams.get('toast_err');if(ok||err){url.searchParams.delete('toast_ok');url.searchParams.delete('toast_err');history.replaceState(null,'',url.pathname+(url.search||'')+url.hash);if(ok)window.bunyipToast(ok,'success');if(err)window.bunyipToast(err,'error');}}catch(e){}})();"#;
+
+/// BUNYIP-145: Server-Sent Events subscriber injected into every
+/// authenticated shell (dashboard + admin). Opens a long-lived
+/// `EventSource` against bunyip-api's `/v1/events` and reacts to four
+/// event names:
+///
+/// - `claims_changed`: an admin granted / revoked something that affects
+///   this user (membership, lifetime grant). Reload so the SPA picks up
+///   the new at+jwt + dashboard tile state. Brendon's case: lifetime
+///   grant fires this; the page self-updates without a hard refresh.
+/// - `profile_changed`: admin or self updated profile fields. Reload.
+/// - `applications_changed`: admin toggled an app slug or entitlement
+///   mapping. Reload to refresh the dashboard's app grid.
+/// - `session_revoked`: bunyip-api destroyed every active rt for this
+///   user (admin deactivate, role change, BUNYIP-144). Redirect to
+///   `/login` so the user re-auths.
+///
+/// EventSource is opened with `withCredentials: true` so the `access_token`
+/// cookie rides along on the cross-subdomain GET (Lax + matching eTLD+1).
+/// Browser auto-reconnect handles transient drops; on `resync` from a
+/// `Lagged` broadcast we also reload.
+///
+/// The template carries a placeholder origin literal (`__BUNYIP_API_ORIGIN__`)
+/// that `sse_subscriber_script` replaces with the value installed via
+/// `install_sse_api_origin`.
+const SSE_SUBSCRIBER: &str = r#"(function(){try{var origin='__BUNYIP_API_ORIGIN__';if(!origin||!window.EventSource)return;var es=new EventSource(origin+'/v1/events',{withCredentials:true});var reload=function(){window.location.reload();};es.addEventListener('claims_changed',reload);es.addEventListener('profile_changed',reload);es.addEventListener('applications_changed',reload);es.addEventListener('resync',reload);es.addEventListener('session_revoked',function(){window.location.href='/login?toast_err=Session%20ended%20by%20an%20administrator.';});}catch(e){}})();"#;
+
+fn sse_subscriber_script() -> String {
+    SSE_SUBSCRIBER.replace("__BUNYIP_API_ORIGIN__", sse_api_origin())
+}
 
 pub fn document(title: &str, body: Markup) -> Markup {
     html! {
@@ -394,6 +448,7 @@ fn app_topbar(title: &str, user: &User) -> Markup {
 /// so every handler keeps its existing `dashboard_response(...)` call shape.
 pub fn dashboard_shell(user: &User, active: &str, topbar_title: &str, content: Markup) -> Markup {
     let is_admin = user.role == UserRole::Admin;
+    let sse = sse_subscriber_script();
     html! {
         div class="flex min-h-screen" {
             (sidebar(false, is_admin, active))
@@ -406,10 +461,12 @@ pub fn dashboard_shell(user: &User, active: &str, topbar_title: &str, content: M
             }
             (feedback_launcher())
         }
+        script { (PreEscaped(sse)) }
     }
 }
 
 pub fn admin_shell(user: &User, active: &str, topbar_title: &str, content: Markup) -> Markup {
+    let sse = sse_subscriber_script();
     html! {
         div class="flex min-h-screen" {
             (sidebar(true, true, active))
@@ -420,5 +477,6 @@ pub fn admin_shell(user: &User, active: &str, topbar_title: &str, content: Marku
                 }
             }
         }
+        script { (PreEscaped(sse)) }
     }
 }

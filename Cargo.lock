@@ -658,6 +658,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tracing",
  "tracing-actix-web",
@@ -4420,6 +4421,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
