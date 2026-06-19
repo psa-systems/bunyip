@@ -33,6 +33,22 @@ use crate::services::{
 use crate::validation;
 use bunyip_oci::services::ManifestCache;
 
+/// BUNYIP-144: revoke every refresh-token family belonging to `user_id` so the
+/// next request from any of their tabs 401s on `/auth/refresh`, bounces to
+/// `/login`, and the fresh sign-in mints tokens carrying the just-mutated
+/// claims (role / membership / lifetime / status). Mirrors the pattern
+/// BUNYIP-137 already wired into [`update_user_role`].
+///
+/// Returns `Ok(true)` to signal "sessions revoked" so the audit log can carry
+/// `sessions_revoked: true` metadata. `Ok(false)` is reserved for callers that
+/// want to skip the revoke (a no-op mutation, an already-deactivated user,
+/// etc.) and is currently never returned by this helper itself; gating "did
+/// the mutation actually change something" stays in each handler.
+async fn revoke_user_sessions(pool: &PgPool, user_id: uuid::Uuid) -> Result<bool, AppError> {
+    TokenRepository::revoke_all_user_refresh_tokens(pool, user_id).await?;
+    Ok(true)
+}
+
 // =============================================================================
 // User Management
 // =============================================================================
@@ -127,9 +143,18 @@ pub async fn update_user_status(
             return Err(AppError::not_found("Deleted user"));
         }
 
+        // BUNYIP-144: revoke any lingering refresh-token families. A soft-
+        // deleted user shouldn't have live tokens (auth middleware drops them
+        // on `deleted_at IS NOT NULL`) but belt-and-braces so a stale token
+        // from a future regression cannot leak past reactivation.
+        let sessions_revoked = revoke_user_sessions(pool.get_ref(), user_id).await?;
+
         let audit_log = CreateAuditLog::new(AuditAction::AdminUserActivated)
             .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
-            .with_resource("user", user_id);
+            .with_resource("user", user_id)
+            .with_metadata(serde_json::json!({
+                "sessions_revoked": sessions_revoked,
+            }));
         AuditLogRepository::create(&pool, audit_log).await?;
     } else {
         let target_user = UserRepository::find_by_id(&pool, user_id)
@@ -138,11 +163,18 @@ pub async fn update_user_status(
 
         UserRepository::soft_delete(&pool, user_id).await?;
 
+        // BUNYIP-144: a deactivation must take effect immediately. Without
+        // this, an already-signed-in user keeps an admin-claim access token
+        // until it expires (up to 15 min) and a refresh token usable for its
+        // full TTL even though the row now has `deleted_at` set.
+        let sessions_revoked = revoke_user_sessions(pool.get_ref(), user_id).await?;
+
         let audit_log = CreateAuditLog::new(AuditAction::AdminUserDeactivated)
             .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
             .with_resource("user", user_id)
             .with_metadata(serde_json::json!({
                 "target_email": target_user.email,
+                "sessions_revoked": sessions_revoked,
             }));
         AuditLogRepository::create(&pool, audit_log).await?;
 
@@ -483,6 +515,13 @@ pub async fn grant_membership(
         .await?;
     }
 
+    // BUNYIP-144: `grant_free_membership` sets `lifetime_member=true` and
+    // `subscription_status=active`. Both are inputs to `has_member_access`
+    // (the dashboard's per-app gate), so existing tokens minted before the
+    // grant carry stale claims. Force re-login so the next request mints
+    // fresh tokens with the new state.
+    let sessions_revoked = revoke_user_sessions(pool.get_ref(), body.user_id).await?;
+
     let audit_log = CreateAuditLog::new(AuditAction::AdminMembershipGranted)
         .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
         .with_resource("user", body.user_id)
@@ -490,6 +529,7 @@ pub async fn grant_membership(
             "tier": "free",
             "price_locked": price_locked,
             "locked_price_amount": locked_amount,
+            "sessions_revoked": sessions_revoked,
         }));
     AuditLogRepository::create(&pool, audit_log).await?;
 
@@ -519,9 +559,18 @@ pub async fn revoke_membership(
     // Clear any grace period
     UserRepository::clear_grace_period(pool.get_ref(), body.user_id).await?;
 
+    // BUNYIP-144: a revoke is a privilege-DOWNGRADE so the security argument
+    // is the strongest of any handler in this set. Without this, the user
+    // keeps an admin-or-active-member claim for the full refresh-token TTL
+    // (30 days for subscribers) after their membership was canceled.
+    let sessions_revoked = revoke_user_sessions(pool.get_ref(), body.user_id).await?;
+
     let audit_log = CreateAuditLog::new(AuditAction::AdminMembershipRevoked)
         .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
-        .with_resource("user", body.user_id);
+        .with_resource("user", body.user_id)
+        .with_metadata(serde_json::json!({
+            "sessions_revoked": sessions_revoked,
+        }));
     AuditLogRepository::create(&pool, audit_log).await?;
 
     Ok(success_no_data(request_id))
@@ -1688,6 +1737,15 @@ pub async fn grant_lifetime_membership(
             .await?;
     }
 
+    // BUNYIP-144: lifetime is a privilege-elevation that feeds directly into
+    // `has_member_access` ("role=admin OR lifetime_member OR ..."), gating
+    // every per-app tile on the dashboard (Mokosh / Drillmark / Lets Chat).
+    // Without revoking, the customer keeps seeing tiles greyed out until
+    // their access token expires (15 min) - and even after that the refresh
+    // remints stale claims unless every tab triggers a fresh refresh. This
+    // is the exact bug the brendon@netcal.com triage on 2026-06-19 hit.
+    let sessions_revoked = revoke_user_sessions(pool.get_ref(), user_id).await?;
+
     AuditLogRepository::create(
         &pool,
         CreateAuditLog::new(AuditAction::AdminMembershipGranted)
@@ -1696,6 +1754,7 @@ pub async fn grant_lifetime_membership(
             .with_metadata(serde_json::json!({
                 "tier": "lifetime",
                 "target_email": user.email,
+                "sessions_revoked": sessions_revoked,
             })),
     )
     .await?;
@@ -1715,6 +1774,12 @@ pub async fn revoke_lifetime_membership(
 
     let user = UserRepository::revoke_lifetime_membership(&pool, user_id).await?;
 
+    // BUNYIP-144: privilege-downgrade. Cut existing sessions immediately so
+    // the user does not retain `lifetime_member=true` JWT claims past the
+    // revoke (otherwise they'd see "Active" on every app tile for the full
+    // refresh-token TTL).
+    let sessions_revoked = revoke_user_sessions(pool.get_ref(), user_id).await?;
+
     AuditLogRepository::create(
         &pool,
         CreateAuditLog::new(AuditAction::AdminMembershipRevoked)
@@ -1723,6 +1788,7 @@ pub async fn revoke_lifetime_membership(
             .with_metadata(serde_json::json!({
                 "tier": "lifetime",
                 "target_email": user.email,
+                "sessions_revoked": sessions_revoked,
             })),
     )
     .await?;
