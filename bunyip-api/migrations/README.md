@@ -37,8 +37,27 @@ referenced them were removed from
 sqlx does not require contiguous version numbers, so the gap is functionally
 inert and is left in place rather than renumbering applied history.
 
-> Operational note: before any deploy that touches the applied migration set,
-> verify `_sqlx_migrations` on the target database. Editing the body of an
-> already-applied migration changes its checksum; reconcile the recorded
-> checksum (or confirm the environment re-migrates from scratch) before
-> deploying.
+> Operational note: editing the body of an already-applied migration changes
+> its sqlx SHA-384 checksum, so a database that applied the original body fails
+> startup with `migration <version> was previously applied but has been
+> modified` until the recorded checksum is reconciled. Prefer a forward-only
+> migration over an in-place edit for exactly this reason.
+
+## BUNYIP-79 in-place edits: automated checksum reconciliation
+
+Commit `9c082eb` edited 11 already-applied migrations in place (closing
+data-integrity gaps). To keep databases that applied the original bodies from
+crash-looping, `bunyip-api/src/migrate_reconcile.rs` runs once at startup
+**before** the migrator: for each of those 11 versions, if the recorded
+checksum still equals the pre-edit value it is rewritten to the current embedded
+checksum. The update is guarded by `AND checksum = <pre-edit hash>`, so it heals
+only databases stuck on the old hash and is a no-op on freshly-migrated ones and
+on any unexpected drift (the immutability check still catches genuine mistakes
+on every other migration). A unit test (`legacy_allowlist_matches_embedded_migrator`)
+keeps the allowlist honest against the embedded migration set.
+
+Caveat: reconciliation only unblocks startup. A row marked applied is never
+re-run, so the DDL guards `9c082eb` added are **not** retro-applied to a database
+that already ran the original bodies. Delivering those guards to already-migrated
+data requires new forward-only migrations and is tracked separately. This is why
+new behavioral changes must ship as fresh migrations, not in-place edits.

@@ -73,6 +73,16 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Database connection pool established");
 
+    // BUNYIP-79: heal the in-place-edited migration checksums before the
+    // migrator's immutability check would abort on databases that applied the
+    // pre-edit bodies. No-op on fresh and already-healed databases.
+    bunyip_api::migrate_reconcile::reconcile_legacy_migration_checksums(&pool)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to reconcile legacy migration checksums");
+            e
+        })?;
+
     // Run database migrations
     info!("Running database migrations...");
     sqlx::migrate!("./migrations")
