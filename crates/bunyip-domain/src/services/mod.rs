@@ -8,6 +8,7 @@
 
 pub mod auth;
 pub mod email;
+pub mod event_bus;
 pub mod jwt;
 pub mod stripe;
 pub mod totp;
@@ -39,6 +40,7 @@ pub type AppDownloadCache = DownloadCache<crate::repositories::DownloadCacheRepo
 // Domain service types.
 pub use auth::{AcceptInviteResult, AuthService, AuthTokens, LoginResult, MagicLinkResult};
 pub use email::EmailService;
+pub use event_bus::{BunyipEvent, EventBus};
 pub use jwt::{AccessTokenClaims, JwtService, RefreshTokenClaims, TwoFactorChallengeClaims};
 pub use stripe::{StripeConfig, StripeService};
 pub use totp::TotpService;

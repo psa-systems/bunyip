@@ -39,6 +39,9 @@ actix-cors = "0.7"
 actix-rt = "2"
 actix-multipart = "0.7"
 futures-util = "0.3"
+# BUNYIP-145: SSE streaming uses BroadcastStream + IntervalStream wrappers
+# around `tokio::sync::broadcast::Receiver` and `tokio::time::Interval`.
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 # Serialization.
 serde = { version = "1", features = ["derive"] }

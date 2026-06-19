@@ -359,6 +359,12 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Webhook service initialized");
 
+    // BUNYIP-145: in-process event bus for SSE fan-out. Mutation handlers
+    // publish; the /v1/events SSE handler subscribes per-user. Eliminates
+    // the hard-refresh-after-admin-grant UX (Brendon@netcal.com triage).
+    let event_bus = Arc::new(bunyip_domain::services::EventBus::new());
+    info!("Event bus initialized");
+
     // Initialize OIDC provider (optional — only when OIDC_ISSUER is set)
     let oidc_provider: Option<Arc<OidcProvider>> = if config.oidc.enabled() {
         let key_set = OidcKeySet::load(
@@ -591,6 +597,7 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::Data::new(stripe_service.clone()))
             .app_data(web::Data::new(totp_service.clone()))
             .app_data(web::Data::new(webhook_service.clone()))
+            .app_data(web::Data::new(event_bus.clone()))
             .app_data(web::Data::new(stripe_key_set.clone()))
             .app_data(web::Data::new(config_data.clone()))
             .app_data(web::Data::new(download_limiter.clone()))

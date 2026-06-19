@@ -92,6 +92,7 @@ pub mod application;
 pub mod auth;
 pub mod billing;
 pub mod download;
+pub mod events;
 pub mod feedback;
 pub mod membership;
 pub mod totp;
@@ -108,6 +109,7 @@ pub use auth::{
 };
 pub use billing::{create_setup_intent, download_invoice, list_invoices};
 pub use download::{admin_refresh_release, download_asset, list_all_downloads, list_app_downloads};
+pub use events::events_stream;
 pub use feedback::{
     archive_feedback, delete_feedback, export_feedback, get_attachment, get_feedback,
     list_feedback, list_feedback_archive, mark_feedback_spam, respond_to_feedback,
