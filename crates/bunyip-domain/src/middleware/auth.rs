@@ -764,6 +764,15 @@ mod tests {
             clear.max_age(),
             Some(actix_web::cookie::time::Duration::seconds(0)),
         );
+
+        // RFC 6265 evicts a stored cookie only when name, path, and secure
+        // match the incoming Max-Age 0 cookie. Both come from the same
+        // hardcoded builder shape, so pin path + secure equal across the
+        // clear and the set to keep them deletable if either side drifts.
+        assert_eq!(clear.path(), set.path(), "clear/set path must match");
+        assert_eq!(clear.path(), Some("/"));
+        assert_eq!(clear.secure(), set.secure(), "clear/set secure must match");
+        assert_eq!(clear.secure(), Some(true));
     }
 
     #[test]
