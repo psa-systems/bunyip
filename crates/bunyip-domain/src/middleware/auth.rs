@@ -406,6 +406,48 @@ impl AuthCookies {
         builder.finish()
     }
 
+    /// Set the OP session cookie, dual-emitting a stale host-only clear when a
+    /// `cookie_domain` is configured.
+    ///
+    /// When `COOKIE_DOMAIN` is set (e.g. `.mokosh.systems`), the live cookie is
+    /// domain-scoped, but a `bunyip_op_session` issued before the domain was
+    /// configured is host-only (scoped to the exact OP host). Browsers send the
+    /// more-specific host-only cookie first, so a stale host-only sid shadows
+    /// the freshly-set domain-scoped one and `/oauth2/authorize` keeps reading
+    /// the dead value and bouncing to `/login` (BUNYIP-146). Pairing the
+    /// domain-scoped `Set-Cookie` with a no-domain Max-Age 0 clear forces the
+    /// browser to delete the host-only straggler so the domain-scoped cookie
+    /// wins. Mirrors the dual-emit shape of [`clear_op_session_only`], but on
+    /// the set path. Only the OP session cookie is touched; the hub
+    /// access/refresh cookies are left intact.
+    ///
+    /// With no `cookie_domain` the live cookie is itself host-only, so there is
+    /// nothing to clear and this returns just the set cookie.
+    ///
+    /// [`clear_op_session_only`]: Self::clear_op_session_only
+    pub fn op_session_set(
+        sid: &str,
+        secure: bool,
+        cookie_domain: Option<&str>,
+    ) -> Vec<Cookie<'static>> {
+        let mut cookies = Vec::with_capacity(2);
+        if cookie_domain.is_some() {
+            // No-domain clear: deletes a host-only stale sibling before the
+            // domain-scoped set below takes effect.
+            cookies.push(
+                Cookie::build(Self::OP_SESSION_COOKIE, "")
+                    .path("/")
+                    .http_only(true)
+                    .secure(secure)
+                    .same_site(SameSite::Lax)
+                    .max_age(actix_web::cookie::time::Duration::seconds(0))
+                    .finish(),
+            );
+        }
+        cookies.push(Self::op_session(sid, secure, cookie_domain));
+        cookies
+    }
+
     /// Cookies that clear ONLY the OP session cookie (preserving
     /// access_token and refresh_token, which may still be valid hub
     /// auth state). Used by `/oauth2/authorize` when it detects the
@@ -679,6 +721,58 @@ mod tests {
             cookie.max_age(),
             Some(actix_web::cookie::time::Duration::days(7))
         );
+    }
+
+    #[test]
+    fn test_op_session_set_no_domain_is_single_set() {
+        // Host-only deployment: live cookie is itself host-only, nothing to
+        // clear, so only the set cookie comes back.
+        let cookies = AuthCookies::op_session_set("sid123", false, None);
+        assert_eq!(cookies.len(), 1);
+        assert_eq!(cookies[0].name(), AuthCookies::OP_SESSION_COOKIE);
+        assert_eq!(cookies[0].value(), "sid123");
+        assert!(cookies[0].domain().is_none());
+    }
+
+    #[test]
+    fn test_op_session_set_with_domain_clears_stale_host_only() {
+        // Domain deployment: domain-scoped set PLUS a no-domain Max-Age 0 clear
+        // that deletes a stale host-only sibling so it cannot shadow the live
+        // cookie (BUNYIP-146).
+        let cookies = AuthCookies::op_session_set("sid123", true, Some(".mokosh.systems"));
+        assert_eq!(cookies.len(), 2);
+        assert!(cookies
+            .iter()
+            .all(|c| c.name() == AuthCookies::OP_SESSION_COOKIE));
+
+        let set = cookies
+            .iter()
+            .find(|c| c.domain() == Some(".mokosh.systems"))
+            .expect("domain-scoped set cookie present");
+        assert_eq!(set.value(), "sid123");
+        assert_eq!(
+            set.max_age(),
+            Some(actix_web::cookie::time::Duration::days(7))
+        );
+
+        let clear = cookies
+            .iter()
+            .find(|c| c.domain().is_none())
+            .expect("no-domain clear present");
+        assert!(clear.value().is_empty());
+        assert_eq!(
+            clear.max_age(),
+            Some(actix_web::cookie::time::Duration::seconds(0)),
+        );
+
+        // RFC 6265 evicts a stored cookie only when name, path, and secure
+        // match the incoming Max-Age 0 cookie. Both come from the same
+        // hardcoded builder shape, so pin path + secure equal across the
+        // clear and the set to keep them deletable if either side drifts.
+        assert_eq!(clear.path(), set.path(), "clear/set path must match");
+        assert_eq!(clear.path(), Some("/"));
+        assert_eq!(clear.secure(), set.secure(), "clear/set secure must match");
+        assert_eq!(clear.secure(), Some(true));
     }
 
     #[test]

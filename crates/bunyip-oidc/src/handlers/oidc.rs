@@ -641,12 +641,18 @@ async fn try_silent_sso(
                 sid = %session.sid,
                 "authorize: silently established op_session from valid access_token cookie"
             );
-            let cookie = crate::middleware::auth::AuthCookies::op_session(
+            // Dual-emit so a stale host-only `bunyip_op_session` from a
+            // pre-COOKIE_DOMAIN deployment is cleared and the domain-scoped
+            // cookie wins; otherwise the next authorize reads the dead
+            // host-only sid and bounces to /login (BUNYIP-146). Path 2 below
+            // gets the same effect via `clear_stale`; this path sets no
+            // access/refresh cookies, so it clears only the OP session.
+            let cookies = crate::middleware::auth::AuthCookies::op_session_set(
                 &session.sid,
                 secure,
                 cookie_domain,
             );
-            return Ok(Some((session, vec![cookie])));
+            return Ok(Some((session, cookies)));
         }
     }
 
