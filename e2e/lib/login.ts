@@ -1,61 +1,22 @@
-import { createHash } from 'node:crypto';
 import { authenticator } from 'otplib';
 import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { env } from './env';
 import { routes } from './api';
 
-// BUNYIP-167 (temporary): fingerprint a value for safe logging (length + sha256
-// prefix, never plaintext), matching lib/env.ts so the POSTed credential bytes
-// can be compared to the resolved-config fingerprints.
-function fp(value: string): string {
-  return `len ${value.length}/${createHash('sha256').update(value).digest('hex').slice(0, 12)}`;
-}
-
-// BUNYIP-167 (temporary): log the actual `/login` POST the browser sends - which
-// fields, the credential fingerprints, key headers, and the response status +
-// redirect - so we can prove whether the right bytes leave the browser and how
-// bunyip responds. Remove with the rest of the BUNYIP-167 diagnostics.
-function attachLoginWireDiagnostics(page: Page): void {
-  page.on('request', (req) => {
-    try {
-      if (req.method() !== 'POST' || new URL(req.url()).pathname !== '/login') return;
-      const params = new URLSearchParams(req.postData() ?? '');
-      const fields = [...params.entries()]
-        .map(([k, v]) => (k === 'email' || k === 'password' ? `${k}=${fp(v)}` : `${k}=${v}`))
-        .join(' ');
-      const h = req.headers();
-      console.log(
-        `[login POST req] ${req.url()} | ${fields} | ` +
-          `origin=${h['origin'] ?? '(none)'} content-type=${h['content-type'] ?? '(none)'} ` +
-          `cookie=${h['cookie'] ? 'present' : 'none'}`,
-      );
-    } catch {
-      /* diagnostic only */
-    }
-  });
-  page.on('response', (resp) => {
-    try {
-      const req = resp.request();
-      if (req.method() !== 'POST' || new URL(resp.url()).pathname !== '/login') return;
-      console.log(
-        `[login POST res] -> ${resp.status()} location=${resp.headers()['location'] ?? '(none)'}`,
-      );
-    } catch {
-      /* diagnostic only */
-    }
-  });
-}
-
-// bunyip-web mounts an SSE reload subscriber on EVERY page (layout.rs
-// SSE_SUBSCRIBER): an EventSource to `/v1/events` that calls
-// `window.location.reload()` on claims_changed / profile_changed /
-// applications_changed / resync. On the login page that reload fires mid-fill
-// and wipes the form, so the filled values never reach submit and the POST goes
-// out empty (BUNYIP-168). The suite needs no live reloads, so abort the SSE
-// connection for the page. Call this on any browser page the suite drives
-// (login flows here; the authenticated account-ui specs need it too).
+// Disable the bunyip-web live-reload subscriber for the test page. bunyip-web
+// mounts it on every page (bunyip-web/src/views/layout.rs SSE_SUBSCRIBER): an
+// EventSource to `/v1/events` that calls `window.location.reload()` on
+// claims_changed / profile_changed / applications_changed / resync. On a form
+// page that reload fires shortly after load and wipes the inputs, so the filled
+// values never reach submit and the POST goes out empty (BUNYIP-168; the
+// server-side fix is BUNYIP-169). The subscriber bails when `window.EventSource`
+// is absent (`if(!window.EventSource)return`), so remove that global before any
+// page script runs via addInitScript. NB: `page.route('**/v1/events')` does NOT
+// reliably intercept an EventSource, so routing is not enough. Call this on any
+// browser page the suite drives (login flows; the authenticated account-ui specs
+// need it too) BEFORE the first navigation.
 export async function blockLiveReload(page: Page): Promise<void> {
-  await page.route('**/v1/events', (route) => route.abort());
+  await page.addInitScript('try { window.EventSource = undefined; } catch (e) {}');
 }
 
 // Drive the bunyip-web login form to establish a real session.
@@ -74,7 +35,6 @@ export async function blockLiveReload(page: Page): Promise<void> {
 // through to a post-login page.
 export async function loginViaHub(page: Page): Promise<void> {
   await blockLiveReload(page); // BUNYIP-168: stop the SSE reload wiping the form
-  attachLoginWireDiagnostics(page); // BUNYIP-167 temporary
   await page.goto('/login');
 
   // Scope to the login form specifically (action="/login"), not whatever form
@@ -92,12 +52,11 @@ export async function loginViaHub(page: Page): Promise<void> {
 
   await email.waitFor({ state: 'visible' });
 
-  // The wire diagnostic (BUNYIP-167) showed the form posting EMPTY email +
-  // password despite fill() returning: bunyip-web re-renders the input nodes
-  // shortly after load (htmx is loaded globally), discarding the JS-set `.value`
-  // while attribute-valued hidden fields (redirect) survive. So fill, VERIFY the
-  // value stuck, and retry until it does (which also waits out the re-render);
-  // then re-fill once more immediately before submit as a last-moment guard.
+  // Fill, VERIFY the value stuck, retry, then re-fill once more immediately
+  // before submit. `blockLiveReload` above is what actually stops the SSE reload
+  // that used to wipe the form mid-fill (BUNYIP-168); this verification is a
+  // belt-and-suspenders guard so any residual re-render cannot send an empty
+  // POST silently - it fails loudly instead.
   await fillVerified(email, env.email);
   await fillVerified(password, env.password);
   if ((await email.inputValue()) !== env.email) await email.fill(env.email);
@@ -147,10 +106,11 @@ export async function loginViaHub(page: Page): Promise<void> {
   );
 }
 
-// Fill a field and confirm the value persisted, retrying a few times. Guards
-// against bunyip-web re-rendering the input after a too-early fill (BUNYIP-168):
-// the retry loop both re-applies the value and waits out the re-render, so it
-// returns only once the field actually holds `value`.
+// Fill a field and confirm the value persisted, retrying a few times. A guard
+// against an empty POST (BUNYIP-168): if anything still clears the input after
+// fill (e.g. a stray reload not covered by blockLiveReload), this fails loudly
+// rather than submitting blank credentials. Returns only once the field holds
+// `value`.
 async function fillVerified(loc: Locator, value: string): Promise<void> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     await loc.fill(value);
