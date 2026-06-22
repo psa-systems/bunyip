@@ -2,7 +2,7 @@ import { expect, oidcTest as test } from '../../lib/fixtures';
 import { discoverOidc, makePkce, randomToken } from '../../lib/api';
 import { env } from '../../lib/env';
 
-// OIDC consent-surface coverage (BUNYIP-149). Runs in the `api` project with the
+// OIDC consent-surface coverage (BUNYIP-148). Runs in the `api` project with the
 // `oidcTest` fixture (replayed OP session cookies, no bearer).
 //
 // Design constraint: global.setup already drove the consent Allow for the E2E
@@ -56,13 +56,19 @@ test.describe('OIDC consent surface', () => {
       return;
     }
 
-    // Otherwise the consent form should render: a 200 HTML page carrying an
-    // Allow/Deny (or scope) control.
+    // Otherwise the consent form should render. Assert the distinctive bunyip
+    // consent-form STRUCTURE, not just any occurrence of "allow"/"scope" (which
+    // an error page could carry): a <form> plus at least one of the consent
+    // handler's own field names (action / client_id / scopes / continue_url -
+    // bunyip-web/src/handlers/consent.rs).
     expect(res.status(), `consent GET -> ${res.status()}: ${await res.text()}`).toBe(200);
     const body = await res.text();
+    const looksLikeConsentForm =
+      /<form[^>]*>/i.test(body) &&
+      /name=["'](action|client_id|scopes|continue_url)["']/i.test(body);
     expect(
-      /name=["']action["']|allow|consent|authorize|approve|scope/i.test(body),
-      'consent response did not look like a consent form (no Allow/scope markup)',
+      looksLikeConsentForm,
+      'consent response did not look like the consent form (no <form> with action/client_id/scopes/continue_url field)',
     ).toBe(true);
   });
 });

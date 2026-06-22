@@ -45,13 +45,18 @@ function deriveApiBase(hubUrl: string): string | null {
 // Required: no domain is ever hardcoded as a fallback. The hub host differs
 // per environment (staging `https://a8n.systems`, prod `https://psa.systems`),
 // so the operator must inject it explicitly.
-const hubBaseURL = required('E2E_BASE_URL');
+// Strip a trailing slash so `${base}${route}` (e.g. in discoverOidc) never
+// produces a double slash like `https://api.a8n.systems//v1/...`, mirroring the
+// gate scripts' own normalisation.
+const stripTrailingSlash = (u: string): string => u.replace(/\/+$/, '');
+
+const hubBaseURL = stripTrailingSlash(required('E2E_BASE_URL'));
 const derivedApi = deriveApiBase(hubBaseURL);
 // The OIDC OP and the `/v1/*` JSON API are the SAME host on bunyip (bunyip-api
 // serves both under `api.<tld>`). E2E_OP_BASE_URL is supplied explicitly in CI
 // (= OIDC_ISSUER_*); locally it falls back to `api.<hub host>`.
-const opBaseURL = optional('E2E_OP_BASE_URL') ?? derivedApi ?? hubBaseURL;
-const apiBaseURL = optional('E2E_API_BASE_URL') ?? opBaseURL;
+const opBaseURL = stripTrailingSlash(optional('E2E_OP_BASE_URL') ?? derivedApi ?? hubBaseURL);
+const apiBaseURL = stripTrailingSlash(optional('E2E_API_BASE_URL') ?? opBaseURL);
 
 // Whether the hub host is the production apex. Billing write specs skip on
 // production so a manual prod dispatch never creates a live subscription.
