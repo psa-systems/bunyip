@@ -405,6 +405,14 @@ migrate-revert: ensure-env
 e2e-bootstrap *args: ensure-env
     {{ compose }}exec api cargo run --bin bunyip-e2e-bootstrap -- {{ args }}
 
+# Run the Playwright E2E suite on the HOST against a deployed bunyip instance
+# (NOT in a container). Requires e2e/.env filled from e2e/.env.example; runs
+# against E2E_BASE_URL. Pass flags through, e.g. `just e2e --headed` or
+# `just e2e tests/auth`.
+[group: 'database']
+e2e *args:
+    cd e2e && npx playwright test {{ args }}
+
 # -- Images ----------------------------------------------------------------------
 
 # Build both production images.
