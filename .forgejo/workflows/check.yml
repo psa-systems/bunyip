@@ -6,10 +6,12 @@
 # resolves them against the committed .sqlx cache, so no database is needed. The
 # generic dunite-core kernel is an anonymously-readable Forgejo git dependency
 # (network only, no credentials).
+
+# Validate code on every push and pull request by running 'just check'
+# Mirrors the local `just check` + `just test` recipes (which use ./dev/cargo).
 name: Check
 
 on:
-  pull_request:
   push:
     branches:
       - main
@@ -23,9 +25,13 @@ on:
       - "scripts/**"
       - ".forgejo/workflows/check.yml"
 
+  pull_request:
+    branches:
+      - main
+
 jobs:
   check:
-    name: fmt / clippy / build / test
+    name: fmt + clippy + build + tests
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
     env:
       SQLX_OFFLINE: "true"
@@ -45,19 +51,13 @@ jobs:
     steps:
       - name: Clone the repository
         uses: https://code.forgejo.org/actions/checkout@v5
+        with:
+          fetch-depth: 1
 
       - name: Check migration version numbers
         # Unique + strictly increasing migration versions; blocks the suffix
         # collisions that parallel branches reintroduce (BUNYIP-79).
         run: ./scripts/check-migration-versions.sh
-
-      - name: Install Rust toolchain components
-        run: rustup component add clippy rustfmt
-
-      - name: Cache Rust build
-        uses: https://github.com/Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
 
       - name: Cap build parallelism
         # nproc/2 cap: never claim more than half the host (see CI.md "Concurrency cap").
