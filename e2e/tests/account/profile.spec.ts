@@ -17,6 +17,12 @@ test.describe('account profile', () => {
   // bunyip-web reloads the page on SSE events (BUNYIP-168); block it so a reload
   // never wipes a form mid-edit.
   test.beforeEach(async ({ page }) => {
+    // BUNYIP-148 diag: /settings closes the page before goto in CI; surface why.
+    page.on('crash', () => console.log('[/settings] PAGE CRASHED'));
+    page.on('pageerror', (e) => console.log('[/settings] pageerror:', e.message));
+    page.on('console', (m) => {
+      if (m.type() === 'error') console.log('[/settings] console.error:', m.text());
+    });
     await blockLiveReload(page);
   });
 
