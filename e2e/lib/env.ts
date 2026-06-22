@@ -2,6 +2,7 @@
 // so a misconfigured CI run dies with a clear message instead of a confusing
 // mid-test 401/redirect.
 
+import { createHash } from 'node:crypto';
 import { config as loadEnv } from 'dotenv';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -145,5 +146,38 @@ export function preflightRequiredEnv(): void {
   throw new Error(
     `Missing ${missing.length} required env var(s). Set in e2e/.env (local) or as ` +
       `Forgejo Actions secrets (CI). See e2e/README.md.\n${lines.join('\n')}`,
+  );
+}
+
+// Safe fingerprint of a secret: its length plus a sha256 prefix. Never the
+// plaintext. Comparing this to `'<value>' | hash sha256` reveals a byte-level
+// mismatch without exposing the secret in CI logs.
+function fingerprint(value: string): string {
+  return `len ${value.length}, sha256[:12]=${createHash('sha256').update(value).digest('hex').slice(0, 12)}`;
+}
+
+/// Diagnostic (BUNYIP-167, temporary): log the resolved suite inputs so a CI
+/// run shows EXACTLY which host, email, and credential bytes it used. The
+/// non-secret values (hub/OP/api URLs, email, tenant, OIDC client + redirect)
+/// are printed in plaintext - they are a test account email and public URLs.
+/// The password and TOTP secret are printed only as a length + sha256 prefix.
+/// Compare the password fingerprint to `'<real password>' | hash sha256` on the
+/// host to confirm the secret matches the account byte-for-byte. Remove once the
+/// credential/host mismatch this was added for is resolved.
+export function logResolvedConfig(): void {
+  console.log(
+    [
+      '[config] resolved suite inputs:',
+      `  baseURL (hub)    = ${env.baseURL}`,
+      `  opBaseURL        = ${env.opBaseURL}`,
+      `  apiBaseURL       = ${env.apiBaseURL}`,
+      `  isProductionApex = ${env.isProductionApex}`,
+      `  email            = ${env.email}`,
+      `  tenantId         = ${env.tenantId}`,
+      `  oidcClientId     = ${env.oidcClientId}`,
+      `  oidcRedirectUri  = ${env.oidcRedirectUri}`,
+      `  password         = ${fingerprint(env.password)}`,
+      `  totpSecret       = ${fingerprint(env.totpSecret)}`,
+    ].join('\n'),
   );
 }
