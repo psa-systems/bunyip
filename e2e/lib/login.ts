@@ -52,6 +52,28 @@ export async function loginViaHub(page: Page): Promise<void> {
 
   await email.waitFor({ state: 'visible' });
 
+  // BUNYIP-168 diag (temporary): the fill works against the PUBLIC a8n.systems
+  // login page locally, but empties in CI - so log what THIS runner actually
+  // loaded (page identity), to tell a different/old bunyip-web from a true
+  // environment quirk. Also fill via JS + dispatch input, and read the .value
+  // back through evaluate (bypassing any Playwright fill nuance), so we see
+  // whether the value sticks at the DOM level at all.
+  {
+    const content = await page.content();
+    const jsValue = await email.evaluate((el: HTMLInputElement) => {
+      el.value = 'diag-probe';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      return el.value;
+    });
+    await page.waitForTimeout(300);
+    const after = await email.evaluate((el: HTMLInputElement) => el.value);
+    console.log(
+      `[login page] url=${page.url()} len=${content.length} ` +
+        `hasEventSource=${content.includes('EventSource')} hasReload=${content.includes('location.reload')} ` +
+        `htmxBoost=${content.includes('hx-boost')} | jsSet="${jsValue}" jsAfter300ms="${after}"`,
+    );
+  }
+
   // Fill, VERIFY the value stuck, retry, then re-fill once more immediately
   // before submit. `blockLiveReload` above is what actually stops the SSE reload
   // that used to wipe the form mid-fill (BUNYIP-168); this verification is a
