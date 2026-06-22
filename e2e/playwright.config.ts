@@ -28,10 +28,18 @@ export default defineConfig({
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
+    // Run the FULL chromium build, not the default stripped
+    // `chromium-headless-shell`. PW 1.60 picks headless-shell for headless runs;
+    // it dies on heavier pages (e.g. /settings, which renders profile + email +
+    // password + 2FA + sessions + trusted-device forms) with "Target page,
+    // context or browser has been closed" and NO page-level crash event, while
+    // the lighter /membership survives. The full chromium (installed by
+    // `playwright install chromium`) handles the same page. BUNYIP-148.
+    channel: 'chromium',
     // --disable-dev-shm-usage: containers (the CI runner) give chromium a tiny
-    // /dev/shm, so heavier pages (e.g. /settings) crash the browser process with
-    // "Target page, context or browser has been closed" and no page-level crash
-    // event. Backing shared memory with /tmp instead avoids the OOM (BUNYIP-148).
+    // /dev/shm, so heavier pages can OOM the browser process. Backing shared
+    // memory with /tmp instead avoids that. Kept alongside the full-chromium
+    // switch as defense in depth (BUNYIP-148).
     launchOptions: { args: ['--disable-dev-shm-usage'] },
   },
   projects: [
