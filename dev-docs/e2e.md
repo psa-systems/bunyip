@@ -123,17 +123,43 @@ first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODU
 1. **Merge the suite.** Lands `e2e/`, the `just e2e` recipe, and
    `.forgejo/workflows/e2e.yml`.
 
-2. **Seed the staging E2E account + tenant.** Run the bootstrap against the
-   staging deployment (creates `e2e-user@a8n.run` + `e2e-admin@a8n.run`,
-   idempotent):
+2. **Seed the staging E2E account + tenant.** On the c-01 host, from the docker
+   repo, run the bootstrap recipe (DEV-378). It runs the `bunyip-e2e-bootstrap`
+   binary shipped in the deployed image (BUNYIP-156) as a one-off container, and
+   creates `e2e-user@a8n.run` + `e2e-admin@a8n.run` (idempotent):
 
+   ```nu
+   # The shared account password. Provide it as BUNYIP_E2E_TEST_USER_PASSWORD.
+   # If the infisical CLI is set up on the host and logged into your instance:
+   $env.BUNYIP_E2E_TEST_USER_PASSWORD = (infisical secrets get test_user_password --path=/bunyip/e2e --env=staging --plain)
+   cd server/c-01/bunyip-api
+   just e2e-bootstrap              # seed (also: just e2e-bootstrap --dry-run / --cleanup)
    ```
-   # inside the staging api container, non-production ENVIRONMENT:
-   BUNYIP_E2E_BOOTSTRAP_ALLOW=true \
-     BUNYIP_E2E_TEST_USER_PASSWORD=<Infisical /bunyip/e2e/test_user_password> \
-     cargo run --bin bunyip-e2e-bootstrap
-   # or, from a checkout wired to the staging DB: just e2e-bootstrap
-   ```
+
+   About the password and its location:
+
+   - **`/bunyip/e2e/test_user_password` is an Infisical SECRET PATH, not a
+     filesystem path.** It is a logical folder + key inside the Infisical
+     secrets manager (project -> environment -> folder `/bunyip/e2e` -> key
+     `test_user_password`), reached via the Infisical CLI / API / web UI scoped
+     to the bunyip project + `staging` env. It is NOT a directory on disk (it is
+     unrelated to anything under `/srv/.../bunyip-api/`), so "the directory does
+     not exist" is expected and irrelevant.
+   - **It is probably not provisioned yet.** bunyip's c-01 secrets currently live
+     in sops (`compose-secrets.yml`); Infisical wiring for bunyip is a future
+     item. The value is the shared password the bootstrap hashes onto BOTH
+     accounts, so you CHOOSE it: pick a strong password, seed with it, then store
+     it (at that Infisical path and/or your team secret store) AND as the
+     `E2E_STAGING_PASSWORD` CI secret in step 5, so the suite logs in with the
+     same value.
+   - **No infisical CLI on the host?** Read it from the Infisical web UI
+     (project -> `/bunyip/e2e` -> `test_user_password` -> reveal) and set
+     `$env.BUNYIP_E2E_TEST_USER_PASSWORD = "..."`. Avoid putting the literal in
+     shell history / argv; the `$(... --plain)` / signal-via-env forms keep it
+     out.
+   - The bunyip-repo `just e2e-bootstrap` is DEV-ONLY (it `cargo run`s the seeder
+     in a source-mounted container); c-01 runs the deployed image, so use the
+     docker-repo recipe above.
 
    Record the **tenant UUID**, the **email**, and the **password**.
 
