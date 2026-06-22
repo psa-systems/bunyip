@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { tagged } from '../../lib/factories';
-import { blockLiveReload } from '../../lib/login';
+import { blockLiveReload, setInputValue } from '../../lib/login';
 
 // Profile-edit coverage (BUNYIP-149). Runs in the `account-ui` project: the
 // browser is ALREADY authenticated (storageState saved by `setup`), so this
@@ -17,12 +17,6 @@ test.describe('account profile', () => {
   // bunyip-web reloads the page on SSE events (BUNYIP-168); block it so a reload
   // never wipes a form mid-edit.
   test.beforeEach(async ({ page }) => {
-    // BUNYIP-148 diag: /settings closes the page before goto in CI; surface why.
-    page.on('crash', () => console.log('[/settings] PAGE CRASHED'));
-    page.on('pageerror', (e) => console.log('[/settings] pageerror:', e.message));
-    page.on('console', (m) => {
-      if (m.type() === 'error') console.log('[/settings] console.error:', m.text());
-    });
     await blockLiveReload(page);
   });
 
@@ -39,9 +33,11 @@ test.describe('account profile', () => {
     const phoneInput = form.locator('input#phone, input[name="phone"]').first();
 
     await firstInput.waitFor({ state: 'visible', timeout: 15_000 });
-    await firstInput.fill(firstName);
-    await lastInput.fill(lastName);
-    await phoneInput.fill(phone);
+    // DOM-set, not fill(): Playwright fill() is a no-op on these inputs in the CI
+    // runner's headless chromium (BUNYIP-168).
+    await setInputValue(firstInput, firstName);
+    await setInputValue(lastInput, lastName);
+    await setInputValue(phoneInput, phone);
 
     await form.getByRole('button', { name: /save|update|submit/i }).first().click();
 

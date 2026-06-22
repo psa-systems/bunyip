@@ -28,6 +28,11 @@ export default defineConfig({
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
+    // --disable-dev-shm-usage: containers (the CI runner) give chromium a tiny
+    // /dev/shm, so heavier pages (e.g. /settings) crash the browser process with
+    // "Target page, context or browser has been closed" and no page-level crash
+    // event. Backing shared memory with /tmp instead avoids the OOM (BUNYIP-148).
+    launchOptions: { args: ['--disable-dev-shm-usage'] },
   },
   projects: [
     // 0. Aggregate-all-missing env-var check. Runs first so a misconfigured CI
