@@ -2,7 +2,6 @@
 // so a misconfigured CI run dies with a clear message instead of a confusing
 // mid-test 401/redirect.
 
-import { createHash } from 'node:crypto';
 import { config as loadEnv } from 'dotenv';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -146,38 +145,5 @@ export function preflightRequiredEnv(): void {
   throw new Error(
     `Missing ${missing.length} required env var(s). Set in e2e/.env (local) or as ` +
       `Forgejo Actions secrets (CI). See e2e/README.md.\n${lines.join('\n')}`,
-  );
-}
-
-// Safe fingerprint of a secret: its length plus a sha256 prefix. Never the
-// plaintext. Comparing this to `'<value>' | hash sha256` reveals a byte-level
-// mismatch without exposing the secret in CI logs.
-function fingerprint(value: string): string {
-  return `len ${value.length}, sha256[:12]=${createHash('sha256').update(value).digest('hex').slice(0, 12)}`;
-}
-
-/// Diagnostic (BUNYIP-167, temporary): log the resolved suite inputs as
-/// FINGERPRINTS (length + sha256 prefix), never plaintext. The inputs are all
-/// registered as Forgejo Actions secrets, so Forgejo masks any plaintext of
-/// their values in the log as `***`; printing a fingerprint (a derived value)
-/// dodges the masking AND keeps secrets out of the log. Compare each fingerprint
-/// to the expected value's hash, e.g. `'e2e-user@a8n.run' | hash sha256` or
-/// `'https://a8n.systems' | hash sha256` - a mismatch names the wrong input.
-/// Remove once the mismatch this was added for is resolved.
-export function logResolvedConfig(): void {
-  console.log(
-    [
-      '[config] resolved suite inputs (fingerprint = len + sha256[:12]; compare to the expected value hash):',
-      `  baseURL (hub)    = ${fingerprint(env.baseURL)}`,
-      `  opBaseURL        = ${fingerprint(env.opBaseURL)}`,
-      `  apiBaseURL       = ${fingerprint(env.apiBaseURL)}`,
-      `  isProductionApex = ${env.isProductionApex}`,
-      `  email            = ${fingerprint(env.email)}`,
-      `  tenantId         = ${fingerprint(env.tenantId)}`,
-      `  oidcClientId     = ${fingerprint(env.oidcClientId)}`,
-      `  oidcRedirectUri  = ${fingerprint(env.oidcRedirectUri)}`,
-      `  password         = ${fingerprint(env.password)}`,
-      `  totpSecret       = ${fingerprint(env.totpSecret)}`,
-    ].join('\n'),
   );
 }
