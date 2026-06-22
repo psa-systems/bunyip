@@ -168,11 +168,41 @@ first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODU
    secret** shown during enrollment, and verify a code. The suite logs in with
    2FA on, so this is required, not optional.
 
-4. **Register a public PKCE OIDC client** (or reuse the hub `bunyip-web` client).
-   Record the **client_id** and a **registered redirect_uri** (e.g.
-   `https://a8n.systems/auth/callback`). It must match exactly or
-   `/oauth2/authorize` returns `invalid_redirect_uri`. The suite only reads the
-   `code` from the redirect Location; the URL is never loaded.
+4. **Pick a public PKCE OIDC client.** There is NO `bunyip-web` OIDC client to
+   reuse: bunyip-web is the OP's own hub UI (it sets `bunyip_op_session`
+   directly), not a registered relying party. bunyip's OIDC clients are seeded
+   by migrations (there is no `clients register` CLI). For staging, **reuse the
+   existing `mokosh-apps` public PKCE client** (migration
+   `20260603000010_register_mokosh_apps_and_drillmark_oidc_clients.sql`): it is
+   already `client_type=public`, `require_pkce=true`, `token_endpoint_auth_method=none`,
+   with `allowed_scopes` covering `openid email offline_access` (the set the
+   suite requests, `offline_access` for the refresh leg). No registration,
+   migration, or deploy needed.
+
+   ```
+   E2E_STAGING_OIDC_CLIENT_ID    = b0000000-0000-4000-8000-000000000002
+   E2E_STAGING_OIDC_REDIRECT_URI = https://msp.a8n.systems/auth/callback
+   ```
+
+   The redirect_uri must match a registered value EXACTLY or `/oauth2/authorize`
+   returns `invalid_redirect_uri`, but it is never loaded - the suite reads the
+   `code` straight from the redirect `Location` (`maxRedirects: 0`), so reusing
+   mokosh's host is fine. The client's `audience` is mokosh's API, which is also
+   fine: the OIDC specs only call the OP's own `/oauth2/userinfo` with the token,
+   never bunyip `/v1` (that bearer comes from the hub-login cookie capture).
+   `global.setup` drives the consent Allow for this `(user, client)` pair, so the
+   token-flow specs get a `code` rather than bouncing to `/oauth2/consent`
+   (the gate that broke mokosh's headless replay - BUNYIP-146).
+
+   Sanity-check the row is on the target DB:
+   `docker compose ... exec postgres psql -c "select client_id, name, allowed_scopes from oauth_clients where name = 'mokosh-apps';"`
+
+   Production is separate: the seed migration hardcodes `msp.a8n.systems`, so for
+   a prod run reuse the prod-seeded client values or register a dedicated client
+   via a migration. If you ever want isolation on staging too (own redirect on
+   `a8n.systems`, bunyip audience, decoupled from mokosh-apps), register a
+   dedicated E2E client via a migration - cleaner long-term, not needed to go
+   green now.
 
 5. **Set the Forgejo Actions secrets** (staging shown; add the `E2E_PRODUCTION_*`
    / `OIDC_ISSUER_PRODUCTION` set when provisioning prod):
