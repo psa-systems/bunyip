@@ -146,16 +146,24 @@ fn enforce_guards(config: &Config) -> anyhow::Result<()> {
 /// verified flag and revives a previously cleaned-up row, so CI re-runs are
 /// no-ops in effect.
 async fn seed(pool: &PgPool, dry_run: bool) -> anyhow::Result<()> {
-    let password = secret_env("BUNYIP_E2E_TEST_USER_PASSWORD").context(
+    let raw_password = secret_env("BUNYIP_E2E_TEST_USER_PASSWORD").context(
         "BUNYIP_E2E_TEST_USER_PASSWORD is unset (CI injects it from Infisical /bunyip/e2e/test_user_password)",
     )?;
-    if password.trim().is_empty() {
+    // Trim before hashing. The E2E suite logs in with the TRIMMED password
+    // (e2e/lib/env.ts `required()` returns `value.trim()`), and bunyip's login
+    // trims the email but NOT the password. If the seed value carried trailing
+    // whitespace (a newline from a secret-store fetch / file / paste is common),
+    // the stored hash would be for "P\n" while the suite sends "P", failing
+    // login with a confusing "email or password incorrect". Trimming both sides
+    // removes the mismatch; passwords carry no meaningful surrounding whitespace.
+    let password = raw_password.trim();
+    if password.is_empty() {
         bail!("BUNYIP_E2E_TEST_USER_PASSWORD is empty");
     }
 
     // Hash once: both accounts share the password, so one PHC string suffices.
     let password_hash = PasswordService::new()
-        .hash(&password)
+        .hash(password)
         .context("failed to hash the test password")?;
 
     for (email, role) in ACCOUNTS {
