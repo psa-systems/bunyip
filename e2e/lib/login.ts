@@ -49,17 +49,51 @@ export async function loginViaHub(page: Page): Promise<void> {
     await fillTotpStep(page);
   }
 
-  // bunyip navigates fully out of the /login path family on success. Match
-  // anything starting with /login so multi-step flows (`/login/2fa`, etc) are
-  // still treated as IN the login flow.
-  await expect
-    .poll(() => new URL(page.url()).pathname, {
-      timeout: 30_000,
-      message:
-        'hub login never navigated away from the /login flow ' +
-        '(still on /login, /login/2fa, /login/mfa, or similar)',
-    })
-    .not.toMatch(/^\/login(\/|$)/);
+  // bunyip navigates fully out of the /login path family on success (a 302 to
+  // /dashboard or the OIDC return URL). A rejected login - bad credentials, or
+  // the 5/min-per-email rate limit - re-renders /login with an `error_box`
+  // instead. Race "left /login" against that error box appearing so a rejection
+  // fails in ~1s WITH bunyip's own message, rather than blocking the full 30s
+  // and reporting only "never left /login".
+  const stillOnLogin = (): boolean => /^\/login(\/|$)/.test(new URL(page.url()).pathname);
+  const leftLogin = page
+    .waitForURL(() => !stillOnLogin(), { timeout: 30_000 })
+    .then(() => 'ok' as const)
+    .catch(() => 'timeout' as const);
+  // `.text-destructive` is the only destructive-styled element on the login
+  // page; bunyip's error_box (views/ui.rs) renders solely on a failed login, so
+  // it is a false-positive-free signal.
+  const errorShown = page
+    .locator('.text-destructive')
+    .first()
+    .waitFor({ state: 'visible', timeout: 30_000 })
+    .then(() => 'error' as const)
+    .catch(() => 'timeout' as const);
+
+  const outcome = await Promise.race([leftLogin, errorShown]);
+  if (outcome === 'ok' && !stillOnLogin()) return;
+
+  // An error box appeared, or the poll timed out still on /login. Surface the
+  // rendered reason (e.g. "Too many attempts", "Invalid email or password").
+  const reason = await readLoginError(page);
+  throw new Error(
+    `hub login did not leave /login (current: ${new URL(page.url()).pathname})` +
+      (reason ? `: "${reason}"` : ' - no error message rendered (timed out waiting for navigation)'),
+  );
+}
+
+// Scrape bunyip's login error_box (`.text-destructive`, views/ui.rs) into a
+// single-line string, or null when no error is rendered. The box holds an icon
+// (svg, no text) plus the message, so innerText is the message.
+async function readLoginError(page: Page): Promise<string | null> {
+  try {
+    const box = page.locator('.text-destructive').first();
+    if ((await box.count()) === 0) return null;
+    const text = (await box.innerText()).trim().replace(/\s+/g, ' ');
+    return text.length > 0 ? text : null;
+  } catch {
+    return null;
+  }
 }
 
 // Compute the current TOTP code from E2E_TOTP_SECRET (RFC 6238, 30s window,

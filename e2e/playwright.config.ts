@@ -43,6 +43,10 @@ export default defineConfig({
       name: 'setup',
       testMatch: /global\.setup\.ts$/,
       dependencies: ['preflight'],
+      // No retries: this project logs in, and bunyip rate-limits login to
+      // 5/min/email. Retrying a rate-limited login just burns more of that
+      // budget and cascades one blip into several failures. Fail once instead.
+      retries: 0,
       use: { ...devices['Desktop Chrome'], baseURL: env.baseURL },
     },
     // 2. Browser-driven auth/session coverage. Starts ANONYMOUS (no
@@ -54,6 +58,10 @@ export default defineConfig({
       name: 'auth-ui',
       testMatch: /tests\/auth\/.*\.spec\.ts$/,
       dependencies: ['preflight'],
+      // No retries, same reason as `setup`: these specs log in, and a retry of a
+      // rate-limited login only deepens the 5/min hole. account-ui / api below
+      // keep the global retries (they do not log in).
+      retries: 0,
       use: { ...devices['Desktop Chrome'], baseURL: env.baseURL },
     },
     // 3. Authenticated browser coverage (account, memberships, billing). Loads
