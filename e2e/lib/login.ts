@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { authenticator } from 'otplib';
-import { expect, type APIRequestContext, type Page } from '@playwright/test';
+import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { env } from './env';
 import { routes } from './api';
 
@@ -64,7 +64,9 @@ export async function loginViaHub(page: Page): Promise<void> {
   attachLoginWireDiagnostics(page); // BUNYIP-167 temporary
   await page.goto('/login');
 
-  const form = page.locator('form').first();
+  // Scope to the login form specifically (action="/login"), not whatever form
+  // happens to be first in the DOM.
+  const form = page.locator('form[action="/login"]').first();
 
   const email = form
     .locator('input#email, input[name="email"], input[type="email"]')
@@ -76,13 +78,19 @@ export async function loginViaHub(page: Page): Promise<void> {
     .first();
 
   await email.waitFor({ state: 'visible' });
-  await email.fill(env.email);
-  await password.fill(env.password);
 
-  await form
-    .getByRole('button', { name: /sign ?in|log ?in|continue|submit/i })
-    .first()
-    .click();
+  // The wire diagnostic (BUNYIP-167) showed the form posting EMPTY email +
+  // password despite fill() returning: bunyip-web re-renders the input nodes
+  // shortly after load (htmx is loaded globally), discarding the JS-set `.value`
+  // while attribute-valued hidden fields (redirect) survive. So fill, VERIFY the
+  // value stuck, and retry until it does (which also waits out the re-render);
+  // then re-fill once more immediately before submit as a last-moment guard.
+  await fillVerified(email, env.email);
+  await fillVerified(password, env.password);
+  if ((await email.inputValue()) !== env.email) await email.fill(env.email);
+  if ((await password.inputValue()) !== env.password) await password.fill(env.password);
+
+  await form.locator('button[type="submit"]').first().click();
 
   // bunyip 302s to /login/2fa for an MFA-enabled account; anything else
   // (success or error) flows through to the URL-out-of-/login poll below.
@@ -123,6 +131,22 @@ export async function loginViaHub(page: Page): Promise<void> {
   throw new Error(
     `hub login did not leave /login (current: ${new URL(page.url()).pathname})` +
       (reason ? `: "${reason}"` : ' - no error message rendered (timed out waiting for navigation)'),
+  );
+}
+
+// Fill a field and confirm the value persisted, retrying a few times. Guards
+// against bunyip-web re-rendering the input after a too-early fill (BUNYIP-168):
+// the retry loop both re-applies the value and waits out the re-render, so it
+// returns only once the field actually holds `value`.
+async function fillVerified(loc: Locator, value: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await loc.fill(value);
+    if ((await loc.inputValue()) === value) return;
+    await loc.page().waitForTimeout(250);
+  }
+  throw new Error(
+    `login field value did not stick after fill (holds ${(await loc.inputValue()).length} chars, ` +
+      `expected ${value.length}); the input is likely re-rendered after fill`,
   );
 }
 
