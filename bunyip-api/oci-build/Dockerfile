@@ -103,7 +103,7 @@ RUN --mount=type=secret,id=dunite_token \
               git config --global url."https://oauth2:$(cat /run/secrets/dunite_token)@dev.a8n.run/".insteadOf "https://dev.a8n.run/"; \
            fi' \
     && find . -name '*.rs' -exec touch {} + \
-    && cargo build --locked --release --bin bunyip-api
+    && cargo build --locked --release --bin bunyip-api --bin bunyip-e2e-bootstrap
 
 # Belt-and-suspenders: a stub bunyip-api is ~0.5 MB, the real server is tens of
 # MB. Fail the build loudly here rather than let a stub reach the registry and
@@ -135,6 +135,11 @@ RUN adduser -D -u 1001 appuser
 
 # Binary, migrations (run on startup), and the email templates.
 COPY --from=builder /build/target/release/bunyip-api /app/bunyip-api
+# One-off staging seeder (BUNYIP-156). Shipped in the image so c-01 can run it
+# via `docker compose run --entrypoint /app/bunyip-e2e-bootstrap`. Inert on
+# production: it refuses to run unless BUNYIP_E2E_BOOTSTRAP_ALLOW=true AND
+# ENVIRONMENT is non-production. ENTRYPOINT below is unchanged.
+COPY --from=builder /build/target/release/bunyip-e2e-bootstrap /app/bunyip-e2e-bootstrap
 COPY --from=builder /build/bunyip-api/migrations /app/migrations
 COPY --from=builder /build/crates/bunyip-domain/templates /app/templates
 
