@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { tagged } from '../../lib/factories';
+import { blockLiveReload } from '../../lib/login';
 
 // Profile-edit coverage (BUNYIP-149). Runs in the `account-ui` project: the
 // browser is ALREADY authenticated (storageState saved by `setup`), so this
@@ -13,6 +14,12 @@ import { tagged } from '../../lib/factories';
 // server-rendered POST /settings/profile, reloads, and asserts the values
 // persisted. The next run overwrites them, so there is nothing to sweep.
 test.describe('account profile', () => {
+  // bunyip-web reloads the page on SSE events (BUNYIP-168); block it so a reload
+  // never wipes a form mid-edit.
+  test.beforeEach(async ({ page }) => {
+    await blockLiveReload(page);
+  });
+
   test('update profile fields and confirm they persist', async ({ page }) => {
     await page.goto('/settings');
 

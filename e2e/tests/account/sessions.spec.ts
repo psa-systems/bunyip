@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { env } from '../../lib/env';
 import { routes } from '../../lib/api';
+import { blockLiveReload } from '../../lib/login';
 
 // Active-sessions coverage (BUNYIP-149). Runs in the `account-ui` project with
 // a live, already-authenticated browser session; does NOT call loginViaHub.
@@ -14,6 +15,11 @@ import { routes } from '../../lib/api';
 // `page.request` carries the live session cookies, so the API probe is
 // authenticated without a bearer.
 test.describe('account sessions', () => {
+  // bunyip-web reloads the page on SSE events (BUNYIP-168); block it.
+  test.beforeEach(async ({ page }) => {
+    await blockLiveReload(page);
+  });
+
   test('the settings page lists at least the current session', async ({ page }) => {
     await page.goto('/settings');
     expect(page.url(), 'settings page should not bounce to /login').not.toMatch(/\/login(\/|$)/);
