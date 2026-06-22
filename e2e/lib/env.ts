@@ -156,26 +156,26 @@ function fingerprint(value: string): string {
   return `len ${value.length}, sha256[:12]=${createHash('sha256').update(value).digest('hex').slice(0, 12)}`;
 }
 
-/// Diagnostic (BUNYIP-167, temporary): log the resolved suite inputs so a CI
-/// run shows EXACTLY which host, email, and credential bytes it used. The
-/// non-secret values (hub/OP/api URLs, email, tenant, OIDC client + redirect)
-/// are printed in plaintext - they are a test account email and public URLs.
-/// The password and TOTP secret are printed only as a length + sha256 prefix.
-/// Compare the password fingerprint to `'<real password>' | hash sha256` on the
-/// host to confirm the secret matches the account byte-for-byte. Remove once the
-/// credential/host mismatch this was added for is resolved.
+/// Diagnostic (BUNYIP-167, temporary): log the resolved suite inputs as
+/// FINGERPRINTS (length + sha256 prefix), never plaintext. The inputs are all
+/// registered as Forgejo Actions secrets, so Forgejo masks any plaintext of
+/// their values in the log as `***`; printing a fingerprint (a derived value)
+/// dodges the masking AND keeps secrets out of the log. Compare each fingerprint
+/// to the expected value's hash, e.g. `'e2e-user@a8n.run' | hash sha256` or
+/// `'https://a8n.systems' | hash sha256` - a mismatch names the wrong input.
+/// Remove once the mismatch this was added for is resolved.
 export function logResolvedConfig(): void {
   console.log(
     [
-      '[config] resolved suite inputs:',
-      `  baseURL (hub)    = ${env.baseURL}`,
-      `  opBaseURL        = ${env.opBaseURL}`,
-      `  apiBaseURL       = ${env.apiBaseURL}`,
+      '[config] resolved suite inputs (fingerprint = len + sha256[:12]; compare to the expected value hash):',
+      `  baseURL (hub)    = ${fingerprint(env.baseURL)}`,
+      `  opBaseURL        = ${fingerprint(env.opBaseURL)}`,
+      `  apiBaseURL       = ${fingerprint(env.apiBaseURL)}`,
       `  isProductionApex = ${env.isProductionApex}`,
-      `  email            = ${env.email}`,
-      `  tenantId         = ${env.tenantId}`,
-      `  oidcClientId     = ${env.oidcClientId}`,
-      `  oidcRedirectUri  = ${env.oidcRedirectUri}`,
+      `  email            = ${fingerprint(env.email)}`,
+      `  tenantId         = ${fingerprint(env.tenantId)}`,
+      `  oidcClientId     = ${fingerprint(env.oidcClientId)}`,
+      `  oidcRedirectUri  = ${fingerprint(env.oidcRedirectUri)}`,
       `  password         = ${fingerprint(env.password)}`,
       `  totpSecret       = ${fingerprint(env.totpSecret)}`,
     ].join('\n'),
