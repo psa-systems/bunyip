@@ -52,37 +52,13 @@ export async function loginViaHub(page: Page): Promise<void> {
 
   await email.waitFor({ state: 'visible' });
 
-  // BUNYIP-168 diag (temporary): the fill works against the PUBLIC a8n.systems
-  // login page locally, but empties in CI - so log what THIS runner actually
-  // loaded (page identity), to tell a different/old bunyip-web from a true
-  // environment quirk. Also fill via JS + dispatch input, and read the .value
-  // back through evaluate (bypassing any Playwright fill nuance), so we see
-  // whether the value sticks at the DOM level at all.
-  {
-    const content = await page.content();
-    const jsValue = await email.evaluate((el: HTMLInputElement) => {
-      el.value = 'diag-probe';
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      return el.value;
-    });
-    await page.waitForTimeout(300);
-    const after = await email.evaluate((el: HTMLInputElement) => el.value);
-    console.log(
-      `[login page] url=${page.url()} len=${content.length} ` +
-        `hasEventSource=${content.includes('EventSource')} hasReload=${content.includes('location.reload')} ` +
-        `htmxBoost=${content.includes('hx-boost')} | jsSet="${jsValue}" jsAfter300ms="${after}"`,
-    );
-  }
-
-  // Fill, VERIFY the value stuck, retry, then re-fill once more immediately
-  // before submit. `blockLiveReload` above is what actually stops the SSE reload
-  // that used to wipe the form mid-fill (BUNYIP-168); this verification is a
-  // belt-and-suspenders guard so any residual re-render cannot send an empty
-  // POST silently - it fails loudly instead.
-  await fillVerified(email, env.email);
-  await fillVerified(password, env.password);
-  if ((await email.inputValue()) !== env.email) await email.fill(env.email);
-  if ((await password.inputValue()) !== env.password) await password.fill(env.password);
+  // Set the values via the DOM, not Playwright `fill()`. On the CI runner's
+  // headless chromium, `fill()` is a no-op on these inputs (the value never
+  // changes), while a direct `el.value = ...` assignment works and persists
+  // (proven by the BUNYIP-168 probe). bunyip-web submits the native form, which
+  // serializes each input's `.value`, so a DOM-set value is submitted correctly.
+  await setInputValue(email, env.email);
+  await setInputValue(password, env.password);
 
   await form.locator('button[type="submit"]').first().click();
 
@@ -128,20 +104,26 @@ export async function loginViaHub(page: Page): Promise<void> {
   );
 }
 
-// Fill a field and confirm the value persisted, retrying a few times. A guard
-// against an empty POST (BUNYIP-168): if anything still clears the input after
-// fill (e.g. a stray reload not covered by blockLiveReload), this fails loudly
-// rather than submitting blank credentials. Returns only once the field holds
-// `value`.
-async function fillVerified(loc: Locator, value: string): Promise<void> {
+// Set an input's value via the DOM and confirm it persisted, retrying a few
+// times. Playwright `fill()` is a no-op on these inputs in the CI runner's
+// headless chromium (BUNYIP-168), so set `.value` directly and dispatch
+// input/change; bunyip-web submits the native form, which serializes `.value`.
+// Throws loudly if the value cannot be made to stick (so we never submit blank
+// or partial credentials silently).
+async function setInputValue(loc: Locator, value: string): Promise<void> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    await loc.fill(value);
+    await loc.evaluate((el, v) => {
+      const input = el as HTMLInputElement;
+      input.value = v as string;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }, value);
     if ((await loc.inputValue()) === value) return;
-    await loc.page().waitForTimeout(250);
+    await loc.page().waitForTimeout(200);
   }
   throw new Error(
-    `login field value did not stick after fill (holds ${(await loc.inputValue()).length} chars, ` +
-      `expected ${value.length}); the input is likely re-rendered after fill`,
+    `login field value did not stick after a DOM set (holds ${(await loc.inputValue()).length} chars, ` +
+      `expected ${value.length})`,
   );
 }
 
@@ -171,7 +153,8 @@ async function fillTotpStep(page: Page): Promise<void> {
     )
     .first();
   await codeInput.waitFor({ state: 'visible', timeout: 10_000 });
-  await codeInput.fill(code);
+  // DOM-set, not fill(): same CI no-op applies to this input (BUNYIP-168).
+  await setInputValue(codeInput, code);
   await form
     .getByRole('button', { name: /verify|continue|submit|sign ?in|log ?in/i })
     .first()
