@@ -114,6 +114,72 @@ store entry itself; the E2E tenant + account (`*_EMAIL` / `*_PASSWORD` /
 (`*_OIDC_CLIENT_ID` / `*_OIDC_REDIRECT_URI`); and the TOTP enrollment
 (`*_TOTP_SECRET`). Keep this here or in the team secret runbook.
 
+## First-time setup runbook
+
+Ordered steps to take the suite from merged-code to a green CI run. None of this
+is in-repo: it is account, secret, and Forgejo-admin work. Do the staging set
+first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODUCTION`.
+
+1. **Merge the suite.** Lands `e2e/`, the `just e2e` recipe, and
+   `.forgejo/workflows/e2e.yml`.
+
+2. **Seed the staging E2E account + tenant.** Run the bootstrap against the
+   staging deployment (creates `e2e-user@a8n.run` + `e2e-admin@a8n.run`,
+   idempotent):
+
+   ```
+   # inside the staging api container, non-production ENVIRONMENT:
+   BUNYIP_E2E_BOOTSTRAP_ALLOW=true \
+     BUNYIP_E2E_TEST_USER_PASSWORD=<Infisical /bunyip/e2e/test_user_password> \
+     cargo run --bin bunyip-e2e-bootstrap
+   # or, from a checkout wired to the staging DB: just e2e-bootstrap
+   ```
+
+   Record the **tenant UUID**, the **email**, and the **password**.
+
+3. **Enroll 2FA on `e2e-user@a8n.run`** (BUNYIP-152). Log into the staging hub
+   as the E2E user, go to `/settings/2fa/setup`, capture the **base32 TOTP
+   secret** shown during enrollment, and verify a code. The suite logs in with
+   2FA on, so this is required, not optional.
+
+4. **Register a public PKCE OIDC client** (or reuse the hub `bunyip-web` client).
+   Record the **client_id** and a **registered redirect_uri** (e.g.
+   `https://a8n.systems/auth/callback`). It must match exactly or
+   `/oauth2/authorize` returns `invalid_redirect_uri`. The suite only reads the
+   `code` from the redirect Location; the URL is never loaded.
+
+5. **Set the Forgejo Actions secrets** (staging shown; add the `E2E_PRODUCTION_*`
+   / `OIDC_ISSUER_PRODUCTION` set when provisioning prod):
+
+   ```
+   E2E_STAGING_BASE_URL          = https://a8n.systems
+   OIDC_ISSUER_STAGING           = https://api.a8n.systems
+   E2E_STAGING_EMAIL             = e2e-user@a8n.run
+   E2E_STAGING_PASSWORD          = <step 2>
+   E2E_STAGING_TENANT_ID         = <tenant UUID, step 2>
+   E2E_STAGING_OIDC_CLIENT_ID    = <step 4>
+   E2E_STAGING_OIDC_REDIRECT_URI = <step 4>
+   E2E_STAGING_TOTP_SECRET       = <base32, step 3>
+   # optional, teardown-only, once BUNYIP-151 lands:
+   E2E_STAGING_STRIPE_SECRET_KEY = sk_test_...
+   ```
+
+6. **Enforce the check.** Forgejo -> repo Settings -> Branch protection on `main`
+   -> add `e2e` to the required status checks. The PR run is what actually blocks
+   a merge; a direct push to `main` can still turn the post-merge run red after
+   the fact.
+
+7. **Verify.** Open a PR (or push to `main`) and watch the `e2e` job run the
+   runnable specs against staging. Locally: `cp e2e/.env.example e2e/.env`, fill
+   the same values, then `cd e2e && npm ci && npx playwright install chromium &&
+   just e2e`.
+
+After this the **runnable** specs pass. The `test.fixme` specs unblock as their
+sub-tasks land: BUNYIP-150 (staging mail sink -> signup / password-reset /
+magic-link / change-email), BUNYIP-151 (staging Stripe test mode -> billing),
+BUNYIP-152 (the 2FA enrollment in step 3 -> two-factor). BUNYIP-149 (bunyip-web
+`/healthz`) is for a future web reachability gate, not a spec blocker.
+
 ## Deploy gating: the gate scripts
 
 A PR's or push's SHA only matters if staging is actually serving it, so each CI
