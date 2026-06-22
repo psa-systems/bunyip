@@ -1,7 +1,50 @@
+import { createHash } from 'node:crypto';
 import { authenticator } from 'otplib';
 import { expect, type APIRequestContext, type Page } from '@playwright/test';
 import { env } from './env';
 import { routes } from './api';
+
+// BUNYIP-167 (temporary): fingerprint a value for safe logging (length + sha256
+// prefix, never plaintext), matching lib/env.ts so the POSTed credential bytes
+// can be compared to the resolved-config fingerprints.
+function fp(value: string): string {
+  return `len ${value.length}/${createHash('sha256').update(value).digest('hex').slice(0, 12)}`;
+}
+
+// BUNYIP-167 (temporary): log the actual `/login` POST the browser sends - which
+// fields, the credential fingerprints, key headers, and the response status +
+// redirect - so we can prove whether the right bytes leave the browser and how
+// bunyip responds. Remove with the rest of the BUNYIP-167 diagnostics.
+function attachLoginWireDiagnostics(page: Page): void {
+  page.on('request', (req) => {
+    try {
+      if (req.method() !== 'POST' || new URL(req.url()).pathname !== '/login') return;
+      const params = new URLSearchParams(req.postData() ?? '');
+      const fields = [...params.entries()]
+        .map(([k, v]) => (k === 'email' || k === 'password' ? `${k}=${fp(v)}` : `${k}=${v}`))
+        .join(' ');
+      const h = req.headers();
+      console.log(
+        `[login POST req] ${req.url()} | ${fields} | ` +
+          `origin=${h['origin'] ?? '(none)'} content-type=${h['content-type'] ?? '(none)'} ` +
+          `cookie=${h['cookie'] ? 'present' : 'none'}`,
+      );
+    } catch {
+      /* diagnostic only */
+    }
+  });
+  page.on('response', (resp) => {
+    try {
+      const req = resp.request();
+      if (req.method() !== 'POST' || new URL(resp.url()).pathname !== '/login') return;
+      console.log(
+        `[login POST res] -> ${resp.status()} location=${resp.headers()['location'] ?? '(none)'}`,
+      );
+    } catch {
+      /* diagnostic only */
+    }
+  });
+}
 
 // Drive the bunyip-web login form to establish a real session.
 //
@@ -18,6 +61,7 @@ import { routes } from './api';
 // as IN /login and the helper only returns once bunyip has actually let us
 // through to a post-login page.
 export async function loginViaHub(page: Page): Promise<void> {
+  attachLoginWireDiagnostics(page); // BUNYIP-167 temporary
   await page.goto('/login');
 
   const form = page.locator('form').first();
