@@ -170,7 +170,11 @@ async fn seed(pool: &PgPool, dry_run: bool) -> anyhow::Result<()> {
             r#"
             INSERT INTO users (email, password_hash, role, email_verified)
             VALUES ($1, $2, $3, TRUE)
-            ON CONFLICT (email) DO UPDATE SET
+            -- email uniqueness is a PARTIAL index (users_email_unique_active,
+            -- migration 20260324000029): UNIQUE (email) WHERE deleted_at IS NULL.
+            -- The conflict target must carry the same predicate, or Postgres
+            -- rejects it with "no unique or exclusion constraint matching".
+            ON CONFLICT (email) WHERE deleted_at IS NULL DO UPDATE SET
                 password_hash = EXCLUDED.password_hash,
                 role          = EXCLUDED.role,
                 email_verified = TRUE,
