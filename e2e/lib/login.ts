@@ -46,6 +46,18 @@ function attachLoginWireDiagnostics(page: Page): void {
   });
 }
 
+// bunyip-web mounts an SSE reload subscriber on EVERY page (layout.rs
+// SSE_SUBSCRIBER): an EventSource to `/v1/events` that calls
+// `window.location.reload()` on claims_changed / profile_changed /
+// applications_changed / resync. On the login page that reload fires mid-fill
+// and wipes the form, so the filled values never reach submit and the POST goes
+// out empty (BUNYIP-168). The suite needs no live reloads, so abort the SSE
+// connection for the page. Call this on any browser page the suite drives
+// (login flows here; the authenticated account-ui specs need it too).
+export async function blockLiveReload(page: Page): Promise<void> {
+  await page.route('**/v1/events', (route) => route.abort());
+}
+
 // Drive the bunyip-web login form to establish a real session.
 //
 // bunyip-web is server-rendered (Maud + htmx): the login page at `/login`
@@ -61,6 +73,7 @@ function attachLoginWireDiagnostics(page: Page): void {
 // as IN /login and the helper only returns once bunyip has actually let us
 // through to a post-login page.
 export async function loginViaHub(page: Page): Promise<void> {
+  await blockLiveReload(page); // BUNYIP-168: stop the SSE reload wiping the form
   attachLoginWireDiagnostics(page); // BUNYIP-167 temporary
   await page.goto('/login');
 

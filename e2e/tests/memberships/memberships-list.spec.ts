@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { env } from '../../lib/env';
 import { routes } from '../../lib/api';
+import { blockLiveReload } from '../../lib/login';
 
 // Memberships coverage (BUNYIP-149). Runs in the `account-ui` project with a
 // live, already-authenticated browser session; does NOT call loginViaHub.
@@ -9,6 +10,11 @@ import { routes } from '../../lib/api';
 // bouncing to /login) and the API (GET /v1/auth/memberships returns the active
 // tenant). `page.request` carries the session cookies, so no bearer is needed.
 test.describe('memberships', () => {
+  // bunyip-web reloads the page on SSE events (BUNYIP-168); block it.
+  test.beforeEach(async ({ page }) => {
+    await blockLiveReload(page);
+  });
+
   test('membership page renders and reports the active tenant', async ({ page }) => {
     await page.goto('/membership');
     expect(page.url(), 'membership page should not bounce to /login').not.toMatch(/\/login(\/|$)/);
