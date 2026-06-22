@@ -1,5 +1,5 @@
-# Bunyip (PSA Systems) - task runner for the split web + api workspace.
-#
+# General Task Runner
+
 # Two deployables: bunyip-api (actix backend, musl-static image) and
 # bunyip-web (Axum SSR frontend, glibc image with bun + tailwind). The
 # backend consumes the dunite git dependency
@@ -9,6 +9,98 @@
 # List available recipes
 default:
     @just --list
+
+# -- Hooks ------------------------------------------------------------------
+
+# Install the git pre-commit hook (run once per fresh clone). Writes a stub at .git/hooks/pre-commit that execs `just pre-commit`. Bypass with `git commit --no-verify`.
+[group: 'hooks']
+install-hooks:
+    #!/usr/bin/env nu
+    let hook = ".git/hooks/pre-commit"
+    # Remove first so a leftover symlink from an older install does not get
+    # written through to its target file. `try` swallows the not-found case.
+    try { rm $hook }
+    "#!/usr/bin/env sh\nexec just pre-commit\n" | save $hook
+    ^chmod +x $hook
+    print $"Wrote ($hook) -> just pre-commit"
+
+# Run the same checks as .forgejo/workflows/check.yml inside the dev compose `api` container.
+[group: 'hooks']
+pre-commit: ensure-env
+    #!/usr/bin/env nu
+    print "\n[pre-commit] cargo fmt --all --check"
+    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo fmt --all --check
+    print "\n[pre-commit] cargo clippy --workspace --all-targets -- -D warnings"
+    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo clippy --workspace --all-targets -- -D warnings
+    print "\n[pre-commit] cargo build --workspace --all-targets --locked"
+    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo build --workspace --all-targets --locked
+    print "\n[pre-commit] cargo test --workspace --lib"
+    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo test --workspace --lib
+    print "\n[pre-commit] all checks passed"
+
+# -- Checks ----------------------------------------------------------------------
+
+# Umbrella check: build + clippy + fmt + docker builder stage.
+[group: 'checks']
+check: check-migrations check-build check-clippy check-fmt check-docker
+
+# Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
+[group: 'checks']
+check-migrations:
+    ./scripts/check-migration-versions.sh
+
+# Build every target in the workspace.
+[group: 'checks']
+check-build:
+    cargo build --workspace --all-targets
+
+# Clippy across the workspace with warnings denied.
+[group: 'checks']
+check-clippy:
+    cargo clippy --workspace --all-targets -- -D warnings
+
+# Formatting check.
+[group: 'checks']
+check-fmt:
+    cargo fmt --all --check
+
+# Build the api image's builder stage only - catches Docker-build drift cheaply.
+[group: 'checks']
+check-docker:
+    docker build --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .
+
+# Run fmt + clippy + workspace lib tests inside the pinned rust-builder image.
+# For dev boxes with no local Rust toolchain; named volumes keep repeat runs incremental.
+[group: 'checks']
+check-container:
+    docker run --rm \
+        -v {{ justfile_directory() }}:/work \
+        -v dunite-check-cargo-registry:/usr/local/cargo/registry \
+        -v bunyip-check-target:/work/target \
+        -w /work \
+        -e SQLX_OFFLINE=true \
+        ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie \
+        bash -c "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace --lib"
+
+# Type-check the workspace.
+[group: 'checks']
+typecheck:
+    cargo check --workspace
+
+# Lint the workspace (clippy).
+[group: 'checks']
+lint:
+    cargo clippy --workspace --all-targets -- -D warnings
+
+# Format the workspace.
+[group: 'checks']
+fmt:
+    cargo fmt --all
+
+# Run unit tests.
+[group: 'checks']
+test:
+    cargo test --workspace --lib
 
 # docker compose reads HOST_UID/HOST_GID for the `user:` mapping + dev-image
 # build args on shared dev hosts (where the developer's uid is not 1000). These
@@ -25,7 +117,7 @@ export SQLX_OFFLINE := "true"
 compose := "docker compose -f compose.dev.yml "
 compose_sso := "docker compose -f compose.dev.yml -f compose.dev-sso.yml "
 
-# ── Dev ───────────────────────────────────────────────────────────────────────
+# -- Development --------------------------------------------------------------
 
 # Create .env from the example if missing, generating the dev secrets that would
 # otherwise be empty (the encryption keys must be 32-byte hex or the api panics
@@ -275,7 +367,7 @@ logs-web: ensure-env
 db-shell: ensure-env
     {{ compose }}exec postgres psql --username bunyip --dbname bunyip
 
-# ── Local (cargo, no Docker) ───────────────────────────────────────────────────
+# -- Local (cargo, no Docker) ---------------------------------------------------
 
 # Run the api backend locally.
 [group: 'local']
@@ -292,71 +384,7 @@ run-web:
 build:
     cargo build --workspace
 
-# ── Checks ──────────────────────────────────────────────────────────────────────
-
-# Umbrella check: build + clippy + fmt + docker builder stage.
-[group: 'checks']
-check: check-migrations check-build check-clippy check-fmt check-docker
-
-# Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
-[group: 'checks']
-check-migrations:
-    ./scripts/check-migration-versions.sh
-
-# Build every target in the workspace.
-[group: 'checks']
-check-build:
-    cargo build --workspace --all-targets
-
-# Clippy across the workspace with warnings denied.
-[group: 'checks']
-check-clippy:
-    cargo clippy --workspace --all-targets -- -D warnings
-
-# Formatting check.
-[group: 'checks']
-check-fmt:
-    cargo fmt --all --check
-
-# Build the api image's builder stage only - catches Docker-build drift cheaply.
-[group: 'checks']
-check-docker:
-    docker build --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .
-
-# Run fmt + clippy + workspace lib tests inside the pinned rust-builder image.
-# For dev boxes with no local Rust toolchain; named volumes keep repeat runs incremental.
-[group: 'checks']
-check-container:
-    docker run --rm \
-        -v {{ justfile_directory() }}:/work \
-        -v dunite-check-cargo-registry:/usr/local/cargo/registry \
-        -v bunyip-check-target:/work/target \
-        -w /work \
-        -e SQLX_OFFLINE=true \
-        ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie \
-        bash -c "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace --lib"
-
-# Type-check the workspace.
-[group: 'checks']
-typecheck:
-    cargo check --workspace
-
-# Lint the workspace (clippy).
-[group: 'checks']
-lint:
-    cargo clippy --workspace --all-targets -- -D warnings
-
-# Format the workspace.
-[group: 'checks']
-fmt:
-    cargo fmt --all
-
-# Run unit tests.
-[group: 'checks']
-test:
-    cargo test --workspace --lib
-
-# ── Database ────────────────────────────────────────────────────────────────────
+# -- Database --------------------------------------------------------------------
 
 # Run pending migrations (also applied automatically on api startup).
 [group: 'database']
@@ -377,7 +405,7 @@ migrate-revert: ensure-env
 e2e-bootstrap *args: ensure-env
     {{ compose }}exec api cargo run --bin bunyip-e2e-bootstrap -- {{ args }}
 
-# ── Images ──────────────────────────────────────────────────────────────────────
+# -- Images ----------------------------------------------------------------------
 
 # Build both production images.
 [group: 'images']
@@ -414,7 +442,7 @@ build-docker-export:
         --output type=local,dest=dist \
         .
 
-# ── Cleanup ──────────────────────────────────────────────────────────────────
+# -- Cleanup ------------------------------------------------------------------
 
 # Tear down this repo's dev footprint: stop the compose.dev.yml stack (drops the default network and orphans), remove this repo's per-developer named volumes (postgres data, cargo-target, web node_modules, download/oci caches) plus the bunyip-specific check-container target cache, delete local build artifacts (target/, bunyip-web/node_modules/), and remove the generated dev .env (ensure-env recreates it). Scoped to this repo; safe on a shared host (no host-global prune; shared dunite registry cache left intact).
 [group: 'cleanup']
@@ -463,7 +491,7 @@ dev-clean-all: dev-clean
     docker buildx prune --force
     print "dev-clean-all: done"
 
-# ── Release ─────────────────────────────────────────────────────────────────────
+# -- Release ------------------------------------------------------------------
 
 # Create a release: bump major (vx.0.0), minor (v0.x.0), or hotfix (v0.0.x), push the branch, and open the PR via fj.
 # After the PR merges, the create-release workflow creates the tag and release automatically.
@@ -524,13 +552,13 @@ create-release bump:
     # Push release branch
     git push --set-upstream origin $release_branch
 
-    # Open the release PR via fj. Body lives in a tempfile so the changelog
-    # can grow later without inline escaping pain.
+    # Open the release PR via fj. Body lives in a tempfile so the
+    # changelog can grow later without inline escaping pain.
     let body_file = (mktemp --tmpdir --suffix .md)
     [
         $"Automated release PR for ($tag)."
         ""
-        $"After merge, `.forgejo/workflows/create-release.yml` tags and publishes ($tag)."
+        $"After merge, `.forgejo/workflows/create-release.yml` tags and publishes ($tag) to the Generic Packages registry."
     ] | str join "\n" | save --force $body_file
     let fj_result = (^fj --host dev.a8n.run pr create $"Release ($tag)" --body-file $body_file | complete)
     rm $body_file
@@ -564,30 +592,3 @@ create-release bump:
     }
     print $"After merging, the create-release workflow will tag and release ($tag) automatically."
 
-# ── Hooks ──────────────────────────────────────────────────────────────────
-
-# Install the git pre-commit hook (run once per fresh clone). Writes a stub at .git/hooks/pre-commit that execs `just pre-commit`. Bypass with `git commit --no-verify`.
-[group: 'hooks']
-install-hooks:
-    #!/usr/bin/env nu
-    let hook = ".git/hooks/pre-commit"
-    # Remove first so a leftover symlink from an older install does not get
-    # written through to its target file. `try` swallows the not-found case.
-    try { rm $hook }
-    "#!/usr/bin/env sh\nexec just pre-commit\n" | save $hook
-    ^chmod +x $hook
-    print $"Wrote ($hook) -> just pre-commit"
-
-# Run the same checks as .forgejo/workflows/check.yml inside the dev compose `api` container.
-[group: 'hooks']
-pre-commit: ensure-env
-    #!/usr/bin/env nu
-    print "\n[pre-commit] cargo fmt --all --check"
-    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo fmt --all --check
-    print "\n[pre-commit] cargo clippy --workspace --all-targets -- -D warnings"
-    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo clippy --workspace --all-targets -- -D warnings
-    print "\n[pre-commit] cargo build --workspace --all-targets --locked"
-    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo build --workspace --all-targets --locked
-    print "\n[pre-commit] cargo test --workspace --lib"
-    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo test --workspace --lib
-    print "\n[pre-commit] all checks passed"
