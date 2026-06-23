@@ -47,13 +47,23 @@ const healthUrl = `${opBaseURL}/health`;
 const hubHealthzUrl = `${hubBaseURL.replace(/\/+$/, '')}/healthz`;
 const TIMEOUT_MS = 30_000;
 
-// `soft` tolerates a non-2xx response (warns and continues) but still treats a
-// network-level failure (host unreachable) as fatal. Used for the hub /healthz
-// during its rollout: PR SHAs never deploy, so on the PR that ADDS /healthz the
-// live staging hub does not serve it yet, and a hard 404 here would deadlock the
-// very PR introducing it (BUNYIP-149, same deploy-transition shape as
-// BUNYIP-183). Tighten to a hard check once /healthz is deployed everywhere.
-async function probe(url, { soft = false } = {}) {
+// Production apex host. TEMPORARY (BUNYIP-185): until psa.systems serves the
+// real /healthz, the hub probe stays SOFT there; everywhere else (staging) it is
+// a hard, body-validating check. Remove this carve-out + the `soft` branch in
+// probeHub once prod serves /healthz.
+const PROD_APEX_HOST = 'psa.systems';
+
+const hubIsProdApex = (() => {
+  try {
+    return new URL(hubBaseURL).hostname === PROD_APEX_HOST;
+  } catch {
+    return false;
+  }
+})();
+
+// Hard probe for the API /health host (status-only: /health is JSON
+// `{status,version}` and exists everywhere, so a 200 is sufficient).
+async function probe(url) {
   console.log(`PR mode: probing ${url} (timeout ${TIMEOUT_MS / 1000}s)...`);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -63,10 +73,6 @@ async function probe(url, { soft = false } = {}) {
       signal: controller.signal,
     });
     if (!res.ok) {
-      if (soft) {
-        console.warn(`${url} -> HTTP ${res.status} (not deployed yet?); continuing.`);
-        return;
-      }
       console.error(`${url} returned HTTP ${res.status}.`);
       process.exit(1);
     }
@@ -79,8 +85,53 @@ async function probe(url, { soft = false } = {}) {
   }
 }
 
-// API/OP host is the hard gate (its /health already exists everywhere).
+// Hub /healthz probe. bunyip-web returns a soft-404 fallback (HTTP 200 + HTML)
+// for unknown paths, so a 200 alone does NOT prove /healthz is the real endpoint
+// - require the JSON liveness body `{"status":"ok"}`. `soft` (prod apex only,
+// for now) downgrades a missing/blank endpoint to a warning; a network failure
+// is always fatal.
+async function probeHub(url, { soft = false } = {}) {
+  console.log(`PR mode: probing ${url} (timeout ${TIMEOUT_MS / 1000}s)...`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      headers: { accept: 'application/json' },
+      signal: controller.signal,
+    });
+    let body = null;
+    if (res.ok) {
+      try {
+        body = await res.json();
+      } catch {
+        body = null;
+      }
+    }
+    const live = res.ok && body && body.status === 'ok';
+    if (!live) {
+      const ct = res.headers.get('content-type') || '';
+      const detail = res.ok
+        ? `200 but not the /healthz JSON {"status":"ok"} (ct=${ct}); a soft-404 fallback is masking a missing endpoint`
+        : `HTTP ${res.status}`;
+      if (soft) {
+        console.warn(`${url} -> ${detail}; prod /healthz not deployed yet, continuing.`);
+        return;
+      }
+      console.error(`${url} -> ${detail}.`);
+      process.exit(1);
+    }
+    console.log(`${url} -> 200 {"status":"ok"} ok.`);
+  } catch (err) {
+    console.error(`Could not reach ${url}: ${String(err)}`);
+    process.exit(1);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// API/OP host is a hard gate (its /health exists everywhere).
 await probe(healthUrl);
-// Hub /healthz is additive + soft until universally deployed (see above).
-await probe(hubHealthzUrl, { soft: true });
+// Hub /healthz: hard + body-validating, except the prod apex stays soft until
+// psa.systems serves it (BUNYIP-185).
+await probeHub(hubHealthzUrl, { soft: hubIsProdApex });
 console.log('Reachability checks complete. Proceeding.');
