@@ -19,3 +19,10 @@ pub mod version;
 pub use config::Config;
 pub use errors::AppError;
 pub use responses::{ApiResponse, ResponseMeta};
+
+/// The two seeded E2E account emails (BUNYIP-52 / BUNYIP-163). Single source of
+/// truth shared by the `bunyip-e2e-bootstrap` binary (which seeds exactly these)
+/// and the `GET /e2e-bootstrapped` readiness probe (`routes/health.rs`, which
+/// checks both exist + are active). Keep in lock-step with the suite's login
+/// accounts.
+pub const E2E_ACCOUNT_EMAILS: [&str; 2] = ["e2e-user@a8n.run", "e2e-admin@a8n.run"];

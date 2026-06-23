@@ -120,8 +120,24 @@ jobs:
         if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
         run: node24 scripts/health-check.mjs
 
+      # E2E seed readiness (BUNYIP-163). Writes `bootstrapped` as a step output;
+      # fail-open (always exits 0). When staging is not seeded the suite is
+      # skipped below and the job still SUCCEEDS, so `e2e` can be a required
+      # check without a merge lockout on a missing/removed bootstrap.
+      - name: Check staging is bootstrapped
+        id: bootstrap_check
+        run: node24 scripts/check-bootstrapped.mjs
+
       - name: Run E2E suite
+        # Run when staging is seeded, OR on a production dispatch (prod is
+        # reachability-only / write-skipped and its /e2e-bootstrapped always
+        # reports false, so it must not gate on it).
+        if: steps.bootstrap_check.outputs.bootstrapped == 'true' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
         run: corepack npx playwright test
+
+      - name: Note skipped suite (staging not bootstrapped)
+        if: steps.bootstrap_check.outputs.bootstrapped != 'true' && !(github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
+        run: echo "staging not bootstrapped; skipping E2E suite - run 'just e2e-bootstrap' to enable coverage."
 
       - name: Upload Playwright report and traces
         if: failure()
