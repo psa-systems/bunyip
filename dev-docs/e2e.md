@@ -257,8 +257,20 @@ trigger runs a pre-flight gate before the Playwright suite.
   gate would always time out for PRs; this just confirms staging is up and the
   suite has something to talk to. The Playwright suite is the actual coverage
   gate. Endpoint: `GET /health`.
+- **`scripts/check-bootstrapped.mjs`** (E2E seed readiness, BUNYIP-163). After
+  the reachability/deploy gate, probes `GET <api>/e2e-bootstrapped` (15s) and
+  writes `bootstrapped=<bool>` to `$GITHUB_OUTPUT`. The bunyip-api endpoint
+  returns `{ "bootstrapped": <bool> }` - true iff both seeded accounts
+  (`e2e-user@a8n.run` / `e2e-admin@a8n.run`) exist with `deleted_at IS NULL`
+  (one indexed count, unauthenticated, always `false` on a production
+  `ENVIRONMENT`). e2e.yml gates the "Run E2E suite" step on this output: when
+  staging is NOT bootstrapped the suite is skipped and **the job still
+  succeeds**. The script fail-opens (any error -> `bootstrapped=false`,
+  exit 0), so the gate never blocks. A production dispatch ignores the flag
+  (prod is reachability-only). Endpoint: `GET /e2e-bootstrapped`. Re-seed with
+  `just e2e-bootstrap`.
 
-Both derive the API host the same way `lib/env.ts` does (explicit
+All three derive the API host the same way `lib/env.ts` does (explicit
 `E2E_API_BASE_URL`, else prepend `api.` to `E2E_BASE_URL`) and treat an empty
 secret string as unset.
 
@@ -278,6 +290,16 @@ parallel runs would collide):
 that, the billing WRITE specs carry `test.skip(env.isProductionApex, ...)` so
 even a production dispatch cannot start or touch a live subscription. That guard
 is independent of the `test.fixme` blockers and stays after they lift.
+
+**Required check + bootstrap skip (BUNYIP-163).** After the pre-flight gate,
+`check-bootstrapped.mjs` decides whether the suite runs: on a staging run the
+Playwright suite executes only when `GET /e2e-bootstrapped` reports the seed is
+present; otherwise it is skipped and the job still passes. This makes it safe to
+mark `e2e` a REQUIRED status check on `main` (the BUNYIP-148 enforcement AC) - a
+missing or removed seed degrades to "no coverage this run", never a merge block,
+including for the PR that might re-enable bootstrapping. Enabling the required
+check itself is a one-time Forgejo branch-protection change (add `e2e` to the
+required status checks for `main`), done out of band.
 
 **Runtime + artifacts.** Each run installs Node + Chromium, runs the gate, then
 the Playwright suite against the selected deployment. On failure it uploads

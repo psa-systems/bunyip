@@ -2,6 +2,10 @@
 
 use actix_web::{get, web, HttpResponse};
 use serde::Serialize;
+use sqlx::PgPool;
+
+use crate::repositories::UserRepository;
+use crate::Config;
 
 const SERVICE_NAME: &str = "bunyip-api";
 const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -56,6 +60,43 @@ pub async fn health_check() -> HttpResponse {
         status: "ok",
         version: PKG_VERSION,
     })
+}
+
+#[derive(Serialize)]
+struct E2eBootstrappedResponse {
+    bootstrapped: bool,
+}
+
+/// E2E readiness probe at /e2e-bootstrapped (BUNYIP-163).
+///
+/// Reports whether the two fixed E2E test accounts (`crate::E2E_ACCOUNT_EMAILS`)
+/// both exist and are active, so the e2e workflow can skip the suite (and still
+/// succeed) when staging is not bootstrapped - letting `e2e` be a required check
+/// without ever locking out merges on a missing or removed seed. Unauthenticated
+/// and information-minimal (one boolean about two fixed test emails) via a single
+/// indexed count.
+///
+/// On a production `ENVIRONMENT` it returns `false` WITHOUT querying: production
+/// uses manual provisioning and the suite skips there anyway, so this endpoint
+/// never probes prod user rows.
+#[get("/e2e-bootstrapped")]
+pub async fn e2e_bootstrapped(pool: web::Data<PgPool>, config: web::Data<Config>) -> HttpResponse {
+    if config.is_production() {
+        return HttpResponse::Ok().json(E2eBootstrappedResponse {
+            bootstrapped: false,
+        });
+    }
+
+    let emails: Vec<String> = crate::E2E_ACCOUNT_EMAILS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let bootstrapped = match UserRepository::count_active_by_emails(&pool, &emails).await {
+        Ok(n) => n as usize == crate::E2E_ACCOUNT_EMAILS.len(),
+        Err(_) => false,
+    };
+
+    HttpResponse::Ok().json(E2eBootstrappedResponse { bootstrapped })
 }
 
 /// Health check endpoint at /v1/health

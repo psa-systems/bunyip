@@ -752,6 +752,20 @@ impl UserRepository {
         Ok(rows.into_iter().map(|(email,)| email).collect())
     }
 
+    /// Count of active (non-deleted) users among `emails`. Powers the
+    /// `/e2e-bootstrapped` readiness probe (BUNYIP-163): one indexed lookup, no
+    /// per-row data returned.
+    pub async fn count_active_by_emails(pool: &PgPool, emails: &[String]) -> Result<i64, AppError> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM users WHERE email = ANY($1) AND deleted_at IS NULL",
+        )
+        .bind(emails)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(row.0)
+    }
+
     /// Find users in grace period
     pub async fn find_in_grace_period(pool: &PgPool) -> Result<Vec<User>, AppError> {
         let users = sqlx::query_as::<_, User>(

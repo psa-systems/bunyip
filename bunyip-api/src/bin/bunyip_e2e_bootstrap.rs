@@ -40,8 +40,8 @@ use bunyip_api::services::PasswordService;
 /// exact-match `ON CONFLICT (email)` / cleanup `WHERE email = $1` line up with
 /// what gets inserted.
 const ACCOUNTS: [(&str, UserRole); 2] = [
-    ("e2e-user@a8n.run", UserRole::Subscriber),
-    ("e2e-admin@a8n.run", UserRole::Admin),
+    (bunyip_api::E2E_ACCOUNT_EMAILS[0], UserRole::Subscriber),
+    (bunyip_api::E2E_ACCOUNT_EMAILS[1], UserRole::Admin),
 ];
 
 struct Options {

@@ -38,6 +38,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     // Root-level endpoints
     cfg.service(health::root_status);
     cfg.service(health::health_check);
+    // E2E seed readiness (BUNYIP-163): lets the e2e workflow skip-and-pass when
+    // staging is not bootstrapped, so `e2e` can be a required check.
+    cfg.service(health::e2e_bootstrapped);
 
     // Root-level `/version` update-check endpoint (bunyip-specific).
     version::configure(cfg);
