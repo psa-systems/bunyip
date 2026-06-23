@@ -23,13 +23,14 @@ test.describe('account sessions', () => {
     const res = await page.request.get(env.apiBaseURL + routes.userSessions);
     expect(res.status(), `GET ${routes.userSessions} -> ${res.status()}`).toBe(200);
 
-    // bunyip-api wraps payloads in a success envelope and the handler nests the
-    // list under `sessions`, so the shape is { data: { sessions: [...] } }
+    // BUNYIP-177 paginated this endpoint: it now returns a PaginatedResponse
+    // inside the success envelope, so the list is under data.items (with
+    // total/page/per_page/total_pages metadata alongside), not data.sessions.
     // (bunyip-web/src/api/mod.rs parse() reads `.data`; handlers/user.rs
-    // list_sessions emits `{ sessions }`). Unwrap both layers.
-    const body = (await res.json()) as { data?: { sessions?: unknown[] } };
-    const sessions = body.data?.sessions ?? [];
-    expect(Array.isArray(sessions), 'data.sessions should be an array').toBe(true);
+    // list_sessions now returns paginated(...).)
+    const body = (await res.json()) as { data?: { items?: unknown[] } };
+    const sessions = body.data?.items ?? [];
+    expect(Array.isArray(sessions), 'data.items should be an array').toBe(true);
     expect(sessions.length, 'expected at least one active session').toBeGreaterThan(0);
   });
 });

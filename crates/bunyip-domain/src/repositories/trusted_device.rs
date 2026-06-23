@@ -73,6 +73,45 @@ impl TrustedDeviceRepository {
         Ok(devices)
     }
 
+    /// A page of a user's active trusted devices, newest first (BUNYIP-177).
+    pub async fn find_user_devices_paginated(
+        pool: &PgPool,
+        user_id: Uuid,
+        per_page: i32,
+        offset: i32,
+    ) -> Result<Vec<TrustedDevice>, AppError> {
+        let devices = sqlx::query_as::<_, TrustedDevice>(
+            r#"
+            SELECT * FROM trusted_devices
+            WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > NOW()
+            ORDER BY created_at DESC
+            LIMIT $2 OFFSET $3
+            "#,
+        )
+        .bind(user_id)
+        .bind(per_page)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(devices)
+    }
+
+    /// Count of a user's active trusted devices, for pagination totals (BUNYIP-177).
+    pub async fn count_user_devices(pool: &PgPool, user_id: Uuid) -> Result<i64, AppError> {
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*) FROM trusted_devices
+            WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > NOW()
+            "#,
+        )
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(row.0)
+    }
+
     /// Find a trusted device by id (any state), for the ownership check on
     /// revoke.
     pub async fn find_by_id(pool: &PgPool, id: Uuid) -> Result<Option<TrustedDevice>, AppError> {

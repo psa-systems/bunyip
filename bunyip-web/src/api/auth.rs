@@ -5,18 +5,26 @@
 use serde_json::{json, Value};
 
 use super::types::{
-    AuthResponse, RecoveryCodesResponse, SetupStatus, TrustedDeviceInfo, TrustedDeviceList,
+    AuthResponse, PaginatedResponse, RecoveryCodesResponse, SetupStatus, TrustedDeviceInfo,
     TwoFactorSetupResponse, TwoFactorStatusResponse, User,
 };
 use super::{ok_data, parse, Api, ApiError};
 
-/// List the signed-in user's trusted devices (BUNYIP-138).
+/// A page of the signed-in user's trusted devices (BUNYIP-138 / BUNYIP-177).
+/// The API returns a `PaginatedResponse<TrustedDeviceInfo>` inside the envelope.
 pub async fn list_trusted_devices(
     api: &Api,
     cookie: Option<&str>,
-) -> Result<Vec<TrustedDeviceInfo>, ApiError> {
-    let list: TrustedDeviceList = parse(api.get("/users/me/trusted-devices", cookie).await?)?;
-    Ok(list.devices)
+    page: i64,
+    per_page: i64,
+) -> Result<PaginatedResponse<TrustedDeviceInfo>, ApiError> {
+    parse(
+        api.get(
+            &format!("/users/me/trusted-devices?page={page}&per_page={per_page}"),
+            cookie,
+        )
+        .await?,
+    )
 }
 
 /// Revoke a single trusted device by id.
