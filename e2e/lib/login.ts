@@ -110,7 +110,7 @@ export async function loginViaHub(page: Page): Promise<void> {
 // input/change; bunyip-web submits the native form, which serializes `.value`.
 // Throws loudly if the value cannot be made to stick (so we never submit blank
 // or partial credentials silently).
-async function setInputValue(loc: Locator, value: string): Promise<void> {
+export async function setInputValue(loc: Locator, value: string): Promise<void> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     await loc.evaluate((el, v) => {
       const input = el as HTMLInputElement;
