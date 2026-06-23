@@ -270,7 +270,9 @@ pub async fn list_sessions(
     let request_id = get_request_id(&req);
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
-    let offset = (page - 1) * per_page;
+    // i64 so a crafted large ?page= cannot overflow the offset (a negative
+    // OFFSET would 500). per_page is already clamped to 1..=100 (BUNYIP-177).
+    let offset = (page as i64 - 1) * per_page as i64;
 
     // Hash the caller's refresh-token cookie (if present) to match it to its
     // stored row without exposing any hashes to the client.
@@ -674,7 +676,9 @@ pub async fn list_trusted_devices(
     let request_id = get_request_id(&req);
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
-    let offset = (page - 1) * per_page;
+    // i64 so a crafted large ?page= cannot overflow the offset (a negative
+    // OFFSET would 500). per_page is already clamped to 1..=100 (BUNYIP-177).
+    let offset = (page as i64 - 1) * per_page as i64;
 
     let devices =
         TrustedDeviceRepository::find_user_devices_paginated(&pool, user.0.sub, per_page, offset)

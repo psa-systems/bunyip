@@ -78,7 +78,7 @@ impl TrustedDeviceRepository {
         pool: &PgPool,
         user_id: Uuid,
         per_page: i32,
-        offset: i32,
+        offset: i64,
     ) -> Result<Vec<TrustedDevice>, AppError> {
         let devices = sqlx::query_as::<_, TrustedDevice>(
             r#"

@@ -1218,8 +1218,6 @@ fn time_ago(iso: &str) -> String {
     }
 }
 
-/// Body of the "Active Sessions" card: one row per session with device, IP,
-/// last-active time, a "This device" badge on the current session, a per-row
 /// Prev/Next links for one of the two /settings lists (BUNYIP-177). `param` is
 /// this list's page query key; `keep` carries the OTHER list's page so paging
 /// one list does not reset the other. Plain links (no htmx), mirroring the only
@@ -1236,7 +1234,9 @@ fn settings_pager(param: &str, page: i64, total_pages: i64, keep: &str) -> Marku
     }
 }
 
-/// Revoke action for non-current sessions, and a "log out all other devices"
+/// Body of the "Active Sessions" card: one row per session with device, IP,
+/// last-active time, a "This device" badge on the current session, a per-row
+/// revoke action for non-current sessions, and a "log out all other devices"
 /// action when there is at least one other session (BUNYIP-137).
 fn sessions_card_body(
     page: &crate::api::types::PaginatedResponse<crate::api::types::SessionInfo>,

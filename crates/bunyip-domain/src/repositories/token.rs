@@ -102,7 +102,7 @@ impl TokenRepository {
         pool: &PgPool,
         user_id: Uuid,
         per_page: i32,
-        offset: i32,
+        offset: i64,
     ) -> Result<Vec<RefreshToken>, AppError> {
         let tokens = sqlx::query_as::<_, RefreshToken>(
             r#"
