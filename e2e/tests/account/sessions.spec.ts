@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { env } from '../../lib/env';
 import { routes } from '../../lib/api';
 import { blockLiveReload } from '../../lib/login';
+import { attachPageDiagnostics } from '../../lib/page-diagnostics';
 
 // Active-sessions coverage (BUNYIP-149). Runs in the `account-ui` project with
 // a live, already-authenticated browser session; does NOT call loginViaHub.
@@ -21,7 +22,20 @@ test.describe('account sessions', () => {
   });
 
   test('the settings page lists at least the current session', async ({ page }) => {
-    await page.goto('/settings');
+    // BUNYIP-148: see the parallel comment in profile.spec.ts. `commit` returns
+    // as soon as the navigation commits instead of waiting for every
+    // subresource to land on the load event; if the renderer dies between
+    // commit and load (the failure mode we have been chasing), subsequent
+    // locator calls produce diagnosable errors instead of an opaque
+    // page-closed message from goto. attachPageDiagnostics carries the
+    // URL trail / request log into the thrown error.
+    const diag = attachPageDiagnostics(page);
+    try {
+      await page.goto('/settings', { waitUntil: 'commit' });
+      await page.waitForLoadState('domcontentloaded', { timeout: 15_000 });
+    } catch (e) {
+      throw new Error(`${(e as Error).message}\n${diag.snapshot('after goto /settings')}`);
+    }
     expect(page.url(), 'settings page should not bounce to /login').not.toMatch(/\/login(\/|$)/);
 
     // The sessions surface is rendered on /settings. Assert at least one

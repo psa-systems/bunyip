@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { tagged } from '../../lib/factories';
 import { blockLiveReload, setInputValue } from '../../lib/login';
+import { attachPageDiagnostics } from '../../lib/page-diagnostics';
 
 // Profile-edit coverage (BUNYIP-149). Runs in the `account-ui` project: the
 // browser is ALREADY authenticated (storageState saved by `setup`), so this
@@ -21,7 +22,27 @@ test.describe('account profile', () => {
   });
 
   test('update profile fields and confirm they persist', async ({ page }) => {
-    await page.goto('/settings');
+    // BUNYIP-148: /settings goto fails with "Target page, context or browser
+    // has been closed" on the CI runner. The previous `channel: 'chromium'` +
+    // `--disable-dev-shm-usage` + project-ordering attempts did not fix it.
+    // Theory: the default `waitUntil: 'load'` waits for every subresource on a
+    // heavy page (settings = profile + email + password + 2FA + sessions +
+    // trusted-devices), and the renderer dies between `commit` and `load`
+    // while playwright is still blocked on the load promise. Switching to
+    // `commit` returns as soon as the navigation commits (response headers
+    // arrived, URL updated). If the renderer dies after that, subsequent
+    // locator calls fail with their own (more diagnosable) errors instead of
+    // the opaque page-closed message from goto.
+    //
+    // attachPageDiagnostics tracks the URL trail + request log; if this still
+    // fails, the thrown error carries both so the next iteration is precise.
+    const diag = attachPageDiagnostics(page);
+    try {
+      await page.goto('/settings', { waitUntil: 'commit' });
+      await page.waitForLoadState('domcontentloaded', { timeout: 15_000 });
+    } catch (e) {
+      throw new Error(`${(e as Error).message}\n${diag.snapshot('after goto /settings')}`);
+    }
 
     const firstName = tagged('First');
     const lastName = tagged('Last');
@@ -42,8 +63,9 @@ test.describe('account profile', () => {
     await form.getByRole('button', { name: /save|update|submit/i }).first().click();
 
     // Reload from the server so the assertion proves persistence, not just the
-    // in-page form state we typed.
-    await page.goto('/settings');
+    // in-page form state we typed. Same `commit` strategy as the first goto.
+    await page.goto('/settings', { waitUntil: 'commit' });
+    await page.waitForLoadState('domcontentloaded', { timeout: 15_000 });
     const reloadedForm = page.locator('form').first();
     await expect(
       reloadedForm.locator('input#first_name, input[name="first_name"]').first(),
