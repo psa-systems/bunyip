@@ -23,11 +23,13 @@ test.describe('account sessions', () => {
     const res = await page.request.get(env.apiBaseURL + routes.userSessions);
     expect(res.status(), `GET ${routes.userSessions} -> ${res.status()}`).toBe(200);
 
-    const body = (await res.json()) as unknown;
-    const sessions = Array.isArray(body)
-      ? body
-      : ((body as { sessions?: unknown[] }).sessions ?? []);
-    expect(Array.isArray(sessions), 'sessions response should be an array').toBe(true);
+    // bunyip-api wraps payloads in a success envelope and the handler nests the
+    // list under `sessions`, so the shape is { data: { sessions: [...] } }
+    // (bunyip-web/src/api/mod.rs parse() reads `.data`; handlers/user.rs
+    // list_sessions emits `{ sessions }`). Unwrap both layers.
+    const body = (await res.json()) as { data?: { sessions?: unknown[] } };
+    const sessions = body.data?.sessions ?? [];
+    expect(Array.isArray(sessions), 'data.sessions should be an array').toBe(true);
     expect(sessions.length, 'expected at least one active session').toBeGreaterThan(0);
   });
 });
