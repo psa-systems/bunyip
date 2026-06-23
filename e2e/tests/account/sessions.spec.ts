@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { env } from '../../lib/env';
 import { routes } from '../../lib/api';
-import { blockLiveReload } from '../../lib/login';
+import { blockFontAwesomeKit, blockLiveReload } from '../../lib/login';
 import { attachPageDiagnostics } from '../../lib/page-diagnostics';
 
 // Active-sessions coverage (BUNYIP-149). Runs in the `account-ui` project with
@@ -23,6 +23,8 @@ test.describe('account sessions', () => {
   // bunyip-web reloads the page on SSE events (BUNYIP-168); block it.
   test.beforeEach(async ({ page }) => {
     await blockLiveReload(page);
+    // BUNYIP-176: the FontAwesome kit kills the headless renderer on /settings.
+    await blockFontAwesomeKit(page);
   });
 
   test('the settings page lists at least the current session', async ({ page }) => {

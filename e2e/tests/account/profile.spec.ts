@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { tagged } from '../../lib/factories';
-import { blockLiveReload, setInputValue } from '../../lib/login';
+import { blockFontAwesomeKit, blockLiveReload, setInputValue } from '../../lib/login';
 import { attachPageDiagnostics } from '../../lib/page-diagnostics';
 
 // Profile-edit coverage (BUNYIP-149). Runs in the `account-ui` project: the
@@ -53,6 +53,8 @@ test.describe('account profile', () => {
   // never wipes a form mid-edit.
   test.beforeEach(async ({ page }) => {
     await blockLiveReload(page);
+    // BUNYIP-176: the FontAwesome kit kills the headless renderer on /settings.
+    await blockFontAwesomeKit(page);
   });
 
   test('update profile fields and confirm they persist', async ({ page }) => {
