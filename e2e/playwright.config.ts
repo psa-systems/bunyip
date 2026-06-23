@@ -36,11 +36,55 @@ export default defineConfig({
     // the lighter /membership survives. The full chromium (installed by
     // `playwright install chromium`) handles the same page. BUNYIP-148.
     channel: 'chromium',
-    // --disable-dev-shm-usage: containers (the CI runner) give chromium a tiny
-    // /dev/shm, so heavier pages can OOM the browser process. Backing shared
-    // memory with /tmp instead avoids that. Kept alongside the full-chromium
-    // switch as defense in depth (BUNYIP-148).
-    launchOptions: { args: ['--disable-dev-shm-usage'] },
+    // Chromium hardening for the CI runner. BUNYIP-148.
+    //
+    // The page-diagnostics dump in profile.spec / sessions.spec
+    // (commit 6f7ba14) proved the failure mode: `goto /settings` with
+    // `waitUntil: 'commit'` succeeds (currentUrl=/settings), but
+    // `page.waitForLoadState('domcontentloaded')` then fails with the
+    // page closed - i.e. the renderer process dies between
+    // navigation-commit and DOM-content-loaded. The request trail at
+    // death names: /settings HTML, Google Fonts CSS, fontawesome kit
+    // JS, htmx, the tailwind styles.css bundle, and four fontawesome
+    // CSS shards (free.min, free-v4-shims, free-v5-font-face,
+    // free-v4-font-face). All "downloaded a font/icon CSS, didn't
+    // make it to first paint". The lighter /membership page survives
+    // because it uses fewer icons + fewer forms.
+    //
+    // Two args, both defensive:
+    //
+    // --disable-dev-shm-usage : containers give chromium a tiny
+    //   /dev/shm (typically 64MB). Heavier pages OOM the renderer
+    //   when shared memory fills. Backing it with /tmp avoids that.
+    //
+    // --disable-gpu : the actual fix for the icon-heavy /settings
+    //   render. Renderer crash signatures of this shape ("dies
+    //   between commit and DOMContentLoaded on an icon-heavy page,
+    //   no page-level crash event, succeeds on lighter pages")
+    //   classically point at GPU init / accelerated raster on a
+    //   container with no real GPU. Forcing software raster path
+    //   removes the dependency on /dev/dri and the discovery dance
+    //   that GPU init does at first paint. Costs perf (irrelevant
+    //   for CI E2E) and avoids the renderer fault.
+    //
+    // --no-sandbox : the OpenSUSE runner image may run the job
+    //   process as root inside its container; chromium's namespace
+    //   sandbox setup fails on a root-uid setup without
+    //   CAP_SYS_ADMIN, and the renderer dies during sandbox
+    //   transition with the same opaque "page closed". Disabling the
+    //   sandbox bypasses that step. Safe in CI: the runner already
+    //   isolates the job per the runner-image contract.
+    //
+    // Kept alongside `channel: 'chromium'` (use the full build, not
+    // the stripped headless-shell) for defense in depth so a later
+    // image change that swaps the chromium binary does not regress.
+    launchOptions: {
+      args: [
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-sandbox',
+      ],
+    },
   },
   projects: [
     // 0. Aggregate-all-missing env-var check. Runs first so a misconfigured CI
