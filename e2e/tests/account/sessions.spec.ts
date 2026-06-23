@@ -23,14 +23,26 @@ test.describe('account sessions', () => {
     const res = await page.request.get(env.apiBaseURL + routes.userSessions);
     expect(res.status(), `GET ${routes.userSessions} -> ${res.status()}`).toBe(200);
 
-    // BUNYIP-177 paginated this endpoint: it now returns a PaginatedResponse
-    // inside the success envelope, so the list is under data.items (with
-    // total/page/per_page/total_pages metadata alongside), not data.sessions.
-    // (bunyip-web/src/api/mod.rs parse() reads `.data`; handlers/user.rs
-    // list_sessions now returns paginated(...).)
-    const body = (await res.json()) as { data?: { items?: unknown[] } };
-    const sessions = body.data?.items ?? [];
-    expect(Array.isArray(sessions), 'data.items should be an array').toBe(true);
+    // bunyip-api wraps payloads in a success envelope, then nests the list one
+    // layer deeper. Two shapes exist across the deploy transition (BUNYIP-183):
+    //   - legacy:    { data: { sessions: [...] } }      (handler emits `{ sessions }`)
+    //   - paginated: { data: { items: [...], total, page, per_page, total_pages } }
+    //                (handler emits `paginated(...)`, BUNYIP-177)
+    // This suite runs against a live deployment, and on a pull_request the PR's
+    // code is NOT deployed (e2e.yml does a /health check, not a deploy), so the
+    // test always runs against whatever staging currently serves. A PR that
+    // reshapes this response therefore asserts the new shape against the old
+    // deployed API (or vice-versa). Accept BOTH so the assertion survives the
+    // window between merge and deploy, regardless of which shape is live.
+    // (bunyip-web/src/api/mod.rs parse() reads `.data`.)
+    const body = (await res.json()) as {
+      data?: { items?: unknown[]; sessions?: unknown[] };
+    };
+    const sessions = body.data?.items ?? body.data?.sessions ?? [];
+    expect(
+      Array.isArray(sessions),
+      'data.items (paginated) or data.sessions (legacy) should be an array',
+    ).toBe(true);
     expect(sessions.length, 'expected at least one active session').toBeGreaterThan(0);
   });
 });
