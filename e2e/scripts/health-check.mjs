@@ -41,26 +41,46 @@ const opBaseURL = pick(
 ).replace(/\/+$/, '');
 
 const healthUrl = `${opBaseURL}/health`;
+// Hub liveness (BUNYIP-149): bunyip-web's /healthz, the SSR app the browser
+// specs actually drive. The API /health above only proves the OP/API host is
+// up, not the hub - so probe both before the suite runs.
+const hubHealthzUrl = `${hubBaseURL.replace(/\/+$/, '')}/healthz`;
 const TIMEOUT_MS = 30_000;
 
-console.log(`PR mode: probing ${healthUrl} (timeout ${TIMEOUT_MS / 1000}s)...`);
-
-const controller = new AbortController();
-const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
-try {
-  const res = await fetch(healthUrl, {
-    headers: { accept: 'application/json' },
-    signal: controller.signal,
-  });
-  if (!res.ok) {
-    console.error(`Deployment /health returned HTTP ${res.status}.`);
+// `soft` tolerates a non-2xx response (warns and continues) but still treats a
+// network-level failure (host unreachable) as fatal. Used for the hub /healthz
+// during its rollout: PR SHAs never deploy, so on the PR that ADDS /healthz the
+// live staging hub does not serve it yet, and a hard 404 here would deadlock the
+// very PR introducing it (BUNYIP-149, same deploy-transition shape as
+// BUNYIP-183). Tighten to a hard check once /healthz is deployed everywhere.
+async function probe(url, { soft = false } = {}) {
+  console.log(`PR mode: probing ${url} (timeout ${TIMEOUT_MS / 1000}s)...`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      headers: { accept: 'application/json' },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      if (soft) {
+        console.warn(`${url} -> HTTP ${res.status} (not deployed yet?); continuing.`);
+        return;
+      }
+      console.error(`${url} returned HTTP ${res.status}.`);
+      process.exit(1);
+    }
+    console.log(`${url} -> ${res.status} ok.`);
+  } catch (err) {
+    console.error(`Could not reach ${url}: ${String(err)}`);
     process.exit(1);
+  } finally {
+    clearTimeout(timer);
   }
-  console.log(`Deployment /health -> ${res.status} ok. Proceeding.`);
-} catch (err) {
-  console.error(`Could not reach ${healthUrl}: ${String(err)}`);
-  process.exit(1);
-} finally {
-  clearTimeout(timer);
 }
+
+// API/OP host is the hard gate (its /health already exists everywhere).
+await probe(healthUrl);
+// Hub /healthz is additive + soft until universally deployed (see above).
+await probe(hubHealthzUrl, { soft: true });
+console.log('Reachability checks complete. Proceeding.');

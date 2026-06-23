@@ -34,9 +34,12 @@ async fn main() {
         cfg: Arc::clone(&cfg),
     };
 
-    use handlers::{auth_pages as ap, consent, content, dashboard as dash, public};
+    use handlers::{auth_pages as ap, consent, content, dashboard as dash, health, public};
 
     let app = Router::new()
+        // Liveness for the e2e reachability gate + monitoring (BUNYIP-149).
+        // Unauthenticated, no DB.
+        .route("/healthz", get(health::healthz))
         // Public / marketing
         .route("/", get(public::landing))
         .route("/pricing", get(content::pricing))
