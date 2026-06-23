@@ -122,12 +122,6 @@ jobs:
 
       - name: Run E2E suite
         run: corepack npx playwright test
-        # TEMP DIAGNOSTIC (BUNYIP-148): pw:browser forwards the chromium process
-        # stderr, so a browser-PROCESS death on /settings (no page-level crash
-        # event, empty error-context) prints its reason (signal / OOM / abort).
-        # Revert once the /settings crash cause is identified.
-        env:
-          DEBUG: pw:browser
 
       - name: Upload Playwright report and traces
         if: failure()

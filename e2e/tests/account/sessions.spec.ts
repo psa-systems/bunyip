@@ -25,7 +25,7 @@ test.describe('account sessions', () => {
     await blockLiveReload(page);
   });
 
-  test.fixme('the settings page lists at least the current session', async ({ page }) => {
+  test('the settings page lists at least the current session', async ({ page }) => {
     // BUNYIP-148: see the parallel comment in profile.spec.ts. `commit` returns
     // as soon as the navigation commits instead of waiting for every
     // subresource to land on the load event; if the renderer dies between

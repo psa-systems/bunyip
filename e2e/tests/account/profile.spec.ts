@@ -55,7 +55,7 @@ test.describe('account profile', () => {
     await blockLiveReload(page);
   });
 
-  test.fixme('update profile fields and confirm they persist', async ({ page }) => {
+  test('update profile fields and confirm they persist', async ({ page }) => {
     // BUNYIP-148: /settings goto fails with "Target page, context or browser
     // has been closed" on the CI runner. The previous `channel: 'chromium'` +
     // `--disable-dev-shm-usage` + project-ordering attempts did not fix it.
