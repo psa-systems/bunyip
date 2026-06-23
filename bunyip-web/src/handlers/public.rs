@@ -1,7 +1,7 @@
 //! Public marketing pages (landing for now; the rest land in phase 2).
 
 use axum::extract::State;
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use maud::html;
 
@@ -10,7 +10,7 @@ use crate::handlers::ctx;
 use crate::util::{app_gradient, app_link};
 use crate::views::layout::{document, public_shell};
 use crate::views::ui::{button_class, icon};
-use crate::web::{html, html_cookies, AppState};
+use crate::web::{html_cookies, html_status, AppState};
 
 struct Feature {
     icon: &'static str,
@@ -201,5 +201,7 @@ pub async fn not_found(State(st): State<AppState>, headers: HeaderMap) -> Respon
         }
     };
     let body = public_shell(&st.cfg, c.user.as_ref(), &apps, false, content);
-    html(document("Not found · Bunyip", body))
+    // BUNYIP-186: a real 404, not a soft-404 200, while still rendering the
+    // branded page.
+    html_status(document("Not found · Bunyip", body), StatusCode::NOT_FOUND)
 }
