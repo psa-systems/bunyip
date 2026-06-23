@@ -29,6 +29,14 @@ pub fn html(markup: Markup) -> Response {
     Html(markup.into_string()).into_response()
 }
 
+/// HTML response with an explicit status (e.g. 404 for the not-found fallback,
+/// BUNYIP-186 - the fallback page must carry a real 404, not a soft-404 200).
+pub fn html_status(markup: Markup, status: StatusCode) -> Response {
+    let mut resp = Html(markup.into_string()).into_response();
+    *resp.status_mut() = status;
+    resp
+}
+
 /// 200 HTML response that also relays refreshed cookies.
 pub fn html_cookies(markup: Markup, cookies: &[String]) -> Response {
     let mut resp = Html(markup.into_string()).into_response();
