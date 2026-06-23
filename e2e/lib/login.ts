@@ -19,24 +19,6 @@ export async function blockLiveReload(page: Page): Promise<void> {
   await page.addInitScript('try { window.EventSource = undefined; } catch (e) {}');
 }
 
-// Abort all FontAwesome-kit requests for the page. bunyip-web's layout loads
-// icons via the HOSTED FontAwesome kit: `kit.fontawesome.com/<id>.js` injects
-// `@font-face` CSS shards served from `ka-f.fontawesome.com` (free.min,
-// free-v4-shims, free-v5-font-face, free-v4-font-face). On the CI runner's
-// headless chromium (software raster, `--disable-gpu`, no real GPU), the
-// renderer process dies parsing those icon-font CSS shards: the BUNYIP-176
-// request trail ends at `free-v4-font-face.min.css` every time, with no
-// follow-up `.woff2`, and `page.goto('/settings')` then fails with "Target
-// page, context or browser has been closed" between navigation-commit and
-// DOMContentLoaded. The lighter `/membership` page survives. Real users (full
-// GPU chromium) render the kit fine, so this is a CI-environment fault, not a
-// product bug - blocking the kit at the network layer lets the page render
-// (icons just do not appear; these specs assert on form inputs and session
-// rows, never icons). Call BEFORE the first navigation to `/settings`.
-export async function blockFontAwesomeKit(page: Page): Promise<void> {
-  await page.route(/(?:kit|ka-f)\.fontawesome\.com/, (route) => route.abort());
-}
-
 // Drive the bunyip-web login form to establish a real session.
 //
 // bunyip-web is server-rendered (Maud + htmx): the login page at `/login`
