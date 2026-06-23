@@ -1009,6 +1009,25 @@ pub async fn membership_reactivate(State(st): State<AppState>, headers: HeaderMa
 pub struct SettingsQuery {
     pub ok: Option<String>,
     pub error: Option<String>,
+    /// 1-indexed page for the Active Sessions list (BUNYIP-177).
+    pub session_page: Option<i64>,
+    /// 1-indexed page for the Trusted Devices list (BUNYIP-177).
+    pub device_page: Option<i64>,
+}
+
+/// Page size for the Settings sessions / trusted-device lists (BUNYIP-177).
+const SETTINGS_PAGE_SIZE: i64 = 20;
+
+/// Empty page fallback so a failed sessions/devices fetch does not break the
+/// rest of /settings (BUNYIP-177).
+fn empty_page<T>(page: i64) -> crate::api::types::PaginatedResponse<T> {
+    crate::api::types::PaginatedResponse {
+        items: Vec::new(),
+        total: 0,
+        page,
+        page_size: Some(SETTINGS_PAGE_SIZE),
+        total_pages: 0,
+    }
 }
 
 pub async fn settings(
@@ -1027,16 +1046,20 @@ pub async fn settings(
         .map(|s| s.enabled)
         .unwrap_or(user.two_factor_enabled);
     let is_admin = matches!(user.role, crate::api::types::UserRole::Admin);
-    // Active sessions (BUNYIP-137). A failure here must not break the rest of
-    // the settings page, so fall back to an empty list.
-    let sessions = calls::list_sessions(&st.api, fwd).await.unwrap_or_default();
+    // Active sessions (BUNYIP-137), paginated (BUNYIP-177). A failure here must
+    // not break the rest of the settings page, so fall back to an empty page.
+    let session_page = q.session_page.unwrap_or(1).max(1);
+    let device_page = q.device_page.unwrap_or(1).max(1);
+    let sessions = calls::list_sessions(&st.api, fwd, session_page, SETTINGS_PAGE_SIZE)
+        .await
+        .unwrap_or_else(|_| empty_page(session_page));
     // Trusted devices (BUNYIP-138). Only 2FA users have any; fetch lazily.
     let trusted_devices = if twofa_enabled {
-        auth_api::list_trusted_devices(&st.api, fwd)
+        auth_api::list_trusted_devices(&st.api, fwd, device_page, SETTINGS_PAGE_SIZE)
             .await
-            .unwrap_or_default()
+            .unwrap_or_else(|_| empty_page(device_page))
     } else {
-        Vec::new()
+        empty_page(device_page)
     };
 
     let content = html! {
@@ -1132,11 +1155,11 @@ pub async fn settings(
             }))
 
             // Active sessions (BUNYIP-137)
-            (settings_card("key", "from-indigo-500 to-primary", "Active Sessions", sessions_card_body(&sessions)))
+            (settings_card("key", "from-indigo-500 to-primary", "Active Sessions", sessions_card_body(&sessions, device_page)))
 
             // Trusted devices (BUNYIP-138). Only meaningful with 2FA on.
             @if twofa_enabled {
-                (settings_card("shield-check", "from-teal-500 to-primary", "Trusted Devices", trusted_devices_card_body(&trusted_devices)))
+                (settings_card("shield-check", "from-teal-500 to-primary", "Trusted Devices", trusted_devices_card_body(&trusted_devices, session_page)))
             }
 
             // Danger zone
@@ -1195,12 +1218,34 @@ fn time_ago(iso: &str) -> String {
     }
 }
 
+/// Prev/Next links for one of the two /settings lists (BUNYIP-177). `param` is
+/// this list's page query key; `keep` carries the OTHER list's page so paging
+/// one list does not reset the other. Plain links (no htmx), mirroring the only
+/// existing pager in bunyip-web (the admin pager).
+fn settings_pager(param: &str, page: i64, total_pages: i64, keep: &str) -> Markup {
+    html! {
+        @if total_pages > 1 {
+            div class="flex justify-center gap-2 mt-4" {
+                @if page > 1 { a href=(format!("/settings?{keep}&{param}={}", page - 1)) class=(button_class("outline", "sm", "")) { "Previous" } }
+                span class="flex items-center px-3 text-sm text-muted-foreground" { "Page " (page) " of " (total_pages) }
+                @if page < total_pages { a href=(format!("/settings?{keep}&{param}={}", page + 1)) class=(button_class("outline", "sm", "")) { "Next" } }
+            }
+        }
+    }
+}
+
 /// Body of the "Active Sessions" card: one row per session with device, IP,
 /// last-active time, a "This device" badge on the current session, a per-row
-/// Revoke action for non-current sessions, and a "log out all other devices"
+/// revoke action for non-current sessions, and a "log out all other devices"
 /// action when there is at least one other session (BUNYIP-137).
-fn sessions_card_body(sessions: &[crate::api::types::SessionInfo]) -> Markup {
-    let has_others = sessions.iter().any(|s| !s.current);
+fn sessions_card_body(
+    page: &crate::api::types::PaginatedResponse<crate::api::types::SessionInfo>,
+    device_page: i64,
+) -> Markup {
+    let sessions = &page.items;
+    // "Log out all other devices" appears whenever the account has more than one
+    // active session, even if the others are on a later page (BUNYIP-177).
+    let has_others = page.total > 1;
     html! {
         @if sessions.is_empty() {
             p class="text-sm text-muted-foreground" { "No active sessions found." }
@@ -1232,6 +1277,7 @@ fn sessions_card_body(sessions: &[crate::api::types::SessionInfo]) -> Markup {
                 }
             }
         }
+        (settings_pager("session_page", page.page, page.total_pages, &format!("device_page={device_page}")))
     }
 }
 
@@ -1274,7 +1320,11 @@ pub async fn settings_revoke_other_sessions(
 
 /// Body of the "Trusted Devices" card (BUNYIP-138): devices that skip the TOTP
 /// prompt at login, each with a revoke action.
-fn trusted_devices_card_body(devices: &[crate::api::types::TrustedDeviceInfo]) -> Markup {
+fn trusted_devices_card_body(
+    page: &crate::api::types::PaginatedResponse<crate::api::types::TrustedDeviceInfo>,
+    session_page: i64,
+) -> Markup {
+    let devices = &page.items;
     html! {
         p class="text-sm text-muted-foreground mb-4" { "Devices that skip the two-factor prompt when you sign in. Revoke any you do not recognize." }
         @if devices.is_empty() {
@@ -1297,6 +1347,7 @@ fn trusted_devices_card_body(devices: &[crate::api::types::TrustedDeviceInfo]) -
                 }
             }
         }
+        (settings_pager("device_page", page.page, page.total_pages, &format!("session_page={session_page}")))
     }
 }
 

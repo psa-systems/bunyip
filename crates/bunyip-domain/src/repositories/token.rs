@@ -97,6 +97,45 @@ impl TokenRepository {
         Ok(tokens)
     }
 
+    /// A page of a user's active refresh tokens, newest first (BUNYIP-177).
+    pub async fn find_user_refresh_tokens_paginated(
+        pool: &PgPool,
+        user_id: Uuid,
+        per_page: i32,
+        offset: i64,
+    ) -> Result<Vec<RefreshToken>, AppError> {
+        let tokens = sqlx::query_as::<_, RefreshToken>(
+            r#"
+            SELECT * FROM refresh_tokens
+            WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > NOW()
+            ORDER BY created_at DESC
+            LIMIT $2 OFFSET $3
+            "#,
+        )
+        .bind(user_id)
+        .bind(per_page)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(tokens)
+    }
+
+    /// Count of a user's active refresh tokens, for pagination totals (BUNYIP-177).
+    pub async fn count_user_refresh_tokens(pool: &PgPool, user_id: Uuid) -> Result<i64, AppError> {
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*) FROM refresh_tokens
+            WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > NOW()
+            "#,
+        )
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(row.0)
+    }
+
     /// Find refresh token by ID
     pub async fn find_refresh_token_by_id(
         pool: &PgPool,

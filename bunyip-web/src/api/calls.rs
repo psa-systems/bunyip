@@ -4,18 +4,28 @@ use serde_json::{json, Value};
 
 use super::types::{
     AppDownloadGroup, Application, ApplicationGroup, ApplicationGroupList, ApplicationList,
-    CheckoutSessionResponse, DownloadGroups, Membership, SessionInfo, SessionList, StripeInvoice,
-    StripePaymentResponse,
+    CheckoutSessionResponse, DownloadGroups, Membership, PaginatedResponse, SessionInfo,
+    StripeInvoice, StripePaymentResponse,
 };
 use super::{ok_data, parse, Api, ApiError};
 
 // --- sessions ---------------------------------------------------------------
 
-/// List the signed-in user's active sessions (BUNYIP-137). The API wraps the
-/// list under a `sessions` key.
-pub async fn list_sessions(api: &Api, cookie: Option<&str>) -> Result<Vec<SessionInfo>, ApiError> {
-    let list: SessionList = parse(api.get("/users/me/sessions", cookie).await?)?;
-    Ok(list.sessions)
+/// A page of the signed-in user's active sessions (BUNYIP-137 / BUNYIP-177).
+/// The API returns a `PaginatedResponse<SessionInfo>` inside the data envelope.
+pub async fn list_sessions(
+    api: &Api,
+    cookie: Option<&str>,
+    page: i64,
+    per_page: i64,
+) -> Result<PaginatedResponse<SessionInfo>, ApiError> {
+    parse(
+        api.get(
+            &format!("/users/me/sessions?page={page}&per_page={per_page}"),
+            cookie,
+        )
+        .await?,
+    )
 }
 
 /// Revoke a single session by id. The API enforces that the session belongs to

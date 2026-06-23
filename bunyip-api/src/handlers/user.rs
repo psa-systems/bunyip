@@ -16,7 +16,7 @@ use crate::models::{
 use crate::repositories::{
     AuditLogRepository, TokenRepository, TrustedDeviceRepository, UserRepository,
 };
-use crate::responses::{get_request_id, success, success_no_data};
+use crate::responses::{get_request_id, paginated, success, success_no_data};
 use crate::services::{AuthService, EmailService, PasswordService, StripeService, TotpService};
 use crate::validation::validate_email;
 
@@ -251,13 +251,28 @@ pub async fn change_password(
 /// The `current` flag marks the session the presented refresh-token cookie
 /// belongs to, so the UI can label and protect it (BUNYIP-137). The stored
 /// `token_hash` is never returned.
+/// Offset-pagination query for the session / trusted-device lists (BUNYIP-177).
+/// `page` is 1-indexed (default 1); `per_page` defaults to 20 and is clamped to
+/// 1..=100, matching the rest of the API's paginated endpoints.
+#[derive(Debug, serde::Deserialize)]
+pub struct PageQuery {
+    pub page: Option<i32>,
+    pub per_page: Option<i32>,
+}
+
 pub async fn list_sessions(
     req: HttpRequest,
     user: AuthenticatedUser,
     pool: web::Data<PgPool>,
     auth_service: web::Data<Arc<AuthService>>,
+    query: web::Query<PageQuery>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
+    let page = query.page.unwrap_or(1).max(1);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
+    // i64 so a crafted large ?page= cannot overflow the offset (a negative
+    // OFFSET would 500). per_page is already clamped to 1..=100 (BUNYIP-177).
+    let offset = (page as i64 - 1) * per_page as i64;
 
     // Hash the caller's refresh-token cookie (if present) to match it to its
     // stored row without exposing any hashes to the client.
@@ -265,7 +280,10 @@ pub async fn list_sessions(
         .cookie("refresh_token")
         .map(|c| auth_service.hash_token(c.value()));
 
-    let tokens = TokenRepository::find_user_refresh_tokens(&pool, user.0.sub).await?;
+    let tokens =
+        TokenRepository::find_user_refresh_tokens_paginated(&pool, user.0.sub, per_page, offset)
+            .await?;
+    let total = TokenRepository::count_user_refresh_tokens(&pool, user.0.sub).await?;
 
     // Map to response format (hide sensitive fields)
     let sessions: Vec<_> = tokens
@@ -283,10 +301,7 @@ pub async fn list_sessions(
         })
         .collect();
 
-    Ok(success(
-        serde_json::json!({ "sessions": sessions }),
-        request_id,
-    ))
+    Ok(paginated(sessions, total, page, per_page, request_id))
 }
 
 /// DELETE /v1/users/me/sessions/{session_id}
@@ -656,11 +671,21 @@ pub async fn list_trusted_devices(
     req: HttpRequest,
     user: AuthenticatedUser,
     pool: web::Data<PgPool>,
+    query: web::Query<PageQuery>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
-    let devices = TrustedDeviceRepository::find_user_devices(&pool, user.0.sub).await?;
+    let page = query.page.unwrap_or(1).max(1);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
+    // i64 so a crafted large ?page= cannot overflow the offset (a negative
+    // OFFSET would 500). per_page is already clamped to 1..=100 (BUNYIP-177).
+    let offset = (page as i64 - 1) * per_page as i64;
+
+    let devices =
+        TrustedDeviceRepository::find_user_devices_paginated(&pool, user.0.sub, per_page, offset)
+            .await?;
+    let total = TrustedDeviceRepository::count_user_devices(&pool, user.0.sub).await?;
     let out: Vec<TrustedDeviceInfo> = devices.into_iter().map(Into::into).collect();
-    Ok(success(serde_json::json!({ "devices": out }), request_id))
+    Ok(paginated(out, total, page, per_page, request_id))
 }
 
 /// POST /v1/users/me/trusted-devices/{id}/revoke
