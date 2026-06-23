@@ -89,10 +89,30 @@ export default defineConfig({
     // 4. Request-context OIDC OP coverage. The fixtures in lib/fixtures.ts load
     //    the bearer (`test`) or replay the OP cookies (`oidcTest`). Uses the OP
     //    host, not the hub host.
+    //
+    // `dependencies: ['account-ui']` forces the api project to wait for every
+    // account-ui spec to finish before any api spec starts. Without this, the
+    // workers:1 scheduler interleaves tests across the two projects: a single
+    // account-ui spec (memberships) runs, the worker closes its chromium and
+    // launches a fresh non-storageState chromium for the api specs, then later
+    // tries to relaunch a storageState-loaded chromium for the next account-ui
+    // spec (profile / sessions). The second account-ui browser launch is what
+    // fails with "Target page, context or browser has been closed" - chromium
+    // process pid=1306 closes with exitCode=0 mid-run (DEBUG=pw:browser
+    // confirmed it is a clean playwright-initiated close, not a crash), and
+    // the relaunch attempt never produces a usable page. Serialising the two
+    // projects keeps the storageState chromium alive for one continuous
+    // memberships+account+billing pass; the api chromium then runs once and
+    // exits. One launch per project = no relaunch-after-close failure mode.
+    //
+    // Trade-off: total wall-clock is the sum of the two projects' runtimes
+    // instead of an interleaved overlap. Since workers:1 already serialises
+    // execution there is no real cost; the interleaving was wall-clock-neutral
+    // but introduced the relaunch fault. (BUNYIP-148.)
     {
       name: 'api',
       testMatch: /tests\/oidc\/.*\.spec\.ts$/,
-      dependencies: ['setup'],
+      dependencies: ['setup', 'account-ui'],
       use: { baseURL: env.opBaseURL },
     },
   ],
