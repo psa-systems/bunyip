@@ -40,6 +40,14 @@ fn stripe_http_client() -> reqwest::Client {
         .expect("reqwest client builder cannot fail for static config")
 }
 
+/// BUNYIP-188: pull the first non-empty origin out of a (possibly
+/// comma-separated) `CORS_ORIGIN`-style value. Returns `None` when
+/// every entry is empty so the caller can apply its own default.
+/// Trims surrounding whitespace per entry so `"a, b"` -> `Some("a")`.
+fn first_origin(raw: &str) -> Option<&str> {
+    raw.split(',').map(str::trim).find(|s| !s.is_empty())
+}
+
 /// Stripe configuration
 #[derive(Clone, Debug)]
 pub struct StripeConfig {
@@ -57,7 +65,19 @@ impl StripeConfig {
     pub fn from_env() -> Result<Self, AppError> {
         let frontend_origin =
             std::env::var("CORS_ORIGIN").unwrap_or_else(|_| "http://localhost:5173".to_string());
-        let base = frontend_origin.trim_end_matches('/');
+        // BUNYIP-188: `CORS_ORIGIN` is a comma-separated list of allowed
+        // origins everywhere else in the codebase, but the Stripe Checkout
+        // `success_url` / `cancel_url` fallback expects a single origin. On
+        // dev-sso `CORS_ORIGIN` is e.g.
+        // `"https://x-bunyip.a8n.run,https://x-mokosh.a8n.run"`; interpolating
+        // the whole list produced
+        // `"https://x-bunyip.a8n.run,https://x-mokosh.a8n.run/checkout/success"`
+        // which Stripe rejected. Split on `,`, pick the first non-empty origin.
+        // Explicit `STRIPE_SUCCESS_URL` / `STRIPE_CANCEL_URL` env vars still
+        // take precedence below (BUNYIP-175 PR #208 behaviour preserved).
+        let base = first_origin(&frontend_origin)
+            .unwrap_or("http://localhost:5173")
+            .trim_end_matches('/');
 
         Ok(Self {
             // secret_env supports the {NAME}_FILE compose-secret convention,
@@ -1115,6 +1135,39 @@ mod tests {
 
     fn test_service() -> StripeService {
         StripeService::new(test_config())
+    }
+
+    // -- BUNYIP-188: first_origin helper --
+
+    #[test]
+    fn first_origin_single_value_passthrough() {
+        assert_eq!(first_origin("https://example.com"), Some("https://example.com"));
+    }
+
+    #[test]
+    fn first_origin_picks_first_of_comma_list() {
+        assert_eq!(
+            first_origin("https://a.example.com,https://b.example.com"),
+            Some("https://a.example.com")
+        );
+    }
+
+    #[test]
+    fn first_origin_trims_whitespace() {
+        assert_eq!(first_origin("  https://a.example.com  ,  https://b.example.com"), Some("https://a.example.com"));
+    }
+
+    #[test]
+    fn first_origin_skips_empty_entries() {
+        assert_eq!(first_origin(",https://a.example.com"), Some("https://a.example.com"));
+        assert_eq!(first_origin(",   ,https://a.example.com"), Some("https://a.example.com"));
+    }
+
+    #[test]
+    fn first_origin_all_empty_returns_none() {
+        assert_eq!(first_origin(""), None);
+        assert_eq!(first_origin(",,"), None);
+        assert_eq!(first_origin("  ,  "), None);
     }
 
     // -- Webhook signature verification --
