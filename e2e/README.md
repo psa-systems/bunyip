@@ -84,7 +84,7 @@ test runs.
 | `E2E_OIDC_REDIRECT_URI` | yes | redirect_uri registered for that client (must match EXACTLY, or `invalid_redirect_uri`). Only the `code` is captured; the URL is never loaded |
 | `E2E_TOTP_SECRET` | yes | base32 TOTP secret for the account; the second factor is computed at runtime |
 | `E2E_STRIPE_SECRET_KEY` | no | Stripe test-mode key, used ONLY by teardown to cancel test-mode subscriptions. Unused until BUNYIP-151 |
-| `E2E_MAIL_SINK_URL` | no | Staging mail-sink JMAP base URL with the E2E mailbox credentials embedded (`https://e2e%40a8n.run:pass@mail.a8n.run`, the Stalwart server). The email-driven specs read token links from this mailbox; unset (e.g. production) makes them skip (BUNYIP-150) |
+| `E2E_MAIL_SINK_URL` | no | Staging mail-sink JMAP base URL with the E2E mailbox credentials embedded (`https://nate%40a8n.run:pass@mail.a8n.run`, the Stalwart server). The email-driven specs read token links from this mailbox; unset (e.g. production) makes them skip (BUNYIP-150) |
 
 ## Secret layout
 

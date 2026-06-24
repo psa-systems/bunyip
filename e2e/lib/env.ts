@@ -106,9 +106,9 @@ export const env = {
   // Optional: a Stripe test-mode secret key (`sk_test_...`) used ONLY by
   // teardown to cancel test-mode subscriptions the billing specs create.
   stripeSecretKey: optional('E2E_STRIPE_SECRET_KEY'),
-  // Optional: the staging mail-sink JMAP base URL with the dedicated E2E
-  // mailbox's credentials embedded as basicAuth userinfo, e.g.
-  // `https://e2e%40a8n.run:password@mail.a8n.run` (Stalwart). The email-driven
+  // Optional: the staging mail-sink JMAP base URL with the E2E mailbox's
+  // credentials embedded as basicAuth userinfo, e.g.
+  // `https://nate%40a8n.run:password@mail.a8n.run` (Stalwart). The email-driven
   // specs read token-links from this mailbox over JMAP and address unique
   // plus-subaddresses of it. STAGING ONLY - production has no sink, so the
   // password-reset / magic-link / change-email specs skip when this is unset

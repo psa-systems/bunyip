@@ -107,17 +107,21 @@ secret; a manual dispatch lets the operator pick.
   bounces the E2E session to `/login` (no code), the OP-session cookie scoping
   is wrong (COOKIE_DOMAIN vs the OP host); see BUNYIP-146.
 - **Mail sink (staging only, BUNYIP-150):** staging bunyip-api keeps sending
-  through the existing Stalwart relay (`mail.a8n.run`); a dedicated mailbox
-  there (`e2e@a8n.run`) receives the E2E mail, and the email-driven specs
-  (`password-reset`, `magic-link`, `change-email`) read the token-links from it
-  over Stalwart's JMAP API (`https://mail.a8n.run`). Each spec self-registers a
-  throwaway bunyip account at a unique plus-subaddress of that mailbox
-  (`e2e+<run-tag>@a8n.run`), which Stalwart delivers into `e2e@a8n.run`; the
-  suite reads by recipient, extracts the link, and destroys the message.
-  Prerequisites: a Stalwart mailbox `e2e@a8n.run` with plus-subaddressing
-  enabled (or made a catch-all). Record the JMAP URL with the mailbox
+  through the existing Stalwart relay (`mail.a8n.run`); a mailbox there
+  (currently `nate@a8n.run`; a dedicated `e2e@a8n.run` once it can be created)
+  receives the E2E mail, and the email-driven specs (`password-reset`,
+  `magic-link`, `change-email`) read the token-links from it over Stalwart's
+  JMAP API (`https://mail.a8n.run`). Each spec self-registers a throwaway bunyip
+  account at a unique plus-subaddress of that mailbox (`<mailbox>+<run-tag>`),
+  which Stalwart delivers into the mailbox; the suite reads by recipient,
+  extracts the link, and destroys the message. The mailbox address is taken
+  from the secret's userinfo, so switching from `nate@` to `e2e@` later is a
+  secret change only - no code change. Because the mailbox may be a personal
+  one, the reader only ever matches/destroys mail whose `To` is the EXACT
+  subaddress, never the base mailbox. Prerequisites: plus-subaddressing enabled
+  on the mailbox (or a catch-all). Record the JMAP URL with the mailbox
   credentials embedded as the staging secret `E2E_STAGING_MAIL_SINK_URL` (e.g.
-  `https://e2e%40a8n.run:password@mail.a8n.run`). Production has no sink, so
+  `https://nate%40a8n.run:password@mail.a8n.run`). Production has no sink, so
   `E2E_MAIL_SINK_URL` resolves empty there and those specs skip. Registration
   needs no email confirmation and each disposable account self-deletes, so no
   shared state is touched. (This replaced an earlier Mailpit-on-c-01 design and
