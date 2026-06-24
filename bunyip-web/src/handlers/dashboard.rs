@@ -777,7 +777,21 @@ fn status_label(s: &MembershipStatus) -> &'static str {
     }
 }
 
-pub async fn membership(State(st): State<AppState>, headers: HeaderMap) -> Response {
+/// BUNYIP-187: flash-banner query for the membership page. Mirrors
+/// `SettingsQuery::{ok, error}`; the values are produced by
+/// `membership_subscribe`, `membership_cancel`, etc., and rendered
+/// in the page banner below.
+#[derive(Deserialize)]
+pub struct MembershipQuery {
+    pub ok: Option<String>,
+    pub error: Option<String>,
+}
+
+pub async fn membership(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<MembershipQuery>,
+) -> Response {
     let (user, c) = match guard(&st, &headers, "/membership").await {
         Ok(v) => v,
         Err(r) => return r,
@@ -819,6 +833,11 @@ pub async fn membership(State(st): State<AppState>, headers: HeaderMap) -> Respo
     let content = html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Membership & Billing" } p class="mt-2 text-muted-foreground" { "Your plan, status, and invoices." } }
+            // BUNYIP-187: flash banners surface checkout failures (and any
+            // other ?error= / ?ok= flash) at the top of the page so the
+            // user sees why a click "did nothing".
+            @if let Some(ok) = &q.ok { div class="rounded-lg border p-3 text-sm flex items-center gap-2" { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) (clamp_msg(ok)) } }
+            @if let Some(e) = &q.error { (error_box(&clamp_msg(e))) }
             @if past_due {
                 div class="rounded-lg border border-destructive/50 p-4 text-sm text-destructive flex items-center gap-2" {
                     (icon("alert-triangle", "h-4 w-4")) "Your payment failed. Update your payment method within 30 days to avoid losing access."
@@ -957,12 +976,54 @@ pub async fn membership_subscribe(State(st): State<AppState>, headers: HeaderMap
         Ok(v) => v,
         Err(r) => return r,
     };
+    // BUNYIP-187: surface checkout failures as a flash banner on
+    // `/membership` instead of silently redirecting. The api returns
+    // a useful 400 (e.g. `price_id: No active price configured`)
+    // when no app-tagged product is configured (gotcha 3 in
+    // BUNYIP-A-5); the old `_ => redirect_cookies("/membership", ...)`
+    // arm dropped that on the floor and left the operator wondering
+    // why the Subscribe button "did nothing".
     match calls::checkout(&st.api, c.forward.as_deref(), None).await {
         Ok(s) if s.checkout_url.starts_with("https://checkout.stripe.com/") => {
             redirect_cookies(&s.checkout_url, &c.set_cookies)
         }
-        _ => redirect_cookies("/membership", &c.set_cookies),
+        Ok(_) => redirect_cookies(
+            &format!(
+                "/membership?error={}",
+                urlenc(&humanise_checkout_error(
+                    "Checkout returned an invalid URL. Please contact support."
+                ))
+            ),
+            &c.set_cookies,
+        ),
+        Err(e) => redirect_cookies(
+            &format!(
+                "/membership?error={}",
+                urlenc(&humanise_checkout_error(&e.user_message()))
+            ),
+            &c.set_cookies,
+        ),
     }
+}
+
+/// BUNYIP-187: map the api's raw checkout-error message to operator-
+/// friendly copy. The recognised messages come from
+/// `bunyip-api/src/handlers/membership.rs` and the gotchas catalogued
+/// in BUNYIP-A-5; anything we have not seen yet falls through to the
+/// raw text so the operator still gets useful information instead of
+/// a sanitised wall.
+fn humanise_checkout_error(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.contains("No active price configured") {
+        return "Stripe checkout is not configured. An admin must create at least one tagged product and recurring price before subscriptions can be opened. See dev-docs/stripe-test-mode.md.".to_string();
+    }
+    if trimmed.contains("Stripe is not configured") || trimmed.contains("STRIPE_SECRET_KEY") {
+        return "Stripe is not configured on this deployment. Set the Stripe keys in the admin Stripe page (or via env) before subscribing.".to_string();
+    }
+    if trimmed.is_empty() {
+        return "Could not start checkout. Please try again or contact support.".to_string();
+    }
+    trimmed.to_string()
 }
 pub async fn membership_cancel(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (_, c) = match guard(&st, &headers, "/membership").await {
