@@ -1020,6 +1020,15 @@ fn humanise_checkout_error(raw: &str) -> String {
     if trimmed.contains("Stripe is not configured") || trimmed.contains("STRIPE_SECRET_KEY") {
         return "Stripe is not configured on this deployment. Set the Stripe keys in the admin Stripe page (or via env) before subscribing.".to_string();
     }
+    // BUNYIP-191: dunite-core maps every `AppError::InternalError` /
+    // `AppError::DatabaseError` to this single user-facing string,
+    // which left the operator with no actionable hint (the real
+    // cause is logged on the api side). Replace it with a message
+    // that explicitly points at the api logs so an operator chasing
+    // a Subscribe failure knows where to look.
+    if trimmed == "An unexpected error occurred. Please try again later." {
+        return "Checkout failed unexpectedly on the server. The api logged the cause - check `docker logs <bunyip-api>` for 'Failed to create Stripe checkout session' or similar, then contact support.".to_string();
+    }
     if trimmed.is_empty() {
         return "Could not start checkout. Please try again or contact support.".to_string();
     }
