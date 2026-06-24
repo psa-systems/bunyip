@@ -63,6 +63,11 @@ services:
       JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-at-least-32-characters-long-000000}
       TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:-}
       STRIPE_ENCRYPTION_KEY: ${STRIPE_ENCRYPTION_KEY:-}
+      # Test-mode Stripe keys for local subscription testing (BUNYIP-175). The
+      # webhook secret is the whsec_ printed by `stripe listen`. Empty by default
+      # keeps payment disabled. See dev-docs/stripe-test-mode.md.
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       SETUP_DEFAULT_ADMIN: ${SETUP_DEFAULT_ADMIN:-}
       EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
       # Bunyip IS the OIDC issuer; Ed25519 keys mounted from ./secrets/oidc (volumes).
