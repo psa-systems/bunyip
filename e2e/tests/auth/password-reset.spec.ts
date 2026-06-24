@@ -1,47 +1,65 @@
 import { expect, test } from '@playwright/test';
+import { routes } from '../../lib/api';
 import { env } from '../../lib/env';
+import { registerDisposable, deleteMe, DISPOSABLE_PASSWORD } from '../../lib/accounts';
+import { clearMailbox, waitForLink, tokenFromLink, PASSWORD_RESET_RE } from '../../lib/mail-sink';
 
 // Password-reset coverage (BUNYIP-149).
 //
-// `test.fixme`: blocked on a mail sink (BUNYIP-150). bunyip's reset is a
-// two-step server-rendered flow: POST /password-reset (request a token, emailed
-// to the account) then /password-reset/confirm (set a new password with that
-// token). The token only arrives by email, so without a programmatic mailbox
-// the confirm step cannot run. Resetting the SHARED E2E account credential
-// would also break every other spec, so even with a sink this should target a
-// disposable account. Un-fixme once the mail sink lands (BUNYIP-150) and a
-// throwaway account is available.
+// bunyip's reset is a two-step flow: request a token (emailed to the account),
+// then confirm a new password with that token. Driven over the JSON API + the
+// Mailpit sink (BUNYIP-150): request the reset, read the token out of the sink,
+// confirm a new password, and prove the new password logs in.
 //
-// The body sketches the intended flow against the real forms.
+// Runs against a disposable account (resetting the shared E2E credential would
+// break every other spec). Skips when no mail sink is configured.
 test.describe('password reset', () => {
-  test.fixme('request a reset token and set a new password', async ({ page }) => {
-    // 1. Request the reset email for a disposable account (NOT env.email - that
-    //    is the shared E2E credential).
-    await page.goto('/password-reset');
-    const requestForm = page.locator('form').first();
-    await requestForm
-      .locator('input#email, input[name="email"], input[type="email"]')
-      .first()
-      .fill('disposable@example.invalid');
-    await requestForm.getByRole('button', { name: /reset|send|submit|continue/i }).first().click();
+  const NEW_PASSWORD = 'E2e-Reset-Passw0rd!';
 
-    // 2. BUNYIP-150: read the reset token out of the mail sink and open the
-    //    confirm page with it.
-    const token = 'TOKEN_FROM_MAIL_SINK';
-    await page.goto(`/password-reset/confirm?token=${token}`);
-    const confirmForm = page.locator('form').first();
-    const newPassword = 'E2e-Reset-Passw0rd!'; // policy-compliant.
-    await confirmForm
-      .locator('input#password, input[name="password"]')
-      .first()
-      .fill(newPassword);
-    await confirmForm
-      .locator('input#confirm, input[name="confirm"], input[name="password_confirm"]')
-      .first()
-      .fill(newPassword);
-    await confirmForm.getByRole('button', { name: /reset|set|confirm|submit/i }).first().click();
+  test('request a reset token and set a new password', async ({ playwright }) => {
+    test.skip(!env.mailSinkURL, 'needs E2E_MAIL_SINK_URL (BUNYIP-150)');
 
-    // 3. Assert login with the new password succeeds.
-    expect(env.baseURL).toBeTruthy();
+    const owner = await playwright.request.newContext({ baseURL: env.apiBaseURL });
+    const reauth = await playwright.request.newContext({ baseURL: env.apiBaseURL });
+    try {
+      const account = await registerDisposable(owner);
+      expect(account.password).toBe(DISPOSABLE_PASSWORD);
+
+      await clearMailbox();
+      const requested = await owner.post(routes.authPasswordReset, {
+        data: { email: account.email },
+      });
+      expect(
+        requested.ok(),
+        `POST ${routes.authPasswordReset} -> ${requested.status()}: ${await requested.text()}`,
+      ).toBeTruthy();
+
+      const link = await waitForLink(account.email, PASSWORD_RESET_RE);
+      const token = tokenFromLink(link);
+
+      const confirmed = await owner.post(routes.authPasswordResetConfirm, {
+        data: { token, new_password: NEW_PASSWORD },
+      });
+      expect(
+        confirmed.ok(),
+        `POST ${routes.authPasswordResetConfirm} -> ${confirmed.status()}: ${await confirmed.text()}`,
+      ).toBeTruthy();
+
+      // The reset is real only if the NEW password now logs in (and the account
+      // has no 2FA, so login completes in one step).
+      const login = await reauth.post(routes.authLogin, {
+        data: { email: account.email, password: NEW_PASSWORD },
+      });
+      expect(
+        login.ok(),
+        `login with the reset password -> ${login.status()}: ${await login.text()}`,
+      ).toBeTruthy();
+    } finally {
+      // The reset revoked the original session on `owner`; delete via the
+      // re-authenticated context instead.
+      await deleteMe(reauth);
+      await owner.dispose();
+      await reauth.dispose();
+    }
   });
 });

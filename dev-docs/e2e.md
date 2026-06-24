@@ -106,6 +106,16 @@ secret; a manual dispatch lets the operator pick.
   mismatch makes `/oauth2/authorize` return `invalid_redirect_uri`. If authorize
   bounces the E2E session to `/login` (no code), the OP-session cookie scoping
   is wrong (COOKIE_DOMAIN vs the OP host); see BUNYIP-146.
+- **Mail sink (staging only, BUNYIP-150):** staging bunyip-api delivers all mail
+  to a Mailpit sink (the `bunyip-mailpit` deployment on c-01) instead of a real
+  relay, so the email-driven specs (`password-reset`, `magic-link`,
+  `change-email`) can read the token-links over Mailpit's HTTP API. Record the
+  sink URL with its basicAuth credentials embedded as the staging secret
+  `E2E_STAGING_MAIL_SINK_URL` (e.g. `https://user:pass@mailpit.a8n.systems`; the
+  credentials are the shared `auth-dev` basicAuth). Production has no sink, so
+  `E2E_MAIL_SINK_URL` resolves empty there and those specs skip. Each such spec
+  self-registers a throwaway account (registration needs no email confirmation)
+  and self-deletes, so no shared state is touched.
 
 **Rotation source (record per secret).** So each value can be rotated later,
 document where it is generated, per environment: the Forgejo Actions secret

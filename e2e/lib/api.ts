@@ -25,6 +25,18 @@ export const routes = {
   userSessions: `${API_V1}/users/me/sessions`,
   userConsents: `${API_V1}/users/me/consents`,
 
+  // Account lifecycle + email-driven flows (BUNYIP-150). Used by the disposable
+  // account helpers (lib/accounts.ts) and the mail-sink specs.
+  authRegister: `${API_V1}/auth/register`,
+  authLogin: `${API_V1}/auth/login`,
+  authMagicLink: `${API_V1}/auth/magic-link`,
+  authMagicLinkVerify: `${API_V1}/auth/magic-link/verify`,
+  authPasswordReset: `${API_V1}/auth/password-reset`,
+  authPasswordResetConfirm: `${API_V1}/auth/password-reset/confirm`,
+  userMe: `${API_V1}/users/me`,
+  userEmail: `${API_V1}/users/me/email`,
+  userEmailConfirm: `${API_V1}/users/me/email/confirm`,
+
   // OIDC OP discovery (root-mounted).
   oidcDiscovery: '/.well-known/openid-configuration',
   jwks: '/.well-known/jwks.json',

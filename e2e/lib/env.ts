@@ -106,6 +106,12 @@ export const env = {
   // Optional: a Stripe test-mode secret key (`sk_test_...`) used ONLY by
   // teardown to cancel test-mode subscriptions the billing specs create.
   stripeSecretKey: optional('E2E_STRIPE_SECRET_KEY'),
+  // Optional: base URL of the staging Mailpit HTTP API, with basicAuth
+  // credentials embedded (e.g. `https://user:pass@mailpit.a8n.systems`).
+  // STAGING ONLY - production has no sink, so the email-driven specs
+  // (password-reset / magic-link / change-email) skip when this is unset
+  // (BUNYIP-150).
+  mailSinkURL: optional('E2E_MAIL_SINK_URL'),
 } as const;
 
 // All env vars the suite cannot run without, in the order an operator would
