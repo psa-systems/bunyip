@@ -14,6 +14,7 @@
 import { type APIRequestContext } from '@playwright/test';
 import { routes } from './api';
 import { runSuffix } from './run';
+import { subaddress } from './mail-sink';
 
 // A throwaway, policy-compliant password (upper/lower/digit/symbol, long). The
 // disposable accounts never have 2FA, so a constant is fine.
@@ -24,10 +25,11 @@ export interface DisposableAccount {
   password: string;
 }
 
-// A run-tagged, unique email. The domain is irrelevant: staging routes every
-// outbound mail to the Mailpit sink regardless of recipient domain.
+// A run-tagged, unique email that is a plus-subaddress of the sink mailbox
+// (e.g. `e2e+e2e-...-1@a8n.run`), so Stalwart delivers its mail into the one
+// mailbox the suite reads. The unique tag isolates this account's mail.
 export function disposableEmail(): string {
-  return `${runSuffix()}@e2e.test`;
+  return subaddress(runSuffix());
 }
 
 // Register a fresh account on `ctx`. On success `ctx` holds the new account's

@@ -1,13 +1,17 @@
-// Read token-links out of the staging Mailpit test mail sink (BUNYIP-150).
+// Read token-links out of the staging mail sink via Stalwart's JMAP API
+// (BUNYIP-150).
 //
-// On staging, bunyip-api delivers all outbound mail to Mailpit instead of a
-// real relay (see the c-01 bunyip-mailpit deployment). Mailpit exposes an HTTP
-// API the suite reads to extract the password-reset / magic-link / email-change
-// token-links that would otherwise only arrive in a human's inbox.
+// Staging bunyip-api delivers its outbound mail through the existing Stalwart
+// relay (mail.a8n.run). A dedicated mailbox (e.g. e2e@a8n.run) receives the
+// E2E mail; the email-driven specs address a unique plus-subaddress per run
+// (e2e+<tag>@a8n.run), which Stalwart delivers into that one mailbox, and read
+// it back over JMAP. Reading by the unique recipient means no mailbox clearing
+// is needed; each matched message is destroyed after it is read.
 //
-// The sink base URL (with embedded basicAuth credentials) comes from
-// E2E_MAIL_SINK_URL. Specs guard on `env.mailSinkURL` with `test.skip` before
-// calling anything here, so these helpers assume it is set.
+// E2E_MAIL_SINK_URL carries the JMAP host plus the mailbox credentials as
+// basicAuth userinfo, e.g. `https://e2e%40a8n.run:password@mail.a8n.run`. Specs
+// guard on `env.mailSinkURL` with `test.skip` before calling anything here, so
+// these helpers assume it is set.
 
 import { request as requestFactory, type APIRequestContext } from '@playwright/test';
 import { env } from './env';
@@ -20,30 +24,49 @@ export const MAGIC_LINK_RE = /https?:\/\/[^\s"'<>]+\/magic-link\?token=[\w.-]+/;
 export const PASSWORD_RESET_RE = /https?:\/\/[^\s"'<>]+\/password-reset\/confirm\?token=[\w.-]+/;
 export const EMAIL_CHANGE_RE = /https?:\/\/[^\s"'<>]+\/settings\/confirm-email\?token=[\w.-]+/;
 
+const JMAP_MAIL_CAPABILITIES = [
+  'urn:ietf:params:jmap:core',
+  'urn:ietf:params:jmap:mail',
+];
+const JMAP_MAIL_ACCOUNT = 'urn:ietf:params:jmap:mail';
+
 interface SinkConnection {
   base: string;
+  mailbox: string;
   headers: Record<string, string>;
 }
 
-// Split E2E_MAIL_SINK_URL into a credential-free base URL plus a Basic auth
-// header. Embedding the credentials in the URL keeps it to a single secret, but
-// we send them as an explicit header rather than relying on fetch/undici
-// userinfo handling.
+// Split E2E_MAIL_SINK_URL into a credential-free base URL, the mailbox address
+// (the basicAuth username, e.g. e2e@a8n.run), and a Basic auth header.
 function sinkConnection(): SinkConnection {
   const raw = env.mailSinkURL;
   if (!raw) {
     throw new Error('E2E_MAIL_SINK_URL is not set (guard specs with test.skip on env.mailSinkURL)');
   }
   const u = new URL(raw);
-  const headers: Record<string, string> = {};
-  if (u.username) {
-    const user = decodeURIComponent(u.username);
-    const pass = decodeURIComponent(u.password);
-    headers.Authorization = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
-    u.username = '';
-    u.password = '';
+  const mailbox = decodeURIComponent(u.username);
+  const password = decodeURIComponent(u.password);
+  if (!mailbox) {
+    throw new Error('E2E_MAIL_SINK_URL must embed the mailbox credentials (user:pass@host)');
   }
-  return { base: u.toString().replace(/\/+$/, ''), headers };
+  const headers: Record<string, string> = {
+    Authorization: `Basic ${Buffer.from(`${mailbox}:${password}`).toString('base64')}`,
+    'Content-Type': 'application/json',
+  };
+  u.username = '';
+  u.password = '';
+  return { base: u.toString().replace(/\/+$/, ''), mailbox, headers };
+}
+
+// Build a plus-subaddress of the sink mailbox, e.g. mailbox `e2e@a8n.run` +
+// tag `e2e-...-1` -> `e2e+e2e-...-1@a8n.run`. Stalwart delivers this into the
+// mailbox, and the unique tag isolates one test's mail from every other's.
+export function subaddress(tag: string): string {
+  const { mailbox } = sinkConnection();
+  const at = mailbox.lastIndexOf('@');
+  const local = mailbox.slice(0, at);
+  const domain = mailbox.slice(at + 1);
+  return `${local}+${tag}@${domain}`;
 }
 
 async function sinkContext(): Promise<APIRequestContext> {
@@ -51,29 +74,59 @@ async function sinkContext(): Promise<APIRequestContext> {
   return requestFactory.newContext({ baseURL: base, extraHTTPHeaders: headers });
 }
 
-// Delete every captured message. The suite runs serially (workers: 1), so
-// clearing the sink immediately BEFORE triggering an email removes any chance
-// of matching a stale message from an earlier step or run.
-export async function clearMailbox(): Promise<void> {
-  const ctx = await sinkContext();
-  try {
-    await ctx.delete('/api/v1/messages');
-  } finally {
-    await ctx.dispose();
+interface JmapSession {
+  apiUrl: string;
+  primaryAccounts?: Record<string, string>;
+}
+
+// Fetch the JMAP session document and resolve the primary mail account id.
+async function jmapSession(ctx: APIRequestContext): Promise<{ apiUrl: string; accountId: string }> {
+  const res = await ctx.get('/.well-known/jmap');
+  if (!res.ok()) {
+    throw new Error(`JMAP session GET /.well-known/jmap -> ${res.status()}: ${await res.text()}`);
   }
+  const session = (await res.json()) as JmapSession;
+  const accountId = session.primaryAccounts?.[JMAP_MAIL_ACCOUNT];
+  if (!accountId) {
+    throw new Error('JMAP session has no primary mail account');
+  }
+  return { apiUrl: session.apiUrl, accountId };
 }
 
-interface MailpitMessageSummary {
-  ID: string;
+interface JmapResponse {
+  methodResponses?: Array<[string, Record<string, unknown>, string]>;
 }
 
-interface MailpitSearchResult {
-  messages?: MailpitMessageSummary[];
+async function jmapCall(
+  ctx: APIRequestContext,
+  apiUrl: string,
+  methodCalls: unknown[],
+): Promise<JmapResponse> {
+  const res = await ctx.post(apiUrl, { data: { using: JMAP_MAIL_CAPABILITIES, methodCalls } });
+  if (!res.ok()) {
+    throw new Error(`JMAP POST ${apiUrl} -> ${res.status()}: ${await res.text()}`);
+  }
+  return (await res.json()) as JmapResponse;
 }
 
-interface MailpitMessage {
-  Text?: string;
-  HTML?: string;
+interface JmapBodyPart {
+  partId?: string;
+}
+interface JmapEmail {
+  id: string;
+  textBody?: JmapBodyPart[];
+  htmlBody?: JmapBodyPart[];
+  bodyValues?: Record<string, { value?: string }>;
+}
+
+// Concatenate every text + HTML body part's decoded value (JMAP returns part
+// references in textBody/htmlBody and the decoded strings in bodyValues).
+function bodyText(email: JmapEmail): string {
+  const parts = [...(email.textBody ?? []), ...(email.htmlBody ?? [])];
+  const values = email.bodyValues ?? {};
+  return parts
+    .map((part) => (part.partId ? values[part.partId]?.value ?? '' : ''))
+    .join('\n');
 }
 
 export interface WaitForLinkOptions {
@@ -81,40 +134,61 @@ export interface WaitForLinkOptions {
   intervalMs?: number;
 }
 
-// Poll the sink for a message to `toAddress` whose body contains a link matching
-// `linkRe`, and return the full matched URL. Filtering by the link pattern (not
-// just the recipient) means the async `send_account_created` welcome mail that
-// also lands for a freshly-registered address is ignored. Throws on timeout so
-// a never-delivered mail fails the spec with a clear message rather than hanging.
+// Poll the sink mailbox over JMAP for a message addressed to `toAddress` whose
+// body contains a link matching `linkRe`, return the full matched URL, and
+// destroy that message. Filtering by the link pattern ignores the async
+// `send_account_created` welcome mail that also arrives for the address. Throws
+// on timeout so a never-delivered mail fails the spec clearly.
 export async function waitForLink(
   toAddress: string,
   linkRe: RegExp,
   opts: WaitForLinkOptions = {},
 ): Promise<string> {
   const timeoutMs = opts.timeoutMs ?? 30_000;
-  const intervalMs = opts.intervalMs ?? 1_000;
+  const intervalMs = opts.intervalMs ?? 2_000;
   const ctx = await sinkContext();
-  const query = encodeURIComponent(`to:${toAddress}`);
   try {
+    const { apiUrl, accountId } = await jmapSession(ctx);
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const search = await ctx.get(`/api/v1/search?query=${query}`);
-      if (search.ok()) {
-        const result = (await search.json()) as MailpitSearchResult;
-        for (const summary of result.messages ?? []) {
-          const msgRes = await ctx.get(`/api/v1/message/${summary.ID}`);
-          if (!msgRes.ok()) continue;
-          const msg = (await msgRes.json()) as MailpitMessage;
-          const haystack = `${msg.Text ?? ''}\n${msg.HTML ?? ''}`;
-          const match = linkRe.exec(haystack);
-          if (match) return match[0];
+      const resp = await jmapCall(ctx, apiUrl, [
+        [
+          'Email/query',
+          {
+            accountId,
+            filter: { to: toAddress },
+            sort: [{ property: 'receivedAt', isAscending: false }],
+            limit: 20,
+          },
+          'q',
+        ],
+        [
+          'Email/get',
+          {
+            accountId,
+            '#ids': { resultOf: 'q', name: 'Email/query', path: '/ids' },
+            properties: ['id', 'textBody', 'htmlBody', 'bodyValues'],
+            fetchTextBodyValues: true,
+            fetchHTMLBodyValues: true,
+          },
+          'g',
+        ],
+      ]);
+      const get = resp.methodResponses?.find((m) => m[0] === 'Email/get');
+      const emails = (get?.[1]?.list as JmapEmail[] | undefined) ?? [];
+      for (const email of emails) {
+        const match = linkRe.exec(bodyText(email));
+        if (match) {
+          // Best-effort cleanup so the shared mailbox does not accumulate.
+          await jmapCall(ctx, apiUrl, [
+            ['Email/set', { accountId, destroy: [email.id] }, 'd'],
+          ]).catch(() => {});
+          return match[0];
         }
       }
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
     }
-    throw new Error(
-      `waitForLink: no mail to ${toAddress} matched ${linkRe} within ${timeoutMs}ms`,
-    );
+    throw new Error(`waitForLink: no JMAP mail to ${toAddress} matched ${linkRe} within ${timeoutMs}ms`);
   } finally {
     await ctx.dispose();
   }

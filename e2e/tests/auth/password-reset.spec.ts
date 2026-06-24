@@ -2,14 +2,14 @@ import { expect, test } from '@playwright/test';
 import { routes } from '../../lib/api';
 import { env } from '../../lib/env';
 import { registerDisposable, deleteMe, DISPOSABLE_PASSWORD } from '../../lib/accounts';
-import { clearMailbox, waitForLink, tokenFromLink, PASSWORD_RESET_RE } from '../../lib/mail-sink';
+import { waitForLink, tokenFromLink, PASSWORD_RESET_RE } from '../../lib/mail-sink';
 
 // Password-reset coverage (BUNYIP-149).
 //
 // bunyip's reset is a two-step flow: request a token (emailed to the account),
 // then confirm a new password with that token. Driven over the JSON API + the
-// Mailpit sink (BUNYIP-150): request the reset, read the token out of the sink,
-// confirm a new password, and prove the new password logs in.
+// Stalwart JMAP sink (BUNYIP-150): request the reset, read the token out of the
+// mailbox, confirm a new password, and prove the new password logs in.
 //
 // Runs against a disposable account (resetting the shared E2E credential would
 // break every other spec). Skips when no mail sink is configured.
@@ -25,7 +25,6 @@ test.describe('password reset', () => {
       const account = await registerDisposable(owner);
       expect(account.password).toBe(DISPOSABLE_PASSWORD);
 
-      await clearMailbox();
       const requested = await owner.post(routes.authPasswordReset, {
         data: { email: account.email },
       });

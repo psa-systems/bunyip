@@ -2,14 +2,14 @@ import { expect, test } from '@playwright/test';
 import { routes } from '../../lib/api';
 import { env } from '../../lib/env';
 import { registerDisposable, deleteMe } from '../../lib/accounts';
-import { clearMailbox, waitForLink, tokenFromLink, MAGIC_LINK_RE } from '../../lib/mail-sink';
+import { waitForLink, tokenFromLink, MAGIC_LINK_RE } from '../../lib/mail-sink';
 
 // Magic-link (passwordless) login coverage (BUNYIP-149).
 //
 // bunyip's /magic-link flow emails a one-time login link; following it
 // establishes a session with no password. Driven over the JSON API + the
-// Mailpit sink (BUNYIP-150): request the link, read it out of the sink, verify
-// the token on a FRESH context, and assert that context is now authenticated.
+// Stalwart JMAP sink (BUNYIP-150): request the link, read it out of the
+// mailbox, verify the token on a FRESH context, and assert it is authenticated.
 //
 // Uses a disposable account rather than the shared E2E account so the flow does
 // not interact with the shared account's 2FA. Skips when no mail sink is
@@ -23,7 +23,6 @@ test.describe('magic-link login', () => {
     try {
       const account = await registerDisposable(owner);
 
-      await clearMailbox();
       const requested = await owner.post(routes.authMagicLink, { data: { email: account.email } });
       expect(
         requested.ok(),
