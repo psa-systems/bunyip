@@ -10,7 +10,24 @@ pub struct Config {
     /// (e.g. `http://localhost:4401` in dev, `https://api.example.com` in prod).
     /// This same origin is bunyip's OWN OIDC issuer (it serves
     /// `/.well-known/*` + `/oauth2/*` alongside the `/v1` API).
+    ///
+    /// Used by the bunyip-web SERVER PROCESS for outbound HTTP to bunyip-api
+    /// (the `reqwest` calls in `crate::api`). On dev this is
+    /// `http://localhost:4401`; on dev-sso and prod it's typically the
+    /// internal docker hostname `http://bunyip-api-app:4401` so the BFF
+    /// reaches the api on the compose network without going back out
+    /// through Traefik.
     pub api_url: String,
+    /// BUNYIP-192: PUBLIC-facing origin of bunyip-api the BROWSER hits
+    /// (HTML JS, EventSource subscriptions, the SSE shell injected into
+    /// every authenticated page). Defaults to `api_url` for back-compat
+    /// (dev does not need to split them); production overrides via
+    /// `BUNYIP_API_PUBLIC_ORIGIN` to the HTTPS public hostname (e.g.
+    /// `https://api.a8n.systems`). Without this override the browser is
+    /// asked to open an EventSource against the internal docker
+    /// hostname which (a) it cannot resolve and (b) is HTTP from an
+    /// HTTPS page so the browser blocks it as Mixed Content.
+    pub api_public_origin: String,
     /// OIDC issuer the BFF trusts. Defaults to `api_url` (bunyip-api is the
     /// issuer); override with `BUNYIP_OIDC_ISSUER` only if the issuer origin
     /// differs from the API origin.
@@ -25,11 +42,19 @@ impl Config {
     pub fn from_env() -> Self {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
         let api_url = var("BUNYIP_API_URL").unwrap_or_else(|| "http://localhost:4401".into());
+        // BUNYIP-192: the public-facing origin for the browser. Falls
+        // back to `api_url` so dev keeps working without configuration
+        // (loopback IS the public URL in dev). Production must set
+        // `BUNYIP_API_PUBLIC_ORIGIN` to the HTTPS hostname or the SSE
+        // subscriber on the dashboard will be blocked by the browser
+        // as Mixed Content.
+        let api_public_origin = var("BUNYIP_API_PUBLIC_ORIGIN").unwrap_or_else(|| api_url.clone());
         Config {
             bind_addr: var("BUNYIP_BIND_ADDR").unwrap_or_else(|| "0.0.0.0:4400".into()),
             // The OIDC issuer is bunyip-api's own origin by default.
             oidc_issuer: var("BUNYIP_OIDC_ISSUER").unwrap_or_else(|| api_url.clone()),
             api_url,
+            api_public_origin,
             app_domain: var("BUNYIP_APP_DOMAIN").unwrap_or_default(),
             show_business_pricing: var("BUNYIP_SHOW_BUSINESS_PRICING")
                 .map(|v| v == "true")
