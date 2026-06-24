@@ -448,6 +448,93 @@ impl StripeService {
         })
     }
 
+    /// BUNYIP-189: bootstrap a default app-tagged product + recurring
+    /// price when the Stripe account has no app-tagged active prices.
+    /// Called after a successful admin Stripe-config save so a fresh
+    /// account (test mode or live) does not require an out-of-band
+    /// `stripe products create` step to make the Subscribe button work
+    /// (the silent-400 gotcha catalogued as gotcha 3 in BUNYIP-A-5).
+    ///
+    /// Idempotent: a re-save when an app-tagged price already exists
+    /// is a no-op. Returns:
+    ///   - `Ok(Some((product, price)))` on a successful bootstrap;
+    ///   - `Ok(None)` when bootstrap was skipped because a price
+    ///     already exists (the common case after the first save).
+    ///
+    /// Defaults come from env so an operator can override without
+    /// recompiling: `BUNYIP_DEFAULT_PRICE_AMOUNT_CENTS` (default
+    /// `300` = $3, matching the existing `/membership` copy),
+    /// `BUNYIP_DEFAULT_PRICE_CURRENCY` (default `usd`),
+    /// `BUNYIP_DEFAULT_PRICE_INTERVAL` (default `month`),
+    /// `APP_NAME` (default `Bunyip` for the product name).
+    pub async fn bootstrap_default_product_if_missing(
+        &self,
+    ) -> Result<Option<(StripeProductResponse, StripePriceResponse)>, AppError> {
+        // Skip when Stripe is not configured (placeholder secret_key).
+        // `update_stripe_config` calls this AFTER `reload` so by the
+        // time we get here the new secret key is live; if it's still
+        // a placeholder the operator did not actually save valid
+        // credentials and bootstrap would just 401 against Stripe.
+        if !self.is_configured() {
+            return Ok(None);
+        }
+
+        // Idempotent guard: any app-tagged active price (matched by
+        // the existing `list_prices` filter) means the bootstrap has
+        // already happened (or the operator hand-created one). The
+        // helper already filters out untagged products, so this is the
+        // exact set the checkout handler will see.
+        let prices = self.list_prices(None).await?;
+        if prices.iter().any(|p| p.active) {
+            tracing::debug!(
+                count = prices.len(),
+                "bootstrap_default_product: app-tagged price already exists; skipping"
+            );
+            return Ok(None);
+        }
+
+        let app_name = std::env::var("APP_NAME")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Bunyip".to_string());
+        let unit_amount: i64 = std::env::var("BUNYIP_DEFAULT_PRICE_AMOUNT_CENTS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|n: &i64| *n > 0)
+            .unwrap_or(300);
+        let currency = std::env::var("BUNYIP_DEFAULT_PRICE_CURRENCY")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "usd".to_string());
+        let interval = std::env::var("BUNYIP_DEFAULT_PRICE_INTERVAL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "month".to_string());
+
+        let product_name = format!("{app_name} Membership");
+        tracing::info!(
+            %product_name, unit_amount, %currency, %interval,
+            "bootstrap_default_product: no app-tagged active price found; creating default"
+        );
+
+        // `create_product` auto-injects the `app=<STRIPE_APP_TAG>`
+        // metadata tag so the resulting product will be visible to
+        // `list_products` / `list_prices` on subsequent calls.
+        let product = self
+            .create_product(
+                &product_name,
+                Some("Default Bunyip membership product, auto-created on first Stripe configuration save."),
+                HashMap::new(),
+            )
+            .await?;
+
+        let price = self
+            .create_price(&product.id, unit_amount, &currency, &interval)
+            .await?;
+
+        Ok(Some((product, price)))
+    }
+
     /// Archive (deactivate) a price in Stripe
     pub async fn archive_price(&self, price_id: &str) -> Result<(), AppError> {
         let (_config, client) = self.snapshot();
