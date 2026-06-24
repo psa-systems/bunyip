@@ -68,6 +68,13 @@ services:
       # keeps payment disabled. See dev-docs/stripe-test-mode.md.
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      # Checkout redirect URLs. Empty default lets the api derive them from
+      # CORS_ORIGIN (correct on plain `just dev`, where CORS_ORIGIN is the single
+      # localhost origin). On dev-sso CORS_ORIGIN is a comma-list of RP origins,
+      # which would produce a malformed success_url, so set these explicitly in
+      # .env to a single bunyip origin (BUNYIP-175).
+      STRIPE_SUCCESS_URL: ${STRIPE_SUCCESS_URL:-}
+      STRIPE_CANCEL_URL: ${STRIPE_CANCEL_URL:-}
       SETUP_DEFAULT_ADMIN: ${SETUP_DEFAULT_ADMIN:-}
       EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
       # Bunyip IS the OIDC issuer; Ed25519 keys mounted from ./secrets/oidc (volumes).
