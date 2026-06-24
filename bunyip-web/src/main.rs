@@ -28,7 +28,16 @@ async fn main() {
     // module so every authenticated shell can emit an SSE subscriber that
     // connects to `<api_url>/v1/events` without threading the config through
     // 45 handler call sites.
-    views::layout::install_sse_api_origin(cfg.api_url.clone());
+    //
+    // BUNYIP-192: use the PUBLIC origin (not the internal `api_url` used by
+    // the BFF for outbound server-to-server HTTP). On dev they're the
+    // same loopback origin so nothing changes; on prod / dev-sso the
+    // internal `api_url` is the docker hostname `bunyip-api-app:4401`
+    // which the browser cannot resolve AND is HTTP from an HTTPS page,
+    // so the EventSource was Mixed-Content-blocked. `api_public_origin`
+    // defaults to `api_url` to preserve dev behaviour and overrides via
+    // `BUNYIP_API_PUBLIC_ORIGIN` in production.
+    views::layout::install_sse_api_origin(cfg.api_public_origin.clone());
     let state = web::AppState {
         api,
         cfg: Arc::clone(&cfg),
