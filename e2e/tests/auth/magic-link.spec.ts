@@ -1,32 +1,51 @@
 import { expect, test } from '@playwright/test';
+import { routes } from '../../lib/api';
 import { env } from '../../lib/env';
+import { registerDisposable, deleteMe } from '../../lib/accounts';
+import { waitForLink, tokenFromLink, MAGIC_LINK_RE } from '../../lib/mail-sink';
 
 // Magic-link (passwordless) login coverage (BUNYIP-149).
 //
-// `test.fixme`: blocked on a mail sink (BUNYIP-150). bunyip's /magic-link flow
-// emails a one-time login link; following it establishes a session with no
-// password. The link only arrives by email, so without a programmatic mailbox
-// the flow cannot complete. Un-fixme once the mail sink lands (BUNYIP-150).
+// bunyip's /magic-link flow emails a one-time login link; following it
+// establishes a session with no password. Driven over the JSON API + the
+// Stalwart JMAP sink (BUNYIP-150): request the link, read it out of the
+// mailbox, verify the token on a FRESH context, and assert it is authenticated.
 //
-// The body sketches the intended flow against the real /magic-link form.
+// Uses a disposable account rather than the shared E2E account so the flow does
+// not interact with the shared account's 2FA. Skips when no mail sink is
+// configured (production, or an unprovisioned staging).
 test.describe('magic-link login', () => {
-  test.fixme('request a magic link and follow it to a live session', async ({ page }) => {
-    // 1. Request the magic link for the E2E account.
-    await page.goto('/magic-link');
-    const form = page.locator('form').first();
-    await form
-      .locator('input#email, input[name="email"], input[type="email"]')
-      .first()
-      .fill(env.email);
-    await form.getByRole('button', { name: /send|magic|link|continue|submit/i }).first().click();
+  test('request a magic link and follow it to a live session', async ({ playwright }) => {
+    test.skip(!env.mailSinkURL, 'needs E2E_MAIL_SINK_URL (BUNYIP-150)');
 
-    // 2. BUNYIP-150: read the magic link out of the mail sink and follow it.
-    const magicUrl = 'MAGIC_URL_FROM_MAIL_SINK';
-    await page.goto(magicUrl);
+    const owner = await playwright.request.newContext({ baseURL: env.apiBaseURL });
+    const follower = await playwright.request.newContext({ baseURL: env.apiBaseURL });
+    try {
+      const account = await registerDisposable(owner);
 
-    // 3. Assert the session is live: a protected page renders instead of
-    //    bouncing to /login.
-    await page.goto('/settings');
-    expect(page.url()).not.toMatch(/\/login(\/|$)/);
+      const requested = await owner.post(routes.authMagicLink, { data: { email: account.email } });
+      expect(
+        requested.ok(),
+        `POST ${routes.authMagicLink} -> ${requested.status()}: ${await requested.text()}`,
+      ).toBeTruthy();
+
+      const link = await waitForLink(account.email, MAGIC_LINK_RE);
+      const token = tokenFromLink(link);
+
+      // Verify on the follower context (no prior session): a 200 from
+      // memberships afterwards means the magic link alone established a session.
+      const verified = await follower.post(routes.authMagicLinkVerify, { data: { token } });
+      expect(
+        verified.ok(),
+        `POST ${routes.authMagicLinkVerify} -> ${verified.status()}: ${await verified.text()}`,
+      ).toBeTruthy();
+
+      const me = await follower.get(routes.memberships);
+      expect(me.status(), 'magic-link session should read memberships').toBe(200);
+    } finally {
+      await deleteMe(owner);
+      await owner.dispose();
+      await follower.dispose();
+    }
   });
 });

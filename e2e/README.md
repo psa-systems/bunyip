@@ -15,13 +15,13 @@ or **`test.fixme`** (intent sketched, blocked on a cited dependency). Every
 | --- | --- | --- | --- |
 | Auth | `tests/auth/login.spec.ts` | runnable | ONE combined login + logout round-trip via the real `/login` form (TOTP-aware), kept to a single login to stay under the 5/min rate limit |
 | Auth | `tests/auth/signup.spec.ts` | `test.fixme` | self-service `/register`; needs a mail sink to read the confirmation link (BUNYIP-150) |
-| Auth | `tests/auth/password-reset.spec.ts` | `test.fixme` | `/password-reset` -> `/password-reset/confirm`; needs a mail sink to read the token (BUNYIP-150) |
-| Auth | `tests/auth/magic-link.spec.ts` | `test.fixme` | `/magic-link` passwordless login; needs a mail sink (BUNYIP-150) |
+| Auth | `tests/auth/password-reset.spec.ts` | runnable | register a disposable account, request `/password-reset`, read the token from the Stalwart JMAP sink, set a new password, assert it logs in (BUNYIP-150). Skipped without `E2E_MAIL_SINK_URL` |
+| Auth | `tests/auth/magic-link.spec.ts` | runnable | request `/magic-link` for a disposable account, follow the emailed token, assert the new session reads `/v1/auth/memberships` (BUNYIP-150). Skipped without `E2E_MAIL_SINK_URL` |
 | Auth | `tests/auth/two-factor.spec.ts` | `test.fixme` | TOTP enrollment; needs a disposable account + captured secret (BUNYIP-152). The 2FA challenge leg is already exercised by every login in `lib/login.ts` |
 | Account | `tests/account/profile.spec.ts` | runnable | edit `POST /settings/profile`, reload, assert persisted (non-destructive) |
 | Account | `tests/account/sessions.spec.ts` | runnable (read-only) | assert the current session is listed (UI + `GET /v1/users/me/sessions`); never revokes, which would kill the shared session |
 | Account | `tests/account/change-password.spec.ts` | `test.fixme` | mutates the shared E2E credential; needs a disposable account (suite-design limit, no sub-task) |
-| Account | `tests/account/change-email.spec.ts` | `test.fixme` | needs an email-change confirmation sink (BUNYIP-150) |
+| Account | `tests/account/change-email.spec.ts` | runnable | register a disposable account, request an email change, confirm via the emailed link from the Stalwart JMAP sink, assert the new email (BUNYIP-150). Skipped without `E2E_MAIL_SINK_URL` |
 | Memberships | `tests/memberships/memberships-list.spec.ts` | runnable | `/membership` renders; `GET /v1/auth/memberships` reports `active_tenant_id == E2E_TENANT_ID` |
 | Billing | `tests/billing/subscribe.spec.ts` | `test.fixme` + prod skip | `POST /membership/subscribe` 302s to checkout.stripe.com; needs staging Stripe test mode (BUNYIP-151) |
 | Billing | `tests/billing/cancel.spec.ts` | `test.fixme` + prod skip | `POST /membership/cancel`; needs staging Stripe test mode (BUNYIP-151) |
@@ -84,6 +84,7 @@ test runs.
 | `E2E_OIDC_REDIRECT_URI` | yes | redirect_uri registered for that client (must match EXACTLY, or `invalid_redirect_uri`). Only the `code` is captured; the URL is never loaded |
 | `E2E_TOTP_SECRET` | yes | base32 TOTP secret for the account; the second factor is computed at runtime |
 | `E2E_STRIPE_SECRET_KEY` | no | Stripe test-mode key, used ONLY by teardown to cancel test-mode subscriptions. Unused until BUNYIP-151 |
+| `E2E_MAIL_SINK_URL` | no | Staging mail-sink JMAP base URL with the E2E mailbox credentials embedded (`https://nate%40a8n.run:pass@mail.a8n.run`, the Stalwart server). The email-driven specs read token links from this mailbox; unset (e.g. production) makes them skip (BUNYIP-150) |
 
 ## Secret layout
 
@@ -100,7 +101,7 @@ manual-dispatch only. See `dev-docs/e2e.md` for provisioning + rotation sources.
 | Blocker | Specs | Unblocks when |
 | --- | --- | --- |
 | BUNYIP-149 | (suite coverage umbrella) | n/a - tracks the runnable coverage |
-| BUNYIP-150 (mail sink) | `auth/signup`, `auth/password-reset`, `auth/magic-link`, `account/change-email` | a programmatic mailbox can read confirmation/reset/magic links |
+| BUNYIP-150 (mail sink) | `auth/signup` | a programmatic mailbox can read the confirmation link. The `password-reset`, `magic-link`, and `change-email` specs now run via the Stalwart JMAP sink (`E2E_MAIL_SINK_URL`); `signup` is the remaining follow-up |
 | BUNYIP-151 (staging Stripe test mode) | `billing/subscribe`, `billing/cancel`, `billing/billing-portal` | staging Stripe test mode is wired (a test customer/price exists) |
 | BUNYIP-152 (2FA enrollment account) | `auth/two-factor` | a disposable account + captured secret exists to test enrollment without disturbing the shared account |
 | suite-design (no sub-task) | `account/change-password` | the suite can provision a disposable account whose credential is throwaway |

@@ -82,6 +82,9 @@ jobs:
       E2E_OIDC_REDIRECT_URI: ${{ inputs.environment == 'production' && secrets.E2E_PRODUCTION_OIDC_REDIRECT_URI || secrets.E2E_STAGING_OIDC_REDIRECT_URI }}
       E2E_TOTP_SECRET: ${{ inputs.environment == 'production' && secrets.E2E_PRODUCTION_TOTP_SECRET || secrets.E2E_STAGING_TOTP_SECRET }}
       E2E_STRIPE_SECRET_KEY: ${{ inputs.environment == 'production' && secrets.E2E_PRODUCTION_STRIPE_SECRET_KEY || secrets.E2E_STAGING_STRIPE_SECRET_KEY }}
+      # Stalwart JMAP mail sink (BUNYIP-150). Staging only: production has no
+      # sink, so it resolves empty and the email-driven specs skip there.
+      E2E_MAIL_SINK_URL: ${{ inputs.environment == 'production' && '' || secrets.E2E_STAGING_MAIL_SINK_URL }}
 
     steps:
       - name: Clone the repository
