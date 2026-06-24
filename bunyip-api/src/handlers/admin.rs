@@ -1724,6 +1724,30 @@ pub async fn update_stripe_config(
         }
     }
 
+    // BUNYIP-189: bootstrap a default app-tagged product + recurring
+    // price when no app-tagged price exists yet. Closes the silent-400
+    // gotcha from BUNYIP-A-5 gotcha 3 - a fresh Stripe account no
+    // longer needs an out-of-band `stripe products create` step to
+    // make the Subscribe button work. Idempotent; a re-save when a
+    // price already exists is a no-op. Failure to bootstrap does NOT
+    // fail the config save (the keys are still valid and the admin can
+    // create the product by hand); the failure is logged.
+    let bootstrap_created = match stripe_service.bootstrap_default_product_if_missing().await {
+        Ok(Some((product, price))) => {
+            tracing::info!(
+                product_id = %product.id,
+                price_id = %price.id,
+                "BUNYIP-189: bootstrapped default Stripe product + price"
+            );
+            Some((product.id, price.id))
+        }
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "BUNYIP-189: bootstrap_default_product failed; admin must create product manually");
+            None
+        }
+    };
+
     let audit_log = CreateAuditLog::new(AuditAction::AdminStripeConfigUpdated)
         .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
         .with_metadata(serde_json::json!({
@@ -1731,7 +1755,15 @@ pub async fn update_stripe_config(
                 "secret_key": secret_key_plain.is_some(),
                 "webhook_secret": webhook_secret_plain.is_some(),
                 "app_tag": app_tag,
-            }
+            },
+            // BUNYIP-189: surface the auto-bootstrap outcome in the
+            // audit log so an operator chasing the "where did this
+            // product come from" question can trace it to the config
+            // save that produced it.
+            "bootstrap": bootstrap_created.as_ref().map(|(p, pr)| serde_json::json!({
+                "product_id": p,
+                "price_id": pr,
+            })),
         }));
     AuditLogRepository::create(&pool, audit_log).await?;
 
