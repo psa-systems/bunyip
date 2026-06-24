@@ -1141,7 +1141,10 @@ mod tests {
 
     #[test]
     fn first_origin_single_value_passthrough() {
-        assert_eq!(first_origin("https://example.com"), Some("https://example.com"));
+        assert_eq!(
+            first_origin("https://example.com"),
+            Some("https://example.com")
+        );
     }
 
     #[test]
@@ -1154,13 +1157,22 @@ mod tests {
 
     #[test]
     fn first_origin_trims_whitespace() {
-        assert_eq!(first_origin("  https://a.example.com  ,  https://b.example.com"), Some("https://a.example.com"));
+        assert_eq!(
+            first_origin("  https://a.example.com  ,  https://b.example.com"),
+            Some("https://a.example.com")
+        );
     }
 
     #[test]
     fn first_origin_skips_empty_entries() {
-        assert_eq!(first_origin(",https://a.example.com"), Some("https://a.example.com"));
-        assert_eq!(first_origin(",   ,https://a.example.com"), Some("https://a.example.com"));
+        assert_eq!(
+            first_origin(",https://a.example.com"),
+            Some("https://a.example.com")
+        );
+        assert_eq!(
+            first_origin(",   ,https://a.example.com"),
+            Some("https://a.example.com")
+        );
     }
 
     #[test]
