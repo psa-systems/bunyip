@@ -77,18 +77,56 @@ STRIPE_WEBHOOK_SECRET=whsec_...
 (or paste it into the admin Stripe UI). Leave `stripe listen` running for the
 rest of the session; it relays every test-mode event to the local endpoint.
 
-## Step 3 - map test-mode products to tiers
+## Step 3 - create a membership product + price (REQUIRED for checkout)
 
-Create test-mode Products and Prices (Dashboard -> Product catalog, in Test
-mode) and map their **product ids** into the tier config (lifetime /
-early-adopter / standard) so `resolve_tier_for_product`
-(`bunyip-api/src/handlers/webhook.rs`) resolves a tier. Without a mapping a
-created subscription still activates membership but leaves the tier unchanged.
+Checkout will not work until at least one **app-tagged** product with an active
+recurring price exists. When the Subscribe button posts to
+`POST /v1/memberships/checkout` with no explicit price, the api selects the first
+active price whose **product carries the metadata `app=<STRIPE_APP_TAG>`**
+(default `app=bunyip`); see `list_prices` / `list_products` in
+`crates/bunyip-domain/src/services/stripe.rs`. Untagged products are filtered
+out, so a brand-new test account (or one whose products predate the tag) fails
+checkout with `400 price_id: No active price configured`, and the web silently
+redirects back to `/membership` with no error.
 
-## Step 4 - drive the lifecycle
+Create the tagged product + price either way:
+
+- **Admin Stripe UI (preferred).** Use the in-app admin product CRUD; the api's `create_product` auto-injects `metadata.app = STRIPE_APP_TAG`, so anything created there is tagged correctly.
+- **Stripe CLI.** Tag the product explicitly, then add a recurring price:
+
+  ```nu
+  stripe products create --name "Bunyip Membership" -d "metadata[app]=bunyip"
+  # -> prod_xxx
+  stripe prices create --product prod_xxx --unit-amount 300 --currency usd -d "recurring[interval]=month"
+  ```
+
+Verify the api can see it: a logged-in Subscribe click should now redirect to
+`checkout.stripe.com` instead of bouncing back.
+
+## Step 4 (optional) - map product ids to tiers
+
+Map the tagged product's **id** into the tier config (lifetime / early-adopter /
+standard) so `resolve_tier_for_product` (`bunyip-api/src/handlers/webhook.rs`)
+resolves a tier; otherwise a created subscription still activates membership but
+leaves the tier unchanged (the webhook logs `resolved_tier=None`). Note the M1
+billing plan (`dev-docs/billing-m1-implementation-plan.md`, decision 1) collapses
+to a single plan and removes the tiers, so this step may be retired.
+
+## Step 5 - drive the lifecycle
 
 - **Subscribe (happy path).** In the app's checkout, pay with the canonical test card below. The subscription activates through `checkout.session.completed` + `customer.subscription.created`; the dashboard shows the membership as Active.
-- **Failure / grace path.** `stripe trigger invoice.payment_failed` starts the 30-day grace period; `stripe trigger invoice.payment_succeeded` clears it. Cancel / plan-change can be driven from the dashboard or via the matching `stripe trigger customer.subscription.{updated,deleted}` events.
+- **Failure / grace path.** A bare `stripe trigger invoice.payment_failed` will NOT exercise a real member: the fixture invents its own customer, so the handler logs `User not found for failed payment` and does nothing. To drive the grace cycle for an existing subscriber, send an event scoped to that customer. The simplest deterministic way is a locally-signed event (the signature is real - HMAC-SHA256 over `<timestamp>.<payload>` with `STRIPE_WEBHOOK_SECRET`):
+
+  ```nu
+  let secret = (^docker exec dev-bunyip-api-($env.USER) printenv STRIPE_WEBHOOK_SECRET | str trim)
+  let cus = "cus_..."                       # the member's stripe_customer_id
+  let ts = (date now | format date "%s")
+  let payload = $'{"id":"evt_local_fail","object":"event","type":"invoice.payment_failed","data":{"object":{"object":"invoice","customer":"($cus)","amount_due":300}}}'
+  let sig = ($"($ts).($payload)" | openssl dgst -sha256 -hmac $secret -hex | split row "= " | last)
+  curl --silent -X POST http://localhost:4401/v1/webhooks/stripe --header $"Stripe-Signature: t=($ts),v1=($sig)" --header "Content-Type: application/json" --data $payload
+  ```
+
+  `invoice.payment_failed` moves the member to `grace_period` (30-day window); resending with `type=invoice.payment_succeeded` and `amount_paid` clears it back to `active`. Cancel / plan-change can be driven from the dashboard or via `stripe trigger customer.subscription.{updated,deleted}` with a customer override.
 
 ### Test cards
 
@@ -109,10 +147,14 @@ There is no "all 9s" success card; the 9s appear in the decline cards above.
 - Stop the listener with `Ctrl-C`; the `whsec_...` it issued is invalidated, so clear `STRIPE_WEBHOOK_SECRET` (a stale value makes every delivery fail signature verification).
 - Test-mode data (customers, subscriptions, events) lives only in Test mode and never touches live data; delete test customers from the dashboard if you want a clean slate.
 
-## What still needs a live test account
+## Verification status (BUNYIP-175)
 
-Steps 3-5 of the BUNYIP-175 acceptance criteria (a real subscribe activating
-membership, the trigger-driven grace cycle, and tier resolution from a mapped
-product) are end-to-end checks that require provisioned Stripe test-mode keys.
-They are the same `[needs test keys]` items the M1 plan gates
-(`dev-docs/billing-m1-implementation-plan.md`).
+Verified end to end on the dev-sso stack with provisioned test-mode keys:
+
+- A `4242` checkout activates membership (`subscription_status=active`, `price_locked=true`) via `checkout.session.completed` + `customer.subscription.created`.
+- The grace cycle works: a customer-scoped `invoice.payment_failed` moves the member to `grace_period` (30-day window), and `invoice.payment_succeeded` clears it back to `active`.
+
+Outstanding: tier resolution from a mapped product (Step 4) is intentionally not
+wired, since the M1 plan removes the tiers
+(`dev-docs/billing-m1-implementation-plan.md`, decision 1). Revisit only if the
+single-plan collapse is abandoned.
