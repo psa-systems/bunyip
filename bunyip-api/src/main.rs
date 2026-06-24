@@ -153,6 +153,14 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
 
+    // Reconcile the lets-chat confidential RP for THIS environment (LC-448).
+    // The static migration 20260618032217 seeds env-blind staging
+    // (chat.a8n.systems) redirect/audience that break the auth-code flow on
+    // every other host - the same class BUNYIP-57 fixed for the SPA clients
+    // above, which lets-chat was never added to. Confidential variant so each
+    // environment can also pin a dedicated client secret.
+    upsert_lets_chat_oidc_client(&pool).await?;
+
     // Test database connection
     sqlx::query("SELECT 1").execute(&pool).await.map_err(|e| {
         error!(error = %e, "Database health check failed");
@@ -777,6 +785,95 @@ async fn upsert_spa_oidc_client(
         audience = %audience,
         "SPA OIDC client registered from environment"
     );
+
+    Ok(())
+}
+
+/// Reconcile the lets-chat confidential OIDC client for THIS environment
+/// (LC-448). Confidential analogue of `upsert_spa_oidc_client`: the static
+/// migration `20260618032217_register_lets_chat_oidc_client.sql` seeds
+/// env-blind staging (`chat.a8n.systems`) redirect/audience that reject the
+/// callback on every other host, and a `client_secret_hash` shared across the
+/// staging and prod bunyip DBs. This startup upsert is authoritative and
+/// self-healing.
+///
+/// Keyed on the fixed `client_id` UUID, it `UPDATE`s the row the migration
+/// pre-seeds (the migrator runs before this), writing `redirect_uris`,
+/// `post_logout_redirect_uris`, and `audience` from the per-environment
+/// `LETS_CHAT_REDIRECT_URIS` / `LETS_CHAT_POST_LOGOUT_REDIRECT_URIS` /
+/// `LETS_CHAT_AUDIENCE` vars. `client_type` and `token_endpoint_auth_method`
+/// are left at their migration values (confidential / client_secret_basic).
+///
+/// `LETS_CHAT_CLIENT_SECRET_HASH` (optional, an Argon2id PHC string) lets an
+/// environment pin a DEDICATED client secret: `COALESCE` keeps the existing
+/// (migration) hash when the var is unset, so staging stays on the shared
+/// hash while prod overrides it. The hash is a verifier, not the secret; the
+/// plaintext lives only in lets-chat's `LETS_CHAT_BUNYIP_SSO_CLIENT_SECRET`.
+///
+/// Gated on `LETS_CHAT_REDIRECT_URIS` + `LETS_CHAT_AUDIENCE` (skip + log when
+/// unset, like the SPA path), so an environment that has not configured the
+/// client never resurfaces a stale row.
+async fn upsert_lets_chat_oidc_client(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    // Matches migration 20260618032217 and lets-chat's configured CLIENT_ID.
+    let client_id = "b0000000-0000-4000-8000-00000000000c";
+
+    let (Some(redirect_uris), Some(audience)) = (
+        secret_env("LETS_CHAT_REDIRECT_URIS"),
+        secret_env("LETS_CHAT_AUDIENCE"),
+    ) else {
+        info!("lets-chat OIDC client redirect/audience env vars unset, skipping registration");
+        return Ok(());
+    };
+    let post_logout = secret_env("LETS_CHAT_POST_LOGOUT_REDIRECT_URIS").unwrap_or_default();
+    // Optional per-environment dedicated secret. When unset, COALESCE below
+    // preserves the migration's shared hash.
+    let secret_hash = secret_env("LETS_CHAT_CLIENT_SECRET_HASH");
+
+    let split_csv = |s: &str| -> Vec<String> {
+        s.split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let redirect_list = split_csv(&redirect_uris);
+    let post_logout_list = split_csv(&post_logout);
+
+    // UPDATE (not INSERT...ON CONFLICT): the row is guaranteed by the
+    // migration, which the migrator applies before this reconcile runs. A
+    // missing row would touch zero rows and is surfaced by the rows_affected
+    // log below rather than silently inserting a malformed client.
+    let result = sqlx::query(
+        r#"
+        UPDATE oauth_clients SET
+            redirect_uris = $2,
+            post_logout_redirect_uris = $3,
+            audience = $4,
+            client_secret_hash = COALESCE($5, client_secret_hash)
+        WHERE client_id = $1::uuid
+        "#,
+    )
+    .bind(client_id)
+    .bind(&redirect_list)
+    .bind(&post_logout_list)
+    .bind(&audience)
+    .bind(secret_hash.as_deref())
+    .execute(pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        tracing::warn!(
+            client_id,
+            "lets-chat OIDC client row not found; migration 20260618032217 may not have applied"
+        );
+    } else {
+        info!(
+            redirect_uris = ?redirect_list,
+            audience = %audience,
+            secret_pinned = secret_hash.is_some(),
+            "lets-chat OIDC client reconciled from environment"
+        );
+    }
 
     Ok(())
 }
