@@ -544,6 +544,15 @@ async fn main() -> anyhow::Result<()> {
     // is `Copy`, so the per-worker `move` factory closure just copies it.
     let server_start = std::time::Instant::now();
 
+    // Single shared reqwest client for OIDC backchannel-logout delivery
+    // (BUNYIP-74). Built once at startup so a builder error fails fast instead
+    // of being silently swallowed per request; cloned per worker (reqwest
+    // clones share one connection pool).
+    let backchannel_http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| anyhow::anyhow!("failed to build backchannel logout HTTP client: {e}"))?;
+
     let primary = HttpServer::new(move || {
         // Configure CORS. Only the explicit CORS_ORIGIN entries are echoed
         // back with credentials; everything else gets no
@@ -620,6 +629,7 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::Data::new(forgejo_registry_client.clone()))
             // OIDC provider (None when OIDC_ISSUER is not set; handlers return 404)
             .app_data(web::Data::new(oidc_provider.clone()))
+            .app_data(web::Data::new(backchannel_http_client.clone()))
             .app_data(web::Data::new(tier_config.clone()))
             // Update checker for the root-level /version endpoint
             .app_data(web::Data::new(update_checker.clone()))

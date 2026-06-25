@@ -1325,7 +1325,7 @@ pub fn generate_opaque_token(byte_len: usize) -> String {
 }
 
 /// SHA-256 of bytes → raw bytes (stored in DB as BYTEA).
-fn sha256_bytes(input: &[u8]) -> Vec<u8> {
+pub(crate) fn sha256_bytes(input: &[u8]) -> Vec<u8> {
     let mut h = Sha256::new();
     h.update(input);
     h.finalize().to_vec()

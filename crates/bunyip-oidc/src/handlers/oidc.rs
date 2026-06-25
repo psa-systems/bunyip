@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::errors::AppError;
 use crate::middleware::auth::OptionalUser;
 use crate::repositories::UserRepository;
-use crate::services::oidc_provider::{OAuthClient, OidcProvider};
+use crate::services::oidc_provider::{sha256_bytes, OAuthClient, OidcProvider};
 
 /// Unwrap `Option<Arc<OidcProvider>>` from `web::Data`, returning 404 when absent.
 /// Yields `&OidcProvider`.
@@ -44,14 +44,6 @@ macro_rules! require_provider {
 
 fn oidc_error(error: &str, description: &str) -> HttpResponse {
     HttpResponse::BadRequest().json(serde_json::json!({
-        "error": error,
-        "error_description": description,
-    }))
-}
-
-#[allow(dead_code)]
-fn oidc_unauthorized(error: &str, description: &str) -> HttpResponse {
-    HttpResponse::Unauthorized().json(serde_json::json!({
         "error": error,
         "error_description": description,
     }))
@@ -199,7 +191,7 @@ pub async fn discovery(provider: web::Data<Option<Arc<OidcProvider>>>) -> HttpRe
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["EdDSA"],
         "token_endpoint_auth_methods_supported": [
-            "client_secret_basic", "private_key_jwt", "none"
+            "client_secret_basic", "none"
         ],
         "scopes_supported": [
             "openid", "email", "offline_access",
@@ -265,7 +257,6 @@ pub struct AuthorizeQuery {
 pub async fn authorize(
     req: HttpRequest,
     provider: web::Data<Option<Arc<OidcProvider>>>,
-    _pool: web::Data<sqlx::PgPool>,
     query: web::Query<AuthorizeQuery>,
     config: web::Data<crate::config::Config>,
     auth_service: web::Data<Arc<crate::services::AuthService>>,
@@ -436,6 +427,16 @@ pub async fn authorize(
         .filter(|s| client.allowed_scopes.iter().any(|a| a.as_str() == *s))
         .map(|s| s.to_string())
         .collect();
+
+    // Refuse to issue a code when none of the requested scopes survive the
+    // intersection with the client's allowed set (RFC 6749 §4.1.2.1). Issuing
+    // a code for an empty scope grant would mint a token with no scope.
+    if requested_scopes.is_empty() {
+        return Ok(oidc_error(
+            "invalid_scope",
+            "none of the requested scopes are permitted for this client",
+        ));
+    }
 
     // BUNYIP-140 JIT path: replace the old "grant every allowed_scope"
     // behaviour with a baseline-only auto-grant. Scopes that disclose
@@ -761,7 +762,11 @@ pub async fn token(
     let body = &form.0;
 
     // Extract client credentials (Basic auth header or form params)
-    let (client_id_str, client_secret_opt) = extract_client_credentials(&req, body)?;
+    let (client_id_str, client_secret_opt) = extract_client_credentials(
+        &req,
+        body.client_id.as_deref(),
+        body.client_secret.as_deref(),
+    )?;
     let client_id = Uuid::parse_str(&client_id_str)
         .map_err(|_| AppError::OidcInvalidClient("invalid client_id format".into()))?;
 
@@ -996,18 +1001,36 @@ pub async fn userinfo(
     // of truth at authorize time, not at userinfo time.
     let token_scopes: std::collections::HashSet<&str> =
         at_claims.scope.split_whitespace().collect();
+    // `sub` is always returned; email / membership claims are gated on the
+    // `email` scope, mirroring the id_token in `mint_id_token` so userinfo
+    // never discloses more than the granted scopes (RFC 6749 / OIDC Core).
     let mut body = serde_json::json!({
         "sub": user.id.to_string(),
-        "email": user.email,
-        "email_verified": user.email_verified,
-        "membership_status": user.membership_status,
-        "has_member_access": crate::services::jwt::AccessTokenClaims::has_member_access_static(
-            &user.role,
-            user.lifetime_member,
-            user.trial_ends_at.map(|t| t.timestamp()),
-            &user.membership_status,
-        ),
     });
+    if token_scopes.contains("email") {
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("email".into(), serde_json::json!(user.email));
+            obj.insert(
+                "email_verified".into(),
+                serde_json::json!(user.email_verified),
+            );
+            obj.insert(
+                "membership_status".into(),
+                serde_json::json!(user.membership_status),
+            );
+            obj.insert(
+                "has_member_access".into(),
+                serde_json::json!(
+                    crate::services::jwt::AccessTokenClaims::has_member_access_static(
+                        &user.role,
+                        user.lifetime_member,
+                        user.trial_ends_at.map(|t| t.timestamp()),
+                        &user.membership_status,
+                    )
+                ),
+            );
+        }
+    }
     if token_scopes.contains("profile") {
         if let Some(obj) = body.as_object_mut() {
             if let Some(v) = user.first_name.as_deref().filter(|s| !s.is_empty()) {
@@ -1035,47 +1058,70 @@ pub struct RevokeRequest {
     pub token: String,
     #[serde(default)]
     pub token_type_hint: Option<String>,
+    // Client credentials may also arrive via the HTTP Basic auth header.
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub client_secret: Option<String>,
 }
 
 /// POST /oauth2/revoke (RFC 7009)
 ///
-/// Revokes a refresh token (and its entire family) or adds a JTI to the
-/// access-token blocklist.  Returns 200 regardless of whether the token
-/// was found (per spec).
+/// Revokes a refresh token and its entire rotation family. The endpoint does
+/// not maintain an access-token blocklist: access tokens are short-lived
+/// stateless JWTs and are left to expire. Returns 200 regardless of whether
+/// the token was found (RFC 7009 §2.2). The client is authenticated first
+/// (RFC 7009 §2.1) and may only revoke its own tokens.
 pub async fn revoke(
-    _req: HttpRequest,
+    req: HttpRequest,
     provider: web::Data<Option<Arc<OidcProvider>>>,
     form: web::Form<RevokeRequest>,
 ) -> Result<HttpResponse, AppError> {
     let provider = require_provider!(provider);
 
-    // RFC 7009 §2.2: respond 200 regardless
-    let _ = do_revoke(provider, &form.token).await;
+    // RFC 7009 §2.1: authenticate the client before acting on any token.
+    let (client_id_str, client_secret_opt) = extract_client_credentials(
+        &req,
+        form.client_id.as_deref(),
+        form.client_secret.as_deref(),
+    )?;
+    let client_id = Uuid::parse_str(&client_id_str)
+        .map_err(|_| AppError::OidcInvalidClient("invalid client_id format".into()))?;
+    let client = provider
+        .load_client(client_id)
+        .await?
+        .ok_or_else(|| AppError::OidcInvalidClient("unknown client".into()))?;
+    authenticate_client(&client, client_secret_opt.as_deref())?;
+
+    // RFC 7009 §2.2: respond 200 regardless of whether the token was found.
+    let _ = do_revoke(provider, client.client_id, &form.token).await;
     Ok(HttpResponse::Ok().finish())
 }
 
-async fn do_revoke(provider: &OidcProvider, raw_token: &str) -> Result<(), AppError> {
-    use sha2::{Digest, Sha256};
+async fn do_revoke(
+    provider: &OidcProvider,
+    client_id: Uuid,
+    raw_token: &str,
+) -> Result<(), AppError> {
+    let token_hash = sha256_bytes(raw_token.as_bytes());
 
-    let token_hash = {
-        let mut h = Sha256::new();
-        h.update(raw_token.as_bytes());
-        h.finalize().to_vec()
-    };
-
-    // Try refresh token first
-    let result = sqlx::query_scalar!(
-        "SELECT family_id FROM refresh_tokens_v2 WHERE token_hash = $1",
-        token_hash as Vec<u8>,
+    // Look up the family only when the token belongs to the authenticating
+    // client, so a client cannot revoke another client's tokens (RFC 7009
+    // §2.1). Runtime query (not the `query!` macro) so the added client_id
+    // predicate needs no `.sqlx/` offline-cache regeneration.
+    let family_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT family_id FROM refresh_tokens_v2 WHERE token_hash = $1 AND client_id = $2",
     )
+    .bind(token_hash)
+    .bind(client_id)
     .fetch_optional(&provider.pool)
-    .await;
+    .await?;
 
-    if let Ok(Some(family_id)) = result {
-        sqlx::query!(
+    if let Some(family_id) = family_id {
+        sqlx::query(
             "UPDATE refresh_token_families SET revoked_at = NOW(), revoke_reason = 'client_revocation' WHERE id = $1",
-            family_id,
         )
+        .bind(family_id)
         .execute(&provider.pool)
         .await?;
     }
@@ -1087,7 +1133,6 @@ async fn do_revoke(provider: &OidcProvider, raw_token: &str) -> Result<(), AppEr
 
 #[derive(Debug, Deserialize)]
 pub struct LogoutQuery {
-    pub id_token_hint: Option<String>,
     pub post_logout_redirect_uri: Option<String>,
     pub state: Option<String>,
 }
@@ -1098,6 +1143,7 @@ pub async fn logout(
     query: web::Query<LogoutQuery>,
     user: OptionalUser,
     config: web::Data<crate::config::Config>,
+    http_client: web::Data<reqwest::Client>,
 ) -> Result<HttpResponse, AppError> {
     // Clone the Arc so we can move it into the background task.
     let provider_arc: Arc<OidcProvider> = match provider.as_ref().as_ref() {
@@ -1105,8 +1151,31 @@ pub async fn logout(
         None => return Ok(HttpResponse::NotFound().finish()),
     };
 
+    // Close the open redirect (BUNYIP-74): only honour a
+    // post_logout_redirect_uri that is registered for some client, per the
+    // OIDC RP-Initiated Logout spec; anything else falls back to "/". The
+    // `state` parameter is echoed back on the redirect when present. Runtime
+    // query so the lookup needs no `.sqlx/` offline-cache regeneration.
     let redirect = match &query.post_logout_redirect_uri {
-        Some(uri) if !uri.is_empty() => uri.clone(),
+        Some(uri) if !uri.is_empty() => {
+            let registered: Option<i32> = sqlx::query_scalar(
+                "SELECT 1 FROM oauth_clients WHERE $1 = ANY(post_logout_redirect_uris) LIMIT 1",
+            )
+            .bind(uri)
+            .fetch_optional(&provider_arc.pool)
+            .await?;
+            if registered.is_some() {
+                match &query.state {
+                    Some(state) if !state.is_empty() => {
+                        let sep = if uri.contains('?') { '&' } else { '?' };
+                        format!("{uri}{sep}state={}", urlencoding::encode(state))
+                    }
+                    _ => uri.clone(),
+                }
+            } else {
+                "/".to_string()
+            }
+        }
         _ => "/".to_string(),
     };
 
@@ -1115,11 +1184,10 @@ pub async fn logout(
         match provider_arc.revoke_sessions_for_backchannel(user_id).await {
             Ok(targets) if !targets.is_empty() => {
                 let provider_arc = Arc::clone(&provider_arc);
+                // Reuse the single app-state reqwest client (built once at
+                // startup) rather than rebuilding one per logout (BUNYIP-74).
+                let http = http_client.get_ref().clone();
                 tokio::spawn(async move {
-                    let http = reqwest::Client::builder()
-                        .timeout(std::time::Duration::from_secs(5))
-                        .build()
-                        .unwrap_or_default();
                     for (client_id, uri, sid) in targets {
                         match provider_arc.mint_logout_token(user_id, &sid, client_id) {
                             Ok(token) => {
@@ -1169,10 +1237,13 @@ pub async fn logout(
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
-/// Extract (client_id, client_secret) from either HTTP Basic auth or form body.
+/// Extract (client_id, client_secret) from either HTTP Basic auth or the form
+/// body's `client_id` / `client_secret` fields. Shared by the token and
+/// revocation endpoints.
 fn extract_client_credentials(
     req: &HttpRequest,
-    body: &TokenRequest,
+    form_client_id: Option<&str>,
+    form_client_secret: Option<&str>,
 ) -> Result<(String, Option<String>), AppError> {
     // Try HTTP Basic auth first
     if let Some(auth_header) = req.headers().get("Authorization") {
@@ -1193,12 +1264,10 @@ fn extract_client_credentials(
     }
 
     // Fall back to form body
-    let client_id = body
-        .client_id
-        .as_deref()
+    let client_id = form_client_id
         .ok_or_else(|| AppError::OidcInvalidClient("client_id is required".into()))?
         .to_string();
-    Ok((client_id, body.client_secret.clone()))
+    Ok((client_id, form_client_secret.map(|s| s.to_string())))
 }
 
 /// Verify the client secret (for confidential clients).
