@@ -25,6 +25,7 @@ import { env } from './env';
 export const MAGIC_LINK_RE = /https?:\/\/[^\s"'<>]+\/magic-link\?token=[\w.-]+/;
 export const PASSWORD_RESET_RE = /https?:\/\/[^\s"'<>]+\/password-reset\/confirm\?token=[\w.-]+/;
 export const EMAIL_CHANGE_RE = /https?:\/\/[^\s"'<>]+\/settings\/confirm-email\?token=[\w.-]+/;
+export const EMAIL_VERIFY_RE = /https?:\/\/[^\s"'<>]+\/settings\/verify-email\?token=[\w.-]+/;
 
 const JMAP_MAIL_CAPABILITIES = [
   'urn:ietf:params:jmap:core',

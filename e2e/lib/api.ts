@@ -36,6 +36,8 @@ export const routes = {
   userMe: `${API_V1}/users/me`,
   userEmail: `${API_V1}/users/me/email`,
   userEmailConfirm: `${API_V1}/users/me/email/confirm`,
+  userEmailVerify: `${API_V1}/users/me/email/verify`,
+  userEmailVerifyConfirm: `${API_V1}/users/me/email/verify/confirm`,
 
   // OIDC OP discovery (root-mounted).
   oidcDiscovery: '/.well-known/openid-configuration',
