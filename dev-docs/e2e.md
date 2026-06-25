@@ -143,6 +143,13 @@ secret; a manual dispatch lets the operator pick.
   reach. `lib/mail-sink.ts:jmapSession` keeps only the apiUrl PATH and forces the
   origin back to the public sink base (the `.well-known/jmap` GET already proved
   443 reachability).
+- **change-email verifies first (BUNYIP-150):** `request_email_change`
+  (`crates/bunyip-domain/src/services/auth.rs`) changes an UNVERIFIED account's
+  email immediately with NO confirmation email; only a VERIFIED account gets the
+  emailed `/settings/confirm-email` link. A freshly registered disposable account
+  is unverified, so `tests/account/change-email.spec.ts` first verifies it via
+  the verify-email flow (over the same sink) so the change takes the
+  link-confirmed path it is meant to exercise.
 
 **Rotation source (record per secret).** So each value can be rotated later,
 document where it is generated, per environment: the Forgejo Actions secret

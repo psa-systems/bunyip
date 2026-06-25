@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { routes } from '../../lib/api';
 import { env } from '../../lib/env';
 import { registerDisposable, deleteMe, disposableEmail } from '../../lib/accounts';
-import { waitForLink, tokenFromLink, EMAIL_CHANGE_RE } from '../../lib/mail-sink';
+import { waitForLink, tokenFromLink, EMAIL_CHANGE_RE, EMAIL_VERIFY_RE } from '../../lib/mail-sink';
 
 // Change-email coverage (BUNYIP-149).
 //
@@ -12,6 +12,13 @@ import { waitForLink, tokenFromLink, EMAIL_CHANGE_RE } from '../../lib/mail-sink
 // (BUNYIP-150): request the change, read the link out of the mailbox (sent to
 // the new address), confirm the token, then prove the account's email is now
 // the new value.
+//
+// IMPORTANT: this emailed-confirm path only applies to a VERIFIED account.
+// `request_email_change` (crates/bunyip-domain/src/services/auth.rs) changes an
+// UNVERIFIED account's email immediately, without sending any link. A freshly
+// registered disposable account is unverified, so the spec first verifies it
+// via the verify-email flow (also over the sink) so the change takes the
+// verified, link-confirmed path it is meant to exercise.
 //
 // This spec is in the account-ui project, which injects the SHARED storageState
 // into the default browser context. We never use that context (the whole flow
@@ -28,6 +35,24 @@ test.describe('change email', () => {
     const reauth = await playwright.request.newContext({ baseURL: env.apiBaseURL });
     try {
       const account = await registerDisposable(owner);
+
+      // Verify the disposable account first (over the sink), so the email
+      // change below takes the verified, link-confirmed path rather than the
+      // unverified immediate-change path that sends no email.
+      const verifyRequested = await owner.post(routes.userEmailVerify);
+      expect(
+        verifyRequested.ok(),
+        `POST ${routes.userEmailVerify} -> ${verifyRequested.status()}: ${await verifyRequested.text()}`,
+      ).toBeTruthy();
+      const verifyLink = await waitForLink(account.email, EMAIL_VERIFY_RE);
+      const verified = await owner.post(routes.userEmailVerifyConfirm, {
+        data: { token: tokenFromLink(verifyLink) },
+      });
+      expect(
+        verified.ok(),
+        `POST ${routes.userEmailVerifyConfirm} -> ${verified.status()}: ${await verified.text()}`,
+      ).toBeTruthy();
+
       const newEmail = disposableEmail();
 
       const requested = await owner.post(routes.userEmail, {
