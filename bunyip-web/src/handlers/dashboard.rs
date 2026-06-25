@@ -1185,6 +1185,7 @@ pub async fn settings(
                         @if !is_admin {
                             form method="post" action="/settings/2fa/disable" class="space-y-2 max-w-md" {
                                 div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" class=(crate::handlers::dashboard_input()); }
+                                div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); }
                                 button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("shield-off", "mr-2 h-4 w-4")) "Disable 2FA" }
                             }
                         } @else { p class="text-xs text-muted-foreground" { "Admin accounts cannot disable two-factor authentication." } }
@@ -1561,6 +1562,8 @@ pub async fn settings_password(
 #[derive(Deserialize)]
 pub struct DisableForm {
     pub password: String,
+    #[serde(default)]
+    pub totp_code: String,
 }
 pub async fn settings_disable_2fa(
     State(st): State<AppState>,
@@ -1571,7 +1574,7 @@ pub async fn settings_disable_2fa(
         Ok(v) => v,
         Err(r) => return r,
     };
-    match auth_api::disable_2fa(&st.api, c.forward.as_deref(), &f.password).await {
+    match auth_api::disable_2fa(&st.api, c.forward.as_deref(), &f.password, &f.totp_code).await {
         Ok(()) => redirect_cookies("/settings?ok=Two-factor+disabled", &c.set_cookies),
         Err(e) => redirect_cookies(
             &format!("/settings?error={}", urlenc(&e.user_message())),
