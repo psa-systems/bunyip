@@ -189,9 +189,20 @@ pub async fn register(
     let ip_address = extract_client_ip(&req);
     let device_info = extract_device_info(&req);
 
-    // Rate limit by IP address
-    let ip_key = ip_address.map(|ip| ip.to_string()).unwrap_or_default();
-    check_rate_limit(&pool, &ip_key, &RateLimitConfig::REGISTRATION).await?;
+    // Rate limit by IP address. The per-IP registration cap is an anti-abuse
+    // control for the public production deployment. Non-production environments
+    // (staging/dev) host the deployed-instance e2e suite, which self-provisions
+    // disposable accounts from the single CI runner egress IP and accumulates
+    // registrations across serial runs inside the one-hour window, tripping a
+    // spurious 429 (BUNYIP-150 / BUNYIP-196 / BUNYIP-197). Each disposable
+    // account needs a fresh unique email, so they cannot be pre-seeded or
+    // reused the way the shared login account is. Apply the cap in production
+    // only; staging/dev register unthrottled (the auto-ban still catches
+    // abusive bursts).
+    if config.is_production() {
+        let ip_key = ip_address.map(|ip| ip.to_string()).unwrap_or_default();
+        check_rate_limit(&pool, &ip_key, &RateLimitConfig::REGISTRATION).await?;
+    }
 
     // Validate email format
     crate::validation::validate_email(&body.email)?;

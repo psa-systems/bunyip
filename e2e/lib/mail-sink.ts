@@ -92,7 +92,14 @@ async function jmapSession(ctx: APIRequestContext): Promise<{ apiUrl: string; ac
   if (!accountId) {
     throw new Error('JMAP session has no primary mail account');
   }
-  return { apiUrl: session.apiUrl, accountId };
+  // Stalwart advertises apiUrl as its internal address (e.g.
+  // http://mail.a8n.run:8080/jmap/), which the CI runner cannot reach. The
+  // `.well-known/jmap` GET above already succeeded over the public TLS host, so
+  // keep only the apiUrl PATH and force the origin back to the configured sink
+  // base (https://mail.a8n.run via Traefik on 443).
+  const { base } = sinkConnection();
+  const path = new URL(session.apiUrl, base);
+  return { apiUrl: `${base}${path.pathname}${path.search}`, accountId };
 }
 
 interface JmapResponse {
