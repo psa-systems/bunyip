@@ -150,6 +150,27 @@ secret; a manual dispatch lets the operator pick.
   is unverified, so `tests/account/change-email.spec.ts` first verifies it via
   the verify-email flow (over the same sink) so the change takes the
   link-confirmed path it is meant to exercise.
+- **Stripe billing (staging only, BUNYIP-151):** the billing specs need staging
+  bunyip running Stripe in TEST mode. Operator provisioning:
+  1. In a Stripe TEST-mode account, create the membership product + a recurring
+     price; note the price id.
+  2. Configure the staging bunyip-api with the test-mode `STRIPE_SECRET_KEY`
+     (`sk_test_...`), `STRIPE_WEBHOOK_SECRET` (`whsec_...`), and the price id -
+     either via the admin UI (`/admin/stripe`, stored encrypted in the DB) or via
+     env (`crates/bunyip-domain/src/services/stripe.rs::from_env`; secrets live in
+     the SOPS `compose-secrets.yml`). Point a Stripe test-mode webhook endpoint at
+     `https://api.a8n.systems/v1/webhook` (or wherever the webhook route is) using
+     that `whsec_`.
+  3. Record the same `sk_test_...` as the Forgejo Actions secret
+     `E2E_STAGING_STRIPE_SECRET_KEY`. The suite exposes it as `E2E_STRIPE_SECRET_KEY`,
+     which both feeds teardown (cancels test-mode subscriptions) AND gates the
+     billing specs: `subscribe` + `billing-portal` run when it is set, skip
+     otherwise; all billing specs also `test.skip` on the production apex.
+  `cancel` stays deferred: it needs an ACTIVE membership to cancel, and
+  `/membership/cancel` only engages when `membership_status` is active, which the
+  `customer.subscription.created` webhook flips - so a future setup step must
+  create a test-mode subscription on the account's customer and wait for the
+  webhook. Build it once staging Stripe + the webhook are live and can validate it.
 
 **Rotation source (record per secret).** So each value can be rotated later,
 document where it is generated, per environment: the Forgejo Actions secret

@@ -9,12 +9,14 @@ import { env } from '../../lib/env';
 // lifted - it is the hard backstop against a real charge.
 test.skip(env.isProductionApex, 'no live subscriptions on production');
 
-// `test.fixme`: blocked on BUNYIP-151 (staging Stripe test mode not yet wired).
-// POST /membership/subscribe 302s to checkout.stripe.com; asserting the
-// redirect target needs a configured Stripe test-mode price/customer on
-// staging. Un-fixme once BUNYIP-151 provisions staging Stripe test mode.
+// Skips until staging Stripe test mode is provisioned (BUNYIP-151): gated on
+// E2E_STRIPE_SECRET_KEY, which the operator sets (as E2E_STAGING_STRIPE_SECRET_KEY)
+// alongside the staging Stripe test-mode keys/price. POST /membership/subscribe
+// 302s to checkout.stripe.com; asserting the redirect target needs a configured
+// Stripe test-mode price on staging.
 test.describe('billing subscribe', () => {
-  test.fixme('subscribe redirects to the Stripe checkout host', async ({ page }) => {
+  test('subscribe redirects to the Stripe checkout host', async ({ page }) => {
+    test.skip(!env.stripeSecretKey, 'needs staging Stripe test mode (BUNYIP-151)');
     await page.goto('/membership');
 
     // bunyip's Subscribe control POSTs /membership/subscribe and 302s to

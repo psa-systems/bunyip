@@ -23,9 +23,9 @@ or **`test.fixme`** (intent sketched, blocked on a cited dependency). Every
 | Account | `tests/account/change-password.spec.ts` | `test.fixme` | mutates the shared E2E credential; needs a disposable account (suite-design limit, no sub-task) |
 | Account | `tests/account/change-email.spec.ts` | runnable | register a disposable account, request an email change, confirm via the emailed link from the Stalwart JMAP sink, assert the new email (BUNYIP-150). Skipped without `E2E_MAIL_SINK_URL` |
 | Memberships | `tests/memberships/memberships-list.spec.ts` | runnable | `/membership` renders; `GET /v1/auth/memberships` reports `active_tenant_id == E2E_TENANT_ID` |
-| Billing | `tests/billing/subscribe.spec.ts` | `test.fixme` + prod skip | `POST /membership/subscribe` 302s to checkout.stripe.com; needs staging Stripe test mode (BUNYIP-151) |
-| Billing | `tests/billing/cancel.spec.ts` | `test.fixme` + prod skip | `POST /membership/cancel`; needs staging Stripe test mode (BUNYIP-151) |
-| Billing | `tests/billing/billing-portal.spec.ts` | `test.fixme` + prod skip | read-only redirect assertion on `/checkout/success`; needs staging Stripe configured (BUNYIP-151) |
+| Billing | `tests/billing/subscribe.spec.ts` | runnable + prod skip | `POST /membership/subscribe` 302s to checkout.stripe.com (BUNYIP-151). Skipped without `E2E_STRIPE_SECRET_KEY` (= staging Stripe test mode provisioned) |
+| Billing | `tests/billing/cancel.spec.ts` | `test.fixme` + prod skip | `POST /membership/cancel`; deferred under BUNYIP-151 - needs a setup step that gives the account an active membership, which is webhook-dependent (see the spec). Lands once staging Stripe + the webhook are live |
+| Billing | `tests/billing/billing-portal.spec.ts` | runnable + prod skip | read-only redirect assertion on `/checkout/success` (BUNYIP-151). Skipped without `E2E_STRIPE_SECRET_KEY` |
 | OIDC | `tests/oidc/authorize-redirect.spec.ts` | runnable | `/oauth2/authorize` (no-follow) returns a `code` to the registered redirect host; names `/login` vs `/consent` on a no-code bounce |
 | OIDC | `tests/oidc/token-flow.spec.ts` | runnable | full PKCE: authorize -> code -> `/oauth2/token` -> `/oauth2/userinfo` -> refresh |
 | OIDC | `tests/oidc/consent-screen.spec.ts` | runnable | asserts `GET /oauth2/consent` responds coherently (renders the form, or redirects on because setup pre-granted scopes); fixme fallback noted inline if the route ever needs an in-flight ticket |
@@ -83,7 +83,7 @@ test runs.
 | `E2E_OIDC_CLIENT_ID` | yes | public PKCE client id for the OP token-flow specs |
 | `E2E_OIDC_REDIRECT_URI` | yes | redirect_uri registered for that client (must match EXACTLY, or `invalid_redirect_uri`). Only the `code` is captured; the URL is never loaded |
 | `E2E_TOTP_SECRET` | yes | base32 TOTP secret for the account; the second factor is computed at runtime |
-| `E2E_STRIPE_SECRET_KEY` | no | Stripe test-mode key, used ONLY by teardown to cancel test-mode subscriptions. Unused until BUNYIP-151 |
+| `E2E_STRIPE_SECRET_KEY` | no | Stripe test-mode key (`sk_test_...`). Used by teardown to cancel test-mode subscriptions AND as the gate for the billing specs - when set (the operator provisions it as `E2E_STAGING_STRIPE_SECRET_KEY` alongside staging Stripe test mode), `subscribe`/`billing-portal` run; unset, they skip (BUNYIP-151) |
 | `E2E_MAIL_SINK_URL` | no | Staging mail-sink JMAP base URL with the E2E mailbox credentials embedded (`https://nate%40a8n.run:pass@mail.a8n.run`, the Stalwart server). The email-driven specs read token links from this mailbox; unset (e.g. production) makes them skip (BUNYIP-150) |
 
 ## Secret layout
@@ -102,7 +102,7 @@ manual-dispatch only. See `dev-docs/e2e.md` for provisioning + rotation sources.
 | --- | --- | --- |
 | BUNYIP-149 | (suite coverage umbrella) | n/a - tracks the runnable coverage |
 | BUNYIP-150 (mail sink) | `auth/signup` | a programmatic mailbox can read the confirmation link. The `password-reset`, `magic-link`, and `change-email` specs now run via the Stalwart JMAP sink (`E2E_MAIL_SINK_URL`); `signup` is the remaining follow-up |
-| BUNYIP-151 (staging Stripe test mode) | `billing/subscribe`, `billing/cancel`, `billing/billing-portal` | staging Stripe test mode is wired (a test customer/price exists) |
+| BUNYIP-151 (staging Stripe test mode) | `billing/cancel` | `subscribe` + `billing-portal` are un-fixme'd and gated on `E2E_STRIPE_SECRET_KEY`; `cancel` stays deferred until staging Stripe + the subscription webhook are live (it needs a webhook-propagated active membership to cancel) |
 | BUNYIP-152 (2FA enrollment account) | `auth/two-factor` | a disposable account + captured secret exists to test enrollment without disturbing the shared account |
 | suite-design (no sub-task) | `account/change-password` | the suite can provision a disposable account whose credential is throwaway |
 
