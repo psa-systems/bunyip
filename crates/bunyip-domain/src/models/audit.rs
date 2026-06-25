@@ -69,6 +69,11 @@ pub enum AuditAction {
     AdminTierConfigUpdated,
     AdminKeyRotation,
     UserAccountDeleted,
+    /// BUNYIP-211: outcome of fanning the `account_deleted` webhook out to one
+    /// downstream app after a user deleted their account. One row per app per
+    /// dispatch (including admin replays); metadata carries `user_id`,
+    /// `app_slug`, `status` (`delivered` / `failed`), and `error` on failure.
+    AccountDeleteWebhookDispatched,
     DownloadRequested,
     DownloadCompleted,
     DownloadDeniedMembership,
@@ -170,6 +175,7 @@ impl AuditAction {
             AuditAction::AdminTierConfigUpdated => "admin_tier_config_updated",
             AuditAction::AdminKeyRotation => "admin_key_rotation",
             AuditAction::UserAccountDeleted => "user_account_deleted",
+            AuditAction::AccountDeleteWebhookDispatched => "account_delete_webhook_dispatched",
             AuditAction::DownloadRequested => "download_requested",
             AuditAction::DownloadCompleted => "download_completed",
             AuditAction::DownloadDeniedMembership => "download_denied_membership",

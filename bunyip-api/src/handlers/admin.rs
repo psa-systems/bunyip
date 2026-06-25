@@ -843,6 +843,66 @@ pub async fn update_application(
     Ok(success(app, request_id))
 }
 
+/// Body for [`replay_account_delete`]: which app to re-notify (BUNYIP-211).
+#[derive(Debug, Deserialize)]
+pub struct ReplayAccountDeleteRequest {
+    /// Slug of the connected app whose `account_deleted` webhook to re-fire.
+    pub app_slug: String,
+}
+
+/// POST /v1/admin/account-deletes/{user_id}/replay
+/// BUNYIP-211: re-fire the `account_deleted` webhook to a single app for a user
+/// whose original delete dispatch failed (its row sits in
+/// `account_delete_dispatch_failures`). Admin-gated. Lets ops resolve a stuck
+/// downstream purge without re-deleting the user. The outcome is recorded the
+/// same way the delete fan-out records it (audit row, and a fresh failure row
+/// if this attempt also exhausts), so the replay is itself observable.
+pub async fn replay_account_delete(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    webhook_service: web::Data<Arc<WebhookService>>,
+    path: web::Path<uuid::Uuid>,
+    body: web::Json<ReplayAccountDeleteRequest>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let user_id = path.into_inner();
+
+    let app = ApplicationRepository::find_by_slug(&pool, &body.app_slug)
+        .await?
+        .ok_or(AppError::not_found("Application"))?;
+
+    let outcome = webhook_service
+        .dispatch_account_deleted(&app, user_id)
+        .await;
+    crate::handlers::user::record_account_delete_dispatch(&pool, user_id, &app, &outcome).await;
+
+    tracing::info!(
+        admin_id = %admin.0.sub,
+        user_id = %user_id,
+        app_slug = %app.slug,
+        delivered = outcome.is_ok(),
+        "admin replayed account_deleted webhook"
+    );
+
+    match outcome {
+        Ok(()) => Ok(success(
+            serde_json::json!({
+                "user_id": user_id,
+                "app_slug": app.slug,
+                "status": "delivered",
+            }),
+            request_id,
+        )),
+        // Surface the failure to the admin (the failure row is already
+        // persisted by record_account_delete_dispatch for a later retry).
+        Err(err) => Err(AppError::internal(format!(
+            "account_deleted webhook to {} still failing: {err}",
+            app.slug
+        ))),
+    }
+}
+
 /// POST /v1/admin/applications
 /// Create a new application
 pub async fn create_application(

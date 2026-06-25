@@ -142,6 +142,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/applications/{slug}/oci/refresh",
                 web::post().to(bunyip_oci::handlers::admin_oci::refresh_oci),
             )
+            // Account-delete webhook replay (BUNYIP-211)
+            .route(
+                "/account-deletes/{user_id}/replay",
+                web::post().to(handlers::replay_account_delete),
+            )
             // Audit logs
             .route("/audit-logs", web::get().to(handlers::list_audit_logs))
             // Feedback

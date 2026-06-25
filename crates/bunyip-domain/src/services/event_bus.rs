@@ -75,6 +75,14 @@ pub enum BunyipEvent {
         /// `role_change`, etc. Display-friendly text comes from the SPA.
         reason: &'static str,
     },
+
+    /// The user deleted their own account (BUNYIP-211). Published AFTER the
+    /// soft delete commits so local subscribers (audit log, SSE) observe the
+    /// same terminal event that fans out to downstream apps via the webhook
+    /// dispatch. Targets the deleted user; their open tabs already redirect to
+    /// /login on the accompanying `SessionRevoked`, but the typed event lets
+    /// any in-process listener react to the delete specifically.
+    AccountDeleted { user_id: Uuid },
 }
 
 impl BunyipEvent {
@@ -85,6 +93,7 @@ impl BunyipEvent {
             BunyipEvent::ProfileChanged { .. } => "profile_changed",
             BunyipEvent::ApplicationsChanged => "applications_changed",
             BunyipEvent::SessionRevoked { .. } => "session_revoked",
+            BunyipEvent::AccountDeleted { .. } => "account_deleted",
         }
     }
 
@@ -97,6 +106,7 @@ impl BunyipEvent {
             BunyipEvent::ProfileChanged { user_id } => Some(*user_id),
             BunyipEvent::ApplicationsChanged => None,
             BunyipEvent::SessionRevoked { user_id, .. } => Some(*user_id),
+            BunyipEvent::AccountDeleted { user_id } => Some(*user_id),
         }
     }
 }
@@ -227,6 +237,14 @@ mod tests {
         });
         // No panic, no error path observable. The publish path drops the
         // event silently when the per-user channel has no receivers.
+    }
+
+    #[test]
+    fn account_deleted_names_and_targets_the_user() {
+        let uid = Uuid::new_v4();
+        let ev = BunyipEvent::AccountDeleted { user_id: uid };
+        assert_eq!(ev.name(), "account_deleted");
+        assert_eq!(ev.target_user(), Some(uid));
     }
 
     #[tokio::test]
