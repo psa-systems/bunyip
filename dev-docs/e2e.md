@@ -127,6 +127,22 @@ secret; a manual dispatch lets the operator pick.
   shared state is touched. (This replaced an earlier Mailpit-on-c-01 design and
   the plaintext SMTP app change; both were dropped in favour of reusing
   Stalwart.)
+- **Registration rate limit (BUNYIP-150 / 196 / 197):** `/v1/auth/register` is
+  capped 3/hour/IP as a production anti-abuse control. The deployed-instance
+  e2e suite self-provisions disposable accounts from the single CI runner egress
+  IP, so registrations accumulate across serial runs in the one-hour window and
+  trip a spurious 429. Root-cause fix (`bunyip-api/src/handlers/auth.rs::register`):
+  the cap is applied in production ONLY (`if config.is_production()`); non-prod
+  (staging/dev) registers unthrottled, with the auto-ban still catching abusive
+  bursts. No env knob, no per-run workaround. NOTE: because the suite tests the
+  DEPLOYED instance, this fix only takes effect after the new image is deployed
+  to staging, so a PR's own pre-merge e2e run can still 429 against the not-yet-
+  redeployed staging; it goes green on the post-merge run.
+- **JMAP apiUrl origin (BUNYIP-150):** Stalwart advertises its session `apiUrl`
+  as the internal `http://mail.a8n.run:8080/jmap/`, which the CI runner cannot
+  reach. `lib/mail-sink.ts:jmapSession` keeps only the apiUrl PATH and forces the
+  origin back to the public sink base (the `.well-known/jmap` GET already proved
+  443 reachability).
 
 **Rotation source (record per secret).** So each value can be rotated later,
 document where it is generated, per environment: the Forgejo Actions secret
