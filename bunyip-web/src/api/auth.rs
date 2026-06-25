@@ -415,14 +415,17 @@ pub async fn status_2fa(
     parse(api.get("/auth/2fa/status", cookie).await?)
 }
 
-pub async fn disable_2fa(api: &Api, cookie: Option<&str>, password: &str) -> Result<(), ApiError> {
-    let r = api
-        .post(
-            "/auth/2fa/disable",
-            cookie,
-            Some(json!({ "password": password })),
-        )
-        .await?;
+pub async fn disable_2fa(
+    api: &Api,
+    cookie: Option<&str>,
+    password: &str,
+    totp_code: &str,
+) -> Result<(), ApiError> {
+    let mut body = json!({ "password": password });
+    if !totp_code.is_empty() {
+        body["totp_code"] = json!(totp_code);
+    }
+    let r = api.post("/auth/2fa/disable", cookie, Some(body)).await?;
     ok_data(&r).map(|_| ())
 }
 
