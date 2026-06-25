@@ -10,14 +10,13 @@ import { env } from '../../lib/env';
 // specs so prod is never exercised against Stripe.
 test.skip(env.isProductionApex, 'no Stripe billing surface exercised on production');
 
-// `test.fixme`: blocked on BUNYIP-151 (staging Stripe test mode not yet wired).
-// The post-checkout return at GET /checkout/success and any billing-portal
-// redirect both presuppose a configured Stripe customer on staging; until that
-// exists the redirect target is undefined. Read-only once unblocked: assert the
-// success/portal route redirects to the expected host without mutating billing
-// state. Un-fixme once BUNYIP-151 lands.
+// Skips until staging Stripe test mode is provisioned (BUNYIP-151): gated on
+// E2E_STRIPE_SECRET_KEY. Read-only: GET /checkout/success and any billing-portal
+// redirect presuppose a configured Stripe customer on staging; assert the route
+// does not error, without mutating billing state.
 test.describe('billing portal', () => {
-  test.fixme('checkout-success / portal redirects to the expected host', async ({ page }) => {
+  test('checkout-success / portal redirects to the expected host', async ({ page }) => {
+    test.skip(!env.stripeSecretKey, 'needs staging Stripe test mode (BUNYIP-151)');
     const res = await page.request.get(`${env.baseURL}/checkout/success`, {
       maxRedirects: 0,
     });
