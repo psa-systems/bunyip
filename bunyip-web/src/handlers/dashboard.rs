@@ -45,42 +45,15 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
     let tagline = TAGLINES[rotating_index(TAGLINES.len())];
     let base_domain = st.cfg.domain_or_localhost();
 
-    // BUNYIP-139: nudge the user to fill in their name once. The banner
-    // renders only while BOTH first_name and last_name are still
-    // empty - first save makes it disappear (no dismiss-state needed).
-    // Whitespace-only values count as empty; trimming happens at the API
-    // edge so the banner accurately reflects what other apps would see.
-    let profile_empty = user
-        .first_name
-        .as_deref()
-        .map(str::trim)
-        .map(str::is_empty)
-        .unwrap_or(true)
-        || user
-            .last_name
-            .as_deref()
-            .map(str::trim)
-            .map(str::is_empty)
-            .unwrap_or(true);
+    // BUNYIP-206: the passive "finish your profile" name banner was removed -
+    // the forced /onboarding gate (handlers::mod::guard) now guarantees a name
+    // is set before the dashboard is reachable, so the nudge is dead code.
 
     let content = html! {
         div class="space-y-8" {
             div {
                 h1 class="text-3xl font-bold" { "Welcome back!" }
                 p class="mt-2 text-muted-foreground" { (tagline) }
-            }
-
-            @if profile_empty {
-                div class="rounded-lg border border-primary/30 bg-primary/5 p-4 flex items-center justify-between gap-4" {
-                    div class="flex items-start gap-3" {
-                        (icon("user-cog", "h-5 w-5 text-primary mt-0.5"))
-                        div {
-                            p class="text-sm font-medium" { "Finish setting up your profile" }
-                            p class="text-sm text-muted-foreground" { "Add your name so connected apps can greet you properly." }
-                        }
-                    }
-                    a href="/settings#profile" class=(button_class("default", "sm", "shrink-0 bg-primary text-primary-foreground")) { "Update profile" }
-                }
             }
 
             // Membership status
@@ -1614,7 +1587,10 @@ pub async fn settings_resend_verification(
     State(st): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    let (user, c) = match guard(&st, &headers, "/settings").await {
+    // BUNYIP-206: guard with the real route path so the onboarding allowlist
+    // (handlers::mod::onboarding_allowed) admits it - a not-yet-onboarded user
+    // must be able to resend the verification email from /onboarding.
+    let (user, c) = match guard(&st, &headers, "/settings/verify-email/resend").await {
         Ok(v) => v,
         Err(r) => return r,
     };

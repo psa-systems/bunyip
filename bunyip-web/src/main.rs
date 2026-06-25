@@ -43,7 +43,9 @@ async fn main() {
         cfg: Arc::clone(&cfg),
     };
 
-    use handlers::{auth_pages as ap, consent, content, dashboard as dash, health, public};
+    use handlers::{
+        auth_pages as ap, consent, content, dashboard as dash, health, onboarding, public,
+    };
 
     let app = Router::new()
         // Liveness for the e2e reachability gate + monitoring (BUNYIP-149).
@@ -95,6 +97,11 @@ async fn main() {
         .route("/setup", get(ap::setup_get).post(ap::setup_post))
         .route("/settings/confirm-email", get(ap::confirm_email))
         .route("/settings/verify-email", get(ap::verify_email))
+        // BUNYIP-206: forced post-registration onboarding (name + verified email).
+        .route(
+            "/onboarding",
+            get(onboarding::onboarding_get).post(onboarding::onboarding_post),
+        )
         // Dashboard
         .route("/dashboard", get(dash::dashboard))
         .route("/applications", get(dash::applications))

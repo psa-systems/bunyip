@@ -312,7 +312,10 @@ pub async fn register_post(
         .await;
     }
     match auth_api::register(&st.api, f.email.trim(), &f.password).await {
-        Ok((_, cookies)) => redirect_cookies("/dashboard", &cookies),
+        // BUNYIP-206: a new user lands on /onboarding (name + email verification)
+        // before any app surface. The `guard()` gate enforces this for every
+        // other entry path; sending them straight here avoids the extra hop.
+        Ok((_, cookies)) => redirect_cookies("/onboarding", &cookies),
         Err(e) => {
             auth_page(
                 &st,
@@ -945,7 +948,11 @@ pub async fn verify_email(
                     "Email Verified!",
                     msg,
                     html! {
-                        a href="/settings" class=(button_class("default", "default", "w-full")) { "Go to Settings" }
+                        // BUNYIP-206: forward onward instead of dumping the user on
+                        // settings. The `guard()` gate routes a still-onboarding user
+                        // (name not yet saved) to /onboarding, everyone else to the
+                        // dashboard.
+                        a href="/dashboard" class=(button_class("default", "default", "w-full")) { "Continue" }
                     },
                 )
             }
