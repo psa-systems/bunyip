@@ -1208,7 +1208,7 @@ pub async fn settings(
 
             // Danger zone
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-red-200 dark:border-red-900" {
-                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight text-red-600 dark:text-red-400 flex items-center gap-2" { (icon("alert-triangle", "h-5 w-5")) "Danger Zone" } p class="text-sm text-muted-foreground" { "Permanently delete your account and all associated data." } }
+                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight text-red-600 dark:text-red-400 flex items-center gap-2" { (icon("alert-triangle", "h-5 w-5")) "Danger Zone" } p class="text-sm text-muted-foreground" { "This permanently deletes your account AND all of your data in Mokosh and any other connected app. This cannot be undone." } }
                 div class="p-6 pt-0" {
                     // Delete account. autocomplete="off" on the form + on the
                     // password input together suppress the password-manager
@@ -1217,7 +1217,7 @@ pub async fn settings(
                     // hint so the manager (or iOS / Chrome AutoFill) can
                     // surface a freshly-arrived SMS / TOTP code from a sibling
                     // tab WITHOUT pre-filling the password field.
-                    form method="post" action="/settings/account/delete" autocomplete="off" class="space-y-3 max-w-md" onsubmit="return confirm('Permanently delete your account? This cannot be undone.')" {
+                    form method="post" action="/settings/account/delete" autocomplete="off" class="space-y-3 max-w-md" onsubmit="return confirm('Permanently delete your account AND all of your data in Mokosh and any other connected app? This cannot be undone.')" {
                         div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" autocomplete="off" placeholder="Enter your password to confirm" class=(crate::handlers::dashboard_input()); }
                         @if user.two_factor_enabled { div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
                         button type="submit" class=(button_class("destructive", "default", "")) { (icon("trash", "mr-2 h-4 w-4")) "Delete My Account" }

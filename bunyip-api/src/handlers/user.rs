@@ -11,14 +11,19 @@ use tokio;
 use crate::errors::AppError;
 use crate::middleware::{extract_client_ip, AuthCookies, AuthenticatedUser};
 use crate::models::{
-    AuditAction, CreateAuditLog, SubscriptionTier, TrustedDeviceInfo, UserResponse,
+    Application, AuditAction, CreateAuditLog, SubscriptionTier, TrustedDeviceInfo, UserResponse,
 };
 use crate::repositories::{
-    AuditLogRepository, TokenRepository, TrustedDeviceRepository, UserRepository,
+    AccountDeleteDispatchFailureRepository, ApplicationRepository, AuditLogRepository,
+    TokenRepository, TrustedDeviceRepository, UserRepository,
 };
 use crate::responses::{get_request_id, paginated, success, success_no_data};
-use crate::services::{AuthService, EmailService, PasswordService, StripeService, TotpService};
+use crate::services::{
+    AuthService, EmailService, PasswordService, StripeService, TotpService, WebhookService,
+};
 use crate::validation::validate_email;
+use bunyip_domain::services::{BunyipEvent, EventBus};
+use uuid::Uuid;
 
 /// Request body for deleting account
 #[derive(Debug, Deserialize)]
@@ -542,6 +547,86 @@ pub async fn confirm_email_verification(
     ))
 }
 
+/// BUNYIP-211: fan the `account_deleted` webhook out to every active app that
+/// has a `webhook_url` (mokosh and any other connected PSA app), retrying each
+/// and recording the per-app outcome. Called from a spawned task after the
+/// soft delete commits, and reused as the loop body has the same shape as the
+/// single-app admin replay.
+pub(crate) async fn fan_out_account_deleted(
+    pool: &PgPool,
+    webhook_service: &WebhookService,
+    user_id: Uuid,
+) {
+    let apps = match ApplicationRepository::list_active(pool).await {
+        Ok(apps) => apps,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                user_id = %user_id,
+                "account_deleted fan-out: failed to list applications; downstream apps not notified"
+            );
+            return;
+        }
+    };
+
+    for app in apps {
+        // Skip apps with no webhook endpoint: nothing to deliver, not a failure.
+        if app.webhook_url.as_deref().is_none_or(str::is_empty) {
+            continue;
+        }
+        let outcome = webhook_service
+            .dispatch_account_deleted(&app, user_id)
+            .await;
+        record_account_delete_dispatch(pool, user_id, &app, &outcome).await;
+    }
+}
+
+/// BUNYIP-211: persist the outcome of a single app's `account_deleted` dispatch.
+/// Always writes an audit row (per-app status); on exhaustion also writes a
+/// replayable `account_delete_dispatch_failures` row. Shared by the delete
+/// fan-out and the admin replay so the two paths cannot record differently.
+pub(crate) async fn record_account_delete_dispatch(
+    pool: &PgPool,
+    user_id: Uuid,
+    app: &Application,
+    outcome: &Result<(), String>,
+) {
+    let (status, error) = match outcome {
+        Ok(()) => ("delivered", None),
+        Err(e) => ("failed", Some(e.as_str())),
+    };
+
+    let audit = CreateAuditLog::new(AuditAction::AccountDeleteWebhookDispatched)
+        .with_resource("application", app.id)
+        .with_metadata(serde_json::json!({
+            "user_id": user_id,
+            "app_slug": app.slug,
+            "status": status,
+            "error": error,
+        }))
+        .with_severity(if outcome.is_ok() {
+            crate::models::AuditSeverity::Info
+        } else {
+            crate::models::AuditSeverity::Error
+        });
+    if let Err(e) = AuditLogRepository::create(pool, audit).await {
+        tracing::error!(error = %e, user_id = %user_id, app_slug = %app.slug, "failed to write account-delete dispatch audit row");
+    }
+
+    if let Err(err) = outcome {
+        if let Err(e) =
+            AccountDeleteDispatchFailureRepository::record(pool, user_id, &app.slug, err).await
+        {
+            tracing::error!(
+                error = %e,
+                user_id = %user_id,
+                app_slug = %app.slug,
+                "failed to persist account-delete dispatch failure; downstream purge may be silently lost"
+            );
+        }
+    }
+}
+
 /// DELETE /v1/users/me
 /// Delete current user's account (soft delete)
 pub async fn delete_account(
@@ -551,6 +636,8 @@ pub async fn delete_account(
     config: web::Data<crate::config::Config>,
     totp_service: web::Data<Arc<TotpService>>,
     stripe_service: web::Data<Arc<StripeService>>,
+    webhook_service: web::Data<Arc<WebhookService>>,
+    event_bus: web::Data<Arc<EventBus>>,
     oidc_provider: web::Data<Option<Arc<bunyip_oidc::services::oidc_provider::OidcProvider>>>,
     body: web::Json<DeleteAccountRequest>,
 ) -> Result<HttpResponse, AppError> {
@@ -638,6 +725,23 @@ pub async fn delete_account(
         user_email = %user.0.email,
         "User deleted their own account"
     );
+
+    // BUNYIP-211: publish the terminal event on the in-process bus so any local
+    // subscriber (audit log tail, SSE) observes the delete, then cascade the
+    // purge to every connected app. The fan-out runs in a spawned task with its
+    // own retry + failure capture so a slow/unreachable downstream cannot block
+    // (or fail) the user's delete, which is already committed.
+    event_bus.publish(BunyipEvent::AccountDeleted {
+        user_id: user.0.sub,
+    });
+    {
+        let pool = pool.get_ref().clone();
+        let webhook_service = webhook_service.get_ref().clone();
+        let deleted_user_id = user.0.sub;
+        tokio::spawn(async move {
+            fan_out_account_deleted(&pool, &webhook_service, deleted_user_id).await;
+        });
+    }
 
     if let Some(provider) = oidc_provider.as_ref().as_ref().cloned() {
         let deleted_user_id = user.0.sub;

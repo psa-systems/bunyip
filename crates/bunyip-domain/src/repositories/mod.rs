@@ -2,6 +2,7 @@
 //!
 //! This module contains all database access logic organized by domain.
 
+pub mod account_delete_dispatch_failure;
 pub mod application;
 pub mod application_group;
 pub mod audit;
@@ -21,6 +22,9 @@ pub mod trusted_device;
 pub mod user;
 
 // Re-export repositories
+pub use account_delete_dispatch_failure::{
+    AccountDeleteDispatchFailure, AccountDeleteDispatchFailureRepository,
+};
 pub use application::ApplicationRepository;
 pub use application_group::ApplicationGroupRepository;
 pub use audit::AuditLogRepository;
