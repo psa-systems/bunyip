@@ -267,6 +267,7 @@ mod tests {
             first_name: None,
             last_name: None,
             phone: None,
+            has_used_trial: false,
         }
     }
 

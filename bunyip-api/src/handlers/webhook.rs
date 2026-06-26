@@ -349,6 +349,15 @@ async fn handle_checkout_completed(
         }
     };
 
+    // BUNYIP-209: if this session carried the signup trial (tagged with
+    // `trial=true` metadata at creation time), burn the one-time trial now that
+    // the checkout has finalized. Doing it here (not at session creation) means
+    // an abandoned checkout never consumes the trial. Idempotent on replay.
+    if session["metadata"]["trial"].as_str() == Some("true") {
+        UserRepository::mark_trial_used(pool, user_id).await?;
+        tracing::info!(user_id = %user_id, "Signup trial consumed via checkout");
+    }
+
     tracing::info!(user_id = %user_id, "Checkout completed, membership activated");
 
     // Send welcome email and audit log
