@@ -220,11 +220,30 @@ impl TotpService {
         Ok(codes)
     }
 
+    /// Generate a single recovery code.
+    ///
+    /// 10 random bytes (80 bits of entropy) from the CSPRNG, base32-encoded into
+    /// 16 characters and grouped into four hyphen-separated blocks for
+    /// readability (BUNYIP-202). The previous format drew only 4 bytes / 32 bits
+    /// and rendered 8 hex chars, which - with 8 live codes per account and a
+    /// rate limit that an attacker can sidestep by rotating source IPs - was
+    /// brute-forceable against the 2FA challenge endpoint. 80 bits clears the
+    /// OWASP >=64-bit bar for backup codes. The hyphens are display-only: both
+    /// this generator and `verify_recovery_code` normalise by stripping hyphens
+    /// and upper-casing before hashing, so a user may enter the code with or
+    /// without the grouping.
     fn generate_recovery_code() -> String {
-        let mut bytes = [0u8; 4];
+        let mut bytes = [0u8; 10];
         rand::thread_rng().fill_bytes(&mut bytes);
-        let hex = hex::encode(bytes).to_uppercase();
-        format!("{}-{}", &hex[..4], &hex[4..])
+        // 10 bytes -> exactly 16 base32 chars (no padding); already uppercase.
+        let encoded = data_encoding::BASE32_NOPAD.encode(&bytes);
+        format!(
+            "{}-{}-{}-{}",
+            &encoded[0..4],
+            &encoded[4..8],
+            &encoded[8..12],
+            &encoded[12..16],
+        )
     }
 
     /// Legacy unsalted SHA-256 hash (kept for verifying existing codes)
@@ -317,11 +336,41 @@ mod tests {
     #[test]
     fn recovery_code_format() {
         let code = TotpService::generate_recovery_code();
-        // Format: XXXX-XXXX (uppercase hex)
-        assert_eq!(code.len(), 9);
-        assert_eq!(&code[4..5], "-");
-        assert!(code[..4].chars().all(|c| c.is_ascii_hexdigit()));
-        assert!(code[5..].chars().all(|c| c.is_ascii_hexdigit()));
+        // Format: XXXX-XXXX-XXXX-XXXX => 16 base32 chars + 3 hyphens = 19.
+        assert_eq!(code.len(), 19);
+        let groups: Vec<&str> = code.split('-').collect();
+        assert_eq!(groups.len(), 4);
+        for group in &groups {
+            assert_eq!(group.len(), 4);
+            // Base32 alphabet (RFC 4648): uppercase A-Z and digits 2-7.
+            assert!(group
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || ('2'..='7').contains(&c)));
+        }
+    }
+
+    #[test]
+    fn recovery_code_has_at_least_64_bits_entropy() {
+        // 16 base32 chars carry 80 bits; assert we are well above the
+        // brute-forceable 32-bit width the previous format used (BUNYIP-202).
+        let code = TotpService::generate_recovery_code();
+        let normalized = code.replace('-', "");
+        let decoded = data_encoding::BASE32_NOPAD
+            .decode(normalized.as_bytes())
+            .expect("recovery code is valid base32");
+        assert_eq!(decoded.len(), 10); // 10 bytes = 80 bits
+    }
+
+    #[test]
+    fn generated_recovery_code_verifies_against_its_hash() {
+        // End-to-end: a freshly generated code, normalised and hashed the way
+        // storage does it, must verify when re-entered (BUNYIP-202).
+        let code = TotpService::generate_recovery_code();
+        let normalized = code.replace('-', "");
+        let hash = TotpService::hash_code_argon2(&normalized).unwrap();
+        // verify path upper-cases and strips hyphens before comparing.
+        let entered = code.to_uppercase().replace('-', "");
+        assert!(TotpService::verify_code_against_hash(&entered, &hash).unwrap());
     }
 
     #[test]
