@@ -105,7 +105,28 @@ pub async fn onboarding_post(
     {
         // Back to /onboarding: the GET re-checks completeness and forwards to
         // /dashboard once the email is verified too.
-        Ok(()) => redirect_cookies("/onboarding", &c.set_cookies),
+        //
+        // BUNYIP-226: when this name save closes BUNYIP-221's dual gate
+        // (email already verified), the API runs `maybe_grant_initial_tier`
+        // and the user's `trial_ends_at` flips on the DB row. The session
+        // cookie's JWT is still the pre-grant one with `trial_ends_at =
+        // None`, so the next page's `/v1/applications` call reads
+        // `has_member_access() == false` from stale claims and renders
+        // the launcher tiles as Locked. Force a token rotation now so the
+        // redirect carries a fresh JWT and the dashboard reads the new
+        // claims on first paint. A refresh failure is non-fatal: the
+        // grant already landed in the DB, the user just keeps the stale
+        // JWT until something else triggers a refresh (no worse than
+        // pre-BUNYIP-226).
+        Ok(()) => {
+            let mut cookies = c.set_cookies.clone();
+            if let Some(cookie) = c.forward.as_deref() {
+                if let Ok(rotated) = auth_api::refresh(&st.api, Some(cookie)).await {
+                    cookies.extend(rotated);
+                }
+            }
+            redirect_cookies("/onboarding", &cookies)
+        }
         Err(e) => redirect_cookies(
             &format!("/onboarding?error={}", urlenc(&e.user_message())),
             &c.set_cookies,

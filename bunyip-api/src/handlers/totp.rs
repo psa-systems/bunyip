@@ -8,7 +8,9 @@ use std::sync::Arc;
 use crate::errors::AppError;
 use crate::middleware::{extract_client_ip, extract_device_info, AuthCookies, AuthenticatedUser};
 use crate::models::{AuditAction, CreateAuditLog, RateLimitConfig};
-use crate::repositories::{AuditLogRepository, TrustedDeviceRepository, UserRepository};
+use crate::repositories::{
+    AuditLogRepository, RateLimitRepository, TrustedDeviceRepository, UserRepository,
+};
 use crate::responses::{get_request_id, success};
 use crate::services::{AuthService, PasswordService, TotpService};
 
@@ -144,6 +146,32 @@ pub async fn verify_2fa(
     let claims = jwt_service.verify_2fa_challenge_token(&body.challenge_token)?;
     let user_id = claims.sub;
 
+    // Per-account failed-attempt lockout, independent of source IP (BUNYIP-201).
+    // The per-IP cap above does nothing against an attacker who rotates cheap
+    // proxy IPs against a single victim's challenge token, so gate on a
+    // per-account FAILURE counter as well. Read-only here (compare with `>=`, not
+    // the repo's increment-oriented `>`), so a request that may succeed does not
+    // consume the budget; only genuine failures below increment it. Once at the
+    // cap, even a correct code is refused until the window expires, which is the
+    // hard lockout: the attacker must wait and the user must retry later or
+    // re-authenticate.
+    let user_rate_key = format!("2fa_verify_user:{}", user_id);
+    let (fail_count, _) = RateLimitRepository::check(
+        &pool,
+        &user_rate_key,
+        &RateLimitConfig::TWO_FACTOR_VERIFY_FAILURES,
+    )
+    .await?;
+    if fail_count >= RateLimitConfig::TWO_FACTOR_VERIFY_FAILURES.max_requests {
+        let retry_after = RateLimitRepository::get_retry_after(
+            &pool,
+            &user_rate_key,
+            &RateLimitConfig::TWO_FACTOR_VERIFY_FAILURES,
+        )
+        .await?;
+        return Err(AppError::RateLimited { retry_after });
+    }
+
     // Try TOTP code first, then recovery code
     // Strip spaces so users can enter TOTP as "XXX XXX"
     let code = body.code.trim().replace(' ', "");
@@ -157,7 +185,35 @@ pub async fn verify_2fa(
     };
 
     if !verified {
+        // Count only failures (BUNYIP-201): a wrong code increments the
+        // per-account counter so repeated guesses trip the lockout regardless of
+        // source IP. Best-effort - a counter write failure must not turn the
+        // "invalid code" response into a 500, but log it because the
+        // brute-force guard is degrading open under DB stress.
+        if let Err(e) = RateLimitRepository::check_and_increment(
+            &pool,
+            &user_rate_key,
+            &RateLimitConfig::TWO_FACTOR_VERIFY_FAILURES,
+        )
+        .await
+        {
+            tracing::warn!(?e, "2fa per-account failure-counter increment failed");
+        }
         return Err(AppError::validation("code", "Invalid verification code"));
+    }
+
+    // A successful verification resets the per-account failure counter so a
+    // legitimate user who fat-fingered a few codes is never locked out
+    // (BUNYIP-201). Best-effort: the login already succeeded, so a reset failure
+    // must not fail the request.
+    if let Err(e) = RateLimitRepository::reset(
+        &pool,
+        &user_rate_key,
+        RateLimitConfig::TWO_FACTOR_VERIFY_FAILURES.action,
+    )
+    .await
+    {
+        tracing::warn!(?e, "2fa per-account failure-counter reset failed");
     }
 
     // Audit the verification

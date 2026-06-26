@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::errors::AppError;
 use crate::middleware::AdminUser;
 use crate::models::{AuditAction, CreateAuditLog, CreateUserTenantAssignment};
-use crate::repositories::{AuditLogRepository, OAuthClientUserTenantRepository};
+use crate::repositories::{AuditLogRepository, OAuthClientUserTenantRepository, TokenRepository};
 use crate::responses::{get_request_id, success, success_no_data};
 
 /// GET /v1/admin/oauth-clients/{client_id}/user-tenants
@@ -78,6 +78,15 @@ pub async fn assign_user_tenant(
     )
     .await?;
 
+    // BUNYIP-200: a tenant (re)assignment may change which tenant the user
+    // should carry, so revoke any outstanding refresh-token families for this
+    // (user, client). Existing tokens carry the tenant selected at /authorize;
+    // killing the families forces a fresh /authorize that re-runs the picker
+    // against the updated assignments instead of letting rotation mint a stale
+    // tenant claim.
+    TokenRepository::revoke_client_user_refresh_tokens(pool.get_ref(), body.user_id, client_id)
+        .await?;
+
     Ok(success(row, request_id))
 }
 
@@ -95,7 +104,7 @@ pub async fn unassign_user_tenant(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let (client_id, assignment_id) = path.into_inner();
-    OAuthClientUserTenantRepository::unassign(pool.get_ref(), assignment_id).await?;
+    let removed = OAuthClientUserTenantRepository::unassign(pool.get_ref(), assignment_id).await?;
 
     AuditLogRepository::create(
         pool.get_ref(),
@@ -104,9 +113,25 @@ pub async fn unassign_user_tenant(
             .with_resource("oauth_client", client_id)
             .with_metadata(serde_json::json!({
                 "assignment_id": assignment_id,
+                "user_id": removed.as_ref().map(|r| r.user_id),
+                "tenant_id": removed.as_ref().map(|r| r.tenant_id),
             })),
     )
     .await?;
+
+    // BUNYIP-200: when an assignment is actually removed, revoke the affected
+    // user's refresh-token families for this client so existing tokens cannot
+    // keep minting the now-stale tenant claim on the next rotation. A no-op
+    // delete (row already gone) skips this. Use the unassigned row's
+    // `oauth_client_id` (the public client_id) for the revocation scope.
+    if let Some(row) = removed {
+        TokenRepository::revoke_client_user_refresh_tokens(
+            pool.get_ref(),
+            row.user_id,
+            row.oauth_client_id,
+        )
+        .await?;
+    }
 
     Ok(success_no_data(request_id))
 }

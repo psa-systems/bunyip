@@ -95,6 +95,11 @@ pub struct EmailConfig {
     pub base_url: String,
     /// Whether to actually send emails (false in dev mode)
     pub enabled: bool,
+    /// Whether to log magic-link/reset/email-change URLs (token included) at
+    /// DEBUG when email sending is disabled. Opt-in for local development only
+    /// (EMAIL_LOG_TOKENS=true); forced off in production so single-use bearer
+    /// tokens are never written to logs (BUNYIP-204).
+    pub log_tokens: bool,
     /// Application name for email subjects and templates
     pub app_name: String,
     /// Admin recipients for operational notifications
@@ -111,6 +116,15 @@ impl EmailConfig {
 
         let smtp_host = env::var("SMTP_HOST").unwrap_or_else(|_| "localhost".to_string());
         let has_smtp = !smtp_host.is_empty() && smtp_host != "localhost";
+
+        // EMAIL_LOG_TOKENS lets local development log the full magic-link /
+        // reset / email-change URL (token included) at DEBUG when email sending
+        // is disabled. It defaults off and is forced off in production so the
+        // single-use bearer token can never reach a production log (BUNYIP-204).
+        let log_tokens = !is_production
+            && env::var("EMAIL_LOG_TOKENS")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false);
 
         // SMTP_TLS: "implicit" (port 465) or "starttls" (port 587)
         let smtp_tls = match env::var("SMTP_TLS")
@@ -149,6 +163,7 @@ impl EmailConfig {
                 .or_else(|_| env::var("CORS_ORIGIN"))
                 .unwrap_or_else(|_| "http://localhost:5173".to_string()),
             enabled: (is_production && has_smtp) || force_enabled,
+            log_tokens,
             app_name: env::var("APP_NAME").unwrap_or_else(|_| "localhost".to_string()),
             admin_notification_emails: env::var("ADMIN_NOTIFICATION_EMAILS")
                 .unwrap_or_default()
@@ -651,6 +666,15 @@ impl Config {
         let is_production = environment == "production";
         let email = EmailConfig::from_env(is_production);
 
+        // Fail fast: a production deployment with email disabled would silently
+        // degrade to the dev-mode path. Before BUNYIP-204 that path logged the
+        // full magic-link / reset / email-change URL (single-use bearer token
+        // included) at INFO, handing account-takeover credentials to anyone with
+        // log read access. Refuse to start instead of degrading silently.
+        if is_production && !email.enabled {
+            return Err(ConfigError::EmailDisabledInProduction);
+        }
+
         // Cookie domain: must be set explicitly via COOKIE_DOMAIN env var.
         // None means cookies are scoped to the exact hostname (suitable for localhost).
         let cookie_domain = env::var("COOKIE_DOMAIN").ok().filter(|s| !s.is_empty());
@@ -798,6 +822,13 @@ pub enum ConfigError {
 
     #[error("Invalid value for {0}: {1}")]
     InvalidValue(String, String),
+
+    #[error(
+        "Email sending is disabled in a production deployment. Set SMTP_HOST (not \"localhost\") \
+         so transactional emails can be delivered, or set EMAIL_ENABLED=true. Refusing to start: \
+         the disabled path would log single-use login/reset tokens instead of emailing them."
+    )]
+    EmailDisabledInProduction,
 }
 
 #[cfg(test)]
@@ -837,6 +868,45 @@ mod tests {
         assert!(!config.email.enabled);
         // In development mode without COOKIE_DOMAIN set, it should be None (for localhost)
         assert!(config.cookie_domain.is_none());
+    }
+
+    #[test]
+    fn test_production_email_disabled_fails_fast() {
+        // A production deployment without SMTP configured must refuse to start
+        // rather than silently degrade to the token-logging dev path (BUNYIP-204).
+        // The email check runs before the TOTP/Stripe key loading, so no
+        // encryption keys are required to exercise it.
+        let _env = env_lock();
+        env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
+        env::set_var("ENVIRONMENT", "production");
+        env::remove_var("SMTP_HOST");
+        env::remove_var("EMAIL_ENABLED");
+
+        let err = Config::from_env_inner().expect_err("production without SMTP must fail");
+        assert!(matches!(err, ConfigError::EmailDisabledInProduction));
+
+        env::remove_var("ENVIRONMENT");
+    }
+
+    #[test]
+    fn test_email_log_tokens_forced_off_in_production() {
+        // EMAIL_LOG_TOKENS only takes effect outside production; in production it
+        // is forced off so single-use tokens never reach a log (BUNYIP-204).
+        let _env = env_lock();
+        env::set_var("EMAIL_LOG_TOKENS", "true");
+
+        assert!(
+            EmailConfig::from_env(false).log_tokens,
+            "EMAIL_LOG_TOKENS=true should enable token logging in development"
+        );
+        assert!(
+            !EmailConfig::from_env(true).log_tokens,
+            "EMAIL_LOG_TOKENS must be ignored in production"
+        );
+
+        env::remove_var("EMAIL_LOG_TOKENS");
+        // Default (unset) is off.
+        assert!(!EmailConfig::from_env(false).log_tokens);
     }
 
     #[test]
