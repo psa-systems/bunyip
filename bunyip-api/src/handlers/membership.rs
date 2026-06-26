@@ -138,9 +138,12 @@ pub async fn create_checkout(
     };
     tx.commit().await?;
 
-    // Create checkout session with the price
+    // Create checkout session with the price. BUNYIP-209: grant the one-time
+    // signup free trial only when the user has never used it. Returning users
+    // (has_used_trial = TRUE) get the existing immediate-billing flow.
+    let eligible_for_trial = !db_user.has_used_trial;
     let (session_id, checkout_url) = stripe
-        .create_checkout_session(&customer_id, db_user.id, &price_id)
+        .create_checkout_session(&customer_id, db_user.id, &price_id, eligible_for_trial)
         .await?;
 
     tracing::info!(

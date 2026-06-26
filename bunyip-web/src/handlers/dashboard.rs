@@ -655,29 +655,84 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
         Ok(v) => v,
         Err(r) => return r,
     };
-    // Route through the same canonical helper the Membership card uses so
-    // the user sees the same plan label here, on /membership, and on /pricing.
+    // BUNYIP-225: gate the "Welcome aboard" success copy on the user's
+    // actual subscription_status, not just the tier string. The tier was
+    // set at signup and stays "standard" forever for most users, so the
+    // page used to confidently render success even when the webhook had
+    // not flipped status to Active (e.g. signature-mismatch dropping the
+    // delivery, or a 5-second race between the Stripe redirect and the
+    // webhook landing). Read the live status; if it is not yet Active,
+    // render a "Finalizing your subscription..." card that auto-refreshes
+    // until the webhook lands. Lifetime members and any user already
+    // Active see the celebration unchanged.
+    let fwd = c.forward.as_deref();
+    let membership = calls::membership(&st.api, fwd).await.unwrap_or(None);
+    let is_active = user.lifetime_member
+        || membership
+            .as_ref()
+            .map(|m| matches!(m.status, MembershipStatus::Active))
+            .unwrap_or(false);
     let tier = tier_name(&user.subscription_tier);
-    let content = html! {
-        div class="flex items-center justify-center min-h-[70vh]" {
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm max-w-lg w-full border-border/50 overflow-hidden" {
-                div class="h-1 bg-gradient-to-r from-teal-500 via-indigo-500 to-primary" {}
-                div class="p-6 pt-8 pb-8 text-center space-y-6" {
-                    div class="flex justify-center" { div class="rounded-full bg-gradient-to-br from-teal-500/20 to-teal-500/5 p-4" { (icon("check-circle", "h-12 w-12 text-teal-500")) } }
-                    div class="space-y-2" {
-                        h1 class="text-3xl font-bold" { "Welcome aboard" span class="text-gradient bg-gradient-to-r from-primary to-indigo-500" { "!" } }
-                        p class="text-muted-foreground text-lg" { "Your membership is now active. You have full access to all applications." }
+    let content = if is_active {
+        html! {
+            div class="flex items-center justify-center min-h-[70vh]" {
+                div class="rounded-lg border bg-card text-card-foreground shadow-sm max-w-lg w-full border-border/50 overflow-hidden" {
+                    div class="h-1 bg-gradient-to-r from-teal-500 via-indigo-500 to-primary" {}
+                    div class="p-6 pt-8 pb-8 text-center space-y-6" {
+                        div class="flex justify-center" { div class="rounded-full bg-gradient-to-br from-teal-500/20 to-teal-500/5 p-4" { (icon("check-circle", "h-12 w-12 text-teal-500")) } }
+                        div class="space-y-2" {
+                            h1 class="text-3xl font-bold" { "Welcome aboard" span class="text-gradient bg-gradient-to-r from-primary to-indigo-500" { "!" } }
+                            p class="text-muted-foreground text-lg" { "Your membership is now active. You have full access to all applications." }
+                        }
+                        div class="bg-gradient-to-r from-indigo-500/5 via-primary/5 to-teal-500/5 rounded-lg p-4 space-y-2 text-sm border border-border/50" {
+                            div class="flex items-center justify-center gap-2" { (icon("credit-card", "h-4 w-4 text-indigo-500")) span class="font-medium" { (tier) " Plan" } }
+                            p class="text-muted-foreground" { "Your price is locked in for life - it will never increase." }
+                        }
+                        div class="flex flex-col gap-3 pt-2" {
+                            a href="/applications" class=(button_class("default", "lg", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { (icon("app-window", "h-4 w-4")) "Browse Applications" (icon("arrow-right", "h-4 w-4")) }
+                            a href="/membership" class=(button_class("outline", "default", "")) { "View Membership Details" }
+                        }
+                        p class="text-xs text-muted-foreground" { "Redirecting to applications shortly…" }
+                        script { (PreEscaped("setTimeout(function(){location.href='/applications'},10000);")) }
                     }
-                    div class="bg-gradient-to-r from-indigo-500/5 via-primary/5 to-teal-500/5 rounded-lg p-4 space-y-2 text-sm border border-border/50" {
-                        div class="flex items-center justify-center gap-2" { (icon("credit-card", "h-4 w-4 text-indigo-500")) span class="font-medium" { (tier) " Plan" } }
-                        p class="text-muted-foreground" { "Your price is locked in for life - it will never increase." }
+                }
+            }
+        }
+    } else {
+        // Stripe Checkout has redirected the user here, but the webhook that
+        // flips subscription_status to Active has not landed yet. Two normal
+        // causes: (a) network delay between the Stripe redirect and Stripe
+        // firing the `checkout.session.completed` event (typically <5s); (b)
+        // bunyip-api is rejecting Stripe deliveries (signature mismatch,
+        // endpoint mis-config). The auto-refresh resolves (a) cleanly; (b)
+        // also surfaces visibly to the user instead of hiding behind a
+        // false "Welcome aboard" message. Operator follow-up: when this
+        // page keeps refreshing for >30s on staging, check
+        // `https://dashboard.stripe.com/test/webhooks` for 4xx/5xx deliveries.
+        html! {
+            div class="flex items-center justify-center min-h-[70vh]" {
+                div class="rounded-lg border bg-card text-card-foreground shadow-sm max-w-lg w-full border-border/50 overflow-hidden" {
+                    div class="h-1 bg-gradient-to-r from-primary via-indigo-500 to-teal-500" {}
+                    div class="p-6 pt-8 pb-8 text-center space-y-6" {
+                        div class="flex justify-center" {
+                            div class="rounded-full bg-gradient-to-br from-primary/20 to-primary/5 p-4" {
+                                (icon("loader", "h-12 w-12 text-primary animate-spin"))
+                            }
+                        }
+                        div class="space-y-2" {
+                            h1 class="text-3xl font-bold" { "Finalizing your subscription" }
+                            p class="text-muted-foreground text-lg" {
+                                "Stripe is confirming your payment. This page refreshes automatically."
+                            }
+                        }
+                        p class="text-xs text-muted-foreground" {
+                            "Still here after 30 seconds? Reload, or contact support if it persists."
+                        }
+                        // Refresh every 3s. As soon as the webhook lands and
+                        // subscription_status flips to Active, the next
+                        // refresh renders the success branch above.
+                        script { (PreEscaped("setTimeout(function(){location.reload()},3000);")) }
                     }
-                    div class="flex flex-col gap-3 pt-2" {
-                        a href="/applications" class=(button_class("default", "lg", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { (icon("app-window", "h-4 w-4")) "Browse Applications" (icon("arrow-right", "h-4 w-4")) }
-                        a href="/membership" class=(button_class("outline", "default", "")) { "View Membership Details" }
-                    }
-                    p class="text-xs text-muted-foreground" { "Redirecting to applications shortly…" }
-                    script { (PreEscaped("setTimeout(function(){location.href='/applications'},10000);")) }
                 }
             }
         }

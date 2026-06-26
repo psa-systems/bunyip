@@ -15,10 +15,10 @@ use maud::{html, Markup};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::handlers::guard;
+use crate::handlers::{auth_page, guard};
 use crate::views::common::auth_card;
 use crate::views::ui::{button_class, error_box};
-use crate::web::{html as render_html, redirect, redirect_cookies, AppState};
+use crate::web::{redirect, redirect_cookies, AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct ConsentQuery {
@@ -75,17 +75,9 @@ pub async fn consent_get(
     }
 
     let body = html! {
-        @if !q.client_id.is_empty() {
-            p class="text-sm text-muted-foreground mb-4" {
-                "An application is requesting access to your information. Approve below to continue."
-            }
-        }
-        ul class="mb-4 space-y-2" {
+        ul class="mb-4 space-y-2 list-disc list-inside text-sm" {
             @for s in &scopes {
-                li class="flex items-start gap-2 text-sm" {
-                    span class="font-medium" { "·" }
-                    span { (scope_label(s)) }
-                }
+                li { (scope_label(s)) }
             }
         }
         form method="post" action="/oauth2/consent" class="space-y-3" {
@@ -103,12 +95,20 @@ pub async fn consent_get(
         "shield",
         "bg-primary/10 text-primary",
         "Approve access",
-        "",
+        "An application is requesting access to your information. Approve below to continue.",
         body,
     );
 
-    let _ = c; // no auth cookies to set here; render fresh markup.
-    render_html(card)
+    // BUNYIP-223: render through `auth_page` so the public shell wraps the
+    // card with `<head>` + stylesheet link + brand chrome - matching every
+    // other auth-flow page (`/login`, `/register`, `/magic-link`, etc.).
+    // The prior `render_html(card)` shipped bare Markup with no CSS so the
+    // shield SVG rendered at the browser's default ~500px size and the
+    // Tailwind classes had no effect (giant icon, unstyled bullets, naked
+    // buttons in the corner). `auth_page` owns its own cookie / context
+    // round-trip so the `c` we got from `guard` is intentionally dropped.
+    let _ = c;
+    auth_page(&st, &headers, "Approve access · Bunyip", card).await
 }
 
 /// POST /oauth2/consent
