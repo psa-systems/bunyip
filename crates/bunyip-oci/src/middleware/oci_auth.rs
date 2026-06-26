@@ -23,6 +23,13 @@ pub struct OciBearerUser {
 }
 
 impl OciBearerUser {
+    /// Whether the bearer holds the admin role. Mirrors
+    /// [`bunyip_domain::models::User::is_admin`] so both admin gates share the
+    /// same role check.
+    pub fn is_admin(&self) -> bool {
+        self.role == "admin"
+    }
+
     pub fn assert_scope(&self, slug: &str) -> Result<(), OciError> {
         let expected = format!("repository:{slug}:pull");
         if self.claims.scope == expected {

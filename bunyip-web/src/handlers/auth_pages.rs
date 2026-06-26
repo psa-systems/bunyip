@@ -14,7 +14,7 @@ use crate::handlers::{auth_page, cookie_of, cookie_value, ctx, dashboard_input, 
 use crate::views::common::auth_card;
 use crate::views::layout::{document, public_shell};
 use crate::views::ui::{button_class, error_box};
-use crate::web::{html, redirect, redirect_cookies, AppState};
+use crate::web::{html, html_cookies, redirect, redirect_cookies, AppState};
 
 fn field(id: &str, label: &str, ty: &str, placeholder: &str, autocomplete: &str) -> Markup {
     html! {
@@ -924,15 +924,27 @@ pub async fn verify_email(
     headers: HeaderMap,
     Query(q): Query<TokenQuery>,
 ) -> Response {
-    let card = match q.token {
-        None => auth_card(
-            "alert-circle",
-            "bg-destructive/10 text-destructive",
-            "Invalid Link",
-            "This email verification link is invalid or has expired.",
-            html! {
-                a href="/settings" class=(button_class("default", "default", "w-full")) { "Go to Settings" }
-            },
+    // BUNYIP-226: when the verify succeeds AND the user is signed in (which
+    // is the common case - the verify link is clicked in the same session),
+    // rotate the access token before rendering. BUNYIP-221's
+    // `maybe_grant_initial_tier` may have just flipped `trial_ends_at` on
+    // the DB row, and the cookie's pre-grant JWT carries stale claims that
+    // make `has_member_access()` return false. A rotation here ensures the
+    // "Continue" link on the celebration card lands on /dashboard with a
+    // fresh JWT, so the app launcher renders unlocked on first paint.
+    let session_cookie = cookie_of(&headers);
+    let (card, rotated_cookies) = match q.token {
+        None => (
+            auth_card(
+                "alert-circle",
+                "bg-destructive/10 text-destructive",
+                "Invalid Link",
+                "This email verification link is invalid or has expired.",
+                html! {
+                    a href="/settings" class=(button_class("default", "default", "w-full")) { "Go to Settings" }
+                },
+            ),
+            Vec::new(),
         ),
         Some(token) => match auth_api::confirm_email_verification(&st.api, &token).await {
             Ok(tier) => {
@@ -942,7 +954,7 @@ pub async fn verify_email(
                     "standard" => "You get 1 month free - no credit card needed.",
                     _ => "Your email address has been verified successfully.",
                 };
-                auth_card(
+                let card = auth_card(
                     "check",
                     "bg-teal-500/10 text-teal-600 dark:text-teal-400",
                     "Email Verified!",
@@ -954,20 +966,49 @@ pub async fn verify_email(
                         // dashboard.
                         a href="/dashboard" class=(button_class("default", "default", "w-full")) { "Continue" }
                     },
-                )
+                );
+                // Only attempt the rotation when the request actually carries
+                // a session cookie - a fresh-browser click on the verify link
+                // signs the user in via the next visit instead, so there is
+                // nothing to rotate here. A refresh failure is non-fatal: the
+                // verify still succeeded; the user just keeps the stale JWT
+                // until the next refresh trigger.
+                let mut cookies = Vec::new();
+                if let Some(cookie) = session_cookie.as_deref() {
+                    if let Ok(rotated) = auth_api::refresh(&st.api, Some(cookie)).await {
+                        cookies = rotated;
+                    }
+                }
+                (card, cookies)
             }
-            Err(e) => auth_card(
-                "alert-circle",
-                "bg-destructive/10 text-destructive",
-                "Verification Failed",
-                &e.user_message(),
-                html! {
-                    a href="/settings" class=(button_class("default", "default", "w-full")) { "Go to Settings" }
-                },
+            Err(e) => (
+                auth_card(
+                    "alert-circle",
+                    "bg-destructive/10 text-destructive",
+                    "Verification Failed",
+                    &e.user_message(),
+                    html! {
+                        a href="/settings" class=(button_class("default", "default", "w-full")) { "Go to Settings" }
+                    },
+                ),
+                Vec::new(),
             ),
         },
     };
-    auth_page(&st, &headers, "Verify email · Bunyip", card).await
+    if rotated_cookies.is_empty() {
+        auth_page(&st, &headers, "Verify email · Bunyip", card).await
+    } else {
+        // The celebration card needs to ride out on a response that carries
+        // the rotated `Set-Cookie` headers; `auth_page`'s shell doesn't
+        // accept extra cookies, so render through the lower-level path
+        // directly here. Apps list is hydrated identically (signed-out call
+        // because the rotated cookie isn't visible yet on this response).
+        let apps = calls::applications(&st.api, session_cookie.as_deref())
+            .await
+            .unwrap_or_default();
+        let body = public_shell(&st.cfg, None, &apps, false, card);
+        html_cookies(document("Verify email · Bunyip", body), &rotated_cookies)
+    }
 }
 
 #[cfg(test)]

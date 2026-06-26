@@ -25,6 +25,17 @@ use crate::services::{
 /// The blob cache, parameterised over Bunyip's Postgres blob-cache store.
 type AppBlobCache = BlobCache<OciBlobCacheRepository>;
 
+/// Resolve a manifest's content digest, computing the sha256 fallback over the
+/// raw bytes when the upstream response omitted a digest. Single source for
+/// both the member pull path and the admin cache-refresh path.
+pub(crate) fn resolve_manifest_digest(digest: String, bytes: &[u8]) -> String {
+    if digest.is_empty() {
+        format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+    } else {
+        digest
+    }
+}
+
 const DEFAULT_ACCEPT: &str = "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json";
 
 /// GET /v2/  — version probe. Requires auth but no scope.
@@ -187,11 +198,7 @@ pub async fn get_manifest(
                 return Err(mapped);
             }
         };
-        let digest = if mr.digest.is_empty() {
-            format!("sha256:{}", hex::encode(Sha256::digest(&mr.bytes)))
-        } else {
-            mr.digest
-        };
+        let digest = resolve_manifest_digest(mr.digest, &mr.bytes);
         cache
             .insert(
                 app.id,
@@ -457,10 +464,9 @@ async fn assert_entitled(
     user: &OciBearerUser,
     app: &crate::models::Application,
 ) -> Result<(), OciError> {
-    let allowed =
-        EntitlementRepository::is_allowed(pool, user.claims.sub, user.role == "admin", app)
-            .await
-            .map_err(|_| OciError::Internal)?;
+    let allowed = EntitlementRepository::is_allowed(pool, user.claims.sub, user.is_admin(), app)
+        .await
+        .map_err(|_| OciError::Internal)?;
     if allowed {
         return Ok(());
     }

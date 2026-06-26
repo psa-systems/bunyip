@@ -251,6 +251,18 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Stripe service initialized");
 
+    // BUNYIP-203: warn loudly when Stripe is wired (real secret key) but no
+    // webhook signing secret is configured. The webhook handler fails closed
+    // in this state, so events will be rejected until a real
+    // STRIPE_WEBHOOK_SECRET is supplied.
+    if stripe_service.is_configured() && !stripe_service.webhook_secret_configured() {
+        tracing::warn!(
+            "Stripe secret key is configured but STRIPE_WEBHOOK_SECRET is unset or the \
+             placeholder; the Stripe webhook endpoint will REJECT all events until a real \
+             webhook signing secret is set. Forged-event protection is fail-closed (BUNYIP-203)."
+        );
+    }
+
     // Initialize Forgejo download services (optional — degrade gracefully when unconfigured).
     // The mechanism comes from the dunite-download engine; bunyip supplies the
     // Postgres-backed store (DownloadCacheRepository) and counter

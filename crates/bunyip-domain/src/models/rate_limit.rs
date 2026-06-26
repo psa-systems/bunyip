@@ -86,6 +86,23 @@ impl RateLimitConfig {
         window_seconds: 60,
     };
 
+    /// 2FA verify endpoint, FAILED code attempts per ACCOUNT: 5 per 15 minutes,
+    /// keyed by `2fa_verify_user:{user_id}` (BUNYIP-201). The endpoint's only
+    /// other throttle is per source IP, which does nothing against an attacker
+    /// who rotates cheap proxy IPs against one victim's challenge token. This
+    /// per-account cap is independent of source IP, so the aggregate guessing
+    /// budget against a single account is bounded no matter how many IPs are
+    /// used. Only failed code attempts increment it and a success resets it, so
+    /// a legitimate user is never throttled; once the cap is hit the account's
+    /// 2FA verification is locked for the rest of the window (even a correct
+    /// code is refused), forcing the attacker to wait or the user to retry
+    /// later / re-authenticate.
+    pub const TWO_FACTOR_VERIFY_FAILURES: Self = Self {
+        action: "two_factor_verify_failures",
+        max_requests: 5,
+        window_seconds: 900,
+    };
+
     /// OCI token endpoint, FAILED verifications per source IP: 20 per minute
     /// (BUNYIP-40 optional hardening). The per-email failure cap alone lets one
     /// host spray a few guesses each across many accounts (each email has its

@@ -162,10 +162,14 @@ impl TotpService {
     // --- Internal helpers ---
 
     fn build_totp(&self, secret: &[u8], account_name: &str) -> Result<TOTP, AppError> {
+        // skew = 0: accept only the current 30s step. A non-zero skew widens the
+        // acceptance window (each unit of skew adds the step before AND after, so
+        // skew=1 accepts 3 codes at once), which directly multiplies an
+        // attacker's per-guess success probability (BUNYIP-201).
         TOTP::new(
             Algorithm::SHA1,
             6,
-            1,
+            0,
             30,
             secret.to_vec(),
             Some(self.issuer.clone()),
@@ -177,10 +181,12 @@ impl TotpService {
     fn check_code(&self, secret: &[u8], code: &str) -> Result<bool, AppError> {
         // Allow spaced format (e.g. "123 456" → "123456")
         let code = code.replace(' ', "");
+        // skew = 0: only the current step is valid (see build_totp). This is the
+        // verification path that brute force targets (BUNYIP-201).
         let totp = TOTP::new(
             Algorithm::SHA1,
             6,
-            1,
+            0,
             30,
             secret.to_vec(),
             Some(self.issuer.clone()),
