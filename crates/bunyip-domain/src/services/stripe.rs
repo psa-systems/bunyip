@@ -1025,6 +1025,11 @@ impl StripeService {
 
         let params = stripe::CreateCheckoutSession {
             mode: Some(stripe::CheckoutSessionMode::Subscription),
+            // Card-only: pin the payment method whitelist so Checkout never
+            // offers "Pay with Link" (or any Dashboard-enabled default). This
+            // is the source of truth - a future Stripe account swap can't
+            // accidentally re-enable Link.
+            payment_method_types: Some(vec![stripe::CreateCheckoutSessionPaymentMethodTypes::Card]),
             customer: Some(customer_id),
             line_items: Some(vec![stripe::CreateCheckoutSessionLineItems {
                 price: Some(price_id.to_string()),
