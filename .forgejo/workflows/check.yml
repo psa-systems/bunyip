@@ -82,5 +82,12 @@ jobs:
 
       - name: Docker builder stage
         # Build the api image's builder stage only - catches Docker-build drift
-        # cheaply, mirroring `just check-docker`.
-        run: docker build --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .
+        # cheaply, mirroring `just check-docker`. The runner reuses its image
+        # store between jobs, and buildkit's exporter refuses to overwrite an
+        # existing tag ("image ... already exists", BUNYIP-231). Drop any
+        # builder image a prior run left behind so the rebuild can re-tag; the
+        # `|| true` keeps the first run (tag absent) green, matching the
+        # `docker image rm` cleanup in the justfile's `dev-clean-all` recipe.
+        run: |
+          docker image rm bunyip-api-builder:check 2>/dev/null || true
+          docker build --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .
