@@ -6,8 +6,9 @@
 
 use crate::errors::AppError;
 use crate::models::stripe::{
-    decrypt_secret, StripeInvoiceResponse, StripePriceResponse, StripeProductResponse,
-    StripeSubscriptionItemResponse, StripeSubscriptionResponse, StripeWebhookEndpointResponse,
+    decrypt_secret, StripeCheckoutPrice, StripeInvoiceResponse, StripePriceResponse,
+    StripeProductResponse, StripeSubscriptionItemResponse, StripeSubscriptionResponse,
+    StripeWebhookEndpointResponse,
 };
 use crate::services::encryption::EncryptionKeySet;
 use hmac::{Hmac, Mac};
@@ -640,6 +641,54 @@ impl StripeService {
                 cancel_at_period_end: sub.cancel_at_period_end,
                 items,
             }
+        }))
+    }
+
+    /// Resolve the price actually purchased on a completed Checkout Session
+    /// (BUNYIP-215).
+    ///
+    /// Stripe does NOT embed `line_items` in the `checkout.session.completed`
+    /// webhook payload, so the price id and amount cannot be read off the event
+    /// (doing so silently yielded the placeholder `"price_default"` and a
+    /// hardcoded amount). Retrieve the session with its line items and their
+    /// prices expanded, and return the first line item's price id plus its
+    /// amount (`unit_amount`, falling back to the line item's `amount_total`).
+    /// Returns `None` only when the session has no resolvable line-item price,
+    /// which should not happen for a genuinely completed checkout.
+    pub async fn get_checkout_session_price(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<StripeCheckoutPrice>, AppError> {
+        let (_config, client) = self.snapshot();
+
+        let sid: stripe::CheckoutSessionId = session_id
+            .parse()
+            .map_err(|_| AppError::validation("session_id", "Invalid checkout session ID"))?;
+
+        let session = stripe::CheckoutSession::retrieve(
+            &client,
+            &sid,
+            &["line_items", "line_items.data.price"],
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, session_id = %session_id, "Failed to retrieve checkout session");
+            AppError::internal("Failed to retrieve checkout session")
+        })?;
+
+        let Some(item) = session
+            .line_items
+            .and_then(|items| items.data.into_iter().next())
+        else {
+            return Ok(None);
+        };
+        let Some(price) = item.price else {
+            return Ok(None);
+        };
+
+        Ok(Some(StripeCheckoutPrice {
+            price_id: price.id.to_string(),
+            amount: price.unit_amount.unwrap_or(item.amount_total),
         }))
     }
 
