@@ -19,7 +19,8 @@ use crate::repositories::{
 };
 use crate::responses::{get_request_id, paginated, success, success_no_data};
 use crate::services::{
-    AuthService, EmailService, PasswordService, StripeService, TotpService, WebhookService,
+    AuthService, EmailService, PasswordService, StripeService, TierGrantTrigger, TotpService,
+    WebhookService,
 };
 use crate::validation::validate_email;
 use bunyip_domain::services::{BunyipEvent, EventBus};
@@ -178,9 +179,12 @@ pub async fn update_current_user_profile(
     req: HttpRequest,
     user: AuthenticatedUser,
     pool: web::Data<PgPool>,
+    auth_service: web::Data<Arc<AuthService>>,
+    stripe: web::Data<Arc<StripeService>>,
     body: web::Json<UpdateProfileRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
+    let ip_address = extract_client_ip(&req);
 
     let first_name = normalize_profile_field("first_name", &body.first_name)?;
     let last_name = normalize_profile_field("last_name", &body.last_name)?;
@@ -203,7 +207,77 @@ pub async fn update_current_user_profile(
     )
     .await?;
 
+    // BUNYIP-221: if the name save just closed the dual-condition gate (email
+    // already verified, both names now present), grant the initial tier. The
+    // helper is idempotent and a no-op when the gate was already closed by a
+    // prior verify or by an admin grant.
+    let granted = auth_service
+        .maybe_grant_initial_tier(user.0.sub, ip_address, TierGrantTrigger::ProfileCompleted)
+        .await
+        .unwrap_or_else(|e| {
+            // A grant failure must NOT fail the profile update; the user has
+            // successfully saved their name. Log and move on; the next call
+            // (e.g. a later verify, an admin retry) can re-try the grant.
+            tracing::error!(
+                error = %e,
+                user_id = %user.0.sub,
+                "Failed to grant initial tier after profile completion"
+            );
+            None
+        });
+
+    // Mirror the lifetime $0-subscription side-effect that `confirm_email_verification`
+    // does so the side that closes the gate produces the same end state.
+    if granted == Some(SubscriptionTier::Lifetime) {
+        maybe_create_lifetime_subscription(&pool, &stripe, user.0.sub).await;
+    }
+
     Ok(success(UserResponse::from(updated), request_id))
+}
+
+/// BUNYIP-221: create the $0 Stripe subscription for a freshly-granted
+/// Lifetime member so they keep receiving invoices. Mirror of the inline
+/// block in `confirm_email_verification`; lifted out so both grant call
+/// sites stay in sync. Best-effort: a failure logs but does not propagate
+/// (the user is already a lifetime member at the DB level).
+async fn maybe_create_lifetime_subscription(pool: &PgPool, stripe: &StripeService, user_id: Uuid) {
+    let Some(free_price_id) = stripe.free_price_id() else {
+        return;
+    };
+    let user = match UserRepository::find_by_id(pool, user_id).await {
+        Ok(Some(u)) => u,
+        Ok(None) => {
+            tracing::warn!(user_id = %user_id, "User vanished before lifetime sub creation");
+            return;
+        }
+        Err(e) => {
+            tracing::error!(error = %e, user_id = %user_id, "Failed to re-read user for lifetime sub");
+            return;
+        }
+    };
+    let customer_id = match user.stripe_customer_id {
+        Some(id) => id,
+        None => match stripe.create_customer(&user.email, user_id).await {
+            Ok(id) => {
+                if let Err(e) = UserRepository::update_stripe_customer_id(pool, user_id, &id).await
+                {
+                    tracing::error!(error = %e, user_id = %user_id, "Failed to persist stripe customer id");
+                    return;
+                }
+                id
+            }
+            Err(e) => {
+                tracing::error!(error = %e, user_id = %user_id, "Failed to create Stripe customer for lifetime member");
+                return;
+            }
+        },
+    };
+    if let Err(e) = stripe
+        .create_free_subscription(&customer_id, &free_price_id)
+        .await
+    {
+        tracing::error!(error = %e, user_id = %user_id, "Failed to create $0 subscription for lifetime member");
+    }
 }
 
 /// PUT /v1/users/me/password
@@ -513,35 +587,31 @@ pub async fn confirm_email_verification(
         .confirm_email_verification(body.token.clone(), ip_address)
         .await?;
 
-    tracing::info!(email = %email, subscription_tier = %tier.as_str(), "Email verified successfully");
-
-    // Create $0 Stripe subscription for lifetime members so they receive invoices
-    if tier == SubscriptionTier::Lifetime {
-        if let Some(free_price_id) = stripe.free_price_id() {
-            let user = UserRepository::find_by_id(&pool, user_id)
-                .await?
-                .ok_or(AppError::not_found("User"))?;
-            let customer_id = match user.stripe_customer_id {
-                Some(id) => id,
-                None => {
-                    let id = stripe.create_customer(&email, user_id).await?;
-                    UserRepository::update_stripe_customer_id(pool.get_ref(), user_id, &id).await?;
-                    id
-                }
-            };
-            if let Err(e) = stripe
-                .create_free_subscription(&customer_id, &free_price_id)
-                .await
-            {
-                tracing::error!(error = %e, user_id = %user_id, "Failed to create $0 subscription for lifetime member");
-            }
+    match &tier {
+        Some(t) => {
+            tracing::info!(email = %email, subscription_tier = %t.as_str(), "Email verified, initial tier granted")
         }
+        None => {
+            tracing::info!(email = %email, "Email verified; tier grant pending name save (BUNYIP-221)")
+        }
+    }
+
+    // Create $0 Stripe subscription for lifetime members so they receive
+    // invoices. Only fires when the verify itself was the side that closed
+    // the BUNYIP-221 dual gate AND the grant landed on Lifetime; the same
+    // side-effect fires from `update_current_user_profile` when the name
+    // save is the closer instead.
+    if tier == Some(SubscriptionTier::Lifetime) {
+        maybe_create_lifetime_subscription(pool.get_ref(), stripe.get_ref(), user_id).await;
     }
 
     Ok(success(
         serde_json::json!({
             "message": "Email verified successfully.",
-            "subscription_tier": tier.as_str(),
+            // Empty string when the gate is still open on the name side; the
+            // bunyip-web verify-email page falls through to a neutral message
+            // in that case (handlers/auth_pages.rs::verify_email).
+            "subscription_tier": tier.as_ref().map(|t| t.as_str()).unwrap_or(""),
         }),
         request_id,
     ))
