@@ -22,7 +22,7 @@ in `bunyip-api/src/handlers/webhook.rs` and mounted under the `/v1` scope
 (`bunyip-api/src/routes/webhook.rs:9`, `bunyip-api/src/routes/mod.rs:24`). The
 api listens on `APP_PORT=4401`. Handled event types:
 
-- `checkout.session.completed` activates membership and locks the price.
+- `checkout.session.completed` activates membership, locks the price, and (BUNYIP-209) burns the one-time signup trial by setting `users.has_used_trial = TRUE` when the session was issued with a trial.
 - `customer.subscription.created` sets status Active, resolves tier from the product id, grants per-product entitlements (BUNYIP-39).
 - `customer.subscription.updated` maps Stripe status to membership status and re-syncs / revokes entitlements.
 - `customer.subscription.deleted` cancels membership, resets tier, revokes Stripe-sourced entitlements.
@@ -102,6 +102,25 @@ Create the tagged product + price either way:
 
 Verify the api can see it: a logged-in Subscribe click should now redirect to
 `checkout.stripe.com` instead of bouncing back.
+
+## Step 3b (operator action) - mirror the signup trial on the product (BUNYIP-209)
+
+New users get a one-time 30-day free trial on their first checkout. The code
+path is the source of truth: `create_checkout_session`
+(`crates/bunyip-domain/src/services/stripe.rs`) sets
+`subscription_data.trial_period_days` and
+`payment_method_collection = if_required` whenever the user's
+`users.has_used_trial` is `FALSE`, and the `checkout.session.completed` webhook
+flips that flag so a later subscribe never re-grants the trial. The trial length
+is `BUNYIP_BILLING_TRIAL_PERIOD_DAYS` (default `30`).
+
+As defense in depth, configure the same 30-day trial on the membership
+**product** in the Stripe Dashboard (Product -> the recurring price -> Free
+trial -> 30 days). This is belt-and-suspenders only: if anyone ever creates a
+subscription bypassing our checkout helper, the dashboard default still applies a
+matching trial rather than billing immediately. Keep the two values in sync - if
+ops changes `BUNYIP_BILLING_TRIAL_PERIOD_DAYS`, update the dashboard trial to
+match.
 
 ## Step 4 (optional) - map product ids to tiers
 

@@ -945,6 +945,32 @@ async fn handle_refresh_grant(
         ));
     }
 
+    // BUNYIP-200: re-validate the tenant assignment at every rotation,
+    // mirroring the has_entitlement re-check above. The refresh-token family
+    // carries the `selected_tenant_id` the user picked at the original
+    // /authorize (BUNYIP-63), but an admin may have since unassigned that
+    // tenant. For a tenant-scoped client (`tenant_claim_name IS NOT NULL`),
+    // the carried tenant MUST still be among the user's current assignments;
+    // otherwise the rotation would keep minting an at+jwt with a stale tenant
+    // claim. Reject with invalid_grant so the client is forced back through
+    // /authorize, where the picker re-runs against live assignments.
+    if rotated.client.tenant_claim_name.is_some() {
+        if let Some(selected) = rotated.selected_tenant_id {
+            let assignments =
+                crate::repositories::OAuthClientUserTenantRepository::assignments_for(
+                    pool,
+                    rotated.client.client_id,
+                    user.id,
+                )
+                .await?;
+            if !assignments.iter().any(|a| a.tenant_id == selected) {
+                return Err(AppError::OidcInvalidGrant(
+                    "selected tenant is no longer assigned to this user".into(),
+                ));
+            }
+        }
+    }
+
     let (access_token, at_exp) = provider.mint_access_token(
         &user,
         &rotated.client,

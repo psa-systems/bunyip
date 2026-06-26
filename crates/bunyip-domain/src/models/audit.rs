@@ -42,6 +42,13 @@ pub enum AuditAction {
     TwoFactorRecoveryCodesRegenerated,
     EmailVerificationRequested,
     EmailVerified,
+    /// BUNYIP-221: the initial subscription tier was assigned (one of Lifetime
+    /// / EarlyAdopter / Standard, with `trial_ends_at` set per the tier). Fires
+    /// once per user the moment BOTH email is verified AND first / last name
+    /// are present, regardless of which side crosses the threshold last.
+    /// Metadata: `{ "trigger": "email_verified" | "profile_completed",
+    /// "subscription_tier": "<tier>" }`.
+    InitialTierGranted,
     FeedbackSubmitted,
     FeedbackResponded,
     FeedbackDeleted,
@@ -156,6 +163,7 @@ impl AuditAction {
             }
             AuditAction::EmailVerificationRequested => "email_verification_requested",
             AuditAction::EmailVerified => "email_verified",
+            AuditAction::InitialTierGranted => "initial_tier_granted",
             AuditAction::FeedbackSubmitted => "feedback_submitted",
             AuditAction::FeedbackResponded => "feedback_responded",
             AuditAction::FeedbackDeleted => "feedback_deleted",

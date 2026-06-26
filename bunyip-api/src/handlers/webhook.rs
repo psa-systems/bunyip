@@ -71,6 +71,7 @@ async fn revoke_stripe_entitlements(pool: &PgPool, user_id: uuid::Uuid) -> Resul
 }
 
 /// Outcome of trying to claim a Stripe webhook event for processing (BUNYIP-210).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EventClaim {
     /// This delivery won the claim and must run the handler.
     Owned,
@@ -79,6 +80,31 @@ enum EventClaim {
     /// Another delivery currently holds a fresh `processing` claim; let Stripe
     /// retry later rather than run the handler a second time concurrently.
     InFlight,
+}
+
+/// Pure decision for the idempotency fence (BUNYIP-210): map the claim-insert
+/// outcome and the current persisted status onto an [`EventClaim`].
+///
+/// This is the regression-critical invariant the original fence got wrong:
+/// ONLY a row that is already `done` may short-circuit a redelivery. Anything
+/// else - a winning claim, a stale/in-flight `processing` row, or a row that a
+/// failed handler released between the upsert and the status read - must NOT be
+/// treated as already processed, so Stripe's retry re-runs the handler instead
+/// of being swallowed with a bare `200`. Factored out of `claim_webhook_event`
+/// so it can be unit-tested without a live database (CI runs `--lib` tests with
+/// no Postgres).
+fn classify_claim(won_claim: bool, existing_status: Option<&str>) -> EventClaim {
+    if won_claim {
+        return EventClaim::Owned;
+    }
+    match existing_status {
+        // Finished by a prior delivery: safe to skip.
+        Some("done") => EventClaim::AlreadyDone,
+        // Fresh `processing` claim held by another delivery, a row released by a
+        // concurrent failure, or any non-terminal status: ask Stripe to retry
+        // rather than declare the event processed. Never swallow the retry.
+        _ => EventClaim::InFlight,
+    }
 }
 
 /// Atomically claim a Stripe webhook event for processing (BUNYIP-210).
@@ -129,13 +155,10 @@ async fn claim_webhook_event(
             .await
             .map_err(|e| AppError::internal(format!("DB error reading webhook event: {e}")))?;
 
-    match existing {
-        Some((status,)) if status == "done" => Ok(EventClaim::AlreadyDone),
-        // Fresh `processing` claim held by another delivery, or the row was
-        // released by a concurrent failure between the upsert and this read:
-        // either way ask Stripe to retry rather than double-run the handler.
-        _ => Ok(EventClaim::InFlight),
-    }
+    Ok(classify_claim(
+        false,
+        existing.as_ref().map(|(status,)| status.as_str()),
+    ))
 }
 
 /// Promote a claimed webhook event to `done` after its handler succeeded
@@ -174,6 +197,20 @@ pub async fn stripe_webhook(
     email: web::Data<Arc<EmailService>>,
     tier_config: web::Data<Arc<std::sync::RwLock<TierConfig>>>,
 ) -> Result<HttpResponse, AppError> {
+    // Fail closed when no real webhook secret is configured (BUNYIP-203).
+    // `from_env` falls back to the public `whsec_placeholder` literal when
+    // `STRIPE_WEBHOOK_SECRET` is unset; verifying a signature against that
+    // known constant would accept forged events (membership activation,
+    // entitlement grants, tier upgrades). Reject before verifying so an
+    // instance brought up without the secret never trusts an event.
+    if !stripe.webhook_secret_configured() {
+        tracing::error!(
+            "Rejecting Stripe webhook: no webhook signing secret configured \
+             (STRIPE_WEBHOOK_SECRET unset or placeholder). Set a real secret to enable webhooks."
+        );
+        return Err(AppError::internal("Stripe webhook secret not configured"));
+    }
+
     // Get signature header
     let signature = req
         .headers()
@@ -334,6 +371,15 @@ async fn handle_checkout_completed(
             session["amount_total"].as_i64().unwrap_or(0) as i32
         }
     };
+
+    // BUNYIP-209: if this session carried the signup trial (tagged with
+    // `trial=true` metadata at creation time), burn the one-time trial now that
+    // the checkout has finalized. Doing it here (not at session creation) means
+    // an abandoned checkout never consumes the trial. Idempotent on replay.
+    if session["metadata"]["trial"].as_str() == Some("true") {
+        UserRepository::mark_trial_used(pool, user_id).await?;
+        tracing::info!(user_id = %user_id, "Signup trial consumed via checkout");
+    }
 
     tracing::info!(user_id = %user_id, "Checkout completed, membership activated");
 
@@ -743,4 +789,64 @@ fn resolve_tier_for_product(product_id: &str, tc: &TierConfig) -> Option<Subscri
         return Some(SubscriptionTier::Standard);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression tests for the BUNYIP-210 idempotency-fence ordering bug.
+    //
+    // The original fence recorded `event.id` as processed BEFORE running the
+    // handler, so a handler error on first delivery left a row that made
+    // Stripe's retry short-circuit to `200` without ever re-running the handler.
+    // The side effect (membership activation / entitlement grant) was lost
+    // permanently. The fix claims the event as `processing`, only promotes it to
+    // `done` after the handler succeeds, and releases the claim on failure.
+    //
+    // CI has no Postgres (tests run `--lib` with SQLX_OFFLINE), so the DB SQL is
+    // not exercised here. What IS exercised is the pure decision that governs
+    // whether a redelivery is allowed to re-run: only a `done` row may be
+    // skipped; every other state must re-process. That is exactly the invariant
+    // the old fence violated.
+
+    /// Core regression: a row that is NOT `done` must never be treated as
+    /// already processed. This is the state a failed-handler delivery leaves
+    /// behind (claim released back to absent, or a stale `processing` row), and
+    /// it must route to a reprocess (`Owned`) or a retry (`InFlight`), never to
+    /// `AlreadyDone` which would swallow the retry.
+    #[test]
+    fn non_done_states_never_swallow_the_retry() {
+        // No row at all: a released claim from a failed handler. Per the upsert
+        // contract the next delivery wins the claim, but even if classification
+        // is reached it must not be AlreadyDone.
+        assert_ne!(classify_claim(false, None), EventClaim::AlreadyDone);
+        // A lingering in-flight / stale claim from a crashed or failed delivery.
+        assert_eq!(
+            classify_claim(false, Some("processing")),
+            EventClaim::InFlight
+        );
+        // Any unexpected non-terminal status is still re-processable, never
+        // silently skipped.
+        assert_eq!(classify_claim(false, Some("queued")), EventClaim::InFlight);
+    }
+
+    /// Only a fully-finished (`done`) prior delivery is allowed to short-circuit
+    /// a redelivery. This is the legitimate idempotency case.
+    #[test]
+    fn done_row_short_circuits_redelivery() {
+        assert_eq!(classify_claim(false, Some("done")), EventClaim::AlreadyDone);
+    }
+
+    /// Winning the insert/upsert claim always means this delivery owns the work,
+    /// regardless of any prior status the read would have seen.
+    #[test]
+    fn winning_the_claim_owns_the_work() {
+        assert_eq!(classify_claim(true, None), EventClaim::Owned);
+        assert_eq!(classify_claim(true, Some("processing")), EventClaim::Owned);
+        // Defensive: even a stale `done` cannot override a won claim (the upsert
+        // WHERE never reclaims a `done` row, so this branch is unreachable in
+        // practice, but the decision must still favour Owned).
+        assert_eq!(classify_claim(true, Some("done")), EventClaim::Owned);
+    }
 }
