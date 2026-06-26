@@ -94,14 +94,24 @@ impl OAuthClientUserTenantRepository {
         Ok(row)
     }
 
-    /// Delete a single assignment. Idempotent: returns Ok even when
+    /// Delete a single assignment. Idempotent: returns `Ok(None)` when
     /// the row is already gone, so a retry after a network hiccup
-    /// does not 500.
-    pub async fn unassign(pool: &PgPool, assignment_id: Uuid) -> Result<(), AppError> {
-        sqlx::query("DELETE FROM oauth_client_user_tenants WHERE id = $1")
-            .bind(assignment_id)
-            .execute(pool)
-            .await?;
-        Ok(())
+    /// does not 500. On a real delete it returns the removed row so the
+    /// caller can act on the freed `(user, tenant)` pair (BUNYIP-200:
+    /// revoke that user's refresh-token families for the client).
+    pub async fn unassign(
+        pool: &PgPool,
+        assignment_id: Uuid,
+    ) -> Result<Option<OAuthClientUserTenant>, AppError> {
+        let row = sqlx::query_as::<_, OAuthClientUserTenant>(
+            r#"
+            DELETE FROM oauth_client_user_tenants WHERE id = $1
+            RETURNING id, oauth_client_id, user_id, tenant_id, role, created_at, created_by
+            "#,
+        )
+        .bind(assignment_id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
     }
 }
