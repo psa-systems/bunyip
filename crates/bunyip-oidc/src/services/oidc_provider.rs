@@ -364,11 +364,10 @@ impl OidcProvider {
                 id, client_id, client_secret_hash, client_type, name,
                 redirect_uris, post_logout_redirect_uris,
                 backchannel_logout_uri, lifecycle_event_uri,
-                allowed_scopes, allowed_grant_types,
-                token_endpoint_auth_method, require_pkce,
+                allowed_scopes,
                 access_token_ttl_seconds, refresh_token_ttl_seconds,
                 refresh_idle_ttl_seconds, audience,
-                dpop_bound, created_at, disabled_at,
+                created_at, disabled_at,
                 tenant_claim_name
             FROM oauth_clients
             WHERE client_id = $1 AND disabled_at IS NULL
@@ -453,34 +452,40 @@ impl OidcProvider {
     ) -> Result<AuthCodeRow, AppError> {
         let code_hash = sha256_bytes(raw_code.as_bytes());
 
-        // Load the row — single round-trip, we'll mark consumed after verification.
-        // Runtime query so the BUNYIP-62 `selected_tenant_id` column does not
-        // force a `.sqlx/` cache regen here.
+        // Atomically claim the code in a single statement: the
+        // `consumed_at IS NULL AND revoked_at IS NULL` predicate is the
+        // redemption guard and `consumed_at = NOW()` is the redemption, so the
+        // check and the mark happen in one round-trip with no window between
+        // them. Two concurrent /token requests race on this UPDATE; exactly one
+        // matches the predicate and gets the row back, the loser matches zero
+        // rows and is rejected. This closes the TOCTOU double-spend that a
+        // SELECT-then-UPDATE leaves open (RFC 6749 §4.1.2). Runtime query so the
+        // BUNYIP-62 `selected_tenant_id` column stays off the `.sqlx/` cache
+        // regen path.
         let row = sqlx::query_as::<_, AuthCodeRow>(
             r#"
-            SELECT
+            UPDATE oauth_authorization_codes
+               SET consumed_at = NOW()
+             WHERE code_hash = $1
+               AND consumed_at IS NULL
+               AND revoked_at IS NULL
+            RETURNING
                 code_hash, client_id, user_id, op_session_id, redirect_uri,
                 scope, code_challenge, nonce, auth_time, acr, amr,
                 issued_at, expires_at, consumed_at, revoked_at,
                 selected_tenant_id
-            FROM oauth_authorization_codes
-            WHERE code_hash = $1
             "#,
         )
-        .bind(code_hash.clone())
+        .bind(code_hash)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| AppError::internal(format!("DB error loading auth code: {e}")))?
+        .map_err(|e| AppError::internal(format!("DB error consuming auth code: {e}")))?
         .ok_or(AppError::OidcInvalidGrant(
-            "unknown authorization code".into(),
+            "authorization code already used or unknown".into(),
         ))?;
 
-        // Already consumed — revoke the family if tokens were issued.
-        if row.consumed_at.is_some() || row.revoked_at.is_some() {
-            return Err(AppError::OidcInvalidGrant(
-                "authorization code already used".into(),
-            ));
-        }
+        // The code is now consumed regardless of the checks below; a code that
+        // fails any binding check is single-use spent, never replayable.
 
         // Expiry
         if row.expires_at < Utc::now() {
@@ -510,16 +515,6 @@ impl OidcProvider {
                 "PKCE verification failed".into(),
             ));
         }
-
-        // Mark consumed. Runtime query to keep the BUNYIP-62 column
-        // addition off the `.sqlx/` regen path.
-        sqlx::query(
-            "UPDATE oauth_authorization_codes SET consumed_at = NOW() WHERE code_hash = $1",
-        )
-        .bind(code_hash)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| AppError::internal(format!("Failed to mark code consumed: {e}")))?;
 
         Ok(row)
     }
@@ -807,31 +802,16 @@ impl OidcProvider {
         .await
         .map_err(|e| AppError::internal(format!("Failed to mark refresh token used: {e}")))?;
 
-        // Load client for TTL values. Runtime query so the BUNYIP-61
-        // `tenant_claim_name` column addition does not force a
-        // `.sqlx/` cache regen here.
-        let client = sqlx::query_as::<_, OAuthClient>(
-            r#"
-            SELECT id, client_id, client_secret_hash, client_type, name,
-                   redirect_uris, post_logout_redirect_uris,
-                   backchannel_logout_uri, lifecycle_event_uri,
-                   allowed_scopes, allowed_grant_types,
-                   token_endpoint_auth_method, require_pkce,
-                   access_token_ttl_seconds, refresh_token_ttl_seconds,
-                   refresh_idle_ttl_seconds, audience,
-                   dpop_bound, created_at, disabled_at,
-                   tenant_claim_name
-            FROM oauth_clients
-            WHERE client_id = $1 AND disabled_at IS NULL
-            "#,
-        )
-        .bind(old.client_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| AppError::internal(format!("Failed to load client during rotation: {e}")))?
-        .ok_or(AppError::OidcInvalidGrant(
-            "client not found or disabled".into(),
-        ))?;
+        // Load client for TTL values. Reuse `load_client()` instead of
+        // duplicating the column list: the client config is read-only here and
+        // not part of the rotation's atomicity (it reads outside the tx on the
+        // pool), so a single source of truth for the SELECT is preferable.
+        let client = self
+            .load_client(old.client_id)
+            .await?
+            .ok_or(AppError::OidcInvalidGrant(
+                "client not found or disabled".into(),
+            ))?;
 
         // Issue new refresh token
         let raw_new = generate_opaque_token(32);
@@ -840,7 +820,12 @@ impl OidcProvider {
         let idle_ttl = Duration::seconds(client.refresh_idle_ttl_seconds as i64);
         let abs_ttl = Duration::seconds(client.refresh_token_ttl_seconds as i64);
         let new_idle_exp = now + idle_ttl;
-        let new_abs_exp = now + abs_ttl;
+        // Cap the absolute expiry at the family's original deadline: rotation
+        // refreshes the idle window but must never push the absolute TTL out, or
+        // a token refreshed before each idle expiry would live forever. Take the
+        // earlier of the inherited deadline and a fresh `now + abs_ttl` (the
+        // latter only matters if the client's configured TTL shrank).
+        let new_abs_exp = old.absolute_expires_at.min(now + abs_ttl);
 
         // Runtime query: the BUNYIP-63 `selected_tenant_id` column is
         // mirrored from `old` so every row in the family carries the
@@ -1219,14 +1204,10 @@ pub struct OAuthClient {
     pub backchannel_logout_uri: Option<String>,
     pub lifecycle_event_uri: Option<String>,
     pub allowed_scopes: Vec<String>,
-    pub allowed_grant_types: Vec<String>,
-    pub token_endpoint_auth_method: String,
-    pub require_pkce: bool,
     pub access_token_ttl_seconds: i32,
     pub refresh_token_ttl_seconds: i32,
     pub refresh_idle_ttl_seconds: i32,
     pub audience: String,
-    pub dpop_bound: bool,
     pub created_at: DateTime<Utc>,
     pub disabled_at: Option<DateTime<Utc>>,
     /// BUNYIP-61: when non-null, /authorize gates on
@@ -1458,14 +1439,10 @@ mod tests {
             backchannel_logout_uri: None,
             lifecycle_event_uri: None,
             allowed_scopes: vec!["openid".to_string()],
-            allowed_grant_types: vec!["authorization_code".to_string()],
-            token_endpoint_auth_method: "none".to_string(),
-            require_pkce: true,
             access_token_ttl_seconds: 600,
             refresh_token_ttl_seconds: 2_592_000,
             refresh_idle_ttl_seconds: 1_209_600,
             audience: "https://api.example.com".to_string(),
-            dpop_bound: false,
             created_at: Utc::now(),
             disabled_at: None,
             tenant_claim_name: None,
