@@ -36,4 +36,10 @@ EXPOSE 4400
 # Stay in /app/bunyip-web so the server's CWD-relative ServeDir("assets") resolves
 # to the crate's assets/ (where build:css writes styles.css). cargo finds the
 # workspace by walking up to /app.
-CMD ["sh", "-c", "cd /app/bunyip-web && bun run build:css && (bun run watch:css &) && cargo watch -w . -x 'run -p bunyip-web'"]
+#
+# `bun install` runs here, NOT only at image-build time: the compose `.:/app`
+# bind mount plus the `web-node-modules` named volume mounted at
+# /app/bunyip-web/node_modules both shadow the image's build-time install, so
+# node_modules must be (re)populated inside the running container before
+# build:css can find the tailwind CLI.
+CMD ["sh", "-c", "cd /app/bunyip-web && bun install && bun run build:css && (bun run watch:css &) && cargo watch -w . -x 'run -p bunyip-web'"]

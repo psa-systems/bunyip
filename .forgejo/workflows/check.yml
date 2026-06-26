@@ -21,6 +21,8 @@ on:
       - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".cargo/config.toml"
       - ".sqlx/**"
       - "scripts/**"
       - ".forgejo/workflows/check.yml"
@@ -77,3 +79,8 @@ jobs:
 
       - name: Unit tests
         run: cargo test --workspace --lib
+
+      - name: Docker builder stage
+        # Build the api image's builder stage only - catches Docker-build drift
+        # cheaply, mirroring `just check-docker`.
+        run: docker build --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .

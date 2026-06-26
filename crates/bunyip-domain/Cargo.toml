@@ -58,7 +58,7 @@ lazy_static = "1.4"
 # HTTP client / IO.
 # (The Forgejo client, metadata/asset caches, and download limiter now come
 # from dunite-download; reqwest/url stay for the webhook + Stripe services.)
-reqwest = { version = "0.11", features = ["json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 url = "2"
 urlencoding = "2"
 tokio = { version = "1", features = ["full", "signal"] }

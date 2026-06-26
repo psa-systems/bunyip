@@ -21,6 +21,7 @@ on:
       - "bunyip-web/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "oci-build/**"
       - ".forgejo/workflows/build-web.yml"
 
 jobs:
@@ -63,7 +64,7 @@ jobs:
         id: get-tags
         shell: nu {0}
         run: |
-          let tags = (^nu bunyip-web/oci-build/get-tags.nu --joined)
+          let tags = (^nu oci-build/get-tags.nu --joined)
           $"tags=($tags)\n" | save --append $env.GITHUB_OUTPUT
 
       - name: Log in to container registry
@@ -82,11 +83,20 @@ jobs:
           let cache_ref = $"($registry)/($image):buildcache"
           let cache_from = $"type=registry,ref=($cache_ref)"
           let cache_to = $"type=registry,ref=($cache_ref),mode=max,ignore-error=true"
+          let git_commit = (^git rev-parse --short HEAD | str trim)
+          let git_tag = (^git describe --tags --always --dirty | str trim)
+          let build_date = (date now | format date "%Y-%m-%dT%H:%M:%SZ")
           # nproc/2 cap: never claim more than half the host (governance CI.md).
           let jobs = ((sys cpu | length) / 2 | into int)
-          print $"Building and pushing ($image) with tags: ($tags_str)"
+          let build_args = [
+              --build-arg $"GIT_COMMIT=($git_commit)"
+              --build-arg $"GIT_TAG=($git_tag)"
+              --build-arg $"BUILD_DATE=($build_date)"
+              --build-arg $"CARGO_BUILD_JOBS=($jobs)"
+          ]
+          print $"Building and pushing ($image) with tags: ($tags_str), commit=($git_commit), tag=($git_tag), date=($build_date)"
           # Context is the repo root; the Dockerfile builds only the bunyip-web binary.
-          ^docker buildx build --push --cache-from $cache_from --cache-to $cache_to --build-arg $"CARGO_BUILD_JOBS=($jobs)" ...$tag_args -f bunyip-web/oci-build/Dockerfile .
+          ^docker buildx build --push --cache-from $cache_from --cache-to $cache_to ...$build_args ...$tag_args -f bunyip-web/oci-build/Dockerfile .
 
       - name: Print image URLs
         shell: nu {0}

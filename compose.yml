@@ -98,7 +98,6 @@ services:
     container_name: bunyip-api
     restart: unless-stopped
     environment:
-      SQLX_OFFLINE: "true"
       # Secrets are file-based: each {NAME}_FILE points at a compose secret
       # mounted under /run/secrets. The api's config layer reads the file and
       # treats an empty file as "not configured" (BUNYIP-38).
@@ -131,7 +130,7 @@ services:
       # ── Update checker (operator-facing). Token via update_check_token secret. ──
       BUNYIP_UPDATE_CHECK_URL: ${BUNYIP_UPDATE_CHECK_URL:-}
       OIDC_ISSUER: ${OIDC_ISSUER:-}
-      OIDC_JWT_PRIVATE_KEY_PATH: /run/secrets/oidc/dev-2026.pem
+      OIDC_JWT_PRIVATE_KEY_PATH: ${OIDC_JWT_PRIVATE_KEY_PATH:-/run/secrets/oidc/dev-2026.pem}
       OIDC_JWT_ACTIVE_KID: ${OIDC_JWT_ACTIVE_KID:-dev-2026}
       OIDC_JWT_PUBLIC_KEYS_DIR: /run/secrets/oidc
       # ── Distribution proxy (member downloads + OCI registry, BUNYIP-28) ──

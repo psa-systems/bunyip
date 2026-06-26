@@ -22,6 +22,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - ".sqlx/**"
+      - "oci-build/**"
       - ".forgejo/workflows/build-api.yml"
 
 jobs:
@@ -64,7 +65,7 @@ jobs:
         id: get-tags
         shell: nu {0}
         run: |
-          let tags = (^nu bunyip-api/oci-build/get-tags.nu --joined)
+          let tags = (^nu oci-build/get-tags.nu --joined)
           $"tags=($tags)\n" | save --append $env.GITHUB_OUTPUT
 
       - name: Log in to container registry

@@ -39,22 +39,15 @@ features = ["derive"]
 version = "1.11"
 features = [
     "v4",
-    "v7",
     "serde",
-    "js",
 ]
 
 [workspace.dependencies.chrono]
 version = "0.4"
 features = [
     "serde",
-    "wasmbind",
 ]
 
 [workspace.dependencies.tracing-subscriber]
 version = "0.3"
 features = ["env-filter"]
-
-[workspace.dependencies.validator]
-version = "0.19"
-features = ["derive"]
