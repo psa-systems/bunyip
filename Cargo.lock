@@ -767,6 +767,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "url",
  "urlencoding",
  "uuid 1.23.1",
 ]
