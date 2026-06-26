@@ -174,6 +174,20 @@ pub async fn stripe_webhook(
     email: web::Data<Arc<EmailService>>,
     tier_config: web::Data<Arc<std::sync::RwLock<TierConfig>>>,
 ) -> Result<HttpResponse, AppError> {
+    // Fail closed when no real webhook secret is configured (BUNYIP-203).
+    // `from_env` falls back to the public `whsec_placeholder` literal when
+    // `STRIPE_WEBHOOK_SECRET` is unset; verifying a signature against that
+    // known constant would accept forged events (membership activation,
+    // entitlement grants, tier upgrades). Reject before verifying so an
+    // instance brought up without the secret never trusts an event.
+    if !stripe.webhook_secret_configured() {
+        tracing::error!(
+            "Rejecting Stripe webhook: no webhook signing secret configured \
+             (STRIPE_WEBHOOK_SECRET unset or placeholder). Set a real secret to enable webhooks."
+        );
+        return Err(AppError::internal("Stripe webhook secret not configured"));
+    }
+
     // Get signature header
     let signature = req
         .headers()
