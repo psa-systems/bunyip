@@ -166,6 +166,28 @@ impl UserRepository {
         Ok(())
     }
 
+    /// BUNYIP-209: mark the user as having consumed their signup free trial.
+    /// Called from the `checkout.session.completed` webhook once a trial
+    /// session finalizes, so a later subscribe cannot re-grant the trial.
+    /// Idempotent: a replayed webhook just re-sets the flag to TRUE.
+    pub async fn mark_trial_used<'e, E>(executor: E, user_id: Uuid) -> Result<(), AppError>
+    where
+        E: sqlx::Executor<'e, Database = Postgres>,
+    {
+        sqlx::query(
+            r#"
+            UPDATE users
+            SET has_used_trial = TRUE, updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(user_id)
+        .execute(executor)
+        .await?;
+
+        Ok(())
+    }
+
     /// Activate membership (set subscription_status to 'active')
     pub async fn activate_membership(pool: &PgPool, user_id: Uuid) -> Result<User, AppError> {
         let user = sqlx::query_as::<_, User>(

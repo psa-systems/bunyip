@@ -1,7 +1,6 @@
 //! Admin-only: manually refresh OCI caches for an app.
 
 use actix_web::{web, HttpRequest, HttpResponse};
-use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::sync::Arc;
 
@@ -62,11 +61,8 @@ pub async fn refresh_oci(
         .await
     {
         Ok(mr) => {
-            let digest = if mr.digest.is_empty() {
-                format!("sha256:{}", hex::encode(Sha256::digest(&mr.bytes)))
-            } else {
-                mr.digest
-            };
+            let digest =
+                crate::handlers::oci_registry::resolve_manifest_digest(mr.digest, &mr.bytes);
             mc.insert(
                 app.id,
                 tag,
