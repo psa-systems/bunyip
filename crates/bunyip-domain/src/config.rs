@@ -587,9 +587,24 @@ impl Config {
     /// # Errors
     /// Returns an error if required environment variables are missing
     pub fn from_env() -> Result<Self, ConfigError> {
-        // Load .env file if it exists (ignore errors if not found)
+        // Load .env file if it exists (ignore errors if not found), then parse
+        // the resulting process env. The load is kept separate from parsing so
+        // tests can exercise `from_env_inner` against a controlled process env
+        // without a repo-root `.env` re-injecting values mid-test (BUNYIP-102).
         let _ = dotenvy::dotenv();
+        Self::from_env_inner()
+    }
 
+    /// Parse configuration from the current process environment only.
+    ///
+    /// Unlike [`Config::from_env`], this does NOT load a `.env` file; it reads
+    /// solely the variables already present in the process env. Production code
+    /// should call [`Config::from_env`]; this exists so tests can pin the env
+    /// deterministically (BUNYIP-102).
+    ///
+    /// # Errors
+    /// Returns an error if required environment variables are missing.
+    pub fn from_env_inner() -> Result<Self, ConfigError> {
         // DATABASE_URL embeds the postgres password, so it supports the
         // DATABASE_URL_FILE secret convention like every other secret.
         let database_url = secret_env("DATABASE_URL")
@@ -796,26 +811,23 @@ mod tests {
     #[test]
     fn test_config_defaults() {
         let _env = env_lock();
-        // Set required env vars
-        // Config::from_env() calls dotenvy::dotenv(), which loads /app/.env when
-        // present. `just ensure-env` generates that .env before pre-commit runs,
-        // so on a clean checkout it would leak APP_PORT/CORS_ORIGIN/etc. into this
-        // process and clobber the code defaults asserted below. dotenvy is
-        // non-overriding: pin the keys this test exercises to their code defaults
-        // BEFORE from_env() so the .env (if any) cannot override them, keeping the
-        // assertions deterministic regardless of the working directory's .env.
+        // Exercise the parse via from_env_inner so dotenvy::dotenv() is NOT
+        // called: a repo-root `.env` (e.g. one setting RUST_LOG=info,bunyip_api=debug)
+        // can no longer re-inject values after the removals below and clobber the
+        // code defaults asserted here. This keeps the test deterministic regardless
+        // of the working tree's `.env` (BUNYIP-102).
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
         // Use development to avoid requiring TOTP_ENCRYPTION_KEY
         env::set_var("ENVIRONMENT", "development");
         env::set_var("HOST_IP", "0.0.0.0");
         env::set_var("APP_PORT", "4000");
-        env::set_var("RUST_LOG", "info");
-        env::set_var("CORS_ORIGIN", "http://localhost:5173");
+        env::remove_var("RUST_LOG");
+        env::remove_var("CORS_ORIGIN");
         env::remove_var("SMTP_HOST");
-        env::set_var("EMAIL_ENABLED", "false");
+        env::remove_var("EMAIL_ENABLED");
         env::remove_var("COOKIE_DOMAIN");
 
-        let config = Config::from_env().unwrap();
+        let config = Config::from_env_inner().unwrap();
 
         assert_eq!(config.host, "0.0.0.0");
         assert_eq!(config.port, 4000);
