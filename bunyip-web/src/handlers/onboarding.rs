@@ -55,8 +55,25 @@ pub async fn onboarding_get(
     // An already-onboarded user never sees this page. `needs_onboarding` also
     // treats email verification as satisfied when delivery is disabled, so a
     // dev / no-SMTP user who has set their name is forwarded on, not trapped.
+    //
+    // BUNYIP-229: when the user lands here AFTER the dual gate has been
+    // satisfied OUT-OF-BAND (the cross-browser case: they verified email
+    // in a different browser, then refreshed this tab), the next hop is
+    // /dashboard but their cookie still carries a pre-grant JWT with
+    // `trial_ends_at = None`. Rotate the access token before the
+    // redirect so /dashboard's /v1/applications call reads fresh claims
+    // on first paint and the launcher does not stay Locked. BUNYIP-226
+    // covered the same-browser flow on `onboarding_post`; this completes
+    // the coverage on the GET-side forwarder. Refresh failure is
+    // non-fatal: the redirect still happens with the original cookies.
     if !needs_onboarding(&st, &user).await {
-        return redirect_cookies("/dashboard", &c.set_cookies);
+        let mut cookies = c.set_cookies.clone();
+        if let Some(cookie) = c.forward.as_deref() {
+            if let Ok(rotated) = auth_api::refresh(&st.api, Some(cookie)).await {
+                cookies.extend(rotated);
+            }
+        }
+        return redirect_cookies("/dashboard", &cookies);
     }
 
     // Auto-send the verification email on first arrival only (cookie-gated, see
