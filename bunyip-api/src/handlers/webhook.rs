@@ -70,6 +70,100 @@ async fn revoke_stripe_entitlements(pool: &PgPool, user_id: uuid::Uuid) -> Resul
     Ok(())
 }
 
+/// Outcome of trying to claim a Stripe webhook event for processing (BUNYIP-210).
+enum EventClaim {
+    /// This delivery won the claim and must run the handler.
+    Owned,
+    /// A prior delivery already ran the handler to completion; skip it.
+    AlreadyDone,
+    /// Another delivery currently holds a fresh `processing` claim; let Stripe
+    /// retry later rather than run the handler a second time concurrently.
+    InFlight,
+}
+
+/// Atomically claim a Stripe webhook event for processing (BUNYIP-210).
+///
+/// Inserts the event as `processing`, or reclaims an existing row only when it
+/// is not `done` and its claim has gone stale (the previous owner presumably
+/// crashed before releasing it). A `RETURNING` row means this delivery won the
+/// claim; an empty result means the row exists and is either `done` or a fresh
+/// in-flight claim, which a follow-up status read disambiguates.
+///
+/// This replaces the old insert-then-process fence, which marked an event
+/// processed up front and so silently dropped the side effect whenever the
+/// handler failed (Stripe's retry saw the row and returned 200 without re-running).
+async fn claim_webhook_event(
+    pool: &PgPool,
+    event_id: &str,
+    event_type: &str,
+) -> Result<EventClaim, AppError> {
+    let claimed: Option<(String,)> = sqlx::query_as(
+        r#"
+        INSERT INTO stripe_webhook_events (event_id, event_type, status, received_at)
+        VALUES ($1, $2, 'processing', NOW())
+        ON CONFLICT (event_id) DO UPDATE
+            SET status = 'processing',
+                received_at = NOW(),
+                event_type = EXCLUDED.event_type
+            WHERE stripe_webhook_events.status <> 'done'
+              AND stripe_webhook_events.received_at < NOW() - INTERVAL '15 minutes'
+        RETURNING event_id
+        "#,
+    )
+    .bind(event_id)
+    .bind(event_type)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| AppError::internal(format!("DB error claiming webhook event: {e}")))?;
+
+    if claimed.is_some() {
+        return Ok(EventClaim::Owned);
+    }
+
+    // No claim won: the row exists and the upsert's WHERE excluded it. Read the
+    // status to tell "already finished" apart from "another delivery in flight".
+    let existing: Option<(String,)> =
+        sqlx::query_as("SELECT status FROM stripe_webhook_events WHERE event_id = $1")
+            .bind(event_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| AppError::internal(format!("DB error reading webhook event: {e}")))?;
+
+    match existing {
+        Some((status,)) if status == "done" => Ok(EventClaim::AlreadyDone),
+        // Fresh `processing` claim held by another delivery, or the row was
+        // released by a concurrent failure between the upsert and this read:
+        // either way ask Stripe to retry rather than double-run the handler.
+        _ => Ok(EventClaim::InFlight),
+    }
+}
+
+/// Promote a claimed webhook event to `done` after its handler succeeded
+/// (BUNYIP-210). Only now is the event safe to treat as already processed.
+async fn finalize_webhook_event(pool: &PgPool, event_id: &str) -> Result<(), AppError> {
+    sqlx::query("UPDATE stripe_webhook_events SET status = 'done' WHERE event_id = $1")
+        .bind(event_id)
+        .execute(pool)
+        .await
+        .map_err(|e| AppError::internal(format!("DB error finalizing webhook event: {e}")))?;
+    Ok(())
+}
+
+/// Release a claimed webhook event after its handler FAILED so Stripe's retry
+/// reprocesses it (BUNYIP-210). Best-effort: if the delete itself fails, the
+/// lease in `claim_webhook_event` still lets a later delivery reclaim the row.
+async fn release_webhook_event(pool: &PgPool, event_id: &str) {
+    if let Err(e) = sqlx::query(
+        "DELETE FROM stripe_webhook_events WHERE event_id = $1 AND status = 'processing'",
+    )
+    .bind(event_id)
+    .execute(pool)
+    .await
+    {
+        tracing::error!(error = %e, event_id = %event_id, "Failed to release webhook event claim; lease will reclaim it");
+    }
+}
+
 /// POST /v1/webhooks/stripe
 /// Handle Stripe webhook events
 pub async fn stripe_webhook(
@@ -101,37 +195,39 @@ pub async fn stripe_webhook(
         .as_str()
         .ok_or(AppError::validation("type", "Missing event type"))?;
 
-    // BUNYIP-89: idempotency on event.id. Stripe delivers at-least-once,
-    // so without this gate every retry re-fires emails, audit-log rows,
-    // and entitlement syncs. Insert ON CONFLICT DO NOTHING; if the row
-    // already existed the handlers were already run, return 200 so
-    // Stripe stops retrying.
+    // BUNYIP-89 / BUNYIP-210: idempotency on event.id. Stripe delivers
+    // at-least-once, so without a fence every retry re-fires emails, audit-log
+    // rows, and entitlement syncs. CLAIM the event before running the handler
+    // and only mark it `done` AFTER the handler succeeds (see the match at the
+    // end). A failed handler RELEASES the claim so the retry reprocesses,
+    // instead of the original fence's behaviour of recording the event up front
+    // and swallowing the side effect on any handler error.
     let event_id = event["id"]
         .as_str()
         .ok_or(AppError::validation("id", "Missing event id"))?;
     // Runtime sqlx (the rest of bunyip-api uses runtime queries; the
     // compile-time `sqlx::query!` macro lives in bunyip-oidc per
     // `.sqlx/` offline cache convention).
-    let inserted: Option<(String,)> = sqlx::query_as(
-        r#"
-        INSERT INTO stripe_webhook_events (event_id, event_type)
-        VALUES ($1, $2)
-        ON CONFLICT (event_id) DO NOTHING
-        RETURNING event_id
-        "#,
-    )
-    .bind(event_id)
-    .bind(event_type)
-    .fetch_optional(pool.get_ref())
-    .await
-    .map_err(|e| AppError::internal(format!("DB error recording webhook event: {e}")))?;
-    if inserted.is_none() {
-        tracing::debug!(
-            event_id = %event_id,
-            event_type = %event_type,
-            "Stripe event already processed; skipping handlers"
-        );
-        return Ok(HttpResponse::Ok().finish());
+    match claim_webhook_event(pool.get_ref(), event_id, event_type).await? {
+        EventClaim::Owned => {}
+        EventClaim::AlreadyDone => {
+            tracing::debug!(
+                event_id = %event_id,
+                event_type = %event_type,
+                "Stripe event already processed; skipping handlers"
+            );
+            return Ok(HttpResponse::Ok().finish());
+        }
+        EventClaim::InFlight => {
+            tracing::warn!(
+                event_id = %event_id,
+                event_type = %event_type,
+                "Stripe event is being processed by a concurrent delivery; asking Stripe to retry"
+            );
+            // Non-2xx so Stripe retries after backoff rather than treating the
+            // event as delivered while the other claim might still fail.
+            return Ok(HttpResponse::Conflict().finish());
+        }
     }
 
     tracing::info!(event_type = %event_type, event_id = %event_id, "Processing Stripe webhook");
@@ -152,32 +248,34 @@ pub async fn stripe_webhook(
         }
     };
 
-    // Route to appropriate handler
-    match event_type {
-        "checkout.session.completed" => {
-            handle_checkout_completed(&event, &pool, &email).await?;
-        }
-        "customer.subscription.created" => {
-            handle_subscription_created(&event, &pool, &tc).await?;
-        }
-        "customer.subscription.updated" => {
-            handle_subscription_updated(&event, &pool, &tc).await?;
-        }
-        "customer.subscription.deleted" => {
-            handle_subscription_deleted(&event, &pool, &email).await?;
-        }
-        "invoice.payment_succeeded" => {
-            handle_payment_succeeded(&event, &pool, &email).await?;
-        }
-        "invoice.payment_failed" => {
-            handle_payment_failed(&event, &pool, &email).await?;
-        }
+    // Route to appropriate handler. Capture the result so the idempotency claim
+    // is finalized on success or released on failure (BUNYIP-210).
+    let outcome = match event_type {
+        "checkout.session.completed" => handle_checkout_completed(&event, &pool, &email).await,
+        "customer.subscription.created" => handle_subscription_created(&event, &pool, &tc).await,
+        "customer.subscription.updated" => handle_subscription_updated(&event, &pool, &tc).await,
+        "customer.subscription.deleted" => handle_subscription_deleted(&event, &pool, &email).await,
+        "invoice.payment_succeeded" => handle_payment_succeeded(&event, &pool, &email).await,
+        "invoice.payment_failed" => handle_payment_failed(&event, &pool, &email).await,
         _ => {
             tracing::debug!(event_type = %event_type, "Unhandled Stripe event type");
+            Ok(())
+        }
+    };
+
+    match outcome {
+        Ok(()) => {
+            // Handler succeeded: now it is safe to record the event as processed.
+            finalize_webhook_event(pool.get_ref(), event_id).await?;
+            Ok(HttpResponse::Ok().finish())
+        }
+        Err(e) => {
+            // Release the claim so Stripe's retry reprocesses this event rather
+            // than seeing a recorded row and skipping it.
+            release_webhook_event(pool.get_ref(), event_id).await;
+            Err(e)
         }
     }
-
-    Ok(HttpResponse::Ok().finish())
 }
 
 async fn handle_checkout_completed(
