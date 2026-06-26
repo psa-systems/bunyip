@@ -267,6 +267,50 @@ impl TokenRepository {
         Ok(())
     }
 
+    /// Revoke every OIDC refresh-token family (and its `refresh_tokens_v2`
+    /// rows) for one `(user, client)` pair. BUNYIP-200: an admin tenant
+    /// unassign/reassign must kill outstanding refresh tokens for that client
+    /// so a rotated token can no longer keep minting the stale tenant claim.
+    /// `client_id` is the public `oauth_clients.client_id` UUID, the same
+    /// value stored on `refresh_token_families.client_id` and
+    /// `oauth_client_user_tenants.oauth_client_id`. Returns the number of
+    /// families revoked. Scoped to the OIDC v2 surface only; the legacy
+    /// `refresh_tokens` table has no per-client binding.
+    pub async fn revoke_client_user_refresh_tokens(
+        pool: &PgPool,
+        user_id: Uuid,
+        client_id: Uuid,
+    ) -> Result<u64, AppError> {
+        let mut tx = pool.begin().await?;
+
+        let result = sqlx::query(
+            r#"
+            UPDATE refresh_token_families
+            SET revoked_at = NOW(), revoke_reason = 'tenant_reassigned'
+            WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(user_id)
+        .bind(client_id)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            r#"
+            UPDATE refresh_tokens_v2 SET revoked_at = NOW()
+            WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(user_id)
+        .bind(client_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(result.rows_affected())
+    }
+
     /// Revoke all of a user's active refresh tokens EXCEPT one (the caller's
     /// current session). Powers "log out all other devices" (BUNYIP-137).
     /// Scoped to the legacy `refresh_tokens` table, which is the surface the
