@@ -406,17 +406,14 @@ pub async fn authorize(
         .await?
         .ok_or_else(|| AppError::bad_request("unknown client_id"))?;
 
-    // Validate redirect_uri (exact match)
-    if !client.redirect_uris.iter().any(|u| {
-        // For loopback clients, match scheme+host ignoring port
-        if u == "http://127.0.0.1" || u == "http://localhost" {
-            q.redirect_uri.starts_with("http://127.0.0.1:")
-                || q.redirect_uri.starts_with("http://localhost:")
-                || q.redirect_uri == *u
-        } else {
-            *u == q.redirect_uri
-        }
-    }) {
+    // Validate redirect_uri. Non-loopback clients require an exact match;
+    // bare-loopback registrations (RFC 8252) permit a varying port but the
+    // request URI's *parsed* host must still be the loopback host.
+    if !client
+        .redirect_uris
+        .iter()
+        .any(|u| redirect_uri_matches(u, &q.redirect_uri))
+    {
         return Ok(oidc_error("invalid_request", "redirect_uri not registered"));
     }
 
@@ -1340,4 +1337,108 @@ fn extract_ip(req: &HttpRequest) -> Option<std::net::IpAddr> {
         .and_then(|s| s.split(',').next())
         .and_then(|s| s.trim().parse().ok())
         .or_else(|| req.peer_addr().map(|addr| addr.ip()))
+}
+
+/// Does a request `redirect_uri` match a single registered redirect?
+///
+/// Normal clients require a byte-for-byte exact match. A bare-loopback
+/// registration (`http://127.0.0.1` or `http://localhost`, per RFC 8252)
+/// permits any port and path, but the request URI is parsed and its host must
+/// resolve to the loopback host. This rejects the string-prefix bypasses
+/// `http://127.0.0.1:1@evil.com` (host `evil.com`, loopback smuggled into the
+/// userinfo) and `http://127.0.0.1.evil.com` (host is a subdomain of
+/// `evil.com`), both of which `starts_with("http://127.0.0.1:")` accepted.
+fn redirect_uri_matches(registered: &str, requested: &str) -> bool {
+    if registered == "http://127.0.0.1" || registered == "http://localhost" {
+        is_loopback_redirect(requested)
+    } else {
+        registered == requested
+    }
+}
+
+/// True iff `requested` is an `http` URL whose *parsed* host is a loopback
+/// host (`127.0.0.1`, `::1`, or `localhost`) with no userinfo component.
+fn is_loopback_redirect(requested: &str) -> bool {
+    let Ok(url) = url::Url::parse(requested) else {
+        return false;
+    };
+    if url.scheme() != "http" {
+        return false;
+    }
+    // Any userinfo (`user[:pass]@`) is a red flag: RFC 8252 loopback redirects
+    // carry none, and it is the vector that smuggles `127.0.0.1:1` in front of
+    // the real host (`...@evil.com`).
+    if !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip == std::net::Ipv4Addr::new(127, 0, 0, 1),
+        Some(url::Host::Ipv6(ip)) => ip == std::net::Ipv6Addr::LOCALHOST,
+        Some(url::Host::Domain(d)) => d == "localhost",
+        None => false,
+    }
+}
+
+#[cfg(test)]
+mod redirect_uri_tests {
+    use super::*;
+
+    // Bare-loopback registration that the attack targets.
+    const LOOPBACK: &str = "http://127.0.0.1";
+    const LOCALHOST: &str = "http://localhost";
+
+    #[test]
+    fn userinfo_at_bypass_rejected() {
+        // host parses to `evil.com`; `127.0.0.1:1` is the userinfo.
+        assert!(!redirect_uri_matches(
+            LOOPBACK,
+            "http://127.0.0.1:1@evil.com/cb"
+        ));
+        assert!(!redirect_uri_matches(
+            LOCALHOST,
+            "http://localhost:1@evil.com/cb"
+        ));
+    }
+
+    #[test]
+    fn subdomain_suffix_bypass_rejected() {
+        // host is `127.0.0.1.evil.com`, a domain, not the loopback IP.
+        assert!(!redirect_uri_matches(
+            LOOPBACK,
+            "http://127.0.0.1.evil.com/cb"
+        ));
+    }
+
+    #[test]
+    fn genuine_loopback_with_varying_port_allowed() {
+        assert!(redirect_uri_matches(LOOPBACK, "http://127.0.0.1:54321/cb"));
+        assert!(redirect_uri_matches(LOCALHOST, "http://localhost:8080/cb"));
+        // IPv6 loopback and the bare host (no port) are also genuine.
+        assert!(redirect_uri_matches(LOOPBACK, "http://[::1]:9000/cb"));
+        assert!(redirect_uri_matches(LOOPBACK, "http://127.0.0.1/cb"));
+    }
+
+    #[test]
+    fn non_http_scheme_rejected() {
+        assert!(!redirect_uri_matches(
+            LOOPBACK,
+            "https://127.0.0.1:1@evil.com/cb"
+        ));
+    }
+
+    #[test]
+    fn non_loopback_client_is_exact_match() {
+        let reg = "https://app.example.com/callback";
+        assert!(redirect_uri_matches(
+            reg,
+            "https://app.example.com/callback"
+        ));
+        // A loopback-looking request must NOT satisfy a normal registration.
+        assert!(!redirect_uri_matches(reg, "http://127.0.0.1:54321/cb"));
+        // Any deviation fails the exact match.
+        assert!(!redirect_uri_matches(
+            reg,
+            "https://app.example.com/callback2"
+        ));
+    }
 }
