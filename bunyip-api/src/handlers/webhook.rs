@@ -293,7 +293,9 @@ pub async fn stripe_webhook(
         }
         "customer.subscription.created" => handle_subscription_created(&event, &pool, &tc).await,
         "customer.subscription.updated" => handle_subscription_updated(&event, &pool, &tc).await,
-        "customer.subscription.deleted" => handle_subscription_deleted(&event, &pool, &email).await,
+        "customer.subscription.deleted" => {
+            handle_subscription_deleted(&event, &pool, &email, &stripe).await
+        }
         "invoice.payment_succeeded" => handle_payment_succeeded(&event, &pool, &email).await,
         "invoice.payment_failed" => handle_payment_failed(&event, &pool, &email).await,
         _ => {
@@ -573,6 +575,7 @@ async fn handle_subscription_deleted(
     event: &serde_json::Value,
     pool: &PgPool,
     email: &EmailService,
+    stripe: &StripeService,
 ) -> Result<(), AppError> {
     let subscription = &event["data"]["object"];
 
@@ -593,6 +596,47 @@ async fn handle_subscription_deleted(
                 "Subscription deleted for lifetime member — skipping tier reset"
             );
             return Ok(());
+        }
+
+        // BUNYIP-225: a user can hold multiple Stripe subscriptions on the
+        // same customer (cancel-with-period-end + new re-sub; or the
+        // multi-subscription edge case where 3 trial subs were created
+        // while webhook deliveries were 401ing). Without this check, the
+        // OLD subscription's deferred deletion (when period_end finally
+        // hits) flips an actively-subscribed user back to Canceled even
+        // though their newer subscription is healthy. Query Stripe for
+        // any OTHER currently-active or trialing subscription on the same
+        // customer; if one exists, keep status Active and only log the
+        // cleanup.
+        match stripe
+            .has_other_active_subscription(customer_id, stripe_subscription_id)
+            .await
+        {
+            Ok(true) => {
+                tracing::info!(
+                    user_id = %user.id,
+                    stripe_subscription_id = %stripe_subscription_id,
+                    "Subscription deleted but at least one sibling sub remains active; keeping membership Active"
+                );
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(e) => {
+                // A Stripe API failure here MUST NOT flip the user to
+                // Canceled on partial data: that is the exact regression
+                // BUNYIP-225 closes. Return Err so the webhook claim is
+                // released and Stripe re-delivers; the next attempt re-
+                // queries cleanly. The user keeps their prior state until
+                // we have authoritative sibling info.
+                tracing::error!(
+                    error = %e,
+                    user_id = %user.id,
+                    customer_id = %customer_id,
+                    stripe_subscription_id = %stripe_subscription_id,
+                    "Failed to query sibling subscriptions; aborting cancel-flip so Stripe retries"
+                );
+                return Err(e);
+            }
         }
 
         let mut tx = pool.begin().await?;
