@@ -23,6 +23,17 @@ type HmacSha256 = Hmac<Sha256>;
 /// Metadata key used to tag Stripe products belonging to this application.
 const APP_TAG_KEY: &str = "app";
 
+/// Placeholder secret key returned by `StripeConfig::from_env` when
+/// `STRIPE_SECRET_KEY` is unset. Treated as "not configured".
+const SECRET_KEY_PLACEHOLDER: &str = "sk_test_placeholder";
+
+/// Placeholder webhook secret returned by `StripeConfig::from_env` when
+/// `STRIPE_WEBHOOK_SECRET` is unset. Because it is a public source constant,
+/// anyone can forge a valid `Stripe-Signature` against it, so the webhook
+/// path must fail closed whenever the configured secret equals this value
+/// (BUNYIP-203).
+const WEBHOOK_SECRET_PLACEHOLDER: &str = "whsec_placeholder";
+
 /// Per-request timeout for raw `reqwest` calls into the Stripe REST API.
 /// Without this, `reqwest::Client::new()` has no timeout and a hung Stripe
 /// upstream would block the awaiting actix worker indefinitely (BUNYIP-82).
@@ -84,9 +95,9 @@ impl StripeConfig {
             // secret_env supports the {NAME}_FILE compose-secret convention,
             // falling back to the plain env var.
             secret_key: crate::config::secret_env("STRIPE_SECRET_KEY")
-                .unwrap_or_else(|| "sk_test_placeholder".to_string()),
+                .unwrap_or_else(|| SECRET_KEY_PLACEHOLDER.to_string()),
             webhook_secret: crate::config::secret_env("STRIPE_WEBHOOK_SECRET")
-                .unwrap_or_else(|| "whsec_placeholder".to_string()),
+                .unwrap_or_else(|| WEBHOOK_SECRET_PLACEHOLDER.to_string()),
             success_url: std::env::var("STRIPE_SUCCESS_URL")
                 .unwrap_or_else(|_| format!("{base}/checkout/success")),
             cancel_url: std::env::var("STRIPE_CANCEL_URL")
@@ -180,7 +191,25 @@ impl StripeService {
             .expect("StripeService lock poisoned")
             .config
             .secret_key;
-        !key.is_empty() && key != "sk_test_placeholder"
+        !key.is_empty() && key != SECRET_KEY_PLACEHOLDER
+    }
+
+    /// Returns `true` when the service holds a real Stripe webhook signing
+    /// secret (i.e. not empty and not the `whsec_placeholder` literal that
+    /// `from_env` returns when `STRIPE_WEBHOOK_SECRET` is unset).
+    ///
+    /// The webhook path MUST consult this before trusting any event: the
+    /// placeholder is a public source constant, so verifying a signature
+    /// against it accepts forged events (BUNYIP-203). When this returns
+    /// `false` the handler fails closed instead of verifying.
+    pub fn webhook_secret_configured(&self) -> bool {
+        let secret = &self
+            .inner
+            .read()
+            .expect("StripeService lock poisoned")
+            .config
+            .webhook_secret;
+        !secret.is_empty() && secret != WEBHOOK_SECRET_PLACEHOLDER
     }
 
     /// Get the configured $0 price ID for free/lifetime subscriptions.
@@ -1390,5 +1419,29 @@ mod tests {
 
         let header = format!("t={},v1={}", old_ts, sig);
         assert!(service.verify_webhook_signature(payload, &header).is_err());
+    }
+
+    // -- BUNYIP-203: webhook secret fail-closed guard --
+
+    #[test]
+    fn webhook_secret_configured_true_for_real_secret() {
+        let service = test_service();
+        assert!(service.webhook_secret_configured());
+    }
+
+    #[test]
+    fn webhook_secret_configured_false_for_placeholder() {
+        let mut config = test_config();
+        config.webhook_secret = WEBHOOK_SECRET_PLACEHOLDER.to_string();
+        let service = StripeService::new(config);
+        assert!(!service.webhook_secret_configured());
+    }
+
+    #[test]
+    fn webhook_secret_configured_false_for_empty() {
+        let mut config = test_config();
+        config.webhook_secret = String::new();
+        let service = StripeService::new(config);
+        assert!(!service.webhook_secret_configured());
     }
 }
