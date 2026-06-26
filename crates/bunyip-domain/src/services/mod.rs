@@ -38,7 +38,9 @@ pub use dunite_download::services::{
 pub type AppDownloadCache = DownloadCache<crate::repositories::DownloadCacheRepository>;
 
 // Domain service types.
-pub use auth::{AcceptInviteResult, AuthService, AuthTokens, LoginResult, MagicLinkResult};
+pub use auth::{
+    AcceptInviteResult, AuthService, AuthTokens, LoginResult, MagicLinkResult, TierGrantTrigger,
+};
 pub use email::EmailService;
 pub use event_bus::{BunyipEvent, EventBus};
 pub use jwt::{AccessTokenClaims, JwtService, RefreshTokenClaims, TwoFactorChallengeClaims};

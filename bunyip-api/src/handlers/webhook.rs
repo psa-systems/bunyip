@@ -70,6 +70,123 @@ async fn revoke_stripe_entitlements(pool: &PgPool, user_id: uuid::Uuid) -> Resul
     Ok(())
 }
 
+/// Outcome of trying to claim a Stripe webhook event for processing (BUNYIP-210).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EventClaim {
+    /// This delivery won the claim and must run the handler.
+    Owned,
+    /// A prior delivery already ran the handler to completion; skip it.
+    AlreadyDone,
+    /// Another delivery currently holds a fresh `processing` claim; let Stripe
+    /// retry later rather than run the handler a second time concurrently.
+    InFlight,
+}
+
+/// Pure decision for the idempotency fence (BUNYIP-210): map the claim-insert
+/// outcome and the current persisted status onto an [`EventClaim`].
+///
+/// This is the regression-critical invariant the original fence got wrong:
+/// ONLY a row that is already `done` may short-circuit a redelivery. Anything
+/// else - a winning claim, a stale/in-flight `processing` row, or a row that a
+/// failed handler released between the upsert and the status read - must NOT be
+/// treated as already processed, so Stripe's retry re-runs the handler instead
+/// of being swallowed with a bare `200`. Factored out of `claim_webhook_event`
+/// so it can be unit-tested without a live database (CI runs `--lib` tests with
+/// no Postgres).
+fn classify_claim(won_claim: bool, existing_status: Option<&str>) -> EventClaim {
+    if won_claim {
+        return EventClaim::Owned;
+    }
+    match existing_status {
+        // Finished by a prior delivery: safe to skip.
+        Some("done") => EventClaim::AlreadyDone,
+        // Fresh `processing` claim held by another delivery, a row released by a
+        // concurrent failure, or any non-terminal status: ask Stripe to retry
+        // rather than declare the event processed. Never swallow the retry.
+        _ => EventClaim::InFlight,
+    }
+}
+
+/// Atomically claim a Stripe webhook event for processing (BUNYIP-210).
+///
+/// Inserts the event as `processing`, or reclaims an existing row only when it
+/// is not `done` and its claim has gone stale (the previous owner presumably
+/// crashed before releasing it). A `RETURNING` row means this delivery won the
+/// claim; an empty result means the row exists and is either `done` or a fresh
+/// in-flight claim, which a follow-up status read disambiguates.
+///
+/// This replaces the old insert-then-process fence, which marked an event
+/// processed up front and so silently dropped the side effect whenever the
+/// handler failed (Stripe's retry saw the row and returned 200 without re-running).
+async fn claim_webhook_event(
+    pool: &PgPool,
+    event_id: &str,
+    event_type: &str,
+) -> Result<EventClaim, AppError> {
+    let claimed: Option<(String,)> = sqlx::query_as(
+        r#"
+        INSERT INTO stripe_webhook_events (event_id, event_type, status, received_at)
+        VALUES ($1, $2, 'processing', NOW())
+        ON CONFLICT (event_id) DO UPDATE
+            SET status = 'processing',
+                received_at = NOW(),
+                event_type = EXCLUDED.event_type
+            WHERE stripe_webhook_events.status <> 'done'
+              AND stripe_webhook_events.received_at < NOW() - INTERVAL '15 minutes'
+        RETURNING event_id
+        "#,
+    )
+    .bind(event_id)
+    .bind(event_type)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| AppError::internal(format!("DB error claiming webhook event: {e}")))?;
+
+    if claimed.is_some() {
+        return Ok(EventClaim::Owned);
+    }
+
+    // No claim won: the row exists and the upsert's WHERE excluded it. Read the
+    // status to tell "already finished" apart from "another delivery in flight".
+    let existing: Option<(String,)> =
+        sqlx::query_as("SELECT status FROM stripe_webhook_events WHERE event_id = $1")
+            .bind(event_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| AppError::internal(format!("DB error reading webhook event: {e}")))?;
+
+    Ok(classify_claim(
+        false,
+        existing.as_ref().map(|(status,)| status.as_str()),
+    ))
+}
+
+/// Promote a claimed webhook event to `done` after its handler succeeded
+/// (BUNYIP-210). Only now is the event safe to treat as already processed.
+async fn finalize_webhook_event(pool: &PgPool, event_id: &str) -> Result<(), AppError> {
+    sqlx::query("UPDATE stripe_webhook_events SET status = 'done' WHERE event_id = $1")
+        .bind(event_id)
+        .execute(pool)
+        .await
+        .map_err(|e| AppError::internal(format!("DB error finalizing webhook event: {e}")))?;
+    Ok(())
+}
+
+/// Release a claimed webhook event after its handler FAILED so Stripe's retry
+/// reprocesses it (BUNYIP-210). Best-effort: if the delete itself fails, the
+/// lease in `claim_webhook_event` still lets a later delivery reclaim the row.
+async fn release_webhook_event(pool: &PgPool, event_id: &str) {
+    if let Err(e) = sqlx::query(
+        "DELETE FROM stripe_webhook_events WHERE event_id = $1 AND status = 'processing'",
+    )
+    .bind(event_id)
+    .execute(pool)
+    .await
+    {
+        tracing::error!(error = %e, event_id = %event_id, "Failed to release webhook event claim; lease will reclaim it");
+    }
+}
+
 /// POST /v1/webhooks/stripe
 /// Handle Stripe webhook events
 pub async fn stripe_webhook(
@@ -80,6 +197,20 @@ pub async fn stripe_webhook(
     email: web::Data<Arc<EmailService>>,
     tier_config: web::Data<Arc<std::sync::RwLock<TierConfig>>>,
 ) -> Result<HttpResponse, AppError> {
+    // Fail closed when no real webhook secret is configured (BUNYIP-203).
+    // `from_env` falls back to the public `whsec_placeholder` literal when
+    // `STRIPE_WEBHOOK_SECRET` is unset; verifying a signature against that
+    // known constant would accept forged events (membership activation,
+    // entitlement grants, tier upgrades). Reject before verifying so an
+    // instance brought up without the secret never trusts an event.
+    if !stripe.webhook_secret_configured() {
+        tracing::error!(
+            "Rejecting Stripe webhook: no webhook signing secret configured \
+             (STRIPE_WEBHOOK_SECRET unset or placeholder). Set a real secret to enable webhooks."
+        );
+        return Err(AppError::internal("Stripe webhook secret not configured"));
+    }
+
     // Get signature header
     let signature = req
         .headers()
@@ -101,37 +232,39 @@ pub async fn stripe_webhook(
         .as_str()
         .ok_or(AppError::validation("type", "Missing event type"))?;
 
-    // BUNYIP-89: idempotency on event.id. Stripe delivers at-least-once,
-    // so without this gate every retry re-fires emails, audit-log rows,
-    // and entitlement syncs. Insert ON CONFLICT DO NOTHING; if the row
-    // already existed the handlers were already run, return 200 so
-    // Stripe stops retrying.
+    // BUNYIP-89 / BUNYIP-210: idempotency on event.id. Stripe delivers
+    // at-least-once, so without a fence every retry re-fires emails, audit-log
+    // rows, and entitlement syncs. CLAIM the event before running the handler
+    // and only mark it `done` AFTER the handler succeeds (see the match at the
+    // end). A failed handler RELEASES the claim so the retry reprocesses,
+    // instead of the original fence's behaviour of recording the event up front
+    // and swallowing the side effect on any handler error.
     let event_id = event["id"]
         .as_str()
         .ok_or(AppError::validation("id", "Missing event id"))?;
     // Runtime sqlx (the rest of bunyip-api uses runtime queries; the
     // compile-time `sqlx::query!` macro lives in bunyip-oidc per
     // `.sqlx/` offline cache convention).
-    let inserted: Option<(String,)> = sqlx::query_as(
-        r#"
-        INSERT INTO stripe_webhook_events (event_id, event_type)
-        VALUES ($1, $2)
-        ON CONFLICT (event_id) DO NOTHING
-        RETURNING event_id
-        "#,
-    )
-    .bind(event_id)
-    .bind(event_type)
-    .fetch_optional(pool.get_ref())
-    .await
-    .map_err(|e| AppError::internal(format!("DB error recording webhook event: {e}")))?;
-    if inserted.is_none() {
-        tracing::debug!(
-            event_id = %event_id,
-            event_type = %event_type,
-            "Stripe event already processed; skipping handlers"
-        );
-        return Ok(HttpResponse::Ok().finish());
+    match claim_webhook_event(pool.get_ref(), event_id, event_type).await? {
+        EventClaim::Owned => {}
+        EventClaim::AlreadyDone => {
+            tracing::debug!(
+                event_id = %event_id,
+                event_type = %event_type,
+                "Stripe event already processed; skipping handlers"
+            );
+            return Ok(HttpResponse::Ok().finish());
+        }
+        EventClaim::InFlight => {
+            tracing::warn!(
+                event_id = %event_id,
+                event_type = %event_type,
+                "Stripe event is being processed by a concurrent delivery; asking Stripe to retry"
+            );
+            // Non-2xx so Stripe retries after backoff rather than treating the
+            // event as delivered while the other claim might still fail.
+            return Ok(HttpResponse::Conflict().finish());
+        }
     }
 
     tracing::info!(event_type = %event_type, event_id = %event_id, "Processing Stripe webhook");
@@ -152,38 +285,45 @@ pub async fn stripe_webhook(
         }
     };
 
-    // Route to appropriate handler
-    match event_type {
+    // Route to appropriate handler. Capture the result so the idempotency claim
+    // is finalized on success or released on failure (BUNYIP-210).
+    let outcome = match event_type {
         "checkout.session.completed" => {
-            handle_checkout_completed(&event, &pool, &email).await?;
+            handle_checkout_completed(&event, &pool, &email, &stripe).await
         }
-        "customer.subscription.created" => {
-            handle_subscription_created(&event, &pool, &tc).await?;
-        }
-        "customer.subscription.updated" => {
-            handle_subscription_updated(&event, &pool, &tc).await?;
-        }
+        "customer.subscription.created" => handle_subscription_created(&event, &pool, &tc).await,
+        "customer.subscription.updated" => handle_subscription_updated(&event, &pool, &tc).await,
         "customer.subscription.deleted" => {
-            handle_subscription_deleted(&event, &pool, &email).await?;
+            handle_subscription_deleted(&event, &pool, &email, &stripe).await
         }
-        "invoice.payment_succeeded" => {
-            handle_payment_succeeded(&event, &pool, &email).await?;
-        }
-        "invoice.payment_failed" => {
-            handle_payment_failed(&event, &pool, &email).await?;
-        }
+        "invoice.payment_succeeded" => handle_payment_succeeded(&event, &pool, &email).await,
+        "invoice.payment_failed" => handle_payment_failed(&event, &pool, &email).await,
         _ => {
             tracing::debug!(event_type = %event_type, "Unhandled Stripe event type");
+            Ok(())
+        }
+    };
+
+    match outcome {
+        Ok(()) => {
+            // Handler succeeded: now it is safe to record the event as processed.
+            finalize_webhook_event(pool.get_ref(), event_id).await?;
+            Ok(HttpResponse::Ok().finish())
+        }
+        Err(e) => {
+            // Release the claim so Stripe's retry reprocesses this event rather
+            // than seeing a recorded row and skipping it.
+            release_webhook_event(pool.get_ref(), event_id).await;
+            Err(e)
         }
     }
-
-    Ok(HttpResponse::Ok().finish())
 }
 
 async fn handle_checkout_completed(
     event: &serde_json::Value,
     pool: &PgPool,
     email: &EmailService,
+    stripe: &StripeService,
 ) -> Result<(), AppError> {
     let session = &event["data"]["object"];
 
@@ -200,28 +340,48 @@ async fn handle_checkout_completed(
         .parse()
         .map_err(|_| AppError::validation("user_id", "Invalid UUID"))?;
 
-    // Get price info
-    let amount = match session["amount_total"].as_i64() {
-        Some(a) => a as i32,
+    let session_id = session["id"]
+        .as_str()
+        .ok_or(AppError::validation("id", "Missing checkout session id"))?;
+
+    // Resolve the real purchased price from the Stripe API (BUNYIP-215). Stripe
+    // omits `line_items` from the `checkout.session.completed` payload, so the
+    // price id and amount cannot be read off the event: the old code did that
+    // and silently locked the placeholder `"price_default"` with a hardcoded
+    // amount. A transient API failure propagates so Stripe retries the delivery
+    // (BUNYIP-210 makes that safe).
+    let price = stripe.get_checkout_session_price(session_id).await?;
+
+    // Update user membership status and lock the real price for life.
+    UserRepository::update_membership_status(pool, user_id, MembershipStatus::Active).await?;
+
+    let amount = match price {
+        Some(p) => {
+            let amount = p.amount as i32;
+            UserRepository::lock_price(pool, user_id, &p.price_id, amount).await?;
+            amount
+        }
         None => {
-            tracing::warn!(user_id = %user_id, "Missing amount_total in checkout session, defaulting to 300");
-            300
+            // Should not happen for a genuinely completed checkout. Do NOT lock
+            // a placeholder; leave the price unlocked rather than persist junk,
+            // and fall back to the session total only for the welcome email.
+            tracing::error!(
+                user_id = %user_id,
+                session_id = %session_id,
+                "Checkout session had no resolvable line-item price; skipping price lock"
+            );
+            session["amount_total"].as_i64().unwrap_or(0) as i32
         }
     };
 
-    // Update user membership status and lock price
-    UserRepository::update_membership_status(pool, user_id, MembershipStatus::Active).await?;
-
-    // Lock the price for life. The price id lives on the session's line items;
-    // `session["subscription"]` is the SUBSCRIPTION id (sub_...), which must not
-    // be stored in the price column. Fall back to the legacy default when line
-    // items are not present on the payload.
-    let price_id = session["line_items"]["data"][0]["price"]["id"]
-        .as_str()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "price_default".to_string());
-
-    UserRepository::lock_price(pool, user_id, &price_id, amount).await?;
+    // BUNYIP-209: if this session carried the signup trial (tagged with
+    // `trial=true` metadata at creation time), burn the one-time trial now that
+    // the checkout has finalized. Doing it here (not at session creation) means
+    // an abandoned checkout never consumes the trial. Idempotent on replay.
+    if session["metadata"]["trial"].as_str() == Some("true") {
+        UserRepository::mark_trial_used(pool, user_id).await?;
+        tracing::info!(user_id = %user_id, "Signup trial consumed via checkout");
+    }
 
     tracing::info!(user_id = %user_id, "Checkout completed, membership activated");
 
@@ -415,6 +575,7 @@ async fn handle_subscription_deleted(
     event: &serde_json::Value,
     pool: &PgPool,
     email: &EmailService,
+    stripe: &StripeService,
 ) -> Result<(), AppError> {
     let subscription = &event["data"]["object"];
 
@@ -435,6 +596,47 @@ async fn handle_subscription_deleted(
                 "Subscription deleted for lifetime member — skipping tier reset"
             );
             return Ok(());
+        }
+
+        // BUNYIP-225: a user can hold multiple Stripe subscriptions on the
+        // same customer (cancel-with-period-end + new re-sub; or the
+        // multi-subscription edge case where 3 trial subs were created
+        // while webhook deliveries were 401ing). Without this check, the
+        // OLD subscription's deferred deletion (when period_end finally
+        // hits) flips an actively-subscribed user back to Canceled even
+        // though their newer subscription is healthy. Query Stripe for
+        // any OTHER currently-active or trialing subscription on the same
+        // customer; if one exists, keep status Active and only log the
+        // cleanup.
+        match stripe
+            .has_other_active_subscription(customer_id, stripe_subscription_id)
+            .await
+        {
+            Ok(true) => {
+                tracing::info!(
+                    user_id = %user.id,
+                    stripe_subscription_id = %stripe_subscription_id,
+                    "Subscription deleted but at least one sibling sub remains active; keeping membership Active"
+                );
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(e) => {
+                // A Stripe API failure here MUST NOT flip the user to
+                // Canceled on partial data: that is the exact regression
+                // BUNYIP-225 closes. Return Err so the webhook claim is
+                // released and Stripe re-delivers; the next attempt re-
+                // queries cleanly. The user keeps their prior state until
+                // we have authoritative sibling info.
+                tracing::error!(
+                    error = %e,
+                    user_id = %user.id,
+                    customer_id = %customer_id,
+                    stripe_subscription_id = %stripe_subscription_id,
+                    "Failed to query sibling subscriptions; aborting cancel-flip so Stripe retries"
+                );
+                return Err(e);
+            }
         }
 
         let mut tx = pool.begin().await?;
@@ -631,4 +833,64 @@ fn resolve_tier_for_product(product_id: &str, tc: &TierConfig) -> Option<Subscri
         return Some(SubscriptionTier::Standard);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression tests for the BUNYIP-210 idempotency-fence ordering bug.
+    //
+    // The original fence recorded `event.id` as processed BEFORE running the
+    // handler, so a handler error on first delivery left a row that made
+    // Stripe's retry short-circuit to `200` without ever re-running the handler.
+    // The side effect (membership activation / entitlement grant) was lost
+    // permanently. The fix claims the event as `processing`, only promotes it to
+    // `done` after the handler succeeds, and releases the claim on failure.
+    //
+    // CI has no Postgres (tests run `--lib` with SQLX_OFFLINE), so the DB SQL is
+    // not exercised here. What IS exercised is the pure decision that governs
+    // whether a redelivery is allowed to re-run: only a `done` row may be
+    // skipped; every other state must re-process. That is exactly the invariant
+    // the old fence violated.
+
+    /// Core regression: a row that is NOT `done` must never be treated as
+    /// already processed. This is the state a failed-handler delivery leaves
+    /// behind (claim released back to absent, or a stale `processing` row), and
+    /// it must route to a reprocess (`Owned`) or a retry (`InFlight`), never to
+    /// `AlreadyDone` which would swallow the retry.
+    #[test]
+    fn non_done_states_never_swallow_the_retry() {
+        // No row at all: a released claim from a failed handler. Per the upsert
+        // contract the next delivery wins the claim, but even if classification
+        // is reached it must not be AlreadyDone.
+        assert_ne!(classify_claim(false, None), EventClaim::AlreadyDone);
+        // A lingering in-flight / stale claim from a crashed or failed delivery.
+        assert_eq!(
+            classify_claim(false, Some("processing")),
+            EventClaim::InFlight
+        );
+        // Any unexpected non-terminal status is still re-processable, never
+        // silently skipped.
+        assert_eq!(classify_claim(false, Some("queued")), EventClaim::InFlight);
+    }
+
+    /// Only a fully-finished (`done`) prior delivery is allowed to short-circuit
+    /// a redelivery. This is the legitimate idempotency case.
+    #[test]
+    fn done_row_short_circuits_redelivery() {
+        assert_eq!(classify_claim(false, Some("done")), EventClaim::AlreadyDone);
+    }
+
+    /// Winning the insert/upsert claim always means this delivery owns the work,
+    /// regardless of any prior status the read would have seen.
+    #[test]
+    fn winning_the_claim_owns_the_work() {
+        assert_eq!(classify_claim(true, None), EventClaim::Owned);
+        assert_eq!(classify_claim(true, Some("processing")), EventClaim::Owned);
+        // Defensive: even a stale `done` cannot override a won claim (the upsert
+        // WHERE never reclaims a `done` row, so this branch is unreachable in
+        // practice, but the decision must still favour Owned).
+        assert_eq!(classify_claim(true, Some("done")), EventClaim::Owned);
+    }
 }

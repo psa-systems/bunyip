@@ -166,6 +166,28 @@ impl UserRepository {
         Ok(())
     }
 
+    /// BUNYIP-209: mark the user as having consumed their signup free trial.
+    /// Called from the `checkout.session.completed` webhook once a trial
+    /// session finalizes, so a later subscribe cannot re-grant the trial.
+    /// Idempotent: a replayed webhook just re-sets the flag to TRUE.
+    pub async fn mark_trial_used<'e, E>(executor: E, user_id: Uuid) -> Result<(), AppError>
+    where
+        E: sqlx::Executor<'e, Database = Postgres>,
+    {
+        sqlx::query(
+            r#"
+            UPDATE users
+            SET has_used_trial = TRUE, updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(user_id)
+        .execute(executor)
+        .await?;
+
+        Ok(())
+    }
+
     /// Activate membership (set subscription_status to 'active')
     pub async fn activate_membership(pool: &PgPool, user_id: Uuid) -> Result<User, AppError> {
         let user = sqlx::query_as::<_, User>(
@@ -638,23 +660,33 @@ impl UserRepository {
     /// must count against the configured cap and be reflected in the admin slot-usage
     /// display. Excluding them let the count read 0 while active lifetimes existed,
     /// defeating the cap and misleading the Tier Settings page (BUNYIP-96).
+    ///
+    /// Email verification is deliberately NOT a filter: an active `lifetime` /
+    /// `early_adopter` subscription occupies a slot whether or not the holder has
+    /// verified their email. Gating on `email_verified = true` let unverified
+    /// lifetimes read as 0, so they bypassed the cap and the Tier Settings page
+    /// under-reported usage (BUNYIP-105). Only soft-deleted users (`deleted_at`)
+    /// are excluded.
     pub async fn count_tier_assignments<'e, E>(executor: E) -> Result<(i64, i64), AppError>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
     {
-        let row: (i64, i64) = sqlx::query_as(
-            r#"
+        let row: (i64, i64) = sqlx::query_as(Self::COUNT_TIER_ASSIGNMENTS_SQL)
+            .fetch_one(executor)
+            .await?;
+        Ok(row)
+    }
+
+    /// SQL backing [`Self::count_tier_assignments`]. Held as a named const so the
+    /// BUNYIP-105 regression test can assert the `email_verified` predicate stays
+    /// dropped without needing a live database.
+    const COUNT_TIER_ASSIGNMENTS_SQL: &'static str = r#"
             SELECT
                 COUNT(*) FILTER (WHERE subscription_tier = 'lifetime') AS lifetime_count,
                 COUNT(*) FILTER (WHERE subscription_tier = 'early_adopter') AS early_adopter_count
             FROM users
-            WHERE email_verified = true AND deleted_at IS NULL
-            "#,
-        )
-        .fetch_one(executor)
-        .await?;
-        Ok(row)
-    }
+            WHERE deleted_at IS NULL
+            "#;
 
     /// Grant lifetime membership to a user (admin override).
     pub async fn grant_lifetime_membership(
@@ -781,5 +813,31 @@ impl UserRepository {
         .await?;
 
         Ok(users)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UserRepository;
+
+    /// BUNYIP-105 regression: slot-usage counts must include unverified holders.
+    ///
+    /// The bug was a `WHERE email_verified = true` predicate that dropped
+    /// unverified `lifetime` / `early_adopter` users from the count, letting them
+    /// bypass the cap and read as 0 on the Tier Settings page. The count query
+    /// must NOT filter on `email_verified`, so an unverified active lifetime still
+    /// occupies its slot. Soft-deleted users (`deleted_at`) stay excluded.
+    #[test]
+    fn count_tier_assignments_sql_does_not_filter_on_email_verified() {
+        let sql = UserRepository::COUNT_TIER_ASSIGNMENTS_SQL;
+        assert!(
+            !sql.contains("email_verified"),
+            "count_tier_assignments must not filter on email_verified, or unverified \
+             lifetimes undercount and bypass the cap (BUNYIP-105); SQL was: {sql}"
+        );
+        assert!(
+            sql.contains("deleted_at IS NULL"),
+            "count_tier_assignments must still exclude soft-deleted users; SQL was: {sql}"
+        );
     }
 }

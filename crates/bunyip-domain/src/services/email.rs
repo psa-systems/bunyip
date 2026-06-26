@@ -279,6 +279,7 @@ impl EmailService {
             from_name: "localhost".to_string(),
             base_url: "http://localhost:5173".to_string(),
             enabled: false,
+            log_tokens: false,
             app_name: "localhost".to_string(),
             admin_notification_emails: Vec::new(),
         };
@@ -372,11 +373,13 @@ impl EmailService {
         let magic_link_url = format!("{}/magic-link?token={}", self.config.base_url, token);
 
         if !self.config.enabled {
-            tracing::info!(
-                email = %email,
-                link = %magic_link_url,
-                "Magic link (dev mode - not sending email)"
-            );
+            // Never log the token (or any URL containing it) at INFO: the
+            // single-use token is a bearer credential and this path also runs
+            // in production deployments without SMTP (BUNYIP-204).
+            tracing::info!(email = %email, "Magic link (dev mode) - token suppressed");
+            if self.config.log_tokens {
+                tracing::debug!(email = %email, link = %magic_link_url, "Magic link URL (EMAIL_LOG_TOKENS)");
+            }
             return Ok(());
         }
 
@@ -401,11 +404,10 @@ impl EmailService {
         );
 
         if !self.config.enabled {
-            tracing::info!(
-                email = %email,
-                link = %reset_url,
-                "Password reset link (dev mode - not sending email)"
-            );
+            tracing::info!(email = %email, "Password reset link (dev mode) - token suppressed");
+            if self.config.log_tokens {
+                tracing::debug!(email = %email, link = %reset_url, "Password reset URL (EMAIL_LOG_TOKENS)");
+            }
             return Ok(());
         }
 
@@ -587,11 +589,10 @@ impl EmailService {
         );
 
         if !self.config.enabled {
-            tracing::info!(
-                email = %email,
-                link = %verify_url,
-                "Email change verify link (dev mode - not sending email)"
-            );
+            tracing::info!(email = %email, "Email change verify link (dev mode) - token suppressed");
+            if self.config.log_tokens {
+                tracing::debug!(email = %email, link = %verify_url, "Email change verify URL (EMAIL_LOG_TOKENS)");
+            }
             return Ok(());
         }
 

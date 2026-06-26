@@ -6,8 +6,9 @@
 
 use crate::errors::AppError;
 use crate::models::stripe::{
-    decrypt_secret, StripeInvoiceResponse, StripePriceResponse, StripeProductResponse,
-    StripeSubscriptionItemResponse, StripeSubscriptionResponse, StripeWebhookEndpointResponse,
+    decrypt_secret, StripeCheckoutPrice, StripeInvoiceResponse, StripePriceResponse,
+    StripeProductResponse, StripeSubscriptionItemResponse, StripeSubscriptionResponse,
+    StripeWebhookEndpointResponse,
 };
 use crate::services::encryption::EncryptionKeySet;
 use hmac::{Hmac, Mac};
@@ -22,6 +23,17 @@ type HmacSha256 = Hmac<Sha256>;
 /// Metadata key used to tag Stripe products belonging to this application.
 const APP_TAG_KEY: &str = "app";
 
+/// Placeholder secret key returned by `StripeConfig::from_env` when
+/// `STRIPE_SECRET_KEY` is unset. Treated as "not configured".
+const SECRET_KEY_PLACEHOLDER: &str = "sk_test_placeholder";
+
+/// Placeholder webhook secret returned by `StripeConfig::from_env` when
+/// `STRIPE_WEBHOOK_SECRET` is unset. Because it is a public source constant,
+/// anyone can forge a valid `Stripe-Signature` against it, so the webhook
+/// path must fail closed whenever the configured secret equals this value
+/// (BUNYIP-203).
+const WEBHOOK_SECRET_PLACEHOLDER: &str = "whsec_placeholder";
+
 /// Per-request timeout for raw `reqwest` calls into the Stripe REST API.
 /// Without this, `reqwest::Client::new()` has no timeout and a hung Stripe
 /// upstream would block the awaiting actix worker indefinitely (BUNYIP-82).
@@ -29,6 +41,11 @@ const APP_TAG_KEY: &str = "app";
 /// (webhook endpoint CRUD); user-facing checkout/cancel flows run through
 /// the `async-stripe` client and inherit its own timeouts.
 const STRIPE_API_TIMEOUT_SECS: u64 = 10;
+
+/// BUNYIP-209: default length of the signup free trial, in days. Overridable
+/// via `BUNYIP_BILLING_TRIAL_PERIOD_DAYS` so ops can dial it without a
+/// redeploy. Stored on `StripeConfig::trial_period_days`.
+const DEFAULT_TRIAL_PERIOD_DAYS: u32 = 30;
 
 /// Build a `reqwest` client with the Stripe API timeout applied. Use this
 /// at every site that talks to `api.stripe.com` directly rather than
@@ -59,6 +76,10 @@ pub struct StripeConfig {
     pub free_price_id: Option<String>,
     /// Application tag stored in product metadata to filter shared Stripe accounts
     pub app_tag: String,
+    /// BUNYIP-209: length of the signup free trial, in days. Passed as
+    /// `subscription_data.trial_period_days` the first time a trial-eligible
+    /// user starts checkout. Defaults to [`DEFAULT_TRIAL_PERIOD_DAYS`].
+    pub trial_period_days: u32,
 }
 
 impl StripeConfig {
@@ -83,9 +104,9 @@ impl StripeConfig {
             // secret_env supports the {NAME}_FILE compose-secret convention,
             // falling back to the plain env var.
             secret_key: crate::config::secret_env("STRIPE_SECRET_KEY")
-                .unwrap_or_else(|| "sk_test_placeholder".to_string()),
+                .unwrap_or_else(|| SECRET_KEY_PLACEHOLDER.to_string()),
             webhook_secret: crate::config::secret_env("STRIPE_WEBHOOK_SECRET")
-                .unwrap_or_else(|| "whsec_placeholder".to_string()),
+                .unwrap_or_else(|| WEBHOOK_SECRET_PLACEHOLDER.to_string()),
             success_url: std::env::var("STRIPE_SUCCESS_URL")
                 .unwrap_or_else(|_| format!("{base}/checkout/success")),
             cancel_url: std::env::var("STRIPE_CANCEL_URL")
@@ -96,6 +117,13 @@ impl StripeConfig {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "bunyip".to_string()),
+            // BUNYIP-209: signup trial length, env-overridable. A blank or
+            // unparseable value falls back to the 30-day default rather than
+            // disabling the trial.
+            trial_period_days: std::env::var("BUNYIP_BILLING_TRIAL_PERIOD_DAYS")
+                .ok()
+                .and_then(|s| s.trim().parse::<u32>().ok())
+                .unwrap_or(DEFAULT_TRIAL_PERIOD_DAYS),
         })
     }
 
@@ -125,6 +153,7 @@ impl StripeConfig {
             cancel_url: env_config.cancel_url,
             free_price_id: env_config.free_price_id,
             app_tag,
+            trial_period_days: env_config.trial_period_days,
         })
     }
 }
@@ -179,7 +208,25 @@ impl StripeService {
             .expect("StripeService lock poisoned")
             .config
             .secret_key;
-        !key.is_empty() && key != "sk_test_placeholder"
+        !key.is_empty() && key != SECRET_KEY_PLACEHOLDER
+    }
+
+    /// Returns `true` when the service holds a real Stripe webhook signing
+    /// secret (i.e. not empty and not the `whsec_placeholder` literal that
+    /// `from_env` returns when `STRIPE_WEBHOOK_SECRET` is unset).
+    ///
+    /// The webhook path MUST consult this before trusting any event: the
+    /// placeholder is a public source constant, so verifying a signature
+    /// against it accepts forged events (BUNYIP-203). When this returns
+    /// `false` the handler fails closed instead of verifying.
+    pub fn webhook_secret_configured(&self) -> bool {
+        let secret = &self
+            .inner
+            .read()
+            .expect("StripeService lock poisoned")
+            .config
+            .webhook_secret;
+        !secret.is_empty() && secret != WEBHOOK_SECRET_PLACEHOLDER
     }
 
     /// Get the configured $0 price ID for free/lifetime subscriptions.
@@ -643,6 +690,100 @@ impl StripeService {
         }))
     }
 
+    /// BUNYIP-225: does this customer hold any subscription other than
+    /// `exclude_sub_id` whose status grants access (`active` or `trialing`)?
+    /// Called from the `customer.subscription.deleted` webhook handler to
+    /// avoid flipping a re-subscribed user back to Canceled when an older
+    /// subscription's deferred deletion fires at period_end.
+    ///
+    /// Lists up to 100 subscriptions for the customer (Stripe's per-page max)
+    /// and filters in-process for `status in {active, trialing}` AND
+    /// `id != exclude_sub_id`. A customer with more than 100 concurrent
+    /// subscriptions is well into pathological territory; the conservative
+    /// fallback is acceptable.
+    pub async fn has_other_active_subscription(
+        &self,
+        customer_id: &str,
+        exclude_sub_id: &str,
+    ) -> Result<bool, AppError> {
+        let (_config, client) = self.snapshot();
+
+        let cid: stripe::CustomerId = customer_id
+            .parse()
+            .map_err(|_| AppError::validation("customer_id", "Invalid customer ID"))?;
+
+        let mut params = stripe::ListSubscriptions::new();
+        params.customer = Some(cid);
+        params.limit = Some(100);
+
+        let subscriptions = stripe::Subscription::list(&client, &params)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    error = %e,
+                    customer_id = %customer_id,
+                    "Failed to list subscriptions for sibling check"
+                );
+                AppError::internal("Failed to query sibling subscriptions")
+            })?;
+
+        let has_sibling = subscriptions.data.iter().any(|sub| {
+            let id = sub.id.to_string();
+            let status = format!("{:?}", sub.status).to_lowercase();
+            id != exclude_sub_id && matches!(status.as_str(), "active" | "trialing")
+        });
+
+        Ok(has_sibling)
+    }
+
+    /// Resolve the price actually purchased on a completed Checkout Session
+    /// (BUNYIP-215).
+    ///
+    /// Stripe does NOT embed `line_items` in the `checkout.session.completed`
+    /// webhook payload, so the price id and amount cannot be read off the event
+    /// (doing so silently yielded the placeholder `"price_default"` and a
+    /// hardcoded amount). Retrieve the session with its line items and their
+    /// prices expanded, and return the first line item's price id plus its
+    /// amount (`unit_amount`, falling back to the line item's `amount_total`).
+    /// Returns `None` only when the session has no resolvable line-item price,
+    /// which should not happen for a genuinely completed checkout.
+    pub async fn get_checkout_session_price(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<StripeCheckoutPrice>, AppError> {
+        let (_config, client) = self.snapshot();
+
+        let sid: stripe::CheckoutSessionId = session_id
+            .parse()
+            .map_err(|_| AppError::validation("session_id", "Invalid checkout session ID"))?;
+
+        let session = stripe::CheckoutSession::retrieve(
+            &client,
+            &sid,
+            &["line_items", "line_items.data.price"],
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, session_id = %session_id, "Failed to retrieve checkout session");
+            AppError::internal("Failed to retrieve checkout session")
+        })?;
+
+        let Some(item) = session
+            .line_items
+            .and_then(|items| items.data.into_iter().next())
+        else {
+            return Ok(None);
+        };
+        let Some(price) = item.price else {
+            return Ok(None);
+        };
+
+        Ok(Some(StripeCheckoutPrice {
+            price_id: price.id.to_string(),
+            amount: price.unit_amount.unwrap_or(item.amount_total),
+        }))
+    }
+
     // ─── Invoices ────────────────────────────────────────────
 
     /// List invoices for a customer from Stripe
@@ -897,24 +1038,44 @@ impl StripeService {
     }
 
     /// Create a checkout session with a specific price.
+    ///
+    /// BUNYIP-209: when `eligible_for_trial` is true (the user has never been
+    /// granted the signup trial), the subscription is created with
+    /// `trial_period_days = config.trial_period_days` and
+    /// `payment_method_collection = IfRequired`, so the trial begins without a
+    /// card up front. The session is tagged with `trial=true` metadata so the
+    /// `checkout.session.completed` webhook can flip `users.has_used_trial`.
+    /// When false, the session matches the pre-trial (immediate-billing)
+    /// behaviour exactly.
     pub async fn create_checkout_session(
         &self,
         customer_id: &str,
         user_id: Uuid,
         price_id: &str,
+        eligible_for_trial: bool,
     ) -> Result<(String, String), AppError> {
         let (config, client) = self.snapshot();
 
         let mut metadata = HashMap::new();
         metadata.insert("user_id".to_string(), user_id.to_string());
+        if eligible_for_trial {
+            metadata.insert("trial".to_string(), "true".to_string());
+        }
 
         let customer_id: stripe::CustomerId = customer_id.parse().map_err(|_| {
             tracing::error!(customer_id = %customer_id, "Invalid Stripe customer ID format");
             AppError::internal("Invalid customer ID")
         })?;
 
+        let trial_period_days = eligible_for_trial.then_some(config.trial_period_days);
+
         let params = stripe::CreateCheckoutSession {
             mode: Some(stripe::CheckoutSessionMode::Subscription),
+            // Card-only: pin the payment method whitelist so Checkout never
+            // offers "Pay with Link" (or any Dashboard-enabled default). This
+            // is the source of truth - a future Stripe account swap can't
+            // accidentally re-enable Link.
+            payment_method_types: Some(vec![stripe::CreateCheckoutSessionPaymentMethodTypes::Card]),
             customer: Some(customer_id),
             line_items: Some(vec![stripe::CreateCheckoutSessionLineItems {
                 price: Some(price_id.to_string()),
@@ -924,8 +1085,14 @@ impl StripeService {
             success_url: Some(&config.success_url),
             cancel_url: Some(&config.cancel_url),
             metadata: Some(metadata.clone()),
+            // Only override collection during a trial: IfRequired lets the
+            // trial start with no card. Leave it unset otherwise so the
+            // immediate-billing flow keeps Stripe's default (Always).
+            payment_method_collection: eligible_for_trial
+                .then_some(stripe::CheckoutSessionPaymentMethodCollection::IfRequired),
             subscription_data: Some(stripe::CreateCheckoutSessionSubscriptionData {
                 metadata: Some(metadata),
+                trial_period_days,
                 ..Default::default()
             }),
             ..Default::default()
@@ -1217,6 +1384,7 @@ mod tests {
             cancel_url: "http://localhost/cancel".to_string(),
             free_price_id: None,
             app_tag: "a8n-tools".to_string(),
+            trial_period_days: 30,
         }
     }
 
@@ -1267,6 +1435,26 @@ mod tests {
         assert_eq!(first_origin(""), None);
         assert_eq!(first_origin(",,"), None);
         assert_eq!(first_origin("  ,  "), None);
+    }
+
+    // -- BUNYIP-209: signup free trial --
+
+    #[test]
+    fn default_trial_period_days_is_30() {
+        assert_eq!(DEFAULT_TRIAL_PERIOD_DAYS, 30);
+        // test_config mirrors the env default so service tests see a trial.
+        assert_eq!(test_config().trial_period_days, 30);
+    }
+
+    #[test]
+    fn trial_period_resolves_only_for_eligible_users() {
+        // Mirrors the selection in `create_checkout_session`: an eligible
+        // (first-time) user gets the configured length, a returning user None.
+        let config = test_config();
+        let eligible: Option<u32> = true.then_some(config.trial_period_days);
+        let returning: Option<u32> = false.then_some(config.trial_period_days);
+        assert_eq!(eligible, Some(30));
+        assert_eq!(returning, None);
     }
 
     // -- Webhook signature verification --
@@ -1341,5 +1529,29 @@ mod tests {
 
         let header = format!("t={},v1={}", old_ts, sig);
         assert!(service.verify_webhook_signature(payload, &header).is_err());
+    }
+
+    // -- BUNYIP-203: webhook secret fail-closed guard --
+
+    #[test]
+    fn webhook_secret_configured_true_for_real_secret() {
+        let service = test_service();
+        assert!(service.webhook_secret_configured());
+    }
+
+    #[test]
+    fn webhook_secret_configured_false_for_placeholder() {
+        let mut config = test_config();
+        config.webhook_secret = WEBHOOK_SECRET_PLACEHOLDER.to_string();
+        let service = StripeService::new(config);
+        assert!(!service.webhook_secret_configured());
+    }
+
+    #[test]
+    fn webhook_secret_configured_false_for_empty() {
+        let mut config = test_config();
+        config.webhook_secret = String::new();
+        let service = StripeService::new(config);
+        assert!(!service.webhook_secret_configured());
     }
 }
