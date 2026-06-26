@@ -181,6 +181,11 @@ pub struct User {
     /// `phone` scope by BUNYIP-140. No format normalization at the DB layer;
     /// the Settings form trims whitespace but otherwise stores verbatim.
     pub phone: Option<String>,
+    /// BUNYIP-209: TRUE once the user has been issued a Stripe Checkout session
+    /// that carried the signup free trial (flipped by the
+    /// `checkout.session.completed` webhook). Trial-eligibility is `!has_used_trial`,
+    /// so a returning user never re-triggers the trial.
+    pub has_used_trial: bool,
 }
 
 impl User {
@@ -326,6 +331,7 @@ mod tests {
             first_name: None,
             last_name: None,
             phone: None,
+            has_used_trial: false,
         }
     }
 

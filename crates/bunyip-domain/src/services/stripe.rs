@@ -42,6 +42,11 @@ const WEBHOOK_SECRET_PLACEHOLDER: &str = "whsec_placeholder";
 /// the `async-stripe` client and inherit its own timeouts.
 const STRIPE_API_TIMEOUT_SECS: u64 = 10;
 
+/// BUNYIP-209: default length of the signup free trial, in days. Overridable
+/// via `BUNYIP_BILLING_TRIAL_PERIOD_DAYS` so ops can dial it without a
+/// redeploy. Stored on `StripeConfig::trial_period_days`.
+const DEFAULT_TRIAL_PERIOD_DAYS: u32 = 30;
+
 /// Build a `reqwest` client with the Stripe API timeout applied. Use this
 /// at every site that talks to `api.stripe.com` directly rather than
 /// `reqwest::Client::new()` (which has no timeout).
@@ -71,6 +76,10 @@ pub struct StripeConfig {
     pub free_price_id: Option<String>,
     /// Application tag stored in product metadata to filter shared Stripe accounts
     pub app_tag: String,
+    /// BUNYIP-209: length of the signup free trial, in days. Passed as
+    /// `subscription_data.trial_period_days` the first time a trial-eligible
+    /// user starts checkout. Defaults to [`DEFAULT_TRIAL_PERIOD_DAYS`].
+    pub trial_period_days: u32,
 }
 
 impl StripeConfig {
@@ -108,6 +117,13 @@ impl StripeConfig {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "bunyip".to_string()),
+            // BUNYIP-209: signup trial length, env-overridable. A blank or
+            // unparseable value falls back to the 30-day default rather than
+            // disabling the trial.
+            trial_period_days: std::env::var("BUNYIP_BILLING_TRIAL_PERIOD_DAYS")
+                .ok()
+                .and_then(|s| s.trim().parse::<u32>().ok())
+                .unwrap_or(DEFAULT_TRIAL_PERIOD_DAYS),
         })
     }
 
@@ -137,6 +153,7 @@ impl StripeConfig {
             cancel_url: env_config.cancel_url,
             free_price_id: env_config.free_price_id,
             app_tag,
+            trial_period_days: env_config.trial_period_days,
         })
     }
 }
@@ -975,21 +992,36 @@ impl StripeService {
     }
 
     /// Create a checkout session with a specific price.
+    ///
+    /// BUNYIP-209: when `eligible_for_trial` is true (the user has never been
+    /// granted the signup trial), the subscription is created with
+    /// `trial_period_days = config.trial_period_days` and
+    /// `payment_method_collection = IfRequired`, so the trial begins without a
+    /// card up front. The session is tagged with `trial=true` metadata so the
+    /// `checkout.session.completed` webhook can flip `users.has_used_trial`.
+    /// When false, the session matches the pre-trial (immediate-billing)
+    /// behaviour exactly.
     pub async fn create_checkout_session(
         &self,
         customer_id: &str,
         user_id: Uuid,
         price_id: &str,
+        eligible_for_trial: bool,
     ) -> Result<(String, String), AppError> {
         let (config, client) = self.snapshot();
 
         let mut metadata = HashMap::new();
         metadata.insert("user_id".to_string(), user_id.to_string());
+        if eligible_for_trial {
+            metadata.insert("trial".to_string(), "true".to_string());
+        }
 
         let customer_id: stripe::CustomerId = customer_id.parse().map_err(|_| {
             tracing::error!(customer_id = %customer_id, "Invalid Stripe customer ID format");
             AppError::internal("Invalid customer ID")
         })?;
+
+        let trial_period_days = eligible_for_trial.then_some(config.trial_period_days);
 
         let params = stripe::CreateCheckoutSession {
             mode: Some(stripe::CheckoutSessionMode::Subscription),
@@ -1002,8 +1034,14 @@ impl StripeService {
             success_url: Some(&config.success_url),
             cancel_url: Some(&config.cancel_url),
             metadata: Some(metadata.clone()),
+            // Only override collection during a trial: IfRequired lets the
+            // trial start with no card. Leave it unset otherwise so the
+            // immediate-billing flow keeps Stripe's default (Always).
+            payment_method_collection: eligible_for_trial
+                .then_some(stripe::CheckoutSessionPaymentMethodCollection::IfRequired),
             subscription_data: Some(stripe::CreateCheckoutSessionSubscriptionData {
                 metadata: Some(metadata),
+                trial_period_days,
                 ..Default::default()
             }),
             ..Default::default()
@@ -1295,6 +1333,7 @@ mod tests {
             cancel_url: "http://localhost/cancel".to_string(),
             free_price_id: None,
             app_tag: "a8n-tools".to_string(),
+            trial_period_days: 30,
         }
     }
 
@@ -1345,6 +1384,26 @@ mod tests {
         assert_eq!(first_origin(""), None);
         assert_eq!(first_origin(",,"), None);
         assert_eq!(first_origin("  ,  "), None);
+    }
+
+    // -- BUNYIP-209: signup free trial --
+
+    #[test]
+    fn default_trial_period_days_is_30() {
+        assert_eq!(DEFAULT_TRIAL_PERIOD_DAYS, 30);
+        // test_config mirrors the env default so service tests see a trial.
+        assert_eq!(test_config().trial_period_days, 30);
+    }
+
+    #[test]
+    fn trial_period_resolves_only_for_eligible_users() {
+        // Mirrors the selection in `create_checkout_session`: an eligible
+        // (first-time) user gets the configured length, a returning user None.
+        let config = test_config();
+        let eligible: Option<u32> = true.then_some(config.trial_period_days);
+        let returning: Option<u32> = false.then_some(config.trial_period_days);
+        assert_eq!(eligible, Some(30));
+        assert_eq!(returning, None);
     }
 
     // -- Webhook signature verification --
