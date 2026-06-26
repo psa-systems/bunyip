@@ -251,7 +251,9 @@ pub async fn stripe_webhook(
     // Route to appropriate handler. Capture the result so the idempotency claim
     // is finalized on success or released on failure (BUNYIP-210).
     let outcome = match event_type {
-        "checkout.session.completed" => handle_checkout_completed(&event, &pool, &email).await,
+        "checkout.session.completed" => {
+            handle_checkout_completed(&event, &pool, &email, &stripe).await
+        }
         "customer.subscription.created" => handle_subscription_created(&event, &pool, &tc).await,
         "customer.subscription.updated" => handle_subscription_updated(&event, &pool, &tc).await,
         "customer.subscription.deleted" => handle_subscription_deleted(&event, &pool, &email).await,
@@ -282,6 +284,7 @@ async fn handle_checkout_completed(
     event: &serde_json::Value,
     pool: &PgPool,
     email: &EmailService,
+    stripe: &StripeService,
 ) -> Result<(), AppError> {
     let session = &event["data"]["object"];
 
@@ -298,28 +301,39 @@ async fn handle_checkout_completed(
         .parse()
         .map_err(|_| AppError::validation("user_id", "Invalid UUID"))?;
 
-    // Get price info
-    let amount = match session["amount_total"].as_i64() {
-        Some(a) => a as i32,
-        None => {
-            tracing::warn!(user_id = %user_id, "Missing amount_total in checkout session, defaulting to 300");
-            300
-        }
-    };
+    let session_id = session["id"]
+        .as_str()
+        .ok_or(AppError::validation("id", "Missing checkout session id"))?;
 
-    // Update user membership status and lock price
+    // Resolve the real purchased price from the Stripe API (BUNYIP-215). Stripe
+    // omits `line_items` from the `checkout.session.completed` payload, so the
+    // price id and amount cannot be read off the event: the old code did that
+    // and silently locked the placeholder `"price_default"` with a hardcoded
+    // amount. A transient API failure propagates so Stripe retries the delivery
+    // (BUNYIP-210 makes that safe).
+    let price = stripe.get_checkout_session_price(session_id).await?;
+
+    // Update user membership status and lock the real price for life.
     UserRepository::update_membership_status(pool, user_id, MembershipStatus::Active).await?;
 
-    // Lock the price for life. The price id lives on the session's line items;
-    // `session["subscription"]` is the SUBSCRIPTION id (sub_...), which must not
-    // be stored in the price column. Fall back to the legacy default when line
-    // items are not present on the payload.
-    let price_id = session["line_items"]["data"][0]["price"]["id"]
-        .as_str()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "price_default".to_string());
-
-    UserRepository::lock_price(pool, user_id, &price_id, amount).await?;
+    let amount = match price {
+        Some(p) => {
+            let amount = p.amount as i32;
+            UserRepository::lock_price(pool, user_id, &p.price_id, amount).await?;
+            amount
+        }
+        None => {
+            // Should not happen for a genuinely completed checkout. Do NOT lock
+            // a placeholder; leave the price unlocked rather than persist junk,
+            // and fall back to the session total only for the welcome email.
+            tracing::error!(
+                user_id = %user_id,
+                session_id = %session_id,
+                "Checkout session had no resolvable line-item price; skipping price lock"
+            );
+            session["amount_total"].as_i64().unwrap_or(0) as i32
+        }
+    };
 
     tracing::info!(user_id = %user_id, "Checkout completed, membership activated");
 

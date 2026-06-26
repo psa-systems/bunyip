@@ -50,6 +50,18 @@ pub struct StripeSubscriptionItemResponse {
     pub quantity: Option<u64>,
 }
 
+/// The price actually purchased on a completed Checkout Session, fetched from
+/// the Stripe API (BUNYIP-215). Stripe omits `line_items` from the
+/// `checkout.session.completed` webhook payload, so this cannot be read off the
+/// event and must be retrieved with `line_items` expanded.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StripeCheckoutPrice {
+    pub price_id: String,
+    /// Amount in the smallest currency unit (cents), from the price's
+    /// `unit_amount`, falling back to the line item's `amount_total`.
+    pub amount: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StripeSubscriptionResponse {
     pub id: String,
