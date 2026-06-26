@@ -690,6 +690,52 @@ impl StripeService {
         }))
     }
 
+    /// BUNYIP-225: does this customer hold any subscription other than
+    /// `exclude_sub_id` whose status grants access (`active` or `trialing`)?
+    /// Called from the `customer.subscription.deleted` webhook handler to
+    /// avoid flipping a re-subscribed user back to Canceled when an older
+    /// subscription's deferred deletion fires at period_end.
+    ///
+    /// Lists up to 100 subscriptions for the customer (Stripe's per-page max)
+    /// and filters in-process for `status in {active, trialing}` AND
+    /// `id != exclude_sub_id`. A customer with more than 100 concurrent
+    /// subscriptions is well into pathological territory; the conservative
+    /// fallback is acceptable.
+    pub async fn has_other_active_subscription(
+        &self,
+        customer_id: &str,
+        exclude_sub_id: &str,
+    ) -> Result<bool, AppError> {
+        let (_config, client) = self.snapshot();
+
+        let cid: stripe::CustomerId = customer_id
+            .parse()
+            .map_err(|_| AppError::validation("customer_id", "Invalid customer ID"))?;
+
+        let mut params = stripe::ListSubscriptions::new();
+        params.customer = Some(cid);
+        params.limit = Some(100);
+
+        let subscriptions = stripe::Subscription::list(&client, &params)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    error = %e,
+                    customer_id = %customer_id,
+                    "Failed to list subscriptions for sibling check"
+                );
+                AppError::internal("Failed to query sibling subscriptions")
+            })?;
+
+        let has_sibling = subscriptions.data.iter().any(|sub| {
+            let id = sub.id.to_string();
+            let status = format!("{:?}", sub.status).to_lowercase();
+            id != exclude_sub_id && matches!(status.as_str(), "active" | "trialing")
+        });
+
+        Ok(has_sibling)
+    }
+
     /// Resolve the price actually purchased on a completed Checkout Session
     /// (BUNYIP-215).
     ///
