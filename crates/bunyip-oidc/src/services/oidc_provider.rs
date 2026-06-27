@@ -452,40 +452,69 @@ impl OidcProvider {
     ) -> Result<AuthCodeRow, AppError> {
         let code_hash = sha256_bytes(raw_code.as_bytes());
 
-        // Atomically claim the code in a single statement: the
-        // `consumed_at IS NULL AND revoked_at IS NULL` predicate is the
-        // redemption guard and `consumed_at = NOW()` is the redemption, so the
-        // check and the mark happen in one round-trip with no window between
-        // them. Two concurrent /token requests race on this UPDATE; exactly one
-        // matches the predicate and gets the row back, the loser matches zero
-        // rows and is rejected. This closes the TOCTOU double-spend that a
-        // SELECT-then-UPDATE leaves open (RFC 6749 §4.1.2). Runtime query so the
-        // BUNYIP-62 `selected_tenant_id` column stays off the `.sqlx/` cache
-        // regen path.
+        // BUNYIP-199: redemption must be atomic so two concurrent token
+        // requests bearing the same code cannot both succeed (double-spend /
+        // code-replay race). Load the row under a row-level lock inside a
+        // SERIALIZABLE transaction, verify, then mark consumed and commit,
+        // exactly as `rotate_refresh_token` does. The `FOR UPDATE` lock plus
+        // SERIALIZABLE isolation serialise concurrent redemptions of the same
+        // code: the loser blocks on the lock, then sees `consumed_at` set and
+        // loses the race.
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| AppError::internal(format!("Failed to begin transaction: {e}")))?;
+
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::internal(format!("Failed to set isolation level: {e}")))?;
+
+        // Load the row with a row-level lock. Runtime query so the BUNYIP-62
+        // `selected_tenant_id` column does not force a `.sqlx/` cache regen here.
         let row = sqlx::query_as::<_, AuthCodeRow>(
             r#"
-            UPDATE oauth_authorization_codes
-               SET consumed_at = NOW()
-             WHERE code_hash = $1
-               AND consumed_at IS NULL
-               AND revoked_at IS NULL
-            RETURNING
+            SELECT
                 code_hash, client_id, user_id, op_session_id, redirect_uri,
                 scope, code_challenge, nonce, auth_time, acr, amr,
                 issued_at, expires_at, consumed_at, revoked_at,
                 selected_tenant_id
+            FROM oauth_authorization_codes
+            WHERE code_hash = $1
+            FOR UPDATE
             "#,
         )
-        .bind(code_hash)
-        .fetch_optional(&self.pool)
+        .bind(code_hash.clone())
+        .fetch_optional(&mut *tx)
         .await
-        .map_err(|e| AppError::internal(format!("DB error consuming auth code: {e}")))?
+        .map_err(|e| AppError::internal(format!("DB error loading auth code: {e}")))?
         .ok_or(AppError::OidcInvalidGrant(
-            "authorization code already used or unknown".into(),
+            "unknown authorization code".into(),
         ))?;
 
-        // The code is now consumed regardless of the checks below; a code that
-        // fails any binding check is single-use spent, never replayable.
+        // Already consumed — the lost race. Revoke the token family if tokens
+        // were already issued from this code, mirroring the refresh-token
+        // reuse-detection behaviour, then return invalid_grant.
+        if row.consumed_at.is_some() || row.revoked_at.is_some() {
+            // Best-effort family revocation: any refresh-token family minted
+            // from a session whose auth code is now being replayed is revoked.
+            sqlx::query(
+                r#"
+                UPDATE refresh_token_families
+                SET revoked_at = NOW(), revoke_reason = 'reuse_detected'
+                WHERE op_session_id = $1 AND revoked_at IS NULL
+                "#,
+            )
+            .bind(row.op_session_id)
+            .execute(&mut *tx)
+            .await
+            .ok(); // best-effort; don't mask the primary invalid_grant
+            tx.commit().await.ok();
+            return Err(AppError::OidcInvalidGrant(
+                "authorization code already used".into(),
+            ));
+        }
 
         // Expiry
         if row.expires_at < Utc::now() {
@@ -515,6 +544,28 @@ impl OidcProvider {
                 "PKCE verification failed".into(),
             ));
         }
+
+        // Mark consumed under the held lock. Guard on `consumed_at IS NULL` as
+        // defence-in-depth: if a concurrent transaction slipped through, the
+        // zero-rows-affected result is treated as a lost race. Runtime query to
+        // keep the BUNYIP-62 column addition off the `.sqlx/` regen path.
+        let consumed = sqlx::query(
+            "UPDATE oauth_authorization_codes SET consumed_at = NOW() WHERE code_hash = $1 AND consumed_at IS NULL",
+        )
+        .bind(code_hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| AppError::internal(format!("Failed to mark code consumed: {e}")))?;
+
+        if consumed.rows_affected() == 0 {
+            return Err(AppError::OidcInvalidGrant(
+                "authorization code already used".into(),
+            ));
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| AppError::internal(format!("Failed to commit code redemption: {e}")))?;
 
         Ok(row)
     }

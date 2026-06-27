@@ -67,7 +67,7 @@ check-fmt:
 # Build the api image's builder stage only - catches Docker-build drift cheaply.
 [group: 'checks']
 check-docker:
-    docker build --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .
+    docker build --file bunyip-api/oci-build/Dockerfile --target builder --output type=cacheonly --provenance=false .
 
 # Run fmt + clippy + workspace lib tests inside the pinned rust-builder image.
 # For dev boxes with no local Rust toolchain; named volumes keep repeat runs incremental.
@@ -488,7 +488,6 @@ dev-clean-all: dev-clean
     let images = [
         "bunyip-api:latest"
         "bunyip-web:latest"
-        "bunyip-api-builder:check"
     ]
     for img in $images {
         let present = (do { ^docker image inspect $img } | complete).exit_code == 0

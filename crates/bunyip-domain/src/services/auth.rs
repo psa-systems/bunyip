@@ -116,6 +116,25 @@ fn trusted_device_allows_skip(role: &str, has_valid_device: bool) -> bool {
     has_valid_device && role == UserRole::Subscriber.as_str()
 }
 
+/// BUNYIP-221: which side of the dual gate (email-verify vs name-save)
+/// triggered the initial-tier grant. Emitted as the `trigger` field on the
+/// `InitialTierGranted` audit row so the timeline shows which event was the
+/// closer of the funnel.
+#[derive(Debug, Clone, Copy)]
+pub enum TierGrantTrigger {
+    EmailVerified,
+    ProfileCompleted,
+}
+
+impl TierGrantTrigger {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TierGrantTrigger::EmailVerified => "email_verified",
+            TierGrantTrigger::ProfileCompleted => "profile_completed",
+        }
+    }
+}
+
 /// Authentication service
 pub struct AuthService {
     pool: PgPool,
@@ -1128,14 +1147,18 @@ impl AuthService {
 
     /// Confirm email verification using token.
     ///
-    /// Returns `(user_id, email, subscription_tier)`. The tier is assigned atomically using
-    /// a transaction-level advisory lock so concurrent verifications cannot race
-    /// and land on the same slot count.
+    /// Returns `(user_id, email, Option<SubscriptionTier>)`. The tier is
+    /// returned as `Some(...)` only when the verify also crossed the BUNYIP-221
+    /// dual-condition threshold (email verified AND first / last name
+    /// present), i.e. when this verify is the side that actually unlocks the
+    /// trial. A verify that happens before the user has saved a name returns
+    /// `Ok((..., None))`; the tier is granted later from
+    /// `update_current_user_profile` once the names land. Either order wins.
     pub async fn confirm_email_verification(
         &self,
         token: String,
         ip_address: Option<IpAddr>,
-    ) -> Result<(Uuid, String, SubscriptionTier), AppError> {
+    ) -> Result<(Uuid, String, Option<SubscriptionTier>), AppError> {
         let ip = ip_address.map(IpNetwork::from);
         let token_hash = self.jwt.hash_token(&token);
 
@@ -1153,22 +1176,123 @@ impl AuthService {
             .await?
             .ok_or(AppError::not_found("User"))?;
 
-        // Open a transaction to atomically assign the subscription tier.
-        // The advisory lock (arbitrary fixed ID) serialises all concurrent
-        // verifications so the slot count cannot be read twice for the same slot.
+        // Flip email_verified + consume the token in one tx. Tier assignment
+        // is no longer part of this tx (BUNYIP-221): it now depends on the
+        // user also having a first / last name, which is independent of the
+        // verify click. The grant runs through `maybe_grant_initial_tier`
+        // below, which handles the dual-condition gate + slot-count race via
+        // its own advisory-locked tx.
         let mut tx = self.pool.begin().await?;
 
-        // Acquire transaction-level advisory lock (released on COMMIT/ROLLBACK)
+        TokenRepository::mark_email_verification_token_used(&mut *tx, verification_token.id)
+            .await?;
+
+        sqlx::query("UPDATE users SET email_verified = TRUE, updated_at = NOW() WHERE id = $1")
+            .bind(user.id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+
+        // Audit the verify itself. Tier metadata (when applicable) is logged
+        // separately by `maybe_grant_initial_tier` via `InitialTierGranted` so
+        // the timeline reads cleanly even when verify and grant are minutes
+        // (or days) apart.
+        AuditLogRepository::create(
+            &self.pool,
+            CreateAuditLog::new(AuditAction::EmailVerified)
+                .with_actor(user.id, &user.email, &user.role)
+                .with_ip(ip),
+        )
+        .await?;
+
+        let granted = self
+            .maybe_grant_initial_tier(user.id, ip_address, TierGrantTrigger::EmailVerified)
+            .await?;
+
+        Ok((user.id, user.email, granted))
+    }
+
+    /// BUNYIP-221: grant the initial subscription tier (Lifetime / EarlyAdopter
+    /// / Standard) when, and only when, both gate conditions are true:
+    ///
+    /// 1. `email_verified = true`.
+    /// 2. `first_name` and `last_name` are both present (non-empty post-trim).
+    ///
+    /// Idempotent: a no-op for users who already have `trial_ends_at`
+    /// populated or who already have a non-`standard` tier assigned (i.e. tier
+    /// already granted, possibly under the pre-BUNYIP-221 verify-only flow).
+    /// Returns `Ok(Some(tier))` when this call performed the grant,
+    /// `Ok(None)` when either gate failed or the grant was already done.
+    ///
+    /// Called from `confirm_email_verification` (after the verify commits) and
+    /// from `update_current_user_profile` (after a successful name save) so
+    /// either order between "verify" and "fill in name" produces the grant.
+    pub async fn maybe_grant_initial_tier(
+        &self,
+        user_id: Uuid,
+        ip_address: Option<IpAddr>,
+        trigger: TierGrantTrigger,
+    ) -> Result<Option<SubscriptionTier>, AppError> {
+        let ip = ip_address.map(IpNetwork::from);
+        let user = UserRepository::find_by_id(&self.pool, user_id)
+            .await?
+            .ok_or(AppError::not_found("User"))?;
+
+        // Gate 1: email verified.
+        if !user.email_verified {
+            return Ok(None);
+        }
+        // Gate 2: both names present (non-empty post-trim).
+        let name_ok = |s: &Option<String>| s.as_deref().is_some_and(|v| !v.trim().is_empty());
+        if !name_ok(&user.first_name) || !name_ok(&user.last_name) {
+            return Ok(None);
+        }
+        // Idempotency: any signal that a prior grant happened means skip.
+        // The "never granted" sentinel is exactly: `subscription_tier =
+        // 'standard'` AND `trial_ends_at IS NULL` AND `lifetime_member =
+        // false`. Anything else is "granted" (by this method, by the
+        // pre-BUNYIP-221 verify-only path, or by an admin grant of `free` /
+        // `lifetime`).
+        if user.lifetime_member
+            || user.trial_ends_at.is_some()
+            || user.subscription_tier != "standard"
+        {
+            return Ok(None);
+        }
+
+        // Open a transaction to atomically assign the tier. Advisory lock
+        // serialises concurrent grants so the slot count cannot be read twice
+        // for the same slot (the same race the pre-BUNYIP-221 verify path
+        // protected against). The lock id matches the one the verify path
+        // used so the two never race against each other either.
+        let mut tx = self.pool.begin().await?;
+
         sqlx::query("SELECT pg_advisory_xact_lock(9999999)")
             .execute(&mut *tx)
             .await?;
 
-        // Count how many users have been assigned each tier while holding the lock.
-        // This ensures slots are filled based on actual assignments, not total user count.
+        // Re-read under the lock so a parallel call that already granted
+        // between our pre-lock check and the lock acquisition does not
+        // produce a duplicate write.
+        let locked = sqlx::query_as::<_, User>(
+            "SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(AppError::not_found("User"))?;
+        if locked.lifetime_member
+            || locked.trial_ends_at.is_some()
+            || locked.subscription_tier != "standard"
+        {
+            tx.commit().await?;
+            return Ok(None);
+        }
+
         let (lifetime_count, early_adopter_count) =
             UserRepository::count_tier_assignments(&mut *tx).await?;
 
-        // Snapshot tier config under the lock so values are consistent
         let tc = self
             .tier_config
             .read()
@@ -1183,19 +1307,9 @@ impl AuthService {
             SubscriptionTier::Standard
         };
 
-        // Mark token as used
-        TokenRepository::mark_email_verification_token_used(&mut *tx, verification_token.id)
-            .await?;
-
-        // Set email_verified and assign tier in the same transaction
-        sqlx::query("UPDATE users SET email_verified = TRUE, updated_at = NOW() WHERE id = $1")
-            .bind(user.id)
-            .execute(&mut *tx)
-            .await?;
-
         UserRepository::assign_subscription_tier(
             &mut *tx,
-            user.id,
+            user_id,
             &tier,
             tc.early_adopter_trial_days,
             tc.standard_trial_days,
@@ -1204,17 +1318,19 @@ impl AuthService {
 
         tx.commit().await?;
 
-        // Audit log (outside transaction — non-critical)
         AuditLogRepository::create(
             &self.pool,
-            CreateAuditLog::new(AuditAction::EmailVerified)
+            CreateAuditLog::new(AuditAction::InitialTierGranted)
                 .with_actor(user.id, &user.email, &user.role)
                 .with_ip(ip)
-                .with_metadata(serde_json::json!({ "subscription_tier": tier.as_str() })),
+                .with_metadata(serde_json::json!({
+                    "trigger": trigger.as_str(),
+                    "subscription_tier": tier.as_str(),
+                })),
         )
         .await?;
 
-        Ok((user.id, user.email, tier))
+        Ok(Some(tier))
     }
 
     /// Create an admin invite
