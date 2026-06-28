@@ -1,13 +1,46 @@
 //! Audit log repository
 
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use crate::errors::AppError;
 use crate::models::{AuditLog, CreateAuditLog};
 
 pub struct AuditLogRepository;
+
+/// Push the optional admin-filter predicates onto a `QueryBuilder`, binding
+/// each value so placeholders and bindings can never drift apart. Used for
+/// both the page query and the count query in `list_paginated`.
+fn push_audit_filters<'a>(
+    qb: &mut QueryBuilder<'a, Postgres>,
+    actor_id: Option<Uuid>,
+    action: Option<&'a str>,
+    admin_only: bool,
+    start_date: Option<DateTime<Utc>>,
+    end_date: Option<DateTime<Utc>>,
+) {
+    let mut sep = " WHERE ";
+    if let Some(actor_id) = actor_id {
+        qb.push(sep).push("actor_id = ").push_bind(actor_id);
+        sep = " AND ";
+    }
+    if let Some(action) = action {
+        qb.push(sep).push("action = ").push_bind(action);
+        sep = " AND ";
+    }
+    if admin_only {
+        qb.push(sep).push("is_admin_action = TRUE");
+        sep = " AND ";
+    }
+    if let Some(start_date) = start_date {
+        qb.push(sep).push("created_at >= ").push_bind(start_date);
+        sep = " AND ";
+    }
+    if let Some(end_date) = end_date {
+        qb.push(sep).push("created_at <= ").push_bind(end_date);
+    }
+}
 
 impl AuditLogRepository {
     /// Create a new audit log entry
@@ -54,54 +87,32 @@ impl AuditLogRepository {
     ) -> Result<(Vec<AuditLog>, i64), AppError> {
         let offset = (page - 1) * per_page;
 
-        // Build query dynamically based on filters
-        let mut conditions = Vec::new();
-        let mut param_idx = 3; // Start after LIMIT and OFFSET
-
-        if actor_id.is_some() {
-            conditions.push(format!("actor_id = ${}", param_idx));
-            param_idx += 1;
-        }
-
-        if action.is_some() {
-            conditions.push(format!("action = ${}", param_idx));
-            param_idx += 1;
-        }
-
-        if admin_only {
-            conditions.push("is_admin_action = TRUE".to_string());
-        }
-
-        if start_date.is_some() {
-            conditions.push(format!("created_at >= ${}", param_idx));
-            param_idx += 1;
-        }
-
-        if end_date.is_some() {
-            conditions.push(format!("created_at <= ${}", param_idx));
-        }
-
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conditions.join(" AND "))
-        };
-
-        let query = format!(
-            "SELECT * FROM audit_logs {} ORDER BY created_at DESC LIMIT $1 OFFSET $2",
-            where_clause
+        // Build the same filter clause on both the page query and the count
+        // query via QueryBuilder so every placeholder is actually bound (the
+        // previous version emitted `$3`/`$4` filters but only ever bound
+        // `$1`/`$2`, so any actor/action filter 500'd at runtime).
+        let mut query = QueryBuilder::new("SELECT * FROM audit_logs");
+        push_audit_filters(
+            &mut query, actor_id, action, admin_only, start_date, end_date,
         );
-        let count_query = format!("SELECT COUNT(*) FROM audit_logs {}", where_clause);
+        query
+            .push(" ORDER BY created_at DESC LIMIT ")
+            .push_bind(per_page)
+            .push(" OFFSET ")
+            .push_bind(offset);
 
-        // For simplicity, just handle the most common case - no filters
-        // In a real implementation, you'd build the query more dynamically
-        let logs = sqlx::query_as::<_, AuditLog>(&query)
-            .bind(per_page)
-            .bind(offset)
-            .fetch_all(pool)
-            .await?;
+        let mut count_query = QueryBuilder::new("SELECT COUNT(*) FROM audit_logs");
+        push_audit_filters(
+            &mut count_query,
+            actor_id,
+            action,
+            admin_only,
+            start_date,
+            end_date,
+        );
 
-        let total: (i64,) = sqlx::query_as(&count_query).fetch_one(pool).await?;
+        let logs = query.build_query_as::<AuditLog>().fetch_all(pool).await?;
+        let total: (i64,) = count_query.build_query_as().fetch_one(pool).await?;
 
         Ok((logs, total.0))
     }
@@ -126,35 +137,6 @@ impl AuditLogRepository {
         .await?;
 
         Ok(logs)
-    }
-
-    /// List admin actions
-    pub async fn list_admin_actions(
-        pool: &PgPool,
-        page: i32,
-        per_page: i32,
-    ) -> Result<(Vec<AuditLog>, i64), AppError> {
-        let offset = (page - 1) * per_page;
-
-        let logs = sqlx::query_as::<_, AuditLog>(
-            r#"
-            SELECT * FROM audit_logs
-            WHERE is_admin_action = TRUE
-            ORDER BY created_at DESC
-            LIMIT $1 OFFSET $2
-            "#,
-        )
-        .bind(per_page)
-        .bind(offset)
-        .fetch_all(pool)
-        .await?;
-
-        let total: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM audit_logs WHERE is_admin_action = TRUE")
-                .fetch_one(pool)
-                .await?;
-
-        Ok((logs, total.0))
     }
 
     /// List security-related events

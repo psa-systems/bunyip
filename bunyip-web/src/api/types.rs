@@ -36,6 +36,31 @@ pub enum SubscriptionTier {
     Standard,
 }
 
+/// One active session in the user's session list (BUNYIP-137). Mirrors the
+/// API's `SessionResponse`. Timestamps stay as ISO-8601 strings per the
+/// module convention; the settings page formats them for display.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionInfo {
+    pub id: String,
+    pub device_info: Option<String>,
+    pub ip_address: Option<String>,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    #[serde(default)]
+    pub current: bool,
+}
+
+/// One trusted device (BUNYIP-138). Mirrors the API's `TrustedDeviceInfo`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrustedDeviceInfo {
+    pub id: String,
+    pub label: Option<String>,
+    pub ip_address: Option<String>,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub expires_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct User {
     pub id: String,
@@ -53,13 +78,21 @@ pub struct User {
     pub subscription_tier: SubscriptionTier,
     pub trial_ends_at: Option<String>,
     pub lifetime_member: bool,
+    /// BUNYIP-139: optional profile fields surfaced for the Settings page
+    /// Profile panel and the dashboard "fill in your name" banner.
+    /// `Option<String>` here is "absent OR cleared"; the dashboard treats
+    /// empty / whitespace-only strings as empty for banner purposes.
+    #[serde(default)]
+    pub first_name: Option<String>,
+    #[serde(default)]
+    pub last_name: Option<String>,
+    #[serde(default)]
+    pub phone: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuthResponse {
     pub user: User,
-    #[serde(default)]
-    pub access_token: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -82,6 +115,10 @@ pub struct Application {
     pub is_accessible: bool,
     pub maintenance_mode: bool,
     pub maintenance_message: Option<String>,
+    /// Group membership (BUNYIP-100); `None` = ungrouped. Used to group the
+    /// applications page under group headings.
+    #[serde(default)]
+    pub group_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -101,8 +138,6 @@ pub struct PaginatedResponse<T> {
     pub page: i64,
     #[serde(default)]
     pub page_size: Option<i64>,
-    #[serde(default)]
-    pub per_page: Option<i64>,
     pub total_pages: i64,
 }
 
@@ -161,10 +196,23 @@ pub enum FeedbackStatus {
     Closed,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FeedbackSubmissionResponse {
-    pub id: String,
-    pub message: String,
+impl FeedbackStatus {
+    /// snake_case wire value, matching the serde discriminant. Single source
+    /// for the status string the BFF sends to bunyip-api.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FeedbackStatus::New => "new",
+            FeedbackStatus::Reviewed => "reviewed",
+            FeedbackStatus::Responded => "responded",
+            FeedbackStatus::Closed => "closed",
+        }
+    }
+}
+
+impl AsRef<str> for FeedbackStatus {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -200,10 +248,17 @@ pub struct DownloadAsset {
     pub download_url: String,
 }
 
+/// OCI pull coordinates for a product (mirrors the API's `AppOciImage`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AppDownloadsResponse {
-    pub release_tag: Option<String>,
-    pub assets: Vec<DownloadAsset>,
+pub struct OciImage {
+    /// Public registry hostname for `docker login`.
+    pub registry: String,
+    /// Repository inside the registry (the application slug).
+    pub repository: String,
+    /// The pinned image tag (the only tag the registry serves).
+    pub tag: String,
+    /// Full pull reference: `{registry}/{repository}:{tag}`.
+    pub reference: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -211,8 +266,16 @@ pub struct AppDownloadGroup {
     pub app_slug: String,
     pub app_display_name: String,
     pub icon_url: Option<String>,
+    /// Version of the binary assets; EMPTY for OCI-only products. Kept a
+    /// plain string (not `Option`) to match the API's wire format, which
+    /// stays a required string for compatibility with older clients.
     pub release_tag: String,
     pub assets: Vec<DownloadAsset>,
+    /// OCI pull info, when the product has a pullable container image.
+    /// `default` so this client also parses responses from an older API
+    /// that does not send the field.
+    #[serde(default)]
+    pub oci: Option<OciImage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -281,6 +344,10 @@ pub struct AdminAuditLog {
     pub created_at: String,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminApplication {
     pub id: String,
@@ -300,11 +367,71 @@ pub struct AdminApplication {
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
+    #[serde(default)]
+    pub requires_entitlement: bool,
+    // Whether this is a hosted app (hub launch tile) or a catalog-only
+    // distribution product. Defaults to hosted to match the DB column default.
+    #[serde(default = "default_true")]
+    pub is_hosted: bool,
+    // Distribution config, for prefilling the admin edit form. The backend
+    // serialises these straight off the `Application` model (snake_case).
+    #[serde(default)]
+    pub artifact_source: Option<String>,
+    #[serde(default)]
+    pub forgejo_owner: Option<String>,
+    #[serde(default)]
+    pub forgejo_repo: Option<String>,
+    #[serde(default)]
+    pub forgejo_package: Option<String>,
+    #[serde(default)]
+    pub pinned_release_tag: Option<String>,
+    #[serde(default)]
+    pub oci_image_owner: Option<String>,
+    #[serde(default)]
+    pub oci_image_name: Option<String>,
+    #[serde(default)]
+    pub pinned_image_tag: Option<String>,
+    // Group membership (BUNYIP-100); `None` = ungrouped. Prefills the group
+    // selector on the application edit form.
+    #[serde(default)]
+    pub group_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct UserEntitlement {
+    pub application_id: String,
+    pub slug: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub requires_entitlement: bool,
+    pub granted_at: String,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminApplicationList {
     pub applications: Vec<AdminApplication>,
+}
+
+/// An application group (BUNYIP-100). Shared by the admin management page and
+/// the user-facing grouping of the applications list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApplicationGroup {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub icon_url: Option<String>,
+    #[serde(default)]
+    pub sort_order: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApplicationGroupList {
+    pub groups: Vec<ApplicationGroup>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -316,6 +443,12 @@ pub struct AdminFeedbackSummary {
     #[serde(default)]
     pub tags: Vec<String>,
     pub message_excerpt: String,
+    /// Mirrors the bunyip-api summary field added in BUNYIP-84 so the admin
+    /// row can show the captured `?from=` path. `#[serde(default)]` keeps
+    /// rolling-deploy compatibility: an older API that does not emit the
+    /// field deserializes as `None`.
+    #[serde(default)]
+    pub page_path: Option<String>,
     pub status: FeedbackStatus,
     pub created_at: String,
     pub responded_at: Option<String>,
@@ -326,6 +459,14 @@ pub struct AdminFeedbackDetail {
     pub id: String,
     pub name: Option<String>,
     pub email: Option<String>,
+    /// BUNYIP-94: the API also emits a masked form (e.g.
+    /// `y***@niceguyit.biz`) alongside the raw email. The detail view
+    /// renders the masked form because admins do not need the unmasked
+    /// address to reply (the API holds the address and routes the
+    /// response email server-side). `#[serde(default)]` keeps an older
+    /// API that does not emit the field deserialize-compatible.
+    #[serde(default)]
+    pub email_masked: Option<String>,
     pub subject: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -334,6 +475,45 @@ pub struct AdminFeedbackDetail {
     pub status: FeedbackStatus,
     pub admin_response: Option<String>,
     pub created_at: String,
+    /// Wall-clock timestamp the admin replied at, populated by the API on
+    /// successful respond. `#[serde(default)]` keeps an older API that
+    /// does not send the field deserialize-compatible.
+    #[serde(default)]
+    pub responded_at: Option<String>,
+    /// Files attached to the submission. `#[serde(default)]` so an older
+    /// API that does not emit the field deserializes as an empty list.
+    #[serde(default)]
+    pub attachments: Vec<FeedbackAttachmentMeta>,
+}
+
+/// Per-file metadata on a feedback detail response. Mirrors bunyip-api's
+/// `FeedbackAttachmentMeta`. The binary is fetched on demand through the
+/// BFF proxy at `/admin/feedback/{id}/attachments/{attachment_id}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FeedbackAttachmentMeta {
+    pub id: String,
+    pub filename: String,
+    pub mime_type: String,
+    pub size_bytes: i64,
+}
+
+/// Mirror of bunyip-api's `ArchivedFeedbackItem`. Powers the dedicated
+/// archive list page; only the fields the SSR row needs are bound.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArchivedFeedback {
+    pub id: String,
+    pub archived_at: String,
+    pub name: Option<String>,
+    /// API returns the unmasked email here. Admins can already see it on
+    /// the active list once they open the detail page, so exposing it on
+    /// the archive list is consistent.
+    pub email: Option<String>,
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub message_excerpt: String,
+    pub original_status: Option<String>,
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -356,6 +536,20 @@ pub struct TierConfigResponse {
     pub free_price_id: Option<String>,
     pub early_adopter_price_id: Option<String>,
     pub standard_price_id: Option<String>,
+    // BUNYIP-122: surface the Stripe product IDs that match the price IDs
+    // above so the admin tier-settings form can read + render them. The
+    // bunyip-api side already returns these fields (see
+    // bunyip-api/src/handlers/admin.rs:1577 UpdateTierConfigRequest and
+    // crates/bunyip-domain/src/models/tier.rs:35 TierConfigResponse).
+    // Note the naming asymmetry the model carries: `free_price_id` /
+    // `lifetime_product_id` both refer to the same tier (the "free" /
+    // "lifetime" plan); we mirror it verbatim rather than re-aliasing.
+    #[serde(default)]
+    pub lifetime_product_id: Option<String>,
+    #[serde(default)]
+    pub early_adopter_product_id: Option<String>,
+    #[serde(default)]
+    pub standard_product_id: Option<String>,
     pub source: String,
     pub lifetime_slots_used: i64,
     pub early_adopter_slots_used: i64,

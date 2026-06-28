@@ -42,6 +42,13 @@ pub enum AuditAction {
     TwoFactorRecoveryCodesRegenerated,
     EmailVerificationRequested,
     EmailVerified,
+    /// BUNYIP-221: the initial subscription tier was assigned (one of Lifetime
+    /// / EarlyAdopter / Standard, with `trial_ends_at` set per the tier). Fires
+    /// once per user the moment BOTH email is verified AND first / last name
+    /// are present, regardless of which side crosses the threshold last.
+    /// Metadata: `{ "trigger": "email_verified" | "profile_completed",
+    /// "subscription_tier": "<tier>" }`.
+    InitialTierGranted,
     FeedbackSubmitted,
     FeedbackResponded,
     FeedbackDeleted,
@@ -50,6 +57,17 @@ pub enum AuditAction {
     ApplicationDeleted,
     AdminUserRoleChanged,
     AdminUserDeleted,
+    /// Admin corrected a user's email address from the admin user-detail
+    /// surface (BUNYIP-119). Metadata carries the old + new address and
+    /// whether the new address was marked verified in the same edit.
+    AdminUserEmailChanged,
+    /// Admin force-verified a user's email address without the user
+    /// completing the email-verification flow (BUNYIP-119).
+    AdminUserEmailVerified,
+    /// Admin cleared a user's two-factor authentication (BUNYIP-119),
+    /// deleting their TOTP secret + recovery codes so a locked-out user
+    /// can re-enrol. Distinct from the user-initiated `TwoFactorDisabled`.
+    AdminUserTwoFactorReset,
     ApplicationUpdated,
     AdminInviteCreated,
     AdminInviteAccepted,
@@ -58,10 +76,16 @@ pub enum AuditAction {
     AdminTierConfigUpdated,
     AdminKeyRotation,
     UserAccountDeleted,
+    /// BUNYIP-211: outcome of fanning the `account_deleted` webhook out to one
+    /// downstream app after a user deleted their account. One row per app per
+    /// dispatch (including admin replays); metadata carries `user_id`,
+    /// `app_slug`, `status` (`delivered` / `failed`), and `error` on failure.
+    AccountDeleteWebhookDispatched,
     DownloadRequested,
     DownloadCompleted,
     DownloadDeniedMembership,
     DownloadDeniedRateLimit,
+    DownloadDeniedEntitlement,
     DownloadFailedUpstream,
     OciLoginSucceeded,
     OciLoginFailed,
@@ -70,6 +94,37 @@ pub enum AuditAction {
     OciPullFailedUpstream,
     OciPullDeniedRateLimit,
     OciPullDeniedScope,
+    OciPullDeniedEntitlement,
+    AdminEntitlementGranted,
+    AdminEntitlementRevoked,
+    AdminApplicationRestrictionChanged,
+    AdminStripePriceMappingChanged,
+    /// A refresh token was presented for exchange that had already been
+    /// used or revoked. The whole token family is revoked at the same
+    /// time. Emitted by `bunyip-oidc` after the family revocation
+    /// commits (BUNYIP-88).
+    AuthRefreshReuseDetected,
+    /// Admin flipped `feedback.is_spam` to TRUE (BUNYIP-92). Moves the
+    /// row from the admin's active queue into the Spam tab; reversible
+    /// via `FeedbackUnmarkedSpam`.
+    FeedbackMarkedSpam,
+    /// Admin flipped `feedback.is_spam` back to FALSE. False-positive
+    /// recovery path for `FeedbackMarkedSpam`.
+    FeedbackUnmarkedSpam,
+    /// Admin moved a single feedback row out of `feedback` and into
+    /// `feedback_archive` (BUNYIP-93). The same end-state the batch
+    /// 90-day `archive_and_purge_closed` job produces, but on-demand.
+    /// Reversible via the existing `FeedbackRestored` action.
+    FeedbackArchived,
+    /// Admin created (or upserted) an `oauth_client_user_tenants`
+    /// assignment for a relying party (BUNYIP-61). Metadata carries
+    /// `user_id`, `tenant_id`, `role`, and the new `assignment_id`.
+    OauthUserTenantAssigned,
+    /// Admin deleted an `oauth_client_user_tenants` assignment.
+    /// Metadata carries the `assignment_id` (the row is gone so the
+    /// (user, tenant) it pointed at is recoverable only from prior
+    /// audit log rows).
+    OauthUserTenantUnassigned,
 }
 
 impl AuditAction {
@@ -108,6 +163,7 @@ impl AuditAction {
             }
             AuditAction::EmailVerificationRequested => "email_verification_requested",
             AuditAction::EmailVerified => "email_verified",
+            AuditAction::InitialTierGranted => "initial_tier_granted",
             AuditAction::FeedbackSubmitted => "feedback_submitted",
             AuditAction::FeedbackResponded => "feedback_responded",
             AuditAction::FeedbackDeleted => "feedback_deleted",
@@ -116,6 +172,9 @@ impl AuditAction {
             AuditAction::ApplicationDeleted => "application_deleted",
             AuditAction::AdminUserRoleChanged => "admin_user_role_changed",
             AuditAction::AdminUserDeleted => "admin_user_deleted",
+            AuditAction::AdminUserEmailChanged => "admin_user_email_changed",
+            AuditAction::AdminUserEmailVerified => "admin_user_email_verified",
+            AuditAction::AdminUserTwoFactorReset => "admin_user_two_factor_reset",
             AuditAction::ApplicationUpdated => "application_updated",
             AuditAction::AdminInviteCreated => "admin_invite_created",
             AuditAction::AdminInviteAccepted => "admin_invite_accepted",
@@ -124,10 +183,12 @@ impl AuditAction {
             AuditAction::AdminTierConfigUpdated => "admin_tier_config_updated",
             AuditAction::AdminKeyRotation => "admin_key_rotation",
             AuditAction::UserAccountDeleted => "user_account_deleted",
+            AuditAction::AccountDeleteWebhookDispatched => "account_delete_webhook_dispatched",
             AuditAction::DownloadRequested => "download_requested",
             AuditAction::DownloadCompleted => "download_completed",
             AuditAction::DownloadDeniedMembership => "download_denied_membership",
             AuditAction::DownloadDeniedRateLimit => "download_denied_rate_limit",
+            AuditAction::DownloadDeniedEntitlement => "download_denied_entitlement",
             AuditAction::DownloadFailedUpstream => "download_failed_upstream",
             AuditAction::OciLoginSucceeded => "oci_login_succeeded",
             AuditAction::OciLoginFailed => "oci_login_failed",
@@ -136,6 +197,19 @@ impl AuditAction {
             AuditAction::OciPullFailedUpstream => "oci_pull_failed_upstream",
             AuditAction::OciPullDeniedRateLimit => "oci_pull_denied_rate_limit",
             AuditAction::OciPullDeniedScope => "oci_pull_denied_scope",
+            AuditAction::OciPullDeniedEntitlement => "oci_pull_denied_entitlement",
+            AuditAction::AdminEntitlementGranted => "admin_entitlement_granted",
+            AuditAction::AdminEntitlementRevoked => "admin_entitlement_revoked",
+            AuditAction::AdminApplicationRestrictionChanged => {
+                "admin_application_restriction_changed"
+            }
+            AuditAction::AdminStripePriceMappingChanged => "admin_stripe_price_mapping_changed",
+            AuditAction::AuthRefreshReuseDetected => "auth_refresh_reuse_detected",
+            AuditAction::FeedbackMarkedSpam => "feedback_marked_spam",
+            AuditAction::FeedbackUnmarkedSpam => "feedback_unmarked_spam",
+            AuditAction::FeedbackArchived => "feedback_archived",
+            AuditAction::OauthUserTenantAssigned => "oauth_user_tenant_assigned",
+            AuditAction::OauthUserTenantUnassigned => "oauth_user_tenant_unassigned",
         }
     }
 
@@ -154,23 +228,36 @@ impl AuditAction {
                 | AuditAction::ApplicationUpdated
                 | AuditAction::AdminUserRoleChanged
                 | AuditAction::AdminUserDeleted
+                | AuditAction::AdminUserEmailChanged
+                | AuditAction::AdminUserEmailVerified
+                | AuditAction::AdminUserTwoFactorReset
                 | AuditAction::FeedbackResponded
                 | AuditAction::FeedbackDeleted
                 | AuditAction::FeedbackRestored
+                | AuditAction::FeedbackMarkedSpam
+                | AuditAction::FeedbackUnmarkedSpam
+                | AuditAction::FeedbackArchived
+                | AuditAction::OauthUserTenantAssigned
+                | AuditAction::OauthUserTenantUnassigned
                 | AuditAction::AdminInviteCreated
                 | AuditAction::AdminInviteAccepted
                 | AuditAction::AdminInviteRevoked
                 | AuditAction::AdminStripeConfigUpdated
                 | AuditAction::AdminTierConfigUpdated
                 | AuditAction::AdminKeyRotation
+                | AuditAction::AdminEntitlementGranted
+                | AuditAction::AdminEntitlementRevoked
+                | AuditAction::AdminApplicationRestrictionChanged
+                | AuditAction::AdminStripePriceMappingChanged
         )
     }
 }
 
 /// Audit severity levels
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditSeverity {
+    #[default]
     Info,
     Warning,
     Error,
@@ -185,12 +272,6 @@ impl AuditSeverity {
             AuditSeverity::Error => "error",
             AuditSeverity::Critical => "critical",
         }
-    }
-}
-
-impl Default for AuditSeverity {
-    fn default() -> Self {
-        AuditSeverity::Info
     }
 }
 

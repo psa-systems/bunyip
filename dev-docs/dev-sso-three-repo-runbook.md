@@ -15,7 +15,7 @@ in production (you cannot do that on `localhost`).
 
 | Repo | Role | dev-sso hostname (user `long`) | Upstream port |
 | --- | --- | --- | --- |
-| `bunyip` | SaaS hub / account + billing UI; **its own OIDC issuer** (new) | `long-bunyip.a8n.run` | web 4400 (api 4401 internal) |
+| `bunyip` | SaaS hub / account + billing UI; **its own OIDC issuer** (new) | `long-bunyip.a8n.run` + `long-bunyip-registry.a8n.run` (OCI registry, sec 9) | web 4400; api 4401 internal, registry 18081 via Traefik |
 | `mokosh-server` | Identity provider (the OIDC issuer the SPA still points at) | `long-mokosh-api.a8n.run` | 4301 |
 | `mokosh-apps` | The PSA client SPA (relying party) | `long-mokosh.a8n.run` | 4301 |
 
@@ -119,48 +119,52 @@ After the dunite rebuild, **bunyip-api is itself an OIDC issuer**
 (`OIDC_ISSUER=http://localhost:4401`; the provider is gated on that var in
 `main.rs`). It loads an Ed25519 signing key at startup
 (`OIDC_JWT_PRIVATE_KEY_PATH=/run/secrets/oidc/dev-2026.pem`, mounted from
-`./secrets`). Missing keys = boot failure. `just ensure-oidc-keys` now generates
+`./secrets/oidc`). Missing keys = boot failure. `just ensure-oidc-keys` now generates
 them (added this session).
 
-### 3.8 The OIDC direction is in transition (read this carefully)
-There are currently **two issuers** in play and the wiring is mid-migration:
-- `bunyip-api` IS an OIDC issuer (`OIDC_ISSUER=:4401`, serves `/oauth2/*` +
-  `/.well-known/*`) and owns its own `/v1/auth/*` (email+password register/login).
-- yet `bunyip-web` is still configured as a **client of mokosh-server**
-  (`BUNYIP_OIDC_ISSUER=https://<user>-mokosh-api.a8n.run` + the
-  `register-bunyip-client` flow above).
+### 3.8 The OIDC direction (cutover landed: bunyip-api IS the OP)
+The reversed wiring scaffold step 8 flagged is now converged in dev-sso. There is ONE issuer: `bunyip-api` (`OIDC_ISSUER=https://<user>-bunyip-api.a8n.run`, serves `/oauth2/*` + `/.well-known/*` + its own `/v1/auth/*` email+password login). Both relying parties consume it:
+- `bunyip-web` (the hub): `BUNYIP_OIDC_ISSUER=https://<user>-bunyip-api.a8n.run`, client `bunyip-web-dev`.
+- the mokosh SPA: `MOKOSH_OIDC_ISSUER=https://<user>-bunyip-api.a8n.run`, client `mokosh-apps-dev`.
 
-So the dev-sso SSO bridge points the SPA at mokosh-server as IdP, even though
-bunyip can now be its own IdP. `dev-docs/bunyip-on-dunite-scaffold.md` step 8
-explicitly flags this as "reversed OIDC wiring" to fix: bunyip-web should
-eventually consume Bunyip's own issuer. Until that converges, the
-`register-bunyip-client` + `BUNYIP_OIDC_*` dance is the supported dev-sso path.
+`mokosh-server` is a **Resource Server**: its auth middleware's BunyipVerifier (`src/modules/auth/oidc_rs.rs`) validates the at+jwt bunyip mints by fetching bunyip's discovery + JWKS and JIT-provisioning the user, activated by `OIDC_ISSUER` + `OIDC_AUDIENCE`. Because the issuer host resolves to dev-01's public edge (self-signed + 404 on the OP path) from inside the container, mokosh-server's compose pins it to the LOCAL Traefik via `extra_hosts` (`<user>-bunyip-api.a8n.run:${BUNYIP_OP_TRAEFIK_IP:-172.30.0.11}`), which serves the OP with a valid Let's Encrypt cert.
+
+bunyip-api's OP is exposed on its own Traefik host `<user>-bunyip-api.a8n.run` (port 4401); register the two dev clients with `just register-dev-clients`. The old `register-bunyip-client` (mokosh-server) flow is retired.
 
 ## 4. Spin-up procedure (the happy path, once a box is set up)
 
 On **desktop-02**, in dependency order:
 
 ```nu
-# 1. IdP first
+# 1. The OP (bunyip-api) + hub first
+cd /home/long/bunyip; just dev-sso
+
+# 2. Register the two dev OIDC clients in bunyip-api (idempotent; prints UUIDs)
+just register-dev-clients
+#    -> hub UUID  -> /home/long/bunyip/.env as BUNYIP_OIDC_CLIENT_ID
+#    -> SPA UUID  -> /home/long/mokosh-apps/.env as MOKOSH_OIDC_CLIENT_ID
+
+# 3. The Resource Server (mokosh-server)
 cd /home/long/mokosh-server; just dev-sso
 
-# 2. Register bunyip-web as an OIDC client (ONE TIME; prints a UUID)
-just register-bunyip-client
-#    -> paste the UUID into /home/long/bunyip/.env as BUNYIP_OIDC_CLIENT_ID
-
-# 3. The client SPA
+# 4. The client SPA
 cd /home/long/mokosh-apps; just dev-sso
 
-# 4. The hub
+# 5. Re-up the hub so it reads the client_id you just set
 cd /home/long/bunyip; just dev-sso
 ```
 
 bunyip `.env` must have (resolve `${USER}` to your username):
 ```
-BUNYIP_OIDC_ISSUER=https://long-mokosh-api.a8n.run
-BUNYIP_OIDC_CLIENT_ID=<uuid from step 2>
+BUNYIP_OIDC_ISSUER=https://long-bunyip-api.a8n.run
+BUNYIP_OIDC_CLIENT_ID=b0000000-0000-4000-8000-0000000000d1
 BUNYIP_OIDC_REDIRECT_URI=https://long-bunyip.a8n.run/auth/callback
 ```
+mokosh-apps `.env` needs `MOKOSH_OIDC_CLIENT_ID=b0000000-0000-4000-8000-0000000000d2`; mokosh-server reads the RS env from its compose overlay (`OIDC_ISSUER` + `OIDC_AUDIENCE` + the `extra_hosts` pin).
+
+Optionally, to also serve the distribution proxy (member downloads + the OCI
+registry on `<user>-bunyip-registry.a8n.run`), add the Forgejo service
+credentials; see section 9.
 
 On your **Mac** (one time), point the dev hostnames at desktop-02's Nebula IP:
 ```bash
@@ -246,9 +250,9 @@ folded into `fix/dev-sso-nebula-secure-list`.
 Symptom: web SSR could not reach `api:4401`. Cause: the api **crash-looped on
 config** - the `.env` was the **old-architecture** one (missing ~20 new keys), so
 `TOTP_ENCRYPTION_KEY`/`STRIPE_ENCRYPTION_KEY` were empty (must be 32-byte hex) and
-the api panicked; plus `secrets/` had no Ed25519 OIDC keys. Fix: regenerate `.env`
+the api panicked; plus `secrets/oidc/` had no Ed25519 OIDC keys. Fix: regenerate `.env`
 from the new template (generated secret keys, kept the registered client_id + uid),
-generate `secrets/dev-2026.pem`, recreate the api. Durable fix: `ensure-oidc-keys`
+generate `secrets/oidc/dev-2026.pem`, recreate the api. Durable fix: `ensure-oidc-keys`
 recipe (`feat/dev-ensure-oidc-keys`) + the existing `ensure-env` key generation.
 See 3.7.
 
@@ -264,13 +268,14 @@ See 3.7.
 | compose "incorrect label ... network" | missing `external: true` | 6.6 |
 | containers restart, 404 backend | HOST_UID fell back to 1000 (0700 repo) | 6.7 |
 | api panics "must be 32 bytes" | stale `.env` missing the new secret keys | 6.9 |
-| api panics on OIDC key | `secrets/dev-2026.pem` missing | 3.7 / 6.9 |
+| api panics on OIDC key | `secrets/oidc/dev-2026.pem` missing | 3.7 / 6.9 |
 | `${USER}` literal in `docker inspect` labels | map-syntax labels | 6.8 |
 
 ## 8. Open / transitional items
 
-- **Reversed OIDC wiring** (3.8): bunyip-web is a client of mokosh-server while
-  bunyip-api is its own issuer. Converge per scaffold step 8.
+- ~~**Reversed OIDC wiring** (3.8): bunyip-web is a client of mokosh-server while
+  bunyip-api is its own issuer.~~ DONE: bunyip-api is now the sole OP; bunyip-web
+  and the mokosh SPA are its clients; mokosh-server is a Resource Server (see 3.8).
 - **dev-01 must serve on `nebula-secure`** for the entrypoint change to be correct
   there too; confirm with the foundation owner (the work was done on desktop-02).
 - **Open PRs** from this session: `fix/dev-sso-nebula-secure-list` (bunyip +
@@ -278,3 +283,227 @@ See 3.7.
   mokosh-server already carries the nebula-secure change.
 - The `milestone-1-handoff.md` and `bunyip-on-dunite-scaffold.md` docs predate the
   rebuild landing and are stale on "mock backend / don't persist in bunyip-api".
+
+## 9. OCI registry subdomain (distribution proxy, BUNYIP-32)
+
+The dev-sso overlay routes the bunyip OCI registry through Traefik on its own
+per-developer hostname, `<user>-bunyip-registry.a8n.run`, with a real
+certificate. Members (or you, testing) docker-login with bunyip credentials;
+bunyip fetches the actual images from the private Forgejo with a server-side
+service token. Procedures and configuration rules live in
+`dev-docs/oci-registry-verification.md` (which has a dedicated dev-sso
+section); this section covers only the dev-sso-specific wiring.
+
+### Required .env additions
+
+The same distribution block documented in `.env.example` (Forgejo base URL,
+service token, `OCI_REGISTRY_ENABLED=true`). Do NOT set
+`OCI_REGISTRY_SERVICE` / `OCI_REGISTRY_REALM` for dev-sso: the overlay pins the
+service to `<user>-bunyip-registry.a8n.run` and clears the realm so it derives
+to `https://<service>/auth/token` (TLS via Traefik).
+
+The single api container serves both access paths at once: Traefik routes the
+registry hostname to it AND its localhost port stays published, so
+`localhost:18081` keeps working. (This is one container reachable two ways,
+not two stacks; a separate plain `just dev` cannot run concurrently with
+dev-sso - same container names and host ports.)
+
+### How it is wired
+
+- `compose.dev-sso.yml` adds Traefik labels to the `api` service:
+  router `bunyip-registry-<user>` on entrypoints `web-secure,nebula-secure`,
+  certresolver `cert-cloudflare`, forwarding to container port 18081.
+- The router binds BOTH secure entrypoints because the dev boxes differ
+  (verified on dev-01, 2026-06-02): on dev-01 the public :443 maps to Traefik's
+  `web-secure` entrypoint, while on desktop-02 the Nebula-published :443 is
+  `nebula-secure`. A router bound to only one of them 404s on the other box.
+  This is the same split behind the section 8 open item about bunyip-web's
+  entrypoint.
+- Both `/v2/*` and `/auth/token` ride the same hostname, which is exactly what
+  Docker's auth flow expects.
+
+### Smoke test (on the dev box)
+
+Run `just verify-oci` first (covers the full matrix against `localhost:18081`,
+which the same container also serves). Then confirm the Traefik path:
+
+```nu
+# A member user + application row must exist; `just verify-oci` seeds them.
+let user_name = (^whoami | str trim)
+let registry = $"($user_name)-bunyip-registry.a8n.run"
+
+# 1. Challenge advertises the Traefik hostname + https realm
+^curl --silent --include $"https://($registry)/v2/" | lines | where $it =~ "www-authenticate"
+# expect: Bearer realm="https://<user>-bunyip-registry.a8n.run/auth/token",service="..."
+
+# 2. Login + pull through Traefik (login prompts for the password; pipe it via
+#    --password-stdin when scripting)
+^docker login $registry --username admin@bunyip.local
+^docker pull $"($registry)/bunyip-api:v0.1.1"
+```
+
+The rest of the matrix (denials, cache hits, rate limits) is identical to the
+localhost procedure in `dev-docs/oci-registry-verification.md`. The binary
+download proxy rides the api with no extra routing; exercise it via the web UI
+/downloads page or `/v1/downloads` with a bearer token.
+
+### Mac access
+
+Add the registry hostname to the same `/etc/hosts` line as the other dev
+hostnames (section 4): `<nebula-ip>  <user>-bunyip-registry.a8n.run`. Docker
+Desktop on macOS resolves through the host's `/etc/hosts`.
+
+## 10. Distribution e2e smoke test (BUNYIP-35)
+
+The full customer-flow verification matrix, first executed 2026-06-02 against
+the local dev stack. Full pass/fail results live as a comment on BUNYIP-35.
+
+This section does NOT repeat what is already automated or documented
+elsewhere:
+
+- **OCI basics** (auth challenge, admin docker login, entitled pull,
+  pinned-tag enforcement): run `just verify-oci` - it checks all of them with
+  pass/fail output. The manual procedure behind it is
+  `dev-docs/oci-registry-verification.md` (the BUNYIP-31 runbook).
+- **Traefik-hostname routing**: section 9 above.
+
+What this section adds: the credential matrix (including non-member denials),
+a definitive cache proof, binary download integrity, limit enforcement, and
+Forgejo failure modes.
+
+### Prerequisites
+
+- Stack up via `just dev-detach` (NEVER raw `docker compose`; the justfile
+  owns the HOST_UID/volume wiring).
+- `.env` has a valid `FORGEJO_BASE_URL` + `FORGEJO_API_TOKEN` (read:package
+  scope) and `OCI_REGISTRY_ENABLED=true`.
+- Two dedicated test users. `just verify-oci` uses the admin
+  (`SETUP_DEFAULT_ADMIN`); this matrix needs a separate MEMBER (so results
+  don't depend on admin state) and a NON-MEMBER (for the denial tests, which
+  verify-oci cannot cover). Create them:
+
+```nu
+# Member + non-member accounts (register sets no entitlement).
+^curl --silent --request POST http://localhost:4401/v1/auth/register --header "Content-Type: application/json" --data '{"email": "test-member@bunyip.local", "password": "<pick-a-password>"}'
+^curl --silent --request POST http://localhost:4401/v1/auth/register --header "Content-Type: application/json" --data '{"email": "test-nonmember@bunyip.local", "password": "<pick-a-password>"}'
+
+# Entitle ONLY the member. lifetime_member is one of the access paths checked
+# by has_member_access() (role/lifetime/trial/active|grace all work);
+# oci-registry-verification.md uses membership_status = 'active' instead -
+# either is fine, lifetime_member never expires.
+let user_name = (^whoami | str trim)
+^docker exec $"dev-bunyip-postgres-($user_name)" psql --username bunyip --dbname bunyip --command "UPDATE users SET lifetime_member = TRUE, email_verified = TRUE WHERE email = 'test-member@bunyip.local';" --command "UPDATE users SET email_verified = TRUE WHERE email = 'test-nonmember@bunyip.local';"
+```
+
+- API auth for `/v1/*` is an HttpOnly `access_token` cookie (NOT a bearer
+  header). Capture it with a cookie jar:
+
+```nu
+# Login and store cookies; reuse $jar on every later /v1 request.
+let jar = (^mktemp | str trim)
+^curl --silent --cookie-jar $jar --request POST http://localhost:4401/v1/auth/login --header "Content-Type: application/json" --data '{"email": "test-member@bunyip.local", "password": "<password>"}'
+# Authenticated request:
+^curl --silent --cookie $jar http://localhost:4401/v1/downloads
+```
+
+### Matrix A: functional flows (no restarts)
+
+Run `just verify-oci` first; everything below assumes it passed.
+
+| # | Test | Command sketch | Expected |
+| --- | --- | --- | --- |
+| A1 | Bad password | `docker login localhost:18081` with member email, wrong password | docker: `unauthorized`; HTTP 401 from `/auth/token` |
+| A2 | Non-member docker login | `docker login` with non-member creds | `unauthorized` (entitlement gate; verify-oci only tests the happy path) |
+| A3 | Multi-arch index | `curl --header "Authorization: Bearer <token>" --header "Accept: application/vnd.oci.image.index.v1+json" http://localhost:18081/v2/mokosh-server/manifests/v0.2.0` (token from `/auth/token` with the pull scope) | JSON body `mediaType: application/vnd.oci.image.index.v1+json` with a `linux/amd64` entry |
+| A4 | Nonexistent repo | `docker pull localhost:18081/no-such-product:v1` | HTTP 404; JSON envelope code `NAME_UNKNOWN`; docker CLI prints `name unknown: repository name not known` |
+| A5 | Unpinned tag | `docker pull localhost:18081/mokosh-server:latest` | HTTP 404; JSON envelope code `MANIFEST_UNKNOWN`; docker CLI prints `manifest unknown: manifest not known` |
+| A6 | Cache proof (definitive) | see below | re-pull succeeds with Forgejo unreachable |
+| A7 | Downloads listing | `GET /v1/downloads` with member cookie jar | groups with `assets` and/or `oci` blocks |
+| A8 | Binary integrity | download binary + `.sha256` asset via the proxy; `sha256sum` the binary; also sha256 the same file fetched from Forgejo directly | all three digests identical |
+| A9 | Non-member denial | `GET /v1/downloads` + an asset URL with the NON-member cookie jar | HTTP 403, envelope code `FORBIDDEN`, no asset bytes |
+
+Caveat: space docker operations ~15 s apart or the token endpoint's
+5/min/email rate limit (BUNYIP-40) fires before whatever you are actually
+testing.
+
+**A6 cache proof.** "Grep the logs" does NOT work here: the blob path logs
+nothing on an upstream fetch, so absence of log lines proves nothing. The
+definitive method is a re-pull with the upstream dead - it can only succeed if
+every manifest and blob byte comes from bunyip's caches:
+
+```nu
+let user_name = (^whoami | str trim)
+let api = $"dev-bunyip-api-($user_name)"
+# 1. Warm the caches.
+^docker pull localhost:18081/mokosh-server:v0.2.0
+# 2. Make Forgejo unreachable inside the api container (backup first).
+^docker exec --user root $api sh -c 'cp /etc/hosts /etc/hosts.bak && echo "127.0.0.2 dev.a8n.run" >> /etc/hosts'
+# 3. Re-pull within the manifest-cache TTL (60 s default). Success = proof.
+^docker rmi localhost:18081/mokosh-server:v0.2.0
+^docker pull localhost:18081/mokosh-server:v0.2.0
+# 4. ALWAYS restore, even if step 3 failed.
+^docker exec --user root $api sh -c 'cp /etc/hosts.bak /etc/hosts && rm /etc/hosts.bak'
+```
+
+### Matrix B: limit enforcement
+
+Blocked on BUNYIP-42 for a clean procedure: compose.dev.yml does not pass the
+limit env vars through, so `.env` values are ignored. Until that lands, the
+interim method is a compose override layered on top of the just-managed stack
+(this is the one sanctioned exception to "never raw compose" - it keeps
+compose.dev.yml first so all just-managed wiring stays identical, and HOST_UID
+/ HOST_GID must be exported exactly as the justfile does):
+
+```nu
+# Override file with low limits (save errors if a leftover exists; remove it first).
+if ("/tmp/compose.limits.yml" | path exists) { ^rm /tmp/compose.limits.yml }
+"services:
+  api:
+    environment:
+      OCI_PULLS_PER_USER_PER_DAY: \"3\"
+      DOWNLOAD_DAILY_LIMIT_PER_USER: \"3\"
+      DOWNLOAD_CONCURRENCY_PER_USER: \"1\"
+" | save /tmp/compose.limits.yml
+$env.HOST_UID = (^id --user | str trim); $env.HOST_GID = (^id --group | str trim)
+^docker compose -f compose.dev.yml -f /tmp/compose.limits.yml up --detach api
+# ... run B1-B3 ...
+# Restore the normal stack when done:
+just dev-detach
+^rm /tmp/compose.limits.yml
+```
+
+| # | Test | Expected |
+| --- | --- | --- |
+| B1 | Pull past the daily cap | HTTP 429 on `/v2/{slug}/manifests/...`; the wait time is the `Retry-After` HTTP HEADER (the OCI 429 body has no retry field); value = seconds until midnight UTC. NOTE: one multi-arch docker pull = 3 counted requests (BUNYIP-43), so with cap 3 the SECOND pull is denied |
+| B2 | 4th download with cap 3 | HTTP 429; JSON body code `download_daily_limit` with `details.retry_after` (seconds to midnight UTC) - unlike B1 this one IS in the body |
+| B3 | 3 parallel downloads, concurrency 1 | exactly one 200, rest 429 |
+
+Reset counters between runs:
+
+```nu
+let user_name = (^whoami | str trim)
+^docker exec $"dev-bunyip-postgres-($user_name)" psql --username bunyip --dbname bunyip --command "DELETE FROM oci_pull_daily_counts;" --command "DELETE FROM download_daily_counts;"
+```
+
+### Matrix C: failure modes
+
+| # | Test | Procedure | Expected |
+| --- | --- | --- | --- |
+| C1 | Forgejo unreachable | Same hosts block/restore as A6 steps 2 and 4 (ALWAYS restore) | Warm caches keep serving; after cache expiry/invalidation `/v1/downloads` stays 200 and drops the affected product; asset download = 502 with API envelope code `UPSTREAM_ERROR`; `docker pull` = 502 with OCI envelope code `UNKNOWN`, message `upstream error`; container never crash-loops |
+| C2 | Forgejo token revoked | `cp .env /tmp/env-backup` FIRST. Then swap the token (`sed -i 's/^FORGEJO_API_TOKEN=.*/FORGEJO_API_TOKEN=invalid-test/' .env`), `just dev-detach`, run the checks, then `cp /tmp/env-backup .env && just dev-detach` | Customer sees generic "upstream service temporarily unavailable"; api log carries the actionable line `upstream Forgejo rejected the registry service credentials; verify FORGEJO_API_TOKEN is valid and has the read:package scope`; the token value never appears in any response |
+
+### Known gaps and defects (as of 2026-06-02)
+
+- No live releases-backed product exists (all binaries publish to the Forgejo
+  generic package registry), so the `artifact_source = 'release'` path is
+  covered only by wiremock integration tests in
+  `bunyip-api/src/handlers/download.rs`, not by this live matrix.
+- Blob cache hits/misses are not observable in logs (why A6 needs the
+  dead-upstream method); the only blob-cache log lines are the eviction
+  failures of BUNYIP-41.
+- BUNYIP-40: token endpoint shares the 5/min login rate limit; multi-image
+  pulls can 429.
+- BUNYIP-41: blob cache LRU eviction silently fails (pool exhaustion) during
+  concurrent pulls.
+- BUNYIP-42: compose files missing limit/TTL env passthrough.
+- BUNYIP-43: daily pull counter counts manifest requests (3+ per docker pull).

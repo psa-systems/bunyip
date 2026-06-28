@@ -5,18 +5,58 @@
 use serde_json::{json, Value};
 
 use super::types::{
-    AuthResponse, RecoveryCodesResponse, SetupStatus, TwoFactorSetupResponse,
-    TwoFactorStatusResponse, User,
+    AuthResponse, PaginatedResponse, RecoveryCodesResponse, SetupStatus, TrustedDeviceInfo,
+    TwoFactorSetupResponse, TwoFactorStatusResponse, User,
 };
 use super::{ok_data, parse, Api, ApiError};
 
+/// A page of the signed-in user's trusted devices (BUNYIP-138 / BUNYIP-177).
+/// The API returns a `PaginatedResponse<TrustedDeviceInfo>` inside the envelope.
+pub async fn list_trusted_devices(
+    api: &Api,
+    cookie: Option<&str>,
+    page: i64,
+    per_page: i64,
+) -> Result<PaginatedResponse<TrustedDeviceInfo>, ApiError> {
+    parse(
+        api.get(
+            &format!("/users/me/trusted-devices?page={page}&per_page={per_page}"),
+            cookie,
+        )
+        .await?,
+    )
+}
+
+/// Revoke a single trusted device by id.
+pub async fn revoke_trusted_device(
+    api: &Api,
+    cookie: Option<&str>,
+    id: &str,
+) -> Result<(), ApiError> {
+    let path = format!(
+        "/users/me/trusted-devices/{}/revoke",
+        urlencoding::encode(id)
+    );
+    let r = api.post(&path, cookie, None).await?;
+    ok_data(&r).map(|_| ())
+}
+
+// BUNYIP-139: User grew three Option<String> fields, pushing the size diff
+// between the two variants over clippy's default threshold. The enum is
+// constructed once per login attempt - boxing would change every call site
+// for a non-issue. Allow the lint locally.
+#[allow(clippy::large_enum_variant)]
 pub enum LoginOutcome {
     SignedIn(User),
     TwoFactorRequired { challenge_token: String },
 }
 
 fn parse_login(value: Value) -> Result<LoginOutcome, ApiError> {
-    if value.get("requires_2fa").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if value
+        .get("requires_2fa")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         let challenge_token = value
             .get("challenge_token")
             .and_then(|v| v.as_str())
@@ -67,7 +107,11 @@ pub async fn login(
     remember: bool,
 ) -> Result<(LoginOutcome, Vec<String>), ApiError> {
     let r = api
-        .post("/auth/login", cookie, Some(json!({ "email": email, "password": password, "remember": remember })))
+        .post(
+            "/auth/login",
+            cookie,
+            Some(json!({ "email": email, "password": password, "remember": remember })),
+        )
         .await?;
     let cookies = r.set_cookies.clone();
     let data = ok_data(&r)?.clone();
@@ -79,9 +123,18 @@ pub async fn verify_2fa(
     cookie: Option<&str>,
     challenge_token: &str,
     code: &str,
+    trust_device: bool,
 ) -> Result<(User, Vec<String>), ApiError> {
     let r = api
-        .post("/auth/2fa/verify", cookie, Some(json!({ "challenge_token": challenge_token, "code": code })))
+        .post(
+            "/auth/2fa/verify",
+            cookie,
+            Some(json!({
+                "challenge_token": challenge_token,
+                "code": code,
+                "trust_device": trust_device,
+            })),
+        )
         .await?;
     let cookies = r.set_cookies.clone();
     let data = ok_data(&r)?.clone();
@@ -94,7 +147,9 @@ pub async fn verify_2fa(
 }
 
 pub async fn request_magic_link(api: &Api, email: &str) -> Result<(), ApiError> {
-    let r = api.post("/auth/magic-link", None, Some(json!({ "email": email }))).await?;
+    let r = api
+        .post("/auth/magic-link", None, Some(json!({ "email": email })))
+        .await?;
     ok_data(&r).map(|_| ())
 }
 
@@ -102,20 +157,40 @@ pub async fn verify_magic_link(
     api: &Api,
     token: &str,
 ) -> Result<(LoginOutcome, Vec<String>), ApiError> {
-    let r = api.post("/auth/magic-link/verify", None, Some(json!({ "token": token }))).await?;
+    let r = api
+        .post(
+            "/auth/magic-link/verify",
+            None,
+            Some(json!({ "token": token })),
+        )
+        .await?;
     let cookies = r.set_cookies.clone();
     let data = ok_data(&r)?.clone();
     Ok((parse_login(data)?, cookies))
 }
 
 pub async fn request_password_reset(api: &Api, email: &str) -> Result<(), ApiError> {
-    let r = api.post("/auth/password-reset", None, Some(json!({ "email": email }))).await?;
+    let r = api
+        .post(
+            "/auth/password-reset",
+            None,
+            Some(json!({ "email": email })),
+        )
+        .await?;
     ok_data(&r).map(|_| ())
 }
 
-pub async fn confirm_password_reset(api: &Api, token: &str, new_password: &str) -> Result<(), ApiError> {
+pub async fn confirm_password_reset(
+    api: &Api,
+    token: &str,
+    new_password: &str,
+) -> Result<(), ApiError> {
     let r = api
-        .post("/auth/password-reset/confirm", None, Some(json!({ "token": token, "new_password": new_password })))
+        .post(
+            "/auth/password-reset/confirm",
+            None,
+            Some(json!({ "token": token, "new_password": new_password })),
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -127,14 +202,30 @@ pub async fn register(
     email: &str,
     password: &str,
 ) -> Result<(User, Vec<String>), ApiError> {
-    let r = api.post("/auth/register", None, Some(json!({ "email": email, "password": password }))).await?;
+    let r = api
+        .post(
+            "/auth/register",
+            None,
+            Some(json!({ "email": email, "password": password })),
+        )
+        .await?;
     let cookies = r.set_cookies.clone();
     let auth: AuthResponse = parse(r)?;
     Ok((auth.user, cookies))
 }
 
-pub async fn setup(api: &Api, email: &str, password: &str) -> Result<(User, Vec<String>), ApiError> {
-    let r = api.post("/auth/setup", None, Some(json!({ "email": email, "password": password }))).await?;
+pub async fn setup(
+    api: &Api,
+    email: &str,
+    password: &str,
+) -> Result<(User, Vec<String>), ApiError> {
+    let r = api
+        .post(
+            "/auth/setup",
+            None,
+            Some(json!({ "email": email, "password": password })),
+        )
+        .await?;
     let cookies = r.set_cookies.clone();
     let auth: AuthResponse = parse(r)?;
     Ok((auth.user, cookies))
@@ -154,8 +245,16 @@ pub async fn accept_invite(
     let r = api.post("/auth/invite/accept", None, Some(body)).await?;
     let cookies = r.set_cookies.clone();
     let data = ok_data(&r)?.clone();
-    if data.get("needs_password").and_then(|b| b.as_bool()).unwrap_or(false) {
-        let email = data.get("email").and_then(|e| e.as_str()).unwrap_or_default().to_string();
+    if data
+        .get("needs_password")
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false)
+    {
+        let email = data
+            .get("email")
+            .and_then(|e| e.as_str())
+            .unwrap_or_default()
+            .to_string();
         return Ok((Some(email), None, cookies));
     }
     let auth: AuthResponse = serde_json::from_value(data).map_err(|e| ApiError {
@@ -168,10 +267,50 @@ pub async fn accept_invite(
 
 // --- account / email / password --------------------------------------------
 
-pub async fn change_password(api: &Api, cookie: Option<&str>, current: &str, new: &str) -> Result<(), ApiError> {
+/// BUNYIP-139: persist optional first_name / last_name / phone via
+/// `PUT /v1/users/me/profile`. Each arg follows the API contract:
+/// - `Some("trimmed value")` -> write the value
+/// - `Some("")` -> clear the column to NULL
+/// - `None` -> leave the column unchanged (key absent in the JSON body)
+pub async fn update_profile(
+    api: &Api,
+    cookie: Option<&str>,
+    first_name: Option<&str>,
+    last_name: Option<&str>,
+    phone: Option<&str>,
+) -> Result<(), ApiError> {
+    let mut body = serde_json::Map::new();
+    if let Some(v) = first_name {
+        body.insert("first_name".into(), json!(v));
+    }
+    if let Some(v) = last_name {
+        body.insert("last_name".into(), json!(v));
+    }
+    if let Some(v) = phone {
+        body.insert("phone".into(), json!(v));
+    }
     let r = api
-        .put("/users/me/password", cookie, Some(json!({ "current_password": current, "new_password": new })))
+        .put(
+            "/users/me/profile",
+            cookie,
+            Some(serde_json::Value::Object(body)),
+        )
         .await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn change_password(
+    api: &Api,
+    cookie: Option<&str>,
+    current: &str,
+    new: &str,
+    totp_code: &str,
+) -> Result<(), ApiError> {
+    let mut body = json!({ "current_password": current, "new_password": new });
+    if !totp_code.is_empty() {
+        body["totp_code"] = json!(totp_code);
+    }
+    let r = api.put("/users/me/password", cookie, Some(body)).await?;
     ok_data(&r).map(|_| ())
 }
 
@@ -181,29 +320,51 @@ pub async fn request_email_change(
     cookie: Option<&str>,
     new_email: &str,
     current_password: &str,
+    totp_code: &str,
 ) -> Result<(bool, Vec<String>), ApiError> {
-    let body = if current_password.is_empty() {
-        json!({ "new_email": new_email })
-    } else {
-        json!({ "new_email": new_email, "current_password": current_password })
-    };
+    let mut body = json!({ "new_email": new_email });
+    if !current_password.is_empty() {
+        body["current_password"] = json!(current_password);
+    }
+    if !totp_code.is_empty() {
+        body["totp_code"] = json!(totp_code);
+    }
     let r = api.post("/users/me/email", cookie, Some(body)).await?;
     let cookies = r.set_cookies.clone();
     let data = ok_data(&r)?;
-    let relogin = data.get("requires_relogin").and_then(|b| b.as_bool()).unwrap_or(false);
+    let relogin = data
+        .get("requires_relogin")
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false);
     Ok((relogin, cookies))
 }
 
 pub async fn confirm_email_change(api: &Api, token: &str) -> Result<(), ApiError> {
-    let r = api.post("/users/me/email/confirm", None, Some(json!({ "token": token }))).await?;
+    let r = api
+        .post(
+            "/users/me/email/confirm",
+            None,
+            Some(json!({ "token": token })),
+        )
+        .await?;
     ok_data(&r).map(|_| ())
 }
 
 /// Returns the granted subscription tier string.
 pub async fn confirm_email_verification(api: &Api, token: &str) -> Result<String, ApiError> {
-    let r = api.post("/users/me/email/verify/confirm", None, Some(json!({ "token": token }))).await?;
+    let r = api
+        .post(
+            "/users/me/email/verify/confirm",
+            None,
+            Some(json!({ "token": token })),
+        )
+        .await?;
     let data = ok_data(&r)?;
-    Ok(data.get("subscription_tier").and_then(|t| t.as_str()).unwrap_or_default().to_string())
+    Ok(data
+        .get("subscription_tier")
+        .and_then(|t| t.as_str())
+        .unwrap_or_default()
+        .to_string())
 }
 
 pub async fn request_email_verification(api: &Api, cookie: Option<&str>) -> Result<(), ApiError> {
@@ -211,7 +372,12 @@ pub async fn request_email_verification(api: &Api, cookie: Option<&str>) -> Resu
     ok_data(&r).map(|_| ())
 }
 
-pub async fn delete_account(api: &Api, cookie: Option<&str>, password: &str, totp: Option<&str>) -> Result<Vec<String>, ApiError> {
+pub async fn delete_account(
+    api: &Api,
+    cookie: Option<&str>,
+    password: &str,
+    totp: Option<&str>,
+) -> Result<Vec<String>, ApiError> {
     let body = match totp {
         Some(c) => json!({ "password": password, "totp_code": c }),
         None => json!({ "password": password }),
@@ -224,23 +390,56 @@ pub async fn delete_account(api: &Api, cookie: Option<&str>, password: &str, tot
 
 // --- 2FA management ---------------------------------------------------------
 
-pub async fn setup_2fa(api: &Api, cookie: Option<&str>) -> Result<TwoFactorSetupResponse, ApiError> {
+pub async fn setup_2fa(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<TwoFactorSetupResponse, ApiError> {
     parse(api.post("/auth/2fa/setup", cookie, None).await?)
 }
 
-pub async fn confirm_2fa(api: &Api, cookie: Option<&str>, code: &str) -> Result<RecoveryCodesResponse, ApiError> {
-    parse(api.post("/auth/2fa/confirm", cookie, Some(json!({ "code": code }))).await?)
+pub async fn confirm_2fa(
+    api: &Api,
+    cookie: Option<&str>,
+    code: &str,
+) -> Result<RecoveryCodesResponse, ApiError> {
+    parse(
+        api.post("/auth/2fa/confirm", cookie, Some(json!({ "code": code })))
+            .await?,
+    )
 }
 
-pub async fn status_2fa(api: &Api, cookie: Option<&str>) -> Result<TwoFactorStatusResponse, ApiError> {
+pub async fn status_2fa(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<TwoFactorStatusResponse, ApiError> {
     parse(api.get("/auth/2fa/status", cookie).await?)
 }
 
-pub async fn disable_2fa(api: &Api, cookie: Option<&str>, password: &str) -> Result<(), ApiError> {
-    let r = api.post("/auth/2fa/disable", cookie, Some(json!({ "password": password }))).await?;
+pub async fn disable_2fa(
+    api: &Api,
+    cookie: Option<&str>,
+    password: &str,
+    totp_code: &str,
+) -> Result<(), ApiError> {
+    let mut body = json!({ "password": password });
+    if !totp_code.is_empty() {
+        body["totp_code"] = json!(totp_code);
+    }
+    let r = api.post("/auth/2fa/disable", cookie, Some(body)).await?;
     ok_data(&r).map(|_| ())
 }
 
-pub async fn regenerate_recovery_codes(api: &Api, cookie: Option<&str>, password: &str) -> Result<RecoveryCodesResponse, ApiError> {
-    parse(api.post("/auth/2fa/recovery-codes", cookie, Some(json!({ "password": password }))).await?)
+pub async fn regenerate_recovery_codes(
+    api: &Api,
+    cookie: Option<&str>,
+    password: &str,
+) -> Result<RecoveryCodesResponse, ApiError> {
+    parse(
+        api.post(
+            "/auth/2fa/recovery-codes",
+            cookie,
+            Some(json!({ "password": password })),
+        )
+        .await?,
+    )
 }

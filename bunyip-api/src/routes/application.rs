@@ -19,4 +19,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 web::get().to(handlers::download_asset),
             ),
     );
+    // Application groups (BUNYIP-100): display metadata for grouping the apps.
+    cfg.service(
+        web::scope("/application-groups")
+            .route("", web::get().to(handlers::list_application_groups)),
+    );
 }

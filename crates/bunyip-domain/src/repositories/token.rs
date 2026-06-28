@@ -97,12 +97,43 @@ impl TokenRepository {
         Ok(tokens)
     }
 
-    /// Alias for find_user_refresh_tokens
-    pub async fn find_active_refresh_tokens_for_user(
+    /// A page of a user's active refresh tokens, newest first (BUNYIP-177).
+    pub async fn find_user_refresh_tokens_paginated(
         pool: &PgPool,
         user_id: Uuid,
+        per_page: i32,
+        offset: i64,
     ) -> Result<Vec<RefreshToken>, AppError> {
-        Self::find_user_refresh_tokens(pool, user_id).await
+        let tokens = sqlx::query_as::<_, RefreshToken>(
+            r#"
+            SELECT * FROM refresh_tokens
+            WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > NOW()
+            ORDER BY created_at DESC
+            LIMIT $2 OFFSET $3
+            "#,
+        )
+        .bind(user_id)
+        .bind(per_page)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(tokens)
+    }
+
+    /// Count of a user's active refresh tokens, for pagination totals (BUNYIP-177).
+    pub async fn count_user_refresh_tokens(pool: &PgPool, user_id: Uuid) -> Result<i64, AppError> {
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*) FROM refresh_tokens
+            WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > NOW()
+            "#,
+        )
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(row.0)
     }
 
     /// Find refresh token by ID
@@ -170,11 +201,33 @@ impl TokenRepository {
         Ok(())
     }
 
-    /// Revoke all refresh tokens for a user
-    pub async fn revoke_all_user_refresh_tokens(
-        pool: &PgPool,
+    /// Revoke all refresh tokens for a user across BOTH refresh-token surfaces.
+    ///
+    /// Bunyip carries two parallel refresh-token schemes: the legacy
+    /// `refresh_tokens` table (HS256 session tokens) and the OIDC scheme in
+    /// `refresh_tokens_v2` gated by `refresh_token_families`. A security event
+    /// such as a password change, password reset, "log out everywhere", or
+    /// account deletion must invalidate every outstanding refresh token, so this
+    /// revokes all three relations in one transaction. Revoking the family is
+    /// what blocks the OIDC refresh endpoint (it checks the family); the v2 rows
+    /// are revoked too so per-token bookkeeping stays consistent.
+    ///
+    /// Generic over [`sqlx::Acquire`] so callers can pass either a `&PgPool`
+    /// (the revocation runs in its own transaction) or an existing
+    /// `&mut Transaction` (the revocation joins the caller's transaction, e.g.
+    /// the email-change flows that must revoke atomically with the email
+    /// update). In the latter case `begin` opens a nested transaction
+    /// (savepoint) so the three statements still commit or roll back together.
+    pub async fn revoke_all_user_refresh_tokens<'a, A>(
+        executor: A,
         user_id: Uuid,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), AppError>
+    where
+        A: sqlx::Acquire<'a, Database = Postgres>,
+    {
+        let mut tx = executor.begin().await?;
+
+        // Legacy HS256 refresh tokens.
         sqlx::query(
             r#"
             UPDATE refresh_tokens SET revoked_at = NOW()
@@ -182,10 +235,104 @@ impl TokenRepository {
             "#,
         )
         .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+        // OIDC refresh-token families (the surface the OIDC refresh endpoint
+        // consults to reject a whole login session).
+        sqlx::query(
+            r#"
+            UPDATE refresh_token_families
+            SET revoked_at = NOW(), revoke_reason = 'security_event'
+            WHERE user_id = $1 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+        // OIDC refresh tokens themselves.
+        sqlx::query(
+            r#"
+            UPDATE refresh_tokens_v2 SET revoked_at = NOW()
+            WHERE user_id = $1 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    /// Revoke every OIDC refresh-token family (and its `refresh_tokens_v2`
+    /// rows) for one `(user, client)` pair. BUNYIP-200: an admin tenant
+    /// unassign/reassign must kill outstanding refresh tokens for that client
+    /// so a rotated token can no longer keep minting the stale tenant claim.
+    /// `client_id` is the public `oauth_clients.client_id` UUID, the same
+    /// value stored on `refresh_token_families.client_id` and
+    /// `oauth_client_user_tenants.oauth_client_id`. Returns the number of
+    /// families revoked. Scoped to the OIDC v2 surface only; the legacy
+    /// `refresh_tokens` table has no per-client binding.
+    pub async fn revoke_client_user_refresh_tokens(
+        pool: &PgPool,
+        user_id: Uuid,
+        client_id: Uuid,
+    ) -> Result<u64, AppError> {
+        let mut tx = pool.begin().await?;
+
+        let result = sqlx::query(
+            r#"
+            UPDATE refresh_token_families
+            SET revoked_at = NOW(), revoke_reason = 'tenant_reassigned'
+            WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(user_id)
+        .bind(client_id)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            r#"
+            UPDATE refresh_tokens_v2 SET revoked_at = NOW()
+            WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(user_id)
+        .bind(client_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Revoke all of a user's active refresh tokens EXCEPT one (the caller's
+    /// current session). Powers "log out all other devices" (BUNYIP-137).
+    /// Scoped to the legacy `refresh_tokens` table, which is the surface the
+    /// active-sessions panel lists; OIDC SSO sessions are managed separately.
+    /// Returns the number of sessions revoked.
+    pub async fn revoke_other_user_refresh_tokens(
+        pool: &PgPool,
+        user_id: Uuid,
+        keep_token_id: Uuid,
+    ) -> Result<u64, AppError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE refresh_tokens SET revoked_at = NOW()
+            WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(user_id)
+        .bind(keep_token_id)
         .execute(pool)
         .await?;
 
-        Ok(())
+        Ok(result.rows_affected())
     }
 
     // =====================
@@ -411,17 +558,20 @@ impl TokenRepository {
     }
 
     /// Confirm an email change request
-    pub async fn confirm_email_change_request(
-        pool: &PgPool,
+    pub async fn confirm_email_change_request<'e, E>(
+        executor: E,
         request_id: Uuid,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), AppError>
+    where
+        E: sqlx::Executor<'e, Database = Postgres>,
+    {
         sqlx::query(
             r#"
             UPDATE email_change_requests SET confirmed_at = NOW() WHERE id = $1
             "#,
         )
         .bind(request_id)
-        .execute(pool)
+        .execute(executor)
         .await?;
 
         Ok(())

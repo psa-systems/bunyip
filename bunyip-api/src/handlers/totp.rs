@@ -8,23 +8,13 @@ use std::sync::Arc;
 use crate::errors::AppError;
 use crate::middleware::{extract_client_ip, extract_device_info, AuthCookies, AuthenticatedUser};
 use crate::models::{AuditAction, CreateAuditLog, RateLimitConfig};
-use crate::repositories::{AuditLogRepository, RateLimitRepository, UserRepository};
+use crate::repositories::{
+    AuditLogRepository, RateLimitRepository, TrustedDeviceRepository, UserRepository,
+};
 use crate::responses::{get_request_id, success};
 use crate::services::{AuthService, PasswordService, TotpService};
 
-/// Check rate limit and return RateLimited error if exceeded
-async fn check_rate_limit(
-    pool: &PgPool,
-    key: &str,
-    config: &RateLimitConfig,
-) -> Result<(), AppError> {
-    let (_count, exceeded) = RateLimitRepository::check_and_increment(pool, key, config).await?;
-    if exceeded {
-        let retry_after = RateLimitRepository::get_retry_after(pool, key, config).await?;
-        return Err(AppError::RateLimited { retry_after });
-    }
-    Ok(())
-}
+use super::check_rate_limit;
 
 // --- Request/Response types ---
 
@@ -37,11 +27,20 @@ pub struct ConfirmSetupRequest {
 pub struct Verify2FARequest {
     pub challenge_token: String,
     pub code: String,
+    /// Opt-in to remember this device and skip TOTP for 30 days (BUNYIP-138).
+    /// Honored only for subscribers; ignored for admins.
+    #[serde(default)]
+    pub trust_device: bool,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct PasswordConfirmRequest {
     pub password: String,
+    /// Fresh TOTP (or recovery) code. Required by `disable_2fa` for accounts
+    /// with 2FA, so a trusted-device session alone cannot turn 2FA off
+    /// (BUNYIP-138). Unused by other handlers that accept this body.
+    #[serde(default)]
+    pub totp_code: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -125,6 +124,7 @@ pub async fn verify_2fa(
     totp_service: web::Data<Arc<TotpService>>,
     body: web::Json<Verify2FARequest>,
     config: web::Data<crate::config::Config>,
+    oidc_provider: crate::handlers::auth::OidcProviderData,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let ip_address = extract_client_ip(&req);
@@ -146,6 +146,32 @@ pub async fn verify_2fa(
     let claims = jwt_service.verify_2fa_challenge_token(&body.challenge_token)?;
     let user_id = claims.sub;
 
+    // Per-account failed-attempt lockout, independent of source IP (BUNYIP-201).
+    // The per-IP cap above does nothing against an attacker who rotates cheap
+    // proxy IPs against a single victim's challenge token, so gate on a
+    // per-account FAILURE counter as well. Read-only here (compare with `>=`, not
+    // the repo's increment-oriented `>`), so a request that may succeed does not
+    // consume the budget; only genuine failures below increment it. Once at the
+    // cap, even a correct code is refused until the window expires, which is the
+    // hard lockout: the attacker must wait and the user must retry later or
+    // re-authenticate.
+    let user_rate_key = format!("2fa_verify_user:{}", user_id);
+    let (fail_count, _) = RateLimitRepository::check(
+        &pool,
+        &user_rate_key,
+        &RateLimitConfig::TWO_FACTOR_VERIFY_FAILURES,
+    )
+    .await?;
+    if fail_count >= RateLimitConfig::TWO_FACTOR_VERIFY_FAILURES.max_requests {
+        let retry_after = RateLimitRepository::get_retry_after(
+            &pool,
+            &user_rate_key,
+            &RateLimitConfig::TWO_FACTOR_VERIFY_FAILURES,
+        )
+        .await?;
+        return Err(AppError::RateLimited { retry_after });
+    }
+
     // Try TOTP code first, then recovery code
     // Strip spaces so users can enter TOTP as "XXX XXX"
     let code = body.code.trim().replace(' ', "");
@@ -159,7 +185,35 @@ pub async fn verify_2fa(
     };
 
     if !verified {
+        // Count only failures (BUNYIP-201): a wrong code increments the
+        // per-account counter so repeated guesses trip the lockout regardless of
+        // source IP. Best-effort - a counter write failure must not turn the
+        // "invalid code" response into a 500, but log it because the
+        // brute-force guard is degrading open under DB stress.
+        if let Err(e) = RateLimitRepository::check_and_increment(
+            &pool,
+            &user_rate_key,
+            &RateLimitConfig::TWO_FACTOR_VERIFY_FAILURES,
+        )
+        .await
+        {
+            tracing::warn!(?e, "2fa per-account failure-counter increment failed");
+        }
         return Err(AppError::validation("code", "Invalid verification code"));
+    }
+
+    // A successful verification resets the per-account failure counter so a
+    // legitimate user who fat-fingered a few codes is never locked out
+    // (BUNYIP-201). Best-effort: the login already succeeded, so a reset failure
+    // must not fail the request.
+    if let Err(e) = RateLimitRepository::reset(
+        &pool,
+        &user_rate_key,
+        RateLimitConfig::TWO_FACTOR_VERIFY_FAILURES.action,
+    )
+    .await
+    {
+        tracing::warn!(?e, "2fa per-account failure-counter reset failed");
     }
 
     // Audit the verification
@@ -186,13 +240,28 @@ pub async fn verify_2fa(
         .await?;
     }
 
-    // Complete login
-    let (tokens, user_response) = auth_service
-        .complete_2fa_login(&body.challenge_token, device_info, ip_address)
+    // Complete login. `trusted_token` is Some only when the user opted in AND
+    // is a subscriber (BUNYIP-138).
+    let (tokens, user_response, trusted_token) = auth_service
+        .complete_2fa_login(
+            &body.challenge_token,
+            device_info,
+            ip_address,
+            body.trust_device,
+        )
         .await?;
 
     let secure = config.is_production();
     let cookie_domain = config.cookie_domain.as_deref();
+
+    let op_cookie = crate::handlers::auth::establish_op_session(
+        &oidc_provider,
+        &req,
+        user_response.id,
+        secure,
+        cookie_domain,
+    )
+    .await;
 
     let response = AuthResponse {
         user: user_response,
@@ -203,23 +272,28 @@ pub async fn verify_2fa(
     for cookie in AuthCookies::clear_stale(secure) {
         resp.cookie(cookie);
     }
-    Ok(resp
-        .cookie(AuthCookies::access_token(
-            &tokens.access_token,
-            secure,
-            cookie_domain,
-        ))
-        .cookie(AuthCookies::refresh_token(
-            &tokens.refresh_token,
-            secure,
-            true,
-            cookie_domain,
-        ))
-        .json(crate::responses::ApiResponse {
-            success: true,
-            data: Some(response),
-            meta: crate::responses::ResponseMeta::new(request_id),
-        }))
+    resp.cookie(AuthCookies::access_token(
+        &tokens.access_token,
+        secure,
+        cookie_domain,
+    ))
+    .cookie(AuthCookies::refresh_token(
+        &tokens.refresh_token,
+        secure,
+        true,
+        cookie_domain,
+    ));
+    if let Some(token) = trusted_token {
+        resp.cookie(AuthCookies::trusted_device(&token, secure, cookie_domain));
+    }
+    if let Some(op) = op_cookie {
+        resp.cookie(op);
+    }
+    Ok(resp.json(crate::responses::ApiResponse {
+        success: true,
+        data: Some(response),
+        meta: crate::responses::ResponseMeta::new(request_id),
+    }))
 }
 
 /// DELETE /v1/auth/2fa
@@ -254,7 +328,31 @@ pub async fn disable_2fa(
         return Err(AppError::validation("password", "Invalid password"));
     }
 
+    // Require a fresh TOTP/recovery code in addition to the password
+    // (BUNYIP-138): a trusted-device session must not be able to turn 2FA off
+    // without a live second factor.
+    let code = body
+        .totp_code
+        .as_deref()
+        .map(|c| c.trim().replace(' ', ""))
+        .filter(|c| !c.is_empty())
+        .ok_or_else(|| AppError::validation("totp_code", "Two-factor code required"))?;
+    let code_ok = if code.contains('-') || code.len() > 6 {
+        totp_service.verify_recovery_code(user.0.sub, &code).await?
+    } else {
+        totp_service.verify_code(user.0.sub, &code).await?
+    };
+    if !code_ok {
+        return Err(AppError::validation(
+            "totp_code",
+            "Invalid verification code",
+        ));
+    }
+
     totp_service.disable(user.0.sub).await?;
+
+    // Disabling 2FA drops trusted devices so the protection cannot linger.
+    TrustedDeviceRepository::revoke_all_for_user(&pool, user.0.sub).await?;
 
     // Audit log
     let ip = ip_address.map(ipnetwork::IpNetwork::from);

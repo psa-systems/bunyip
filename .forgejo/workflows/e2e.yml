@@ -1,0 +1,154 @@
+---
+
+# Playwright E2E suite against a deployed bunyip instance.
+#
+# Deployed-instance model: this suite never spins bunyip up locally. It runs a
+# real browser + request context against an already-running deployment (the hub
+# web app and the OP/API), so what it exercises is exactly what users hit. CI
+# holds both staging and production config side by side as Forgejo Actions
+# secrets, and the job env: block selects per var and exposes the result on the
+# plain `E2E_*` names, so env.ts and the gate scripts never need to know which
+# environment they target.
+#
+# Environments: automatic triggers (push, PR) always resolve to staging;
+# production runs only on a manual dispatch that selects it (the suite is
+# write-heavy and shares one rate-limited account, so it must not churn live
+# prod unattended).
+#
+# Triggers:
+#   - push to main: post-merge validation against staging. Runs the deploy-sync
+#     gate (`wait-for-deploy.mjs`) so it asserts the deployment is actually
+#     serving the pushed commit before the suite runs.
+#   - pull_request targeting main: merge gate against staging. PR SHAs never
+#     deploy, so the version gate is replaced with a `/health` reachability
+#     check; the suite still runs against whatever staging is currently
+#     serving.
+#   - workflow_dispatch: manual ad-hoc runs. `environment=staging` (default)
+#     behaves like a post-merge run (deploy-sync gate). `environment=production`
+#     targets prod; the dispatched SHA is unlikely to be what prod serves, so
+#     it runs the reachability check instead of the SHA-polling gate.
+#
+# Serial concurrency: bunyip enforces a login rate limit of 5 requests per
+# minute per email. The suite shares one E2E account, so back-to-back runs
+# (post-merge + PR + multi-PR) would trip that limit and fail spuriously.
+# Serialise across ALL triggers via a single group and do NOT cancel in
+# progress, so post-merge runs always complete and every PR commit gets
+# exercised once it makes it through the queue. Slow throughput is the
+# trade-off; for an auth-rate-limited gate, correctness beats throughput.
+name: E2E
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target deployment for the manual run
+        type: choice
+        default: staging
+        options:
+          - staging
+          - production
+
+concurrency:
+  group: e2e-bunyip
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    name: Playwright against deployment
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
+
+    defaults:
+      run:
+        working-directory: e2e
+
+    # Select the staging vs production secret per var and expose it on the
+    # plain E2E_* name that env.ts and the gate scripts read. On push /
+    # pull_request the `inputs` context is empty, so `inputs.environment ==
+    # 'production'` is false and every var resolves to its staging secret; a
+    # manual dispatch lets the operator pick.
+    env:
+      E2E_BASE_URL: ${{ inputs.environment == 'production' && secrets.E2E_PRODUCTION_BASE_URL || secrets.E2E_STAGING_BASE_URL }}
+      E2E_OP_BASE_URL: ${{ inputs.environment == 'production' && secrets.OIDC_ISSUER_PRODUCTION || secrets.OIDC_ISSUER_STAGING }}
+      E2E_EMAIL: ${{ inputs.environment == 'production' && secrets.E2E_PRODUCTION_EMAIL || secrets.E2E_STAGING_EMAIL }}
+      E2E_PASSWORD: ${{ inputs.environment == 'production' && secrets.E2E_PRODUCTION_PASSWORD || secrets.E2E_STAGING_PASSWORD }}
+      E2E_TENANT_ID: ${{ inputs.environment == 'production' && secrets.E2E_PRODUCTION_TENANT_ID || secrets.E2E_STAGING_TENANT_ID }}
+      E2E_OIDC_CLIENT_ID: ${{ inputs.environment == 'production' && secrets.E2E_PRODUCTION_OIDC_CLIENT_ID || secrets.E2E_STAGING_OIDC_CLIENT_ID }}
+      E2E_OIDC_REDIRECT_URI: ${{ inputs.environment == 'production' && secrets.E2E_PRODUCTION_OIDC_REDIRECT_URI || secrets.E2E_STAGING_OIDC_REDIRECT_URI }}
+      E2E_TOTP_SECRET: ${{ inputs.environment == 'production' && secrets.E2E_PRODUCTION_TOTP_SECRET || secrets.E2E_STAGING_TOTP_SECRET }}
+      E2E_STRIPE_SECRET_KEY: ${{ inputs.environment == 'production' && secrets.E2E_PRODUCTION_STRIPE_SECRET_KEY || secrets.E2E_STAGING_STRIPE_SECRET_KEY }}
+      # Stalwart JMAP mail sink (BUNYIP-150). Staging only: production has no
+      # sink, so it resolves empty and the email-driven specs skip there.
+      E2E_MAIL_SINK_URL: ${{ inputs.environment == 'production' && '' || secrets.E2E_STAGING_MAIL_SINK_URL }}
+
+    steps:
+      - name: Clone the repository
+        uses: https://code.forgejo.org/actions/checkout@v5
+        with:
+          # wait-for-deploy.mjs walks `git log` from GITHUB_SHA back to the
+          # most recent commit that touched a build-trigger path. A shallow
+          # clone would stop at depth 1 and the walk would miss or fail.
+          fetch-depth: 0
+
+      # No Node setup step: the opensuse-base runner image ships nodejs24, so
+      # the runtime is already on disk. The bare `node`/`npm`/`npx` are
+      # libalternatives wrappers whose `*-default` targets are not all
+      # installed, so npm/npx run through corepack (it provisions npm on
+      # demand) and node scripts use the concrete `node24` binary.
+      - name: Install dependencies
+        run: corepack npm ci
+
+      - name: Install Playwright browser
+        # No --with-deps: that shells out to apt-get, which the OpenSUSE runner
+        # does not have, and the runner image already carries the X / GTK / NSS
+        # libs Chromium needs. If a future image trims them, add a `zypper
+        # install -y` step here for the missing sonames.
+        run: corepack npx playwright install chromium
+
+      # A production dispatch must NOT run the SHA-polling gate: the dispatched
+      # commit is unlikely to be what prod currently serves, so the version
+      # poll would time out. Version-sync runs on push and on a staging
+      # dispatch; reachability runs on pull_request and on a production
+      # dispatch.
+      - name: Wait for deploy to serve this commit (push / staging dispatch)
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
+        run: node24 scripts/wait-for-deploy.mjs
+
+      - name: Verify deployment is reachable (pull_request / production dispatch)
+        if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
+        run: node24 scripts/health-check.mjs
+
+      # E2E seed readiness (BUNYIP-163). Writes `bootstrapped` as a step output;
+      # fail-open (always exits 0). When staging is not seeded the suite is
+      # skipped below and the job still SUCCEEDS, so `e2e` can be a required
+      # check without a merge lockout on a missing/removed bootstrap.
+      - name: Check staging is bootstrapped
+        id: bootstrap_check
+        run: node24 scripts/check-bootstrapped.mjs
+
+      - name: Run E2E suite
+        # Run when staging is seeded, OR on a production dispatch (prod is
+        # reachability-only / write-skipped and its /e2e-bootstrapped always
+        # reports false, so it must not gate on it).
+        if: steps.bootstrap_check.outputs.bootstrapped == 'true' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
+        run: corepack npx playwright test
+
+      - name: Note skipped suite (staging not bootstrapped)
+        if: steps.bootstrap_check.outputs.bootstrapped != 'true' && !(github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
+        run: echo "staging not bootstrapped; skipping E2E suite - run 'just e2e-bootstrap' to enable coverage."
+
+      - name: Upload Playwright report and traces
+        if: failure()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+          retention-days: 14
+          if-no-files-found: ignore

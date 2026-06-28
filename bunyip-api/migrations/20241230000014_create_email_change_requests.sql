@@ -3,7 +3,11 @@ CREATE TABLE email_change_requests (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     new_email VARCHAR(255) NOT NULL,
-    token_hash VARCHAR(255) NOT NULL,
+    -- UNIQUE so a token hash maps to at most one request, matching the other
+    -- single-use token tables (refresh_tokens, password_reset_tokens). The
+    -- redundant non-unique idx_..._token_hash below is kept only for lookups
+    -- that predate this constraint; the UNIQUE index covers equality lookups.
+    token_hash VARCHAR(255) NOT NULL UNIQUE,
     expires_at TIMESTAMPTZ NOT NULL,
     confirmed_at TIMESTAMPTZ,
     canceled_at TIMESTAMPTZ,

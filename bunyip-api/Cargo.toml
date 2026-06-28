@@ -6,10 +6,24 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+# The crate ships a second binary (bunyip-e2e-bootstrap), which makes a bare
+# `cargo run -p bunyip-api` ambiguous (and breaks `just dev` / the dev
+# container's `cargo watch -x 'run -p bunyip-api'`). Pin the server as the
+# default so `cargo run` resolves to it.
+default-run = "bunyip-api"
+
+[lints]
+workspace = true
 
 [[bin]]
 name = "bunyip-api"
 path = "src/main.rs"
+
+# E2E test-account seeder (BUNYIP-52). Standalone tool, not a server subcommand;
+# reuses the bunyip-api lib (config, repositories, services).
+[[bin]]
+name = "bunyip-e2e-bootstrap"
+path = "src/bin/bunyip_e2e_bootstrap.rs"
 
 # bunyip owns the domain (bunyip-domain) and the verticals (bunyip-oci,
 # bunyip-oidc). The generic kernel comes from dunite-core, which bunyip-domain
@@ -25,6 +39,9 @@ actix-cors = "0.7"
 actix-rt = "2"
 actix-multipart = "0.7"
 futures-util = "0.3"
+# BUNYIP-145: SSE streaming uses BroadcastStream + IntervalStream wrappers
+# around `tokio::sync::broadcast::Receiver` and `tokio::time::Interval`.
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 # Serialization.
 serde = { version = "1", features = ["derive"] }
@@ -66,6 +83,14 @@ validator = { version = "0.18", features = ["derive"] }
 
 # Billing.
 async-stripe = { version = "0.37", features = ["runtime-tokio-hyper", "checkout", "billing", "webhook-events"] }
+
+# Attachment-upload security (BUNYIP-90). Both are tiny, zero-/few-dep
+# crates that read only the header bytes of a file - no decoder, no
+# decompression. `infer` sniffs the magic bytes to identify the file
+# type; `imagesize` reads image dimensions without decoding the pixels,
+# which is the cheap defence against decompression bombs.
+infer = "0.16"
+imagesize = "0.13"
 
 [dev-dependencies]
 actix-rt = "2"

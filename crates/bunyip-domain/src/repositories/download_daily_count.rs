@@ -1,16 +1,30 @@
 //! Per-user per-day download counter.
+//!
+//! Implements the dunite-download [`DownloadCounter`](dunite_download::store::DownloadCounter)
+//! trait (dunite-core's `UsageCounter`) against Bunyip's Postgres schema, so the
+//! generic [`DownloadLimiter`](dunite_download::services::DownloadLimiter) can
+//! enforce daily caps without depending on the schema.
 
+use async_trait::async_trait;
 use chrono::NaiveDate;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::errors::AppError;
 
-pub struct DownloadDailyCountRepository;
+/// Postgres-backed per-user daily download counter.
+#[derive(Clone)]
+pub struct DownloadDailyCountRepository {
+    pool: PgPool,
+}
 
 impl DownloadDailyCountRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
     /// Increments the count for `(user_id, day)` by 1 and returns the new value.
-    pub async fn increment(pool: &PgPool, user_id: Uuid, day: NaiveDate) -> Result<i32, AppError> {
+    pub async fn increment(&self, user_id: Uuid, day: NaiveDate) -> Result<i32, AppError> {
         let (count,): (i32,) = sqlx::query_as(
             r#"
             INSERT INTO download_daily_counts (user_id, day, count)
@@ -22,13 +36,13 @@ impl DownloadDailyCountRepository {
         )
         .bind(user_id)
         .bind(day)
-        .fetch_one(pool)
+        .fetch_one(&self.pool)
         .await?;
         Ok(count)
     }
 
     /// Decrement on failed download (counted optimistically, roll back on failure).
-    pub async fn decrement(pool: &PgPool, user_id: Uuid, day: NaiveDate) -> Result<(), AppError> {
+    pub async fn decrement(&self, user_id: Uuid, day: NaiveDate) -> Result<(), AppError> {
         sqlx::query(
             r#"
             UPDATE download_daily_counts
@@ -38,8 +52,20 @@ impl DownloadDailyCountRepository {
         )
         .bind(user_id)
         .bind(day)
-        .execute(pool)
+        .execute(&self.pool)
         .await?;
         Ok(())
+    }
+}
+
+/// Wire the Postgres repository to the engine's counter trait.
+#[async_trait]
+impl dunite_download::store::DownloadCounter for DownloadDailyCountRepository {
+    async fn increment(&self, user_id: Uuid, day: NaiveDate) -> Result<i32, AppError> {
+        DownloadDailyCountRepository::increment(self, user_id, day).await
+    }
+
+    async fn decrement(&self, user_id: Uuid, day: NaiveDate) -> Result<(), AppError> {
+        DownloadDailyCountRepository::decrement(self, user_id, day).await
     }
 }

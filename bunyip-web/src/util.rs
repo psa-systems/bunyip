@@ -84,6 +84,25 @@ pub fn relative_time(iso: &str) -> String {
     format!("{y} year{} ago", if y == 1 { "" } else { "s" })
 }
 
+/// Percent-encode a string for a URL query value (single source for the BFF).
+///
+/// Unreserved RFC 3986 chars pass through, space becomes `+`, everything else
+/// is percent-encoded. Used by settings redirects, admin search, and admin API
+/// calls so the three previously-drifted local copies stay one implementation.
+pub fn urlenc(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 /// Days left until an ISO timestamp, or None if it's in the past / unparseable.
 pub fn days_until(iso: &str) -> Option<i64> {
     let then = DateTime::parse_from_rfc3339(iso).ok()?.with_timezone(&Utc);

@@ -6,10 +6,12 @@
 # resolves them against the committed .sqlx cache, so no database is needed. The
 # generic dunite-core kernel is an anonymously-readable Forgejo git dependency
 # (network only, no credentials).
+
+# Validate code on every push and pull request by running 'just check'
+# Mirrors the local `just check` + `just test` recipes (which use ./dev/cargo).
 name: Check
 
 on:
-  pull_request:
   push:
     branches:
       - main
@@ -19,35 +21,73 @@ on:
       - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".cargo/config.toml"
       - ".sqlx/**"
+      - "scripts/**"
       - ".forgejo/workflows/check.yml"
+
+  pull_request:
+    branches:
+      - main
 
 jobs:
   check:
-    name: fmt / clippy / build / test
+    name: fmt + clippy + build + tests
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
     env:
       SQLX_OFFLINE: "true"
+      # Disk-footprint controls. CI doesn't need full DWARF debug info -
+      # nothing here runs a debugger - and `-C debuginfo=2` (cargo's dev
+      # default) bloats `target/` past 10GB per workspace. `line-tables-only`
+      # keeps enough info for readable test panics and rustc backtraces while
+      # cutting the on-disk size ~50%. Combined with disabling incremental
+      # (which builds a separate per-job dep tree that gets thrown away on
+      # the next runner allocation anyway), this keeps the runner's
+      # /workspace from filling up between consecutive PR jobs - the
+      # ENOSPC failures we hit on three back-to-back bunyip-upgrade PRs
+      # were all this. See docs/bunyip-upgrade/00-overview.md for the
+      # surrounding context.
+      CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+      CARGO_INCREMENTAL: "0"
     steps:
       - name: Clone the repository
         uses: https://code.forgejo.org/actions/checkout@v5
-
-      - name: Install Rust toolchain components
-        run: rustup component add clippy rustfmt
-
-      - name: Cache Rust build
-        uses: https://github.com/Swatinem/rust-cache@v2
         with:
-          cache-on-failure: true
+          fetch-depth: 1
+
+      - name: Check migration version numbers
+        # Unique + strictly increasing migration versions; blocks the suffix
+        # collisions that parallel branches reintroduce (BUNYIP-79).
+        run: ./scripts/check-migration-versions.sh
+
+      - name: Cap build parallelism
+        # nproc/2 cap: never claim more than half the host (see CI.md "Concurrency cap").
+        run: echo "CARGO_BUILD_JOBS=$(($(nproc) / 2))" >> "$GITHUB_ENV"
 
       - name: Check formatting
-        run: cargo fmt --check
+        run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Build
-        run: cargo build --all-targets
+      - name: Verify Cargo.lock is in sync
+        # --locked errors if the lockfile would need updating, catching a
+        # manifest bump (e.g. a release) that forgot to sync Cargo.lock
+        # (BUNYIP-59).
+        run: cargo build --workspace --all-targets --locked
 
       - name: Unit tests
-        run: cargo test --lib
+        run: cargo test --workspace --lib
+
+      - name: Docker builder stage
+        # Build the api image's builder stage only - catches Docker-build drift
+        # cheaply, mirroring `just check-docker`. The runner reuses its image
+        # store between jobs, and buildkit's exporter refuses to overwrite an
+        # existing tag ("image ... already exists", BUNYIP-231). Drop any
+        # builder image a prior run left behind so the rebuild can re-tag; the
+        # `|| true` keeps the first run (tag absent) green, matching the
+        # `docker image rm` cleanup in the justfile's `dev-clean-all` recipe.
+        run: |
+          docker image rm bunyip-api-builder:check 2>/dev/null || true
+          docker build --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .

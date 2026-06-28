@@ -1,8 +1,16 @@
 pub mod admin;
 pub mod auth_pages;
+pub mod consent;
 pub mod content;
 pub mod dashboard;
+pub mod health;
+/// BUNYIP-206: forced post-registration onboarding (name + verified email).
+pub mod onboarding;
 pub mod public;
+/// BUNYIP-112/113/115/117: shared web-edge field validators that bound and
+/// shape user input before it hits the API. Replaces per-form ad-hoc trims
+/// and silent `unwrap_or(0)` numeric coercions.
+pub mod validate;
 
 use axum::http::HeaderMap;
 use axum::response::Response;
@@ -39,19 +47,33 @@ pub fn rotating_index(len: usize) -> usize {
 /// Authenticate (optional) and fetch the applications list (for header + footer).
 pub async fn public_ctx(st: &AppState, headers: &HeaderMap) -> (AuthCtx, Vec<Application>) {
     let (c, fwd) = ctx(st, headers).await;
-    let apps = calls::applications(&st.api, fwd.as_deref()).await.unwrap_or_default();
+    let apps = calls::applications(&st.api, fwd.as_deref())
+        .await
+        .unwrap_or_default();
     (c, apps)
 }
 
 /// Wrap content in the public shell + document and relay any refreshed cookies.
-pub fn public_response(st: &AppState, c: &AuthCtx, apps: &[Application], title: &str, launcher: bool, content: Markup) -> Response {
+pub fn public_response(
+    st: &AppState,
+    c: &AuthCtx,
+    apps: &[Application],
+    title: &str,
+    launcher: bool,
+    content: Markup,
+) -> Response {
     let body = public_shell(&st.cfg, c.user.as_ref(), apps, launcher, content);
     html_cookies(document(title, body), &c.set_cookies)
 }
 
 /// Render an auth/token page (public shell, no feedback launcher). `content` is
 /// computed by the caller.
-pub async fn auth_page(st: &AppState, headers: &HeaderMap, title: &str, content: Markup) -> Response {
+pub async fn auth_page(
+    st: &AppState,
+    headers: &HeaderMap,
+    title: &str,
+    content: Markup,
+) -> Response {
     let (c, apps) = public_ctx(st, headers).await;
     public_response(st, &c, &apps, title, false, content)
 }
@@ -78,16 +100,80 @@ pub fn password_ok(p: &str) -> bool {
         && p.chars().any(|c| !c.is_ascii_alphanumeric())
 }
 
+/// BUNYIP-206: a user has supplied their name once both first AND last name are
+/// non-empty (phone is optional). Whitespace-only values count as empty,
+/// mirroring the trim-at-the-API-edge behaviour of the profile write.
+pub fn names_present(user: &User) -> bool {
+    fn present(v: &Option<String>) -> bool {
+        matches!(v.as_deref().map(str::trim), Some(s) if !s.is_empty())
+    }
+    present(&user.first_name) && present(&user.last_name)
+}
+
+/// BUNYIP-206: paths a not-yet-onboarded user may still reach, so the onboarding
+/// gate cannot trap them: the onboarding page itself, the emailed verification
+/// link landing plus its resend control, logout, and static assets.
+/// (`/settings/verify-email` and `/logout` do not currently run `guard`, but are
+/// listed so this allowlist is the single source of truth for the flow.)
+fn onboarding_allowed(path: &str) -> bool {
+    matches!(
+        path,
+        "/onboarding" | "/settings/verify-email" | "/settings/verify-email/resend" | "/logout"
+    ) || path.starts_with("/assets")
+}
+
+/// BUNYIP-206: the onboarding gate decision. A user still needs onboarding while
+/// they lack a name, or - WHEN email delivery is actually configured - while
+/// their email is unverified. Email verification is treated as not-required when
+/// delivery is disabled (local dev / no-SMTP deploys, `email.enabled` reported
+/// via `setup_status.email_enabled`), so the gate can never permanently trap a
+/// user who could never receive the verification link. `setup_status` is only
+/// queried for the rare name-present-but-unverified case; the common
+/// already-onboarded path returns without any API call.
+pub async fn needs_onboarding(st: &AppState, user: &User) -> bool {
+    if !names_present(user) {
+        return true;
+    }
+    if user.email_verified {
+        return false;
+    }
+    crate::api::auth::setup_status(&st.api)
+        .await
+        .map(|s| s.email_enabled)
+        .unwrap_or(false)
+}
+
 /// Authenticate a protected page. `Err` is a ready redirect (to /login when
-/// signed out, or to 2FA setup for an admin who hasn't enabled it yet).
-pub async fn guard(st: &AppState, headers: &HeaderMap, path: &str) -> Result<(User, AuthCtx), Response> {
+/// signed out, to 2FA setup for an admin who hasn't enabled it yet, or to
+/// /onboarding for a user who hasn't finished onboarding - BUNYIP-206).
+pub async fn guard(
+    st: &AppState,
+    headers: &HeaderMap,
+    path: &str,
+) -> Result<(User, AuthCtx), Response> {
     let cookie = cookie_of(headers);
     let c = auth::authenticate(&st.api, cookie.as_deref()).await;
     match c.user.clone() {
         None => Err(redirect_cookies("/login", &c.set_cookies)),
         Some(u) => {
-            if u.role == UserRole::Admin && !u.two_factor_enabled && path != "/settings/2fa/setup" {
-                return Err(redirect_cookies("/settings/2fa/setup", &c.set_cookies));
+            // Admin 2FA-setup gate takes precedence over onboarding. An admin
+            // who still owes 2FA is pinned to the setup page; while they are ON
+            // it we let them through WITHOUT applying the onboarding gate, so
+            // the two gates can never fight (or loop) over the same request.
+            // Once 2FA is enabled the next request falls through to onboarding.
+            if u.role == UserRole::Admin && !u.two_factor_enabled {
+                if path != "/settings/2fa/setup" {
+                    return Err(redirect_cookies("/settings/2fa/setup", &c.set_cookies));
+                }
+                return Ok((u, c));
+            }
+            // BUNYIP-206: force a new user through /onboarding (name + verified
+            // email) before any app surface. A no-op for bootstrap admins
+            // (already named + verified) and for any already-onboarded user.
+            // `needs_onboarding` is only consulted for non-allowlisted paths, so
+            // the /onboarding page + flow routes never re-enter the gate.
+            if !onboarding_allowed(path) && needs_onboarding(st, &u).await {
+                return Err(redirect_cookies("/onboarding", &c.set_cookies));
             }
             Ok((u, c))
         }
@@ -108,10 +194,99 @@ pub fn dashboard_input() -> &'static str {
     "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 }
 
-pub fn dashboard_response(c: &AuthCtx, user: &User, active: &str, title: &str, content: Markup) -> Response {
-    html_cookies(document(title, dashboard_shell(user, active, content)), &c.set_cookies)
+pub fn dashboard_response(
+    c: &AuthCtx,
+    user: &User,
+    active: &str,
+    title: &str,
+    content: Markup,
+) -> Response {
+    // `title` carries the browser tab title (e.g. "Settings · Bunyip"); the
+    // top bar wants just "Settings" with no brand suffix. Strip the suffix
+    // here so every handler keeps its existing call shape. A handler that
+    // somehow passes a title without the suffix falls through unchanged.
+    let topbar_title = topbar_title(title);
+    html_cookies(
+        document(title, dashboard_shell(user, active, topbar_title, content)),
+        &c.set_cookies,
+    )
 }
 
-pub fn admin_response(c: &AuthCtx, user: &User, active: &str, title: &str, content: Markup) -> Response {
-    html_cookies(document(title, admin_shell(user, active, content)), &c.set_cookies)
+pub fn admin_response(
+    c: &AuthCtx,
+    user: &User,
+    active: &str,
+    title: &str,
+    content: Markup,
+) -> Response {
+    let topbar_title = topbar_title(title);
+    html_cookies(
+        document(title, admin_shell(user, active, topbar_title, content)),
+        &c.set_cookies,
+    )
+}
+
+/// Strip the `" · Bunyip"` brand suffix from a browser-tab title so the
+/// in-page top bar can render just the page name. Title-without-suffix passes
+/// through unchanged.
+fn topbar_title(title: &str) -> &str {
+    title.strip_suffix(" · Bunyip").unwrap_or(title)
+}
+
+#[cfg(test)]
+mod onboarding_gate_tests {
+    use super::{names_present, onboarding_allowed};
+    use crate::api::types::{MembershipStatus, SubscriptionTier, User, UserRole};
+
+    fn user(first: Option<&str>, last: Option<&str>) -> User {
+        User {
+            id: "u1".into(),
+            email: "u@example.com".into(),
+            role: UserRole::Subscriber,
+            email_verified: false,
+            two_factor_enabled: false,
+            membership_status: MembershipStatus::None,
+            price_locked: false,
+            locked_price_id: None,
+            locked_price_amount: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+            subscription_tier: SubscriptionTier::Free,
+            trial_ends_at: None,
+            lifetime_member: false,
+            first_name: first.map(str::to_string),
+            last_name: last.map(str::to_string),
+            phone: None,
+        }
+    }
+
+    #[test]
+    fn names_present_needs_both() {
+        assert!(names_present(&user(Some("Ada"), Some("Lovelace"))));
+        assert!(!names_present(&user(None, None)));
+        assert!(!names_present(&user(Some("Ada"), None)));
+        assert!(!names_present(&user(None, Some("Lovelace"))));
+    }
+
+    #[test]
+    fn whitespace_only_names_count_as_empty() {
+        assert!(!names_present(&user(Some("   "), Some("Lovelace"))));
+        assert!(!names_present(&user(Some("Ada"), Some("\t"))));
+    }
+
+    #[test]
+    fn allowlist_admits_flow_paths_only() {
+        for p in [
+            "/onboarding",
+            "/settings/verify-email",
+            "/settings/verify-email/resend",
+            "/logout",
+            "/assets/app.css",
+        ] {
+            assert!(onboarding_allowed(p), "{p} should be allowed");
+        }
+        for p in ["/dashboard", "/settings", "/membership", "/admin", "/"] {
+            assert!(!onboarding_allowed(p), "{p} should be gated");
+        }
+    }
 }

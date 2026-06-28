@@ -165,10 +165,27 @@ pub struct User {
     pub subscription_tier: String,
     /// Null for lifetime members; set for trial members
     pub trial_ends_at: Option<DateTime<Utc>>,
-    /// True for the first 20 verified users and admin-granted lifetime members
+    /// True for the first `lifetime_slots` verified users (the `TIER_LIFETIME_SLOTS`
+    /// config, default 5) and admin-granted lifetime members
     pub lifetime_member: bool,
     /// Set when an admin manually granted lifetime membership
     pub subscription_override_by: Option<Uuid>,
+    /// BUNYIP-139: optional given name. Nullable in the DB (legacy rows have no
+    /// source). Flowed as the OIDC `given_name` claim under the `profile` scope
+    /// by BUNYIP-140.
+    pub first_name: Option<String>,
+    /// BUNYIP-139: optional family name. Flowed as `family_name` under the
+    /// `profile` scope by BUNYIP-140.
+    pub last_name: Option<String>,
+    /// BUNYIP-139: optional phone number. Flowed as `phone_number` under the
+    /// `phone` scope by BUNYIP-140. No format normalization at the DB layer;
+    /// the Settings form trims whitespace but otherwise stores verbatim.
+    pub phone: Option<String>,
+    /// BUNYIP-209: TRUE once the user has been issued a Stripe Checkout session
+    /// that carried the signup free trial (flipped by the
+    /// `checkout.session.completed` webhook). Trial-eligibility is `!has_used_trial`,
+    /// so a returning user never re-triggers the trial.
+    pub has_used_trial: bool,
 }
 
 impl User {
@@ -250,6 +267,12 @@ pub struct UserResponse {
     pub subscription_tier: String,
     pub trial_ends_at: Option<DateTime<Utc>>,
     pub lifetime_member: bool,
+    /// BUNYIP-139: see [`User::first_name`].
+    pub first_name: Option<String>,
+    /// BUNYIP-139: see [`User::last_name`].
+    pub last_name: Option<String>,
+    /// BUNYIP-139: see [`User::phone`].
+    pub phone: Option<String>,
 }
 
 impl From<User> for UserResponse {
@@ -269,6 +292,9 @@ impl From<User> for UserResponse {
             subscription_tier: user.subscription_tier,
             trial_ends_at: user.trial_ends_at,
             lifetime_member: user.lifetime_member,
+            first_name: user.first_name,
+            last_name: user.last_name,
+            phone: user.phone,
         }
     }
 }
@@ -302,6 +328,10 @@ mod tests {
             trial_ends_at: None,
             lifetime_member: false,
             subscription_override_by: None,
+            first_name: None,
+            last_name: None,
+            phone: None,
+            has_used_trial: false,
         }
     }
 

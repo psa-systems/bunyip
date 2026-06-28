@@ -46,16 +46,31 @@ impl FeedbackRepository {
         pool: &PgPool,
         page: i32,
         per_page: i32,
-        status: Option<&str>,
+        bucket: Option<&str>,
     ) -> Result<(Vec<Feedback>, i64), AppError> {
         let offset = (page - 1) * per_page;
+
+        // BUNYIP-92: bucket is the admin-tab dispatcher. Each bucket maps
+        // to a SQL predicate baked into a static string here (not a bound
+        // value), so the filter is closed against SQL injection by
+        // construction. Unknown bucket -> no filter, which preserves the
+        // pre-BUNYIP-92 (buggy) behaviour for any caller that does not
+        // yet pass one. All bucket strings exclude `is_spam = TRUE`
+        // EXCEPT the explicit "spam" bucket; the active queue never
+        // surfaces spam.
+        let bucket_predicate: Option<&'static str> = match bucket.unwrap_or("active") {
+            "active" => Some(" WHERE is_spam = FALSE AND status <> 'closed'"),
+            "closed" => Some(" WHERE is_spam = FALSE AND status = 'closed'"),
+            "spam" => Some(" WHERE is_spam = TRUE"),
+            _ => None,
+        };
 
         let mut query = QueryBuilder::new("SELECT * FROM feedback");
         let mut count_query = QueryBuilder::new("SELECT COUNT(*)::BIGINT FROM feedback");
 
-        if let Some(status) = status {
-            query.push(" WHERE status = ").push_bind(status);
-            count_query.push(" WHERE status = ").push_bind(status);
+        if let Some(predicate) = bucket_predicate {
+            query.push(predicate);
+            count_query.push(predicate);
         }
 
         query
@@ -69,6 +84,20 @@ impl FeedbackRepository {
         let total: (i64,) = count_query.build_query_as().fetch_one(pool).await?;
 
         Ok((feedback, total.0))
+    }
+
+    /// Flip `is_spam` on a feedback row (BUNYIP-92). Used by both the
+    /// mark-spam and unmark-spam admin actions; the caller writes the
+    /// matching audit-log row.
+    pub async fn set_is_spam(pool: &PgPool, id: Uuid, is_spam: bool) -> Result<Feedback, AppError> {
+        let feedback = sqlx::query_as::<_, Feedback>(
+            "UPDATE feedback SET is_spam = $1, updated_at = NOW() WHERE id = $2 RETURNING *",
+        )
+        .bind(is_spam)
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+        Ok(feedback)
     }
 
     pub async fn update_status(
@@ -173,7 +202,13 @@ impl FeedbackRepository {
     }
 
     pub async fn delete(pool: &PgPool, id: Uuid) -> Result<(), AppError> {
-        let result = sqlx::query("DELETE FROM feedback WHERE id = $1 AND status = 'closed'")
+        // BUNYIP-92: dropped the legacy `AND status = 'closed'` constraint.
+        // The admin-only gate + the JS confirm() in the SSR layer + the
+        // FeedbackDeleted audit log already provide three independent
+        // safety layers; the closed-only check blocked legitimate
+        // workflows (e.g. delete a spam row directly from the Spam tab
+        // without first reopening + closing it).
+        let result = sqlx::query("DELETE FROM feedback WHERE id = $1")
             .bind(id)
             .execute(pool)
             .await?;
@@ -190,6 +225,9 @@ impl FeedbackRepository {
         feedback_id: Uuid,
         attachments: Vec<(String, String, Vec<u8>)>,
     ) -> Result<(), AppError> {
+        // All-or-nothing: a failure partway through must not leave a feedback
+        // row with only some of its attachments persisted.
+        let mut tx = pool.begin().await?;
         for (filename, mime_type, data) in attachments {
             let size_bytes = data.len() as i32;
             sqlx::query(
@@ -203,9 +241,10 @@ impl FeedbackRepository {
             .bind(mime_type)
             .bind(size_bytes)
             .bind(data)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
         }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -244,6 +283,42 @@ impl FeedbackRepository {
             };
             (meta, r.5)
         }))
+    }
+
+    /// Archive a single feedback row on demand (BUNYIP-93). Mirrors the
+    /// SQL pattern in `archive_and_purge_closed` (INSERT INTO
+    /// feedback_archive ... DELETE FROM feedback) but scoped to one id
+    /// and wrapped in a transaction so a crash mid-way cannot leave the
+    /// row in both tables or in neither. Attachments cascade-delete
+    /// with the source row, same as the batch path; restoring an
+    /// archived row does not restore attachments (existing
+    /// trade-off). Returns `AppError::not_found` when the id is not
+    /// present in `feedback`.
+    pub async fn archive_one(pool: &PgPool, id: Uuid) -> Result<(), AppError> {
+        let mut tx = pool.begin().await?;
+        let result = sqlx::query(
+            r#"
+            WITH archived AS (
+                INSERT INTO feedback_archive (id, data)
+                SELECT f.id, row_to_json(f)::jsonb
+                FROM feedback f
+                WHERE f.id = $1
+                ON CONFLICT (id) DO NOTHING
+                RETURNING id
+            )
+            DELETE FROM feedback f
+            USING archived a
+            WHERE f.id = a.id
+            "#,
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Err(AppError::not_found("Feedback"));
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     pub async fn archive_and_purge_closed(pool: &PgPool) -> Result<u64, AppError> {

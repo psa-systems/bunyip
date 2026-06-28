@@ -6,6 +6,7 @@ use futures_util::TryStreamExt;
 use serde::Deserialize;
 use sqlx::PgPool;
 use std::collections::HashSet;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::config::Config;
@@ -17,8 +18,7 @@ use crate::models::{
     RespondToFeedbackRequest, UpdateFeedbackStatusRequest,
 };
 use crate::repositories::{
-    AuditLogRepository, FeedbackRepository, NotificationRepository, RateLimitRepository,
-    UserRepository,
+    AuditLogRepository, FeedbackRepository, NotificationRepository, UserRepository,
 };
 use crate::responses::{created, get_request_id, paginated, success};
 use crate::services::EmailService;
@@ -32,6 +32,121 @@ const ALLOWED_MIME_TYPES: &[&str] = &[
     "image/gif",
     "text/plain",
 ];
+
+/// Filename length cap (BUNYIP-90). Belt-and-suspenders alongside the
+/// control-character rejection: a 5000-character filename would survive
+/// the basename strip and end up in the DB row + admin UI + log lines.
+const MAX_FILENAME_LEN: usize = 200;
+
+/// Maximum decoded image dimension in pixels (BUNYIP-90). The byte size
+/// cap already rejects most decompression bombs, but a 5 MB PNG can
+/// declare a billion-pixel dimension that blows up the admin browser
+/// when it tries to render the thumbnail. 10000 covers any plausible
+/// real-world screenshot (typical 4K is 3840px wide); anything beyond
+/// is hostile.
+const MAX_IMAGE_DIMENSION: usize = 10000;
+
+/// Validate `filename` for length and absence of control characters
+/// (BUNYIP-90). Returns the trimmed-to-basename filename on success.
+/// NULL bytes and other control characters can break logging, CSV
+/// export, and downstream callers' shell-command boundaries; we reject
+/// at the front door instead of patching every consumer.
+fn validate_filename(fname: &str) -> Result<String, AppError> {
+    let safe = std::path::Path::new(fname)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("attachment")
+        .to_string();
+    if safe.is_empty() {
+        return Err(AppError::validation("attachment", "Empty filename"));
+    }
+    if safe.len() > MAX_FILENAME_LEN {
+        return Err(AppError::validation(
+            "attachment",
+            "Filename exceeds 200 characters",
+        ));
+    }
+    if safe.chars().any(|c| c.is_control()) {
+        return Err(AppError::validation(
+            "attachment",
+            "Filename contains control characters",
+        ));
+    }
+    Ok(safe)
+}
+
+/// Sniff `bytes` for a known file signature and derive the canonical
+/// MIME (BUNYIP-90). For files whose magic bytes are recognised, the
+/// returned MIME OVERRIDES whatever the browser sent in the multipart
+/// part's Content-Type - the sniffer is authoritative. For files with
+/// no magic-byte signature (text), the only accepted shape is a UTF-8
+/// blob declared as text/plain by the browser; everything else is
+/// rejected so an attacker cannot smuggle a binary in by claiming
+/// text/plain.
+fn derive_canonical_mime(bytes: &[u8], declared_mime: &str) -> Result<String, AppError> {
+    if let Some(kind) = infer::get(bytes) {
+        let sniffed = kind.mime_type();
+        if !ALLOWED_MIME_TYPES.contains(&sniffed) {
+            tracing::warn!(
+                declared_mime = %declared_mime,
+                sniffed_mime = %sniffed,
+                "Feedback attachment rejected: sniffed MIME not in allowlist"
+            );
+            return Err(AppError::validation(
+                "attachment",
+                "File content is not an allowed type",
+            ));
+        }
+        return Ok(sniffed.to_string());
+    }
+    // No magic bytes recognized. Only `text/plain` is allowed here; the
+    // payload must also be valid UTF-8 so an attacker can't ship a
+    // binary by claiming text/plain.
+    if declared_mime != "text/plain" {
+        tracing::warn!(
+            declared_mime = %declared_mime,
+            "Feedback attachment rejected: could not verify file type from content"
+        );
+        return Err(AppError::validation(
+            "attachment",
+            "Could not verify file type from content",
+        ));
+    }
+    if std::str::from_utf8(bytes).is_err() {
+        return Err(AppError::validation(
+            "attachment",
+            "text/plain attachment is not valid UTF-8",
+        ));
+    }
+    Ok("text/plain".to_string())
+}
+
+/// Reject decompression-bomb images by reading just the header
+/// (BUNYIP-90). `imagesize::blob_size` parses dimensions without
+/// decoding any pixels, so a billion-pixel "PNG" fails here before any
+/// rendering ever happens. No-op for non-image MIMEs.
+fn enforce_image_dimensions(mime: &str, bytes: &[u8]) -> Result<(), AppError> {
+    if !mime.starts_with("image/") {
+        return Ok(());
+    }
+    let size = imagesize::blob_size(bytes).map_err(|e| {
+        tracing::warn!(mime = %mime, error = %e, "Feedback image rejected: could not parse dimensions");
+        AppError::validation("attachment", "Could not parse image dimensions")
+    })?;
+    if size.width > MAX_IMAGE_DIMENSION || size.height > MAX_IMAGE_DIMENSION {
+        tracing::warn!(
+            mime = %mime,
+            width = size.width,
+            height = size.height,
+            "Feedback image rejected: dimensions exceed limit"
+        );
+        return Err(AppError::validation(
+            "attachment",
+            "Image dimensions exceed limit",
+        ));
+    }
+    Ok(())
+}
 
 fn normalize_optional(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
@@ -91,12 +206,7 @@ async fn check_feedback_rate_limit(pool: &PgPool, key: &str) -> Result<(), AppEr
         max_requests: 5,
         window_seconds: 3600,
     };
-    let (_count, exceeded) = RateLimitRepository::check_and_increment(pool, key, &config).await?;
-    if exceeded {
-        let retry_after = RateLimitRepository::get_retry_after(pool, key, &config).await?;
-        return Err(AppError::RateLimited { retry_after });
-    }
-    Ok(())
+    super::check_rate_limit(pool, key, &config).await
 }
 
 pub async fn submit_feedback(
@@ -156,30 +266,32 @@ pub async fn submit_feedback(
         }
 
         if let Some(fname) = filename {
-            // File field
+            // File field. BUNYIP-90 hardening: every check runs against
+            // file CONTENT, never the declared MIME or claimed filename:
+            //  - count + size: see byte-chunk loop above
+            //  - filename: length + control-char guard (rejects NULL,
+            //    newline, tab, etc. that would break logging / CSV)
+            //  - MIME: magic-byte sniff overrides the browser's claim;
+            //    only the sniffed type ends up stored. text/plain has
+            //    no magic and is accepted only when the bytes parse as
+            //    UTF-8
+            //  - image dimensions: header-only parse via imagesize so
+            //    we never instantiate a decoder against adversarial
+            //    input. Blocks 1000000x1000000 "PNG" bombs.
             if attachment_parts.len() >= MAX_ATTACHMENTS {
                 return Err(AppError::validation(
                     "attachment",
                     "Maximum 3 attachments allowed",
                 ));
             }
-            let mime = field
+            let safe_name = validate_filename(&fname)?;
+            let declared_mime = field
                 .content_type()
                 .map(|m| m.to_string())
                 .unwrap_or_else(|| "application/octet-stream".to_string());
-            if !ALLOWED_MIME_TYPES.contains(&mime.as_str()) {
-                return Err(AppError::validation(
-                    "attachment",
-                    "Only PNG, JPEG, WebP, GIF, and plain text files are allowed",
-                ));
-            }
-            // Sanitize filename: keep only the basename, strip path separators
-            let safe_name = std::path::Path::new(&fname)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("attachment")
-                .to_string();
-            attachment_parts.push((safe_name, mime, bytes));
+            let canonical_mime = derive_canonical_mime(&bytes, &declared_mime)?;
+            enforce_image_dimensions(&canonical_mime, &bytes)?;
+            attachment_parts.push((safe_name, canonical_mime, bytes));
         } else {
             // Text field
             let value = String::from_utf8_lossy(&bytes).to_string();
@@ -312,8 +424,18 @@ pub async fn submit_feedback(
 pub struct ListFeedbackQuery {
     pub page: Option<i32>,
     pub per_page: Option<i32>,
-    pub page_size: Option<i32>,
+    /// Legacy single-status filter kept for compatibility; ignored when
+    /// `bucket` is set. New callers should use `bucket` instead so
+    /// is_spam filtering and "everything except closed" are reachable
+    /// in one parameter.
     pub status: Option<String>,
+    /// BUNYIP-92: tab-aware filtering. Accepts `active` / `closed` /
+    /// `spam`. The repository layer maps each value to a static SQL
+    /// predicate; unknown values produce an unfiltered list (preserves
+    /// pre-BUNYIP-92 behaviour for any caller that does not yet pass
+    /// it). The `archive` view has its own endpoint and does not enter
+    /// here.
+    pub bucket: Option<String>,
 }
 
 pub async fn list_feedback(
@@ -324,15 +446,31 @@ pub async fn list_feedback(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.or(query.page_size).unwrap_or(20).min(100);
+    let per_page = query.per_page.unwrap_or(20).min(100);
 
     if let Some(status) = query.status.as_deref() {
         FeedbackStatus::from_str(status)
-            .ok_or_else(|| AppError::validation("status", "Invalid feedback status"))?;
+            .map_err(|_| AppError::validation("status", "Invalid feedback status"))?;
+    }
+
+    // Validate the bucket value against the known set so we can hand it
+    // straight through to the repository; an unknown value here would
+    // silently fall through to the no-filter branch and re-expose the
+    // pre-BUNYIP-92 spam-in-active-queue bug.
+    if let Some(b) = query.bucket.as_deref() {
+        match b {
+            "active" | "closed" | "spam" => {}
+            _ => {
+                return Err(AppError::validation(
+                    "bucket",
+                    "Bucket must be one of active|closed|spam",
+                ));
+            }
+        }
     }
 
     let (feedback, total) =
-        FeedbackRepository::list_paginated(&pool, page, per_page, query.status.as_deref()).await?;
+        FeedbackRepository::list_paginated(&pool, page, per_page, query.bucket.as_deref()).await?;
 
     let items = feedback
         .into_iter()
@@ -382,7 +520,7 @@ pub async fn respond_to_feedback(
         .as_deref()
         .map(|value| {
             FeedbackStatus::from_str(value)
-                .ok_or_else(|| AppError::validation("status", "Invalid feedback status"))
+                .map_err(|_| AppError::validation("status", "Invalid feedback status"))
         })
         .transpose()?
         .unwrap_or(FeedbackStatus::Responded);
@@ -411,13 +549,26 @@ pub async fn respond_to_feedback(
     .await?;
 
     if let Some(email) = updated.email.clone() {
-        let email_svc = email_service.get_ref().clone();
-        let detail = updated.clone();
-        tokio::spawn(async move {
-            if let Err(e) = email_svc.send_feedback_response(&email, &detail).await {
-                tracing::error!(error = %e, feedback_id = %detail.id, "Failed to send feedback response email");
-            }
-        });
+        // BUNYIP-94: await the send instead of fire-and-forget. The
+        // previous tokio::spawn detached the task so any SMTP / config
+        // / template failure ended up in a different tracing span from
+        // the surrounding request and was invisible to admins
+        // confirming "did my reply go out." Awaiting keeps the error on
+        // the same request_id; the response is still considered
+        // successful even if email send fails because the row is
+        // already in the DB with admin_response set.
+        if let Err(e) = email_service
+            .get_ref()
+            .send_feedback_response(&email, &updated)
+            .await
+        {
+            tracing::error!(
+                error = %e,
+                feedback_id = %updated.id,
+                recipient = %email,
+                "Failed to send feedback response email"
+            );
+        }
     }
 
     let attachments = FeedbackRepository::find_attachments(&pool, updated.id).await?;
@@ -439,7 +590,7 @@ pub async fn update_feedback_status(
         .ok_or_else(|| AppError::not_found("Feedback"))?;
 
     let status = FeedbackStatus::from_str(&body.status)
-        .ok_or_else(|| AppError::validation("status", "Invalid feedback status"))?;
+        .map_err(|_| AppError::validation("status", "Invalid feedback status"))?;
 
     let updated = FeedbackRepository::update_status(&pool, feedback_id, status).await?;
 
@@ -481,6 +632,92 @@ pub async fn delete_feedback(
     Ok(success(serde_json::json!({}), request_id))
 }
 
+/// POST /v1/admin/feedback/{id}/mark-spam
+///
+/// Flip `is_spam` to TRUE so the row leaves the admin's active queue
+/// and lands in the Spam tab. Writes a `FeedbackMarkedSpam` audit log;
+/// reversible via `unmark_feedback_spam`. The auto-spam path on intake
+/// (the honeypot field on submission) is independent of this manual
+/// flag and uses the same column.
+pub async fn mark_feedback_spam(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let feedback_id = path.into_inner();
+
+    let updated = FeedbackRepository::set_is_spam(&pool, feedback_id, true).await?;
+
+    AuditLogRepository::create(
+        &pool,
+        CreateAuditLog::new(AuditAction::FeedbackMarkedSpam)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+            .with_resource("feedback", feedback_id),
+    )
+    .await?;
+
+    let attachments = FeedbackRepository::find_attachments(&pool, updated.id).await?;
+    Ok(success(updated.to_admin_detail(attachments), request_id))
+}
+
+/// POST /v1/admin/feedback/{id}/archive
+///
+/// Move a single feedback row out of `feedback` and into
+/// `feedback_archive` (BUNYIP-93). The same end-state the batch
+/// 90-day `archive_and_purge_closed` job produces, but on demand.
+/// Restore happens through the existing
+/// `POST /admin/feedback/archive/{archive_id}/restore` route.
+pub async fn archive_feedback(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let feedback_id = path.into_inner();
+
+    FeedbackRepository::archive_one(&pool, feedback_id).await?;
+
+    AuditLogRepository::create(
+        &pool,
+        CreateAuditLog::new(AuditAction::FeedbackArchived)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+            .with_resource("feedback", feedback_id),
+    )
+    .await?;
+
+    Ok(success(serde_json::json!({}), request_id))
+}
+
+/// POST /v1/admin/feedback/{id}/unmark-spam
+///
+/// Reverse `mark_feedback_spam`. False-positive recovery for the case
+/// where the admin flagged a real row by mistake.
+pub async fn unmark_feedback_spam(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let feedback_id = path.into_inner();
+
+    let updated = FeedbackRepository::set_is_spam(&pool, feedback_id, false).await?;
+
+    AuditLogRepository::create(
+        &pool,
+        CreateAuditLog::new(AuditAction::FeedbackUnmarkedSpam)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+            .with_resource("feedback", feedback_id),
+    )
+    .await?;
+
+    let attachments = FeedbackRepository::find_attachments(&pool, updated.id).await?;
+    Ok(success(updated.to_admin_detail(attachments), request_id))
+}
+
 fn csv_field(value: &str) -> String {
     if value.contains(',') || value.contains('"') || value.contains('\n') {
         format!("\"{}\"", value.replace('"', "\"\""))
@@ -498,7 +735,7 @@ pub async fn export_feedback(
     _admin: AdminUser,
     pool: web::Data<PgPool>,
 ) -> Result<HttpResponse, AppError> {
-    let _ = get_request_id(&req);
+    let request_id = get_request_id(&req);
     let feedback = FeedbackRepository::list_all(&pool).await?;
 
     let mut csv = String::from(
@@ -532,6 +769,7 @@ pub async fn export_feedback(
             "Content-Disposition",
             "attachment; filename=\"feedback.csv\"",
         ))
+        .insert_header(("x-request-id", request_id))
         .body(csv))
 }
 

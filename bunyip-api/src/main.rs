@@ -12,21 +12,24 @@ use tracing_actix_web::TracingLogger;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use bunyip_api::{
-    config::{Config, TierConfig},
+    config::{secret_env, Config, TierConfig},
     middleware::{
         auto_ban::{self, AutoBanService},
         request_id::RequestIdMiddleware,
         AutoBanMiddleware, SecurityHeaders,
     },
     models::{CreateUser, UserRole},
-    repositories::{FeedbackRepository, RateLimitRepository, UserRepository},
+    repositories::{
+        DownloadCacheRepository, DownloadDailyCountRepository, FeedbackRepository,
+        RateLimitRepository, UserRepository,
+    },
     routes,
-    version::UpdateChecker,
     services::{
-        AuthService, DownloadCache, DownloadLimiter, EmailService, EncryptionKeySet,
-        ForgejoClient, JwtConfig, JwtService, PasswordService, ReleaseCache, StripeConfig,
+        AppDownloadCache, AuthService, DownloadLimiter, EmailService, EncryptionKeySet,
+        ForgejoAssetClient, JwtConfig, JwtService, PasswordService, ReleaseCache, StripeConfig,
         StripeService, TotpService, WebhookService,
     },
+    version::UpdateChecker,
 };
 use bunyip_oci::{
     middleware::OciWwwAuthenticate,
@@ -70,6 +73,16 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Database connection pool established");
 
+    // BUNYIP-79: heal the in-place-edited migration checksums before the
+    // migrator's immutability check would abort on databases that applied the
+    // pre-edit bodies. No-op on fresh and already-healed databases.
+    bunyip_api::migrate_reconcile::reconcile_legacy_migration_checksums(&pool)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to reconcile legacy migration checksums");
+            e
+        })?;
+
     // Run database migrations
     info!("Running database migrations...");
     sqlx::migrate!("./migrations")
@@ -82,8 +95,11 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Database migrations completed successfully");
 
-    // Seed default admin if SETUP_DEFAULT_ADMIN is set and no admin exists
-    if let Ok(setup_admin) = std::env::var("SETUP_DEFAULT_ADMIN") {
+    // Seed default admin if SETUP_DEFAULT_ADMIN is set and no admin exists.
+    // secret_env supports both the plain env var (dev) and the
+    // SETUP_DEFAULT_ADMIN_FILE compose secret (production), and treats empty
+    // values as unset.
+    if let Some(setup_admin) = secret_env("SETUP_DEFAULT_ADMIN") {
         let admin_emails = UserRepository::find_admin_emails(&pool).await?;
         if admin_emails.is_empty() {
             let (email, password) = setup_admin.split_once(':').unwrap_or_else(|| {
@@ -112,6 +128,39 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Register the browser SPA OIDC clients with redirect/post-logout/audience
+    // values correct for THIS environment (BUNYIP-57). The static migration
+    // 20260603000010 seeds env-blind staging (a8n.systems) URIs that break the
+    // PKCE flow on every other host; this env-driven startup upsert is
+    // authoritative and self-healing, correcting the stale row in place. Each
+    // client is env-gated: unset vars -> skip + log (mirrors SETUP_DEFAULT_ADMIN).
+    upsert_spa_oidc_client(
+        &pool,
+        "b0000000-0000-4000-8000-000000000002",
+        "mokosh-apps",
+        "MOKOSH_APPS_REDIRECT_URIS",
+        "MOKOSH_APPS_POST_LOGOUT_REDIRECT_URIS",
+        "MOKOSH_APPS_AUDIENCE",
+    )
+    .await?;
+    upsert_spa_oidc_client(
+        &pool,
+        "b0000000-0000-4000-8000-000000000003",
+        "drillmark",
+        "DRILLMARK_REDIRECT_URIS",
+        "DRILLMARK_POST_LOGOUT_REDIRECT_URIS",
+        "DRILLMARK_AUDIENCE",
+    )
+    .await?;
+
+    // Reconcile the lets-chat confidential RP for THIS environment (LC-448).
+    // The static migration 20260618032217 seeds env-blind staging
+    // (chat.a8n.systems) redirect/audience that break the auth-code flow on
+    // every other host - the same class BUNYIP-57 fixed for the SPA clients
+    // above, which lets-chat was never added to. Confidential variant so each
+    // environment can also pin a dedicated client secret.
+    upsert_lets_chat_oidc_client(&pool).await?;
+
     // Test database connection
     sqlx::query("SELECT 1").execute(&pool).await.map_err(|e| {
         error!(error = %e, "Database health check failed");
@@ -120,8 +169,10 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Database health check passed");
 
-    // Initialize JWT service
-    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| {
+    // Initialize JWT service. secret_env reads JWT_SECRET_FILE (compose
+    // secret) or JWT_SECRET (dev .env); empty counts as unset, so an
+    // unconfigured production deployment fails fast here.
+    let jwt_secret = secret_env("JWT_SECRET").unwrap_or_else(|| {
         if config.is_production() {
             panic!("JWT_SECRET must be set in production");
         }
@@ -200,25 +251,41 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Stripe service initialized");
 
-    // Initialize Forgejo download services (optional — degrade gracefully when unconfigured)
+    // BUNYIP-203: warn loudly when Stripe is wired (real secret key) but no
+    // webhook signing secret is configured. The webhook handler fails closed
+    // in this state, so events will be rejected until a real
+    // STRIPE_WEBHOOK_SECRET is supplied.
+    if stripe_service.is_configured() && !stripe_service.webhook_secret_configured() {
+        tracing::warn!(
+            "Stripe secret key is configured but STRIPE_WEBHOOK_SECRET is unset or the \
+             placeholder; the Stripe webhook endpoint will REJECT all events until a real \
+             webhook signing secret is set. Forged-event protection is fail-closed (BUNYIP-203)."
+        );
+    }
+
+    // Initialize Forgejo download services (optional — degrade gracefully when unconfigured).
+    // The mechanism comes from the dunite-download engine; bunyip supplies the
+    // Postgres-backed store (DownloadCacheRepository) and counter
+    // (DownloadDailyCountRepository) adapters.
     let forgejo_client = config.download.forgejo_base_url.as_ref().and_then(|base| {
         config
             .download
             .forgejo_api_token
             .as_ref()
-            .map(|token| Arc::new(ForgejoClient::new(base.clone(), token.clone())))
+            .map(|token| Arc::new(ForgejoAssetClient::new(base.clone(), token.clone())))
     });
 
     let release_cache = forgejo_client
         .clone()
         .map(|c| Arc::new(ReleaseCache::new(c, config.download.release_cache_ttl_secs)));
 
-    let download_cache = forgejo_client.clone().map(|c| {
-        Arc::new(DownloadCache::new(
+    let download_cache: Option<Arc<AppDownloadCache>> = forgejo_client.clone().map(|c| {
+        let store = Arc::new(DownloadCacheRepository::new(pool.clone()));
+        Arc::new(AppDownloadCache::new(
             c,
             &config.download.cache_dir,
             config.download.cache_max_bytes,
-            pool.clone(),
+            store,
         ))
     });
 
@@ -227,6 +294,9 @@ async fn main() -> anyhow::Result<()> {
             tracing::warn!(error = %e, "failed to create download cache dir");
         }
     }
+
+    // Durable per-user daily counter used by the download limiter.
+    let download_counter = Arc::new(DownloadDailyCountRepository::new(pool.clone()));
 
     let download_limiter = Arc::new(DownloadLimiter::new(
         config.download.concurrency_per_user,
@@ -280,6 +350,15 @@ async fn main() -> anyhow::Result<()> {
     ));
     let oci_token_service = Arc::new(OciTokenService::new(&jwt_config, config.oci.token_ttl_secs));
 
+    // Fail fast on a registry config that can never work (malformed realm).
+    // Misconfiguration here otherwise only surfaces as opaque docker-login
+    // failures on the client side.
+    if config.oci.enabled {
+        if let Err(e) = config.oci.validate() {
+            anyhow::bail!("invalid OCI registry configuration: {e}");
+        }
+    }
+
     info!(
         enabled = config.oci.enabled,
         port = config.oci.port,
@@ -299,6 +378,12 @@ async fn main() -> anyhow::Result<()> {
     let webhook_service = Arc::new(WebhookService::new(jwt_secret.clone()));
 
     info!("Webhook service initialized");
+
+    // BUNYIP-145: in-process event bus for SSE fan-out. Mutation handlers
+    // publish; the /v1/events SSE handler subscribes per-user. Eliminates
+    // the hard-refresh-after-admin-grant UX (Brendon@netcal.com triage).
+    let event_bus = Arc::new(bunyip_domain::services::EventBus::new());
+    info!("Event bus initialized");
 
     // Initialize OIDC provider (optional — only when OIDC_ISSUER is set)
     let oidc_provider: Option<Arc<OidcProvider>> = if config.oidc.enabled() {
@@ -328,6 +413,18 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // Register the OIDC provider as an `AtJwtVerifier` so the auth
+    // extractors (`AuthenticatedUser`, `AdminUser`, `MemberUser`,
+    // `OptionalUser`) accept OIDC at+jwt tokens in addition to legacy
+    // HS256 access tokens (BUNYIP-55). The extractor peeks at the JWT
+    // header's `typ` claim and routes to whichever verifier matches;
+    // when OIDC is disabled, `None` here means the extractor falls
+    // back to HS256-only, preserving the pre-BUNYIP-55 behaviour.
+    let at_jwt_verifier: Option<Arc<dyn bunyip_domain::middleware::auth::AtJwtVerifier>> =
+        oidc_provider
+            .as_ref()
+            .map(|p| Arc::clone(p) as Arc<dyn bunyip_domain::middleware::auth::AtJwtVerifier>);
+
     // Initialize auto-ban service
     let auto_ban_service = Arc::new(AutoBanService::new(config.auto_ban.clone(), pool.clone()));
 
@@ -353,9 +450,9 @@ async fn main() -> anyhow::Result<()> {
     let update_check_url = std::env::var("BUNYIP_UPDATE_CHECK_URL")
         .ok()
         .filter(|s| !s.is_empty());
-    let update_check_token = std::env::var("BUNYIP_UPDATE_CHECK_TOKEN")
-        .ok()
-        .filter(|s| !s.is_empty());
+    // secret_env supports the {NAME}_FILE compose-secret convention,
+    // falling back to the plain env var.
+    let update_check_token = secret_env("BUNYIP_UPDATE_CHECK_TOKEN");
     info!(
         enabled = update_check_url.is_some(),
         "Update checker initialized"
@@ -363,21 +460,18 @@ async fn main() -> anyhow::Result<()> {
     let update_checker = Arc::new(UpdateChecker::new(update_check_url, update_check_token));
 
     let server_addr = config.server_addr();
-    let cors_origin = config.cors_origin.clone();
-
-    // Extract the domain from CORS_ORIGIN for subdomain matching
-    // e.g. "https://example.net" → ".example.net"
-    let cors_domain = cors_origin
-        .split("://")
-        .nth(1)
-        .unwrap_or("")
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .split(':')
-        .next()
-        .map(|host| format!(".{host}"))
-        .unwrap_or_default();
+    // CORS_ORIGIN is a comma-separated allow-list once multiple RPs register
+    // (bunyip-web + mokosh-apps + drillmark). Parse it into a Vec so each
+    // origin can be registered individually with the CorsLayer; passing the
+    // raw comma-list as a single .allowed_origin() never matches any browser
+    // Origin header.
+    let cors_origins: Vec<String> = config
+        .cors_origin
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
 
     let config_data = config.clone();
 
@@ -458,23 +552,36 @@ async fn main() -> anyhow::Result<()> {
     let pool_oci_server = pool.clone();
     let cfg_oci_server = config_data.oci.clone();
 
+    // Process start instant, surfaced as SystemHealth.uptime_seconds. `Instant`
+    // is `Copy`, so the per-worker `move` factory closure just copies it.
+    let server_start = std::time::Instant::now();
+
+    // Single shared reqwest client for OIDC backchannel-logout delivery
+    // (BUNYIP-74). Built once at startup so a builder error fails fast instead
+    // of being silently swallowed per request; cloned per worker (reqwest
+    // clones share one connection pool).
+    let backchannel_http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| anyhow::anyhow!("failed to build backchannel logout HTTP client: {e}"))?;
+
     let primary = HttpServer::new(move || {
-        // Configure CORS
-        let domain = cors_domain.clone();
-        let cors = Cors::default()
-            .allowed_origin(&cors_origin)
-            .allowed_origin_fn(move |origin, _req_head| {
-                let origin = origin.as_bytes();
-                // Allow localhost (development)
-                if origin.starts_with(b"http://localhost") {
-                    return true;
-                }
-                // Allow the configured domain and its subdomains
-                if !domain.is_empty() {
-                    return origin.ends_with(domain.as_bytes());
-                }
-                false
-            })
+        // Configure CORS. Only the explicit CORS_ORIGIN entries are echoed
+        // back with credentials; everything else gets no
+        // Access-Control-Allow-Origin. Per the CORS policy (docs/cors.md /
+        // PSA-21: "No wildcards. Always use an explicit, comma-separated
+        // list"), we deliberately do NOT register an `allowed_origin_fn`:
+        // actix evaluates that closure in addition to the explicit list, and a
+        // prefix/suffix match there (`starts_with("http://localhost")` or a
+        // bare `ends_with(".{apex}")`) reflects credentialed CORS to
+        // attacker-controlled hosts (`http://localhost.attacker.com`, any
+        // `*.{apex}` subdomain). For local dev, enumerate the dev origin (e.g.
+        // `http://localhost:4400`) in CORS_ORIGIN instead. (BUNYIP-124)
+        let mut cors = Cors::default();
+        for o in &cors_origins {
+            cors = cors.allowed_origin(o);
+        }
+        let cors = cors
             .allowed_methods(vec!["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
             .allowed_headers(vec![
                 actix_web::http::header::AUTHORIZATION,
@@ -499,16 +606,31 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::JsonConfig::default().limit(32_768))
             // Add database pool to app state
             .app_data(web::Data::new(pool.clone()))
+            // Server start instant for uptime reporting
+            .app_data(web::Data::new(server_start))
             // Add services to app state
             .app_data(jwt_service.clone())
+            // Register the at+jwt verifier (BUNYIP-55) as an
+            // `Arc<dyn AtJwtVerifier>` so the auth extractors can
+            // accept OIDC at+jwt tokens. Cloned per worker; the
+            // underlying `OidcProvider` is shared (it owns `Arc`s
+            // internally). When OIDC is disabled (`oidc_provider ==
+            // None`), this call is a no-op and the extractor falls
+            // back to legacy HS256-only verification.
+            .app_data(at_jwt_verifier.clone().unwrap_or_else(|| {
+                Arc::new(bunyip_domain::middleware::auth::DisabledAtJwtVerifier)
+                    as Arc<dyn bunyip_domain::middleware::auth::AtJwtVerifier>
+            }))
             .app_data(web::Data::new(auth_service.clone()))
             .app_data(web::Data::new(email_service.clone()))
             .app_data(web::Data::new(stripe_service.clone()))
             .app_data(web::Data::new(totp_service.clone()))
             .app_data(web::Data::new(webhook_service.clone()))
+            .app_data(web::Data::new(event_bus.clone()))
             .app_data(web::Data::new(stripe_key_set.clone()))
             .app_data(web::Data::new(config_data.clone()))
             .app_data(web::Data::new(download_limiter.clone()))
+            .app_data(web::Data::new(download_counter.clone()))
             .app_data(web::Data::new(release_cache.clone()))
             .app_data(web::Data::new(download_cache.clone()))
             .app_data(web::Data::new(manifest_cache.clone()))
@@ -519,6 +641,7 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::Data::new(forgejo_registry_client.clone()))
             // OIDC provider (None when OIDC_ISSUER is not set; handlers return 404)
             .app_data(web::Data::new(oidc_provider.clone()))
+            .app_data(web::Data::new(backchannel_http_client.clone()))
             .app_data(web::Data::new(tier_config.clone()))
             // Update checker for the root-level /version endpoint
             .app_data(web::Data::new(update_checker.clone()))
@@ -597,6 +720,181 @@ async fn main() -> anyhow::Result<()> {
     } else {
         info!("OCI registry server disabled (requires OCI_REGISTRY_ENABLED=true + FORGEJO_BASE_URL + FORGEJO_API_TOKEN)");
         primary.await?;
+    }
+
+    Ok(())
+}
+
+/// Env-driven, idempotent upsert of a browser SPA OIDC client (BUNYIP-57).
+///
+/// Reads the per-client env vars (via `secret_env`, so the `{NAME}_FILE`
+/// compose-secret convention works and empty counts as unset). Registration is
+/// gated on the two vars login actually requires: `*_REDIRECT_URIS` and
+/// `*_AUDIENCE`. When both are present it upserts the row keyed on the fixed
+/// `client_id` UUID, writing only `redirect_uris`, `post_logout_redirect_uris`,
+/// and `audience`; every other column (`client_type`, `name`, scopes, grant
+/// types, auth method, `require_pkce`, TTL) keeps its migration-defined value
+/// via `DO UPDATE` of only those three columns. `*_POST_LOGOUT_REDIRECT_URIS`
+/// is optional (the column is `TEXT[] DEFAULT '{}'`); when unset it upserts an
+/// empty array rather than skipping the whole client, so a partial config can
+/// never silently leave the stale staging row in place. The `*_REDIRECT_URIS` /
+/// `*_POST_LOGOUT_REDIRECT_URIS` vars are comma-separated. When either required
+/// var is unset the client is skipped with a log line (env-gated, like
+/// SETUP_DEFAULT_ADMIN) so an undeployed client never resurfaces a stale row.
+async fn upsert_spa_oidc_client(
+    pool: &sqlx::PgPool,
+    client_id: &str,
+    name: &str,
+    redirect_uris_var: &str,
+    post_logout_var: &str,
+    audience_var: &str,
+) -> anyhow::Result<()> {
+    let (Some(redirect_uris), Some(audience)) =
+        (secret_env(redirect_uris_var), secret_env(audience_var))
+    else {
+        info!(
+            client = name,
+            "SPA OIDC client redirect/audience env vars unset, skipping registration"
+        );
+        return Ok(());
+    };
+    // Optional: a client with no post-logout URIs upserts an empty array.
+    let post_logout = secret_env(post_logout_var).unwrap_or_default();
+
+    let split_csv = |s: &str| -> Vec<String> {
+        s.split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let redirect_list = split_csv(&redirect_uris);
+    let post_logout_list = split_csv(&post_logout);
+
+    sqlx::query(
+        r#"
+        INSERT INTO oauth_clients (
+            client_id, client_type, name,
+            redirect_uris, post_logout_redirect_uris,
+            allowed_scopes, allowed_grant_types,
+            token_endpoint_auth_method, require_pkce,
+            audience, access_token_ttl_seconds
+        ) VALUES (
+            $1::uuid, 'public', $2,
+            $3, $4,
+            ARRAY['openid', 'email', 'offline_access'],
+            ARRAY['authorization_code', 'refresh_token'],
+            'none', TRUE,
+            $5, 600
+        )
+        ON CONFLICT (client_id) DO UPDATE SET
+            redirect_uris = EXCLUDED.redirect_uris,
+            post_logout_redirect_uris = EXCLUDED.post_logout_redirect_uris,
+            audience = EXCLUDED.audience
+        "#,
+    )
+    .bind(client_id)
+    .bind(name)
+    .bind(&redirect_list)
+    .bind(&post_logout_list)
+    .bind(&audience)
+    .execute(pool)
+    .await?;
+
+    info!(
+        client = name,
+        redirect_uris = ?redirect_list,
+        audience = %audience,
+        "SPA OIDC client registered from environment"
+    );
+
+    Ok(())
+}
+
+/// Reconcile the lets-chat confidential OIDC client for THIS environment
+/// (LC-448). Confidential analogue of `upsert_spa_oidc_client`: the static
+/// migration `20260618032217_register_lets_chat_oidc_client.sql` seeds
+/// env-blind staging (`chat.a8n.systems`) redirect/audience that reject the
+/// callback on every other host, and a `client_secret_hash` shared across the
+/// staging and prod bunyip DBs. This startup upsert is authoritative and
+/// self-healing.
+///
+/// Keyed on the fixed `client_id` UUID, it `UPDATE`s the row the migration
+/// pre-seeds (the migrator runs before this), writing `redirect_uris`,
+/// `post_logout_redirect_uris`, and `audience` from the per-environment
+/// `LETS_CHAT_REDIRECT_URIS` / `LETS_CHAT_POST_LOGOUT_REDIRECT_URIS` /
+/// `LETS_CHAT_AUDIENCE` vars. `client_type` and `token_endpoint_auth_method`
+/// are left at their migration values (confidential / client_secret_basic).
+///
+/// `LETS_CHAT_CLIENT_SECRET_HASH` (optional, an Argon2id PHC string) lets an
+/// environment pin a DEDICATED client secret: `COALESCE` keeps the existing
+/// (migration) hash when the var is unset, so staging stays on the shared
+/// hash while prod overrides it. The hash is a verifier, not the secret; the
+/// plaintext lives only in lets-chat's `LETS_CHAT_BUNYIP_SSO_CLIENT_SECRET`.
+///
+/// Gated on `LETS_CHAT_REDIRECT_URIS` + `LETS_CHAT_AUDIENCE` (skip + log when
+/// unset, like the SPA path), so an environment that has not configured the
+/// client never resurfaces a stale row.
+async fn upsert_lets_chat_oidc_client(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    // Matches migration 20260618032217 and lets-chat's configured CLIENT_ID.
+    let client_id = "b0000000-0000-4000-8000-00000000000c";
+
+    let (Some(redirect_uris), Some(audience)) = (
+        secret_env("LETS_CHAT_REDIRECT_URIS"),
+        secret_env("LETS_CHAT_AUDIENCE"),
+    ) else {
+        info!("lets-chat OIDC client redirect/audience env vars unset, skipping registration");
+        return Ok(());
+    };
+    let post_logout = secret_env("LETS_CHAT_POST_LOGOUT_REDIRECT_URIS").unwrap_or_default();
+    // Optional per-environment dedicated secret. When unset, COALESCE below
+    // preserves the migration's shared hash.
+    let secret_hash = secret_env("LETS_CHAT_CLIENT_SECRET_HASH");
+
+    let split_csv = |s: &str| -> Vec<String> {
+        s.split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let redirect_list = split_csv(&redirect_uris);
+    let post_logout_list = split_csv(&post_logout);
+
+    // UPDATE (not INSERT...ON CONFLICT): the row is guaranteed by the
+    // migration, which the migrator applies before this reconcile runs. A
+    // missing row would touch zero rows and is surfaced by the rows_affected
+    // log below rather than silently inserting a malformed client.
+    let result = sqlx::query(
+        r#"
+        UPDATE oauth_clients SET
+            redirect_uris = $2,
+            post_logout_redirect_uris = $3,
+            audience = $4,
+            client_secret_hash = COALESCE($5, client_secret_hash)
+        WHERE client_id = $1::uuid
+        "#,
+    )
+    .bind(client_id)
+    .bind(&redirect_list)
+    .bind(&post_logout_list)
+    .bind(&audience)
+    .bind(secret_hash.as_deref())
+    .execute(pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        tracing::warn!(
+            client_id,
+            "lets-chat OIDC client row not found; migration 20260618032217 may not have applied"
+        );
+    } else {
+        info!(
+            redirect_uris = ?redirect_list,
+            audience = %audience,
+            secret_pinned = secret_hash.is_some(),
+            "lets-chat OIDC client reconciled from environment"
+        );
     }
 
     Ok(())

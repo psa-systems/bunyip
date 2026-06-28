@@ -1,6 +1,6 @@
 //! Authentication service
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use ipnetwork::IpNetwork;
 use rand::RngCore;
 use sqlx::PgPool;
@@ -14,10 +14,12 @@ use crate::errors::AppError;
 use crate::models::{
     AuditAction, CreateAdminInvite, CreateAuditLog, CreateEmailChangeRequest,
     CreateEmailVerificationToken, CreateMagicLinkToken, CreatePasswordResetToken,
-    CreateRefreshToken, CreateUser, SubscriptionTier, User, UserResponse, UserRole,
+    CreateRefreshToken, CreateTrustedDevice, CreateUser, SubscriptionTier, User, UserResponse,
+    UserRole,
 };
 use crate::repositories::{
-    AuditLogRepository, InviteRepository, TokenRepository, TotpRepository, UserRepository,
+    AuditLogRepository, InviteRepository, TokenRepository, TotpRepository, TrustedDeviceRepository,
+    UserRepository,
 };
 use crate::services::{JwtService, PasswordService};
 
@@ -29,13 +31,21 @@ pub struct AuthTokens {
     pub expires_in: i64,
 }
 
-/// Result of a login attempt — either full success or 2FA challenge
+// The three result enums below carry a full UserResponse in their Success
+// variant, which dwarfs the alternative variants. That is fine: each value is
+// a transient per-request return, matched exactly once and never stored in a
+// collection, so the size imbalance costs nothing (and boxing would add a
+// pointless per-login heap allocation).
+
+/// Result of a login attempt: either full success or 2FA challenge.
+#[allow(clippy::large_enum_variant)]
 pub enum LoginResult {
     Success(AuthTokens, UserResponse),
     TwoFactorRequired { challenge_token: String },
 }
 
 /// Result of magic link verification
+#[allow(clippy::large_enum_variant)]
 pub enum MagicLinkResult {
     Success(AuthTokens, UserResponse, bool),
     TwoFactorRequired {
@@ -45,9 +55,84 @@ pub enum MagicLinkResult {
 }
 
 /// Result of accepting an admin invite
+#[allow(clippy::large_enum_variant)]
 pub enum AcceptInviteResult {
     Success(AuthTokens, UserResponse),
     PasswordRequired { email: String },
+}
+
+// --- session-lifetime policy (BUNYIP-137) -----------------------------------
+//
+// Admin sessions get a much shorter leash than subscriber sessions so an
+// unattended privileged session does not stay usable for weeks. These are the
+// single source of truth for the windows (no inline literals elsewhere). The
+// values are assumptions to revise from real usage, not hard requirements.
+
+/// Absolute refresh-token lifetime by role. Admins: 12 hours. Everyone else:
+/// 30 days (the historical default). For admins this deadline is preserved
+/// across refresh rotation (see `create_tokens`), so it is a true ceiling on
+/// session age, not a rolling window.
+fn refresh_absolute_ttl(role: &str) -> Duration {
+    if role == UserRole::Admin.as_str() {
+        Duration::hours(12)
+    } else {
+        Duration::days(30)
+    }
+}
+
+/// Idle window by role. A refresh is rejected (and the session revoked) once
+/// the session has been inactive longer than this. `None` means no idle limit
+/// (subscriber behavior is unchanged). Admins: 30 minutes.
+fn refresh_idle_ttl(role: &str) -> Option<Duration> {
+    if role == UserRole::Admin.as_str() {
+        Some(Duration::minutes(30))
+    } else {
+        None
+    }
+}
+
+/// Whether a session must be rejected for idle timeout, given its role and the
+/// time it was last active. Pure decision function (BUNYIP-137) so the policy
+/// is unit-testable without a database. Roles with no idle window never expire
+/// on idle.
+fn session_idle_expired(role: &str, last_active: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    match refresh_idle_ttl(role) {
+        Some(idle) => now - last_active > idle,
+        None => false,
+    }
+}
+
+// --- trusted-device policy (BUNYIP-138) -------------------------------------
+
+/// How long a remembered device may skip the login TOTP prompt. Using the
+/// device does not extend this; the deadline is fixed at creation.
+const TRUSTED_DEVICE_TTL_DAYS: i64 = 30;
+
+/// Whether a presented trusted device permits skipping the login TOTP prompt.
+/// Pure decision (unit-testable): only subscribers may skip, and only when a
+/// valid (non-revoked, non-expired, owner-matched) device row was found.
+/// Admins always complete full 2FA.
+fn trusted_device_allows_skip(role: &str, has_valid_device: bool) -> bool {
+    has_valid_device && role == UserRole::Subscriber.as_str()
+}
+
+/// BUNYIP-221: which side of the dual gate (email-verify vs name-save)
+/// triggered the initial-tier grant. Emitted as the `trigger` field on the
+/// `InitialTierGranted` audit row so the timeline shows which event was the
+/// closer of the funnel.
+#[derive(Debug, Clone, Copy)]
+pub enum TierGrantTrigger {
+    EmailVerified,
+    ProfileCompleted,
+}
+
+impl TierGrantTrigger {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TierGrantTrigger::EmailVerified => "email_verified",
+            TierGrantTrigger::ProfileCompleted => "profile_completed",
+        }
+    }
 }
 
 /// Authentication service
@@ -66,6 +151,14 @@ impl AuthService {
             password: PasswordService::new(),
             tier_config,
         }
+    }
+
+    /// Hash a raw refresh token the same way it is stored, so callers (e.g.
+    /// the active-sessions endpoint) can match a presented refresh-token cookie
+    /// to its stored row without reaching into the private JWT service
+    /// (BUNYIP-137).
+    pub fn hash_token(&self, token: &str) -> String {
+        self.jwt.hash_token(token)
     }
 
     /// Hot-reload the tier configuration (e.g. after admin update).
@@ -109,7 +202,7 @@ impl AuthService {
         .await?;
 
         // Create audit log
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
         AuditLogRepository::create(
             &self.pool,
             CreateAuditLog::new(AuditAction::UserRegistered)
@@ -129,6 +222,7 @@ impl AuthService {
         password: String,
         device_info: Option<String>,
         ip_address: Option<IpAddr>,
+        trusted_device_token: Option<String>,
     ) -> Result<LoginResult, AppError> {
         // Find user
         let user = UserRepository::find_by_email(&self.pool, &email)
@@ -156,6 +250,40 @@ impl AuthService {
             let has_verified_totp = totp_record.map(|r| r.verified).unwrap_or(false);
 
             if has_verified_totp {
+                // Trusted-device skip (BUNYIP-138): the password has already
+                // been verified above; a subscriber presenting a valid trusted-
+                // device cookie may skip the SECOND factor only. The opaque
+                // cookie value is hashed and matched to a non-revoked, non-
+                // expired, owner-matched row. Admins never skip.
+                if let Some(token) = trusted_device_token.as_deref() {
+                    let hash = self.jwt.hash_token(token);
+                    if let Some(device) =
+                        TrustedDeviceRepository::find_valid_by_hash(&self.pool, &hash).await?
+                    {
+                        if device.user_id == user.id && trusted_device_allows_skip(&user.role, true)
+                        {
+                            TrustedDeviceRepository::touch_last_used(&self.pool, device.id).await?;
+                            let tokens = self
+                                .create_tokens(&user, device_info.clone(), ip_address, None)
+                                .await?;
+                            UserRepository::update_last_login(&self.pool, user.id).await?;
+                            let ip = ip_address.map(IpNetwork::from);
+                            AuditLogRepository::create(
+                                &self.pool,
+                                CreateAuditLog::new(AuditAction::UserLogin)
+                                    .with_actor(user.id, &user.email, &user.role)
+                                    .with_ip(ip)
+                                    .with_metadata(serde_json::json!({
+                                        "method": "trusted_device",
+                                        "device_info": device_info,
+                                    })),
+                            )
+                            .await?;
+                            return Ok(LoginResult::Success(tokens, UserResponse::from(user)));
+                        }
+                    }
+                }
+
                 let challenge_token = self.jwt.create_2fa_challenge_token(user.id)?;
                 return Ok(LoginResult::TwoFactorRequired { challenge_token });
             }
@@ -167,14 +295,14 @@ impl AuthService {
 
         // Create tokens
         let tokens = self
-            .create_tokens(&user, device_info.clone(), ip_address)
+            .create_tokens(&user, device_info.clone(), ip_address, None)
             .await?;
 
         // Update last login
         UserRepository::update_last_login(&self.pool, user.id).await?;
 
         // Create audit log
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
         AuditLogRepository::create(
             &self.pool,
             CreateAuditLog::new(AuditAction::UserLogin)
@@ -265,11 +393,36 @@ impl AuthService {
             .await?
             .ok_or(AppError::InvalidCredentials)?;
 
+        // Idle-timeout enforcement (BUNYIP-137). For roles with an idle window
+        // (admins), reject and revoke a session that has been inactive too
+        // long. Activity is measured from `last_used_at`, falling back to
+        // `created_at`; because refresh rotates the row (a new row with
+        // `created_at = NOW()` replaces the old one), this is effectively the
+        // time since the session was last refreshed.
+        let last_active = stored_token.last_used_at.unwrap_or(stored_token.created_at);
+        if session_idle_expired(&user.role, last_active, Utc::now()) {
+            TokenRepository::revoke_refresh_token(&self.pool, stored_token.id).await?;
+            tracing::info!(
+                user_id = %user.id,
+                token_id = %claims.jti,
+                "token_refresh: session idle-timeout exceeded, revoked"
+            );
+            return Err(AppError::TokenExpired);
+        }
+
         // Revoke old token
         TokenRepository::revoke_refresh_token(&self.pool, stored_token.id).await?;
 
-        // Create new tokens
-        let tokens = self.create_tokens(&user, device_info, ip_address).await?;
+        // Create new tokens. Carry the rotated-out token's absolute deadline so
+        // an admin session's 12h ceiling is not reset on every refresh.
+        let tokens = self
+            .create_tokens(
+                &user,
+                device_info,
+                ip_address,
+                Some(stored_token.expires_at),
+            )
+            .await?;
 
         Ok(tokens)
     }
@@ -289,7 +442,7 @@ impl AuthService {
 
         // Get user for audit log
         if let Some(user) = UserRepository::find_by_id(&self.pool, user_id).await? {
-            let ip = ip_address.map(|ip| IpNetwork::from(ip));
+            let ip = ip_address.map(IpNetwork::from);
             AuditLogRepository::create(
                 &self.pool,
                 CreateAuditLog::new(AuditAction::UserLogout)
@@ -309,10 +462,12 @@ impl AuthService {
         ip_address: Option<IpAddr>,
     ) -> Result<(), AppError> {
         TokenRepository::revoke_all_user_refresh_tokens(&self.pool, user_id).await?;
+        // "Log out everywhere" also drops trusted devices (BUNYIP-138).
+        TrustedDeviceRepository::revoke_all_for_user(&self.pool, user_id).await?;
 
         // Get user for audit log
         if let Some(user) = UserRepository::find_by_id(&self.pool, user_id).await? {
-            let ip = ip_address.map(|ip| IpNetwork::from(ip));
+            let ip = ip_address.map(IpNetwork::from);
             AuditLogRepository::create(
                 &self.pool,
                 CreateAuditLog::new(AuditAction::UserLogout)
@@ -332,7 +487,7 @@ impl AuthService {
         email: String,
         ip_address: Option<IpAddr>,
     ) -> Result<String, AppError> {
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
 
         // Generate token
         let token = generate_secure_token(32);
@@ -447,13 +602,15 @@ impl AuthService {
         }
 
         // Create tokens
-        let tokens = self.create_tokens(&user, device_info, ip_address).await?;
+        let tokens = self
+            .create_tokens(&user, device_info, ip_address, None)
+            .await?;
 
         // Update last login
         UserRepository::update_last_login(&self.pool, user.id).await?;
 
         // Audit log
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
         AuditLogRepository::create(
             &self.pool,
             CreateAuditLog::new(AuditAction::MagicLinkUsed)
@@ -470,12 +627,18 @@ impl AuthService {
     }
 
     /// Complete 2FA login after challenge token + TOTP/recovery code verification
+    ///
+    /// When `trust_device` is set and the account is a subscriber, a trusted
+    /// device is created and its opaque secret is returned as the third tuple
+    /// element so the handler can set the `bunyip_trusted_device` cookie. It is
+    /// `None` for admins (who never skip 2FA) and when the flag is unset.
     pub async fn complete_2fa_login(
         &self,
         challenge_token: &str,
         device_info: Option<String>,
         ip_address: Option<IpAddr>,
-    ) -> Result<(AuthTokens, UserResponse), AppError> {
+        trust_device: bool,
+    ) -> Result<(AuthTokens, UserResponse, Option<String>), AppError> {
         // Verify challenge token
         let claims = self.jwt.verify_2fa_challenge_token(challenge_token)?;
         let user_id = claims.sub;
@@ -491,14 +654,24 @@ impl AuthService {
 
         // Create tokens
         let tokens = self
-            .create_tokens(&user, device_info.clone(), ip_address)
+            .create_tokens(&user, device_info.clone(), ip_address, None)
             .await?;
+
+        // Issue a trusted device only for subscribers who opted in (BUNYIP-138).
+        let trusted_token = if trust_device && trusted_device_allows_skip(&user.role, true) {
+            Some(
+                self.issue_trusted_device(user.id, device_info.clone(), ip_address)
+                    .await?,
+            )
+        } else {
+            None
+        };
 
         // Update last login
         UserRepository::update_last_login(&self.pool, user.id).await?;
 
         // Audit log
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
         AuditLogRepository::create(
             &self.pool,
             CreateAuditLog::new(AuditAction::UserLogin)
@@ -508,7 +681,41 @@ impl AuthService {
         )
         .await?;
 
-        Ok((tokens, UserResponse::from(user)))
+        Ok((tokens, UserResponse::from(user), trusted_token))
+    }
+
+    /// Create a trusted device for a user and return the opaque cookie secret
+    /// (the caller sets it as the `bunyip_trusted_device` cookie). Only the
+    /// SHA-256 hash of the secret is stored (BUNYIP-138).
+    pub async fn issue_trusted_device(
+        &self,
+        user_id: Uuid,
+        label: Option<String>,
+        ip_address: Option<IpAddr>,
+    ) -> Result<String, AppError> {
+        let token = generate_secure_token(32);
+        let token_hash = self.jwt.hash_token(&token);
+        let expires_at = Utc::now() + Duration::days(TRUSTED_DEVICE_TTL_DAYS);
+        let ip = ip_address.map(IpNetwork::from);
+        TrustedDeviceRepository::create(
+            &self.pool,
+            CreateTrustedDevice {
+                user_id,
+                token_hash,
+                label,
+                ip_address: ip,
+                expires_at,
+            },
+        )
+        .await?;
+        Ok(token)
+    }
+
+    /// Revoke all of a user's trusted devices. Called on credential and 2FA
+    /// changes so the TOTP prompt is re-armed on every device.
+    pub async fn revoke_trusted_devices(&self, user_id: Uuid) -> Result<(), AppError> {
+        TrustedDeviceRepository::revoke_all_for_user(&self.pool, user_id).await?;
+        Ok(())
     }
 
     /// Request password reset
@@ -517,7 +724,7 @@ impl AuthService {
         email: String,
         ip_address: Option<IpAddr>,
     ) -> Result<Option<String>, AppError> {
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
 
         // Find user
         let user = match UserRepository::find_by_email(&self.pool, &email).await? {
@@ -620,9 +827,11 @@ impl AuthService {
 
         // Revoke all refresh tokens (logout everywhere)
         TokenRepository::revoke_all_user_refresh_tokens(&self.pool, user.id).await?;
+        // A password reset also drops trusted devices (BUNYIP-138).
+        TrustedDeviceRepository::revoke_all_for_user(&self.pool, user.id).await?;
 
         // Audit log
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
         AuditLogRepository::create(
             &self.pool,
             CreateAuditLog::new(AuditAction::PasswordResetCompleted)
@@ -668,8 +877,15 @@ impl AuthService {
         let new_hash = self.password.hash(&new_password)?;
         UserRepository::update_password(&self.pool, user_id, &new_hash).await?;
 
+        // Revoke every outstanding refresh token (legacy + OIDC) so a changed
+        // password logs the user out everywhere, matching the password-reset
+        // path. revoke_all_user_refresh_tokens unifies both surfaces.
+        TokenRepository::revoke_all_user_refresh_tokens(&self.pool, user_id).await?;
+        // A password change also drops trusted devices (BUNYIP-138).
+        TrustedDeviceRepository::revoke_all_for_user(&self.pool, user_id).await?;
+
         // Audit log
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
         AuditLogRepository::create(
             &self.pool,
             CreateAuditLog::new(AuditAction::PasswordChanged)
@@ -693,7 +909,7 @@ impl AuthService {
         current_password: Option<String>,
         ip_address: Option<IpAddr>,
     ) -> Result<(String, Option<String>), AppError> {
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
 
         // Get user
         let user = UserRepository::find_by_id(&self.pool, user_id)
@@ -717,12 +933,11 @@ impl AuthService {
         }
 
         // If user has a password, require it for verification
-        if user.password_hash.is_some() {
+        if let Some(password_hash) = &user.password_hash {
             let password = current_password.ok_or(AppError::validation(
                 "current_password",
                 "Password is required to change email",
             ))?;
-            let password_hash = user.password_hash.as_ref().unwrap();
             if !self.password.verify(&password, password_hash)? {
                 return Err(AppError::validation(
                     "current_password",
@@ -780,34 +995,17 @@ impl AuthService {
             let mut tx = self.pool.begin().await?;
 
             // Lock the user row to prevent concurrent email changes
-            sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
-                .bind(user_id)
-                .execute(&mut *tx)
-                .await?;
+            UserRepository::lock_for_update(&mut *tx, user_id).await?;
 
             // Re-check email availability inside the transaction
-            let existing: Option<(Uuid,)> = sqlx::query_as(
-                "SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL",
-            )
-            .bind(&new_email)
-            .fetch_optional(&mut *tx)
-            .await?;
-            if existing.is_some() {
+            if UserRepository::email_exists(&mut *tx, &new_email).await? {
                 return Err(AppError::conflict("Email already registered"));
             }
 
-            sqlx::query("UPDATE users SET email = $1, email_verified = $2, updated_at = NOW() WHERE id = $3")
-                .bind(&new_email)
-                .bind(false)
-                .bind(user_id)
-                .execute(&mut *tx)
-                .await?;
+            UserRepository::update_email(&mut *tx, user_id, &new_email, false).await?;
 
             // Revoke all refresh tokens (force re-login with new email)
-            sqlx::query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL")
-                .bind(user_id)
-                .execute(&mut *tx)
-                .await?;
+            TokenRepository::revoke_all_user_refresh_tokens(&mut *tx, user_id).await?;
 
             tx.commit().await?;
 
@@ -835,7 +1033,7 @@ impl AuthService {
         token: String,
         ip_address: Option<IpAddr>,
     ) -> Result<(String, String), AppError> {
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
         let token_hash = self.jwt.hash_token(&token);
 
         // Find request (outside transaction for early rejection)
@@ -853,46 +1051,25 @@ impl AuthService {
         let mut tx = self.pool.begin().await?;
 
         // Lock the user row to prevent concurrent email changes
-        let user: User =
-            sqlx::query_as("SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE")
-                .bind(request.user_id)
-                .fetch_optional(&mut *tx)
-                .await?
-                .ok_or(AppError::not_found("User"))?;
+        let user: User = UserRepository::find_by_id_for_update(&mut *tx, request.user_id)
+            .await?
+            .ok_or(AppError::not_found("User"))?;
 
         let old_email = user.email.clone();
 
         // Re-check email availability inside the transaction
-        let existing: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL",
-        )
-        .bind(&new_email)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if existing.is_some() {
+        if UserRepository::email_exists(&mut *tx, &new_email).await? {
             return Err(AppError::conflict("Email already registered"));
         }
 
         // Update email (set verified since they proved ownership)
-        sqlx::query(
-            "UPDATE users SET email = $1, email_verified = TRUE, updated_at = NOW() WHERE id = $2",
-        )
-        .bind(&new_email)
-        .bind(user.id)
-        .execute(&mut *tx)
-        .await?;
+        UserRepository::update_email(&mut *tx, user.id, &new_email, true).await?;
 
         // Confirm the request
-        sqlx::query("UPDATE email_change_requests SET confirmed_at = NOW() WHERE id = $1")
-            .bind(request.id)
-            .execute(&mut *tx)
-            .await?;
+        TokenRepository::confirm_email_change_request(&mut *tx, request.id).await?;
 
         // Revoke all refresh tokens (force re-login)
-        sqlx::query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL")
-            .bind(user.id)
-            .execute(&mut *tx)
-            .await?;
+        TokenRepository::revoke_all_user_refresh_tokens(&mut *tx, user.id).await?;
 
         tx.commit().await?;
 
@@ -914,13 +1091,13 @@ impl AuthService {
     /// Request email verification
     ///
     /// Generates a token and returns it so the caller can send the verification email.
-    /// Requires 2FA to be enabled and email to not already be verified.
+    /// Requires email to not already be verified.
     pub async fn request_email_verification(
         &self,
         user_id: Uuid,
         ip_address: Option<IpAddr>,
     ) -> Result<String, AppError> {
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+        let ip = ip_address.map(IpNetwork::from);
 
         let user = UserRepository::find_by_id(&self.pool, user_id)
             .await?
@@ -928,13 +1105,6 @@ impl AuthService {
 
         if user.email_verified {
             return Err(AppError::validation("email", "Email is already verified"));
-        }
-
-        if !user.two_factor_enabled {
-            return Err(AppError::validation(
-                "two_factor",
-                "Two-factor authentication must be enabled to verify your email",
-            ));
         }
 
         // Rate limit: 3 requests per hour
@@ -977,15 +1147,19 @@ impl AuthService {
 
     /// Confirm email verification using token.
     ///
-    /// Returns `(user_id, email, subscription_tier)`. The tier is assigned atomically using
-    /// a transaction-level advisory lock so concurrent verifications cannot race
-    /// and land on the same slot count.
+    /// Returns `(user_id, email, Option<SubscriptionTier>)`. The tier is
+    /// returned as `Some(...)` only when the verify also crossed the BUNYIP-221
+    /// dual-condition threshold (email verified AND first / last name
+    /// present), i.e. when this verify is the side that actually unlocks the
+    /// trial. A verify that happens before the user has saved a name returns
+    /// `Ok((..., None))`; the tier is granted later from
+    /// `update_current_user_profile` once the names land. Either order wins.
     pub async fn confirm_email_verification(
         &self,
         token: String,
         ip_address: Option<IpAddr>,
-    ) -> Result<(Uuid, String, SubscriptionTier), AppError> {
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
+    ) -> Result<(Uuid, String, Option<SubscriptionTier>), AppError> {
+        let ip = ip_address.map(IpNetwork::from);
         let token_hash = self.jwt.hash_token(&token);
 
         // Find and validate token before opening the transaction
@@ -1002,22 +1176,123 @@ impl AuthService {
             .await?
             .ok_or(AppError::not_found("User"))?;
 
-        // Open a transaction to atomically assign the subscription tier.
-        // The advisory lock (arbitrary fixed ID) serialises all concurrent
-        // verifications so the slot count cannot be read twice for the same slot.
+        // Flip email_verified + consume the token in one tx. Tier assignment
+        // is no longer part of this tx (BUNYIP-221): it now depends on the
+        // user also having a first / last name, which is independent of the
+        // verify click. The grant runs through `maybe_grant_initial_tier`
+        // below, which handles the dual-condition gate + slot-count race via
+        // its own advisory-locked tx.
         let mut tx = self.pool.begin().await?;
 
-        // Acquire transaction-level advisory lock (released on COMMIT/ROLLBACK)
+        TokenRepository::mark_email_verification_token_used(&mut *tx, verification_token.id)
+            .await?;
+
+        sqlx::query("UPDATE users SET email_verified = TRUE, updated_at = NOW() WHERE id = $1")
+            .bind(user.id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+
+        // Audit the verify itself. Tier metadata (when applicable) is logged
+        // separately by `maybe_grant_initial_tier` via `InitialTierGranted` so
+        // the timeline reads cleanly even when verify and grant are minutes
+        // (or days) apart.
+        AuditLogRepository::create(
+            &self.pool,
+            CreateAuditLog::new(AuditAction::EmailVerified)
+                .with_actor(user.id, &user.email, &user.role)
+                .with_ip(ip),
+        )
+        .await?;
+
+        let granted = self
+            .maybe_grant_initial_tier(user.id, ip_address, TierGrantTrigger::EmailVerified)
+            .await?;
+
+        Ok((user.id, user.email, granted))
+    }
+
+    /// BUNYIP-221: grant the initial subscription tier (Lifetime / EarlyAdopter
+    /// / Standard) when, and only when, both gate conditions are true:
+    ///
+    /// 1. `email_verified = true`.
+    /// 2. `first_name` and `last_name` are both present (non-empty post-trim).
+    ///
+    /// Idempotent: a no-op for users who already have `trial_ends_at`
+    /// populated or who already have a non-`standard` tier assigned (i.e. tier
+    /// already granted, possibly under the pre-BUNYIP-221 verify-only flow).
+    /// Returns `Ok(Some(tier))` when this call performed the grant,
+    /// `Ok(None)` when either gate failed or the grant was already done.
+    ///
+    /// Called from `confirm_email_verification` (after the verify commits) and
+    /// from `update_current_user_profile` (after a successful name save) so
+    /// either order between "verify" and "fill in name" produces the grant.
+    pub async fn maybe_grant_initial_tier(
+        &self,
+        user_id: Uuid,
+        ip_address: Option<IpAddr>,
+        trigger: TierGrantTrigger,
+    ) -> Result<Option<SubscriptionTier>, AppError> {
+        let ip = ip_address.map(IpNetwork::from);
+        let user = UserRepository::find_by_id(&self.pool, user_id)
+            .await?
+            .ok_or(AppError::not_found("User"))?;
+
+        // Gate 1: email verified.
+        if !user.email_verified {
+            return Ok(None);
+        }
+        // Gate 2: both names present (non-empty post-trim).
+        let name_ok = |s: &Option<String>| s.as_deref().is_some_and(|v| !v.trim().is_empty());
+        if !name_ok(&user.first_name) || !name_ok(&user.last_name) {
+            return Ok(None);
+        }
+        // Idempotency: any signal that a prior grant happened means skip.
+        // The "never granted" sentinel is exactly: `subscription_tier =
+        // 'standard'` AND `trial_ends_at IS NULL` AND `lifetime_member =
+        // false`. Anything else is "granted" (by this method, by the
+        // pre-BUNYIP-221 verify-only path, or by an admin grant of `free` /
+        // `lifetime`).
+        if user.lifetime_member
+            || user.trial_ends_at.is_some()
+            || user.subscription_tier != "standard"
+        {
+            return Ok(None);
+        }
+
+        // Open a transaction to atomically assign the tier. Advisory lock
+        // serialises concurrent grants so the slot count cannot be read twice
+        // for the same slot (the same race the pre-BUNYIP-221 verify path
+        // protected against). The lock id matches the one the verify path
+        // used so the two never race against each other either.
+        let mut tx = self.pool.begin().await?;
+
         sqlx::query("SELECT pg_advisory_xact_lock(9999999)")
             .execute(&mut *tx)
             .await?;
 
-        // Count how many users have been assigned each tier while holding the lock.
-        // This ensures slots are filled based on actual assignments, not total user count.
+        // Re-read under the lock so a parallel call that already granted
+        // between our pre-lock check and the lock acquisition does not
+        // produce a duplicate write.
+        let locked = sqlx::query_as::<_, User>(
+            "SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(AppError::not_found("User"))?;
+        if locked.lifetime_member
+            || locked.trial_ends_at.is_some()
+            || locked.subscription_tier != "standard"
+        {
+            tx.commit().await?;
+            return Ok(None);
+        }
+
         let (lifetime_count, early_adopter_count) =
             UserRepository::count_tier_assignments(&mut *tx).await?;
 
-        // Snapshot tier config under the lock so values are consistent
         let tc = self
             .tier_config
             .read()
@@ -1032,19 +1307,9 @@ impl AuthService {
             SubscriptionTier::Standard
         };
 
-        // Mark token as used
-        TokenRepository::mark_email_verification_token_used(&mut *tx, verification_token.id)
-            .await?;
-
-        // Set email_verified and assign tier in the same transaction
-        sqlx::query("UPDATE users SET email_verified = TRUE, updated_at = NOW() WHERE id = $1")
-            .bind(user.id)
-            .execute(&mut *tx)
-            .await?;
-
         UserRepository::assign_subscription_tier(
             &mut *tx,
-            user.id,
+            user_id,
             &tier,
             tc.early_adopter_trial_days,
             tc.standard_trial_days,
@@ -1053,17 +1318,19 @@ impl AuthService {
 
         tx.commit().await?;
 
-        // Audit log (outside transaction — non-critical)
         AuditLogRepository::create(
             &self.pool,
-            CreateAuditLog::new(AuditAction::EmailVerified)
+            CreateAuditLog::new(AuditAction::InitialTierGranted)
                 .with_actor(user.id, &user.email, &user.role)
                 .with_ip(ip)
-                .with_metadata(serde_json::json!({ "subscription_tier": tier.as_str() })),
+                .with_metadata(serde_json::json!({
+                    "trigger": trigger.as_str(),
+                    "subscription_tier": tier.as_str(),
+                })),
         )
         .await?;
 
-        Ok((user.id, user.email, tier))
+        Ok(Some(tier))
     }
 
     /// Create an admin invite
@@ -1143,7 +1410,7 @@ impl AuthService {
         match UserRepository::find_by_email(&self.pool, &invite.email).await? {
             Some(user) if user.role == "admin" => {
                 // Already an admin — stale invite
-                return Err(AppError::conflict("User is already an admin"));
+                Err(AppError::conflict("User is already an admin"))
             }
             Some(user) => {
                 // Existing non-admin user — upgrade to admin
@@ -1154,7 +1421,7 @@ impl AuthService {
 
                 // Create auth tokens
                 let tokens = self
-                    .create_tokens(&updated_user, device_info, ip_address)
+                    .create_tokens(&updated_user, device_info, ip_address, None)
                     .await?;
                 UserRepository::update_last_login(&self.pool, user.id).await?;
 
@@ -1214,7 +1481,9 @@ impl AuthService {
                 InviteRepository::mark_accepted(&self.pool, invite.id).await?;
 
                 // Create auth tokens
-                let tokens = self.create_tokens(&user, device_info, ip_address).await?;
+                let tokens = self
+                    .create_tokens(&user, device_info, ip_address, None)
+                    .await?;
                 UserRepository::update_last_login(&self.pool, user.id).await?;
 
                 // Audit log
@@ -1265,18 +1534,37 @@ impl AuthService {
         Ok(())
     }
 
-    /// Helper to create auth tokens
+    /// Helper to create auth tokens.
+    ///
+    /// `refresh_expires_at` carries an existing session's absolute deadline
+    /// across a refresh rotation. On a fresh login it is `None` and the
+    /// deadline is computed from the role's absolute TTL. On refresh the caller
+    /// passes the rotated-out token's `expires_at`: for admins the deadline is
+    /// the STRICTER of that existing value and a fresh admin TTL, so the
+    /// 12-hour ceiling is not reset every refresh (a true absolute cap) and a
+    /// deadline that was somehow issued under a looser policy (e.g. a 30-day
+    /// subscriber window that escaped role-change revocation) can only ever be
+    /// tightened, never extended, once the account is an admin. For subscribers
+    /// the deadline is recomputed (rolling 30-day window, the historical
+    /// behavior) so subscriber sessions are unchanged (BUNYIP-137).
     async fn create_tokens(
         &self,
         user: &User,
         device_info: Option<String>,
         ip_address: Option<IpAddr>,
+        refresh_expires_at: Option<DateTime<Utc>>,
     ) -> Result<AuthTokens, AppError> {
         let access_token = self.jwt.create_access_token(user)?;
         let (refresh_token, token_hash) = self.jwt.create_refresh_token(user.id)?;
 
-        let ip = ip_address.map(|ip| IpNetwork::from(ip));
-        let expires_at = Utc::now() + Duration::days(30);
+        let ip = ip_address.map(IpNetwork::from);
+        let fresh_deadline = Utc::now() + refresh_absolute_ttl(&user.role);
+        let expires_at = match refresh_expires_at {
+            // Admins: clamp to the stricter of the carried deadline and a fresh
+            // admin window, so the cap can only tighten across rotation.
+            Some(existing) if user.role == UserRole::Admin.as_str() => existing.min(fresh_deadline),
+            _ => fresh_deadline,
+        };
 
         // Store refresh token
         TokenRepository::create_refresh_token(
@@ -1309,6 +1597,50 @@ pub(crate) fn generate_secure_token(length: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admin_gets_shorter_absolute_ttl_than_subscriber() {
+        assert_eq!(refresh_absolute_ttl("admin"), Duration::hours(12));
+        assert_eq!(refresh_absolute_ttl("subscriber"), Duration::days(30));
+        // Unknown roles are treated as non-admin (the safe, unchanged default).
+        assert_eq!(refresh_absolute_ttl("whatever"), Duration::days(30));
+    }
+
+    #[test]
+    fn only_admins_have_an_idle_window() {
+        assert_eq!(refresh_idle_ttl("admin"), Some(Duration::minutes(30)));
+        assert_eq!(refresh_idle_ttl("subscriber"), None);
+    }
+
+    #[test]
+    fn admin_session_expires_after_idle_window() {
+        let now = Utc::now();
+        // 31 minutes idle exceeds the 30-minute admin window.
+        let stale = now - Duration::minutes(31);
+        assert!(session_idle_expired("admin", stale, now));
+        // 10 minutes idle is still within the window.
+        let fresh = now - Duration::minutes(10);
+        assert!(!session_idle_expired("admin", fresh, now));
+    }
+
+    #[test]
+    fn trusted_device_skip_only_for_subscriber_with_valid_device() {
+        // Subscriber with a valid device skips; admins never skip; no valid
+        // device never skips (BUNYIP-138).
+        assert!(trusted_device_allows_skip("subscriber", true));
+        assert!(!trusted_device_allows_skip("admin", true));
+        assert!(!trusted_device_allows_skip("subscriber", false));
+        assert!(!trusted_device_allows_skip("admin", false));
+    }
+
+    #[test]
+    fn subscriber_session_never_idle_expires() {
+        let now = Utc::now();
+        // Even a 60-day-idle subscriber session is not idle-expired (only the
+        // absolute TTL bounds it, unchanged behavior).
+        let very_stale = now - Duration::days(60);
+        assert!(!session_idle_expired("subscriber", very_stale, now));
+    }
 
     #[test]
     fn generate_secure_token_correct_length() {

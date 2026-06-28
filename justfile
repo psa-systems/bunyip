@@ -1,5 +1,5 @@
-# Bunyip (PSA Systems) - task runner for the split web + api workspace.
-#
+# General Task Runner
+
 # Two deployables: bunyip-api (actix backend, musl-static image) and
 # bunyip-web (Axum SSR frontend, glibc image with bun + tailwind). The
 # backend consumes the dunite git dependency
@@ -9,6 +9,98 @@
 # List available recipes
 default:
     @just --list
+
+# -- Hooks ------------------------------------------------------------------
+
+# Install the git pre-commit hook (run once per fresh clone). Writes a stub at .git/hooks/pre-commit that execs `just pre-commit`. Bypass with `git commit --no-verify`.
+[group: 'hooks']
+install-hooks:
+    #!/usr/bin/env nu
+    let hook = ".git/hooks/pre-commit"
+    # Remove first so a leftover symlink from an older install does not get
+    # written through to its target file. `try` swallows the not-found case.
+    try { rm $hook }
+    "#!/usr/bin/env sh\nexec just pre-commit\n" | save $hook
+    ^chmod +x $hook
+    print $"Wrote ($hook) -> just pre-commit"
+
+# Run the same checks as .forgejo/workflows/check.yml inside the dev compose `api` container.
+[group: 'hooks']
+pre-commit: ensure-env
+    #!/usr/bin/env nu
+    print "\n[pre-commit] cargo fmt --all --check"
+    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo fmt --all --check
+    print "\n[pre-commit] cargo clippy --workspace --all-targets -- -D warnings"
+    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo clippy --workspace --all-targets -- -D warnings
+    print "\n[pre-commit] cargo build --workspace --all-targets --locked"
+    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo build --workspace --all-targets --locked
+    print "\n[pre-commit] cargo test --workspace --lib"
+    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo test --workspace --lib
+    print "\n[pre-commit] all checks passed"
+
+# -- Checks ----------------------------------------------------------------------
+
+# Umbrella check: build + clippy + fmt + docker builder stage.
+[group: 'checks']
+check: check-migrations check-build check-clippy check-fmt check-docker
+
+# Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
+[group: 'checks']
+check-migrations:
+    ./scripts/check-migration-versions.sh
+
+# Build every target in the workspace.
+[group: 'checks']
+check-build:
+    cargo build --workspace --all-targets
+
+# Clippy across the workspace with warnings denied.
+[group: 'checks']
+check-clippy:
+    cargo clippy --workspace --all-targets -- -D warnings
+
+# Formatting check.
+[group: 'checks']
+check-fmt:
+    cargo fmt --all --check
+
+# Build the api image's builder stage only - catches Docker-build drift cheaply.
+[group: 'checks']
+check-docker:
+    docker build --file bunyip-api/oci-build/Dockerfile --target builder --output type=cacheonly --provenance=false .
+
+# Run fmt + clippy + workspace lib tests inside the pinned rust-builder image.
+# For dev boxes with no local Rust toolchain; named volumes keep repeat runs incremental.
+[group: 'checks']
+check-container:
+    docker run --rm \
+        -v {{ justfile_directory() }}:/work \
+        -v dunite-check-cargo-registry:/usr/local/cargo/registry \
+        -v bunyip-check-target:/work/target \
+        -w /work \
+        -e SQLX_OFFLINE=true \
+        ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie \
+        bash -c "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace --lib"
+
+# Type-check the workspace.
+[group: 'checks']
+typecheck:
+    cargo check --workspace
+
+# Lint the workspace (clippy).
+[group: 'checks']
+lint:
+    cargo clippy --workspace --all-targets -- -D warnings
+
+# Format the workspace.
+[group: 'checks']
+fmt:
+    cargo fmt --all
+
+# Run unit tests.
+[group: 'checks']
+test:
+    cargo test --workspace --lib
 
 # docker compose reads HOST_UID/HOST_GID for the `user:` mapping + dev-image
 # build args on shared dev hosts (where the developer's uid is not 1000). These
@@ -25,7 +117,7 @@ export SQLX_OFFLINE := "true"
 compose := "docker compose -f compose.dev.yml "
 compose_sso := "docker compose -f compose.dev.yml -f compose.dev-sso.yml "
 
-# ── Dev ───────────────────────────────────────────────────────────────────────
+# -- Development --------------------------------------------------------------
 
 # Create .env from the example if missing, generating the dev secrets that would
 # otherwise be empty (the encryption keys must be 32-byte hex or the api panics
@@ -33,6 +125,14 @@ compose_sso := "docker compose -f compose.dev.yml -f compose.dev-sso.yml "
 [private]
 ensure-env:
     #!/usr/bin/env nu
+    # compose.dev.yml declares the per-developer private network as
+    # `external: true`, so compose will NOT create it. Ensure it exists
+    # (idempotent: inspect returns 0 when present, otherwise create).
+    let user_name = (^whoami | str trim)
+    let net = $"dev-bunyip-private-($user_name)"
+    if (do { ^docker network inspect $net } | complete | get exit_code) != 0 {
+        ^docker network create $net out> /dev/null
+    }
     if (".env" | path exists) { return }
     print "Creating .env with generated dev credentials..."
     open .env.example
@@ -50,19 +150,34 @@ ensure-env:
     | save .env
     print "Wrote .env (generated TOTP_ENCRYPTION_KEY, STRIPE_ENCRYPTION_KEY, JWT_SECRET)."
 
-# Generate the dev OIDC signing keypair (Ed25519, kid dev-2026) into ./secrets if
-# missing. bunyip-api IS the OIDC issuer and loads these at startup
-# (OIDC_JWT_PRIVATE_KEY_PATH); without them it fails to boot. ./secrets is mounted
-# into the api container at /run/secrets/oidc (see compose.dev.yml). The keypair is
-# gitignored; this just makes a fresh clone bootable without manual openssl steps.
+# Generate the dev OIDC signing keypair (Ed25519, kid dev-2026) into ./secrets/oidc
+# if missing. bunyip-api IS the OIDC issuer and loads these at startup
+# (OIDC_JWT_PRIVATE_KEY_PATH); without them it fails to boot. ./secrets/oidc is
+# mounted into the api container at /run/secrets/oidc (see compose.dev.yml). The
+# keypair is gitignored; this just makes a fresh clone bootable without manual
+# openssl steps. Pre-BUNYIP-38 layouts kept the keys at ./secrets/ directly; they
+# are migrated into the subdir automatically.
 [private]
 ensure-oidc-keys:
     #!/usr/bin/env nu
-    if (("secrets/dev-2026.pem" | path exists) and ("secrets/dev-2026.pub.pem" | path exists)) { return }
-    mkdir secrets
-    ^openssl genpkey --algorithm ed25519 --out secrets/dev-2026.pem
-    ^openssl pkey --in secrets/dev-2026.pem --pubout --out secrets/dev-2026.pub.pem
-    print "Generated secrets/dev-2026.pem (Ed25519 OIDC signing key, kid dev-2026)."
+    mkdir secrets/oidc
+    # Migrate the old flat layout (secrets/dev-2026.pem) into secrets/oidc/.
+    ["dev-2026.pem", "dev-2026.pub.pem"] | each {|f|
+        if (($"secrets/($f)" | path exists) and not ($"secrets/oidc/($f)" | path exists)) {
+            mv $"secrets/($f)" $"secrets/oidc/($f)"
+            print $"Migrated secrets/($f) -> secrets/oidc/($f)"
+        }
+    } | ignore
+    if (("secrets/oidc/dev-2026.pem" | path exists) and ("secrets/oidc/dev-2026.pub.pem" | path exists)) { return }
+    ^openssl genpkey --algorithm ed25519 --out secrets/oidc/dev-2026.pem
+    ^openssl pkey --in secrets/oidc/dev-2026.pem --pubout --out secrets/oidc/dev-2026.pub.pem
+    print "Generated secrets/oidc/dev-2026.pem (Ed25519 OIDC signing key, kid dev-2026)."
+
+# Create/migrate the production secret files under ./secrets (BUNYIP-38).
+# Idempotent wrapper around scripts/init-secrets.sh; see compose.yml quick start.
+[group: 'dev']
+init-secrets:
+    ./scripts/init-secrets.sh
 
 # Start the full dev stack (postgres + api + web) in the foreground.
 [group: 'dev']
@@ -91,7 +206,57 @@ dev-sso: ensure-env ensure-oidc-keys
     }
     {{ compose_sso }}up --build --detach
     print ""
-    print $"  bunyip hub: https://($user_name)-bunyip.a8n.run"
+    print $"  bunyip hub:   https://($user_name)-bunyip.a8n.run"
+    print $"  OCI registry: https://($user_name)-bunyip-registry.a8n.run  \(when OCI_REGISTRY_ENABLED=true in .env)"
+
+# Register the per-developer OIDC clients (hub + mokosh SPA) in bunyip-api.
+# The committed seed migration registers the static staging hosts; dev hosts
+# carry ${USER} in their redirect URIs and cannot live in a migration, so this
+# recipe upserts them against the running dev DB. Idempotent (ON CONFLICT DO
+# UPDATE keeps the redirect URIs current if your username or hosts change).
+# Run after `just dev-sso`; paste the printed HUB client_id into .env as
+# BUNYIP_OIDC_CLIENT_ID and the SPA client_id into mokosh-apps/.env.
+[group: 'dev']
+register-dev-clients:
+    #!/usr/bin/env nu
+    let user_name = (^whoami | str trim)
+    let pg = $"dev-bunyip-postgres-($user_name)"
+    let hub_id = "b0000000-0000-4000-8000-0000000000d1"
+    let spa_id = "b0000000-0000-4000-8000-0000000000d2"
+    let hub_redirect = $"https://($user_name)-bunyip.a8n.run/auth/callback"
+    let spa_redirect = $"https://($user_name)-mokosh.a8n.run/auth/callback"
+    let hub_origin = $"https://($user_name)-bunyip.a8n.run"
+    let spa_origin = $"https://($user_name)-mokosh.a8n.run"
+    let hub_aud = $"https://($user_name)-bunyip-api.a8n.run"
+    let spa_aud = $"https://($user_name)-mokosh-api.a8n.run"
+    if (do { ^docker inspect $pg } | complete | get exit_code) != 0 {
+        print $"FAIL: ($pg) is not running. Run `just dev-sso` first."
+        exit 1
+    }
+    let sql = $"
+        INSERT INTO oauth_clients \(
+            client_id, client_type, name,
+            redirect_uris, post_logout_redirect_uris,
+            allowed_scopes, allowed_grant_types,
+            token_endpoint_auth_method, require_pkce,
+            audience, access_token_ttl_seconds
+        \) VALUES
+        \('($hub_id)', 'public', 'bunyip-web-dev',
+          ARRAY['($hub_redirect)'], ARRAY['($hub_origin)'],
+          ARRAY['openid','email','offline_access'], ARRAY['authorization_code','refresh_token'],
+          'none', TRUE, '($hub_aud)', 600\),
+        \('($spa_id)', 'public', 'mokosh-apps-dev',
+          ARRAY['($spa_redirect)'], ARRAY['($spa_origin)'],
+          ARRAY['openid','email','offline_access'], ARRAY['authorization_code','refresh_token'],
+          'none', TRUE, '($spa_aud)', 600\)
+        ON CONFLICT \(client_id\) DO UPDATE
+            SET redirect_uris = EXCLUDED.redirect_uris,
+                post_logout_redirect_uris = EXCLUDED.post_logout_redirect_uris,
+                audience = EXCLUDED.audience;"
+    ^docker exec $pg psql --username bunyip --dbname bunyip --quiet --command $sql
+    print ""
+    print $"  hub  \(BUNYIP_OIDC_CLIENT_ID in bunyip/.env\):        ($hub_id)"
+    print $"  SPA  \(MOKOSH_OIDC_CLIENT_ID in mokosh-apps/.env\):   ($spa_id)"
 
 # Stop the dev stack.
 [group: 'dev']
@@ -103,13 +268,84 @@ dev-stop: ensure-env
 dev-stop-sso: ensure-env
     {{ compose_sso }}down --remove-orphans
 
-# Stop the stack, remove its named volumes, and delete the generated dev .env.
+# Automated OCI registry verification against the running dev stack (BUNYIP-31).
+# Prerequisites: `just dev-detach` already up with the distribution proxy enabled
+# in .env (FORGEJO_BASE_URL, FORGEJO_API_TOKEN, OCI_REGISTRY_ENABLED=true) and a
+# published image to pull. Runs the docker login/pull matrix from
+# dev-docs/oci-registry-verification.md and exits non-zero on the first failure.
 [group: 'dev']
-dev-clean:
+verify-oci slug="bunyip-api" owner="psa-systems-private" image="bunyip-api" tag="v0.1.1":
     #!/usr/bin/env nu
-    # Named volumes are per-user suffixed on shared hosts; ensure-env recreates .env.
-    {{ compose }}down --volumes
-    [".env"] | where ($it | path exists) | each {|f| rm $f; print $"Removed ($f)" } | ignore
+    let user_name = (^whoami | str trim)
+    let api_container = $"dev-bunyip-api-($user_name)"
+    let pg_container = $"dev-bunyip-postgres-($user_name)"
+
+    # Pull connection details out of .env (never printed).
+    let env_vars = (
+        open .env | lines
+        | where $it !~ '^#'
+        | where ($it | is-not-empty)
+        | parse '{name}={value}'
+        | transpose --header-row --as-record
+    )
+    let port = (try { $env_vars | get BUNYIP_OCI_PORT } catch { "18081" })
+    let registry = $"localhost:($port)"
+    let admin = (
+        try { $env_vars | get SETUP_DEFAULT_ADMIN } catch {
+            print "FAIL: SETUP_DEFAULT_ADMIN missing from .env (needed for docker login)"
+            exit 1
+        }
+    )
+    let admin_email = ($admin | split row ':' | first)
+    let admin_pass = ($admin | split row ':' | skip 1 | str join ':')
+
+    print $"== OCI registry verification against ($registry) =="
+
+    # Stack must be up.
+    if (do { ^docker inspect $api_container } | complete | get exit_code) != 0 {
+        print $"FAIL: ($api_container) is not running. Run `just dev-detach` first."
+        exit 1
+    }
+
+    # Seed (or repoint) the application row the registry serves.
+    ^docker exec $pg_container psql --username bunyip --dbname bunyip --quiet --command $"
+        INSERT INTO applications \(name, slug, display_name, container_name, oci_image_owner, oci_image_name, pinned_image_tag\)
+        VALUES \('{{ slug }}', '{{ slug }}', '{{ slug }}', 'unused', '{{ owner }}', '{{ image }}', '{{ tag }}'\)
+        ON CONFLICT \(slug\) DO UPDATE
+            SET oci_image_owner = '{{ owner }}', oci_image_name = '{{ image }}', pinned_image_tag = '{{ tag }}';"
+    print "seeded application row"
+
+    # 1. Unauthenticated probe must 401 with a WWW-Authenticate challenge.
+    let probe = (^curl --silent --include $"http://($registry)/v2/" | str join "\n")
+    if not ($probe | str contains "401") { print "FAIL: GET /v2/ did not return 401"; exit 1 }
+    if not ($probe | str downcase | str contains "www-authenticate") {
+        print "FAIL: 401 response is missing the WWW-Authenticate challenge"; exit 1
+    }
+    print "PASS: /v2/ auth challenge"
+
+    # 2. docker login with the admin member credentials.
+    $admin_pass | ^docker login $registry --username $admin_email --password-stdin
+    print "PASS: docker login"
+
+    # 3. Entitled pull of the pinned tag.
+    ^docker pull $"($registry)/{{ slug }}:{{ tag }}"
+    print "PASS: entitled pull (pinned tag)"
+
+    # 4. A non-pinned tag must be refused.
+    let wrong = (do { ^docker pull $"($registry)/{{ slug }}:not-the-pinned-tag" } | complete)
+    if $wrong.exit_code == 0 { print "FAIL: pull of a non-pinned tag succeeded"; exit 1 }
+    print "PASS: pinned-tag enforcement"
+
+    # 5. Second pull exercises the blob cache (rows touched, no re-fetch).
+    ^docker rmi $"($registry)/{{ slug }}:{{ tag }}" out> /dev/null
+    ^docker pull $"($registry)/{{ slug }}:{{ tag }}" out> /dev/null
+    print "PASS: second pull (blob cache)"
+
+    # Cleanup: remove the test image and registry credentials.
+    ^docker rmi $"($registry)/{{ slug }}:{{ tag }}" out> /dev/null
+    ^docker logout $registry out> /dev/null
+    print ""
+    print "== All OCI verification checks passed =="
 
 # Tail all logs.
 [group: 'dev']
@@ -131,7 +367,7 @@ logs-web: ensure-env
 db-shell: ensure-env
     {{ compose }}exec postgres psql --username bunyip --dbname bunyip
 
-# ── Local (cargo, no Docker) ───────────────────────────────────────────────────
+# -- Local (cargo, no Docker) ---------------------------------------------------
 
 # Run the api backend locally.
 [group: 'local']
@@ -148,53 +384,7 @@ run-web:
 build:
     cargo build --workspace
 
-# ── Checks ──────────────────────────────────────────────────────────────────────
-
-# Umbrella check: build + clippy + fmt + docker builder stage.
-[group: 'checks']
-check: check-build check-clippy check-fmt check-docker
-
-# Build every target in the workspace.
-[group: 'checks']
-check-build:
-    cargo build --workspace --all-targets
-
-# Clippy across the workspace with warnings denied.
-[group: 'checks']
-check-clippy:
-    cargo clippy --workspace --all-targets -- -D warnings
-
-# Formatting check.
-[group: 'checks']
-check-fmt:
-    cargo fmt --all --check
-
-# Build the api image's builder stage only - catches Docker-build drift cheaply.
-[group: 'checks']
-check-docker:
-    docker build --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .
-
-# Type-check the workspace.
-[group: 'checks']
-typecheck:
-    cargo check --workspace
-
-# Lint the workspace (clippy).
-[group: 'checks']
-lint:
-    cargo clippy --workspace --all-targets -- -D warnings
-
-# Format the workspace.
-[group: 'checks']
-fmt:
-    cargo fmt --all
-
-# Run unit tests.
-[group: 'checks']
-test:
-    cargo test --workspace --lib
-
-# ── Database ────────────────────────────────────────────────────────────────────
+# -- Database --------------------------------------------------------------------
 
 # Run pending migrations (also applied automatically on api startup).
 [group: 'database']
@@ -206,7 +396,24 @@ migrate: ensure-env
 migrate-revert: ensure-env
     {{ compose }}exec api cargo sqlx migrate revert --source bunyip-api/migrations
 
-# ── Images ──────────────────────────────────────────────────────────────────────
+# Seed the BUNYIP-52 E2E test accounts (e2e-user@a8n.run, e2e-admin@a8n.run).
+# Idempotent; runs inside the api container against the dev database. Requires
+# BUNYIP_E2E_BOOTSTRAP_ALLOW=true and BUNYIP_E2E_TEST_USER_PASSWORD in the
+# container env. Pass flags through, e.g. `just e2e-bootstrap --dry-run` or
+# `just e2e-bootstrap --cleanup`.
+[group: 'database']
+e2e-bootstrap *args: ensure-env
+    {{ compose }}exec api cargo run --bin bunyip-e2e-bootstrap -- {{ args }}
+
+# Run the Playwright E2E suite on the HOST against a deployed bunyip instance
+# (NOT in a container). Requires e2e/.env filled from e2e/.env.example; runs
+# against E2E_BASE_URL. Pass flags through, e.g. `just e2e --headed` or
+# `just e2e tests/auth`.
+[group: 'database']
+e2e *args:
+    cd e2e && npx playwright test {{ args }}
+
+# -- Images ----------------------------------------------------------------------
 
 # Build both production images.
 [group: 'images']
@@ -243,7 +450,55 @@ build-docker-export:
         --output type=local,dest=dist \
         .
 
-# ── Release ─────────────────────────────────────────────────────────────────────
+# -- Cleanup ------------------------------------------------------------------
+
+# Tear down this repo's dev footprint: stop the compose.dev.yml stack (drops the default network and orphans), remove this repo's per-developer named volumes (postgres data, cargo-target, web node_modules, download/oci caches) plus the bunyip-specific check-container target cache, delete local build artifacts (target/, bunyip-web/node_modules/), and remove the generated dev .env (ensure-env recreates it). Scoped to this repo; safe on a shared host (no host-global prune; shared dunite registry cache left intact).
+[group: 'cleanup']
+dev-clean:
+    #!/usr/bin/env nu
+    {{ compose }}down --remove-orphans
+    let suffix = $env.USER
+    let vols = [
+        $"dev-bunyip-postgres-($suffix)"
+        $"dev-bunyip-cargo-target-($suffix)"
+        $"dev-bunyip-web-node-modules-($suffix)"
+        $"dev-bunyip-download-cache-($suffix)"
+        $"dev-bunyip-oci-cache-($suffix)"
+        "bunyip-check-target"
+    ]
+    let existing = docker volume ls --quiet | lines
+    for vol in $vols {
+        if $vol in $existing {
+            docker volume rm $vol
+        }
+    }
+    let paths = [target bunyip-web/node_modules .env]
+    for p in $paths {
+        if ($p | path exists) {
+            rm --recursive $p
+            print $"removed ($p)"
+        }
+    }
+    print "dev-clean: done"
+
+# Everything dev-clean does, plus remove the Docker images this repo builds and prune its buildx cache. Run for a from-scratch rebuild.
+[group: 'cleanup']
+dev-clean-all: dev-clean
+    #!/usr/bin/env nu
+    let images = [
+        "bunyip-api:latest"
+        "bunyip-web:latest"
+    ]
+    for img in $images {
+        let present = (do { ^docker image inspect $img } | complete).exit_code == 0
+        if $present {
+            docker image rm $img
+        }
+    }
+    docker buildx prune --force
+    print "dev-clean-all: done"
+
+# -- Release ------------------------------------------------------------------
 
 # Create a release: bump major (vx.0.0), minor (v0.x.0), or hotfix (v0.0.x), push the branch, and open the PR via fj.
 # After the PR merges, the create-release workflow creates the tag and release automatically.
@@ -282,22 +537,35 @@ create-release bump:
     let tag = $"v($bare)"
     let release_branch = $"release/($tag)"
 
+    # Abort if the target tag already exists. A stale manifest version must never
+    # target an already-published release (BUNYIP-59).
+    let existing_tag = (do { ^git rev-parse -q --verify $"refs/tags/($tag)" } | complete)
+    if $existing_tag.exit_code == 0 {
+        print $"(ansi red)Tag ($tag) already exists. Bump past it or delete the stale tag first.(ansi reset)"
+        exit 1
+    }
+
     # Create release branch, bump the workspace version, and commit
     git checkout -b $release_branch
     open Cargo.toml | update workspace.package.version $bare | to toml | collect | save --force Cargo.toml
     git add Cargo.toml
+    # The workspace crates inherit version.workspace, so the bump changes their
+    # Cargo.lock entries; sync the lock in the same commit or CI's --locked build
+    # fails (BUNYIP-59).
+    cargo update --workspace
+    git add Cargo.lock
     git commit --signoff --message $"Release ($tag)"
 
     # Push release branch
     git push --set-upstream origin $release_branch
 
-    # Open the release PR via fj. Body lives in a tempfile so the changelog
-    # can grow later without inline escaping pain.
+    # Open the release PR via fj. Body lives in a tempfile so the
+    # changelog can grow later without inline escaping pain.
     let body_file = (mktemp --tmpdir --suffix .md)
     [
         $"Automated release PR for ($tag)."
         ""
-        $"After merge, `.forgejo/workflows/create-release.yml` tags and publishes ($tag)."
+        $"After merge, `.forgejo/workflows/create-release.yml` tags and publishes ($tag) to the Generic Packages registry."
     ] | str join "\n" | save --force $body_file
     let fj_result = (^fj --host dev.a8n.run pr create $"Release ($tag)" --body-file $body_file | complete)
     rm $body_file
@@ -330,3 +598,4 @@ create-release bump:
         print $"fj output: ($fj_result.stdout | str trim)"
     }
     print $"After merging, the create-release workflow will tag and release ($tag) automatically."
+

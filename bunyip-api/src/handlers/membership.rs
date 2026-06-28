@@ -138,9 +138,12 @@ pub async fn create_checkout(
     };
     tx.commit().await?;
 
-    // Create checkout session with the price
+    // Create checkout session with the price. BUNYIP-209: grant the one-time
+    // signup free trial only when the user has never used it. Returning users
+    // (has_used_trial = TRUE) get the existing immediate-billing flow.
+    let eligible_for_trial = !db_user.has_used_trial;
     let (session_id, checkout_url) = stripe
-        .create_checkout_session(&customer_id, db_user.id, &price_id)
+        .create_checkout_session(&customer_id, db_user.id, &price_id, eligible_for_trial)
         .await?;
 
     tracing::info!(
@@ -374,7 +377,7 @@ pub async fn get_payment_history(
         .ok_or(AppError::not_found("User"))?;
 
     let payments = if let Some(ref customer_id) = db_user.stripe_customer_id {
-        let limit = query.per_page.map(|p| p.min(100).max(1) as u64);
+        let limit = query.per_page.map(|p| p.clamp(1, 100) as u64);
         let invoices = stripe.list_customer_invoices(customer_id, limit).await?;
         invoices
             .into_iter()
@@ -396,62 +399,5 @@ pub async fn get_payment_history(
 
 #[derive(Debug, Deserialize)]
 pub struct PaginationQuery {
-    pub page: Option<i32>,
     pub per_page: Option<i32>,
-}
-
-/// Response for subscription activation
-#[derive(Debug, Serialize)]
-pub struct SubscribeResponse {
-    pub message: String,
-    pub membership_status: String,
-}
-
-/// POST /v1/memberships/subscribe
-/// Activate membership (temporary endpoint for development)
-/// In production, this would be triggered by Stripe webhook after successful payment
-pub async fn subscribe(
-    req: HttpRequest,
-    user: AuthenticatedUser,
-    pool: web::Data<PgPool>,
-    config: web::Data<Config>,
-) -> Result<HttpResponse, AppError> {
-    // Get jwt_service from app data (it's registered as Arc<JwtService>)
-    let jwt_service = req
-        .app_data::<Arc<JwtService>>()
-        .ok_or_else(|| AppError::internal("JWT service not configured"))?;
-    let request_id = get_request_id(&req);
-
-    // Activate membership in database
-    let updated_user = UserRepository::activate_membership(&pool, user.0.sub).await?;
-
-    tracing::info!(
-        user_id = %updated_user.id,
-        "User subscribed to membership"
-    );
-
-    // Create new access token with updated claims
-    let access_token = jwt_service.create_access_token(&updated_user)?;
-
-    // Determine if we should use secure cookies
-    let secure = config.is_production();
-    let cookie_domain = config.cookie_domain.as_deref();
-
-    // Build response with the cookie
-    let response_data = SubscribeResponse {
-        message: "Successfully subscribed".to_string(),
-        membership_status: updated_user.membership_status,
-    };
-
-    Ok(HttpResponse::Ok()
-        .cookie(AuthCookies::access_token(
-            &access_token,
-            secure,
-            cookie_domain,
-        ))
-        .json(crate::responses::ApiResponse {
-            success: true,
-            data: Some(response_data),
-            meta: crate::responses::ResponseMeta::new(request_id),
-        }))
 }

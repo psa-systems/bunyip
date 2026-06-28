@@ -30,6 +30,18 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 web::put().to(handlers::update_user_role),
             )
             .route(
+                "/users/{user_id}/email",
+                web::put().to(handlers::update_user_email),
+            )
+            .route(
+                "/users/{user_id}/email/verify",
+                web::post().to(handlers::verify_user_email),
+            )
+            .route(
+                "/users/{user_id}/two-factor/reset",
+                web::post().to(handlers::reset_user_two_factor),
+            )
+            .route(
                 "/users/{user_id}/reset-password",
                 web::post().to(handlers::admin_reset_password),
             )
@@ -40,6 +52,35 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route(
                 "/users/{user_id}/lifetime",
                 web::post().to(handlers::grant_lifetime_membership),
+            )
+            .route(
+                "/users/{user_id}/lifetime/revoke",
+                web::post().to(handlers::revoke_lifetime_membership),
+            )
+            // Per-product entitlements (BUNYIP-39)
+            .route(
+                "/users/{user_id}/entitlements",
+                web::get().to(handlers::list_user_entitlements),
+            )
+            .route(
+                "/users/{user_id}/entitlements",
+                web::post().to(handlers::grant_entitlement),
+            )
+            .route(
+                "/users/{user_id}/entitlements/revoke",
+                web::post().to(handlers::revoke_entitlement),
+            )
+            .route(
+                "/applications/{slug}/restricted",
+                web::put().to(handlers::set_application_restricted),
+            )
+            .route(
+                "/applications/{slug}/stripe-prices",
+                web::post().to(handlers::add_price_mapping),
+            )
+            .route(
+                "/applications/{slug}/stripe-prices",
+                web::delete().to(handlers::remove_price_mapping),
             )
             // Membership management
             .route("/memberships", web::get().to(handlers::list_memberships))
@@ -73,12 +114,38 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 web::delete().to(handlers::delete_application),
             )
             .route(
+                "/applications/{app_id}/group",
+                web::put().to(handlers::set_application_group),
+            )
+            // Application groups (BUNYIP-100)
+            .route(
+                "/application-groups",
+                web::get().to(handlers::list_all_application_groups),
+            )
+            .route(
+                "/application-groups",
+                web::post().to(handlers::create_application_group),
+            )
+            .route(
+                "/application-groups/{group_id}",
+                web::put().to(handlers::update_application_group),
+            )
+            .route(
+                "/application-groups/{group_id}",
+                web::delete().to(handlers::delete_application_group),
+            )
+            .route(
                 "/applications/{slug}/downloads/refresh",
                 web::post().to(handlers::admin_refresh_release),
             )
             .route(
                 "/applications/{slug}/oci/refresh",
                 web::post().to(bunyip_oci::handlers::admin_oci::refresh_oci),
+            )
+            // Account-delete webhook replay (BUNYIP-211)
+            .route(
+                "/account-deletes/{user_id}/replay",
+                web::post().to(handlers::replay_account_delete),
             )
             // Audit logs
             .route("/audit-logs", web::get().to(handlers::list_audit_logs))
@@ -110,11 +177,36 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 web::put().to(handlers::update_feedback_status),
             )
             .route(
+                "/feedback/{feedback_id}/mark-spam",
+                web::post().to(handlers::mark_feedback_spam),
+            )
+            .route(
+                "/feedback/{feedback_id}/unmark-spam",
+                web::post().to(handlers::unmark_feedback_spam),
+            )
+            .route(
+                "/feedback/{feedback_id}/archive",
+                web::post().to(handlers::archive_feedback),
+            )
+            .route(
                 "/feedback/{feedback_id}",
                 web::delete().to(handlers::delete_feedback),
             )
             // Test email
             .route("/test-email", web::post().to(handlers::send_test_email))
+            // OIDC per-RP user-tenant assignments (BUNYIP-61).
+            .route(
+                "/oauth-clients/{client_id}/user-tenants",
+                web::get().to(handlers::list_client_assignments),
+            )
+            .route(
+                "/oauth-clients/{client_id}/user-tenants",
+                web::post().to(handlers::assign_user_tenant),
+            )
+            .route(
+                "/oauth-clients/{client_id}/user-tenants/{assignment_id}",
+                web::delete().to(handlers::unassign_user_tenant),
+            )
             // Admin Invites
             .route("/invites", web::post().to(handlers::create_admin_invite))
             .route("/invites", web::get().to(handlers::list_admin_invites))

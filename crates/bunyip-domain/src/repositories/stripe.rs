@@ -35,6 +35,10 @@ impl StripeConfigRepository {
 
     /// Updates only the fields that are `Some`. `None` leaves the existing DB value unchanged.
     /// Secrets are passed as pre-encrypted (ciphertext, nonce) pairs.
+    ///
+    /// Also covers key rotation (formerly a separate `update_encryption`): pass
+    /// the re-encrypted secrets plus the rotating admin's id and the new
+    /// `key_version`, and `app_tag: None` to leave the tag untouched.
     pub async fn update(
         pool: &PgPool,
         secret_key: Option<Vec<u8>>,
@@ -72,37 +76,5 @@ impl StripeConfigRepository {
         .await?;
 
         Ok(config)
-    }
-
-    /// Update encryption data for the singleton stripe_config row (used during key rotation).
-    pub async fn update_encryption(
-        pool: &PgPool,
-        secret_key: Option<Vec<u8>>,
-        secret_key_nonce: Option<Vec<u8>>,
-        webhook_secret: Option<Vec<u8>>,
-        webhook_secret_nonce: Option<Vec<u8>>,
-        key_version: i16,
-    ) -> Result<(), AppError> {
-        sqlx::query(
-            r#"
-            UPDATE stripe_config
-            SET
-                secret_key = COALESCE($1, secret_key),
-                secret_key_nonce = COALESCE($2, secret_key_nonce),
-                webhook_secret = COALESCE($3, webhook_secret),
-                webhook_secret_nonce = COALESCE($4, webhook_secret_nonce),
-                key_version = $5,
-                updated_at = NOW()
-            WHERE id = 1
-            "#,
-        )
-        .bind(secret_key)
-        .bind(secret_key_nonce)
-        .bind(webhook_secret)
-        .bind(webhook_secret_nonce)
-        .bind(key_version)
-        .execute(pool)
-        .await?;
-        Ok(())
     }
 }

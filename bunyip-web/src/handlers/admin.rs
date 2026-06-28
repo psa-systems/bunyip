@@ -3,8 +3,9 @@
 //! baseline works without JS). Mirrors the Dioxus admin pages; the heavyweight
 //! Stripe product/price/webhook managers remain condensed (see ROADMAP.md).
 
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::Response;
 use axum::Form;
 use maud::{html, Markup};
@@ -12,11 +13,15 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::api::admin as admin_api;
-use crate::api::types::{AdminAuditLog, FeedbackStatus};
+use crate::api::types::{
+    AdminApplication, AdminAuditLog, AdminFeedbackDetail, ApplicationGroup, FeedbackAttachmentMeta,
+    FeedbackStatus, User, UserEntitlement,
+};
+use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
-use crate::util::relative_time;
-use crate::views::ui::{badge, button_class, icon};
-use crate::web::{redirect, AppState};
+use crate::util::{relative_time, urlenc};
+use crate::views::ui::{badge, button_class, error_box, icon};
+use crate::web::{redirect_cookies, AppState};
 
 fn title_case(action: &str) -> String {
     action
@@ -50,17 +55,25 @@ fn pager(base: &str, page: u32, total_pages: i64) -> Markup {
 // ===========================================================================
 
 pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let fwd = c.forward.as_deref();
     let stats = admin_api::stats(&st.api, fwd).await.ok();
-    let logs = admin_api::audit_logs(&st.api, fwd, 1, 5, false).await.map(|p| p.items).unwrap_or_default();
+    let logs = admin_api::audit_logs(&st.api, fwd, 1, 5, false)
+        .await
+        .map(|p| p.items)
+        .unwrap_or_default();
 
-    let stat = |label: &str, value: String, sub: &str, ic: &str| html! {
-        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-            div class="flex flex-col space-y-1.5 p-6 flex-row items-center justify-between pb-2" {
-                h3 class="text-sm font-medium" { (label) } (icon(ic, "h-4 w-4 text-muted-foreground"))
+    let stat = |label: &str, value: String, sub: &str, ic: &str| {
+        html! {
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6 flex-row items-center justify-between pb-2" {
+                    h3 class="text-sm font-medium" { (label) } (icon(ic, "h-4 w-4 text-muted-foreground"))
+                }
+                div class="p-6 pt-0" { div class="text-2xl font-bold" { (value) } p class="text-xs text-muted-foreground" { (sub) } }
             }
-            div class="p-6 pt-0" { div class="text-2xl font-bold" { (value) } p class="text-xs text-muted-foreground" { (sub) } }
         }
     };
 
@@ -100,7 +113,10 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
 // ===========================================================================
 
 #[derive(Deserialize)]
-pub struct AuditQuery { pub page: Option<u32>, pub admin_only: Option<String> }
+pub struct AuditQuery {
+    pub page: Option<u32>,
+    pub admin_only: Option<String>,
+}
 
 fn audit_row(log: &AdminAuditLog) -> Markup {
     let ic = match log.action.as_str() {
@@ -134,14 +150,27 @@ fn audit_row(log: &AdminAuditLog) -> Markup {
     }
 }
 
-pub async fn audit_logs(State(st): State<AppState>, headers: HeaderMap, Query(q): Query<AuditQuery>) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+pub async fn audit_logs(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<AuditQuery>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let page = q.page.unwrap_or(1).max(1);
     let admin_only = q.admin_only.as_deref() == Some("true");
-    let data = admin_api::audit_logs(&st.api, c.forward.as_deref(), page, 50, admin_only).await.ok();
+    let data = admin_api::audit_logs(&st.api, c.forward.as_deref(), page, 50, admin_only)
+        .await
+        .ok();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
     let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
-    let base = if admin_only { "/admin/audit-logs?admin_only=true" } else { "/admin/audit-logs" };
+    let base = if admin_only {
+        "/admin/audit-logs?admin_only=true"
+    } else {
+        "/admin/audit-logs"
+    };
 
     let content = html! {
         div class="space-y-6" {
@@ -164,7 +193,13 @@ pub async fn audit_logs(State(st): State<AppState>, headers: HeaderMap, Query(q)
             }
         }
     };
-    admin_response(&c, &user, "/admin/audit-logs", "Audit Logs · Bunyip", content)
+    admin_response(
+        &c,
+        &user,
+        "/admin/audit-logs",
+        "Audit Logs · Bunyip",
+        content,
+    )
 }
 
 // ===========================================================================
@@ -172,16 +207,52 @@ pub async fn audit_logs(State(st): State<AppState>, headers: HeaderMap, Query(q)
 // ===========================================================================
 
 #[derive(Deserialize)]
-pub struct UserQuery { pub page: Option<u32>, pub search: Option<String> }
+pub struct UserQuery {
+    pub page: Option<u32>,
+    pub search: Option<String>,
+    /// `suspended` switches the list to soft-deleted accounts so an admin can
+    /// reactivate them; anything else (incl. absent) shows live accounts
+    /// (BUNYIP-120).
+    pub status: Option<String>,
+}
 
-pub async fn users(State(st): State<AppState>, headers: HeaderMap, Query(q): Query<UserQuery>) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+pub async fn users(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<UserQuery>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let page = q.page.unwrap_or(1).max(1);
     let search = q.search.unwrap_or_default();
-    let data = admin_api::users(&st.api, c.forward.as_deref(), page, 20, &search).await.ok();
+    let suspended = q.status.as_deref() == Some("suspended");
+    let data = admin_api::users(&st.api, c.forward.as_deref(), page, 20, &search, suspended)
+        .await
+        .ok();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
     let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
-    let base = if search.is_empty() { "/admin/users".to_string() } else { format!("/admin/users?search={}", urlenc(&search)) };
+    // Preserve the active filters across pager links.
+    let mut params: Vec<String> = Vec::new();
+    if !search.is_empty() {
+        params.push(format!("search={}", urlenc(&search)));
+    }
+    if suspended {
+        params.push("status=suspended".to_string());
+    }
+    let base = if params.is_empty() {
+        "/admin/users".to_string()
+    } else {
+        format!("/admin/users?{}", params.join("&"))
+    };
+    let active_tab = |on: bool| {
+        if on {
+            button_class("secondary", "sm", "")
+        } else {
+            button_class("outline", "sm", "")
+        }
+    };
 
     let content = html! {
         div class="space-y-6" {
@@ -189,8 +260,15 @@ pub async fn users(State(st): State<AppState>, headers: HeaderMap, Query(q): Que
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" {
                     div class="flex items-center justify-between gap-4" {
-                        h3 class="text-2xl font-semibold leading-none tracking-tight" { "All Users" }
-                        form method="get" action="/admin/users" class="w-64" { input name="search" value=(search) placeholder="Search by email…" class=(dashboard_input()); }
+                        h3 class="text-2xl font-semibold leading-none tracking-tight" { @if suspended { "Suspended Users" } @else { "All Users" } }
+                        form method="get" action="/admin/users" class="w-64" {
+                            @if suspended { input type="hidden" name="status" value="suspended"; }
+                            input name="search" value=(search) placeholder="Search by email…" class=(dashboard_input());
+                        }
+                    }
+                    div class="flex items-center gap-2 text-sm" {
+                        a href="/admin/users" class=(active_tab(!suspended)) { "Active" }
+                        a href="/admin/users?status=suspended" class=(active_tab(suspended)) { "Suspended" }
                     }
                 }
                 div class="p-6 pt-0" {
@@ -199,21 +277,44 @@ pub async fn users(State(st): State<AppState>, headers: HeaderMap, Query(q): Que
                             @let is_admin = matches!(u.role, crate::api::types::UserRole::Admin);
                             div class="flex items-center justify-between py-3" {
                                 div {
-                                    p class="font-medium flex items-center gap-2" { (u.email) @if is_admin { (badge("default", "Admin")) } @if !u.email_verified { (badge("outline", "Unverified")) } }
+                                    p class="font-medium flex items-center gap-2" { (u.email) @if is_admin { (badge("default", "Admin")) } @if suspended { (badge("outline", "Suspended")) } @if !u.email_verified { (badge("outline", "Unverified")) } }
                                     p class="text-xs text-muted-foreground" { "Joined " (relative_time(&u.created_at)) }
                                 }
-                                div class="flex items-center gap-2" {
-                                    form method="post" action=(format!("/admin/users/{}/role", u.id)) {
-                                        input type="hidden" name="role" value=(if is_admin { "subscriber" } else { "admin" });
-                                        button type="submit" class=(button_class("outline", "sm", "")) { @if is_admin { "Demote" } @else { "Make Admin" } }
-                                    }
-                                    form method="post" action=(format!("/admin/users/{}/delete", u.id)) onsubmit="return confirm('Delete this user? This cannot be undone.')" {
-                                        button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("trash", "h-4 w-4")) }
+                                div class="flex items-center gap-2 flex-wrap" {
+                                    @if suspended {
+                                        form method="post" action=(format!("/admin/users/{}/reactivate", u.id)) onsubmit="return confirm('Reactivate this user? They will be able to sign in again.')" {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Reactivate" }
+                                        }
+                                    } @else {
+                                        a href=(format!("/admin/users/{}", u.id)) class=(button_class("outline", "sm", "")) { "View" }
+                                        a href=(format!("/admin/users/{}/entitlements", u.id)) class=(button_class("outline", "sm", "")) { "Entitlements" }
+                                        form method="post" action=(format!("/admin/users/{}/role", u.id)) onsubmit="return confirm('Change this user role? Admins have full platform access.')" {
+                                            input type="hidden" name="role" value=(if is_admin { "subscriber" } else { "admin" });
+                                            button type="submit" class=(button_class("outline", "sm", "")) { @if is_admin { "Demote" } @else { "Make Admin" } }
+                                        }
+                                        form method="post" action=(format!("/admin/users/{}/reset-password", u.id)) onsubmit="return confirm('Send a password reset email to this user?')" {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Reset Password" }
+                                        }
+                                        @if u.lifetime_member {
+                                            form method="post" action=(format!("/admin/users/{}/lifetime/revoke", u.id)) onsubmit="return confirm('Revoke lifetime membership? User will be returned to standard tier with no active subscription.')" {
+                                                button type="submit" class=(button_class("outline", "sm", "")) { "Revoke Lifetime" }
+                                            }
+                                        } @else {
+                                            form method="post" action=(format!("/admin/users/{}/lifetime", u.id)) onsubmit="return confirm('Grant lifetime membership? Creates a $0 Stripe subscription.')" {
+                                                button type="submit" class=(button_class("outline", "sm", "")) { "Lifetime" }
+                                            }
+                                        }
+                                        form method="post" action=(format!("/admin/users/{}/suspend", u.id)) onsubmit="return confirm('Suspend (soft-delete) this user?')" {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Suspend" }
+                                        }
+                                        form method="post" action=(format!("/admin/users/{}/delete", u.id)) onsubmit="return confirm('Delete this user? This cannot be undone.')" {
+                                            button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("trash", "h-4 w-4")) }
+                                        }
                                     }
                                 }
                             }
                         }
-                        @if items.is_empty() { p class="text-center text-muted-foreground py-8" { "No users found" } }
+                        @if items.is_empty() { p class="text-center text-muted-foreground py-8" { @if suspended { "No suspended users" } @else { "No users found" } } }
                     }
                     (pager(&base, page, total_pages))
                 }
@@ -224,16 +325,322 @@ pub async fn users(State(st): State<AppState>, headers: HeaderMap, Query(q): Que
 }
 
 #[derive(Deserialize)]
-pub struct RoleForm { pub role: String }
-pub async fn user_role(State(st): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Form(f): Form<RoleForm>) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
-    let _ = admin_api::update_user_role(&st.api, c.forward.as_deref(), &id, &f.role).await;
-    redirect("/admin/users")
+pub struct RoleForm {
+    pub role: String,
 }
-pub async fn user_delete(State(st): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+pub async fn user_role(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<RoleForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    // Only the known roles are accepted; reject anything else (the UI uses a
+    // dropdown, so an arbitrary role string can only come from a crafted
+    // request) before forwarding it to the API (BUNYIP-114).
+    if !matches!(f.role.as_str(), "admin" | "subscriber") {
+        return redirect_cookies("/admin/users", &c.set_cookies);
+    }
+    let _ = admin_api::update_user_role(&st.api, c.forward.as_deref(), &id, &f.role).await;
+    redirect_cookies("/admin/users", &c.set_cookies)
+}
+pub async fn user_delete(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let _ = admin_api::delete_user(&st.api, c.forward.as_deref(), &id).await;
-    redirect("/admin/users")
+    redirect_cookies("/admin/users", &c.set_cookies)
+}
+
+pub async fn user_suspend(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::suspend_user(&st.api, c.forward.as_deref(), &id).await;
+    redirect_cookies("/admin/users", &c.set_cookies)
+}
+
+/// Reactivate a suspended user, then return to the suspended list so the admin
+/// stays in the same view (BUNYIP-120).
+pub async fn user_reactivate(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::reactivate_user(&st.api, c.forward.as_deref(), &id).await;
+    redirect_cookies("/admin/users?status=suspended", &c.set_cookies)
+}
+
+pub async fn user_reset_password(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::admin_reset_password(&st.api, c.forward.as_deref(), &id).await;
+    redirect_cookies(&format!("/admin/users/{id}"), &c.set_cookies)
+}
+
+/// Admin email correction (BUNYIP-119). `verified` is an HTML checkbox, so it
+/// only arrives in the body when ticked; absence means "leave unverified".
+#[derive(Deserialize)]
+pub struct EmailForm {
+    pub email: String,
+    #[serde(default)]
+    pub verified: Option<String>,
+}
+
+/// POST /admin/users/{id}/email - correct a user's email (BUNYIP-119).
+pub async fn user_email(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<EmailForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let email = f.email.trim();
+    if email.is_empty() {
+        return redirect_cookies(
+            &format!("/admin/users/{id}?toast_err=Email%20is%20required"),
+            &c.set_cookies,
+        );
+    }
+    let verified = f.verified.is_some();
+    let target =
+        match admin_api::update_user_email(&st.api, c.forward.as_deref(), &id, email, verified)
+            .await
+        {
+            Ok(()) => format!("/admin/users/{id}?toast_ok=Email%20updated"),
+            Err(_) => format!("/admin/users/{id}?toast_err=Could%20not%20update%20email"),
+        };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// POST /admin/users/{id}/email/verify - force-verify a user's email (BUNYIP-119).
+pub async fn user_verify_email(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::verify_user_email(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => format!("/admin/users/{id}?toast_ok=Email%20verified"),
+        Err(_) => format!("/admin/users/{id}?toast_err=Could%20not%20verify%20email"),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// POST /admin/users/{id}/two-factor/reset - clear a user's 2FA (BUNYIP-119).
+pub async fn user_reset_2fa(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::reset_user_two_factor(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => format!("/admin/users/{id}?toast_ok=Two-factor%20cleared"),
+        Err(_) => format!("/admin/users/{id}?toast_err=Could%20not%20clear%20two-factor"),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+pub async fn user_grant_lifetime(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::grant_lifetime(&st.api, c.forward.as_deref(), &id).await;
+    redirect_cookies(&format!("/admin/users/{id}"), &c.set_cookies)
+}
+
+pub async fn user_revoke_lifetime(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::revoke_lifetime(&st.api, c.forward.as_deref(), &id).await;
+    redirect_cookies(&format!("/admin/users/{id}"), &c.set_cookies)
+}
+
+/// GET /admin/users/{id} - single-user detail page with all admin actions in one place.
+pub async fn user_detail(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::get_user(&st.api, c.forward.as_deref(), &id).await {
+        Ok(u) => u,
+        Err(_) => {
+            return admin_response(
+                &c,
+                &user,
+                "/admin/users",
+                "User not found",
+                html! {
+                    div class="rounded-lg border bg-card text-card-foreground shadow-sm p-6" {
+                        p { "Could not load user " (id) "." }
+                        p class="mt-2" { a href="/admin/users" class="text-primary hover:underline" { "Back to users" } }
+                    }
+                },
+            )
+        }
+    };
+    let is_admin_target = matches!(target.role, crate::api::types::UserRole::Admin);
+
+    let content = html! {
+        div class="space-y-6" {
+            div class="flex items-center justify-between" {
+                div {
+                    h1 class="text-2xl font-bold flex items-center gap-2" {
+                        (target.email)
+                        @if is_admin_target { (badge("default", "Admin")) }
+                        @if target.lifetime_member { (badge("default", "Lifetime")) }
+                        @if !target.email_verified { (badge("outline", "Unverified")) }
+                    }
+                    p class="text-sm text-muted-foreground mt-1" {
+                        "Joined " (relative_time(&target.created_at))
+                        @if let Some(last) = target.last_login_at.as_deref() {
+                            " · last login " (relative_time(last))
+                        }
+                    }
+                }
+                a href="/admin/users" class=(button_class("outline", "sm", "")) { (icon("arrow-left", "h-4 w-4 mr-1")) "Back" }
+            }
+
+            // Profile card
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6 pb-2" {
+                    h3 class="text-base font-semibold leading-none tracking-tight" { "Profile" }
+                }
+                div class="p-6 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm" {
+                    div { span class="text-muted-foreground" { "User ID: " } code class="font-mono text-xs" { (target.id) } }
+                    div { span class="text-muted-foreground" { "Email: " } (target.email) }
+                    div { span class="text-muted-foreground" { "Role: " } (format!("{:?}", target.role)) }
+                    div { span class="text-muted-foreground" { "Email verified: " } @if target.email_verified { "Yes" } @else { "No" } }
+                    div { span class="text-muted-foreground" { "Two-factor: " } @if target.two_factor_enabled { "Enabled" } @else { "Disabled" } }
+                    div { span class="text-muted-foreground" { "Membership: " } (format!("{:?}", target.membership_status)) }
+                    div { span class="text-muted-foreground" { "Tier: " } (format!("{:?}", target.subscription_tier)) }
+                    @if target.lifetime_member { div { span class="text-muted-foreground" { "Lifetime: " } "Yes" } }
+                    @if let Some(grace) = target.grace_period_end.as_deref() {
+                        div { span class="text-muted-foreground" { "Grace ends: " } (relative_time(grace)) }
+                    }
+                }
+            }
+
+            // Identity & security card (BUNYIP-119): the email, email-verified,
+            // and two-factor fields are shown read-only above; this card makes
+            // them editable so an admin can correct an address, force-verify
+            // it, or clear a stuck second factor.
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6 pb-2" {
+                    h3 class="text-base font-semibold leading-none tracking-tight" { "Identity & security" }
+                    p class="text-xs text-muted-foreground" { "Correct the email, force-verify it, or clear a stuck second factor. All actions write an audit-log entry." }
+                }
+                div class="p-6 pt-2 space-y-4" {
+                    form method="post" action=(format!("/admin/users/{}/email", target.id)) class="space-y-2" {
+                        label class="text-sm font-medium" for="admin-email" { "Email" }
+                        div class="flex flex-col sm:flex-row gap-2" {
+                            input id="admin-email" name="email" type="email" required value=(target.email) class=(dashboard_input());
+                            button type="submit" class=(button_class("default", "default", "")) { "Save email" }
+                        }
+                        label class="flex items-center gap-2 text-sm text-muted-foreground" {
+                            input type="checkbox" name="verified" value="true" class="h-4 w-4";
+                            "Mark this address verified (leave unchecked to require the user to re-verify)"
+                        }
+                    }
+                    div class="flex flex-wrap gap-2" {
+                        @if !target.email_verified {
+                            form method="post" action=(format!("/admin/users/{}/email/verify", target.id)) onsubmit="return confirm('Force-verify this email without the user confirming it?')" {
+                                button type="submit" class=(button_class("outline", "default", "")) { "Force-verify email" }
+                            }
+                        }
+                        @if target.two_factor_enabled {
+                            form method="post" action=(format!("/admin/users/{}/two-factor/reset", target.id)) onsubmit="return confirm('Clear this user 2FA? Their authenticator and recovery codes are removed and they must re-enrol.')" {
+                                button type="submit" class=(button_class("outline", "default", "text-destructive hover:text-destructive")) { "Clear 2FA" }
+                            }
+                        } @else {
+                            span class="text-xs text-muted-foreground self-center" { "Two-factor is not enabled for this user." }
+                        }
+                    }
+                }
+            }
+
+            // Actions card
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6 pb-2" {
+                    h3 class="text-base font-semibold leading-none tracking-tight" { "Actions" }
+                    p class="text-xs text-muted-foreground" { "All actions write an audit-log entry." }
+                }
+                div class="p-6 pt-2 flex flex-wrap gap-2" {
+                    a href=(format!("/admin/users/{}/entitlements", target.id)) class=(button_class("outline", "default", "")) { "Manage Entitlements" }
+                    form method="post" action=(format!("/admin/users/{}/role", target.id)) onsubmit="return confirm('Change this user role? Admins have full platform access.')" {
+                        input type="hidden" name="role" value=(if is_admin_target { "subscriber" } else { "admin" });
+                        button type="submit" class=(button_class("outline", "default", "")) { @if is_admin_target { "Demote to subscriber" } @else { "Promote to admin" } }
+                    }
+                    form method="post" action=(format!("/admin/users/{}/reset-password", target.id)) onsubmit="return confirm('Send a password reset email to this user?')" {
+                        button type="submit" class=(button_class("outline", "default", "")) { "Send password reset" }
+                    }
+                    @if target.lifetime_member {
+                        form method="post" action=(format!("/admin/users/{}/lifetime/revoke", target.id)) onsubmit="return confirm('Revoke lifetime membership? User will be returned to standard tier with no active subscription.')" {
+                            button type="submit" class=(button_class("outline", "default", "")) { "Revoke lifetime" }
+                        }
+                    } @else {
+                        form method="post" action=(format!("/admin/users/{}/lifetime", target.id)) onsubmit="return confirm('Grant lifetime membership? Creates a $0 Stripe subscription.')" {
+                            button type="submit" class=(button_class("outline", "default", "")) { "Grant lifetime" }
+                        }
+                    }
+                    form method="post" action=(format!("/admin/users/{}/suspend", target.id)) onsubmit="return confirm('Suspend (soft-delete) this user?')" {
+                        button type="submit" class=(button_class("outline", "default", "")) { "Suspend" }
+                    }
+                    form method="post" action=(format!("/admin/users/{}/delete", target.id)) onsubmit="return confirm('Delete this user? This cannot be undone.')" {
+                        button type="submit" class=(button_class("outline", "default", "text-destructive hover:text-destructive")) { "Delete user" }
+                    }
+                }
+            }
+        }
+    };
+    admin_response(&c, &user, "/admin/users", "User · Bunyip", content)
 }
 
 // ===========================================================================
@@ -241,12 +648,23 @@ pub async fn user_delete(State(st): State<AppState>, headers: HeaderMap, Path(id
 // ===========================================================================
 
 #[derive(Deserialize)]
-pub struct PageQuery { pub page: Option<u32> }
+pub struct PageQuery {
+    pub page: Option<u32>,
+}
 
-pub async fn memberships(State(st): State<AppState>, headers: HeaderMap, Query(q): Query<PageQuery>) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+pub async fn memberships(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<PageQuery>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let page = q.page.unwrap_or(1).max(1);
-    let data = admin_api::memberships(&st.api, c.forward.as_deref(), page, 20, "").await.ok();
+    let data = admin_api::memberships(&st.api, c.forward.as_deref(), page, 20, "")
+        .await
+        .ok();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
     let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
 
@@ -258,9 +676,25 @@ pub async fn memberships(State(st): State<AppState>, headers: HeaderMap, Query(q
                 div class="p-6 pt-0" {
                     div class="divide-y" {
                         @for m in &items {
-                            div class="flex items-center justify-between py-3" {
-                                div { p class="font-medium" { (m.user_email) } p class="text-xs text-muted-foreground" { (m.subscription_tier) } }
-                                (badge("outline", &m.status))
+                            @let has_override = m.subscription_override_by.is_some();
+                            div class="flex items-center justify-between py-3 gap-4" {
+                                div {
+                                    p class="font-medium flex items-center gap-2" { (m.user_email) @if has_override { (badge("default", "Admin override")) } }
+                                    p class="text-xs text-muted-foreground" { (m.subscription_tier) }
+                                }
+                                div class="flex items-center gap-2 flex-wrap" {
+                                    (badge("outline", &m.status))
+                                    a href=(format!("/admin/users/{}", m.user_id)) class=(button_class("outline", "sm", "")) { "View" }
+                                    @if has_override {
+                                        form method="post" action=(format!("/admin/memberships/{}/revoke", m.user_id)) onsubmit="return confirm('Revoke this admin-granted membership? The user returns to the standard tier with no active subscription.')" {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Revoke" }
+                                        }
+                                    } @else {
+                                        form method="post" action=(format!("/admin/memberships/{}/grant", m.user_id)) onsubmit="return confirm('Grant a free admin-override membership to this user?')" {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Grant" }
+                                        }
+                                    }
+                                }
                             }
                         }
                         @if items.is_empty() { p class="text-center text-muted-foreground py-8" { "No memberships found" } }
@@ -270,44 +704,177 @@ pub async fn memberships(State(st): State<AppState>, headers: HeaderMap, Query(q
             }
         }
     };
-    admin_response(&c, &user, "/admin/memberships", "Memberships · Bunyip", content)
+    admin_response(
+        &c,
+        &user,
+        "/admin/memberships",
+        "Memberships · Bunyip",
+        content,
+    )
+}
+
+/// POST /admin/memberships/{user_id}/grant - grant a free admin-override
+/// membership (sets `subscription_override_by`). Forwards to the existing API
+/// endpoint; redirects back to the listing. BUNYIP-118.
+pub async fn membership_grant(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::grant_membership(&st.api, c.forward.as_deref(), &user_id).await;
+    redirect_cookies("/admin/memberships", &c.set_cookies)
+}
+
+/// POST /admin/memberships/{user_id}/revoke - revoke an admin-override
+/// membership (resets tier to standard, clears `subscription_override_by`).
+/// BUNYIP-118.
+pub async fn membership_revoke(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::revoke_membership(&st.api, c.forward.as_deref(), &user_id).await;
+    redirect_cookies("/admin/memberships", &c.set_cookies)
 }
 
 // ===========================================================================
 // Feedback
 // ===========================================================================
 
-pub async fn feedback(State(st): State<AppState>, headers: HeaderMap, Query(q): Query<PageQuery>) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+/// Top-of-page tabs that bucket the feedback queue by triage state.
+/// Active is the working queue (new/reviewed/responded, not spam).
+/// Closed is the resolved bin (status=closed, not spam). Spam is
+/// quarantine. Archive is the long-term cold storage (BUNYIP-85).
+/// BUNYIP-92 added Closed + Spam so "Close" produces a visible effect
+/// (row leaves Active, lands in Closed) and spam never clutters
+/// triage.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum FeedbackTab {
+    Active,
+    Closed,
+    Spam,
+    Archive,
+}
+
+impl FeedbackTab {
+    /// Bucket string passed to the bunyip-api list endpoint.
+    fn bucket(self) -> &'static str {
+        match self {
+            FeedbackTab::Active => "active",
+            FeedbackTab::Closed => "closed",
+            FeedbackTab::Spam => "spam",
+            FeedbackTab::Archive => "active", // unused; archive has its own endpoint
+        }
+    }
+
+    /// Path used to return to this tab after a row action (so the
+    /// admin lands back on the same view they clicked from).
+    fn path(self) -> &'static str {
+        match self {
+            FeedbackTab::Active => "/admin/feedback",
+            FeedbackTab::Closed => "/admin/feedback/closed",
+            FeedbackTab::Spam => "/admin/feedback/spam",
+            FeedbackTab::Archive => "/admin/feedback/archive",
+        }
+    }
+}
+
+fn feedback_tabs(current: FeedbackTab) -> Markup {
+    let tab_class = |selected: bool| {
+        if selected {
+            "border-b-2 border-primary px-3 py-2 text-sm font-semibold text-foreground"
+        } else {
+            "border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground hover:text-foreground"
+        }
+    };
+    html! {
+        nav class="flex items-center gap-2 border-b border-border/50" aria-label="Feedback view" {
+            a href="/admin/feedback" class=(tab_class(current == FeedbackTab::Active)) { "Active" }
+            a href="/admin/feedback/closed" class=(tab_class(current == FeedbackTab::Closed)) { "Closed" }
+            a href="/admin/feedback/spam" class=(tab_class(current == FeedbackTab::Spam)) { "Spam" }
+            a href="/admin/feedback/archive" class=(tab_class(current == FeedbackTab::Archive)) { "Archive" }
+        }
+    }
+}
+
+pub async fn feedback(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<PageQuery>,
+) -> Response {
+    render_feedback_list(st, headers, q, FeedbackTab::Active).await
+}
+
+/// GET /admin/feedback/closed - BUNYIP-92. Rows where the admin clicked
+/// Close (status=closed) land here, out of the active triage queue.
+pub async fn feedback_closed(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<PageQuery>,
+) -> Response {
+    render_feedback_list(st, headers, q, FeedbackTab::Closed).await
+}
+
+/// GET /admin/feedback/spam - BUNYIP-92. Honeypot-detected rows plus
+/// any admin-flagged spam. The default Active tab never surfaces these
+/// (the repository now filters is_spam=false).
+pub async fn feedback_spam(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<PageQuery>,
+) -> Response {
+    render_feedback_list(st, headers, q, FeedbackTab::Spam).await
+}
+
+async fn render_feedback_list(
+    st: AppState,
+    headers: HeaderMap,
+    q: PageQuery,
+    tab: FeedbackTab,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let page = q.page.unwrap_or(1).max(1);
-    let data = admin_api::feedback(&st.api, c.forward.as_deref(), page, 20).await.ok();
+    let data = admin_api::feedback(&st.api, c.forward.as_deref(), page, 20, tab.bucket())
+        .await
+        .ok();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
     let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
 
+    let (section_title, empty_msg) = match tab {
+        FeedbackTab::Active => ("Submissions", "No feedback yet"),
+        FeedbackTab::Closed => ("Closed", "No closed feedback"),
+        FeedbackTab::Spam => ("Spam", "No spam"),
+        FeedbackTab::Archive => ("Archive", "Archive is empty"),
+    };
+
     let content = html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Feedback" } p class="mt-2 text-muted-foreground" { "Triage submitted feedback." } }
+            div class="flex items-start justify-between gap-4" {
+                div { h1 class="text-3xl font-bold" { "Feedback" } p class="mt-2 text-muted-foreground" { "Triage submitted feedback." } }
+                a href="/admin/feedback/export" class=(button_class("outline", "sm", "")) { "Export CSV" }
+            }
+            (feedback_tabs(tab))
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Submissions" } }
+                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { (section_title) } }
                 div class="p-6 pt-0" {
                     div class="divide-y" {
                         @for f in &items {
-                            div class="py-3 flex items-start justify-between gap-4" {
-                                div class="min-w-0" {
-                                    p class="font-medium truncate" { (f.subject.clone().unwrap_or_else(|| "(no subject)".into())) }
-                                    p class="text-sm text-muted-foreground truncate" { (f.message_excerpt) }
-                                    p class="text-xs text-muted-foreground" { (relative_time(&f.created_at)) }
-                                }
-                                div class="flex items-center gap-2 shrink-0" {
-                                    (badge("outline", admin_api::feedback_status_str(f.status.clone())))
-                                    form method="post" action=(format!("/admin/feedback/{}/status", f.id)) { input type="hidden" name="status" value="reviewed"; button type="submit" class=(button_class("outline", "sm", "")) { "Reviewed" } }
-                                    form method="post" action=(format!("/admin/feedback/{}/status", f.id)) { input type="hidden" name="status" value="closed"; button type="submit" class=(button_class("outline", "sm", "")) { "Close" } }
-                                }
-                            }
+                            (feedback_row(f, tab))
                         }
-                        @if items.is_empty() { p class="text-center text-muted-foreground py-8" { "No feedback yet" } }
+                        @if items.is_empty() { p class="text-center text-muted-foreground py-8" { (empty_msg) } }
                     }
-                    (pager("/admin/feedback", page, total_pages))
+                    (pager(tab.path(), page, total_pages))
                 }
             }
         }
@@ -315,18 +882,768 @@ pub async fn feedback(State(st): State<AppState>, headers: HeaderMap, Query(q): 
     admin_response(&c, &user, "/admin/feedback", "Feedback · Bunyip", content)
 }
 
+/// Render one row with tab-aware action buttons (BUNYIP-92).
+/// - Active: Reviewed/Un-review + Close + Mark Spam + Delete
+/// - Closed: Re-open + Mark Spam + Delete
+/// - Spam: Unmark Spam + Delete
+/// - Archive: Delete (Restore lives on the dedicated archive list)
+///
+/// Every action POSTs a `from` hidden field carrying the tab slug so
+/// the handler can redirect back to the same view after the row
+/// disappears.
+fn feedback_row(f: &crate::api::types::AdminFeedbackSummary, tab: FeedbackTab) -> Markup {
+    let already_reviewed = matches!(f.status, FeedbackStatus::Reviewed);
+    let review_action = if already_reviewed { "new" } else { "reviewed" };
+    let review_label = if already_reviewed {
+        "Un-review"
+    } else {
+        "Reviewed"
+    };
+    let name = f.name.clone().filter(|s| !s.trim().is_empty());
+    let email = f.email_masked.clone().filter(|s| !s.trim().is_empty());
+    let identity = match (name.as_deref(), email.as_deref()) {
+        (Some(n), Some(e)) => Some(format!("{n} · {e}")),
+        (Some(n), None) => Some(n.to_string()),
+        (None, Some(e)) => Some(e.to_string()),
+        (None, None) => None,
+    };
+    let from_path = f
+        .page_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "/feedback");
+    let from = tab.bucket();
+    html! {
+        div class="py-3 flex items-start justify-between gap-4" {
+            div class="min-w-0" {
+                p class="font-medium truncate" {
+                    a href=(format!("/admin/feedback/{}", f.id)) class="hover:underline" {
+                        (f.subject.clone().unwrap_or_else(|| "(no subject)".into()))
+                    }
+                }
+                @if let Some(line) = &identity {
+                    p class="text-xs text-muted-foreground truncate" { (line) }
+                }
+                @if let Some(p) = from_path {
+                    p class="text-xs text-muted-foreground truncate" { "From: " (p) }
+                }
+                p class="text-sm text-muted-foreground truncate" { (f.message_excerpt) }
+                p class="text-xs text-muted-foreground" { (relative_time(&f.created_at)) }
+            }
+            div class="flex items-center gap-2 shrink-0" {
+                (badge("outline", f.status.as_str()))
+                // BUNYIP-93: "Reply" is a discoverability fix, not a new
+                // action. The reply form lives on the detail subpage
+                // (BUNYIP-85); the row subject already links there but
+                // wasn't obvious. The Reply anchor makes the path one
+                // explicit click. Hidden on Spam and Archive tabs:
+                // replying to spam is meaningless and archived rows are
+                // out-of-queue.
+                @if matches!(tab, FeedbackTab::Active | FeedbackTab::Closed) {
+                    a href=(format!("/admin/feedback/{}", f.id))
+                      class=(button_class("default", "sm", "")) { "Reply" }
+                }
+                @match tab {
+                    FeedbackTab::Active => {
+                        form method="post" action=(format!("/admin/feedback/{}/status", f.id)) {
+                            input type="hidden" name="status" value=(review_action);
+                            input type="hidden" name="from" value=(from);
+                            button type="submit" class=(button_class("outline", "sm", "")) { (review_label) }
+                        }
+                        form method="post" action=(format!("/admin/feedback/{}/status", f.id)) {
+                            input type="hidden" name="status" value="closed";
+                            input type="hidden" name="from" value=(from);
+                            button type="submit" class=(button_class("outline", "sm", "")) { "Close" }
+                        }
+                        form method="post" action=(format!("/admin/feedback/{}/archive", f.id)) {
+                            input type="hidden" name="from" value=(from);
+                            button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                        }
+                        form method="post" action=(format!("/admin/feedback/{}/mark-spam", f.id)) {
+                            input type="hidden" name="from" value=(from);
+                            button type="submit" class=(button_class("outline", "sm", "")) { "Spam" }
+                        }
+                    }
+                    FeedbackTab::Closed => {
+                        form method="post" action=(format!("/admin/feedback/{}/status", f.id)) {
+                            input type="hidden" name="status" value="new";
+                            input type="hidden" name="from" value=(from);
+                            button type="submit" class=(button_class("outline", "sm", "")) { "Re-open" }
+                        }
+                        form method="post" action=(format!("/admin/feedback/{}/archive", f.id)) {
+                            input type="hidden" name="from" value=(from);
+                            button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                        }
+                        form method="post" action=(format!("/admin/feedback/{}/mark-spam", f.id)) {
+                            input type="hidden" name="from" value=(from);
+                            button type="submit" class=(button_class("outline", "sm", "")) { "Spam" }
+                        }
+                    }
+                    FeedbackTab::Spam => {
+                        form method="post" action=(format!("/admin/feedback/{}/unmark-spam", f.id)) {
+                            input type="hidden" name="from" value=(from);
+                            button type="submit" class=(button_class("outline", "sm", "")) { "Not spam" }
+                        }
+                        form method="post" action=(format!("/admin/feedback/{}/archive", f.id)) {
+                            input type="hidden" name="from" value=(from);
+                            button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                        }
+                    }
+                    FeedbackTab::Archive => {}
+                }
+                form method="post" action=(format!("/admin/feedback/{}/delete", f.id))
+                    onsubmit="return confirm('Delete this feedback permanently? This cannot be undone.')" {
+                    input type="hidden" name="from" value=(from);
+                    button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { "Delete" }
+                }
+            }
+        }
+    }
+}
+
 #[derive(Deserialize)]
-pub struct StatusForm { pub status: String }
-pub async fn feedback_status(State(st): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Form(f): Form<StatusForm>) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+pub struct StatusForm {
+    pub status: String,
+    /// BUNYIP-92: the tab slug (active/closed/spam) the admin clicked
+    /// from, so we redirect back to that view with a toast confirming
+    /// the action.
+    #[serde(default)]
+    pub from: Option<String>,
+}
+
+/// Map a `from` form value to the tab path the BFF redirects back to
+/// after a row action. Unknown values default to `/admin/feedback`
+/// (Active) which is the safe fallback.
+fn from_tab_path(from: Option<&str>) -> &'static str {
+    match from.unwrap_or("active") {
+        "closed" => "/admin/feedback/closed",
+        "spam" => "/admin/feedback/spam",
+        "archive" => "/admin/feedback/archive",
+        _ => "/admin/feedback",
+    }
+}
+
+pub async fn feedback_status(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<StatusForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let status = match f.status.as_str() {
         "reviewed" => FeedbackStatus::Reviewed,
         "responded" => FeedbackStatus::Responded,
         "closed" => FeedbackStatus::Closed,
         _ => FeedbackStatus::New,
     };
-    let _ = admin_api::update_feedback_status(&st.api, c.forward.as_deref(), &id, status).await;
-    redirect("/admin/feedback")
+    let toast = match status {
+        FeedbackStatus::Closed => "Closed",
+        FeedbackStatus::Reviewed => "Marked reviewed",
+        FeedbackStatus::New => "Re-opened",
+        FeedbackStatus::Responded => "Marked responded",
+    };
+    let target =
+        match admin_api::update_feedback_status(&st.api, c.forward.as_deref(), &id, status).await {
+            Ok(()) => format!(
+                "{}?toast_ok={}",
+                from_tab_path(f.from.as_deref()),
+                urlencoding::encode(toast),
+            ),
+            Err(_) => format!(
+                "{}?toast_err=Could%20not%20update%20status",
+                from_tab_path(f.from.as_deref()),
+            ),
+        };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+#[derive(Deserialize)]
+pub struct FromForm {
+    #[serde(default)]
+    pub from: Option<String>,
+}
+
+/// POST /admin/feedback/:id/mark-spam (BUNYIP-92).
+pub async fn feedback_mark_spam(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<FromForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::mark_feedback_spam(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => format!(
+            "{}?toast_ok=Marked%20as%20spam",
+            from_tab_path(f.from.as_deref()),
+        ),
+        Err(_) => format!(
+            "{}?toast_err=Could%20not%20mark%20spam",
+            from_tab_path(f.from.as_deref()),
+        ),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// POST /admin/feedback/:id/unmark-spam (BUNYIP-92).
+pub async fn feedback_unmark_spam(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<FromForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::unmark_feedback_spam(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => format!(
+            "{}?toast_ok=Restored%20from%20spam",
+            from_tab_path(f.from.as_deref()),
+        ),
+        Err(_) => format!(
+            "{}?toast_err=Could%20not%20unmark%20spam",
+            from_tab_path(f.from.as_deref()),
+        ),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// POST /admin/feedback/:id/archive (BUNYIP-93). Per-row archive: the
+/// row moves out of `feedback` and into `feedback_archive`. Reversible
+/// from the Archive tab via the existing Restore button (BUNYIP-85).
+pub async fn feedback_archive_action(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<FromForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::archive_feedback(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => format!("{}?toast_ok=Archived", from_tab_path(f.from.as_deref()),),
+        Err(_) => format!(
+            "{}?toast_err=Could%20not%20archive",
+            from_tab_path(f.from.as_deref()),
+        ),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// POST /admin/feedback/:id/delete (BUNYIP-92). Hard delete, gated by a
+/// JS confirm() on the form; the BFF does NOT add a second confirmation.
+pub async fn feedback_delete(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<FromForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::delete_feedback(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => format!("{}?toast_ok=Deleted", from_tab_path(f.from.as_deref()),),
+        Err(_) => format!(
+            "{}?toast_err=Could%20not%20delete",
+            from_tab_path(f.from.as_deref()),
+        ),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// GET /admin/feedback/export
+///
+/// BFF proxy for the bunyip-api CSV export. The browser cannot hit
+/// `<api>/v1/admin/feedback/export` directly (separate origin, the
+/// session cookie is scoped to this app), so the "Export CSV" anchor on
+/// the admin feedback page points here. We re-auth via `admin_guard`,
+/// forward the session cookie to the API at `/admin/feedback/export`,
+/// and stream the response body back with the upstream `Content-Type`
+/// and `Content-Disposition` so the browser drives the download.
+///
+/// Pattern mirrors `dashboard::download_asset`; see its doc comment for
+/// the upstream-status / fallback rationale.
+pub async fn feedback_export(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (_user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let fwd = c.forward.as_deref();
+    match st.api.get_stream("/admin/feedback/export", fwd).await {
+        Ok(resp) if resp.status().is_success() => {
+            let content_type = resp
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("text/csv")
+                .to_string();
+            let disposition = resp
+                .headers()
+                .get(header::CONTENT_DISPOSITION)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+                .unwrap_or_else(|| "attachment; filename=\"feedback.csv\"".to_string());
+            let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
+            let content_length = resp
+                .headers()
+                .get(header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            let mut builder = Response::builder()
+                .status(status)
+                .header(header::CONTENT_TYPE, content_type)
+                .header(header::CONTENT_DISPOSITION, disposition);
+            builder = with_attachment_hardening(builder);
+            if let Some(len) = content_length {
+                builder = builder.header(header::CONTENT_LENGTH, len);
+            }
+            builder
+                .body(Body::from_stream(resp.bytes_stream()))
+                .unwrap_or_else(|_| redirect_cookies("/admin/feedback", &c.set_cookies))
+        }
+        // 401 forces re-auth; everything else bounces back to the list
+        // (lost privileges, upstream outage) so the browser never saves an
+        // error blob as `feedback.csv`.
+        Ok(resp) if resp.status().as_u16() == 401 => redirect_cookies("/login", &c.set_cookies),
+        _ => redirect_cookies("/admin/feedback", &c.set_cookies),
+    }
+}
+
+/// Apply the BUNYIP-90 hardening header triple to any binary-proxy
+/// response (attachment download, CSV export). Keep the helper next to
+/// the two callers so future binary-serving routes get the same
+/// treatment by reference.
+///
+/// `X-Content-Type-Options: nosniff` forces the browser to respect the
+/// upstream Content-Type and skip its own MIME sniffing - a text/plain
+/// attachment that happens to contain `<script>` markup never becomes
+/// HTML, even on legacy browsers.
+///
+/// `Content-Security-Policy: sandbox` sandboxes any inline-rendered
+/// content (the strictest sandbox: no scripts, no forms, no
+/// same-origin). Belt-and-suspenders defence in depth alongside
+/// nosniff; if a future binary type accidentally lands HTML-ish into
+/// this proxy, the sandbox neuters it.
+///
+/// `Referrer-Policy: no-referrer` prevents the attachment URL (which
+/// contains feedback id + attachment id) from leaking via the Referer
+/// header when the admin then navigates elsewhere.
+fn with_attachment_hardening(
+    builder: axum::http::response::Builder,
+) -> axum::http::response::Builder {
+    builder
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Content-Security-Policy", "sandbox")
+        .header("Referrer-Policy", "no-referrer")
+}
+
+/// GET /admin/feedback/:id
+///
+/// Detail subpage for a single feedback submission. Shows the unmasked
+/// email (callers already pass `admin_guard`), full message, captured
+/// `page_path`, current status, and either the existing admin response
+/// or an inline form to send one.
+pub async fn feedback_detail(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let detail = match admin_api::feedback_detail(&st.api, c.forward.as_deref(), &id).await {
+        Ok(d) => d,
+        Err(_) => return redirect_cookies("/admin/feedback", &c.set_cookies),
+    };
+    let content = feedback_detail_view(&detail);
+    admin_response(&c, &user, "/admin/feedback", "Feedback · Bunyip", content)
+}
+
+fn feedback_detail_view(f: &AdminFeedbackDetail) -> Markup {
+    // BUNYIP-94: render the masked email, never the raw one. Admins do
+    // not need the raw address to reply (the API holds it and routes the
+    // response server-side); leaking the raw address on the detail page
+    // would violate the same masking posture the row list already uses.
+    let identity_line = match (
+        f.name.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        f.email_masked
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+    ) {
+        (Some(n), Some(e)) => Some(format!("{n} · {e}")),
+        (Some(n), None) => Some(n.to_string()),
+        (None, Some(e)) => Some(e.to_string()),
+        (None, None) => None,
+    };
+    // BUNYIP-94: explicit signal when the row has no email at all. The
+    // reply form will still save the response to the DB, but no email
+    // can be delivered. Surfacing this means an admin does not silently
+    // assume the submitter received the reply.
+    let has_email = f
+        .email
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty());
+    let from_path = f
+        .page_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "/feedback");
+    html! {
+        div class="space-y-6 max-w-3xl" {
+            div class="flex items-center justify-between gap-4" {
+                div {
+                    h1 class="text-3xl font-bold" { (f.subject.clone().unwrap_or_else(|| "(no subject)".into())) }
+                    p class="mt-2 text-muted-foreground text-sm" {
+                        a href="/admin/feedback" class="hover:underline" { "← Back to feedback" }
+                    }
+                }
+                (badge("outline", f.status.as_str()))
+            }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="p-6 space-y-4" {
+                    @if let Some(line) = &identity_line {
+                        div { h3 class="text-sm font-semibold" { "From" } p class="text-sm text-muted-foreground" { (line) } }
+                    }
+                    @if let Some(p) = from_path {
+                        div { h3 class="text-sm font-semibold" { "Page" } p class="text-sm text-muted-foreground" { (p) } }
+                    }
+                    @if !f.tags.is_empty() {
+                        div {
+                            h3 class="text-sm font-semibold" { "Tags" }
+                            div class="mt-1 flex flex-wrap gap-1.5" {
+                                @for t in &f.tags { (badge("outline", t)) }
+                            }
+                        }
+                    }
+                    div {
+                        h3 class="text-sm font-semibold" { "Message" }
+                        // Preserve newlines from the original submission; the
+                        // submitter's paragraph breaks carry meaning when
+                        // describing a repro.
+                        p class="text-sm whitespace-pre-wrap" { (f.message) }
+                    }
+                    @if !f.attachments.is_empty() {
+                        (feedback_attachments_view(&f.id, &f.attachments))
+                    }
+                    div { h3 class="text-sm font-semibold" { "Received" } p class="text-sm text-muted-foreground" { (relative_time(&f.created_at)) } }
+                }
+            }
+            // BUNYIP-92: row actions on the detail page mirror the list
+            // tabs. The `from` hidden field redirects back to the list
+            // (Active by default) on success so the admin lands where
+            // most context lives, not on a detail page for a row they
+            // just deleted.
+            div class="flex flex-wrap items-center gap-2" {
+                form method="post" action=(format!("/admin/feedback/{}/archive", f.id)) {
+                    input type="hidden" name="from" value="active";
+                    button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                }
+                form method="post" action=(format!("/admin/feedback/{}/mark-spam", f.id)) {
+                    input type="hidden" name="from" value="active";
+                    button type="submit" class=(button_class("outline", "sm", "")) { "Mark as spam" }
+                }
+                form method="post" action=(format!("/admin/feedback/{}/delete", f.id))
+                    onsubmit="return confirm('Delete this feedback permanently? This cannot be undone.')" {
+                    input type="hidden" name="from" value="active";
+                    button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { "Delete" }
+                }
+            }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Response" } }
+                div class="p-6 pt-0 space-y-4" {
+                    // BUNYIP-94: when the submitter left no email, the
+                    // reply form still saves the response to the DB but
+                    // no email goes out. Make that explicit so admins do
+                    // not silently assume the submitter received it.
+                    @if !has_email {
+                        div class="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300" {
+                            "No email on record - the submitter did not provide an address. Your response will be saved but cannot be delivered."
+                        }
+                    }
+                    // BUNYIP-123: a sent response is editable and
+                    // resendable rather than one-shot. The respond route
+                    // upserts admin_response, so re-submitting the
+                    // (pre-filled) form overwrites the stored reply and,
+                    // when an email is on record, re-delivers it - letting
+                    // an admin fix a typo or wrong reply. When a response
+                    // already exists, show when it was last sent above the
+                    // form and pre-fill the textarea with the current text.
+                    // No-email guard: `respond_to_feedback` on the API side
+                    // just skips the email send when the submitter left no
+                    // address, so the form does NOT need to gate on
+                    // email_present here. The status update still happens
+                    // either way. On success the POST bounces back to this
+                    // same detail page with a `?toast_ok=` confirmation.
+                    @let existing_response = f.admin_response.as_deref().map(str::trim).filter(|s| !s.is_empty());
+                    @if existing_response.is_some() {
+                        @if let Some(at) = &f.responded_at {
+                            p class="text-xs text-muted-foreground" { "Sent " (relative_time(at)) }
+                        }
+                    }
+                    form method="post" action=(format!("/admin/feedback/{}/respond", f.id)) class="space-y-3" {
+                        div class="grid gap-2" {
+                            label for="response" class="text-sm font-medium" { "Reply to the submitter" }
+                            textarea id="response" name="response" rows="6" required placeholder="Type a response. The submitter will receive this verbatim by email." class="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" {
+                                @if let Some(resp) = existing_response { (resp) }
+                            }
+                        }
+                        div class="flex justify-end" {
+                            button type="submit" class=(button_class("default", "default", "gap-2")) {
+                                @if existing_response.is_some() { "Resend response" } @else { "Send response" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RespondForm {
+    pub response: String,
+}
+
+/// POST /admin/feedback/:id/respond
+pub async fn feedback_respond(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(body): Form<RespondForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let response = body.response.trim();
+    if response.is_empty() {
+        // Empty body: short-circuit and reload the detail page; the user
+        // can re-type. No toast - they will see the empty textarea and
+        // figure it out.
+        return redirect_cookies(&format!("/admin/feedback/{id}"), &c.set_cookies);
+    }
+    // BUNYIP-117: bound the admin response at the web edge. The body is
+    // emailed verbatim and stored in feedback_responses (TEXT); 16k chars
+    // is generous for a support reply while still rejecting a runaway
+    // paste. Authoritative validation happens in
+    // `services::feedback::respond` once the API tightens its own bound.
+    const RESPONSE_MAX: usize = 16_000;
+    if response.len() > RESPONSE_MAX {
+        return redirect_cookies(
+            &format!(
+                "/admin/feedback/{id}?toast_err=Response%20must%20be%20{RESPONSE_MAX}%20characters%20or%20fewer"
+            ),
+            &c.set_cookies,
+        );
+    }
+    let target =
+        match admin_api::respond_to_feedback(&st.api, c.forward.as_deref(), &id, response).await {
+            Ok(()) => format!("/admin/feedback/{id}?toast_ok=Response%20sent"),
+            Err(_) => format!("/admin/feedback/{id}?toast_err=Could%20not%20send%20response"),
+        };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// GET /admin/feedback/archive
+pub async fn feedback_archive(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<PageQuery>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let page = q.page.unwrap_or(1).max(1);
+    let data = admin_api::feedback_archive(&st.api, c.forward.as_deref(), page, 20)
+        .await
+        .ok();
+    let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
+    let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
+
+    let content = html! {
+        div class="space-y-6" {
+            div class="flex items-start justify-between gap-4" {
+                div { h1 class="text-3xl font-bold" { "Feedback" } p class="mt-2 text-muted-foreground" { "Archived submissions. Restore moves a row back to the active list." } }
+                a href="/admin/feedback/export" class=(button_class("outline", "sm", "")) { "Export CSV" }
+            }
+            (feedback_tabs(FeedbackTab::Archive))
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Archived" } }
+                div class="p-6 pt-0" {
+                    div class="divide-y" {
+                        @for a in &items {
+                            @let name = a.name.clone().filter(|s| !s.trim().is_empty());
+                            @let email = a.email.clone().filter(|s| !s.trim().is_empty());
+                            @let identity = match (name.as_deref(), email.as_deref()) {
+                                (Some(n), Some(e)) => Some(format!("{n} · {e}")),
+                                (Some(n), None) => Some(n.to_string()),
+                                (None, Some(e)) => Some(e.to_string()),
+                                (None, None) => None,
+                            };
+                            div class="py-3 flex items-start justify-between gap-4" {
+                                div class="min-w-0" {
+                                    p class="font-medium truncate" { (a.subject.clone().unwrap_or_else(|| "(no subject)".into())) }
+                                    @if let Some(line) = &identity {
+                                        p class="text-xs text-muted-foreground truncate" { (line) }
+                                    }
+                                    p class="text-sm text-muted-foreground truncate" { (a.message_excerpt) }
+                                    p class="text-xs text-muted-foreground" {
+                                        "Archived " (relative_time(&a.archived_at))
+                                        @if let Some(orig) = &a.original_status {
+                                            " · was " (orig)
+                                        }
+                                    }
+                                }
+                                div class="flex items-center gap-2 shrink-0" {
+                                    form method="post" action=(format!("/admin/feedback/archive/{}/restore", a.id)) {
+                                        button type="submit" class=(button_class("outline", "sm", "")) { "Restore" }
+                                    }
+                                }
+                            }
+                        }
+                        @if items.is_empty() { p class="text-center text-muted-foreground py-8" { "Archive is empty" } }
+                    }
+                    (pager("/admin/feedback/archive", page, total_pages))
+                }
+            }
+        }
+    };
+    admin_response(&c, &user, "/admin/feedback", "Feedback · Bunyip", content)
+}
+
+/// Render the attachments block on the feedback detail page. Image
+/// MIMEs get an inline `<img>` thumbnail loaded from the same BFF
+/// proxy URL; other MIMEs (text/plain) stay as a plain download link
+/// with the filename and a human-readable size.
+fn feedback_attachments_view(feedback_id: &str, atts: &[FeedbackAttachmentMeta]) -> Markup {
+    html! {
+        div {
+            h3 class="text-sm font-semibold" { "Attachments" }
+            div class="mt-2 grid gap-3 sm:grid-cols-2" {
+                @for a in atts {
+                    @let href = format!(
+                        "/admin/feedback/{}/attachments/{}",
+                        feedback_id, a.id,
+                    );
+                    @let is_image = a.mime_type.starts_with("image/");
+                    div class="rounded-md border border-border/60 p-3 flex gap-3 items-start" {
+                        @if is_image {
+                            a href=(href) target="_blank" rel="noopener" class="shrink-0" {
+                                img src=(href) alt=(a.filename)
+                                    class="h-20 w-20 rounded object-cover bg-muted";
+                            }
+                        }
+                        div class="min-w-0 flex-1" {
+                            a href=(href) class="text-sm font-medium hover:underline truncate block" { (a.filename) }
+                            p class="text-xs text-muted-foreground" { (format_size(a.size_bytes)) " · " (a.mime_type) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Render byte count as KB / MB with one decimal. Bytes-only for tiny
+/// (rare) values. Used in the attachments list.
+fn format_size(bytes: i64) -> String {
+    let b = bytes as f64;
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", b / 1024.0)
+    } else {
+        format!("{:.1} MB", b / (1024.0 * 1024.0))
+    }
+}
+
+/// GET /admin/feedback/:id/attachments/:attachment_id
+///
+/// BFF proxy for a single feedback attachment. The browser cannot hit
+/// bunyip-api directly (cross-origin cookie), so the `<img>` and
+/// download anchors on the detail page point here. Re-auth via
+/// `admin_guard`, forward to the API at
+/// `/admin/feedback/{id}/attachments/{attachment_id}`, stream the
+/// response body back with the upstream `Content-Type` and
+/// `Content-Disposition`. Pattern mirrors `feedback_export` and
+/// `dashboard::download_asset`.
+pub async fn feedback_attachment(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path((feedback_id, attachment_id)): Path<(String, String)>,
+) -> Response {
+    let (_user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let path = format!("/admin/feedback/{feedback_id}/attachments/{attachment_id}");
+    match st.api.get_stream(&path, c.forward.as_deref()).await {
+        Ok(resp) if resp.status().is_success() => {
+            let content_type = resp
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            let disposition = resp
+                .headers()
+                .get(header::CONTENT_DISPOSITION)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+                .unwrap_or_else(|| "attachment".to_string());
+            let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
+            let content_length = resp
+                .headers()
+                .get(header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            let mut builder = Response::builder()
+                .status(status)
+                .header(header::CONTENT_TYPE, content_type)
+                .header(header::CONTENT_DISPOSITION, disposition);
+            builder = with_attachment_hardening(builder);
+            if let Some(len) = content_length {
+                builder = builder.header(header::CONTENT_LENGTH, len);
+            }
+            builder
+                .body(Body::from_stream(resp.bytes_stream()))
+                .unwrap_or_else(|_| {
+                    redirect_cookies(&format!("/admin/feedback/{feedback_id}"), &c.set_cookies)
+                })
+        }
+        Ok(resp) if resp.status().as_u16() == 401 => redirect_cookies("/login", &c.set_cookies),
+        _ => redirect_cookies(&format!("/admin/feedback/{feedback_id}"), &c.set_cookies),
+    }
+}
+
+/// POST /admin/feedback/archive/:archive_id/restore
+pub async fn feedback_restore(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(archive_id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::restore_feedback(&st.api, c.forward.as_deref(), &archive_id).await
+    {
+        Ok(()) => "/admin/feedback/archive?toast_ok=Restored".to_string(),
+        Err(_) => "/admin/feedback/archive?toast_err=Could%20not%20restore".to_string(),
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 // ===========================================================================
@@ -334,19 +1651,47 @@ pub async fn feedback_status(State(st): State<AppState>, headers: HeaderMap, Pat
 // ===========================================================================
 
 pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
-    let apps = admin_api::applications(&st.api, c.forward.as_deref()).await.unwrap_or_default();
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let apps = admin_api::applications(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
 
     let content = html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Applications" } p class="mt-2 text-muted-foreground" { "Configure available applications." } }
+            div class="flex items-center justify-between gap-4" {
+                div { h1 class="text-3xl font-bold" { "Applications" } p class="mt-2 text-muted-foreground" { "Configure available applications." } }
+                a href="/admin/applications/new" class=(button_class("default", "default", "")) { "New application" }
+            }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "All Applications" } }
                 div class="p-6 pt-0" {
                     div class="divide-y" {
-                        @for app in &apps {
+                        @for (i, app) in apps.iter().enumerate() {
                             div class="py-3 flex items-center justify-between gap-4" {
-                                div { p class="font-medium" { (app.display_name) } p class="text-xs text-muted-foreground" { (app.slug) } }
+                                div class="flex items-center gap-3" {
+                                    div class="flex flex-col gap-1" {
+                                        @if i > 0 {
+                                            form method="post" action=(format!("/admin/applications/{}/swap-order", app.id)) {
+                                                input type="hidden" name="target_app_id" value=(apps[i - 1].id);
+                                                button type="submit" title="Move up" aria-label="Move up" class=(button_class("outline", "sm", "")) { "Up" }
+                                            }
+                                        }
+                                        @if i + 1 < apps.len() {
+                                            form method="post" action=(format!("/admin/applications/{}/swap-order", app.id)) {
+                                                input type="hidden" name="target_app_id" value=(apps[i + 1].id);
+                                                button type="submit" title="Move down" aria-label="Move down" class=(button_class("outline", "sm", "")) { "Down" }
+                                            }
+                                        }
+                                    }
+                                    div class="space-y-1" {
+                                        p class="font-medium" { (app.display_name) }
+                                        p class="text-xs text-muted-foreground" { (app.slug) }
+                                        (surface_tags(&SurfaceVisibility::of(app)))
+                                    }
+                                }
                                 div class="flex items-center gap-6" {
                                     form method="post" action=(format!("/admin/applications/{}/field", app.id)) class="flex items-center gap-2" {
                                         input type="hidden" name="field" value="is_active";
@@ -360,6 +1705,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                                         span class="text-sm text-muted-foreground" { "Maintenance: " (if app.maintenance_mode { "on" } else { "off" }) }
                                         button type="submit" class=(button_class("outline", "sm", "")) { "Toggle" }
                                     }
+                                    a href=(format!("/admin/applications/{}/edit", app.id)) class=(button_class("outline", "sm", "")) { "Edit" }
                                 }
                             }
                         }
@@ -369,30 +1715,1387 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
             }
         }
     };
-    admin_response(&c, &user, "/admin/applications", "Applications · Bunyip", content)
+    admin_response(
+        &c,
+        &user,
+        "/admin/applications",
+        "Applications · Bunyip",
+        content,
+    )
 }
 
 #[derive(Deserialize)]
-pub struct AppFieldForm { pub field: String, pub value: String }
-pub async fn application_field(State(st): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Form(f): Form<AppFieldForm>) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
+pub struct AppFieldForm {
+    pub field: String,
+    pub value: String,
+}
+pub async fn application_field(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<AppFieldForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let val = f.value == "true";
     let mut map = serde_json::Map::new();
     map.insert(f.field.clone(), json!(val));
     let body = serde_json::Value::Object(map);
     let _ = admin_api::update_application(&st.api, c.forward.as_deref(), &id, body).await;
-    redirect("/admin/applications")
+    redirect_cookies("/admin/applications", &c.set_cookies)
+}
+
+// --- application distribution edit / create --------------------------------
+
+/// Current values of the distribution form, borrowed for rendering. Shared by
+/// the create and edit forms so the field layout cannot drift between them.
+struct DistView<'a> {
+    artifact_source: &'a str,
+    forgejo_owner: &'a str,
+    forgejo_repo: &'a str,
+    forgejo_package: &'a str,
+    pinned_release_tag: &'a str,
+    oci_image_owner: &'a str,
+    oci_image_name: &'a str,
+    pinned_image_tag: &'a str,
+}
+
+/// Identity fields shown only on the create form (the backend requires them;
+/// they are immutable afterwards, so the edit form omits them).
+struct IdentityView<'a> {
+    name: &'a str,
+    slug: &'a str,
+    display_name: &'a str,
+    container_name: &'a str,
+}
+
+/// The descriptive / metadata fields the API accepts on both create and update
+/// (`UpdateApplication` / `CreateApplication`): everything other than identity
+/// and the distribution coordinates. Shared by the create and edit forms so the
+/// field layout cannot drift between them. Borrowed for rendering.
+struct DetailsView<'a> {
+    description: &'a str,
+    icon_url: &'a str,
+    subdomain: &'a str,
+    version: &'a str,
+    source_code_url: &'a str,
+    maintenance_message: &'a str,
+}
+
+/// An HTML checkbox submits its value only when checked, so an unchecked box is
+/// absent from the form body (serde default `""`). Treat the standard checked
+/// markers as true.
+fn checkbox_on(s: &str) -> bool {
+    s == "true" || s == "on"
+}
+
+fn details_fields(v: &DetailsView) -> Markup {
+    html! {
+        h4 class="text-lg font-semibold pt-2" { "Details" }
+        div class="space-y-2" { label class="text-sm font-medium" { "Description" } input name="description" value=(v.description) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Icon URL" } input name="icon_url" value=(v.icon_url) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Subdomain" } input name="subdomain" value=(v.subdomain) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Version" } input name="version" value=(v.version) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Source code URL" } input name="source_code_url" value=(v.source_code_url) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Maintenance message" } p class="text-xs text-muted-foreground" { "Shown to users while maintenance mode is on." } input name="maintenance_message" value=(v.maintenance_message) class=(dashboard_input()); }
+    }
+}
+
+fn distribution_fields(v: &DistView) -> Markup {
+    html! {
+        h4 class="text-lg font-semibold pt-2" { "Binary (Forgejo)" }
+        div class="space-y-2" {
+            label class="text-sm font-medium" { "Artifact source" }
+            select name="artifact_source" class=(dashboard_input()) {
+                option value="release" selected[v.artifact_source != "generic_package"] { "release" }
+                option value="generic_package" selected[v.artifact_source == "generic_package"] { "generic_package" }
+            }
+        }
+        div class="space-y-2" { label class="text-sm font-medium" { "Forgejo owner" } input name="forgejo_owner" value=(v.forgejo_owner) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Forgejo repo" } input name="forgejo_repo" value=(v.forgejo_repo) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Forgejo package" } p class="text-xs text-muted-foreground" { "generic_package sources only; leave blank to clear back to the repo name." } input name="forgejo_package" value=(v.forgejo_package) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Pinned release tag" } input name="pinned_release_tag" value=(v.pinned_release_tag) class=(dashboard_input()); }
+        h4 class="text-lg font-semibold pt-2" { "Container (OCI)" }
+        div class="space-y-2" { label class="text-sm font-medium" { "OCI image owner" } input name="oci_image_owner" value=(v.oci_image_owner) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "OCI image name" } input name="oci_image_name" value=(v.oci_image_name) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Pinned image tag" } input name="pinned_image_tag" value=(v.pinned_image_tag) class=(dashboard_input()); }
+    }
+}
+
+/// At-a-glance visibility of an application across the three distribution
+/// surfaces shown in the admin UI. Each field MIRRORS the canonical predicate
+/// in `bunyip-domain` (`crates/bunyip-domain/src/models/application.rs`) so the
+/// badges cannot silently disagree with what users actually see; if a domain
+/// rule changes, update it here too:
+/// - `hub`: the user Applications section / hub launch tile, listed by
+///   `ApplicationRepository::list_active_hosted` (`is_active && is_hosted`).
+/// - `binary`: `Application::is_downloadable` / `download_source` (forgejo_owner
+///   + pinned_release_tag + repo-or-package depending on `artifact_source`).
+/// - `oci`: `Application::is_pullable` (is_active + all three OCI fields set).
+///
+/// `None` and empty/whitespace string fields are both treated as absent.
+struct SurfaceVisibility {
+    hub: bool,
+    binary: bool,
+    oci: bool,
+}
+
+impl SurfaceVisibility {
+    fn of(app: &AdminApplication) -> Self {
+        fn present(field: &Option<String>) -> bool {
+            field.as_deref().is_some_and(|s| !s.trim().is_empty())
+        }
+        // Mirrors `Application::download_source`: the `generic_package` source
+        // accepts a package name or falls back to the repo; every other source
+        // (including the `release` default) requires the repo.
+        let binary = present(&app.forgejo_owner)
+            && present(&app.pinned_release_tag)
+            && if app.artifact_source.as_deref() == Some("generic_package") {
+                present(&app.forgejo_package) || present(&app.forgejo_repo)
+            } else {
+                present(&app.forgejo_repo)
+            };
+        let oci = app.is_active
+            && present(&app.oci_image_owner)
+            && present(&app.oci_image_name)
+            && present(&app.pinned_image_tag);
+        Self {
+            hub: app.is_active && app.is_hosted,
+            binary,
+            oci,
+        }
+    }
+}
+
+/// One surface badge: a colored `on_variant` when the app reaches the surface,
+/// a muted outline `off_label` ("No X") when it does not.
+fn surface_badge(on: bool, on_variant: &str, on_label: &str, off_label: &str) -> Markup {
+    if on {
+        badge(on_variant, on_label)
+    } else {
+        badge("outline", off_label)
+    }
+}
+
+/// The Hub / Binary / OCI surface badges for one application. Rendered on the
+/// admin Applications list and the edit page so an admin can see at a glance
+/// which surfaces an app is (and is not) served in.
+fn surface_tags(s: &SurfaceVisibility) -> Markup {
+    html! {
+        div class="flex flex-wrap items-center gap-1.5" {
+            (surface_badge(s.hub, "success", "Hub", "No Hub"))
+            (surface_badge(s.binary, "secondary", "Binary", "No Binary"))
+            (surface_badge(s.oci, "secondary", "OCI", "No OCI"))
+        }
+    }
+}
+
+/// Render the application create/edit form. `identity` is `Some` only for
+/// create (the edit form posts distribution fields only). `surfaces` is `Some`
+/// only on the edit page of a persisted app, where the Hub/Binary/OCI badges
+/// can be derived; create and error re-renders pass `None`. `error` renders a
+/// banner and the form keeps the submitted values for correction.
+fn application_form(
+    action: &str,
+    heading: &str,
+    blurb: &str,
+    identity: Option<&IdentityView>,
+    is_hosted: bool,
+    details: &DetailsView,
+    v: &DistView,
+    surfaces: Option<&SurfaceVisibility>,
+    error: Option<&str>,
+) -> Markup {
+    html! {
+        div class="space-y-6" {
+            div {
+                h1 class="text-3xl font-bold" { (heading) }
+                p class="mt-2 text-muted-foreground" { (blurb) }
+                @if let Some(s) = surfaces { div class="mt-3" { (surface_tags(s)) } }
+            }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="p-6" {
+                    form method="post" action=(action) class="space-y-4 max-w-md" {
+                        @if let Some(err) = error { (error_box(err)) }
+                        @if let Some(id) = identity {
+                            h4 class="text-lg font-semibold" { "Identity" }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Name" } input name="name" value=(id.name) required class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Slug" } input name="slug" value=(id.slug) required class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Display name" } input name="display_name" value=(id.display_name) required class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Container name" } input name="container_name" value=(id.container_name) required class=(dashboard_input()); }
+                        }
+                        div class="flex items-start gap-2" {
+                            input type="checkbox" name="is_hosted" value="true" checked[is_hosted] id="is_hosted" class="mt-1";
+                            label for="is_hosted" class="text-sm font-medium" { "Hosted app" p class="text-xs font-normal text-muted-foreground" { "Checked: shows as a launchable hub tile. Unchecked: catalog-only distribution product (downloads / OCI pulls only)." } }
+                        }
+                        (details_fields(details))
+                        (distribution_fields(v))
+                        div class="flex items-center gap-2 pt-2" {
+                            button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
+                            a href="/admin/applications" class=(button_class("outline", "default", "")) { "Cancel" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn dist_view_from_form(f: &DistributionForm) -> DistView<'_> {
+    DistView {
+        artifact_source: &f.artifact_source,
+        forgejo_owner: &f.forgejo_owner,
+        forgejo_repo: &f.forgejo_repo,
+        forgejo_package: &f.forgejo_package,
+        pinned_release_tag: &f.pinned_release_tag,
+        oci_image_owner: &f.oci_image_owner,
+        oci_image_name: &f.oci_image_name,
+        pinned_image_tag: &f.pinned_image_tag,
+    }
+}
+
+fn details_view_from_dist_form(f: &DistributionForm) -> DetailsView<'_> {
+    DetailsView {
+        description: &f.description,
+        icon_url: &f.icon_url,
+        subdomain: &f.subdomain,
+        version: &f.version,
+        source_code_url: &f.source_code_url,
+        maintenance_message: &f.maintenance_message,
+    }
+}
+
+/// Add every non-empty descriptive field (`DetailsView` columns) to an update /
+/// create body, trimmed. Empty inputs are omitted so the backend keeps the
+/// existing column (its UPDATE COALESCEs a NULL to the old value), matching the
+/// "blank fields keep their current value" contract of the distribution fields.
+fn insert_detail_fields(
+    m: &mut serde_json::Map<String, serde_json::Value>,
+    description: &str,
+    icon_url: &str,
+    subdomain: &str,
+    version: &str,
+    source_code_url: &str,
+    maintenance_message: &str,
+) {
+    for (k, val) in [
+        ("description", description),
+        ("icon_url", icon_url),
+        ("subdomain", subdomain),
+        ("version", version),
+        ("source_code_url", source_code_url),
+        ("maintenance_message", maintenance_message),
+    ] {
+        if !val.trim().is_empty() {
+            m.insert(k.into(), json!(val.trim()));
+        }
+    }
+}
+
+/// Body for PUT /admin/applications/{id}: set every non-empty distribution
+/// field. Empty inputs are omitted so the backend keeps the existing column
+/// (its UPDATE COALESCEs a NULL to the old value), EXCEPT `forgejo_package`,
+/// which is always sent so an empty value clears it to NULL (the documented
+/// backend sentinel). `forgejo_package` is also forced empty on non-generic
+/// sources: it is meaningless there, and re-sending a prefilled package while
+/// the admin flips the source to `release` would fail backend validation.
+/// `is_hosted` is always sent so the checkbox can toggle it in both directions.
+fn distribution_update_body(f: &DistributionForm) -> serde_json::Value {
+    let mut m = serde_json::Map::new();
+    if !f.artifact_source.trim().is_empty() {
+        m.insert("artifact_source".into(), json!(f.artifact_source.trim()));
+    }
+    for (k, val) in [
+        ("forgejo_owner", &f.forgejo_owner),
+        ("forgejo_repo", &f.forgejo_repo),
+        ("pinned_release_tag", &f.pinned_release_tag),
+        ("oci_image_owner", &f.oci_image_owner),
+        ("oci_image_name", &f.oci_image_name),
+        ("pinned_image_tag", &f.pinned_image_tag),
+    ] {
+        if !val.trim().is_empty() {
+            m.insert(k.into(), json!(val.trim()));
+        }
+    }
+    let package = if f.artifact_source.trim() == "generic_package" {
+        f.forgejo_package.trim()
+    } else {
+        ""
+    };
+    m.insert("forgejo_package".into(), json!(package));
+    m.insert("is_hosted".into(), json!(checkbox_on(&f.is_hosted)));
+    insert_detail_fields(
+        &mut m,
+        &f.description,
+        &f.icon_url,
+        &f.subdomain,
+        &f.version,
+        &f.source_code_url,
+        &f.maintenance_message,
+    );
+    serde_json::Value::Object(m)
+}
+
+#[derive(Deserialize, Default)]
+pub struct DistributionForm {
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub icon_url: String,
+    #[serde(default)]
+    pub subdomain: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub source_code_url: String,
+    #[serde(default)]
+    pub maintenance_message: String,
+    #[serde(default)]
+    pub artifact_source: String,
+    #[serde(default)]
+    pub forgejo_owner: String,
+    #[serde(default)]
+    pub forgejo_repo: String,
+    #[serde(default)]
+    pub forgejo_package: String,
+    #[serde(default)]
+    pub pinned_release_tag: String,
+    #[serde(default)]
+    pub oci_image_owner: String,
+    #[serde(default)]
+    pub oci_image_name: String,
+    #[serde(default)]
+    pub pinned_image_tag: String,
+    #[serde(default)]
+    pub is_hosted: String,
+}
+
+/// GET /admin/applications/{id}/edit
+/// Query params on the edit page. `error` is set when a delete attempt bounces
+/// back (bad password / 2FA code) so the danger zone can show why.
+#[derive(Deserialize)]
+pub struct AppEditQuery {
+    pub error: Option<String>,
+}
+
+pub async fn application_edit(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(q): Query<AppEditQuery>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    // Distinguish a failed list fetch (network / auth / 5xx) from a genuinely
+    // missing application; collapsing both to "not found" would mislead.
+    let apps = match admin_api::applications(&st.api, c.forward.as_deref()).await {
+        Ok(apps) => apps,
+        Err(e) => {
+            let content = html! {
+                div class="space-y-6" {
+                    h1 class="text-3xl font-bold" { "Edit application" }
+                    (error_box(&e.user_message()))
+                }
+            };
+            return admin_response(
+                &c,
+                &user,
+                "/admin/applications",
+                "Edit application · Bunyip",
+                content,
+            );
+        }
+    };
+    // Groups for the assignment selector. A failed fetch degrades to no groups
+    // (the selector still offers "Ungrouped") rather than blocking the edit.
+    let groups = admin_api::application_groups(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
+    let content = match apps.iter().find(|a| a.id == id) {
+        None => {
+            html! { div class="space-y-6" { h1 class="text-3xl font-bold" { "Edit application" } p class="text-muted-foreground" { "Application not found." } } }
+        }
+        Some(app) => {
+            let v = DistView {
+                artifact_source: app.artifact_source.as_deref().unwrap_or("release"),
+                forgejo_owner: app.forgejo_owner.as_deref().unwrap_or_default(),
+                forgejo_repo: app.forgejo_repo.as_deref().unwrap_or_default(),
+                forgejo_package: app.forgejo_package.as_deref().unwrap_or_default(),
+                pinned_release_tag: app.pinned_release_tag.as_deref().unwrap_or_default(),
+                oci_image_owner: app.oci_image_owner.as_deref().unwrap_or_default(),
+                oci_image_name: app.oci_image_name.as_deref().unwrap_or_default(),
+                pinned_image_tag: app.pinned_image_tag.as_deref().unwrap_or_default(),
+            };
+            let details = DetailsView {
+                description: app.description.as_deref().unwrap_or_default(),
+                icon_url: app.icon_url.as_deref().unwrap_or_default(),
+                subdomain: app.subdomain.as_deref().unwrap_or_default(),
+                version: app.version.as_deref().unwrap_or_default(),
+                source_code_url: app.source_code_url.as_deref().unwrap_or_default(),
+                maintenance_message: app.maintenance_message.as_deref().unwrap_or_default(),
+            };
+            let surfaces = SurfaceVisibility::of(app);
+            html! {
+                (application_form(
+                    &format!("/admin/applications/{id}/distribution"),
+                    &format!("Edit {}", app.display_name),
+                    "Edit the application details, Forgejo binary, and OCI container coordinates. Blank fields keep their current value.",
+                    None,
+                    app.is_hosted,
+                    &details,
+                    &v,
+                    Some(&surfaces),
+                    None,
+                ))
+                (group_assignment_form(&id, app.group_id.as_deref(), &groups))
+                (app_danger_zone(&id, q.error.as_deref()))
+            }
+        }
+    };
+    admin_response(
+        &c,
+        &user,
+        "/admin/applications",
+        "Edit application · Bunyip",
+        content,
+    )
+}
+
+/// Danger zone on the edit page: hard-delete the application. Mirrors the
+/// account self-delete UI; the API requires the admin's password + 2FA code, so
+/// both fields are collected and posted to the delete handler.
+fn app_danger_zone(id: &str, error: Option<&str>) -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm border-red-200 dark:border-red-900 mt-8 max-w-2xl" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                h3 class="text-2xl font-semibold leading-none tracking-tight text-red-600 dark:text-red-400 flex items-center gap-2" { (icon("alert-triangle", "h-5 w-5")) "Danger Zone" }
+                p class="text-sm text-muted-foreground" { "Permanently delete this application. Its entitlements, price links, and download caches are removed with it. This cannot be undone." }
+            }
+            div class="p-6 pt-0" {
+                @if let Some(e) = error { (error_box(e)) }
+                form method="post" action=(format!("/admin/applications/{id}/delete")) class="space-y-3 max-w-md mt-2" onsubmit="return confirm('Permanently delete this application? This cannot be undone.')" {
+                    div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" placeholder="Enter your password to confirm" class=(dashboard_input()); }
+                    div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" placeholder="6-digit code" class=(dashboard_input()); }
+                    button type="submit" class=(button_class("destructive", "default", "")) { (icon("trash", "mr-2 h-4 w-4")) "Delete application" }
+                }
+            }
+        }
+    }
+}
+
+/// POST /admin/applications/{id}/distribution
+pub async fn application_distribution_save(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<DistributionForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let body = distribution_update_body(&f);
+    match admin_api::update_application(&st.api, c.forward.as_deref(), &id, body).await {
+        Ok(()) => redirect_cookies("/admin/applications", &c.set_cookies),
+        Err(e) => {
+            let v = dist_view_from_form(&f);
+            let details = details_view_from_dist_form(&f);
+            let content = application_form(
+                &format!("/admin/applications/{id}/distribution"),
+                "Edit application",
+                "Edit the application details, Forgejo binary, and OCI container coordinates. Blank fields keep their current value.",
+                None,
+                checkbox_on(&f.is_hosted),
+                &details,
+                &v,
+                None,
+                Some(&e.user_message()),
+            );
+            admin_response(
+                &c,
+                &user,
+                "/admin/applications",
+                "Edit application · Bunyip",
+                content,
+            )
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SwapOrderForm {
+    #[serde(default)]
+    pub target_app_id: String,
+}
+
+/// POST /admin/applications/{id}/swap-order
+/// Swap this application's sort order with the neighbour identified by
+/// `target_app_id` (the adjacent row in the admin list), then return to the
+/// list where the new ordering is visible. BUNYIP-121.
+pub async fn application_swap_order(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<SwapOrderForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::swap_application_order(&st.api, c.forward.as_deref(), &id, &f.target_app_id)
+        .await;
+    redirect_cookies("/admin/applications", &c.set_cookies)
+}
+
+#[derive(Deserialize)]
+pub struct DeleteAppForm {
+    #[serde(default)]
+    pub password: String,
+    #[serde(default)]
+    pub totp_code: String,
+}
+
+/// POST /admin/applications/{id}/delete
+pub async fn application_delete(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<DeleteAppForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match admin_api::delete_application(
+        &st.api,
+        c.forward.as_deref(),
+        &id,
+        &f.password,
+        &f.totp_code,
+    )
+    .await
+    {
+        // Relay any cookie the guard rotated on both paths (mirrors user_delete);
+        // a plain redirect would drop a refreshed session.
+        Ok(()) => redirect_cookies("/admin/applications", &c.set_cookies),
+        // Bad password / 2FA code (or any failure): bounce back to this app's
+        // danger zone with the API's message rather than dropping the admin on a
+        // blank page.
+        Err(e) => redirect_cookies(
+            &format!(
+                "/admin/applications/{id}/edit?error={}",
+                urlenc(&e.user_message())
+            ),
+            &c.set_cookies,
+        ),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct CreateAppForm {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub container_name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub icon_url: String,
+    #[serde(default)]
+    pub subdomain: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub source_code_url: String,
+    #[serde(default)]
+    pub maintenance_message: String,
+    #[serde(default)]
+    pub artifact_source: String,
+    #[serde(default)]
+    pub forgejo_owner: String,
+    #[serde(default)]
+    pub forgejo_repo: String,
+    #[serde(default)]
+    pub forgejo_package: String,
+    #[serde(default)]
+    pub pinned_release_tag: String,
+    #[serde(default)]
+    pub oci_image_owner: String,
+    #[serde(default)]
+    pub oci_image_name: String,
+    #[serde(default)]
+    pub pinned_image_tag: String,
+    #[serde(default)]
+    pub is_hosted: String,
+}
+
+/// Body for POST /admin/applications: required identity fields plus every
+/// non-empty distribution field. Empty distribution inputs are omitted (a new
+/// row has nothing to clear, and an empty string would fail backend
+/// validation). `forgejo_package` is only sent on a `generic_package` source
+/// (it is invalid on `release`). `is_hosted` reflects the checkbox so a
+/// catalog-only product (unchecked) is not forced to the DB default of hosted.
+fn create_app_body(f: &CreateAppForm) -> Result<serde_json::Value, String> {
+    use crate::handlers::validate;
+    // BUNYIP-112: identity fields are bounded + slug-checked at the edge.
+    // `slug` is load-bearing for OCI repo paths in
+    // `Application::oci_pull_image`, so an unconstrained value would
+    // silently end up in pull URLs.
+    let name = validate::trim_bounded(&f.name, "Name", 200)?;
+    let slug = validate::slug(&f.slug, "Slug")?;
+    let display_name = validate::trim_bounded(&f.display_name, "Display name", 200)?;
+    let container_name = validate::trim_bounded(&f.container_name, "Container name", 200)?;
+    let mut m = serde_json::Map::new();
+    m.insert("name".into(), json!(name));
+    m.insert("slug".into(), json!(slug));
+    m.insert("display_name".into(), json!(display_name));
+    m.insert("container_name".into(), json!(container_name));
+    m.insert("is_hosted".into(), json!(checkbox_on(&f.is_hosted)));
+    insert_detail_fields(
+        &mut m,
+        &f.description,
+        &f.icon_url,
+        &f.subdomain,
+        &f.version,
+        &f.source_code_url,
+        &f.maintenance_message,
+    );
+    if !f.artifact_source.trim().is_empty() {
+        m.insert("artifact_source".into(), json!(f.artifact_source.trim()));
+    }
+    for (k, val) in [
+        ("forgejo_owner", &f.forgejo_owner),
+        ("forgejo_repo", &f.forgejo_repo),
+        ("pinned_release_tag", &f.pinned_release_tag),
+        ("oci_image_owner", &f.oci_image_owner),
+        ("oci_image_name", &f.oci_image_name),
+        ("pinned_image_tag", &f.pinned_image_tag),
+    ] {
+        if let Some(v) = validate::trim_bounded_opt(val, k, 200)? {
+            m.insert(k.into(), json!(v));
+        }
+    }
+    if f.artifact_source.trim() == "generic_package" && !f.forgejo_package.trim().is_empty() {
+        let pkg = validate::trim_bounded(&f.forgejo_package, "forgejo_package", 200)?;
+        m.insert("forgejo_package".into(), json!(pkg));
+    }
+    Ok(serde_json::Value::Object(m))
+}
+
+/// GET /admin/applications/new
+pub async fn application_new(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let id = IdentityView {
+        name: "",
+        slug: "",
+        display_name: "",
+        container_name: "",
+    };
+    let details = DetailsView {
+        description: "",
+        icon_url: "",
+        subdomain: "",
+        version: "",
+        source_code_url: "",
+        maintenance_message: "",
+    };
+    let v = DistView {
+        artifact_source: "release",
+        forgejo_owner: "",
+        forgejo_repo: "",
+        forgejo_package: "",
+        pinned_release_tag: "",
+        oci_image_owner: "",
+        oci_image_name: "",
+        pinned_image_tag: "",
+    };
+    let content = application_form(
+        "/admin/applications",
+        "New application",
+        "Create a catalog application and (optionally) its Forgejo binary and OCI container coordinates.",
+        Some(&id),
+        true,
+        &details,
+        &v,
+        None,
+        None,
+    );
+    admin_response(
+        &c,
+        &user,
+        "/admin/applications",
+        "New application · Bunyip",
+        content,
+    )
+}
+
+/// POST /admin/applications
+pub async fn application_create(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<CreateAppForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    // Render helper so the validation-error and API-error paths share the
+    // identical reconstruction of the form view (BUNYIP-112).
+    let render_form_error = |err: &str| -> Response {
+        let id = IdentityView {
+            name: &f.name,
+            slug: &f.slug,
+            display_name: &f.display_name,
+            container_name: &f.container_name,
+        };
+        let v = DistView {
+            artifact_source: &f.artifact_source,
+            forgejo_owner: &f.forgejo_owner,
+            forgejo_repo: &f.forgejo_repo,
+            forgejo_package: &f.forgejo_package,
+            pinned_release_tag: &f.pinned_release_tag,
+            oci_image_owner: &f.oci_image_owner,
+            oci_image_name: &f.oci_image_name,
+            pinned_image_tag: &f.pinned_image_tag,
+        };
+        let details = DetailsView {
+            description: &f.description,
+            icon_url: &f.icon_url,
+            subdomain: &f.subdomain,
+            version: &f.version,
+            source_code_url: &f.source_code_url,
+            maintenance_message: &f.maintenance_message,
+        };
+        let content = application_form(
+            "/admin/applications",
+            "New application",
+            "Create a catalog application and (optionally) its Forgejo binary and OCI container coordinates.",
+            Some(&id),
+            checkbox_on(&f.is_hosted),
+            &details,
+            &v,
+            None,
+            Some(err),
+        );
+        admin_response(
+            &c,
+            &user,
+            "/admin/applications",
+            "New application · Bunyip",
+            content,
+        )
+    };
+    let body = match create_app_body(&f) {
+        Ok(b) => b,
+        Err(msg) => return render_form_error(&msg),
+    };
+    match admin_api::create_application(&st.api, c.forward.as_deref(), body).await {
+        Ok(()) => redirect_cookies("/admin/applications", &c.set_cookies),
+        Err(e) => render_form_error(&e.user_message()),
+    }
+}
+
+// ===========================================================================
+// Application Groups (BUNYIP-100)
+// ===========================================================================
+
+#[derive(Deserialize, Default)]
+pub struct GroupForm {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub icon_url: String,
+    #[serde(default)]
+    pub sort_order: String,
+}
+
+/// JSON body for create/update of a group. Required identity fields are
+/// bounded and slug-checked; description / icon_url collapse empty to null;
+/// sort_order is parsed as a bounded `i32` so non-numeric and out-of-INTEGER
+/// inputs surface as inline errors instead of silently becoming 0 or
+/// truncating (BUNYIP-113). Name / slug / icon_url validation lands here as
+/// part of the BUNYIP-112 sweep so create + edit share the same edge.
+fn group_body(f: &GroupForm) -> Result<serde_json::Value, String> {
+    use crate::handlers::validate;
+    let name = validate::trim_bounded(&f.name, "Name", 200)?;
+    let slug = validate::slug(&f.slug, "Slug")?;
+    let display_name = validate::trim_bounded(&f.display_name, "Display name", 200)?;
+    let description = validate::trim_bounded_opt(&f.description, "Description", 1000)?;
+    let icon_url = validate::url_opt(&f.icon_url, "Icon URL", 512)?;
+    let sort_order = validate::parse_i32(&f.sort_order, "Sort order")?;
+    Ok(json!({
+        "name": name,
+        "slug": slug,
+        "display_name": display_name,
+        "description": description,
+        "icon_url": icon_url,
+        "sort_order": sort_order,
+    }))
+}
+
+/// Shared create/edit form for a group.
+fn group_form(
+    action: &str,
+    heading: &str,
+    g: Option<&ApplicationGroup>,
+    error: Option<&str>,
+) -> Markup {
+    let name = g.map(|g| g.name.as_str()).unwrap_or_default();
+    let slug = g.map(|g| g.slug.as_str()).unwrap_or_default();
+    let display_name = g.map(|g| g.display_name.as_str()).unwrap_or_default();
+    let description = g.and_then(|g| g.description.as_deref()).unwrap_or_default();
+    let icon_url = g.and_then(|g| g.icon_url.as_deref()).unwrap_or_default();
+    let sort_order = g.map(|g| g.sort_order).unwrap_or(0);
+    html! {
+        div class="space-y-6" {
+            div { h1 class="text-3xl font-bold" { (heading) } p class="mt-2 text-muted-foreground" { "Group related applications under one heading on the Applications page." } }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="p-6" {
+                    form method="post" action=(action) class="space-y-4 max-w-md" {
+                        @if let Some(err) = error { (error_box(err)) }
+                        div class="space-y-2" { label class="text-sm font-medium" { "Name" } input name="name" value=(name) required class=(dashboard_input()); }
+                        div class="space-y-2" { label class="text-sm font-medium" { "Slug" } input name="slug" value=(slug) required class=(dashboard_input()); }
+                        div class="space-y-2" { label class="text-sm font-medium" { "Display name" } input name="display_name" value=(display_name) required class=(dashboard_input()); }
+                        div class="space-y-2" { label class="text-sm font-medium" { "Description" } input name="description" value=(description) class=(dashboard_input()); }
+                        div class="space-y-2" { label class="text-sm font-medium" { "Icon URL" } input name="icon_url" value=(icon_url) class=(dashboard_input()); }
+                        div class="space-y-2" { label class="text-sm font-medium" { "Sort order" } input name="sort_order" type="number" value=(sort_order) class=(dashboard_input()); }
+                        div class="flex items-center gap-2 pt-2" {
+                            button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
+                            a href="/admin/application-groups" class=(button_class("outline", "default", "")) { "Cancel" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A group `<select>` + save button for the application edit page. Posts to the
+/// dedicated set-group endpoint so it never collides with the distribution save
+/// (which COALESCEs and cannot clear group_id).
+fn group_assignment_form(
+    app_id: &str,
+    current: Option<&str>,
+    groups: &[ApplicationGroup],
+) -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="p-6" {
+                h4 class="text-lg font-semibold" { "Group" }
+                p class="text-xs text-muted-foreground mb-3" { "Assign this application to a group, or leave it ungrouped." }
+                form method="post" action=(format!("/admin/applications/{app_id}/group")) class="flex items-end gap-2 max-w-md" {
+                    select name="group_id" class=(dashboard_input()) {
+                        option value="" selected[current.is_none()] { "Ungrouped" }
+                        @for g in groups {
+                            option value=(g.id) selected[current == Some(g.id.as_str())] { (g.display_name) }
+                        }
+                    }
+                    button type="submit" class=(button_class("default", "default", "")) { "Save" }
+                }
+            }
+        }
+    }
+}
+
+/// GET /admin/application-groups
+pub async fn application_groups(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let groups = admin_api::application_groups(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
+    let content = html! {
+        div class="space-y-6" {
+            div class="flex items-center justify-between gap-4" {
+                div { h1 class="text-3xl font-bold" { "Application Groups" } p class="mt-2 text-muted-foreground" { "Group related applications under one heading." } }
+                a href="/admin/application-groups/new" class=(button_class("default", "default", "")) { "New group" }
+            }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="p-6 pt-0" {
+                    div class="divide-y" {
+                        @for g in &groups {
+                            div class="py-3 flex items-center justify-between gap-4" {
+                                div { p class="font-medium" { (g.display_name) } p class="text-xs text-muted-foreground" { (g.slug) } }
+                                div class="flex items-center gap-2" {
+                                    a href=(format!("/admin/application-groups/{}/edit", g.id)) class=(button_class("outline", "sm", "")) { "Edit" }
+                                    form method="post" action=(format!("/admin/application-groups/{}/delete", g.id)) onsubmit="return confirm('Delete this application group? This cannot be undone.')" {
+                                        button type="submit" class=(button_class("outline", "sm", "")) { "Delete" }
+                                    }
+                                }
+                            }
+                        }
+                        @if groups.is_empty() { p class="text-center text-muted-foreground py-8" { "No groups" } }
+                    }
+                }
+            }
+        }
+    };
+    admin_response(
+        &c,
+        &user,
+        "/admin/application-groups",
+        "Application Groups · Bunyip",
+        content,
+    )
+}
+
+/// GET /admin/application-groups/new
+pub async fn application_group_new(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let content = group_form("/admin/application-groups", "New group", None, None);
+    admin_response(
+        &c,
+        &user,
+        "/admin/application-groups",
+        "New group · Bunyip",
+        content,
+    )
+}
+
+/// POST /admin/application-groups
+pub async fn application_group_create(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<GroupForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let body = match group_body(&f) {
+        Ok(b) => b,
+        Err(msg) => {
+            let content = group_form("/admin/application-groups", "New group", None, Some(&msg));
+            return admin_response(
+                &c,
+                &user,
+                "/admin/application-groups",
+                "New group · Bunyip",
+                content,
+            );
+        }
+    };
+    match admin_api::create_application_group(&st.api, c.forward.as_deref(), body).await {
+        Ok(()) => redirect_cookies("/admin/application-groups", &c.set_cookies),
+        Err(e) => {
+            let content = group_form(
+                "/admin/application-groups",
+                "New group",
+                None,
+                Some(&e.user_message()),
+            );
+            admin_response(
+                &c,
+                &user,
+                "/admin/application-groups",
+                "New group · Bunyip",
+                content,
+            )
+        }
+    }
+}
+
+/// GET /admin/application-groups/{id}/edit
+pub async fn application_group_edit(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let groups = admin_api::application_groups(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
+    let content = match groups.iter().find(|g| g.id == id) {
+        None => {
+            html! { div class="space-y-6" { h1 class="text-3xl font-bold" { "Edit group" } p class="text-muted-foreground" { "Group not found." } } }
+        }
+        Some(g) => group_form(
+            &format!("/admin/application-groups/{id}"),
+            &format!("Edit {}", g.display_name),
+            Some(g),
+            None,
+        ),
+    };
+    admin_response(
+        &c,
+        &user,
+        "/admin/application-groups",
+        "Edit group · Bunyip",
+        content,
+    )
+}
+
+/// POST /admin/application-groups/{id}
+pub async fn application_group_save(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<GroupForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let body = match group_body(&f) {
+        Ok(b) => b,
+        Err(msg) => {
+            let content = group_form(
+                &format!("/admin/application-groups/{id}"),
+                "Edit group",
+                None,
+                Some(&msg),
+            );
+            return admin_response(
+                &c,
+                &user,
+                "/admin/application-groups",
+                "Edit group · Bunyip",
+                content,
+            );
+        }
+    };
+    match admin_api::update_application_group(&st.api, c.forward.as_deref(), &id, body).await {
+        Ok(()) => redirect_cookies("/admin/application-groups", &c.set_cookies),
+        Err(e) => {
+            let content = group_form(
+                &format!("/admin/application-groups/{id}"),
+                "Edit group",
+                None,
+                Some(&e.user_message()),
+            );
+            admin_response(
+                &c,
+                &user,
+                "/admin/application-groups",
+                "Edit group · Bunyip",
+                content,
+            )
+        }
+    }
+}
+
+/// POST /admin/application-groups/{id}/delete
+pub async fn application_group_delete(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::delete_application_group(&st.api, c.forward.as_deref(), &id).await;
+    redirect_cookies("/admin/application-groups", &c.set_cookies)
+}
+
+#[derive(Deserialize)]
+pub struct SetGroupForm {
+    #[serde(default)]
+    pub group_id: String,
+}
+
+/// POST /admin/applications/{id}/group
+pub async fn application_set_group(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<SetGroupForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let group_id = if f.group_id.trim().is_empty() {
+        None
+    } else {
+        Some(f.group_id.trim())
+    };
+    let _ = admin_api::set_application_group(&st.api, c.forward.as_deref(), &id, group_id).await;
+    redirect_cookies(&format!("/admin/applications/{id}/edit"), &c.set_cookies)
+}
+
+// ===========================================================================
+// Entitlements
+// ===========================================================================
+
+pub async fn entitlements(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let apps = admin_api::applications(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
+
+    let content = html! {
+        div class="space-y-6" {
+            div { h1 class="text-3xl font-bold" { "Entitlements" } p class="mt-2 text-muted-foreground" { "Control which applications require a per-product entitlement to access." } }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Products" } p class="text-sm text-muted-foreground" { "Restricted products are only available to users who have been granted an entitlement." } }
+                div class="p-6 pt-0" {
+                    div class="divide-y" {
+                        @for app in &apps {
+                            div class="py-3 flex items-center justify-between gap-4" {
+                                div {
+                                    p class="font-medium flex items-center gap-2" { (app.display_name) @if app.requires_entitlement { (badge("default", "Restricted")) } }
+                                    p class="text-xs text-muted-foreground" { (app.slug) }
+                                }
+                                form method="post" action=(format!("/admin/applications/{}/restricted-toggle", app.slug)) {
+                                    input type="hidden" name="value" value=(if app.requires_entitlement { "false" } else { "true" });
+                                    button type="submit" class=(button_class("outline", "sm", "")) { @if app.requires_entitlement { "Open" } @else { "Restrict" } }
+                                }
+                            }
+                        }
+                        @if apps.is_empty() { p class="text-center text-muted-foreground py-8" { "No applications" } }
+                    }
+                }
+            }
+        }
+    };
+    admin_response(
+        &c,
+        &user,
+        "/admin/entitlements",
+        "Entitlements · Bunyip",
+        content,
+    )
+}
+
+#[derive(Deserialize)]
+pub struct RestrictedForm {
+    pub value: String,
+}
+pub async fn set_app_restricted(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    Form(f): Form<RestrictedForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let requires_entitlement = f.value == "true";
+    let _ = admin_api::set_application_restricted(
+        &st.api,
+        c.forward.as_deref(),
+        &slug,
+        requires_entitlement,
+    )
+    .await;
+    redirect_cookies("/admin/entitlements", &c.set_cookies)
+}
+
+pub async fn user_entitlements(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<String>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let fwd = c.forward.as_deref();
+    let granted: Vec<UserEntitlement> = admin_api::list_user_entitlements(&st.api, fwd, &user_id)
+        .await
+        .unwrap_or_default();
+    let apps = admin_api::applications(&st.api, fwd)
+        .await
+        .unwrap_or_default();
+
+    let content = html! {
+        div class="space-y-6" {
+            div {
+                h1 class="text-3xl font-bold" { "User Entitlements" }
+                p class="mt-2 text-muted-foreground" { "Grant or revoke per-product access for this user." }
+                p class="mt-1 text-xs text-muted-foreground" { a href="/admin/users" class="hover:underline" { "Back to users" } }
+            }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Granted Entitlements" } }
+                div class="p-6 pt-0" {
+                    div class="divide-y" {
+                        @for e in &granted {
+                            div class="flex items-center justify-between py-3" {
+                                div {
+                                    p class="font-medium flex items-center gap-2" { (e.display_name) (badge("outline", &e.source)) }
+                                    p class="text-xs text-muted-foreground" { (e.slug) " · granted " (relative_time(&e.granted_at)) }
+                                }
+                            }
+                        }
+                        @if granted.is_empty() { p class="text-center text-muted-foreground py-8" { "No entitlements granted" } }
+                    }
+                }
+            }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "All Products" } p class="text-sm text-muted-foreground" { "Grant or revoke any product for this user." } }
+                div class="p-6 pt-0" {
+                    div class="divide-y" {
+                        @for app in &apps {
+                            @let has = granted.iter().any(|e| e.slug == app.slug);
+                            div class="py-3 flex items-center justify-between gap-4" {
+                                div {
+                                    p class="font-medium flex items-center gap-2" { (app.display_name) @if app.requires_entitlement { (badge("default", "Restricted")) } @if has { (badge("outline", "Granted")) } }
+                                    p class="text-xs text-muted-foreground" { (app.slug) }
+                                }
+                                @if has {
+                                    form method="post" action=(format!("/admin/users/{}/entitlements/revoke", user_id)) {
+                                        input type="hidden" name="slug" value=(app.slug);
+                                        button type="submit" class=(button_class("outline", "sm", "")) { "Revoke" }
+                                    }
+                                } @else {
+                                    form method="post" action=(format!("/admin/users/{}/entitlements/grant", user_id)) {
+                                        input type="hidden" name="slug" value=(app.slug);
+                                        button type="submit" class=(button_class("outline", "sm", "")) { "Grant" }
+                                    }
+                                }
+                            }
+                        }
+                        @if apps.is_empty() { p class="text-center text-muted-foreground py-8" { "No applications" } }
+                    }
+                }
+            }
+        }
+    };
+    admin_response(
+        &c,
+        &user,
+        "/admin/users",
+        "User Entitlements · Bunyip",
+        content,
+    )
+}
+
+#[derive(Deserialize)]
+pub struct SlugForm {
+    pub slug: String,
+}
+pub async fn grant_user_entitlement_h(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<String>,
+    Form(f): Form<SlugForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ =
+        admin_api::grant_user_entitlement(&st.api, c.forward.as_deref(), &user_id, &f.slug).await;
+    redirect_cookies(
+        &format!("/admin/users/{user_id}/entitlements"),
+        &c.set_cookies,
+    )
+}
+pub async fn revoke_user_entitlement_h(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<String>,
+    Form(f): Form<SlugForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ =
+        admin_api::revoke_user_entitlement(&st.api, c.forward.as_deref(), &user_id, &f.slug).await;
+    redirect_cookies(
+        &format!("/admin/users/{user_id}/entitlements"),
+        &c.set_cookies,
+    )
 }
 
 // ===========================================================================
 // Tier settings
 // ===========================================================================
 
-pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
-    let cfg = admin_api::tier_config(&st.api, c.forward.as_deref()).await.ok();
+/// Upper bounds for tier-settings fields. Slots and trial days are i64 with no
+/// business meaning beyond these caps; rejecting larger input keeps obvious
+/// typos and overflow probes out of the config.
+const MAX_TIER_SLOTS: i64 = 1_000_000;
+const MAX_TRIAL_DAYS: i64 = 3_650;
 
-    let content = html! {
+/// Field values shown in the tier-settings form. Kept as strings so a failed
+/// save can echo back exactly what the admin typed, including junk that did not
+/// parse as an integer.
+struct TierFormValues {
+    lifetime_slots: String,
+    early_adopter_slots: String,
+    early_adopter_trial_days: String,
+    standard_trial_days: String,
+    // BUNYIP-122: Stripe catalog IDs echoed back on a failed save so the admin
+    // does not lose what they typed when a numeric field fails validation.
+    free_price_id: String,
+    early_adopter_price_id: String,
+    standard_price_id: String,
+    lifetime_product_id: String,
+    early_adopter_product_id: String,
+    standard_product_id: String,
+}
+
+impl TierFormValues {
+    fn from_config(c: &crate::api::types::TierConfigResponse) -> Self {
+        TierFormValues {
+            lifetime_slots: c.lifetime_slots.to_string(),
+            early_adopter_slots: c.early_adopter_slots.to_string(),
+            early_adopter_trial_days: c.early_adopter_trial_days.to_string(),
+            standard_trial_days: c.standard_trial_days.to_string(),
+            free_price_id: c.free_price_id.clone().unwrap_or_default(),
+            early_adopter_price_id: c.early_adopter_price_id.clone().unwrap_or_default(),
+            standard_price_id: c.standard_price_id.clone().unwrap_or_default(),
+            lifetime_product_id: c.lifetime_product_id.clone().unwrap_or_default(),
+            early_adopter_product_id: c.early_adopter_product_id.clone().unwrap_or_default(),
+            standard_product_id: c.standard_product_id.clone().unwrap_or_default(),
+        }
+    }
+}
+
+/// Parse one tier-settings field: require a base-10 integer in `[0, max]`.
+/// Returns a user-facing message naming the field on failure.
+fn parse_tier_field(raw: &str, label: &str, max: i64) -> Result<i64, String> {
+    let n: i64 = raw
+        .trim()
+        .parse()
+        .map_err(|_| format!("{label} must be a whole number."))?;
+    if n < 0 {
+        return Err(format!("{label} must be zero or greater."));
+    }
+    if n > max {
+        return Err(format!("{label} must be at most {max}."));
+    }
+    Ok(n)
+}
+
+fn tier_settings_content(
+    cfg: Option<&crate::api::types::TierConfigResponse>,
+    values: &TierFormValues,
+    error: Option<&str>,
+) -> Markup {
+    html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Tier Settings" } p class="mt-2 text-muted-foreground" { "Configure pricing tiers, trials, and slot limits." } }
             @match cfg {
@@ -401,27 +3104,208 @@ pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Re
                     div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Tiers & Slots" } p class="text-sm text-muted-foreground" { (c.lifetime_slots_used) " lifetime and " (c.early_adopter_slots_used) " early-adopter slots used." } }
                     div class="p-6 pt-0" {
                         form method="post" action="/admin/tier-settings" class="space-y-4 max-w-md" {
-                            div class="space-y-2" { label class="text-sm font-medium" { "Lifetime slots" } input name="lifetime_slots" type="number" value=(c.lifetime_slots) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter slots" } input name="early_adopter_slots" type="number" value=(c.early_adopter_slots) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter trial days" } input name="early_adopter_trial_days" type="number" value=(c.early_adopter_trial_days) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Standard trial days" } input name="standard_trial_days" type="number" value=(c.standard_trial_days) class=(dashboard_input()); }
+                            @if let Some(e) = error { (error_box(e)) }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Lifetime slots" } input name="lifetime_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.lifetime_slots) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter slots" } input name="early_adopter_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.early_adopter_slots) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter trial days" } input name="early_adopter_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.early_adopter_trial_days) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Standard trial days" } input name="standard_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.standard_trial_days) class=(dashboard_input()); }
+                            // BUNYIP-122: surface the Stripe price + product
+                            // IDs so admins can wire each tier to its Stripe
+                            // catalog row from this page. Blank submissions
+                            // leave the persisted value untouched (the API
+                            // treats empty string as "no change"); explicit
+                            // empty-by-clear is left for v2 once the API
+                            // grows a tri-state shape. Values echo the
+                            // submitted input so a failed save keeps them.
+                            div class="mt-2 pt-4 border-t border-border space-y-1" {
+                                p class="text-sm font-semibold" { "Stripe catalog (free / lifetime tier)" }
+                            }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Free price ID" } input name="free_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.free_price_id) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Lifetime product ID" } input name="lifetime_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.lifetime_product_id) class=(dashboard_input()); }
+                            div class="mt-2 pt-4 border-t border-border space-y-1" {
+                                p class="text-sm font-semibold" { "Stripe catalog (early adopter tier)" }
+                            }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter price ID" } input name="early_adopter_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.early_adopter_price_id) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter product ID" } input name="early_adopter_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.early_adopter_product_id) class=(dashboard_input()); }
+                            div class="mt-2 pt-4 border-t border-border space-y-1" {
+                                p class="text-sm font-semibold" { "Stripe catalog (standard tier)" }
+                            }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Standard price ID" } input name="standard_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.standard_price_id) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Standard product ID" } input name="standard_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.standard_product_id) class=(dashboard_input()); }
                             button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
                         }
                     }
                 },
             }
         }
+    }
+}
+
+pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
     };
-    admin_response(&c, &user, "/admin/tier-settings", "Tier settings · Bunyip", content)
+    let cfg = admin_api::tier_config(&st.api, c.forward.as_deref())
+        .await
+        .ok();
+    let values = cfg
+        .as_ref()
+        .map(TierFormValues::from_config)
+        .unwrap_or_else(|| TierFormValues {
+            lifetime_slots: String::new(),
+            early_adopter_slots: String::new(),
+            early_adopter_trial_days: String::new(),
+            standard_trial_days: String::new(),
+            free_price_id: String::new(),
+            early_adopter_price_id: String::new(),
+            standard_price_id: String::new(),
+            lifetime_product_id: String::new(),
+            early_adopter_product_id: String::new(),
+            standard_product_id: String::new(),
+        });
+    let content = tier_settings_content(cfg.as_ref(), &values, None);
+    admin_response(
+        &c,
+        &user,
+        "/admin/tier-settings",
+        "Tier settings · Bunyip",
+        content,
+    )
 }
 
 #[derive(Deserialize)]
-pub struct TierForm { pub lifetime_slots: i64, pub early_adopter_slots: i64, pub early_adopter_trial_days: i64, pub standard_trial_days: i64 }
-pub async fn tier_settings_save(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<TierForm>) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
-    let body = json!({ "lifetime_slots": f.lifetime_slots, "early_adopter_slots": f.early_adopter_slots, "early_adopter_trial_days": f.early_adopter_trial_days, "standard_trial_days": f.standard_trial_days });
-    let _ = admin_api::update_tier_config(&st.api, c.forward.as_deref(), body).await;
-    redirect("/admin/tier-settings")
+pub struct TierForm {
+    // BUNYIP-111: kept as raw strings so a non-integer submission can be
+    // echoed back and re-validated inline instead of failing Form extraction
+    // with a bare 422.
+    #[serde(default)]
+    pub lifetime_slots: String,
+    #[serde(default)]
+    pub early_adopter_slots: String,
+    #[serde(default)]
+    pub early_adopter_trial_days: String,
+    #[serde(default)]
+    pub standard_trial_days: String,
+    // BUNYIP-122: Stripe price + product IDs. Optional - blank ("" after
+    // form parse) leaves the persisted value untouched. We send the field
+    // only when non-empty so the API's tri-state-by-omission semantics
+    // line up.
+    #[serde(default)]
+    pub free_price_id: String,
+    #[serde(default)]
+    pub early_adopter_price_id: String,
+    #[serde(default)]
+    pub standard_price_id: String,
+    #[serde(default)]
+    pub lifetime_product_id: String,
+    #[serde(default)]
+    pub early_adopter_product_id: String,
+    #[serde(default)]
+    pub standard_product_id: String,
+}
+pub async fn tier_settings_save(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<TierForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+
+    // Echo back exactly what was submitted (trimmed) if we have to re-render.
+    let values = TierFormValues {
+        lifetime_slots: f.lifetime_slots.trim().to_string(),
+        early_adopter_slots: f.early_adopter_slots.trim().to_string(),
+        early_adopter_trial_days: f.early_adopter_trial_days.trim().to_string(),
+        standard_trial_days: f.standard_trial_days.trim().to_string(),
+        free_price_id: f.free_price_id.trim().to_string(),
+        early_adopter_price_id: f.early_adopter_price_id.trim().to_string(),
+        standard_price_id: f.standard_price_id.trim().to_string(),
+        lifetime_product_id: f.lifetime_product_id.trim().to_string(),
+        early_adopter_product_id: f.early_adopter_product_id.trim().to_string(),
+        standard_product_id: f.standard_product_id.trim().to_string(),
+    };
+
+    // Validate the numeric fields and build the request body before calling the
+    // API, then surface any API-side rejection instead of discarding it. `?`
+    // short-circuits on the first bad field so the message names the offending
+    // input. The Stripe catalog IDs (BUNYIP-122) are sent only when non-empty
+    // and within the 255-char column limit, so an omitted field leaves the
+    // persisted value untouched.
+    let validated = (|| {
+        let mut body = serde_json::Map::new();
+        body.insert(
+            "lifetime_slots".into(),
+            json!(parse_tier_field(
+                &f.lifetime_slots,
+                "Lifetime slots",
+                MAX_TIER_SLOTS
+            )?),
+        );
+        body.insert(
+            "early_adopter_slots".into(),
+            json!(parse_tier_field(
+                &f.early_adopter_slots,
+                "Early-adopter slots",
+                MAX_TIER_SLOTS
+            )?),
+        );
+        body.insert(
+            "early_adopter_trial_days".into(),
+            json!(parse_tier_field(
+                &f.early_adopter_trial_days,
+                "Early-adopter trial days",
+                MAX_TRIAL_DAYS
+            )?),
+        );
+        body.insert(
+            "standard_trial_days".into(),
+            json!(parse_tier_field(
+                &f.standard_trial_days,
+                "Standard trial days",
+                MAX_TRIAL_DAYS
+            )?),
+        );
+        for (k, v) in [
+            ("free_price_id", &f.free_price_id),
+            ("early_adopter_price_id", &f.early_adopter_price_id),
+            ("standard_price_id", &f.standard_price_id),
+            ("lifetime_product_id", &f.lifetime_product_id),
+            ("early_adopter_product_id", &f.early_adopter_product_id),
+            ("standard_product_id", &f.standard_product_id),
+        ] {
+            let t = v.trim();
+            if !t.is_empty() && t.len() <= 255 {
+                body.insert(k.into(), json!(t));
+            }
+        }
+        Ok::<_, String>(serde_json::Value::Object(body))
+    })();
+
+    let error = match validated {
+        Ok(body) => {
+            match admin_api::update_tier_config(&st.api, c.forward.as_deref(), body).await {
+                Ok(()) => return redirect_cookies("/admin/tier-settings", &c.set_cookies),
+                Err(e) => e.user_message(),
+            }
+        }
+        Err(msg) => msg,
+    };
+
+    // Re-render the form inline with the error and the submitted values.
+    let cfg = admin_api::tier_config(&st.api, c.forward.as_deref())
+        .await
+        .ok();
+    let content = tier_settings_content(cfg.as_ref(), &values, Some(&error));
+    admin_response(
+        &c,
+        &user,
+        "/admin/tier-settings",
+        "Tier settings · Bunyip",
+        content,
+    )
 }
 
 // ===========================================================================
@@ -429,8 +3313,13 @@ pub async fn tier_settings_save(State(st): State<AppState>, headers: HeaderMap, 
 // ===========================================================================
 
 pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
-    let cfg = admin_api::stripe_config(&st.api, c.forward.as_deref()).await.ok();
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let cfg = admin_api::stripe_config(&st.api, c.forward.as_deref())
+        .await
+        .ok();
 
     let content = html! {
         div class="space-y-6" {
@@ -455,20 +3344,230 @@ pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response 
 }
 
 #[derive(Deserialize)]
-pub struct StripeForm { #[serde(default)] pub secret_key: String, #[serde(default)] pub webhook_secret: String, pub app_tag: String }
-pub async fn stripe_save(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<StripeForm>) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await { Ok(v) => v, Err(r) => return r };
-    let mut body = json!({ "app_tag": f.app_tag });
-    if !f.secret_key.is_empty() { body["secret_key"] = json!(f.secret_key); }
-    if !f.webhook_secret.is_empty() { body["webhook_secret"] = json!(f.webhook_secret); }
-    let _ = admin_api::update_stripe_config(&st.api, c.forward.as_deref(), body).await;
-    redirect("/admin/stripe")
+pub struct StripeForm {
+    #[serde(default)]
+    pub secret_key: String,
+    #[serde(default)]
+    pub webhook_secret: String,
+    pub app_tag: String,
+}
+pub async fn stripe_save(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<StripeForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    // BUNYIP-117: validate at the edge. app_tag is bounded (200 chars
+    // covers any sane Stripe metadata key); the two secrets are format-
+    // checked against their Stripe-documented prefixes when present
+    // (`sk_` / `rk_` for secret keys, `whsec_` for webhook secrets).
+    // Empty inputs leave the persisted value untouched (the API treats
+    // omission as "no change"). Replaces the prior `let _ = ...` that
+    // swallowed API rejections so the operator now sees an inline error.
+    use crate::handlers::validate;
+    let render_error = |err: &str| -> Response { stripe_error_page(&c, &user, err) };
+    let app_tag = match validate::trim_bounded_opt(&f.app_tag, "App tag", 200) {
+        Ok(Some(t)) => t.to_string(),
+        Ok(None) => String::new(),
+        Err(msg) => return render_error(&msg),
+    };
+    let secret_key = f.secret_key.trim();
+    if !secret_key.is_empty() {
+        if !(secret_key.starts_with("sk_") || secret_key.starts_with("rk_")) {
+            return render_error("Secret key must start with 'sk_' or 'rk_'");
+        }
+        if secret_key.len() > 255 {
+            return render_error("Secret key must be 255 characters or fewer");
+        }
+    }
+    let webhook_secret = f.webhook_secret.trim();
+    if !webhook_secret.is_empty() {
+        if !webhook_secret.starts_with("whsec_") {
+            return render_error("Webhook secret must start with 'whsec_'");
+        }
+        if webhook_secret.len() > 255 {
+            return render_error("Webhook secret must be 255 characters or fewer");
+        }
+    }
+    let mut body = json!({ "app_tag": app_tag });
+    if !secret_key.is_empty() {
+        body["secret_key"] = json!(secret_key);
+    }
+    if !webhook_secret.is_empty() {
+        body["webhook_secret"] = json!(webhook_secret);
+    }
+    match admin_api::update_stripe_config(&st.api, c.forward.as_deref(), body).await {
+        Ok(()) => redirect_cookies("/admin/stripe", &c.set_cookies),
+        Err(e) => render_error(&e.user_message()),
+    }
 }
 
-fn urlenc(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b { b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char), b' ' => out.push('+'), _ => out.push_str(&format!("%{b:02X}")) }
+/// Re-render the Stripe settings page with the supplied inline error so a
+/// failed save surfaces context instead of the prior silent 200 + redirect.
+fn stripe_error_page(c: &AuthCtx, user: &User, err: &str) -> Response {
+    // We deliberately do NOT re-fetch the upstream Stripe config here -
+    // the failure path runs in a sync render context, mirroring the
+    // posture other admin save handlers take for their error surface.
+    let content = html! {
+        div class="space-y-6" {
+            div { h1 class="text-3xl font-bold" { "Stripe" } p class="mt-2 text-muted-foreground" { "Connect and configure Stripe billing." } }
+            (error_box(err))
+            p class="text-sm text-muted-foreground" { "Re-open the Stripe page to retry with the persisted values." }
+            a href="/admin/stripe" class=(button_class("default", "default", "")) { "Back to Stripe" }
+        }
+    };
+    admin_response(c, user, "/admin/stripe", "Stripe · Bunyip", content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_body_omits_empty_but_always_sends_forgejo_package() {
+        // Empty optional inputs are dropped so the backend keeps the existing
+        // column; forgejo_package is always present as the clear-to-NULL sentinel.
+        let f = DistributionForm {
+            artifact_source: "release".into(),
+            forgejo_owner: "acme".into(),
+            ..Default::default()
+        };
+        let body = distribution_update_body(&f);
+        assert_eq!(body["artifact_source"], json!("release"));
+        assert_eq!(body["forgejo_owner"], json!("acme"));
+        assert_eq!(body["forgejo_package"], json!(""));
+        assert!(body.get("forgejo_repo").is_none());
+        assert!(body.get("oci_image_owner").is_none());
+        // Unchecked checkbox (absent field) is sent as false, not omitted, so
+        // the toggle works in both directions.
+        assert_eq!(body["is_hosted"], json!(false));
     }
-    out
+
+    #[test]
+    fn update_body_sends_set_forgejo_package_and_trims() {
+        let f = DistributionForm {
+            artifact_source: "generic_package".into(),
+            forgejo_package: "  mypkg  ".into(),
+            ..Default::default()
+        };
+        let body = distribution_update_body(&f);
+        assert_eq!(body["forgejo_package"], json!("mypkg"));
+    }
+
+    #[test]
+    fn update_body_clears_package_on_release_even_if_prefilled() {
+        // Switching a generic_package app to release must not re-send the stale
+        // package, which would fail backend validation.
+        let f = DistributionForm {
+            artifact_source: "release".into(),
+            forgejo_package: "leftover-pkg".into(),
+            is_hosted: "true".into(),
+            ..Default::default()
+        };
+        let body = distribution_update_body(&f);
+        assert_eq!(body["forgejo_package"], json!(""));
+        assert_eq!(body["is_hosted"], json!(true));
+    }
+
+    #[test]
+    fn create_body_requires_identity_and_omits_empty_package() {
+        // A new row has nothing to clear, so an empty forgejo_package is omitted
+        // (an empty string would fail backend non-empty validation).
+        let f = CreateAppForm {
+            name: "Mokosh".into(),
+            slug: "mokosh".into(),
+            display_name: "Mokosh".into(),
+            container_name: "mokosh".into(),
+            ..Default::default()
+        };
+        let body = create_app_body(&f).expect("create_app_body");
+        assert_eq!(body["name"], json!("Mokosh"));
+        assert_eq!(body["slug"], json!("mokosh"));
+        assert_eq!(body["display_name"], json!("Mokosh"));
+        assert_eq!(body["container_name"], json!("mokosh"));
+        assert!(body.get("forgejo_package").is_none());
+        assert!(body.get("forgejo_owner").is_none());
+        // Unchecked "Hosted app" creates a catalog-only product (is_hosted=false)
+        // instead of inheriting the DB default of true.
+        assert_eq!(body["is_hosted"], json!(false));
+    }
+
+    #[test]
+    fn create_body_sends_generic_package_and_hosted_flag() {
+        let f = CreateAppForm {
+            name: "Mokosh".into(),
+            slug: "mokosh".into(),
+            display_name: "Mokosh".into(),
+            container_name: "mokosh".into(),
+            artifact_source: "generic_package".into(),
+            forgejo_package: "mokosh-cli".into(),
+            is_hosted: "true".into(),
+            ..Default::default()
+        };
+        let body = create_app_body(&f).expect("create_app_body");
+        assert_eq!(body["forgejo_package"], json!("mokosh-cli"));
+        assert_eq!(body["is_hosted"], json!(true));
+    }
+
+    #[test]
+    fn create_body_rejects_junk_slug_and_oversize_name() {
+        // BUNYIP-112: junk slug and over-length name surface as inline edge
+        // errors, not raw 500s on a DB cap or silent acceptance.
+        let mut f = CreateAppForm {
+            name: "Mokosh".into(),
+            slug: " $$$ ".into(),
+            display_name: "Mokosh".into(),
+            container_name: "mokosh".into(),
+            ..Default::default()
+        };
+        assert!(create_app_body(&f).is_err());
+        f.slug = "mokosh".into();
+        f.name = "a".repeat(300);
+        assert!(create_app_body(&f).is_err());
+    }
+
+    #[test]
+    fn update_body_sends_detail_fields_trimmed_and_omits_empty() {
+        // The descriptive fields are now editable from the admin form; set ones
+        // are sent (trimmed) and blank ones are omitted so the backend keeps the
+        // existing column value.
+        let f = DistributionForm {
+            description: "  A great app  ".into(),
+            icon_url: "https://example.com/icon.png".into(),
+            maintenance_message: "Back at 5pm".into(),
+            ..Default::default()
+        };
+        let body = distribution_update_body(&f);
+        assert_eq!(body["description"], json!("A great app"));
+        assert_eq!(body["icon_url"], json!("https://example.com/icon.png"));
+        assert_eq!(body["maintenance_message"], json!("Back at 5pm"));
+        assert!(body.get("subdomain").is_none());
+        assert!(body.get("version").is_none());
+        assert!(body.get("source_code_url").is_none());
+    }
+
+    #[test]
+    fn create_body_sends_detail_fields() {
+        let f = CreateAppForm {
+            name: "Mokosh".into(),
+            slug: "mokosh".into(),
+            display_name: "Mokosh".into(),
+            container_name: "mokosh".into(),
+            description: "Identity platform".into(),
+            version: "1.2.3".into(),
+            source_code_url: "https://dev.a8n.run/psa-systems/mokosh".into(),
+            ..Default::default()
+        };
+        let body = create_app_body(&f).expect("create_app_body");
+        assert_eq!(body["description"], json!("Identity platform"));
+        assert_eq!(body["version"], json!("1.2.3"));
+        assert_eq!(
+            body["source_code_url"],
+            json!("https://dev.a8n.run/psa-systems/mokosh")
+        );
+        assert!(body.get("icon_url").is_none());
+    }
 }

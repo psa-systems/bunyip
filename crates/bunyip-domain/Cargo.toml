@@ -7,9 +7,16 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 # Generic kernel (errors, responses, validation, middleware, primitive services).
 dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", branch = "main" }
+# Generic Forgejo binary-distribution engine (artifact metadata, asset cache,
+# rate limiting). Bunyip implements its store traits over Postgres.
+dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", branch = "main" }
+async-trait = "0.1"
 
 # Web framework + multipart.
 actix-web = "4"
@@ -49,14 +56,13 @@ tera = "1"
 lazy_static = "1.4"
 
 # HTTP client / IO.
-reqwest = { version = "0.11", features = ["json", "stream"] }
-tempfile = "3"
+# (The Forgejo client, metadata/asset caches, and download limiter now come
+# from dunite-download; reqwest/url stay for the webhook + Stripe services.)
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 url = "2"
 urlencoding = "2"
 tokio = { version = "1", features = ["full", "signal"] }
-tokio-util = { version = "0.7", features = ["codec"] }
 bytes = "1"
-moka = { version = "0.12", features = ["future"] }
 
 # Database.
 sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "uuid", "chrono", "ipnetwork", "migrate"] }

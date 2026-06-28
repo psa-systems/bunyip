@@ -22,14 +22,18 @@ impl FeedbackStatus {
             FeedbackStatus::Closed => "closed",
         }
     }
+}
 
-    pub fn from_str(value: &str) -> Option<Self> {
+impl std::str::FromStr for FeedbackStatus {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
-            "new" => Some(Self::New),
-            "reviewed" => Some(Self::Reviewed),
-            "responded" => Some(Self::Responded),
-            "closed" => Some(Self::Closed),
-            _ => None,
+            "new" => Ok(Self::New),
+            "reviewed" => Ok(Self::Reviewed),
+            "responded" => Ok(Self::Responded),
+            "closed" => Ok(Self::Closed),
+            _ => Err(()),
         }
     }
 }
@@ -68,19 +72,6 @@ pub struct RespondToFeedback {
     pub status: FeedbackStatus,
     pub admin_response: String,
     pub responded_by: Uuid,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CreateFeedbackRequest {
-    pub name: Option<String>,
-    pub email: Option<String>,
-    pub subject: Option<String>,
-    #[serde(default)]
-    pub tags: Vec<String>,
-    pub message: String,
-    pub page_path: Option<String>,
-    #[serde(default)]
-    pub website: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,6 +122,11 @@ pub struct AdminFeedbackSummary {
     pub subject: Option<String>,
     pub tags: Vec<String>,
     pub message_excerpt: String,
+    /// Path the submitter was on when they opened the feedback form, so
+    /// admins triaging the list can see context without opening a detail
+    /// view. `None` when the submission predates the field; `"/feedback"`
+    /// (the default) is suppressed by the renderer to avoid noise.
+    pub page_path: Option<String>,
     pub status: String,
     pub created_at: DateTime<Utc>,
     pub responded_at: Option<DateTime<Utc>>,
@@ -188,6 +184,7 @@ impl Feedback {
             subject: self.subject.clone(),
             tags: self.tags.clone(),
             message_excerpt: Self::excerpt(&self.message),
+            page_path: self.page_path.clone(),
             status: self.status.clone(),
             created_at: self.created_at,
             responded_at: self.responded_at,
@@ -218,6 +215,7 @@ impl Feedback {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     // -- FeedbackStatus --
 
@@ -231,20 +229,20 @@ mod tests {
 
     #[test]
     fn feedback_status_from_str() {
-        assert_eq!(FeedbackStatus::from_str("new"), Some(FeedbackStatus::New));
+        assert_eq!(FeedbackStatus::from_str("new"), Ok(FeedbackStatus::New));
         assert_eq!(
             FeedbackStatus::from_str("reviewed"),
-            Some(FeedbackStatus::Reviewed)
+            Ok(FeedbackStatus::Reviewed)
         );
         assert_eq!(
             FeedbackStatus::from_str("responded"),
-            Some(FeedbackStatus::Responded)
+            Ok(FeedbackStatus::Responded)
         );
         assert_eq!(
             FeedbackStatus::from_str("closed"),
-            Some(FeedbackStatus::Closed)
+            Ok(FeedbackStatus::Closed)
         );
-        assert_eq!(FeedbackStatus::from_str("invalid"), None);
+        assert_eq!(FeedbackStatus::from_str("invalid"), Err(()));
     }
 
     // -- Feedback::mask_email --

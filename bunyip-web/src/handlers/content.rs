@@ -1,17 +1,24 @@
 //! Content + marketing pages: pricing, our story, terms, privacy, feedback.
 
-use axum::extract::State;
+use axum::extract::{Multipart, Query, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
-use axum::Form;
 use maud::{html, Markup};
 use serde::Deserialize;
 
 use crate::api::auth as auth_api;
-use crate::api::calls::{self, FeedbackInput};
+use crate::api::calls::{self, FeedbackAttachment, FeedbackInput};
+use crate::api::types::SubscriptionTier;
+use crate::handlers::dashboard::tier_name;
 use crate::handlers::{public_ctx, public_response};
 use crate::views::ui::{button_class, icon};
 use crate::web::AppState;
+
+/// Displayed at the top of /terms and /privacy. Bump this string the SAME
+/// COMMIT you review the policy body for accuracy - do not bump it reflexively
+/// to make the page look fresh. The bump is a signal to anyone reading the
+/// commit that the policy text was re-read and confirmed current.
+const POLICY_LAST_UPDATED: &str = "June 2026";
 
 // --- pricing ----------------------------------------------------------------
 
@@ -23,8 +30,12 @@ const PERSONAL: [&str; 6] = [
     "In-app feedback widget",
     "Cancel anytime",
 ];
+// First bullet phrasing is intentionally tier-name-agnostic ("the personal
+// plan" instead of "Starter") so a rename of `SubscriptionTier::Standard`
+// via the canonical `tier_name` helper does not desync this feature list
+// from the card heading above it.
 const BUSINESS: [&str; 6] = [
-    "Everything in Starter",
+    "Everything in the personal plan",
     "Unlimited members and orgs",
     "Org switching and role management",
     "Admin console and audit logs",
@@ -32,8 +43,21 @@ const BUSINESS: [&str; 6] = [
     "Invoice billing",
 ];
 
-fn pricing_card(title: &str, desc: &str, price: &str, features: &[&str], highlight: bool, stripe: bool, cta_href: &str, cta_label: &str) -> Markup {
-    let border = if highlight { "w-full border-2 border-primary relative" } else { "w-full border-primary" };
+fn pricing_card(
+    title: &str,
+    desc: &str,
+    price: &str,
+    features: &[&str],
+    highlight: bool,
+    stripe: bool,
+    cta_href: &str,
+    cta_label: &str,
+) -> Markup {
+    let border = if highlight {
+        "w-full border-2 border-primary relative"
+    } else {
+        "w-full border-primary"
+    };
     html! {
         div class={ "rounded-lg border bg-card text-card-foreground shadow-sm " (border) } {
             div class="flex flex-col space-y-1.5 p-6 text-center" {
@@ -66,11 +90,22 @@ fn pricing_card(title: &str, desc: &str, price: &str, features: &[&str], highlig
 
 pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (c, apps) = public_ctx(&st, &headers).await;
-    let stripe = auth_api::setup_status(&st.api).await.map(|s| s.stripe_enabled).unwrap_or(true);
+    let stripe = auth_api::setup_status(&st.api)
+        .await
+        .map(|s| s.stripe_enabled)
+        .unwrap_or(true);
     let show_business = st.cfg.show_business_pricing;
     let signed_in = c.is_signed_in();
-    let (cta_href, cta_label) = if signed_in { ("/membership", "Go to Membership") } else { ("/register", "Get Started") };
-    let grid = if show_business { "md:grid-cols-2 max-w-4xl" } else { "max-w-md" };
+    let (cta_href, cta_label) = if signed_in {
+        ("/membership", "Go to Membership")
+    } else {
+        ("/register", "Get Started")
+    };
+    let grid = if show_business {
+        "md:grid-cols-2 max-w-4xl"
+    } else {
+        "max-w-md"
+    };
 
     let content = html! {
         div class="py-20" {
@@ -80,7 +115,12 @@ pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response
                     p class="mt-4 text-lg text-muted-foreground" { "The business layer for your PSA. Start free for 14 days, no credit card required." }
                 }
                 div class={ "mt-16 grid gap-8 mx-auto " (grid) } {
-                    (pricing_card("Starter", "For a single team getting set up", "$3", &PERSONAL, false, stripe, cta_href, cta_label))
+                    // Route the personal-tier title through tier_name so this
+                    // marketing page and the in-app Membership / Settings
+                    // labels are byte-identical. Renaming the tier (e.g.
+                    // "Standard" -> "Starter") is a one-line change in
+                    // `handlers::dashboard::tier_name`.
+                    (pricing_card(tier_name(&SubscriptionTier::Standard), "For a single team getting set up", "$3", &PERSONAL, false, stripe, cta_href, cta_label))
                     @if show_business {
                         (pricing_card("Business", "For MSPs running multiple orgs", "$15", &BUSINESS, true, stripe, cta_href, cta_label))
                     }
@@ -120,6 +160,84 @@ pub async fn our_story(State(st): State<AppState>, headers: HeaderMap) -> Respon
     public_response(&st, &c, &apps, "Our Story · Bunyip", true, content)
 }
 
+// --- roadmap ----------------------------------------------------------------
+
+// Seed roadmap items, grouped by status bucket. Each entry is a (title,
+// one-line description) pair. Editing the page is a one-line change here,
+// the same shape as PERSONAL / BUSINESS above. Placeholder content until a
+// data-backed source lands (see BUNYIP-136); keep copy in American English
+// with no em-dashes.
+const ROADMAP_SHIPPING_SOON: [(&str, &str); 2] = [
+    (
+        "Single sign-on hardening",
+        "Tighter session rotation and trusted-device controls across Bunyip and Mokosh.",
+    ),
+    (
+        "Org switching polish",
+        "Faster switching between orgs with clearer role and membership context.",
+    ),
+];
+const ROADMAP_PLANNED: [(&str, &str); 2] = [
+    (
+        "Org-level billing roles",
+        "Delegate billing and invoices to a finance contact without granting full admin.",
+    ),
+    (
+        "Usage and audit exports",
+        "Download audit logs and membership history as CSV.",
+    ),
+];
+const ROADMAP_EXPLORING: [(&str, &str); 2] = [
+    (
+        "Self-serve org migration",
+        "Move members and entitlements between orgs without support involvement.",
+    ),
+    (
+        "Public status page",
+        "A live view of platform availability and incident history.",
+    ),
+];
+
+fn roadmap_section(title: &str, blurb: &str, items: &[(&str, &str)]) -> Markup {
+    html! {
+        section {
+            h2 class="text-2xl font-semibold mb-2" { (title) }
+            p class="text-muted-foreground mb-6" { (blurb) }
+            div class="grid gap-4 md:grid-cols-2" {
+                @for (name, desc) in items {
+                    div class="rounded-lg border bg-card text-card-foreground shadow-sm p-6" {
+                        div class="flex items-start gap-3" {
+                            (icon("check", "h-5 w-5 text-primary flex-shrink-0 mt-0.5"))
+                            div {
+                                h3 class="font-semibold leading-none tracking-tight" { (name) }
+                                p class="mt-2 text-sm text-muted-foreground" { (desc) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub async fn roadmap(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (c, apps) = public_ctx(&st, &headers).await;
+    let content = html! {
+        div class="container max-w-4xl py-12" {
+            div class="mb-12" {
+                h1 class="text-4xl font-bold mb-4" { "Roadmap" }
+                p class="text-lg text-muted-foreground" { "What we are working on and what is coming next. This is a living view, so expect it to change as we ship." }
+            }
+            div class="space-y-12" {
+                (roadmap_section("Shipping soon", "In progress and landing in the near term.", &ROADMAP_SHIPPING_SOON))
+                (roadmap_section("Planned", "Committed work that has not started yet.", &ROADMAP_PLANNED))
+                (roadmap_section("Exploring", "Ideas we are considering. No commitment yet.", &ROADMAP_EXPLORING))
+            }
+        }
+    };
+    public_response(&st, &c, &apps, "Roadmap · Bunyip", true, content)
+}
+
 // --- legal ------------------------------------------------------------------
 
 fn legal_p(title: &str, body: Markup) -> Markup {
@@ -140,7 +258,7 @@ pub async fn terms(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let content = html! {
         div class="container max-w-4xl py-12" {
             h1 class="text-4xl font-bold mb-8" { "Terms of Service" }
-            p class="text-muted-foreground mb-8" { "Last updated: January 2025" }
+            p class="text-muted-foreground mb-8" { "Last updated: " (POLICY_LAST_UPDATED) }
             div class="max-w-none space-y-8" {
                 (legal_p("1. Acceptance of Terms", html! { "By accessing or using " (d) " (\"the Service\"), you agree to be bound by these Terms of Service. If you do not agree to these terms, please do not use the Service." }))
                 (legal_p("2. Description of Service", html! { (d) " provides a membership-based platform offering access to developer productivity tools." }))
@@ -173,7 +291,7 @@ pub async fn privacy(State(st): State<AppState>, headers: HeaderMap) -> Response
     let content = html! {
         div class="container max-w-4xl py-12" {
             h1 class="text-4xl font-bold mb-8" { "Privacy Policy" }
-            p class="text-muted-foreground mb-8" { "Last updated: January 2025" }
+            p class="text-muted-foreground mb-8" { "Last updated: " (POLICY_LAST_UPDATED) }
             div class="max-w-none space-y-8" {
                 (legal_p("1. Introduction", html! { "This Privacy Policy describes how " (d) " collects, uses, and protects your personal information when you use our services." }))
                 (legal_ul("2. Information We Collect", &[
@@ -207,16 +325,61 @@ pub async fn privacy(State(st): State<AppState>, headers: HeaderMap) -> Response
 
 const FEEDBACK_TAGS: [&str; 4] = ["Bug", "Feature", "Flow", "Idea"];
 
-fn feedback_form(submitted: bool, error: Option<&str>) -> Markup {
+const FEEDBACK_DEFAULT_PATH: &str = "/feedback";
+
+/// Mirrors bunyip-api's per-form limits (`bunyip-api/src/handlers/feedback.rs:29-35`
+/// and lines 151, 161). Enforced upstream of the multipart -> reqwest
+/// hop so the user sees an inline error banner rather than the API's
+/// bare 422 text after upload completes.
+const FEEDBACK_MAX_ATTACHMENTS: usize = 3;
+const FEEDBACK_MAX_ATTACHMENT_BYTES: usize = 5 * 1024 * 1024;
+const FEEDBACK_ALLOWED_MIMES: [&str; 5] = [
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+    "text/plain",
+];
+/// Per-route axum body limit on `/feedback`. The default is 2 MB and
+/// would reject any reasonable file. Cap at 3 files × 5 MB + ~1 MB of
+/// form overhead, rounded up. Applied only to this route in
+/// `main.rs`; the rest of the app stays on the default.
+pub const FEEDBACK_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
+
+/// Validate a candidate `page_path` value (from a `?from=` query or from a
+/// previously-rendered hidden form field) before round-tripping it back into
+/// the markup. Trims, then requires it to start with `/` and stay under the
+/// API's 255-char limit (matches the validation at
+/// `bunyip-api/src/handlers/feedback.rs:223`). Anything else is treated as
+/// missing - cheap open-redirect-style guard for the hidden field.
+fn sanitize_page_path(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.starts_with('/') && trimmed.len() <= 255 {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+#[derive(Deserialize)]
+pub struct FeedbackQuery {
+    /// Path the visitor came from when they opened the feedback page (e.g.
+    /// from the floating launcher or a deep link). Rendered as a hidden
+    /// `page_path` input so the submit round-trips it to the API.
+    #[serde(default)]
+    pub from: Option<String>,
+}
+
+fn feedback_form(submitted: bool, error: Option<&str>, page_path: Option<&str>) -> Markup {
     html! {
         div class="relative overflow-hidden py-20" {
             div class="container relative" {
                 div class="mx-auto max-w-3xl text-center" {
-                    div class="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-4 py-1.5 text-sm text-primary" {
+                    div class="inline-flex items-center gap-2 rounded-full bg-bunyip-reed-100 dark:bg-bunyip-reed-800 px-4 py-1.5 text-sm font-medium text-bunyip-reed-800 dark:text-bunyip-reed-100" {
                         (icon("smile-plus", "h-4 w-4")) "Help shape what ships next"
                     }
                     h1 class="mt-6 text-4xl font-bold tracking-tight sm:text-5xl" {
-                        "Tell us what would make " span class="text-gradient bg-gradient-to-r from-primary via-indigo-500 to-teal-400" { "Bunyip" } " better."
+                        "Tell us what would make " span class="text-bunyip-reed-900 dark:text-bunyip-reed-50" { "Bunyip" } " better."
                     }
                     p class="mx-auto mt-4 max-w-2xl text-lg text-muted-foreground" { "Share bugs, missing features, rough edges, or ideas. We read everything." }
                 }
@@ -232,12 +395,15 @@ fn feedback_form(submitted: bool, error: Option<&str>) -> Markup {
                         @if let Some(e) = error {
                             div class="mb-6 rounded-lg border border-destructive/50 p-4 text-sm text-destructive" { (e) }
                         }
-                        form method="post" action="/feedback" class="space-y-5" {
+                        // `enctype="multipart/form-data"` is required so the
+                        // file input below can carry binary file parts. The
+                        // form-handler reads via axum's Multipart extractor.
+                        form method="post" action="/feedback" enctype="multipart/form-data" class="space-y-5" {
                             div class="grid gap-5 md:grid-cols-2" {
-                                div class="grid gap-2" { label for="name" class="text-sm font-medium" { "Name" } input id="name" name="name" placeholder="Optional" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"; }
-                                div class="grid gap-2" { label for="email" class="text-sm font-medium" { "Email" } input id="email" name="email" type="email" placeholder="you@example.com" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"; }
+                                div class="grid gap-2" { label for="name" class="text-sm font-medium" { "Name" } input id="name" name="name" maxlength="100" placeholder="Optional" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"; }
+                                div class="grid gap-2" { label for="email" class="text-sm font-medium" { "Email" } input id="email" name="email" type="email" maxlength="254" placeholder="you@example.com" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"; }
                             }
-                            div class="grid gap-2" { label for="subject" class="text-sm font-medium" { "Subject" } input id="subject" name="subject" placeholder="Optional" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"; }
+                            div class="grid gap-2" { label for="subject" class="text-sm font-medium" { "Subject" } input id="subject" name="subject" maxlength="200" placeholder="Optional" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"; }
                             div class="grid gap-3" {
                                 label class="text-sm font-medium" { "Tags" }
                                 div class="flex flex-wrap gap-3" {
@@ -249,9 +415,19 @@ fn feedback_form(submitted: bool, error: Option<&str>) -> Markup {
                                 }
                             }
                             div class="hidden" { input name="website" autocomplete="off" tabindex="-1"; }
+                            @if let Some(p) = page_path {
+                                input type="hidden" name="page_path" value=(p);
+                            }
                             div class="grid gap-2" {
                                 label for="message" class="text-sm font-medium" { "Message" }
-                                textarea id="message" name="message" rows="7" required placeholder="What would you like to see improved?" class="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" {}
+                                textarea id="message" name="message" rows="7" required maxlength="16000" placeholder="What would you like to see improved?" class="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" {}
+                            }
+                            div class="grid gap-2" {
+                                label for="attachments" class="text-sm font-medium" { "Attachments " span class="text-muted-foreground font-normal" { "(optional)" } }
+                                input id="attachments" name="attachments" type="file" multiple
+                                    accept="image/png,image/jpeg,image/webp,image/gif,text/plain"
+                                    class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm file:mr-3 file:rounded file:border-0 file:bg-muted file:px-3 file:py-1 file:text-sm";
+                                p class="text-xs text-muted-foreground" { "PNG, JPEG, WebP, GIF, or plain text. Up to 3 files, 5 MB each." }
                             }
                             div class="flex justify-end" {
                                 button type="submit" class=(button_class("default", "default", "gap-2")) { "Send feedback" }
@@ -264,46 +440,187 @@ fn feedback_form(submitted: bool, error: Option<&str>) -> Markup {
     }
 }
 
-pub async fn feedback_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
+pub async fn feedback_get(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<FeedbackQuery>,
+) -> Response {
     let (c, apps) = public_ctx(&st, &headers).await;
-    public_response(&st, &c, &apps, "Feedback · Bunyip", false, feedback_form(false, None))
+    let from = q.from.as_deref().and_then(sanitize_page_path);
+    public_response(
+        &st,
+        &c,
+        &apps,
+        "Feedback · Bunyip",
+        false,
+        feedback_form(false, None, from.as_deref()),
+    )
 }
 
-#[derive(Deserialize)]
-pub struct FeedbackForm {
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub email: String,
-    #[serde(default)]
-    pub subject: String,
-    #[serde(default)]
-    pub message: String,
-    #[serde(default)]
-    pub website: String,
-    #[serde(default)]
-    pub tags: Vec<String>,
+/// Consume the multipart body into a [`FeedbackInput`].
+///
+/// On a per-form ceiling violation (too many files, oversize file,
+/// disallowed MIME) returns `Err(message)` so the caller can re-render
+/// the form with the standard inline error banner. Skips files
+/// produced by an empty input (the browser sends a zero-length
+/// `application/octet-stream` part for empty file slots), preserves
+/// repeated `tags` keys for the multi-checkbox row, sanitizes
+/// `page_path` the same way the previous `application/x-www-form-urlencoded`
+/// parser did, and tolerates unknown text fields silently.
+///
+/// Pure I/O error path: an underlying multipart read failure (likely
+/// a malformed body or a connection drop mid-upload) also becomes an
+/// inline `Err`, mirroring the BUNYIP-79 "graceful 422 -> inline"
+/// posture for the old text-only form.
+async fn read_feedback_multipart(multipart: &mut Multipart) -> Result<FeedbackInput, String> {
+    let mut input = FeedbackInput {
+        name: String::new(),
+        email: String::new(),
+        subject: String::new(),
+        message: String::new(),
+        tags: Vec::new(),
+        page_path: FEEDBACK_DEFAULT_PATH.into(),
+        website: String::new(),
+        attachments: Vec::new(),
+    };
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => return Err(format!("Could not read form: {e}")),
+        };
+        let field_name = field.name().map(str::to_string).unwrap_or_default();
+        let file_name = field.file_name().map(str::to_string);
+        let content_type = field.content_type().map(str::to_string);
+        let bytes = match field.bytes().await {
+            Ok(b) => b,
+            Err(e) => return Err(format!("Could not read field: {e}")),
+        };
+        if let Some(filename) = file_name {
+            // File field. The browser sends a zero-length part for
+            // every empty file input slot; skip those instead of
+            // turning them into a "0-byte file" the API would reject.
+            if bytes.is_empty() {
+                continue;
+            }
+            if bytes.len() > FEEDBACK_MAX_ATTACHMENT_BYTES {
+                return Err(format!(
+                    "Each attachment must be {} MB or smaller. \"{filename}\" exceeds the limit.",
+                    FEEDBACK_MAX_ATTACHMENT_BYTES / (1024 * 1024)
+                ));
+            }
+            if input.attachments.len() >= FEEDBACK_MAX_ATTACHMENTS {
+                return Err(format!(
+                    "Up to {FEEDBACK_MAX_ATTACHMENTS} attachments only."
+                ));
+            }
+            let mime = content_type.unwrap_or_else(|| "application/octet-stream".to_string());
+            if !FEEDBACK_ALLOWED_MIMES.contains(&mime.as_str()) {
+                return Err("Only PNG, JPEG, WebP, GIF, and plain text files are allowed.".into());
+            }
+            // Strip path separators - safe filename only. Matches the
+            // API's sanitization at `bunyip-api/src/handlers/feedback.rs:177-181`.
+            let safe = std::path::Path::new(&filename)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("attachment")
+                .to_string();
+            input.attachments.push(FeedbackAttachment {
+                filename: safe,
+                mime,
+                bytes: bytes.to_vec(),
+            });
+            continue;
+        }
+        let value = String::from_utf8_lossy(&bytes).to_string();
+        match field_name.as_str() {
+            "name" => input.name = value,
+            "email" => input.email = value,
+            "subject" => input.subject = value,
+            "message" => input.message = value,
+            "website" => input.website = value,
+            "page_path" => {
+                if let Some(p) = sanitize_page_path(&value) {
+                    input.page_path = p;
+                }
+            }
+            "tags" => {
+                let s = value.trim();
+                if !s.is_empty() {
+                    input.tags.push(s.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(input)
 }
 
-pub async fn feedback_post(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<FeedbackForm>) -> Response {
+pub async fn feedback_post(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> Response {
     let (c, apps) = public_ctx(&st, &headers).await;
     let cookie = c.forward.clone();
-    let input = FeedbackInput {
-        name: f.name,
-        email: f.email,
-        subject: f.subject,
-        message: f.message,
-        tags: f.tags,
-        page_path: "/feedback".into(),
-        website: f.website,
-    };
-    let (submitted, error) = if input.message.trim().is_empty() {
-        (false, Some("Please enter a message.".to_string()))
-    } else {
-        match calls::submit_feedback(&st.api, cookie.as_deref(), &input).await {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(e.user_message())),
+    let parsed = read_feedback_multipart(&mut multipart).await;
+    let (submitted, error, render_path) = match parsed {
+        Err(msg) => (false, Some(msg), None),
+        Ok(input) => {
+            // Round-trip the captured path on error redraw so the next submit
+            // attempt keeps the context (otherwise a typo on the message field
+            // would strip the `?from=` context after the first failed submit).
+            let render_path = if input.page_path == FEEDBACK_DEFAULT_PATH {
+                None
+            } else {
+                Some(input.page_path.clone())
+            };
+            // BUNYIP-115: web-edge validation. Bound each field to its DB
+            // VARCHAR cap (feedback.name VARCHAR(100), subject VARCHAR(200),
+            // email VARCHAR(255), message TEXT/64k cap below) and shape-check
+            // email. Over-length input used to hit the API and surface as a
+            // raw 500 when Postgres rejected the over-length value; malformed
+            // email round-tripped without complaint.
+            use crate::handlers::validate;
+            const MESSAGE_MAX: usize = 16_000;
+            let mut err: Option<String> = None;
+            if !input.name.trim().is_empty() {
+                if let Err(msg) = validate::trim_bounded(&input.name, "Name", 100) {
+                    err = Some(msg);
+                }
+            }
+            if err.is_none() && !input.email.trim().is_empty() {
+                if let Err(msg) = validate::email(&input.email, "Email") {
+                    err = Some(msg);
+                }
+            }
+            if err.is_none() && !input.subject.trim().is_empty() {
+                if let Err(msg) = validate::trim_bounded(&input.subject, "Subject", 200) {
+                    err = Some(msg);
+                }
+            }
+            if err.is_none() {
+                if input.message.trim().is_empty() {
+                    err = Some("Please enter a message.".to_string());
+                } else if input.message.len() > MESSAGE_MAX {
+                    err = Some(format!("Message must be {MESSAGE_MAX} characters or fewer"));
+                }
+            }
+            match err {
+                Some(msg) => (false, Some(msg), render_path),
+                None => match calls::submit_feedback(&st.api, cookie.as_deref(), &input).await {
+                    Ok(()) => (true, None, render_path),
+                    Err(e) => (false, Some(e.user_message()), render_path),
+                },
+            }
         }
     };
-    public_response(&st, &c, &apps, "Feedback · Bunyip", false, feedback_form(submitted, error.as_deref()))
+    public_response(
+        &st,
+        &c,
+        &apps,
+        "Feedback · Bunyip",
+        false,
+        feedback_form(submitted, error.as_deref(), render_path.as_deref()),
+    )
 }

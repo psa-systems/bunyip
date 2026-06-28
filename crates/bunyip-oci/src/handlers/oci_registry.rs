@@ -9,19 +9,32 @@ use std::sync::Arc;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use uuid::Uuid;
 
-use crate::errors::{AppError, OciError};
+use crate::errors::OciError;
 use crate::middleware::{extract_client_ip, OciBearerUser};
 use crate::models::oci::CachedManifest;
 use crate::models::{AuditAction, CreateAuditLog};
 use crate::repositories::{
-    ApplicationRepository, AuditLogRepository, OciBlobCacheRepository, OciPullDailyCountRepository,
+    ApplicationRepository, AuditLogRepository, EntitlementRepository, OciBlobCacheRepository,
+    OciPullDailyCountRepository,
 };
 use crate::services::{
-    BlobCache, ForgejoRegistryClient, ManifestCache, OciLimitDenial, OciLimiter, RegistryError,
+    BlobCache, BlobCacheError, ForgejoRegistryClient, ManifestCache, OciLimitDenial, OciLimiter,
+    RegistryError,
 };
 
 /// The blob cache, parameterised over Bunyip's Postgres blob-cache store.
 type AppBlobCache = BlobCache<OciBlobCacheRepository>;
+
+/// Resolve a manifest's content digest, computing the sha256 fallback over the
+/// raw bytes when the upstream response omitted a digest. Single source for
+/// both the member pull path and the admin cache-refresh path.
+pub(crate) fn resolve_manifest_digest(digest: String, bytes: &[u8]) -> String {
+    if digest.is_empty() {
+        format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+    } else {
+        digest
+    }
+}
 
 const DEFAULT_ACCEPT: &str = "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json";
 
@@ -70,6 +83,7 @@ pub async fn get_manifest(
     if !app.is_pullable() {
         return Err(OciError::NameUnknown);
     }
+    assert_entitled(pool.get_ref(), &req, &user, &app).await?;
     let pinned = app
         .pinned_image_tag
         .clone()
@@ -83,32 +97,68 @@ pub async fn get_manifest(
         return Err(OciError::ManifestUnknown);
     }
 
-    let guard = match limiter
-        .acquire(counter.get_ref().as_ref(), user.claims.sub)
-        .await
-        .map_err(|_| OciError::Internal)?
-    {
-        Ok(g) => g,
-        Err(OciLimitDenial::Concurrency) => {
-            audit_denied(pool.get_ref(), &req, &user, &app.id, "concurrency", None).await;
-            return Err(OciError::TooManyRequests {
-                retry_after_secs: None,
-            });
+    // Meter (daily pull cap + concurrency) only TAG-addressed manifest requests
+    // (BUNYIP-43). A logical `docker pull` resolves the tag (HEAD and/or GET by
+    // tag) and then fetches the platform manifest by DIGEST; counting the
+    // digest follow-ups made one multi-arch pull consume 3+ of the daily
+    // allowance (default 50 yielded ~16 real pulls). Digest-addressed requests
+    // are still served, just not metered. Note: a client that does both HEAD
+    // and GET by tag meters twice; one that resolves via HEAD-by-tag then GETs
+    // by digest meters once. Either way a pull never exceeds the tag requests,
+    // and digest follow-ups are free.
+    //
+    // Digest-addressed requests are still concurrency-bounded via a
+    // concurrency-only acquire (PSA-42), so a multi-arch pull's by-digest
+    // platform-manifest follow-ups stay within concurrent_manifests_per_user
+    // without counting toward the daily cap.
+    let is_head = req.method() == actix_web::http::Method::HEAD;
+    let counts_as_pull = should_meter(&reference);
+    // Every request holds a concurrency slot for the duration of the fetch;
+    // only tag-addressed (metered) requests also count toward the daily cap.
+    let _guard = if counts_as_pull {
+        match limiter
+            .acquire(counter.get_ref().as_ref(), user.claims.sub)
+            .await
+            .map_err(|_| OciError::Internal)?
+        {
+            Ok(g) => g,
+            Err(OciLimitDenial::Concurrency) => {
+                audit_denied(pool.get_ref(), &req, &user, &app.id, "concurrency", None).await;
+                return Err(OciError::TooManyRequests {
+                    retry_after_secs: None,
+                });
+            }
+            Err(OciLimitDenial::DailyCap { reset_in_secs }) => {
+                let secs_u64 = reset_in_secs.max(0) as u64;
+                audit_denied(
+                    pool.get_ref(),
+                    &req,
+                    &user,
+                    &app.id,
+                    "daily_cap",
+                    Some(secs_u64),
+                )
+                .await;
+                return Err(OciError::TooManyRequests {
+                    retry_after_secs: Some(secs_u64),
+                });
+            }
         }
-        Err(OciLimitDenial::DailyCap { reset_in_secs }) => {
-            let secs_u64 = reset_in_secs.max(0) as u64;
-            audit_denied(
-                pool.get_ref(),
-                &req,
-                &user,
-                &app.id,
-                "daily_cap",
-                Some(secs_u64),
-            )
-            .await;
-            return Err(OciError::TooManyRequests {
-                retry_after_secs: Some(secs_u64),
-            });
+    } else {
+        // Not metered (digest-addressed), but still take a concurrency slot so
+        // the by-digest follow-ups of a multi-arch pull stay bounded (PSA-42).
+        match limiter.acquire_concurrency_only(user.claims.sub) {
+            Ok(g) => g,
+            Err(OciLimitDenial::Concurrency) => {
+                audit_denied(pool.get_ref(), &req, &user, &app.id, "concurrency", None).await;
+                return Err(OciError::TooManyRequests {
+                    retry_after_secs: None,
+                });
+            }
+            // acquire_concurrency_only never touches the daily counter.
+            Err(OciLimitDenial::DailyCap { .. }) => {
+                unreachable!("acquire_concurrency_only cannot return DailyCap")
+            }
         }
     };
 
@@ -148,11 +198,7 @@ pub async fn get_manifest(
                 return Err(mapped);
             }
         };
-        let digest = if mr.digest.is_empty() {
-            format!("sha256:{}", hex::encode(Sha256::digest(&mr.bytes)))
-        } else {
-            mr.digest
-        };
+        let digest = resolve_manifest_digest(mr.digest, &mr.bytes);
         cache
             .insert(
                 app.id,
@@ -175,9 +221,10 @@ pub async fn get_manifest(
         &manifest.digest,
     )
     .await;
-    drop(guard);
+    // Release the concurrency slot (held by every request) before cloning the
+    // response bytes, so a slow client read does not hold it.
+    drop(_guard);
 
-    let is_head = req.method() == actix_web::http::Method::HEAD;
     let mut resp = HttpResponse::Ok();
     resp.insert_header(("Content-Type", manifest.media_type.clone()));
     resp.insert_header(("Docker-Content-Digest", manifest.digest.clone()));
@@ -215,6 +262,7 @@ pub async fn get_blob(
     if !app.is_pullable() {
         return Err(OciError::NameUnknown);
     }
+    assert_entitled(pool.get_ref(), &req, &user, &app).await?;
     let owner = app
         .oci_image_owner
         .as_deref()
@@ -224,12 +272,20 @@ pub async fn get_blob(
     let handle = match blob_cache.get_or_fetch(owner, name, &digest).await {
         Ok(h) => h,
         Err(e) => {
-            let mapped = match &e {
-                AppError::NotFound { .. } => OciError::BlobUnknown,
-                AppError::ValidationError { .. } => OciError::BlobUnknown,
-                _ => OciError::Upstream,
-            };
-            if matches!(mapped, OciError::Upstream) {
+            // The OCI status classification (BlobUnknown / Upstream / Internal)
+            // lives in dunite-oci next to the error types (PSA-35); this
+            // handler adds only Bunyip's logging and audit policy.
+            if let BlobCacheError::Registry(RegistryError::Upstream(status @ (401 | 403))) = &e {
+                log_forgejo_credential_rejection(*status);
+            }
+            let mapped = OciError::from(&e);
+            if !matches!(mapped, OciError::BlobUnknown) {
+                tracing::error!(
+                    error = ?e,
+                    slug = %slug,
+                    digest = %digest,
+                    "blob fetch failed; see error for the upstream/filesystem cause"
+                );
                 audit_failed_upstream(
                     pool.get_ref(),
                     &req,
@@ -271,9 +327,34 @@ pub async fn push_not_supported() -> Result<HttpResponse, OciError> {
     Err(OciError::Unsupported)
 }
 
+/// 401/403 from Forgejo means OUR service credentials were rejected, not the
+/// member's. Surface a precise operator diagnostic; the member still sees a
+/// generic upstream error. Shared by the manifest and blob paths so the
+/// guidance cannot drift between them.
+fn log_forgejo_credential_rejection(status: u16) {
+    tracing::error!(
+        status,
+        "upstream Forgejo rejected the registry service credentials; \
+         verify FORGEJO_API_TOKEN is valid and has the read:package scope \
+         for the configured owner/image"
+    );
+}
+
+/// Whether a manifest request should be metered toward the daily pull cap +
+/// concurrency limit (BUNYIP-43). Only TAG-addressed requests count as a
+/// logical pull; digest-addressed requests are the multi-arch platform-manifest
+/// follow-ups within a pull (or a direct by-digest pull) and are not metered.
+fn should_meter(reference: &str) -> bool {
+    !reference.starts_with("sha256:")
+}
+
 fn map_reg_err(e: &RegistryError) -> OciError {
     match e {
         RegistryError::NotFound => OciError::ManifestUnknown,
+        RegistryError::Upstream(status @ (401 | 403)) => {
+            log_forgejo_credential_rejection(*status);
+            OciError::Upstream
+        }
         _ => OciError::Upstream,
     }
 }
@@ -369,5 +450,50 @@ async fn audit_failed_upstream(
         }));
     if let Err(e) = AuditLogRepository::create(pool, log).await {
         tracing::warn!(?e, "oci pull_failed_upstream audit log failed");
+    }
+}
+
+/// Entitlement gate for a restricted product (BUNYIP-39). The decision is the
+/// shared `EntitlementRepository::is_allowed` (open products and admins pass
+/// without a DB hit). Denials are audited and surface as `NameUnknown` (404),
+/// the same code as a non-pullable product, so an unentitled member cannot
+/// distinguish "restricted product exists" from "no such product" by status.
+async fn assert_entitled(
+    pool: &PgPool,
+    req: &HttpRequest,
+    user: &OciBearerUser,
+    app: &crate::models::Application,
+) -> Result<(), OciError> {
+    let allowed = EntitlementRepository::is_allowed(pool, user.claims.sub, user.is_admin(), app)
+        .await
+        .map_err(|_| OciError::Internal)?;
+    if allowed {
+        return Ok(());
+    }
+    let log = CreateAuditLog::new(AuditAction::OciPullDeniedEntitlement)
+        .with_actor(user.claims.sub, &user.email, &user.role)
+        .with_resource("application", app.id)
+        .with_ip(extract_client_ip(req).map(IpNetwork::from))
+        .with_metadata(serde_json::json!({ "slug": app.slug }));
+    if let Err(e) = AuditLogRepository::create(pool, log).await {
+        tracing::warn!(?e, "oci pull_denied_entitlement audit log failed");
+    }
+    Err(OciError::NameUnknown)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_meter;
+
+    #[test]
+    fn should_meter_tag_but_not_digest() {
+        // Tag-addressed requests are logical pulls -> metered.
+        assert!(should_meter("v0.1.1"));
+        assert!(should_meter("latest"));
+        // Digest-addressed requests are multi-arch follow-ups / by-digest pulls
+        // -> not metered (BUNYIP-43: prevents one pull burning 3+ of the cap).
+        assert!(!should_meter(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        ));
     }
 }

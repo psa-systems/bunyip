@@ -50,6 +50,18 @@ pub struct StripeSubscriptionItemResponse {
     pub quantity: Option<u64>,
 }
 
+/// The price actually purchased on a completed Checkout Session, fetched from
+/// the Stripe API (BUNYIP-215). Stripe omits `line_items` from the
+/// `checkout.session.completed` webhook payload, so this cannot be read off the
+/// event and must be retrieved with `line_items` expanded.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StripeCheckoutPrice {
+    pub price_id: String,
+    /// Amount in the smallest currency unit (cents), from the price's
+    /// `unit_amount`, falling back to the line item's `amount_total`.
+    pub amount: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StripeSubscriptionResponse {
     pub id: String,
@@ -114,7 +126,7 @@ pub fn mask_secret(s: &str) -> String {
     // show prefix through the last underscore plus *** plus last 4 chars.
     let prefix_end = s.rfind('_').map(|i| i + 1).unwrap_or(0);
     let suffix = &s[s.len() - 4..];
-    if prefix_end > 0 && prefix_end + 4 < s.len() {
+    if prefix_end > 0 && prefix_end + 4 <= s.len() {
         format!("{}***{}", &s[..prefix_end], suffix)
     } else {
         format!("***{}", suffix)
@@ -164,11 +176,10 @@ impl StripeConfigResponse {
     /// Reads env vars and returns a response showing what's currently configured there.
     /// Used as a fallback when no DB config has been saved yet.
     pub fn from_env() -> Self {
-        use std::env;
-        let secret_key = env::var("STRIPE_SECRET_KEY").ok().filter(|s| !s.is_empty());
-        let webhook_secret = env::var("STRIPE_WEBHOOK_SECRET")
-            .ok()
-            .filter(|s| !s.is_empty());
+        // secret_env supports the {NAME}_FILE compose-secret convention,
+        // falling back to the plain env var.
+        let secret_key = crate::config::secret_env("STRIPE_SECRET_KEY");
+        let webhook_secret = crate::config::secret_env("STRIPE_WEBHOOK_SECRET");
 
         Self {
             secret_key_masked: secret_key.as_deref().map(mask_secret),

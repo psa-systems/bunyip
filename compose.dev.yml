@@ -63,21 +63,64 @@ services:
       JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-at-least-32-characters-long-000000}
       TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:-}
       STRIPE_ENCRYPTION_KEY: ${STRIPE_ENCRYPTION_KEY:-}
+      # Test-mode Stripe keys for local subscription testing (BUNYIP-175). The
+      # webhook secret is the whsec_ printed by `stripe listen`. Empty by default
+      # keeps payment disabled. See dev-docs/stripe-test-mode.md.
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      # Checkout redirect URLs. Empty default lets the api derive them from
+      # CORS_ORIGIN (correct on plain `just dev`, where CORS_ORIGIN is the single
+      # localhost origin). On dev-sso CORS_ORIGIN is a comma-list of RP origins,
+      # which would produce a malformed success_url, so set these explicitly in
+      # .env to a single bunyip origin (BUNYIP-175).
+      STRIPE_SUCCESS_URL: ${STRIPE_SUCCESS_URL:-}
+      STRIPE_CANCEL_URL: ${STRIPE_CANCEL_URL:-}
       SETUP_DEFAULT_ADMIN: ${SETUP_DEFAULT_ADMIN:-}
       EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
-      # Bunyip IS the OIDC issuer; Ed25519 keys mounted from ./secrets (volumes).
+      # Bunyip IS the OIDC issuer; Ed25519 keys mounted from ./secrets/oidc (volumes).
       OIDC_ISSUER: ${OIDC_ISSUER:-http://localhost:4401}
       OIDC_JWT_PRIVATE_KEY_PATH: /run/secrets/oidc/dev-2026.pem
       OIDC_JWT_ACTIVE_KID: ${OIDC_JWT_ACTIVE_KID:-dev-2026}
       OIDC_JWT_PUBLIC_KEYS_DIR: /run/secrets/oidc
       # Optional Forgejo token to fetch the dunite git dep on the first build.
       DUNITE_GIT_TOKEN: ${DUNITE_GIT_TOKEN:-}
+      # ── Distribution proxy (downloads + OCI registry) ─────────────────────
+      # Both verticals stay disabled until FORGEJO_BASE_URL + FORGEJO_API_TOKEN
+      # are set in .env. Token scopes: see dev-docs/oci-registry-verification.md.
+      FORGEJO_BASE_URL: ${FORGEJO_BASE_URL:-}
+      FORGEJO_API_TOKEN: ${FORGEJO_API_TOKEN:-}
+      DOWNLOAD_CACHE_DIR: /var/cache/bunyip-downloads
+      OCI_REGISTRY_ENABLED: ${OCI_REGISTRY_ENABLED:-false}
+      # Container-internal listener port (fixed). BUNYIP_OCI_PORT changes only
+      # the host side of the port mapping below.
+      OCI_REGISTRY_PORT: "18081"
+      # What docker on the HOST sees: the advertised service name and token
+      # realm track BUNYIP_OCI_PORT, so overriding the published port keeps
+      # docker login working with no extra configuration.
+      OCI_REGISTRY_SERVICE: ${OCI_REGISTRY_SERVICE:-localhost:${BUNYIP_OCI_PORT:-18081}}
+      OCI_REGISTRY_REALM: ${OCI_REGISTRY_REALM:-http://localhost:${BUNYIP_OCI_PORT:-18081}/auth/token}
+      OCI_BLOB_CACHE_DIR: /var/cache/bunyip-oci
+      # Distribution limits + cache TTLs (BUNYIP-42). Defaults mirror
+      # crates/bunyip-domain/src/config.rs so `docker compose config` shows the
+      # effective value; override any of them in .env to exercise enforcement.
+      DOWNLOAD_CONCURRENCY_PER_USER: ${DOWNLOAD_CONCURRENCY_PER_USER:-2}
+      DOWNLOAD_DAILY_LIMIT_PER_USER: ${DOWNLOAD_DAILY_LIMIT_PER_USER:-50}
+      FORGEJO_RELEASE_CACHE_TTL_SECS: ${FORGEJO_RELEASE_CACHE_TTL_SECS:-300}
+      OCI_CONCURRENT_MANIFESTS_PER_USER: ${OCI_CONCURRENT_MANIFESTS_PER_USER:-2}
+      OCI_PULLS_PER_USER_PER_DAY: ${OCI_PULLS_PER_USER_PER_DAY:-50}
+      OCI_MANIFEST_CACHE_TTL_SECS: ${OCI_MANIFEST_CACHE_TTL_SECS:-300}
+      OCI_TOKEN_TTL_SECS: ${OCI_TOKEN_TTL_SECS:-900}
     volumes:
       - .:/app
       - cargo-target:/app/target
-      - ./secrets:/run/secrets/oidc:ro
+      # OIDC signing keys live in their own subdir (matches compose.yml; keeps
+      # any production secret value files in ./secrets/ out of the container).
+      - ./secrets/oidc:/run/secrets/oidc:ro
+      - download-cache:/var/cache/bunyip-downloads
+      - oci-cache:/var/cache/bunyip-oci
     ports:
       - "${BUNYIP_API_PORT:-4401}:4401"
+      - "${BUNYIP_OCI_PORT:-18081}:18081"
     depends_on:
       postgres:
         condition: service_healthy
@@ -123,6 +166,10 @@ volumes:
     name: dev-bunyip-cargo-target-${USER}
   web-node-modules:
     name: dev-bunyip-web-node-modules-${USER}
+  download-cache:
+    name: dev-bunyip-download-cache-${USER}
+  oci-cache:
+    name: dev-bunyip-oci-cache-${USER}
 
 networks:
   # Declared external so compose attaches to the per-developer network the

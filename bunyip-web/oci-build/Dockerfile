@@ -14,7 +14,7 @@
 
 # ---- Stage 1: build ---------------------------------------------------------
 # bun + cargo ship in the builder image; nothing to install.
-FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.0-rust1.94-trixie AS build
+FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie AS build
 
 # nproc/2 concurrency cap (per governance CI.md).
 ARG CARGO_BUILD_JOBS=2
@@ -36,13 +36,29 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # ---- Stage 2: run -----------------------------------------------------------
 FROM debian:trixie-slim
 
+ARG GIT_COMMIT=unknown
+ARG GIT_TAG=unknown
+ARG BUILD_DATE=unknown
+
 # ca-certificates so reqwest (rustls) can validate the API's TLS cert.
 RUN apt-get update && apt-get install --yes --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# Run as a non-root user (UID 1001), mirroring bunyip-api/oci-build/Dockerfile.
+RUN groupadd --gid 1001 appuser \
+ && useradd --uid 1001 --gid 1001 --no-create-home appuser
+
 WORKDIR /app
 COPY --from=build /app/target/release/bunyip-web /app/bunyip-web
 COPY --from=build /app/bunyip-web/assets /app/assets
+RUN chown -R appuser:appuser /app
+USER appuser
+
+LABEL org.opencontainers.image.source=https://dev.a8n.run/psa-systems/bunyip \
+      org.opencontainers.image.description="Bunyip Web (PSA Systems)" \
+      org.opencontainers.image.revision=${GIT_COMMIT} \
+      org.opencontainers.image.version=${GIT_TAG} \
+      org.opencontainers.image.created=${BUILD_DATE}
 
 ENV BUNYIP_BIND_ADDR=0.0.0.0:4400
 EXPOSE 4400

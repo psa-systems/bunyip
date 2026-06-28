@@ -2,20 +2,24 @@
 //! dashboard pages (applications, membership, billing, settings, ...) arrive in
 //! phase 3.
 
-use axum::extract::{Query, State};
-use axum::http::HeaderMap;
-use axum::response::Response;
+use axum::body::Body;
+use axum::extract::{Path, Query, State};
+use axum::http::{header, HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::Form;
 use maud::{html, Markup, PreEscaped};
 use serde::Deserialize;
 
 use crate::api::auth as auth_api;
 use crate::api::calls;
-use crate::api::types::{Membership, MembershipStatus, SubscriptionTier, User};
+use crate::api::types::{
+    AppDownloadGroup, Application, Membership, MembershipStatus, SubscriptionTier,
+    TwoFactorSetupResponse, User,
+};
 use crate::handlers::{dashboard_response, guard, password_ok, rotating_index};
-use crate::util::{app_gradient, days_until, has_active_membership};
+use crate::util::{app_gradient, days_until, has_active_membership, urlenc};
 use crate::views::ui::{badge, button_class, error_box, icon};
-use crate::web::{redirect, redirect_cookies, AppState};
+use crate::web::{redirect_cookies, AppState};
 
 const TAGLINES: [&str; 5] = [
     "All access. No clock.",
@@ -33,10 +37,17 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
     let fwd = c.forward.as_deref();
 
     let apps = calls::applications(&st.api, fwd).await.unwrap_or_default();
-    let stripe_enabled = auth_api::setup_status(&st.api).await.map(|s| s.stripe_enabled).unwrap_or(true);
+    let stripe_enabled = auth_api::setup_status(&st.api)
+        .await
+        .map(|s| s.stripe_enabled)
+        .unwrap_or(true);
     let is_member = has_active_membership(Some(&user));
     let tagline = TAGLINES[rotating_index(TAGLINES.len())];
     let base_domain = st.cfg.domain_or_localhost();
+
+    // BUNYIP-206: the passive "finish your profile" name banner was removed -
+    // the forced /onboarding gate (handlers::mod::guard) now guarantees a name
+    // is set before the dashboard is reachable, so the nudge is dead code.
 
     let content = html! {
         div class="space-y-8" {
@@ -107,7 +118,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                             }
                             div class="p-6 pt-0 mt-auto" {
                                 @if app.is_accessible {
-                                    a href=(format!("https://{app_url}")) target="_blank" rel="noopener noreferrer" {
+                                    a href=(format!("https://{app_url}/dashboard")) target="_blank" rel="noopener noreferrer" {
                                         span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md shadow-indigo-500/15 hover:shadow-lg hover:shadow-indigo-500/25 transition-shadow", app_gradient(i)))) {
                                             "Open " (app.display_name) (icon("external-link", "ml-2 h-4 w-4"))
                                         }
@@ -131,6 +142,14 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
 }
 
 pub fn membership_badge(user: &User) -> Markup {
+    // Admins have all-access regardless of membership status (mirrors
+    // `has_active_membership`, which treats role == Admin as access-granted).
+    // Without this, an admin whose `membership_status` is None/Canceled/etc.
+    // gets a "No Membership" pill next to "You have access to all
+    // applications" - a direct contradiction (BUNYIP-108).
+    if matches!(user.role, crate::api::types::UserRole::Admin) {
+        return badge("default", "Admin");
+    }
     if user.lifetime_member {
         return badge("success", "Lifetime");
     }
@@ -139,6 +158,7 @@ pub fn membership_badge(user: &User) -> Markup {
     }
     match user.membership_status {
         MembershipStatus::Active => badge("success", "Active"),
+        MembershipStatus::GracePeriod => badge("warning", "Grace Period"),
         MembershipStatus::PastDue => badge("warning", "Past Due"),
         MembershipStatus::Canceled => badge("destructive", "Canceled"),
         MembershipStatus::Incomplete => badge("secondary", "Incomplete"),
@@ -147,7 +167,8 @@ pub fn membership_badge(user: &User) -> Markup {
 }
 
 fn membership_prompt(user: &User) -> Markup {
-    let ended = user.trial_ends_at.is_some() || user.membership_status == MembershipStatus::Canceled;
+    let ended =
+        user.trial_ends_at.is_some() || user.membership_status == MembershipStatus::Canceled;
     html! {
         @if ended { "Your trial has ended - subscribe to continue." }
         @else { "Subscribe to get access to all applications." }
@@ -179,34 +200,136 @@ fn subscription_status(user: &User) -> Markup {
 // shared formatting
 // ===========================================================================
 
-fn base_domain(st: &AppState) -> String {
-    st.cfg.domain_or_localhost()
-}
 fn fmt_ts(ts: i64) -> String {
-    chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0).map(|d| d.format("%B %-d, %Y").to_string()).unwrap_or_default()
+    chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
+        .map(|d| d.format("%B %-d, %Y").to_string())
+        .unwrap_or_default()
 }
 fn fmt_date_iso(iso: &str) -> String {
-    chrono::DateTime::parse_from_rfc3339(iso).map(|d| d.format("%B %-d, %Y").to_string()).unwrap_or_else(|_| iso.to_string())
+    chrono::DateTime::parse_from_rfc3339(iso)
+        .map(|d| d.format("%B %-d, %Y").to_string())
+        .unwrap_or_else(|_| iso.to_string())
 }
 fn fmt_currency(cents: i64, currency: &str) -> String {
     format!("{} {:.2}", currency.to_uppercase(), cents as f64 / 100.0)
 }
 fn format_size(bytes: i64) -> String {
     let mb = bytes as f64 / 1_048_576.0;
-    if mb >= 1.0 { format!("{mb:.1} MB") } else { format!("{:.1} KB", bytes as f64 / 1024.0) }
+    if mb >= 1.0 {
+        format!("{mb:.1} MB")
+    } else {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    }
 }
 
 // ===========================================================================
 // Applications
 // ===========================================================================
 
+/// One application card on the Applications page. `idx` only drives the
+/// gradient accent so cards stay visually varied across groups.
+fn app_card(
+    idx: usize,
+    app: &Application,
+    domain: &str,
+    is_member: bool,
+    downloads: Option<&AppDownloadGroup>,
+) -> Markup {
+    let subdomain = app
+        .subdomain
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| app.slug.clone());
+    let app_url = format!("{subdomain}.{domain}");
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50 transition-all hover:shadow-lg" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                div class="flex items-start justify-between" {
+                    div class={ "flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-to-br " (app_gradient(idx)) } {
+                        @if let Some(ic) = &app.icon_url { img src=(ic) alt=(app.display_name) class="h-6 w-6"; } @else { (icon("link-2", "h-6 w-6 text-white")) }
+                    }
+                    @if app.maintenance_mode { (badge("warning", "Maintenance")) }
+                }
+                h3 class="text-2xl font-semibold leading-none tracking-tight mt-4" { (app.display_name) }
+                p class="text-sm text-muted-foreground" { (app.description.clone().unwrap_or_default()) }
+            }
+            div class="p-6 pt-0" {
+                p class="text-sm text-muted-foreground mb-4" { (app_url) }
+                @if app.is_accessible {
+                    // `/dashboard`, not `/`, so the child app's AuthGuard sees a
+                    // protected route and kicks off the OIDC code flow against
+                    // the user's existing OP session. Landing on the public
+                    // homepage instead just shows the marketing page; the user
+                    // has to click "Sign in" before the SSO bridge fires.
+                    a href=(format!("https://{app_url}/dashboard")) target="_blank" rel="noopener noreferrer" {
+                        span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md", app_gradient(idx)))) { "Launch" (icon("external-link", "ml-2 h-4 w-4")) }
+                    }
+                } @else {
+                    button type="button" disabled class=(button_class("default", "default", "w-full")) {
+                        @if !is_member { "Membership Required" } @else if app.maintenance_mode { "Under Maintenance" } @else { "Not Available" }
+                    }
+                }
+                @if let Some(g) = downloads { (download_affordance(g, is_member)) }
+            }
+        }
+    }
+}
+
 pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match guard(&st, &headers, "/applications").await { Ok(v) => v, Err(r) => return r };
+    let (user, c) = match guard(&st, &headers, "/applications").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let fwd = c.forward.as_deref();
     let apps = calls::applications(&st.api, fwd).await.unwrap_or_default();
-    let stripe = auth_api::setup_status(&st.api).await.map(|s| s.stripe_enabled).unwrap_or(true);
+    // Groups (BUNYIP-100). A failed fetch degrades to a flat ungrouped list.
+    let groups = calls::application_groups(&st.api, fwd)
+        .await
+        .unwrap_or_default();
+    // Per-product downloads (BUNYIP-100), joined onto each card by slug so
+    // downloads live on the Applications page (the standalone Downloads page is
+    // retired). A failed fetch degrades to cards with no Download affordance.
+    let download_groups = calls::downloads_all(&st.api, fwd).await.unwrap_or_default();
+    let stripe = auth_api::setup_status(&st.api)
+        .await
+        .map(|s| s.stripe_enabled)
+        .unwrap_or(true);
     let is_member = has_active_membership(Some(&user));
-    let domain = base_domain(&st);
+    let domain = st.cfg.domain_or_localhost();
+
+    // Build display sections: each group (in API sort order) with its members,
+    // then an "ungrouped" bucket. The global enumerate index is carried into
+    // each card so gradient accents stay varied across sections. An app whose
+    // group_id references a missing group falls into the ungrouped bucket.
+    let indexed: Vec<(usize, &Application)> = apps.iter().enumerate().collect();
+    let mut group_sections: Vec<(&str, Vec<(usize, &Application)>)> = Vec::new();
+    for g in &groups {
+        let members: Vec<(usize, &Application)> = indexed
+            .iter()
+            .filter(|(_, a)| a.group_id.as_deref() == Some(g.id.as_str()))
+            .copied()
+            .collect();
+        if !members.is_empty() {
+            group_sections.push((g.display_name.as_str(), members));
+        }
+    }
+    let ungrouped: Vec<(usize, &Application)> = indexed
+        .iter()
+        .filter(|(_, a)| {
+            !groups
+                .iter()
+                .any(|g| Some(g.id.as_str()) == a.group_id.as_deref())
+        })
+        .copied()
+        .collect();
+    let has_groups = !group_sections.is_empty();
+    // Catalog-only products: download groups whose slug matches no hosted app.
+    // These had only the Downloads page before; surface them here so retiring
+    // that page loses nothing.
+    let catalog_only: Vec<&AppDownloadGroup> = download_groups
+        .iter()
+        .filter(|g| !apps.iter().any(|a| a.slug == g.app_slug))
+        .collect();
 
     let content = html! {
         div class="space-y-6" {
@@ -224,33 +347,27 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                     }
                 }
             }
-            div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
-                @for (i, app) in apps.iter().enumerate() {
-                    @let subdomain = app.subdomain.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| app.slug.clone());
-                    @let app_url = format!("{subdomain}.{domain}");
-                    div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50 transition-all hover:shadow-lg" {
-                        div class="flex flex-col space-y-1.5 p-6" {
-                            div class="flex items-start justify-between" {
-                                div class={ "flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-to-br " (app_gradient(i)) } {
-                                    @if let Some(ic) = &app.icon_url { img src=(ic) alt=(app.display_name) class="h-6 w-6"; } @else { (icon("link-2", "h-6 w-6 text-white")) }
-                                }
-                                @if app.maintenance_mode { (badge("warning", "Maintenance")) }
-                            }
-                            h3 class="text-2xl font-semibold leading-none tracking-tight mt-4" { (app.display_name) }
-                            p class="text-sm text-muted-foreground" { (app.description.clone().unwrap_or_default()) }
-                        }
-                        div class="p-6 pt-0" {
-                            p class="text-sm text-muted-foreground mb-4" { (app_url) }
-                            @if app.is_accessible {
-                                a href=(format!("https://{app_url}")) target="_blank" rel="noopener noreferrer" {
-                                    span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md", app_gradient(i)))) { "Launch" (icon("external-link", "ml-2 h-4 w-4")) }
-                                }
-                            } @else {
-                                button type="button" disabled class=(button_class("default", "default", "w-full")) {
-                                    @if !is_member { "Membership Required" } @else if app.maintenance_mode { "Under Maintenance" } @else { "Not Available" }
-                                }
-                            }
-                        }
+            @for (name, members) in &group_sections {
+                section class="space-y-3" {
+                    h2 class="text-xl font-semibold tracking-tight" { (name) }
+                    div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
+                        @for &(idx, app) in members { (app_card(idx, app, &domain, is_member, download_groups.iter().find(|g| g.app_slug == app.slug))) }
+                    }
+                }
+            }
+            @if !ungrouped.is_empty() {
+                section class="space-y-3" {
+                    @if has_groups { h2 class="text-xl font-semibold tracking-tight" { "Other" } }
+                    div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
+                        @for &(idx, app) in &ungrouped { (app_card(idx, app, &domain, is_member, download_groups.iter().find(|g| g.app_slug == app.slug))) }
+                    }
+                }
+            }
+            @if !catalog_only.is_empty() {
+                section class="space-y-3" {
+                    h2 class="text-xl font-semibold tracking-tight" { "More downloads" }
+                    div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
+                        @for &g in &catalog_only { (download_only_card(g, is_member)) }
                     }
                 }
             }
@@ -263,61 +380,567 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
 // Downloads
 // ===========================================================================
 
-pub async fn downloads(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match guard(&st, &headers, "/downloads").await { Ok(v) => v, Err(r) => return r };
-    let fwd = c.forward.as_deref();
-    let has_membership = has_active_membership(Some(&user));
-    let groups = calls::downloads_all(&st.api, fwd).await.unwrap_or_default();
+/// The standalone Downloads page is retired (BUNYIP-100): downloads now live on
+/// each application card via the per-card Download affordance. Old links and
+/// bookmarks land on the Applications page. The `/downloads/{slug}/{asset}`
+/// proxy below stays: the card download links still route through it.
+pub async fn downloads(_: State<AppState>, _: HeaderMap) -> Response {
+    axum::response::Redirect::permanent("/applications").into_response()
+}
 
-    let content = html! {
-        div class="space-y-6" {
-            h1 class="text-2xl font-semibold" { "Downloads" }
-            @if groups.is_empty() {
-                p class="text-sm text-muted-foreground" { "No downloads available" }
-            } @else {
-                @for g in &groups {
-                    section class="border rounded p-4" {
-                        div class="flex items-center gap-2 mb-2" {
-                            @if let Some(ic) = &g.icon_url { img src=(ic) alt="" class="w-6 h-6"; }
-                            h2 class="font-semibold" { (g.app_display_name) }
-                            span class="text-xs text-muted-foreground" { (g.release_tag) }
-                        }
-                        ul class="space-y-2" {
-                            @for a in &g.assets {
-                                li class="flex items-center justify-between" {
-                                    div {
-                                        div class="font-mono text-sm" { (a.asset_name) }
-                                        div class="text-xs text-muted-foreground" { (format_size(a.size_bytes)) }
-                                    }
-                                    @if has_membership {
-                                        a href=(a.download_url) download=(a.asset_name) class="px-3 py-1 rounded bg-primary text-primary-foreground text-sm" { "Download" }
-                                    } @else {
-                                        a href="/membership" class="text-sm text-primary underline" { "Upgrade to access" }
-                                    }
-                                }
-                            }
-                        }
-                    }
+/// GET /downloads/{slug}/{asset_name}
+///
+/// BFF download proxy. The browser must never hit bunyip-api directly (separate
+/// origin, the session cookie is scoped to this app), so the asset link points
+/// here. We re-auth the session, forward the cookie to the API's
+/// `/v1/applications/{slug}/downloads/{asset}`, and stream the bytes back with
+/// the upstream Content-Type / Content-Disposition. Without this hop the anchor
+/// resolved against the web origin, fell through to the HTML 404 fallback, and
+/// the browser saved that HTML page under the asset's filename (BUNYIP-64).
+pub async fn download_asset(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path((slug, asset_name)): Path<(String, String)>,
+) -> Response {
+    let (_user, c) = match guard(&st, &headers, "/downloads").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let fwd = c.forward.as_deref();
+    match calls::download_asset(&st.api, &slug, &asset_name, fwd).await {
+        Ok(resp) if resp.status().is_success() => {
+            // Read the relay headers before consuming `resp` into a stream.
+            let content_type = resp
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            let disposition = resp
+                .headers()
+                .get(header::CONTENT_DISPOSITION)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+                // Fallback only: the API always sends Content-Disposition. Escape
+                // backslash/quote so a stray char in the name can't break out of
+                // the quoted filename (a newline is already rejected by
+                // HeaderValue, which fails the build into the redirect below).
+                .unwrap_or_else(|| {
+                    let safe = asset_name.replace('\\', "\\\\").replace('"', "\\\"");
+                    format!("attachment; filename=\"{safe}\"")
+                });
+            // Forward the upstream status (always 200 here) and Content-Length so
+            // the browser can show download progress. When the CompressionLayer
+            // compresses for the browser it drops the stale length itself; on the
+            // identity path the forwarded length is correct.
+            let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
+            let content_length = resp
+                .headers()
+                .get(header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            let mut builder = Response::builder()
+                .status(status)
+                .header(header::CONTENT_TYPE, content_type)
+                .header(header::CONTENT_DISPOSITION, disposition);
+            if let Some(len) = content_length {
+                builder = builder.header(header::CONTENT_LENGTH, len);
+            }
+            builder
+                .body(Body::from_stream(resp.bytes_stream()))
+                .unwrap_or_else(|_| redirect_cookies("/downloads", &c.set_cookies))
+        }
+        // Any non-2xx (expired session, lost entitlement, upstream outage) must
+        // NOT be saved as the asset. The anchor carries no `download` attribute,
+        // so navigating the browser back renders HTML instead of downloading it:
+        // sign-in on 401, the downloads page otherwise.
+        Ok(resp) if resp.status().as_u16() == 401 => redirect_cookies("/login", &c.set_cookies),
+        _ => redirect_cookies("/downloads", &c.set_cookies),
+    }
+}
+
+/// A single download option for a product, kept as a typed enum so the dialog
+/// is data-driven: adding a new distribution channel is one new variant plus
+/// one render arm in `download_option_row`, nothing else. BUNYIP-100.
+enum DownloadOption {
+    /// A binary asset fetchable in one click via the BFF proxy.
+    DirectLink {
+        name: String,
+        size: String,
+        href: String,
+    },
+    /// A copy-pasteable shell command (e.g. `docker login` / `docker pull`).
+    CopyBlock { command: String },
+}
+
+/// Map a product's downloads to the ordered option list shown in its dialog:
+/// every binary asset becomes a click-to-download link (via the BFF proxy on
+/// this origin, not the API's `download_url` which the browser cannot reach);
+/// an OCI image becomes the `docker login` + `docker pull` copy blocks.
+fn download_options(g: &AppDownloadGroup) -> Vec<DownloadOption> {
+    let mut opts = Vec::new();
+    for a in &g.assets {
+        opts.push(DownloadOption::DirectLink {
+            name: a.asset_name.clone(),
+            size: format_size(a.size_bytes),
+            href: format!(
+                "/downloads/{}/{}",
+                urlencoding::encode(&g.app_slug),
+                urlencoding::encode(&a.asset_name)
+            ),
+        });
+    }
+    if let Some(oci) = &g.oci {
+        opts.push(DownloadOption::CopyBlock {
+            command: format!("docker login {}", oci.registry),
+        });
+        opts.push(DownloadOption::CopyBlock {
+            command: format!("docker pull {}", oci.reference),
+        });
+    }
+    opts
+}
+
+/// Render one option inside the download dialog.
+fn download_option_row(opt: &DownloadOption) -> Markup {
+    match opt {
+        // No `download` attribute: the proxy's Content-Disposition drives the
+        // save, and an error response navigates rather than being saved as the
+        // file (BUNYIP-64).
+        DownloadOption::DirectLink { name, size, href } => html! {
+            li class="flex items-center justify-between gap-3" {
+                div { div class="font-mono text-sm break-all" { (name) } div class="text-xs text-muted-foreground" { (size) } }
+                a href=(href) class="px-3 py-1 rounded bg-primary text-primary-foreground text-sm shrink-0" { "Download" }
+            }
+        },
+        DownloadOption::CopyBlock { command } => html! { li { (command_block(command)) } },
+    }
+}
+
+/// The Download affordance for an application card. With exactly one binary and
+/// nothing else it is a one-click link; otherwise it is a button that opens a
+/// `<dialog>` listing every option (binary links plus OCI copy blocks). Members
+/// only; non-members get an upgrade prompt. Renders nothing when the product
+/// has no downloads. BUNYIP-100.
+fn download_affordance(g: &AppDownloadGroup, is_member: bool) -> Markup {
+    let opts = download_options(g);
+    if opts.is_empty() {
+        return html! {};
+    }
+    if !is_member {
+        return html! { div class="mt-2 text-center" { (upgrade_link()) } };
+    }
+    // One binary and nothing else: a direct download link, no dialog.
+    if opts.len() == 1 {
+        if let DownloadOption::DirectLink { href, .. } = &opts[0] {
+            return html! {
+                a href=(href) class=(button_class("outline", "default", "w-full mt-2")) { (icon("download", "mr-2 h-4 w-4")) "Download" }
+            };
+        }
+    }
+    // The slug is validated lowercase/digits/hyphens, so it is a safe element id
+    // and a safe literal inside the inline open handler.
+    let dialog_id = format!("dl-{}", g.app_slug);
+    html! {
+        button type="button" class=(button_class("outline", "default", "w-full mt-2"))
+            onclick=(format!("document.getElementById('{dialog_id}').showModal()")) {
+            (icon("download", "mr-2 h-4 w-4")) "Download"
+        }
+        dialog id=(dialog_id) class="rounded-lg border bg-card text-card-foreground p-0 w-full max-w-lg backdrop:bg-black/50" {
+            div class="p-6 space-y-4" {
+                div class="flex items-center justify-between gap-4" {
+                    h3 class="text-lg font-semibold" { (g.app_display_name) " downloads" }
+                    button type="button" aria-label="Close" class=(button_class("outline", "sm", "shrink-0")) onclick="this.closest('dialog').close()" { (icon("x", "h-4 w-4")) }
+                }
+                ul class="space-y-3" {
+                    @for opt in &opts { (download_option_row(opt)) }
                 }
             }
         }
-    };
-    dashboard_response(&c, &user, "/downloads", "Downloads · Bunyip", content)
+    }
+}
+
+/// A download-only card for a catalog product that is not a hosted hub tile
+/// (so it has no Launch action). Keeps catalog-only distribution products
+/// visible on the Applications page now that the standalone Downloads page is
+/// retired. BUNYIP-100.
+fn download_only_card(g: &AppDownloadGroup, is_member: bool) -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50 transition-all hover:shadow-lg" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                div class="flex h-12 w-12 items-center justify-center rounded-lg bg-muted" {
+                    @if let Some(ic) = &g.icon_url { img src=(ic) alt=(g.app_display_name) class="h-6 w-6"; } @else { (icon("package", "h-6 w-6 text-muted-foreground")) }
+                }
+                h3 class="text-2xl font-semibold leading-none tracking-tight mt-4" { (g.app_display_name) }
+            }
+            div class="p-6 pt-0" {
+                (download_affordance(g, is_member))
+            }
+        }
+    }
+}
+
+/// Membership-gate link shown in place of download/pull actions.
+fn upgrade_link() -> Markup {
+    html! {
+        a href="/membership" class="text-sm text-primary underline" { "Upgrade to access" }
+    }
+}
+
+/// Static click handler shared by every copy button. It reads the command
+/// from the button's own `data-copy` attribute at click time; no value is ever
+/// spliced into this string, so it is identical for every block.
+///
+/// Clipboard API needs a secure context (HTTPS / localhost). When it is
+/// unavailable, select the command text so the user can copy manually;
+/// otherwise report success/failure on the button label. The in-button label
+/// swap ("Copy" -> "Copied") fires for the local feedback affordance, AND a
+/// toast pops top-right via `window.bunyipToast`. The `if(window.bunyipToast)`
+/// guard keeps the button usable if the toast script failed to load.
+const COPY_CMD_JS: &str = "var b=this;var t=b.innerText;var c=b.dataset.copy;\
+     if(navigator.clipboard){\
+       navigator.clipboard.writeText(c).then(\
+         function(){b.innerText='Copied';setTimeout(function(){b.innerText=t},1500);\
+                      if(window.bunyipToast)window.bunyipToast('Copied to clipboard','success');},\
+         function(){b.innerText='Copy failed';setTimeout(function(){b.innerText=t},1500);\
+                      if(window.bunyipToast)window.bunyipToast('Copy failed','error');});\
+     }else{\
+       window.getSelection().selectAllChildren(b.previousElementSibling);\
+       b.innerText='Press Ctrl+C';setTimeout(function(){b.innerText=t},3000);\
+     }";
+
+/// A copy-pasteable shell command with a copy-to-clipboard button.
+///
+/// Trust model: `cmd` may carry API-sourced values (the registry host and
+/// image reference that bunyip-api returns for a product). Those values are
+/// rendered ONLY as passive, Maud-escaped content: the visible `<code>` text
+/// and the button's `data-copy` attribute. The click handler is the static
+/// `COPY_CMD_JS` constant, which reads the command from `this.dataset.copy` at
+/// click time and never has API data interpolated into executable JS. This
+/// removes the prior BFF-trust pattern where the command was spliced into the
+/// inline onclick (the earlier `serde_json::to_string` only blocked raw-string
+/// injection; it still shipped API data as executable content).
+fn command_block(cmd: &str) -> Markup {
+    html! {
+        div class="flex items-center gap-2" {
+            code class="flex-1 rounded bg-muted px-3 py-2 font-mono text-sm overflow-x-auto whitespace-nowrap" { (cmd) }
+            button type="button" aria-label="Copy command" data-copy=(cmd) class=(button_class("outline", "sm", "shrink-0 w-28")) onclick=(COPY_CMD_JS) {
+                "Copy"
+            }
+        }
+    }
 }
 
 // ===========================================================================
 // Billing
 // ===========================================================================
 
-pub async fn billing(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match guard(&st, &headers, "/billing").await { Ok(v) => v, Err(r) => return r };
+/// Permanent redirect to `/membership` (HTTP 308). The two pages used to be
+/// separate but rendered the same "no payment history yet" empty state and
+/// confused users navigating between them; the membership page now absorbs the
+/// invoices table and the sidebar drops the standalone Billing entry. The
+/// route stays mapped so existing bookmarks land somewhere sensible. See
+/// `docs/bunyip-upgrade/01-membership-plan-data.md`.
+pub async fn billing(_: State<AppState>, _: HeaderMap) -> Response {
+    axum::response::Redirect::permanent("/membership").into_response()
+}
+
+// ===========================================================================
+// Checkout success
+// ===========================================================================
+
+pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    // authenticate() already refreshed claims via /me; that picks up the new membership.
+    let (user, c) = match guard(&st, &headers, "/checkout/success").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    // BUNYIP-225: gate the "Welcome aboard" success copy on the user's
+    // actual subscription_status, not just the tier string. The tier was
+    // set at signup and stays "standard" forever for most users, so the
+    // page used to confidently render success even when the webhook had
+    // not flipped status to Active (e.g. signature-mismatch dropping the
+    // delivery, or a 5-second race between the Stripe redirect and the
+    // webhook landing). Read the live status; if it is not yet Active,
+    // render a "Finalizing your subscription..." card that auto-refreshes
+    // until the webhook lands. Lifetime members and any user already
+    // Active see the celebration unchanged.
     let fwd = c.forward.as_deref();
+    let membership = calls::membership(&st.api, fwd).await.unwrap_or(None);
+    let is_active = user.lifetime_member
+        || membership
+            .as_ref()
+            .map(|m| matches!(m.status, MembershipStatus::Active))
+            .unwrap_or(false);
+    let tier = tier_name(&user.subscription_tier);
+    let content = if is_active {
+        html! {
+            div class="flex items-center justify-center min-h-[70vh]" {
+                div class="rounded-lg border bg-card text-card-foreground shadow-sm max-w-lg w-full border-border/50 overflow-hidden" {
+                    div class="h-1 bg-gradient-to-r from-teal-500 via-indigo-500 to-primary" {}
+                    div class="p-6 pt-8 pb-8 text-center space-y-6" {
+                        div class="flex justify-center" { div class="rounded-full bg-gradient-to-br from-teal-500/20 to-teal-500/5 p-4" { (icon("check-circle", "h-12 w-12 text-teal-500")) } }
+                        div class="space-y-2" {
+                            h1 class="text-3xl font-bold" { "Welcome aboard" span class="text-gradient bg-gradient-to-r from-primary to-indigo-500" { "!" } }
+                            p class="text-muted-foreground text-lg" { "Your membership is now active. You have full access to all applications." }
+                        }
+                        div class="bg-gradient-to-r from-indigo-500/5 via-primary/5 to-teal-500/5 rounded-lg p-4 space-y-2 text-sm border border-border/50" {
+                            div class="flex items-center justify-center gap-2" { (icon("credit-card", "h-4 w-4 text-indigo-500")) span class="font-medium" { (tier) " Plan" } }
+                            p class="text-muted-foreground" { "Your price is locked in for life - it will never increase." }
+                        }
+                        div class="flex flex-col gap-3 pt-2" {
+                            a href="/applications" class=(button_class("default", "lg", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { (icon("app-window", "h-4 w-4")) "Browse Applications" (icon("arrow-right", "h-4 w-4")) }
+                            a href="/membership" class=(button_class("outline", "default", "")) { "View Membership Details" }
+                        }
+                        p class="text-xs text-muted-foreground" { "Redirecting to applications shortly…" }
+                        script { (PreEscaped("setTimeout(function(){location.href='/applications'},10000);")) }
+                    }
+                }
+            }
+        }
+    } else {
+        // Stripe Checkout has redirected the user here, but the webhook that
+        // flips subscription_status to Active has not landed yet. Two normal
+        // causes: (a) network delay between the Stripe redirect and Stripe
+        // firing the `checkout.session.completed` event (typically <5s); (b)
+        // bunyip-api is rejecting Stripe deliveries (signature mismatch,
+        // endpoint mis-config). The auto-refresh resolves (a) cleanly; (b)
+        // also surfaces visibly to the user instead of hiding behind a
+        // false "Welcome aboard" message. Operator follow-up: when this
+        // page keeps refreshing for >30s on staging, check
+        // `https://dashboard.stripe.com/test/webhooks` for 4xx/5xx deliveries.
+        html! {
+            div class="flex items-center justify-center min-h-[70vh]" {
+                div class="rounded-lg border bg-card text-card-foreground shadow-sm max-w-lg w-full border-border/50 overflow-hidden" {
+                    div class="h-1 bg-gradient-to-r from-primary via-indigo-500 to-teal-500" {}
+                    div class="p-6 pt-8 pb-8 text-center space-y-6" {
+                        div class="flex justify-center" {
+                            div class="rounded-full bg-gradient-to-br from-primary/20 to-primary/5 p-4" {
+                                (icon("loader", "h-12 w-12 text-primary animate-spin"))
+                            }
+                        }
+                        div class="space-y-2" {
+                            h1 class="text-3xl font-bold" { "Finalizing your subscription" }
+                            p class="text-muted-foreground text-lg" {
+                                "Stripe is confirming your payment. This page refreshes automatically."
+                            }
+                        }
+                        p class="text-xs text-muted-foreground" {
+                            "Still here after 30 seconds? Reload, or contact support if it persists."
+                        }
+                        // Refresh every 3s. As soon as the webhook lands and
+                        // subscription_status flips to Active, the next
+                        // refresh renders the success branch above.
+                        script { (PreEscaped("setTimeout(function(){location.reload()},3000);")) }
+                    }
+                }
+            }
+        }
+    };
+    dashboard_response(&c, &user, "/membership", "Welcome · Bunyip", content)
+}
+
+// ===========================================================================
+// Membership required (error page)
+// ===========================================================================
+
+pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match guard(&st, &headers, "/membership-required").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let content = html! {
+        div class="flex min-h-[60vh] items-center justify-center px-4" {
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm w-full max-w-md" {
+                div class="flex flex-col space-y-1.5 p-6 text-center" {
+                    div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10" { (icon("credit-card", "h-8 w-8 text-primary")) }
+                    h3 class="text-2xl font-semibold leading-none tracking-tight" { "Membership Required" }
+                    p class="text-sm text-muted-foreground" { "You need an active membership to access this content." }
+                }
+                div class="p-6 pt-0 space-y-4" {
+                    p class="text-center text-muted-foreground" { "Subscribe to get access to all applications for just $3/month." }
+                    div class="flex flex-col gap-4" {
+                        a href="/membership" class=(button_class("default", "default", "w-full")) { "Subscribe Now" }
+                        a href="/dashboard" class=(button_class("outline", "default", "w-full")) { (icon("arrow-left", "mr-2 h-4 w-4")) "Back to Dashboard" }
+                    }
+                }
+            }
+        }
+    };
+    dashboard_response(
+        &c,
+        &user,
+        "/dashboard",
+        "Membership required · Bunyip",
+        content,
+    )
+}
+
+// ===========================================================================
+// Membership (view + actions)
+// ===========================================================================
+
+/// Canonical plan-name helper. The Membership card, the Settings "Account
+/// Type" cell, and the public Pricing card all route through this so the
+/// in-app name and the marketing-facing name never disagree. Renaming a tier
+/// is a one-line change here that updates every consumer. Closes audit
+/// finding 1 (plan name inconsistency). See
+/// `docs/bunyip-upgrade/01-membership-plan-data.md`.
+pub fn tier_name(t: &SubscriptionTier) -> &'static str {
+    match t {
+        SubscriptionTier::Lifetime => "Lifetime",
+        SubscriptionTier::Free => "Free",
+        SubscriptionTier::EarlyAdopter => "Early Adopter",
+        SubscriptionTier::Standard => "Standard",
+    }
+}
+fn status_label(s: &MembershipStatus) -> &'static str {
+    match s {
+        MembershipStatus::None => "none",
+        MembershipStatus::Active => "active",
+        MembershipStatus::PastDue => "past_due",
+        MembershipStatus::Canceled => "canceled",
+        MembershipStatus::Incomplete => "incomplete",
+        MembershipStatus::GracePeriod => "grace_period",
+    }
+}
+
+/// BUNYIP-187: flash-banner query for the membership page. Mirrors
+/// `SettingsQuery::{ok, error}`; the values are produced by
+/// `membership_subscribe`, `membership_cancel`, etc., and rendered
+/// in the page banner below.
+#[derive(Deserialize)]
+pub struct MembershipQuery {
+    pub ok: Option<String>,
+    pub error: Option<String>,
+}
+
+pub async fn membership(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<MembershipQuery>,
+) -> Response {
+    let (user, c) = match guard(&st, &headers, "/membership").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let fwd = c.forward.as_deref();
+    let current: Option<Membership> = calls::membership(&st.api, fwd).await.unwrap_or(None);
+    let payments = calls::payment_history(&st.api, fwd)
+        .await
+        .unwrap_or_default();
+    // The page now absorbs the invoices table that used to live on /billing;
+    // /billing is a 308 redirect into this page. See docs/bunyip-upgrade/
+    // 01-membership-plan-data.md.
     let invoices = calls::invoices(&st.api, fwd).await.unwrap_or_default();
+    let stripe = auth_api::setup_status(&st.api)
+        .await
+        .map(|s| s.stripe_enabled)
+        .unwrap_or(true);
+    let tier = user.subscription_tier.clone();
+    let status = current.as_ref().map(|m| m.status.clone());
+    // Lifetime members get a stripped-down card: plan name + an explanatory
+    // line, NO price, NO next-billing field, NO cancel buttons. Subscribers
+    // keep the existing card shape. The `has` guard explicitly excludes
+    // lifetime so a lifetime user with a stray Active row from the legacy
+    // billing flow never sees Cancel UI either (defense in depth).
+    let lifetime = user.lifetime_member;
+    let has = !lifetime
+        && matches!(
+            status,
+            Some(MembershipStatus::Active)
+                | Some(MembershipStatus::PastDue)
+                | Some(MembershipStatus::GracePeriod)
+        );
+    let past_due = matches!(status, Some(MembershipStatus::PastDue));
+    let will_cancel = current
+        .as_ref()
+        .map(|m| m.cancel_at_period_end)
+        .unwrap_or(false);
 
     let content = html! {
         div class="space-y-6" {
-            div { h1 class="text-2xl font-bold" { "Billing" } p class="text-muted-foreground" { "View and download your invoices." } }
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div { h1 class="text-3xl font-bold" { "Membership & Billing" } p class="mt-2 text-muted-foreground" { "Your plan, status, and invoices." } }
+            // BUNYIP-187: flash banners surface checkout failures (and any
+            // other ?error= / ?ok= flash) at the top of the page so the
+            // user sees why a click "did nothing".
+            @if let Some(ok) = &q.ok { div class="rounded-lg border p-3 text-sm flex items-center gap-2" { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) (clamp_msg(ok)) } }
+            @if let Some(e) = &q.error { (error_box(&clamp_msg(e))) }
+            @if past_due {
+                div class="rounded-lg border border-destructive/50 p-4 text-sm text-destructive flex items-center gap-2" {
+                    (icon("alert-triangle", "h-4 w-4")) "Your payment failed. Update your payment method within 30 days to avoid losing access."
+                }
+            }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50 overflow-hidden" {
+                div class="h-1 bg-gradient-to-r from-primary via-indigo-500 to-teal-500" {}
+                div class="flex flex-col space-y-1.5 p-6" {
+                    div class="flex items-center justify-between" {
+                        div class="flex items-center gap-3" {
+                            div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-indigo-500" { (icon("credit-card", "h-4 w-4 text-white")) }
+                            h3 class="text-2xl font-semibold leading-none tracking-tight" { "Current Plan" }
+                        }
+                        (membership_badge(&user))
+                    }
+                }
+                div class="p-6 pt-0 space-y-4" {
+                    @if lifetime {
+                        // Lifetime members already see the "Lifetime" badge
+                        // top-right of the card, so repeating it in a
+                        // "Plan: Lifetime" and "Access: Lifetime - no billing"
+                        // grid is a stutter. The badge carries the identity;
+                        // the body just has to convey what makes lifetime
+                        // different from a paid plan: no billing, no expiry.
+                        // (BUNYIP-91.)
+                        p class="text-sm text-muted-foreground" { "No billing. Access never expires." }
+                    } @else if has {
+                        // `has` is driven by membership_status (Active or
+                        // PastDue) but `current` is loaded separately from
+                        // the API. A successful status + missing current row
+                        // is rare but representable, so the unwrap previously
+                        // here was brittle: a future API hiccup could panic
+                        // the Maud thread. Couple the field access to a
+                        // matching guard; a missing `current` simply renders
+                        // nothing in this branch.
+                        @if let Some(m) = current.clone() {
+                            div class="grid gap-4 md:grid-cols-2" {
+                                div { p class="text-sm text-muted-foreground" { "Plan" } p class="font-medium" { (tier_name(&tier)) } }
+                                div { p class="text-sm text-muted-foreground" { "Price" } p class="font-medium" { @if m.price_locked { @if let Some(a)=m.locked_price_amount { "$" (a/100) "/month" } @else { "$3/month" } } @else { "$3/month" } } }
+                                div { p class="text-sm text-muted-foreground" { "Status" } p class="font-medium" { (status_label(&m.status)) } }
+                                div { p class="text-sm text-muted-foreground" { "Next Billing" } p class="font-medium" {
+                                    @let end = m.current_period_end.as_deref().map(fmt_date_iso).unwrap_or_else(|| "N/A".into());
+                                    @if will_cancel { "Canceled - ends " (end) } @else { (end) } } }
+                            }
+                            div class="flex gap-4 pt-4" {
+                                @if will_cancel {
+                                    form method="post" action="/membership/reactivate" { button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Reactivate Membership" } }
+                                } @else {
+                                    form method="post" action="/membership/cancel" { button type="submit" class=(button_class("outline", "default", "")) { "Cancel Membership" } }
+                                    form method="post" action="/membership/cancel-now" onsubmit="return confirm('Cancel immediately? You will lose access right now.')" { button type="submit" class=(button_class("destructive", "default", "")) { "Cancel Now" } }
+                                }
+                            }
+                        }
+                    } @else {
+                        div class="py-8" {
+                            div class="text-center mb-8" {
+                                div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500/20 to-teal-500/20" { (icon("credit-card", "h-8 w-8 text-indigo-500")) }
+                                h3 class="text-lg font-semibold mb-2" { "No Active Membership" }
+                                p class="text-muted-foreground" { "Subscribe to access all applications." }
+                            }
+                            div class="text-center" {
+                                @if stripe {
+                                    form method="post" action="/membership/subscribe" { button type="submit" class=(button_class("default", "lg", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Subscribe " (icon("arrow-right", "h-4 w-4")) } }
+                                } @else {
+                                    button type="button" disabled title="Payment is not configured" class=(button_class("default", "lg", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Subscribe" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Invoices (lifted from the retired /billing page). Always
+            // renders so a one-off charge or refund still surfaces;
+            // empty-state copy covers the common lifetime-member case.
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Invoices" } p class="text-sm text-muted-foreground" { "Your billing history" } }
                 div class="p-6 pt-0" {
                     @if invoices.is_empty() {
@@ -346,152 +969,6 @@ pub async fn billing(State(st): State<AppState>, headers: HeaderMap) -> Response
                     }
                 }
             }
-        }
-    };
-    dashboard_response(&c, &user, "/billing", "Billing · Bunyip", content)
-}
-
-// ===========================================================================
-// Checkout success
-// ===========================================================================
-
-pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    // authenticate() already refreshed claims via /me; that picks up the new membership.
-    let (user, c) = match guard(&st, &headers, "/checkout/success").await { Ok(v) => v, Err(r) => return r };
-    let tier = match user.subscription_tier { SubscriptionTier::EarlyAdopter => "Early Adopter", SubscriptionTier::Lifetime => "Lifetime", _ => "Standard" };
-    let content = html! {
-        div class="flex items-center justify-center min-h-[70vh]" {
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm max-w-lg w-full border-border/50 overflow-hidden" {
-                div class="h-1 bg-gradient-to-r from-teal-500 via-indigo-500 to-primary" {}
-                div class="p-6 pt-8 pb-8 text-center space-y-6" {
-                    div class="flex justify-center" { div class="rounded-full bg-gradient-to-br from-teal-500/20 to-teal-500/5 p-4" { (icon("check-circle", "h-12 w-12 text-teal-500")) } }
-                    div class="space-y-2" {
-                        h1 class="text-3xl font-bold" { "Welcome aboard" span class="text-gradient bg-gradient-to-r from-primary to-indigo-500" { "!" } }
-                        p class="text-muted-foreground text-lg" { "Your membership is now active. You have full access to all applications." }
-                    }
-                    div class="bg-gradient-to-r from-indigo-500/5 via-primary/5 to-teal-500/5 rounded-lg p-4 space-y-2 text-sm border border-border/50" {
-                        div class="flex items-center justify-center gap-2" { (icon("credit-card", "h-4 w-4 text-indigo-500")) span class="font-medium" { (tier) " Plan" } }
-                        p class="text-muted-foreground" { "Your price is locked in for life - it will never increase." }
-                    }
-                    div class="flex flex-col gap-3 pt-2" {
-                        a href="/applications" class=(button_class("default", "lg", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { (icon("app-window", "h-4 w-4")) "Browse Applications" (icon("arrow-right", "h-4 w-4")) }
-                        a href="/membership" class=(button_class("outline", "default", "")) { "View Membership Details" }
-                    }
-                    p class="text-xs text-muted-foreground" { "Redirecting to applications shortly…" }
-                    script { (PreEscaped("setTimeout(function(){location.href='/applications'},10000);")) }
-                }
-            }
-        }
-    };
-    dashboard_response(&c, &user, "/membership", "Welcome · Bunyip", content)
-}
-
-// ===========================================================================
-// Membership required (error page)
-// ===========================================================================
-
-pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match guard(&st, &headers, "/membership-required").await { Ok(v) => v, Err(r) => return r };
-    let content = html! {
-        div class="flex min-h-[60vh] items-center justify-center px-4" {
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm w-full max-w-md" {
-                div class="flex flex-col space-y-1.5 p-6 text-center" {
-                    div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10" { (icon("credit-card", "h-8 w-8 text-primary")) }
-                    h3 class="text-2xl font-semibold leading-none tracking-tight" { "Membership Required" }
-                    p class="text-sm text-muted-foreground" { "You need an active membership to access this content." }
-                }
-                div class="p-6 pt-0 space-y-4" {
-                    p class="text-center text-muted-foreground" { "Subscribe to get access to all applications for just $3/month." }
-                    div class="flex flex-col gap-4" {
-                        a href="/membership" class=(button_class("default", "default", "w-full")) { "Subscribe Now" }
-                        a href="/dashboard" class=(button_class("outline", "default", "w-full")) { (icon("arrow-left", "mr-2 h-4 w-4")) "Back to Dashboard" }
-                    }
-                }
-            }
-        }
-    };
-    dashboard_response(&c, &user, "/dashboard", "Membership required · Bunyip", content)
-}
-
-// ===========================================================================
-// Membership (view + actions)
-// ===========================================================================
-
-fn tier_name(t: &SubscriptionTier) -> &'static str {
-    match t { SubscriptionTier::Lifetime => "Lifetime", SubscriptionTier::Free => "Free", SubscriptionTier::EarlyAdopter => "Early Adopter", SubscriptionTier::Standard => "Standard" }
-}
-fn status_label(s: &MembershipStatus) -> &'static str {
-    match s { MembershipStatus::None => "none", MembershipStatus::Active => "active", MembershipStatus::PastDue => "past_due", MembershipStatus::Canceled => "canceled", MembershipStatus::Incomplete => "incomplete", MembershipStatus::GracePeriod => "grace_period" }
-}
-
-pub async fn membership(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match guard(&st, &headers, "/membership").await { Ok(v) => v, Err(r) => return r };
-    let fwd = c.forward.as_deref();
-    let current: Option<Membership> = calls::membership(&st.api, fwd).await.unwrap_or(None);
-    let payments = calls::payment_history(&st.api, fwd).await.unwrap_or_default();
-    let stripe = auth_api::setup_status(&st.api).await.map(|s| s.stripe_enabled).unwrap_or(true);
-    let tier = user.subscription_tier.clone();
-    let status = current.as_ref().map(|m| m.status.clone());
-    let has = matches!(status, Some(MembershipStatus::Active) | Some(MembershipStatus::PastDue));
-    let past_due = matches!(status, Some(MembershipStatus::PastDue));
-    let will_cancel = current.as_ref().map(|m| m.cancel_at_period_end).unwrap_or(false);
-
-    let content = html! {
-        div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Membership" } p class="mt-2 text-muted-foreground" { "Manage your membership and billing." } }
-            @if past_due {
-                div class="rounded-lg border border-destructive/50 p-4 text-sm text-destructive flex items-center gap-2" {
-                    (icon("alert-triangle", "h-4 w-4")) "Your payment failed. Update your payment method within 30 days to avoid losing access."
-                }
-            }
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50 overflow-hidden" {
-                div class="h-1 bg-gradient-to-r from-primary via-indigo-500 to-teal-500" {}
-                div class="flex flex-col space-y-1.5 p-6" {
-                    div class="flex items-center justify-between" {
-                        div class="flex items-center gap-3" {
-                            div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-indigo-500" { (icon("credit-card", "h-4 w-4 text-white")) }
-                            h3 class="text-2xl font-semibold leading-none tracking-tight" { "Current Plan" }
-                        }
-                        (membership_badge(&user))
-                    }
-                }
-                div class="p-6 pt-0 space-y-4" {
-                    @if has {
-                        @let m = current.clone().unwrap();
-                        div class="grid gap-4 md:grid-cols-2" {
-                            div { p class="text-sm text-muted-foreground" { "Plan" } p class="font-medium" { (tier_name(&tier)) } }
-                            div { p class="text-sm text-muted-foreground" { "Price" } p class="font-medium" { @if m.price_locked { @if let Some(a)=m.locked_price_amount { "$" (a/100) "/month" } @else { "$3/month" } } @else { "$3/month" } } }
-                            div { p class="text-sm text-muted-foreground" { "Status" } p class="font-medium" { (status_label(&m.status)) } }
-                            div { p class="text-sm text-muted-foreground" { "Next Billing" } p class="font-medium" {
-                                @let end = m.current_period_end.as_deref().map(fmt_date_iso).unwrap_or_else(|| "N/A".into());
-                                @if will_cancel { "Canceled - ends " (end) } @else { (end) } } }
-                        }
-                        div class="flex gap-4 pt-4" {
-                            @if will_cancel {
-                                form method="post" action="/membership/reactivate" { button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Reactivate Membership" } }
-                            } @else {
-                                form method="post" action="/membership/cancel" { button type="submit" class=(button_class("outline", "default", "")) { "Cancel Membership" } }
-                                form method="post" action="/membership/cancel-now" onsubmit="return confirm('Cancel immediately? You will lose access right now.')" { button type="submit" class=(button_class("destructive", "default", "")) { "Cancel Now" } }
-                            }
-                        }
-                    } @else {
-                        div class="py-8" {
-                            div class="text-center mb-8" {
-                                div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500/20 to-teal-500/20" { (icon("credit-card", "h-8 w-8 text-indigo-500")) }
-                                h3 class="text-lg font-semibold mb-2" { "No Active Membership" }
-                                p class="text-muted-foreground" { "Subscribe to access all applications." }
-                            }
-                            div class="text-center" {
-                                @if stripe {
-                                    form method="post" action="/membership/subscribe" { button type="submit" class=(button_class("default", "lg", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Subscribe " (icon("arrow-right", "h-4 w-4")) } }
-                                } @else {
-                                    button type="button" disabled title="Payment is not configured" class=(button_class("default", "lg", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Subscribe" }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Payment History" } }
                 div class="p-6 pt-0" {
@@ -513,32 +990,112 @@ pub async fn membership(State(st): State<AppState>, headers: HeaderMap) -> Respo
             }
         }
     };
-    dashboard_response(&c, &user, "/membership", "Membership · Bunyip", content)
+    dashboard_response(
+        &c,
+        &user,
+        "/membership",
+        "Membership & Billing · Bunyip",
+        content,
+    )
 }
 
 pub async fn membership_subscribe(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (_, c) = match guard(&st, &headers, "/membership").await { Ok(v) => v, Err(r) => return r };
+    let (_, c) = match guard(&st, &headers, "/membership").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    // BUNYIP-187: surface checkout failures as a flash banner on
+    // `/membership` instead of silently redirecting. The api returns
+    // a useful 400 (e.g. `price_id: No active price configured`)
+    // when no app-tagged product is configured (gotcha 3 in
+    // BUNYIP-A-5); the old `_ => redirect_cookies("/membership", ...)`
+    // arm dropped that on the floor and left the operator wondering
+    // why the Subscribe button "did nothing".
     match calls::checkout(&st.api, c.forward.as_deref(), None).await {
-        Ok(s) if s.checkout_url.starts_with("https://checkout.stripe.com/") => redirect_cookies(&s.checkout_url, &c.set_cookies),
-        _ => redirect_cookies("/membership", &c.set_cookies),
+        Ok(s) if s.checkout_url.starts_with("https://checkout.stripe.com/") => {
+            redirect_cookies(&s.checkout_url, &c.set_cookies)
+        }
+        Ok(_) => redirect_cookies(
+            &format!(
+                "/membership?error={}",
+                urlenc(&humanise_checkout_error(
+                    "Checkout returned an invalid URL. Please contact support."
+                ))
+            ),
+            &c.set_cookies,
+        ),
+        Err(e) => redirect_cookies(
+            &format!(
+                "/membership?error={}",
+                urlenc(&humanise_checkout_error(&e.user_message()))
+            ),
+            &c.set_cookies,
+        ),
     }
 }
+
+/// BUNYIP-187: map the api's raw checkout-error message to operator-
+/// friendly copy. The recognised messages come from
+/// `bunyip-api/src/handlers/membership.rs` and the gotchas catalogued
+/// in BUNYIP-A-5; anything we have not seen yet falls through to the
+/// raw text so the operator still gets useful information instead of
+/// a sanitised wall.
+fn humanise_checkout_error(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.contains("No active price configured") {
+        return "Stripe checkout is not configured. An admin must create at least one tagged product and recurring price before subscriptions can be opened. See dev-docs/stripe-test-mode.md.".to_string();
+    }
+    if trimmed.contains("Stripe is not configured") || trimmed.contains("STRIPE_SECRET_KEY") {
+        return "Stripe is not configured on this deployment. Set the Stripe keys in the admin Stripe page (or via env) before subscribing.".to_string();
+    }
+    // BUNYIP-191: dunite-core maps every `AppError::InternalError` /
+    // `AppError::DatabaseError` to this single user-facing string,
+    // which left the operator with no actionable hint (the real
+    // cause is logged on the api side). Replace it with a message
+    // that explicitly points at the api logs so an operator chasing
+    // a Subscribe failure knows where to look.
+    if trimmed == "An unexpected error occurred. Please try again later." {
+        return "Checkout failed unexpectedly on the server. The api logged the cause - check `docker logs <bunyip-api>` for 'Failed to create Stripe checkout session' or similar, then contact support.".to_string();
+    }
+    if trimmed.is_empty() {
+        return "Could not start checkout. Please try again or contact support.".to_string();
+    }
+    trimmed.to_string()
+}
 pub async fn membership_cancel(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (_, c) = match guard(&st, &headers, "/membership").await { Ok(v) => v, Err(r) => return r };
-    let extra = calls::cancel(&st.api, c.forward.as_deref()).await.unwrap_or_default();
-    let mut cookies = c.set_cookies.clone(); cookies.extend(extra);
+    let (_, c) = match guard(&st, &headers, "/membership").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let extra = calls::cancel(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
+    let mut cookies = c.set_cookies.clone();
+    cookies.extend(extra);
     redirect_cookies("/membership", &cookies)
 }
 pub async fn membership_cancel_now(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (_, c) = match guard(&st, &headers, "/membership").await { Ok(v) => v, Err(r) => return r };
-    let extra = calls::cancel_now(&st.api, c.forward.as_deref()).await.unwrap_or_default();
-    let mut cookies = c.set_cookies.clone(); cookies.extend(extra);
+    let (_, c) = match guard(&st, &headers, "/membership").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let extra = calls::cancel_now(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
+    let mut cookies = c.set_cookies.clone();
+    cookies.extend(extra);
     redirect_cookies("/membership", &cookies)
 }
 pub async fn membership_reactivate(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (_, c) = match guard(&st, &headers, "/membership").await { Ok(v) => v, Err(r) => return r };
-    let extra = calls::reactivate(&st.api, c.forward.as_deref()).await.unwrap_or_default();
-    let mut cookies = c.set_cookies.clone(); cookies.extend(extra);
+    let (_, c) = match guard(&st, &headers, "/membership").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let extra = calls::reactivate(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
+    let mut cookies = c.set_cookies.clone();
+    cookies.extend(extra);
     redirect_cookies("/membership", &cookies)
 }
 
@@ -547,20 +1104,67 @@ pub async fn membership_reactivate(State(st): State<AppState>, headers: HeaderMa
 // ===========================================================================
 
 #[derive(Deserialize)]
-pub struct SettingsQuery { pub ok: Option<String>, pub error: Option<String> }
+pub struct SettingsQuery {
+    pub ok: Option<String>,
+    pub error: Option<String>,
+    /// 1-indexed page for the Active Sessions list (BUNYIP-177).
+    pub session_page: Option<i64>,
+    /// 1-indexed page for the Trusted Devices list (BUNYIP-177).
+    pub device_page: Option<i64>,
+}
 
-pub async fn settings(State(st): State<AppState>, headers: HeaderMap, Query(q): Query<SettingsQuery>) -> Response {
-    let (user, c) = match guard(&st, &headers, "/settings").await { Ok(v) => v, Err(r) => return r };
+/// Page size for the Settings sessions / trusted-device lists (BUNYIP-177).
+const SETTINGS_PAGE_SIZE: i64 = 20;
+
+/// Empty page fallback so a failed sessions/devices fetch does not break the
+/// rest of /settings (BUNYIP-177).
+fn empty_page<T>(page: i64) -> crate::api::types::PaginatedResponse<T> {
+    crate::api::types::PaginatedResponse {
+        items: Vec::new(),
+        total: 0,
+        page,
+        page_size: Some(SETTINGS_PAGE_SIZE),
+        total_pages: 0,
+    }
+}
+
+pub async fn settings(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<SettingsQuery>,
+) -> Response {
+    let (user, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let fwd = c.forward.as_deref();
     let twofa = auth_api::status_2fa(&st.api, fwd).await.ok();
-    let twofa_enabled = twofa.as_ref().map(|s| s.enabled).unwrap_or(user.two_factor_enabled);
+    let twofa_enabled = twofa
+        .as_ref()
+        .map(|s| s.enabled)
+        .unwrap_or(user.two_factor_enabled);
     let is_admin = matches!(user.role, crate::api::types::UserRole::Admin);
+    // Active sessions (BUNYIP-137), paginated (BUNYIP-177). A failure here must
+    // not break the rest of the settings page, so fall back to an empty page.
+    let session_page = q.session_page.unwrap_or(1).max(1);
+    let device_page = q.device_page.unwrap_or(1).max(1);
+    let sessions = calls::list_sessions(&st.api, fwd, session_page, SETTINGS_PAGE_SIZE)
+        .await
+        .unwrap_or_else(|_| empty_page(session_page));
+    // Trusted devices (BUNYIP-138). Only 2FA users have any; fetch lazily.
+    let trusted_devices = if twofa_enabled {
+        auth_api::list_trusted_devices(&st.api, fwd, device_page, SETTINGS_PAGE_SIZE)
+            .await
+            .unwrap_or_else(|_| empty_page(device_page))
+    } else {
+        empty_page(device_page)
+    };
 
     let content = html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Settings" } p class="mt-2 text-muted-foreground" { "Manage your account settings and preferences." } }
-            @if let Some(ok) = &q.ok { div class="rounded-lg border p-3 text-sm flex items-center gap-2" { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) (ok) } }
-            @if let Some(e) = &q.error { (error_box(e)) }
+            @if let Some(ok) = &q.ok { div class="rounded-lg border p-3 text-sm flex items-center gap-2" { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) (clamp_msg(ok)) } }
+            @if let Some(e) = &q.error { (error_box(&clamp_msg(e))) }
 
             // Account info
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50 overflow-hidden" {
@@ -571,28 +1175,59 @@ pub async fn settings(State(st): State<AppState>, headers: HeaderMap, Query(q): 
                 div class="p-6 pt-0 space-y-4" {
                     div class="grid gap-4 md:grid-cols-2" {
                         div { p class="text-sm text-muted-foreground" { "Email" } p class="font-medium" { (user.email) } }
-                        div { p class="text-sm text-muted-foreground" { "Account Type" } p class="font-medium flex items-center gap-2" { @if is_admin { "admin" (badge("default", "Admin")) } @else { "subscriber" } } }
-                        div { p class="text-sm text-muted-foreground" { "Email Verified" } p class="font-medium flex items-center gap-2" { @if user.email_verified { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) "Verified" } @else { (icon("alert-circle", "h-4 w-4 text-yellow-600")) "Not Verified" } } }
+                        div { p class="text-sm text-muted-foreground" { "Account Type" } p class="font-medium flex items-center gap-2" { @if is_admin { "admin" (badge("default", "Admin")) } @else { (tier_name(&user.subscription_tier)) } } }
+                        div { p class="text-sm text-muted-foreground" { "Email Verified" } p class="font-medium flex items-center gap-2" { @if user.email_verified { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) "Verified" } @else { (icon("alert-circle", "h-4 w-4 text-yellow-600")) "Not Verified" } } @if !user.email_verified { form method="post" action="/settings/verify-email/resend" class="mt-2" { button type="submit" class=(button_class("outline", "sm", "")) { (icon("mail", "mr-2 h-4 w-4")) "Resend verification email" } } } }
                         div { p class="text-sm text-muted-foreground" { "Membership Status" } p class="font-medium" { (status_label(&user.membership_status)) } }
                     }
                 }
             }
 
-            // Change email
+            // BUNYIP-139: Profile (first_name, last_name, phone). All three
+            // are optional at the DB level; the Settings form trims input and
+            // empty submission clears the column to NULL. Length is bounded
+            // at 64 per the DB CHECK; the same limit is enforced at the API
+            // edge. Persistence: PUT /v1/users/me/profile via
+            // `auth_api::update_profile`.
+            (settings_card("user-cog", "from-primary to-teal-500", "Profile", html! {
+                form method="post" action="/settings/profile" class="space-y-4 max-w-md" {
+                    div class="space-y-2" { label class="text-sm font-medium" { "First Name" } input name="first_name" type="text" maxlength="64" value=(user.first_name.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label class="text-sm font-medium" { "Last Name" } input name="last_name" type="text" maxlength="64" value=(user.last_name.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label class="text-sm font-medium" { "Phone " span class="text-xs text-muted-foreground" { "(optional)" } } input name="phone" type="tel" maxlength="64" value=(user.phone.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
+                    p class="text-xs text-muted-foreground" { "Apps that connect to your Bunyip account can request these fields. You will be asked to confirm before any new app sees them." }
+                    button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-teal-500 text-white border-0")) { "Save Profile" }
+                }
+            }))
+
+            // Change email. autocomplete="off" on the form + value="" on the
+            // new-email input defeat the password-manager's "fill in the
+            // saved username" heuristic that was leaving the field already
+            // populated with the user's current email (audit finding 3).
+            // current_password also takes autocomplete="off" here - this is
+            // confirmation-of-identity, not a sign-in form, so we don't want
+            // the manager filling it.
             (settings_card("mail", "from-primary to-teal-500", "Change Email", html! {
-                form method="post" action="/settings/email" class="space-y-4 max-w-md" {
-                    div class="space-y-2" { label class="text-sm font-medium" { "New Email Address" } input name="new_email" type="email" placeholder="Enter your new email" class=(crate::handlers::dashboard_input()); }
-                    div class="space-y-2" { label class="text-sm font-medium" { "Current Password" } input name="current_password" type="password" placeholder="Enter your current password" class=(crate::handlers::dashboard_input()); }
+                form method="post" action="/settings/email" autocomplete="off" class="space-y-4 max-w-md" {
+                    // BUNYIP-117: bound the new-email at the edge (254
+                    // chars / RFC 5321 max, required + type=email for the
+                    // browser's own shape check). Authoritative validation
+                    // is still in `services::auth::request_email_change`.
+                    div class="space-y-2" { label class="text-sm font-medium" { "New Email Address" } input name="new_email" type="email" value="" autocomplete="off" maxlength="254" required placeholder="Enter your new email" class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label class="text-sm font-medium" { "Current Password" } input name="current_password" type="password" autocomplete="off" required placeholder="Enter your current password" class=(crate::handlers::dashboard_input()); }
+                    @if twofa_enabled { div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
                     button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-teal-500 text-white border-0")) { "Change Email" }
                 }
             }))
 
-            // Change password
+            // Change password. This is the one Settings form where the
+            // password manager SHOULD help: current-password lets it fill
+            // the saved value, new-password lets it offer to save the
+            // updated credential after submit.
             (settings_card("lock", "from-indigo-500 to-teal-500", "Change Password", html! {
                 form method="post" action="/settings/password" class="space-y-4 max-w-md" {
-                    div class="space-y-2" { label class="text-sm font-medium" { "Current Password" } input name="current_password" type="password" class=(crate::handlers::dashboard_input()); }
-                    div class="space-y-2" { label class="text-sm font-medium" { "New Password" } input name="new_password" type="password" class=(crate::handlers::dashboard_input()); }
-                    div class="space-y-2" { label class="text-sm font-medium" { "Confirm Password" } input name="confirm" type="password" class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label class="text-sm font-medium" { "Current Password" } input name="current_password" type="password" autocomplete="current-password" class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label class="text-sm font-medium" { "New Password" } input name="new_password" type="password" autocomplete="new-password" class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label class="text-sm font-medium" { "Confirm Password" } input name="confirm" type="password" autocomplete="new-password" class=(crate::handlers::dashboard_input()); }
+                    @if twofa_enabled { div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
                     button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Update Password" }
                 }
             }))
@@ -605,6 +1240,7 @@ pub async fn settings(State(st): State<AppState>, headers: HeaderMap, Query(q): 
                         @if !is_admin {
                             form method="post" action="/settings/2fa/disable" class="space-y-2 max-w-md" {
                                 div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" class=(crate::handlers::dashboard_input()); }
+                                div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); }
                                 button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("shield-off", "mr-2 h-4 w-4")) "Disable 2FA" }
                             }
                         } @else { p class="text-xs text-muted-foreground" { "Admin accounts cannot disable two-factor authentication." } }
@@ -617,13 +1253,28 @@ pub async fn settings(State(st): State<AppState>, headers: HeaderMap, Query(q): 
                 }
             }))
 
+            // Active sessions (BUNYIP-137)
+            (settings_card("key", "from-indigo-500 to-primary", "Active Sessions", sessions_card_body(&sessions, device_page)))
+
+            // Trusted devices (BUNYIP-138). Only meaningful with 2FA on.
+            @if twofa_enabled {
+                (settings_card("shield-check", "from-teal-500 to-primary", "Trusted Devices", trusted_devices_card_body(&trusted_devices, session_page)))
+            }
+
             // Danger zone
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-red-200 dark:border-red-900" {
-                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight text-red-600 dark:text-red-400 flex items-center gap-2" { (icon("alert-triangle", "h-5 w-5")) "Danger Zone" } p class="text-sm text-muted-foreground" { "Permanently delete your account and all associated data." } }
+                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight text-red-600 dark:text-red-400 flex items-center gap-2" { (icon("alert-triangle", "h-5 w-5")) "Danger Zone" } p class="text-sm text-muted-foreground" { "This permanently deletes your account AND all of your data in Mokosh and any other connected app. This cannot be undone." } }
                 div class="p-6 pt-0" {
-                    form method="post" action="/settings/account/delete" class="space-y-3 max-w-md" onsubmit="return confirm('Permanently delete your account? This cannot be undone.')" {
-                        div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" placeholder="Enter your password to confirm" class=(crate::handlers::dashboard_input()); }
-                        @if user.two_factor_enabled { div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
+                    // Delete account. autocomplete="off" on the form + on the
+                    // password input together suppress the password-manager
+                    // pre-fill that auditor finding 4 flagged on this danger-
+                    // zone form. TOTP gets the spec-aligned one-time-code
+                    // hint so the manager (or iOS / Chrome AutoFill) can
+                    // surface a freshly-arrived SMS / TOTP code from a sibling
+                    // tab WITHOUT pre-filling the password field.
+                    form method="post" action="/settings/account/delete" autocomplete="off" class="space-y-3 max-w-md" onsubmit="return confirm('Permanently delete your account AND all of your data in Mokosh and any other connected app? This cannot be undone.')" {
+                        div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" autocomplete="off" placeholder="Enter your password to confirm" class=(crate::handlers::dashboard_input()); }
+                        @if user.two_factor_enabled { div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
                         button type="submit" class=(button_class("destructive", "default", "")) { (icon("trash", "mr-2 h-4 w-4")) "Delete My Account" }
                     }
                 }
@@ -644,60 +1295,437 @@ fn settings_card(icon_name: &str, gradient: &str, title: &str, body: Markup) -> 
     }
 }
 
-#[derive(Deserialize)]
-pub struct EmailChangeForm { pub new_email: String, #[serde(default)] pub current_password: String }
-pub async fn settings_email(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<EmailChangeForm>) -> Response {
-    let (_, c) = match guard(&st, &headers, "/settings").await { Ok(v) => v, Err(r) => return r };
-    match auth_api::request_email_change(&st.api, c.forward.as_deref(), f.new_email.trim(), &f.current_password).await {
-        Ok((relogin, mut cookies)) => {
-            let mut all = c.set_cookies.clone(); all.append(&mut cookies);
-            if relogin { redirect_cookies("/login", &all) } else { redirect_cookies("/settings?ok=Email+change+requested", &all) }
+/// Human "time ago" from an ISO-8601 timestamp; falls back to the date prefix
+/// if the value does not parse.
+fn time_ago(iso: &str) -> String {
+    match chrono::DateTime::parse_from_rfc3339(iso) {
+        Ok(t) => {
+            let secs = (chrono::Utc::now() - t.with_timezone(&chrono::Utc))
+                .num_seconds()
+                .max(0);
+            if secs < 60 {
+                "just now".to_string()
+            } else if secs < 3600 {
+                format!("{} min ago", secs / 60)
+            } else if secs < 86_400 {
+                format!("{} hr ago", secs / 3600)
+            } else {
+                format!("{} days ago", secs / 86_400)
+            }
         }
-        Err(e) => redirect_cookies(&format!("/settings?error={}", urlenc(&e.user_message())), &c.set_cookies),
+        Err(_) => iso.chars().take(10).collect(),
+    }
+}
+
+/// Prev/Next links for one of the two /settings lists (BUNYIP-177). `param` is
+/// this list's page query key; `keep` carries the OTHER list's page so paging
+/// one list does not reset the other. Plain links (no htmx), mirroring the only
+/// existing pager in bunyip-web (the admin pager).
+fn settings_pager(param: &str, page: i64, total_pages: i64, keep: &str) -> Markup {
+    html! {
+        @if total_pages > 1 {
+            div class="flex justify-center gap-2 mt-4" {
+                @if page > 1 { a href=(format!("/settings?{keep}&{param}={}", page - 1)) class=(button_class("outline", "sm", "")) { "Previous" } }
+                span class="flex items-center px-3 text-sm text-muted-foreground" { "Page " (page) " of " (total_pages) }
+                @if page < total_pages { a href=(format!("/settings?{keep}&{param}={}", page + 1)) class=(button_class("outline", "sm", "")) { "Next" } }
+            }
+        }
+    }
+}
+
+/// Body of the "Active Sessions" card: one row per session with device, IP,
+/// last-active time, a "This device" badge on the current session, a per-row
+/// revoke action for non-current sessions, and a "log out all other devices"
+/// action when there is at least one other session (BUNYIP-137).
+fn sessions_card_body(
+    page: &crate::api::types::PaginatedResponse<crate::api::types::SessionInfo>,
+    device_page: i64,
+) -> Markup {
+    let sessions = &page.items;
+    // "Log out all other devices" appears whenever the account has more than one
+    // active session, even if the others are on a later page (BUNYIP-177).
+    let has_others = page.total > 1;
+    html! {
+        @if sessions.is_empty() {
+            p class="text-sm text-muted-foreground" { "No active sessions found." }
+        } @else {
+            ul class="space-y-3" {
+                @for s in sessions {
+                    li class="flex items-center justify-between gap-4 rounded-lg border border-border/50 p-4" {
+                        div class="min-w-0" {
+                            p class="font-medium truncate flex items-center gap-2" {
+                                (s.device_info.as_deref().unwrap_or("Unknown device"))
+                                @if s.current { (badge("success", "This device")) }
+                            }
+                            p class="text-sm text-muted-foreground" {
+                                @if let Some(ip) = &s.ip_address { (ip) " · " }
+                                "last active " (time_ago(s.last_used_at.as_deref().unwrap_or(&s.created_at)))
+                            }
+                        }
+                        @if !s.current {
+                            form method="post" action=(format!("/settings/sessions/{}/revoke", urlenc(&s.id))) {
+                                button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("log-out", "mr-2 h-4 w-4")) "Revoke" }
+                            }
+                        }
+                    }
+                }
+            }
+            @if has_others {
+                form method="post" action="/settings/sessions/revoke-others" class="mt-4" onsubmit="return confirm('Log out all other devices?')" {
+                    button type="submit" class=(button_class("outline", "sm", "")) { (icon("log-out", "mr-2 h-4 w-4")) "Log out all other devices" }
+                }
+            }
+        }
+        (settings_pager("session_page", page.page, page.total_pages, &format!("device_page={device_page}")))
+    }
+}
+
+/// POST /settings/sessions/{id}/revoke - revoke one of the user's sessions.
+pub async fn settings_revoke_session(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match calls::revoke_session(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => redirect_cookies("/settings?ok=Session+revoked", &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
+    }
+}
+
+/// POST /settings/sessions/revoke-others - log out all other devices.
+pub async fn settings_revoke_other_sessions(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match calls::revoke_other_sessions(&st.api, c.forward.as_deref()).await {
+        Ok(()) => redirect_cookies("/settings?ok=Logged+out+other+devices", &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
+    }
+}
+
+/// Body of the "Trusted Devices" card (BUNYIP-138): devices that skip the TOTP
+/// prompt at login, each with a revoke action.
+fn trusted_devices_card_body(
+    page: &crate::api::types::PaginatedResponse<crate::api::types::TrustedDeviceInfo>,
+    session_page: i64,
+) -> Markup {
+    let devices = &page.items;
+    html! {
+        p class="text-sm text-muted-foreground mb-4" { "Devices that skip the two-factor prompt when you sign in. Revoke any you do not recognize." }
+        @if devices.is_empty() {
+            p class="text-sm text-muted-foreground" { "No trusted devices." }
+        } @else {
+            ul class="space-y-3" {
+                @for d in devices {
+                    li class="flex items-center justify-between gap-4 rounded-lg border border-border/50 p-4" {
+                        div class="min-w-0" {
+                            p class="font-medium truncate" { (d.label.as_deref().unwrap_or("Unknown device")) }
+                            p class="text-sm text-muted-foreground" {
+                                @if let Some(ip) = &d.ip_address { (ip) " · " }
+                                "added " (time_ago(&d.created_at))
+                            }
+                        }
+                        form method="post" action=(format!("/settings/trusted-devices/{}/revoke", urlenc(&d.id))) {
+                            button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("trash", "mr-2 h-4 w-4")) "Revoke" }
+                        }
+                    }
+                }
+            }
+        }
+        (settings_pager("device_page", page.page, page.total_pages, &format!("session_page={session_page}")))
+    }
+}
+
+/// POST /settings/trusted-devices/{id}/revoke - forget a trusted device.
+pub async fn settings_revoke_trusted_device(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match auth_api::revoke_trusted_device(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => redirect_cookies("/settings?ok=Trusted+device+revoked", &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
     }
 }
 
 #[derive(Deserialize)]
-pub struct PasswordChangeForm { pub current_password: String, pub new_password: String, pub confirm: String }
-pub async fn settings_password(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<PasswordChangeForm>) -> Response {
-    let (_, c) = match guard(&st, &headers, "/settings").await { Ok(v) => v, Err(r) => return r };
+pub struct EmailChangeForm {
+    pub new_email: String,
+    #[serde(default)]
+    pub current_password: String,
+    /// TOTP/recovery code, required by the API when 2FA is on (BUNYIP-138).
+    #[serde(default)]
+    pub totp_code: String,
+}
+
+/// BUNYIP-139: Settings -> Profile form.
+#[derive(Deserialize)]
+pub struct ProfileForm {
+    #[serde(default)]
+    pub first_name: String,
+    #[serde(default)]
+    pub last_name: String,
+    #[serde(default)]
+    pub phone: String,
+}
+
+/// BUNYIP-139: POST /settings/profile. Persists optional first_name /
+/// last_name / phone via `auth_api::update_profile`. Every field is sent on
+/// every submit (trimmed at the API edge) so a user can clear a value by
+/// erasing the input and saving.
+pub async fn settings_profile(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<ProfileForm>,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match auth_api::update_profile(
+        &st.api,
+        c.forward.as_deref(),
+        Some(f.first_name.as_str()),
+        Some(f.last_name.as_str()),
+        Some(f.phone.as_str()),
+    )
+    .await
+    {
+        Ok(()) => redirect_cookies("/settings?ok=Profile+saved", &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
+    }
+}
+
+pub async fn settings_email(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<EmailChangeForm>,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    // BUNYIP-117: web-edge shape + bound check on the email. Authoritative
+    // shape-check still happens in `services::auth::request_email_change`,
+    // but bouncing garbage / over-length values here means the bad-input
+    // user error is "your email is malformed" rather than a generic
+    // upstream rejection.
+    if let Err(msg) = crate::handlers::validate::email(&f.new_email, "New email") {
+        return redirect_cookies(&format!("/settings?error={}", urlenc(&msg)), &c.set_cookies);
+    }
+    if f.current_password.is_empty() {
+        return redirect_cookies(
+            &format!(
+                "/settings?error={}",
+                urlenc("Please enter your current password")
+            ),
+            &c.set_cookies,
+        );
+    }
+    match auth_api::request_email_change(
+        &st.api,
+        c.forward.as_deref(),
+        f.new_email.trim(),
+        &f.current_password,
+        f.totp_code.trim(),
+    )
+    .await
+    {
+        Ok((relogin, mut cookies)) => {
+            let mut all = c.set_cookies.clone();
+            all.append(&mut cookies);
+            if relogin {
+                redirect_cookies("/login", &all)
+            } else {
+                redirect_cookies("/settings?ok=Email+change+requested", &all)
+            }
+        }
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct PasswordChangeForm {
+    pub current_password: String,
+    pub new_password: String,
+    pub confirm: String,
+    /// TOTP/recovery code, required by the API when 2FA is on (BUNYIP-138).
+    #[serde(default)]
+    pub totp_code: String,
+}
+pub async fn settings_password(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<PasswordChangeForm>,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     if !password_ok(&f.new_password) || f.new_password != f.confirm {
-        let e = if f.new_password != f.confirm { "Passwords don't match" } else { "Password does not meet the requirements" };
+        let e = if f.new_password != f.confirm {
+            "Passwords don't match"
+        } else {
+            "Password does not meet the requirements"
+        };
         return redirect_cookies(&format!("/settings?error={}", urlenc(e)), &c.set_cookies);
     }
-    match auth_api::change_password(&st.api, c.forward.as_deref(), &f.current_password, &f.new_password).await {
+    match auth_api::change_password(
+        &st.api,
+        c.forward.as_deref(),
+        &f.current_password,
+        &f.new_password,
+        f.totp_code.trim(),
+    )
+    .await
+    {
         Ok(()) => redirect_cookies("/settings?ok=Password+updated", &c.set_cookies),
-        Err(e) => redirect_cookies(&format!("/settings?error={}", urlenc(&e.user_message())), &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
     }
 }
 
 #[derive(Deserialize)]
-pub struct DisableForm { pub password: String }
-pub async fn settings_disable_2fa(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<DisableForm>) -> Response {
-    let (_, c) = match guard(&st, &headers, "/settings").await { Ok(v) => v, Err(r) => return r };
-    match auth_api::disable_2fa(&st.api, c.forward.as_deref(), &f.password).await {
+pub struct DisableForm {
+    pub password: String,
+    #[serde(default)]
+    pub totp_code: String,
+}
+pub async fn settings_disable_2fa(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<DisableForm>,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match auth_api::disable_2fa(&st.api, c.forward.as_deref(), &f.password, &f.totp_code).await {
         Ok(()) => redirect_cookies("/settings?ok=Two-factor+disabled", &c.set_cookies),
-        Err(e) => redirect_cookies(&format!("/settings?error={}", urlenc(&e.user_message())), &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
+    }
+}
+
+/// Resend the email-verification message for the signed-in user. The domain
+/// layer rate-limits issuance (3 per hour) and rejects an already-verified
+/// account; both surface here as the API error message.
+pub async fn settings_resend_verification(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    // BUNYIP-206: guard with the real route path so the onboarding allowlist
+    // (handlers::mod::onboarding_allowed) admits it - a not-yet-onboarded user
+    // must be able to resend the verification email from /onboarding.
+    let (user, c) = match guard(&st, &headers, "/settings/verify-email/resend").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match auth_api::request_email_verification(&st.api, c.forward.as_deref()).await {
+        Ok(()) => redirect_cookies(
+            &format!(
+                "/settings?ok={}",
+                urlenc(&format!("Verification email sent to {}", user.email))
+            ),
+            &c.set_cookies,
+        ),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
     }
 }
 
 #[derive(Deserialize)]
-pub struct DeleteForm { pub password: String, #[serde(default)] pub totp_code: String }
-pub async fn settings_delete(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<DeleteForm>) -> Response {
-    let (_, c) = match guard(&st, &headers, "/settings").await { Ok(v) => v, Err(r) => return r };
-    let totp = if f.totp_code.is_empty() { None } else { Some(f.totp_code.as_str()) };
+pub struct DeleteForm {
+    pub password: String,
+    #[serde(default)]
+    pub totp_code: String,
+}
+pub async fn settings_delete(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<DeleteForm>,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    // Account deletion is irreversible; require a non-empty password at the
+    // edge instead of forwarding a blank credential to the API (BUNYIP-116).
+    if f.password.trim().is_empty() {
+        return redirect_cookies(
+            &format!(
+                "/settings?error={}",
+                urlenc("Enter your current password to confirm account deletion.")
+            ),
+            &c.set_cookies,
+        );
+    }
+    let totp = if f.totp_code.is_empty() {
+        None
+    } else {
+        Some(f.totp_code.as_str())
+    };
     match auth_api::delete_account(&st.api, c.forward.as_deref(), &f.password, totp).await {
-        Ok(mut cookies) => { let mut all = c.set_cookies.clone(); all.append(&mut cookies); redirect_cookies("/", &all) }
-        Err(e) => redirect_cookies(&format!("/settings?error={}", urlenc(&e.user_message())), &c.set_cookies),
+        Ok(mut cookies) => {
+            let mut all = c.set_cookies.clone();
+            all.append(&mut cookies);
+            redirect_cookies("/", &all)
+        }
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
     }
 }
 
-fn urlenc(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b { b'A'..=b'Z'|b'a'..=b'z'|b'0'..=b'9'|b'-'|b'_'|b'.'|b'~' => out.push(b as char), b' ' => out.push('+'), _ => out.push_str(&format!("%{b:02X}")) }
+/// Cap a user-supplied `?ok=`/`?error=` query-param message before it is
+/// rendered. The value is already Maud-escaped (so this is not an XSS guard);
+/// it bounds a hand-crafted link that stuffs the param with kilobytes of text
+/// to blow up the page. ~256 bytes is ample for the short status strings these
+/// params legitimately carry. Truncation lands on a char boundary.
+fn clamp_msg(s: &str) -> String {
+    const MAX: usize = 256;
+    if s.len() <= MAX {
+        return s.to_string();
     }
-    out
+    let mut end = MAX;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_string()
 }
 
 // ===========================================================================
@@ -706,41 +1734,78 @@ fn urlenc(s: &str) -> String {
 
 fn qr_svg(uri: &str) -> String {
     qrcode::QrCode::new(uri.as_bytes())
-        .map(|code| code.render::<qrcode::render::svg::Color>().min_dimensions(200, 200).quiet_zone(false).build())
+        .map(|code| {
+            code.render::<qrcode::render::svg::Color>()
+                .min_dimensions(200, 200)
+                .quiet_zone(false)
+                .build()
+        })
         .unwrap_or_default()
 }
 
-pub async fn twofa_setup_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match guard(&st, &headers, "/settings/2fa/setup").await { Ok(v) => v, Err(r) => return r };
-    let fwd = c.forward.as_deref();
-    let content = match auth_api::setup_2fa(&st.api, fwd).await {
-        Ok(s) => html! {
-            div class="mx-auto max-w-lg space-y-6" {
-                div { h1 class="text-3xl font-bold" { "Set Up Two-Factor Authentication" } p class="mt-2 text-muted-foreground" { "Scan the QR code, then enter a code to confirm." } }
-                div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
-                    div class="p-6 space-y-6" {
-                        div class="flex justify-center rounded-lg bg-white p-4" { div class="[&_svg]:h-[200px] [&_svg]:w-[200px]" { (PreEscaped(qr_svg(&s.otpauth_uri))) } }
-                        div class="space-y-2" {
-                            label class="text-sm text-muted-foreground" { "Or enter this key manually:" }
-                            code class="block rounded bg-muted px-3 py-2 text-sm font-mono break-all" { (s.secret) }
-                        }
-                        form method="post" action="/settings/2fa/setup" class="space-y-4" {
-                            div class="space-y-2" { label class="text-sm font-medium" { "Verification Code" } input name="code" inputmode="numeric" placeholder="000000" class=(crate::handlers::dashboard_input()); }
-                            button type="submit" class=(button_class("default", "default", "w-full")) { "Verify & Enable" }
-                        }
+/// Single Maud renderer for the 2FA enrollment view: QR + manual key + the
+/// verification-code form. Used by BOTH the GET handler (no error) and the
+/// POST error path (error banner above the code input). Keeping a single
+/// renderer means the QR / manual key / submit button are guaranteed to
+/// match across the entry render and any retry render, which is the whole
+/// point of audit finding 6: a wrong code MUST NOT make the QR disappear.
+///
+/// Caller passes `setup` (the bunyip-api `/v1/auth/2fa/setup` response, which
+/// the upstream handler MUST return the SAME in-progress secret for during
+/// enrollment - see `docs/bunyip-upgrade/04-2fa-error-state-preserves-form.md`).
+fn twofa_setup_view(setup: &TwoFactorSetupResponse, error: Option<&str>) -> Markup {
+    html! {
+        div class="mx-auto max-w-lg space-y-6" {
+            div { h1 class="text-3xl font-bold" { "Set Up Two-Factor Authentication" } p class="mt-2 text-muted-foreground" { "Scan the QR code, then enter a code to confirm." } }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
+                div class="p-6 space-y-6" {
+                    div class="flex justify-center rounded-lg bg-white p-4" { div class="[&_svg]:h-[200px] [&_svg]:w-[200px]" { (PreEscaped(qr_svg(&setup.otpauth_uri))) } }
+                    div class="space-y-2" {
+                        label class="text-sm text-muted-foreground" { "Or enter this key manually:" }
+                        code class="block rounded bg-muted px-3 py-2 text-sm font-mono break-all" { (setup.secret) }
+                    }
+                    @if let Some(msg) = error {
+                        (error_box(msg))
+                    }
+                    form method="post" action="/settings/2fa/setup" class="space-y-4" {
+                        // BUNYIP-117: bound the TOTP edge before submit
+                        // (maxlength + pattern). Authoritative check is
+                        // still domain-side via `services::totp::verify_code`.
+                        div class="space-y-2" { label class="text-sm font-medium" { "Verification Code" } input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000000" autocomplete="one-time-code" class=(crate::handlers::dashboard_input()); }
+                        button type="submit" class=(button_class("default", "default", "w-full")) { "Verify & Enable" }
                     }
                 }
             }
-        },
+        }
+    }
+}
+
+pub async fn twofa_setup_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match guard(&st, &headers, "/settings/2fa/setup").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let fwd = c.forward.as_deref();
+    let content = match auth_api::setup_2fa(&st.api, fwd).await {
+        Ok(setup) => twofa_setup_view(&setup, None),
         Err(e) => html! { div class="mx-auto max-w-lg" { (error_box(&e.user_message())) } },
     };
     dashboard_response(&c, &user, "/settings", "Two-factor setup · Bunyip", content)
 }
 
 #[derive(Deserialize)]
-pub struct TwoFactorSetupForm { pub code: String }
-pub async fn twofa_setup_post(State(st): State<AppState>, headers: HeaderMap, Form(f): Form<TwoFactorSetupForm>) -> Response {
-    let (user, c) = match guard(&st, &headers, "/settings/2fa/setup").await { Ok(v) => v, Err(r) => return r };
+pub struct TwoFactorSetupForm {
+    pub code: String,
+}
+pub async fn twofa_setup_post(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<TwoFactorSetupForm>,
+) -> Response {
+    let (user, c) = match guard(&st, &headers, "/settings/2fa/setup").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let fwd = c.forward.as_deref();
     let content = match auth_api::confirm_2fa(&st.api, fwd, f.code.trim()).await {
         Ok(codes) => html! {
@@ -755,7 +1820,78 @@ pub async fn twofa_setup_post(State(st): State<AppState>, headers: HeaderMap, Fo
                 }
             }
         },
-        Err(e) => html! { div class="mx-auto max-w-lg space-y-4" { (error_box(&e.user_message())) a href="/settings/2fa/setup" class=(button_class("outline","default","")) { "Try again" } } },
+        Err(e) => {
+            // Re-fetch the in-progress secret so the QR + manual key render
+            // identically to what the user is currently scanning. bunyip-api
+            // returns the SAME pending secret while an enrollment is in
+            // flight (see the API-side note in
+            // docs/bunyip-upgrade/04-2fa-error-state-preserves-form.md). If
+            // that re-fetch itself fails (network blip, session timeout),
+            // fall through to the legacy banner-only error so the user can
+            // restart enrollment manually.
+            let err_msg = e.user_message();
+            match auth_api::setup_2fa(&st.api, fwd).await {
+                Ok(setup) => twofa_setup_view(&setup, Some(&err_msg)),
+                Err(_) => html! {
+                    div class="mx-auto max-w-lg space-y-4" {
+                        (error_box(&err_msg))
+                        a href="/settings/2fa/setup" class=(button_class("outline", "default", "")) { "Try again" }
+                    }
+                },
+            }
+        }
     };
     dashboard_response(&c, &user, "/settings", "Two-factor setup · Bunyip", content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::types::{MembershipStatus, SubscriptionTier, User, UserRole};
+
+    fn user(role: UserRole, status: MembershipStatus) -> User {
+        User {
+            id: "u1".into(),
+            email: "u@example.com".into(),
+            role,
+            email_verified: true,
+            two_factor_enabled: false,
+            membership_status: status,
+            price_locked: false,
+            locked_price_id: None,
+            locked_price_amount: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+            subscription_tier: SubscriptionTier::Free,
+            trial_ends_at: None,
+            lifetime_member: false,
+            first_name: None,
+            last_name: None,
+            phone: None,
+        }
+    }
+
+    #[test]
+    fn admin_badge_shows_admin_not_no_membership() {
+        // BUNYIP-108: an admin has all-access, so the badge must not read
+        // "No Membership" (which contradicted "You have access to all
+        // applications" on the dashboard).
+        let markup = membership_badge(&user(UserRole::Admin, MembershipStatus::None)).into_string();
+        assert!(markup.contains("Admin"));
+        assert!(!markup.contains("No Membership"));
+    }
+
+    #[test]
+    fn non_admin_without_membership_still_shows_no_membership() {
+        let markup =
+            membership_badge(&user(UserRole::Subscriber, MembershipStatus::None)).into_string();
+        assert!(markup.contains("No Membership"));
+    }
+
+    #[test]
+    fn non_admin_active_shows_active() {
+        let markup =
+            membership_badge(&user(UserRole::Subscriber, MembershipStatus::Active)).into_string();
+        assert!(markup.contains("Active"));
+    }
 }

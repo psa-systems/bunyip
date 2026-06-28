@@ -13,21 +13,30 @@ path = "src/main.rs"
 
 [dependencies]
 # Web server.
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.7", features = ["macros", "multipart"] }
 tokio = { workspace = true }
-tower = "0.5"
-tower-http = { version = "0.6", features = ["fs", "compression-gzip", "trace"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs", "compression-gzip", "set-header", "trace"] }
 
 # HTML templating (compile-checked Rust macro) - rendered to String and wrapped
 # in axum::response::Html, so no version coupling with a maud "axum" feature.
 maud = "0.26"
 
 # Server-side HTTP client for the /v1 API. rustls to avoid a native OpenSSL dep.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "stream"] }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
+
+# Percent-encode the OIDC return URL when shuttling it through the 2FA hop.
+urlencoding = "2"
+
+# BUNYIP-112: parse + validate URL fields at the web edge (icon_url,
+# source_code_url, health_check_url, webhook_url) so malformed values never
+# reach the API or render as broken `href`s. Already in tree transitively via
+# reqwest -> url; declared here to use it directly.
+url = "2"
 
 # Server-side QR rendering (otpauth URI -> inline SVG) for 2FA setup.
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
@@ -35,5 +44,16 @@ qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 # Logging.
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+# bunyip-web ships a wider API/UI surface than what's wired up in current
+# routes (recovery-codes, downloads, feedback admin, subscribe). The helpers
+# + types exist because the matching handler PRs are queued; flipping dead_code
+# + too_many_arguments to allow keeps CI green during the staged rollout.
+# Tighten back to warn (or remove the entries) once the handlers ship.
+[lints.rust]
+dead_code = "allow"
+
+[lints.clippy]
+too_many_arguments = "allow"
 
 # Release/dev profiles are defined once at the workspace root (../Cargo.toml).

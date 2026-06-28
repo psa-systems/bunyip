@@ -30,7 +30,7 @@ use crate::middleware::auth::extract_client_ip;
 // ── Pattern matching ────────────────────────────────────────────────────────
 
 /// Compiled suspicious-path patterns (all static strings, no regex).
-pub struct SuspiciousPatterns {
+pub(crate) struct SuspiciousPatterns {
     suffixes: Vec<&'static str>,
     prefixes: Vec<&'static str>,
     exact: HashSet<&'static str>,
@@ -39,7 +39,7 @@ pub struct SuspiciousPatterns {
 
 impl SuspiciousPatterns {
     /// Build the default set of suspicious patterns.
-    pub fn default_patterns() -> Self {
+    pub(crate) fn default_patterns() -> Self {
         Self {
             suffixes: vec![
                 // Server-side scripting extensions
@@ -118,7 +118,7 @@ impl SuspiciousPatterns {
     }
 
     /// Returns `true` if the path matches any suspicious pattern.
-    pub fn matches(&self, path: &str) -> bool {
+    pub(crate) fn matches(&self, path: &str) -> bool {
         // Normalise: lowercase for extension matching only
         let lower = path.to_ascii_lowercase();
 
@@ -157,7 +157,6 @@ struct BanEntry {
 struct StrikeEntry {
     count: u32,
     first_seen: DateTime<Utc>,
-    last_path: String,
 }
 
 // ── AutoBanService ──────────────────────────────────────────────────────────
@@ -184,11 +183,29 @@ impl AutoBanService {
     }
 
     /// Returns `true` if the given IP is currently banned.
+    ///
+    /// Expired entries are evicted on read so the map stays bounded by the live
+    /// ban set rather than growing until the periodic 5-minute sweep.
     pub async fn is_banned(&self, ip: &IpAddr) -> bool {
-        let map = self.banned.read().await;
+        let now = Utc::now();
+
+        // Fast path: shared read lock covers the common cases (still banned, or
+        // not in the map at all) without contending for the write lock.
+        {
+            let map = self.banned.read().await;
+            match map.get(ip) {
+                Some(entry) if now < entry.expires_at => return true,
+                None => return false,
+                Some(_) => {} // expired: fall through to evict under a write lock
+            }
+        }
+
+        // Slow path: the entry is expired. Take the write lock and remove it,
+        // re-checking expiry in case a concurrent ban refreshed it meanwhile.
+        let mut map = self.banned.write().await;
         if let Some(entry) = map.get(ip) {
-            if Utc::now() < entry.expires_at {
-                return true;
+            if now >= entry.expires_at {
+                map.remove(ip);
             }
         }
         false
@@ -208,7 +225,6 @@ impl AutoBanService {
         let entry = strikes.entry(*ip).or_insert(StrikeEntry {
             count: 0,
             first_seen: now,
-            last_path: String::new(),
         });
 
         // Reset strikes if outside the window
@@ -218,7 +234,6 @@ impl AutoBanService {
         }
 
         entry.count += 1;
-        entry.last_path = path.to_string();
 
         if entry.count >= self.config.threshold {
             let reason = format!(
@@ -454,6 +469,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::env_lock;
 
     #[test]
     fn test_suspicious_patterns_scripting_extensions() {
@@ -564,20 +580,41 @@ mod tests {
 
     #[tokio::test]
     async fn test_record_strike_triggers_ban() {
-        // Use a pool-less approach: we need a real pool for the service,
-        // but we can test the logic with a mock-style setup.
-        // For unit tests without DB, we test patterns + ban logic separately.
-        // The service needs a PgPool, so we test the integration in main tests.
-        // Here we verify the pattern matching + state management conceptually.
+        // A lazy pool never actually connects, so this stays a pure in-memory
+        // unit test. The async DB-persist task spawned on ban promotion fails
+        // to connect and logs, but that does not touch the in-memory ban
+        // promotion this test exercises.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/bunyip_autoban_test")
+            .expect("lazy pool construction never connects");
+        let config = AutoBanConfig {
+            enabled: true,
+            threshold: 3,
+            window_secs: 3600,
+            ban_duration_secs: 86400,
+        };
+        let service = AutoBanService::new(config, pool);
+        let ip: IpAddr = "203.0.113.10".parse().unwrap();
 
-        // This test verifies the threshold logic via the SuspiciousPatterns directly
-        let patterns = SuspiciousPatterns::default_patterns();
-        assert!(patterns.matches("/wp-login.php"));
-        assert!(!patterns.matches("/v1/auth/login"));
+        // Strikes below the threshold accumulate without banning.
+        assert!(!service.record_strike(&ip, "/wp-login.php").await);
+        assert!(!service.is_banned(&ip).await);
+        assert!(!service.record_strike(&ip, "/phpmyadmin/").await);
+        assert!(!service.is_banned(&ip).await);
+
+        // The threshold strike promotes the IP to a ban.
+        assert!(
+            service.record_strike(&ip, "/xmlrpc.php").await,
+            "threshold strike should return newly-banned = true"
+        );
+        assert!(service.is_banned(&ip).await, "IP should be banned now");
     }
 
     #[test]
     fn test_auto_ban_config_defaults() {
+        // AUTO_BAN_* is also read by Config::from_env (config.rs tests), so
+        // mutating it requires the crate-wide env lock.
+        let _env = env_lock();
         // Clear env vars to test defaults
         std::env::remove_var("AUTO_BAN_ENABLED");
         std::env::remove_var("AUTO_BAN_THRESHOLD");

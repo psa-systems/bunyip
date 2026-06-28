@@ -2,8 +2,6 @@
 members = [
     "bunyip-api",
     "bunyip-web",
-    # Domain layer + verticals built on the generic dunite crates
-    # (https://dev.a8n.run/psa-systems/dunite). See dev-docs/bunyip-on-dunite-scaffold.md.
     "crates/bunyip-domain",
     "crates/bunyip-oci",
     "crates/bunyip-oidc",
@@ -11,11 +9,14 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.1"
+version = "0.4.1"
 edition = "2021"
 authors = ["PSA Systems"]
 license = "MIT"
 repository = "https://dev.a8n.run/psa-systems/bunyip"
+
+[workspace.lints.clippy]
+too_many_arguments = "allow"
 
 [workspace.dependencies]
 parking_lot = "0.12"
@@ -38,22 +39,15 @@ features = ["derive"]
 version = "1.11"
 features = [
     "v4",
-    "v7",
     "serde",
-    "js",
 ]
 
 [workspace.dependencies.chrono]
 version = "0.4"
 features = [
     "serde",
-    "wasmbind",
 ]
 
 [workspace.dependencies.tracing-subscriber]
 version = "0.3"
 features = ["env-filter"]
-
-[workspace.dependencies.validator]
-version = "0.19"
-features = ["derive"]

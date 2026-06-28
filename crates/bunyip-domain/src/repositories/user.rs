@@ -2,7 +2,7 @@
 
 use chrono::{self, DateTime, Utc};
 use sqlx::postgres::Postgres;
-use sqlx::PgPool;
+use sqlx::{PgPool, QueryBuilder};
 use uuid::Uuid;
 
 use crate::errors::AppError;
@@ -95,6 +95,37 @@ impl UserRepository {
         Ok(())
     }
 
+    /// BUNYIP-139: update the user's optional profile fields (first_name,
+    /// last_name, phone). Each Option is interpreted at the SQL level: `Some`
+    /// writes the value; `None` clears the column to NULL. Whitespace
+    /// normalization (trim, "" -> NULL) is the caller's responsibility - this
+    /// method writes verbatim. Returns the updated user row.
+    pub async fn update_profile(
+        pool: &PgPool,
+        user_id: Uuid,
+        first_name: Option<&str>,
+        last_name: Option<&str>,
+        phone: Option<&str>,
+    ) -> Result<User, AppError> {
+        let user = sqlx::query_as::<_, User>(
+            r#"
+            UPDATE users
+            SET first_name = $1, last_name = $2, phone = $3, updated_at = NOW()
+            WHERE id = $4 AND deleted_at IS NULL
+            RETURNING *
+            "#,
+        )
+        .bind(first_name)
+        .bind(last_name)
+        .bind(phone)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("User"))?;
+
+        Ok(user)
+    }
+
     /// Update email verified status
     pub async fn set_email_verified(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {
         sqlx::query(
@@ -128,6 +159,28 @@ impl UserRepository {
             "#,
         )
         .bind(status.as_str())
+        .bind(user_id)
+        .execute(executor)
+        .await?;
+
+        Ok(())
+    }
+
+    /// BUNYIP-209: mark the user as having consumed their signup free trial.
+    /// Called from the `checkout.session.completed` webhook once a trial
+    /// session finalizes, so a later subscribe cannot re-grant the trial.
+    /// Idempotent: a replayed webhook just re-sets the flag to TRUE.
+    pub async fn mark_trial_used<'e, E>(executor: E, user_id: Uuid) -> Result<(), AppError>
+    where
+        E: sqlx::Executor<'e, Database = Postgres>,
+    {
+        sqlx::query(
+            r#"
+            UPDATE users
+            SET has_used_trial = TRUE, updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
         .bind(user_id)
         .execute(executor)
         .await?;
@@ -324,12 +377,15 @@ impl UserRepository {
     }
 
     /// Update user's email address
-    pub async fn update_email(
-        pool: &PgPool,
+    pub async fn update_email<'e, E>(
+        executor: E,
         user_id: Uuid,
         new_email: &str,
         set_verified: bool,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), AppError>
+    where
+        E: sqlx::Executor<'e, Database = Postgres>,
+    {
         sqlx::query(
             r#"
             UPDATE users
@@ -340,10 +396,58 @@ impl UserRepository {
         .bind(new_email)
         .bind(set_verified)
         .bind(user_id)
-        .execute(pool)
+        .execute(executor)
         .await?;
 
         Ok(())
+    }
+
+    /// Lock a user row `FOR UPDATE` to serialize concurrent mutations within a
+    /// transaction. Returns whether a (non-deleted) row was locked.
+    pub async fn lock_for_update<'e, E>(executor: E, user_id: Uuid) -> Result<bool, AppError>
+    where
+        E: sqlx::Executor<'e, Database = Postgres>,
+    {
+        let row: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_optional(executor)
+            .await?;
+
+        Ok(row.is_some())
+    }
+
+    /// Lock and fetch a non-deleted user row `FOR UPDATE` within a transaction.
+    pub async fn find_by_id_for_update<'e, E>(
+        executor: E,
+        user_id: Uuid,
+    ) -> Result<Option<User>, AppError>
+    where
+        E: sqlx::Executor<'e, Database = Postgres>,
+    {
+        let user = sqlx::query_as::<_, User>(
+            "SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+        )
+        .bind(user_id)
+        .fetch_optional(executor)
+        .await?;
+
+        Ok(user)
+    }
+
+    /// Check whether an email is already registered to a non-deleted user.
+    /// Accepts any executor so it can run inside a transaction.
+    pub async fn email_exists<'e, E>(executor: E, email: &str) -> Result<bool, AppError>
+    where
+        E: sqlx::Executor<'e, Database = Postgres>,
+    {
+        let row: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL",
+        )
+        .bind(email)
+        .fetch_optional(executor)
+        .await?;
+
+        Ok(row.is_some())
     }
 
     /// Update last login timestamp
@@ -376,6 +480,26 @@ impl UserRepository {
         .await?;
 
         Ok(())
+    }
+
+    /// Reactivate a soft-deleted user by clearing `deleted_at`.
+    ///
+    /// Returns `true` when a previously-deleted row was restored, `false` when
+    /// no matching soft-deleted user exists (already active or unknown id), so
+    /// the caller can distinguish a real reactivation from a no-op.
+    pub async fn restore(pool: &PgPool, user_id: Uuid) -> Result<bool, AppError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE users
+            SET deleted_at = NULL, updated_at = NOW()
+            WHERE id = $1 AND deleted_at IS NOT NULL
+            "#,
+        )
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
     }
 
     /// Set two_factor_enabled flag on a user
@@ -414,100 +538,66 @@ impl UserRepository {
         Ok(user)
     }
 
-    /// List users with pagination
+    /// List users with pagination.
+    ///
+    /// `active` selects which side of the soft-delete boundary to return:
+    /// `None`/`Some(true)` lists live accounts (the default admin view),
+    /// `Some(false)` lists suspended (soft-deleted) accounts so an admin can
+    /// find and reactivate them (BUNYIP-120).
     pub async fn list_paginated(
         pool: &PgPool,
         page: i32,
         per_page: i32,
         search: Option<&str>,
         status_filter: Option<MembershipStatus>,
+        active: Option<bool>,
     ) -> Result<(Vec<User>, i64), AppError> {
         let offset = (page - 1) * per_page;
+        let search_pattern = search.map(|s| format!("%{}%", s));
 
-        // Build dynamic query based on filters
-        let mut conditions = vec!["deleted_at IS NULL".to_string()];
-
-        if search.is_some() {
-            conditions.push("LOWER(email) LIKE LOWER($3)".to_string());
-        }
-
-        if let Some(_status) = &status_filter {
-            let idx = if search.is_some() { 4 } else { 3 };
-            conditions.push(format!("subscription_status = ${}", idx));
-        }
-
-        let where_clause = conditions.join(" AND ");
-        let query = format!(
-            "SELECT * FROM users WHERE {} ORDER BY created_at DESC LIMIT $1 OFFSET $2",
-            where_clause
-        );
-        let count_query = format!("SELECT COUNT(*) FROM users WHERE {}", where_clause);
-
-        // Execute queries based on filters
-        let (users, total): (Vec<User>, i64) = match (search, &status_filter) {
-            (Some(s), Some(status)) => {
-                let search_pattern = format!("%{}%", s);
-                let users = sqlx::query_as::<_, User>(&query)
-                    .bind(per_page)
-                    .bind(offset)
-                    .bind(&search_pattern)
-                    .bind(status.as_str())
-                    .fetch_all(pool)
-                    .await?;
-
-                let total: (i64,) = sqlx::query_as(&count_query)
-                    .bind(&search_pattern)
-                    .bind(status.as_str())
-                    .fetch_one(pool)
-                    .await?;
-
-                (users, total.0)
-            }
-            (Some(s), None) => {
-                let search_pattern = format!("%{}%", s);
-                let users = sqlx::query_as::<_, User>(&query)
-                    .bind(per_page)
-                    .bind(offset)
-                    .bind(&search_pattern)
-                    .fetch_all(pool)
-                    .await?;
-
-                let total: (i64,) = sqlx::query_as(&count_query)
-                    .bind(&search_pattern)
-                    .fetch_one(pool)
-                    .await?;
-
-                (users, total.0)
-            }
-            (None, Some(status)) => {
-                let users = sqlx::query_as::<_, User>(&query)
-                    .bind(per_page)
-                    .bind(offset)
-                    .bind(status.as_str())
-                    .fetch_all(pool)
-                    .await?;
-
-                let total: (i64,) = sqlx::query_as(&count_query)
-                    .bind(status.as_str())
-                    .fetch_one(pool)
-                    .await?;
-
-                (users, total.0)
-            }
-            (None, None) => {
-                let users = sqlx::query_as::<_, User>(&query)
-                    .bind(per_page)
-                    .bind(offset)
-                    .fetch_all(pool)
-                    .await?;
-
-                let total: (i64,) = sqlx::query_as(&count_query).fetch_one(pool).await?;
-
-                (users, total.0)
-            }
+        let deleted_clause = if active == Some(false) {
+            " WHERE deleted_at IS NOT NULL"
+        } else {
+            " WHERE deleted_at IS NULL"
         };
 
-        Ok((users, total))
+        // Build the filter clause once on both the page query and the count
+        // query via QueryBuilder so the placeholders always match the bindings
+        // (the previous hand-numbered `$3`/`$4` count query bound `$1`/`$2`).
+        let mut query = QueryBuilder::new(format!("SELECT * FROM users{deleted_clause}"));
+        let mut count_query =
+            QueryBuilder::new(format!("SELECT COUNT(*) FROM users{deleted_clause}"));
+
+        if let Some(pattern) = &search_pattern {
+            query
+                .push(" AND LOWER(email) LIKE LOWER(")
+                .push_bind(pattern.as_str())
+                .push(")");
+            count_query
+                .push(" AND LOWER(email) LIKE LOWER(")
+                .push_bind(pattern.as_str())
+                .push(")");
+        }
+
+        if let Some(status) = &status_filter {
+            query
+                .push(" AND subscription_status = ")
+                .push_bind(status.as_str());
+            count_query
+                .push(" AND subscription_status = ")
+                .push_bind(status.as_str());
+        }
+
+        query
+            .push(" ORDER BY created_at DESC LIMIT ")
+            .push_bind(per_page)
+            .push(" OFFSET ")
+            .push_bind(offset);
+
+        let users = query.build_query_as::<User>().fetch_all(pool).await?;
+        let total: (i64,) = count_query.build_query_as().fetch_one(pool).await?;
+
+        Ok((users, total.0))
     }
 
     /// Atomically assign a subscription tier to a user.
@@ -564,23 +654,39 @@ impl UserRepository {
     /// Counts are based on how many users have actually been assigned each tier,
     /// not total verified users. This ensures tier slots are filled correctly even
     /// if users existed before the tier system was introduced.
+    ///
+    /// Admin-granted lifetimes (`subscription_override_by IS NOT NULL`) are counted
+    /// the same as organically-claimed ones: they occupy a real lifetime slot, so they
+    /// must count against the configured cap and be reflected in the admin slot-usage
+    /// display. Excluding them let the count read 0 while active lifetimes existed,
+    /// defeating the cap and misleading the Tier Settings page (BUNYIP-96).
+    ///
+    /// Email verification is deliberately NOT a filter: an active `lifetime` /
+    /// `early_adopter` subscription occupies a slot whether or not the holder has
+    /// verified their email. Gating on `email_verified = true` let unverified
+    /// lifetimes read as 0, so they bypassed the cap and the Tier Settings page
+    /// under-reported usage (BUNYIP-105). Only soft-deleted users (`deleted_at`)
+    /// are excluded.
     pub async fn count_tier_assignments<'e, E>(executor: E) -> Result<(i64, i64), AppError>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
     {
-        let row: (i64, i64) = sqlx::query_as(
-            r#"
-            SELECT
-                COUNT(*) FILTER (WHERE subscription_tier = 'lifetime' AND subscription_override_by IS NULL) AS lifetime_count,
-                COUNT(*) FILTER (WHERE subscription_tier = 'early_adopter') AS early_adopter_count
-            FROM users
-            WHERE email_verified = true AND deleted_at IS NULL
-            "#,
-        )
-        .fetch_one(executor)
-        .await?;
+        let row: (i64, i64) = sqlx::query_as(Self::COUNT_TIER_ASSIGNMENTS_SQL)
+            .fetch_one(executor)
+            .await?;
         Ok(row)
     }
+
+    /// SQL backing [`Self::count_tier_assignments`]. Held as a named const so the
+    /// BUNYIP-105 regression test can assert the `email_verified` predicate stays
+    /// dropped without needing a live database.
+    const COUNT_TIER_ASSIGNMENTS_SQL: &'static str = r#"
+            SELECT
+                COUNT(*) FILTER (WHERE subscription_tier = 'lifetime') AS lifetime_count,
+                COUNT(*) FILTER (WHERE subscription_tier = 'early_adopter') AS early_adopter_count
+            FROM users
+            WHERE deleted_at IS NULL
+            "#;
 
     /// Grant lifetime membership to a user (admin override).
     pub async fn grant_lifetime_membership(
@@ -606,6 +712,35 @@ impl UserRepository {
         .fetch_optional(pool)
         .await?
         .ok_or_else(|| AppError::not_found("User"))?;
+
+        Ok(user)
+    }
+
+    /// Revoke a previously-granted lifetime / free admin-override membership.
+    /// Returns the user to `standard` tier with no active subscription, mirroring
+    /// the post-cancel Stripe state. Caller is responsible for any Stripe-side
+    /// cleanup (cancelling the $0 invoice subscription, etc.).
+    pub async fn revoke_lifetime_membership(
+        pool: &PgPool,
+        user_id: Uuid,
+    ) -> Result<User, AppError> {
+        let user = sqlx::query_as::<_, User>(
+            r#"
+            UPDATE users
+            SET subscription_tier = 'standard',
+                lifetime_member = FALSE,
+                trial_ends_at = NULL,
+                subscription_override_by = NULL,
+                subscription_status = 'none',
+                updated_at = NOW()
+            WHERE id = $1 AND deleted_at IS NULL AND lifetime_member = TRUE
+            RETURNING *
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("Lifetime membership"))?;
 
         Ok(user)
     }
@@ -649,6 +784,20 @@ impl UserRepository {
         Ok(rows.into_iter().map(|(email,)| email).collect())
     }
 
+    /// Count of active (non-deleted) users among `emails`. Powers the
+    /// `/e2e-bootstrapped` readiness probe (BUNYIP-163): one indexed lookup, no
+    /// per-row data returned.
+    pub async fn count_active_by_emails(pool: &PgPool, emails: &[String]) -> Result<i64, AppError> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM users WHERE email = ANY($1) AND deleted_at IS NULL",
+        )
+        .bind(emails)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(row.0)
+    }
+
     /// Find users in grace period
     pub async fn find_in_grace_period(pool: &PgPool) -> Result<Vec<User>, AppError> {
         let users = sqlx::query_as::<_, User>(
@@ -664,5 +813,31 @@ impl UserRepository {
         .await?;
 
         Ok(users)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UserRepository;
+
+    /// BUNYIP-105 regression: slot-usage counts must include unverified holders.
+    ///
+    /// The bug was a `WHERE email_verified = true` predicate that dropped
+    /// unverified `lifetime` / `early_adopter` users from the count, letting them
+    /// bypass the cap and read as 0 on the Tier Settings page. The count query
+    /// must NOT filter on `email_verified`, so an unverified active lifetime still
+    /// occupies its slot. Soft-deleted users (`deleted_at`) stay excluded.
+    #[test]
+    fn count_tier_assignments_sql_does_not_filter_on_email_verified() {
+        let sql = UserRepository::COUNT_TIER_ASSIGNMENTS_SQL;
+        assert!(
+            !sql.contains("email_verified"),
+            "count_tier_assignments must not filter on email_verified, or unverified \
+             lifetimes undercount and bypass the cap (BUNYIP-105); SQL was: {sql}"
+        );
+        assert!(
+            sql.contains("deleted_at IS NULL"),
+            "count_tier_assignments must still exclude soft-deleted users; SQL was: {sql}"
+        );
     }
 }

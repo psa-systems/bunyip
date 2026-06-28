@@ -63,7 +63,7 @@ impl AccessTokenClaims {
     ) -> bool {
         role == "admin"
             || lifetime_member
-            || trial_ends_at.map_or(false, |ts| ts > chrono::Utc::now().timestamp())
+            || trial_ends_at.is_some_and(|ts| ts > chrono::Utc::now().timestamp())
             || membership_status == "active"
             || membership_status == "grace_period"
     }
@@ -77,6 +77,7 @@ pub struct TwoFactorChallengeClaims {
     pub exp: i64,
     pub iat: i64,
     pub jti: String,
+    pub iss: String,
 }
 
 /// Refresh token claims
@@ -86,6 +87,7 @@ pub struct RefreshTokenClaims {
     pub jti: String,
     pub exp: i64,
     pub iat: i64,
+    pub iss: String,
 }
 
 /// JWT service for token operations
@@ -138,6 +140,7 @@ impl JwtService {
             jti: jti.clone(),
             exp: exp.timestamp(),
             iat: now.timestamp(),
+            iss: self.config.issuer.clone(),
         };
 
         let header = Header::new(Algorithm::HS256);
@@ -168,6 +171,7 @@ impl JwtService {
     pub fn verify_refresh_token(&self, token: &str) -> Result<RefreshTokenClaims, AppError> {
         let mut validation = Validation::new(Algorithm::HS256);
         validation.set_required_spec_claims(&["sub", "exp"]);
+        validation.set_issuer(&[&self.config.issuer]);
         validation.validate_exp = true;
 
         let token_data =
@@ -177,18 +181,6 @@ impl JwtService {
                     _ => AppError::InvalidCredentials,
                 },
             )?;
-
-        Ok(token_data.claims)
-    }
-
-    /// Decode token without validation (for expired token handling)
-    pub fn decode_without_validation(&self, token: &str) -> Result<AccessTokenClaims, AppError> {
-        let mut validation = Validation::new(Algorithm::HS256);
-        validation.validate_exp = false;
-        validation.insecure_disable_signature_validation();
-
-        let token_data = decode::<AccessTokenClaims>(token, &self.config.decoding_key, &validation)
-            .map_err(|_| AppError::InvalidCredentials)?;
 
         Ok(token_data.claims)
     }
@@ -204,6 +196,7 @@ impl JwtService {
             exp: exp.timestamp(),
             iat: now.timestamp(),
             jti: format!("2fa_{}", Uuid::new_v4().as_simple()),
+            iss: self.config.issuer.clone(),
         };
 
         let header = Header::new(Algorithm::HS256);
@@ -218,6 +211,7 @@ impl JwtService {
     ) -> Result<TwoFactorChallengeClaims, AppError> {
         let mut validation = Validation::new(Algorithm::HS256);
         validation.set_required_spec_claims(&["sub", "exp"]);
+        validation.set_issuer(&[&self.config.issuer]);
         validation.validate_exp = true;
 
         let token_data =
@@ -270,6 +264,10 @@ mod tests {
             trial_ends_at: None,
             lifetime_member: false,
             subscription_override_by: None,
+            first_name: None,
+            last_name: None,
+            phone: None,
+            has_used_trial: false,
         }
     }
 

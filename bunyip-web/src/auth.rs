@@ -33,20 +33,40 @@ impl AuthCtx {
 
 pub async fn authenticate(api: &Api, cookie: Option<&str>) -> AuthCtx {
     let Some(cookie) = cookie else {
-        return AuthCtx { user: None, set_cookies: vec![], forward: None };
+        return AuthCtx {
+            user: None,
+            set_cookies: vec![],
+            forward: None,
+        };
     };
 
     match api::auth::me(api, Some(cookie)).await {
-        Ok(user) => AuthCtx { user: Some(user), set_cookies: vec![], forward: Some(cookie.to_string()) },
+        Ok(user) => AuthCtx {
+            user: Some(user),
+            set_cookies: vec![],
+            forward: Some(cookie.to_string()),
+        },
         Err(e) if e.status == 401 => match api::auth::refresh(api, Some(cookie)).await {
             Ok(set) => {
                 let merged = merge_cookies(Some(cookie), &set);
                 let user = api::auth::me(api, Some(&merged)).await.ok();
-                AuthCtx { user, set_cookies: set, forward: Some(merged) }
+                AuthCtx {
+                    user,
+                    set_cookies: set,
+                    forward: Some(merged),
+                }
             }
-            Err(_) => AuthCtx { user: None, set_cookies: vec![], forward: Some(cookie.to_string()) },
+            Err(_) => AuthCtx {
+                user: None,
+                set_cookies: vec![],
+                forward: Some(cookie.to_string()),
+            },
         },
-        Err(_) => AuthCtx { user: None, set_cookies: vec![], forward: Some(cookie.to_string()) },
+        Err(_) => AuthCtx {
+            user: None,
+            set_cookies: vec![],
+            forward: Some(cookie.to_string()),
+        },
     }
 }
 
@@ -76,5 +96,8 @@ pub fn merge_cookies(original: Option<&str>, set_cookies: &[String]) -> String {
             }
         }
     }
-    map.iter().map(|(n, v)| format!("{n}={v}")).collect::<Vec<_>>().join("; ")
+    map.iter()
+        .map(|(n, v)| format!("{n}={v}"))
+        .collect::<Vec<_>>()
+        .join("; ")
 }

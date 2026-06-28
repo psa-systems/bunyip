@@ -1,18 +1,12 @@
 use std::process::Command;
 
 fn main() {
-    let commit = resolve(
-        "GIT_COMMIT",
-        &["git", "rev-parse", "--short", "HEAD"],
-    );
+    let commit = resolve("GIT_COMMIT", &["git", "rev-parse", "--short", "HEAD"]);
     let tag = resolve(
         "GIT_TAG",
         &["git", "describe", "--tags", "--always", "--dirty"],
     );
-    let build_date = resolve(
-        "BUILD_DATE",
-        &["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"],
-    );
+    let build_date = resolve("BUILD_DATE", &["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"]);
 
     println!("cargo:rustc-env=GIT_COMMIT={commit}");
     println!("cargo:rustc-env=GIT_TAG={tag}");

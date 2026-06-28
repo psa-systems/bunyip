@@ -2,7 +2,7 @@
 #
 # Production image for bunyip-api (actix-web backend).
 #
-# BUILD CONTEXT: the bunyip repo root. bunyip owns the domain (bunyip-core) +
+# BUILD CONTEXT: the bunyip repo root. bunyip owns the domain (bunyip-domain) +
 # the oci/oidc verticals; the generic dunite-core kernel is a git dependency
 # (https://dev.a8n.run/psa-systems/dunite). The repo is anonymously readable,
 # so the builder only needs network access to dev.a8n.run to fetch it - no
@@ -54,21 +54,27 @@ COPY Cargo.toml Cargo.lock ./
 COPY .sqlx .sqlx
 COPY bunyip-api/Cargo.toml bunyip-api/build.rs bunyip-api/
 COPY bunyip-web/Cargo.toml bunyip-web/
-COPY crates/bunyip-core/Cargo.toml crates/bunyip-core/
+COPY crates/bunyip-domain/Cargo.toml crates/bunyip-domain/
 COPY crates/bunyip-oci/Cargo.toml crates/bunyip-oci/
 COPY crates/bunyip-oidc/Cargo.toml crates/bunyip-oidc/
-# bunyip-core include_str!'s its email templates at compile time.
-COPY crates/bunyip-core/templates crates/bunyip-core/templates
+# bunyip-domain include_str!'s its email templates at compile time.
+COPY crates/bunyip-domain/templates crates/bunyip-domain/templates
 RUN mkdir -p \
         bunyip-api/src bunyip-web/src \
-        crates/bunyip-core/src crates/bunyip-oci/src crates/bunyip-oidc/src \
+        crates/bunyip-domain/src crates/bunyip-oci/src crates/bunyip-oidc/src \
     && echo "fn main() {}" > bunyip-api/src/main.rs \
     && echo "fn main() {}" > bunyip-web/src/main.rs \
-    && : > crates/bunyip-core/src/lib.rs \
+    && : > crates/bunyip-domain/src/lib.rs \
     && : > crates/bunyip-oci/src/lib.rs \
     && : > crates/bunyip-oidc/src/lib.rs
 
 # Build the api binary's dependency graph only (cached unless a manifest changes).
+#
+# After the stub build, every workspace-crate artifact AND its cargo
+# fingerprint must be removed. Removing only the deps/ files is not enough:
+# `COPY . .` preserves host mtimes (older than the stub build), so cargo would
+# consider the stub-built empty libs fresh and link the real bunyip-api against
+# them, failing with unresolved imports.
 RUN --mount=type=secret,id=dunite_token \
     --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
@@ -77,19 +83,37 @@ RUN --mount=type=secret,id=dunite_token \
            fi' \
     && cargo build --locked --release --bin bunyip-api \
     && rm -rf bunyip-api/src bunyip-web/src \
-        crates/bunyip-core/src crates/bunyip-oci/src crates/bunyip-oidc/src \
-        target/release/deps/bunyip_api* target/release/deps/bunyip_web* target/release/deps/bunyip_core*
+        crates/bunyip-domain/src crates/bunyip-oci/src crates/bunyip-oidc/src \
+        target/release/deps/*bunyip* \
+        target/release/.fingerprint/bunyip-* \
+        target/release/bunyip-api*
 
 # ---- Real sources ----
 COPY . .
 
+# `COPY . .` restores host mtimes that are OLDER than the stub-built artifacts
+# above, so cargo can judge the workspace up-to-date and ship the stub instead
+# of the real binary (this is exactly how v0.2.0 shipped a 557 KB `fn main() {}`
+# stub - BUNYIP-58). Touch every source so it is newer than any cached artifact,
+# forcing a real recompile regardless of host mtimes.
 RUN --mount=type=secret,id=dunite_token \
     --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     sh -c 'if [ -s /run/secrets/dunite_token ]; then \
               git config --global url."https://oauth2:$(cat /run/secrets/dunite_token)@dev.a8n.run/".insteadOf "https://dev.a8n.run/"; \
            fi' \
-    && cargo build --locked --release --bin bunyip-api
+    && find . -name '*.rs' -exec touch {} + \
+    && cargo build --locked --release --bin bunyip-api --bin bunyip-e2e-bootstrap
+
+# Belt-and-suspenders: a stub bunyip-api is ~0.5 MB, the real server is tens of
+# MB. Fail the build loudly here rather than let a stub reach the registry and
+# silently restart-loop in production (BUNYIP-58).
+RUN sz="$(stat -c%s target/release/bunyip-api)"; \
+    echo "bunyip-api release binary: $sz bytes"; \
+    if [ "$sz" -lt 5000000 ]; then \
+        echo "FATAL: bunyip-api binary is $sz bytes (< 5 MB) - stub build leaked; aborting." >&2; \
+        exit 1; \
+    fi
 
 # ---- Export stage -----------------------------------------------------------
 # `docker buildx build --target export --output type=local,dest=<dir>` extracts
@@ -111,10 +135,19 @@ RUN adduser -D -u 1001 appuser
 
 # Binary, migrations (run on startup), and the email templates.
 COPY --from=builder /build/target/release/bunyip-api /app/bunyip-api
+# One-off staging seeder (BUNYIP-156). Shipped in the image so c-01 can run it
+# via `docker compose run --entrypoint /app/bunyip-e2e-bootstrap`. Inert on
+# production: it refuses to run unless BUNYIP_E2E_BOOTSTRAP_ALLOW=true AND
+# ENVIRONMENT is non-production. ENTRYPOINT below is unchanged.
+COPY --from=builder /build/target/release/bunyip-e2e-bootstrap /app/bunyip-e2e-bootstrap
 COPY --from=builder /build/bunyip-api/migrations /app/migrations
-COPY --from=builder /build/crates/bunyip-core/templates /app/templates
+COPY --from=builder /build/crates/bunyip-domain/templates /app/templates
 
-RUN chown -R appuser:appuser /app
+# Distribution cache dirs: pre-created WITH ownership so named volumes mounted
+# here inherit it on first use; root-owned mounts would fail every blob/asset
+# write with Permission denied (found during BUNYIP-31 verification).
+RUN mkdir -p /var/cache/bunyip-oci /var/cache/bunyip-downloads \
+ && chown -R appuser:appuser /app /var/cache/bunyip-oci /var/cache/bunyip-downloads
 USER appuser
 
 LABEL org.opencontainers.image.source=https://dev.a8n.run/psa-systems/bunyip \

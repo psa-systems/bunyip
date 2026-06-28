@@ -45,7 +45,11 @@ pub struct ApiError {
 
 impl ApiError {
     fn network(msg: impl Into<String>) -> Self {
-        ApiError { status: 0, code: "NETWORK_ERROR".into(), message: msg.into() }
+        ApiError {
+            status: 0,
+            code: "NETWORK_ERROR".into(),
+            message: msg.into(),
+        }
     }
 
     pub fn user_message(&self) -> String {
@@ -75,14 +79,20 @@ impl Api {
         body: Option<Value>,
     ) -> Result<Resp, ApiError> {
         let url = format!("{}{}", self.base_v1, path);
-        let mut rb = self.http.request(method, &url).header(ACCEPT, "application/json");
+        let mut rb = self
+            .http
+            .request(method, &url)
+            .header(ACCEPT, "application/json");
         if let Some(c) = cookie {
             rb = rb.header(COOKIE, c);
         }
         if let Some(b) = body {
             rb = rb.json(&b);
         }
-        let resp = rb.send().await.map_err(|e| ApiError::network(e.to_string()))?;
+        let resp = rb
+            .send()
+            .await
+            .map_err(|e| ApiError::network(e.to_string()))?;
         let status = resp.status().as_u16();
         let set_cookies = resp
             .headers()
@@ -96,20 +106,58 @@ impl Api {
         } else {
             serde_json::from_str(&text).unwrap_or(Value::Null)
         };
-        Ok(Resp { status, body, set_cookies })
+        Ok(Resp {
+            status,
+            body,
+            set_cookies,
+        })
     }
 
     pub async fn get(&self, path: &str, cookie: Option<&str>) -> Result<Resp, ApiError> {
         self.send(Method::GET, path, cookie, None).await
     }
-    pub async fn post(&self, path: &str, cookie: Option<&str>, body: Option<Value>) -> Result<Resp, ApiError> {
+    pub async fn post(
+        &self,
+        path: &str,
+        cookie: Option<&str>,
+        body: Option<Value>,
+    ) -> Result<Resp, ApiError> {
         self.send(Method::POST, path, cookie, body).await
     }
-    pub async fn put(&self, path: &str, cookie: Option<&str>, body: Option<Value>) -> Result<Resp, ApiError> {
+    pub async fn put(
+        &self,
+        path: &str,
+        cookie: Option<&str>,
+        body: Option<Value>,
+    ) -> Result<Resp, ApiError> {
         self.send(Method::PUT, path, cookie, body).await
     }
-    pub async fn delete(&self, path: &str, cookie: Option<&str>, body: Option<Value>) -> Result<Resp, ApiError> {
+    pub async fn delete(
+        &self,
+        path: &str,
+        cookie: Option<&str>,
+        body: Option<Value>,
+    ) -> Result<Resp, ApiError> {
         self.send(Method::DELETE, path, cookie, body).await
+    }
+
+    /// GET returning the raw `reqwest::Response` for streaming a binary body
+    /// (the download proxy). Unlike `send`, the body is neither read nor parsed
+    /// as JSON here, so a large asset streams through to the browser rather than
+    /// buffering in memory. Cookie is forwarded verbatim, same as `send`.
+    pub async fn get_stream(
+        &self,
+        path: &str,
+        cookie: Option<&str>,
+    ) -> Result<reqwest::Response, ApiError> {
+        let url = format!("{}{}", self.base_v1, path);
+        let mut rb = self.http.request(Method::GET, &url);
+        if let Some(c) = cookie {
+            rb = rb.header(COOKIE, c);
+        }
+        rb.send()
+            .await
+            .map_err(|e| ApiError::network(e.to_string()))
     }
 
     /// POST a multipart form (feedback submission).
@@ -120,11 +168,18 @@ impl Api {
         form: reqwest::multipart::Form,
     ) -> Result<Resp, ApiError> {
         let url = format!("{}{}", self.base_v1, path);
-        let mut rb = self.http.post(&url).header(ACCEPT, "application/json").multipart(form);
+        let mut rb = self
+            .http
+            .post(&url)
+            .header(ACCEPT, "application/json")
+            .multipart(form);
         if let Some(c) = cookie {
             rb = rb.header(COOKIE, c);
         }
-        let resp = rb.send().await.map_err(|e| ApiError::network(e.to_string()))?;
+        let resp = rb
+            .send()
+            .await
+            .map_err(|e| ApiError::network(e.to_string()))?;
         let status = resp.status().as_u16();
         let set_cookies = resp
             .headers()
@@ -134,7 +189,11 @@ impl Api {
             .collect();
         let text = resp.text().await.unwrap_or_default();
         let body = serde_json::from_str(&text).unwrap_or(Value::Null);
-        Ok(Resp { status, body, set_cookies })
+        Ok(Resp {
+            status,
+            body,
+            set_cookies,
+        })
     }
 }
 
@@ -152,7 +211,11 @@ pub fn error_from(resp: &Resp) -> ApiError {
         .filter(|m| !m.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| format!("Request failed ({})", resp.status));
-    ApiError { status: resp.status, code, message }
+    ApiError {
+        status: resp.status,
+        code,
+        message,
+    }
 }
 
 /// `&resp.body["data"]` if 2xx, else the error envelope.

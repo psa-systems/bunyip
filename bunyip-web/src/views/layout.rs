@@ -3,6 +3,8 @@
 //! reactive framework): an early flash-prevention block + toggle functions that
 //! flip classes on <html> and persist to the same `theme-storage` key.
 
+use std::sync::OnceLock;
+
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 
 use crate::api::types::{Application, User, UserRole};
@@ -10,12 +12,82 @@ use crate::config::Config;
 use crate::util::app_link;
 use crate::views::ui::{button_class, icon};
 
+/// BUNYIP-145: the public-facing origin of bunyip-api the browser's
+/// `EventSource` connects to. Set once at startup from `Config::api_url`;
+/// read by every authenticated shell so the dashboard / admin pages can
+/// open a long-lived SSE stream without threading the config through 45
+/// handler call sites.
+static SSE_API_ORIGIN: OnceLock<String> = OnceLock::new();
+
+/// BUNYIP-145: install the public-facing bunyip-api origin used by the SSE
+/// subscriber injected into the dashboard / admin shells. Called once from
+/// `main` before any request is served. Idempotent (the underlying
+/// `OnceLock` ignores subsequent sets).
+pub fn install_sse_api_origin(origin: impl Into<String>) {
+    let _ = SSE_API_ORIGIN.set(origin.into().trim_end_matches('/').to_string());
+}
+
+fn sse_api_origin() -> &'static str {
+    SSE_API_ORIGIN
+        .get()
+        .map(String::as_str)
+        .unwrap_or("http://localhost:4401")
+}
+
 const THEME_FLASH: &str = r#"(function(){try{var r=document.documentElement;var theme='system',hc=false;var raw=localStorage.getItem('theme-storage');if(raw){var p=JSON.parse(raw);theme=(p&&p.state&&p.state.theme)||'system';hc=!!(p&&p.state&&p.state.highContrast);}var dark=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;r.classList.add(theme==='system'?(dark?'dark':'light'):theme);if(hc)r.classList.add('high-contrast');}catch(e){}})();"#;
 
 const THEME_TOGGLE: &str = r#"function bunyipState(){try{var raw=localStorage.getItem('theme-storage');if(raw)return JSON.parse(raw).state||{};}catch(e){}return{};}
 function bunyipSave(t,hc){try{localStorage.setItem('theme-storage',JSON.stringify({state:{theme:t,highContrast:hc},version:0}));}catch(e){}}
 function bunyipToggleTheme(){var r=document.documentElement;var dark=r.classList.contains('dark');r.classList.remove('light','dark');var next=dark?'light':'dark';r.classList.add(next);bunyipSave(next,r.classList.contains('high-contrast'));}
 function bunyipToggleContrast(){var on=document.documentElement.classList.toggle('high-contrast');bunyipSave(bunyipState().theme||'system',on);}"#;
+
+/// Tiny toast system mounted in every <body>. Exposes `window.bunyipToast(msg, kind)`
+/// where `kind` is `"success" | "error" | "info"` (default `"info"`). Each call
+/// appends an auto-dismissing pill into `#bunyip-toast-root`.
+///
+/// Visible-pill cap (BUNYIP-98): a tight `while (root.children.length >= 5)`
+/// before the append evicts the oldest so the column never grows past 5 even
+/// under rapid-fire calls (e.g. spamming a "Copy" button). The existing
+/// auto-dismiss `setTimeout` chain is untouched and guards on `pill.parentNode`,
+/// so a manually evicted pill does not double-remove.
+///
+/// Also drains `?toast_ok=` / `?toast_err=` from the URL on page load so any
+/// handler that wants to surface a confirmation can do it via a 302 redirect:
+/// `Location: /settings?toast_ok=Email%20updated`. The query params are stripped
+/// from the URL bar via `history.replaceState` so a reload does not re-fire the
+/// toast. See docs/bunyip-upgrade/05-toast-system-and-copy-feedback.md.
+const TOAST_JS: &str = r#"window.bunyipToast=function(msg,kind){var root=document.getElementById('bunyip-toast-root');if(!root)return;while(root.children.length>=5){root.removeChild(root.firstChild);}kind=kind||'info';var palette={success:'bg-emerald-600 text-white',error:'bg-red-600 text-white',info:'bg-slate-800 text-white'}[kind]||'bg-slate-800 text-white';var pill=document.createElement('div');pill.className='pointer-events-auto rounded-md px-4 py-2 text-sm shadow-lg '+palette;pill.setAttribute('role','status');pill.textContent=msg;pill.style.transition='opacity 200ms ease, transform 200ms ease';pill.style.opacity='0';pill.style.transform='translateY(-8px)';root.appendChild(pill);requestAnimationFrame(function(){pill.style.opacity='1';pill.style.transform='translateY(0)';});setTimeout(function(){pill.style.opacity='0';pill.style.transform='translateY(-8px)';setTimeout(function(){if(pill.parentNode)pill.parentNode.removeChild(pill);},250);},2500);};
+(function(){try{var url=new URL(window.location.href);var ok=url.searchParams.get('toast_ok');var err=url.searchParams.get('toast_err');if(ok||err){url.searchParams.delete('toast_ok');url.searchParams.delete('toast_err');history.replaceState(null,'',url.pathname+(url.search||'')+url.hash);if(ok)window.bunyipToast(ok,'success');if(err)window.bunyipToast(err,'error');}}catch(e){}})();"#;
+
+/// BUNYIP-145: Server-Sent Events subscriber injected into every
+/// authenticated shell (dashboard + admin). Opens a long-lived
+/// `EventSource` against bunyip-api's `/v1/events` and reacts to four
+/// event names:
+///
+/// - `claims_changed`: an admin granted / revoked something that affects
+///   this user (membership, lifetime grant). Reload so the SPA picks up
+///   the new at+jwt + dashboard tile state. Brendon's case: lifetime
+///   grant fires this; the page self-updates without a hard refresh.
+/// - `profile_changed`: admin or self updated profile fields. Reload.
+/// - `applications_changed`: admin toggled an app slug or entitlement
+///   mapping. Reload to refresh the dashboard's app grid.
+/// - `session_revoked`: bunyip-api destroyed every active rt for this
+///   user (admin deactivate, role change, BUNYIP-144). Redirect to
+///   `/login` so the user re-auths.
+///
+/// EventSource is opened with `withCredentials: true` so the `access_token`
+/// cookie rides along on the cross-subdomain GET (Lax + matching eTLD+1).
+/// Browser auto-reconnect handles transient drops; on `resync` from a
+/// `Lagged` broadcast we also reload.
+///
+/// The template carries a placeholder origin literal (`__BUNYIP_API_ORIGIN__`)
+/// that `sse_subscriber_script` replaces with the value installed via
+/// `install_sse_api_origin`.
+const SSE_SUBSCRIBER: &str = r#"(function(){try{var origin='__BUNYIP_API_ORIGIN__';if(!origin||!window.EventSource)return;var es=new EventSource(origin+'/v1/events',{withCredentials:true});var reload=function(){window.location.reload();};es.addEventListener('claims_changed',reload);es.addEventListener('profile_changed',reload);es.addEventListener('applications_changed',reload);es.addEventListener('resync',reload);es.addEventListener('session_revoked',function(){window.location.href='/login?toast_err=Session%20ended%20by%20an%20administrator.';});}catch(e){}})();"#;
+
+fn sse_subscriber_script() -> String {
+    SSE_SUBSCRIBER.replace("__BUNYIP_API_ORIGIN__", sse_api_origin())
+}
 
 pub fn document(title: &str, body: Markup) -> Markup {
     html! {
@@ -36,9 +108,17 @@ pub fn document(title: &str, body: Markup) -> Markup {
                 link rel="stylesheet" href="/assets/styles.css";
                 script { (PreEscaped(THEME_FLASH)) }
                 script { (PreEscaped(THEME_TOGGLE)) }
+                script { (PreEscaped(TOAST_JS)) }
             }
             body {
                 (body)
+                // Toast surface: lives at top-right with pointer-events:none
+                // on the container and pointer-events:auto on each pill, so
+                // dismissed regions never block clicks. polite + atomic so
+                // screen readers announce each message in full.
+                div id="bunyip-toast-root"
+                    class="pointer-events-none fixed top-4 right-4 z-50 flex flex-col gap-2"
+                    aria-live="polite" aria-atomic="true" {}
             }
         }
     }
@@ -76,7 +156,44 @@ fn theme_controls(icon_class: &str) -> Markup {
     }
 }
 
-fn header(user: Option<&User>) -> Markup {
+/// Floating "open feedback" launcher pinned to the bottom-right of the
+/// viewport. Mounted by `dashboard_shell` (always on for authenticated
+/// users) and by `public_shell` (gated by `show_feedback`, kept off on
+/// the login / register flow). Pages whose primary action lands in the
+/// bottom-right (currently `/downloads`) add their own `pb-24` so the
+/// launcher does not occlude content; see the wrapper in the Downloads
+/// handler.
+///
+/// The link carries the originating page to the feedback form via a `?from=`
+/// query param. It is set client-side in an `onclick` from
+/// `location.pathname + location.search` (the launcher is shared by all shells
+/// and has no server-side access to the request path; threading it through
+/// every shell + response helper + handler call site would be far more
+/// invasive). The static `href="/feedback"` remains a no-JS fallback. The
+/// `/feedback` GET handler reads `?from=`, sanitizes it (must start with `/`),
+/// and round-trips it into the hidden `page_path` input.
+fn feedback_launcher() -> Markup {
+    html! {
+        div class="pointer-events-none fixed bottom-4 right-4 z-40 sm:bottom-6 sm:right-6" {
+            a href="/feedback" aria-label="Open feedback page"
+              onclick="this.href='/feedback?from=' + encodeURIComponent(location.pathname + location.search)"
+              class="pointer-events-auto group flex h-14 w-[60px] items-center overflow-hidden rounded-2xl border border-border/70 bg-background/85 text-primary shadow-xl shadow-primary/10 backdrop-blur-md transition-all duration-300 hover:w-[204px] hover:border-primary/50 hover:bg-background dark:bg-card/90 sm:h-16 sm:w-16 sm:hover:w-[214px]" {
+                span class="relative inline-flex h-14 w-[60px] shrink-0 items-center justify-center rounded-2xl sm:h-16 sm:w-16" {
+                    span class="absolute inset-0 rounded-2xl bg-gradient-to-br from-primary/18 via-indigo-500/12 to-teal-500/18 opacity-80" {}
+                    (icon("smile-plus", "feedback-launcher__icon-bounce relative z-10 h-7 w-7 sm:h-8 sm:w-8"))
+                }
+                span class="max-w-0 whitespace-nowrap pl-0 pr-0 text-sm font-medium text-foreground opacity-0 transition-all duration-300 group-hover:max-w-[130px] group-hover:pl-4 group-hover:pr-4 group-hover:opacity-100" { "Have feedback?" }
+            }
+        }
+    }
+}
+
+/// `_show_feedback` is the public-shell flag that gates whether the floating
+/// launcher is mounted; the header itself no longer renders any feedback
+/// affordance (the launcher lives below the page content, mounted by the
+/// shell). Parameter is kept so call sites do not change; the underscore
+/// silences the unused-arg lint.
+fn header(user: Option<&User>, _show_feedback: bool) -> Markup {
     let is_admin = user.map(|u| u.role == UserRole::Admin).unwrap_or(false);
     html! {
         header class="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60" {
@@ -86,6 +203,7 @@ fn header(user: Option<&User>) -> Markup {
                     nav class="hidden md:flex items-center gap-6" {
                         a href="/pricing" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Pricing" }
                         a href="/our-story" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Our Story" }
+                        a href="/roadmap" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Roadmap" }
                     }
                 }
                 div class="flex items-center gap-4" {
@@ -120,6 +238,7 @@ fn footer(cfg: &Config, apps: &[Application]) -> Markup {
                         ul class="mt-4 space-y-3 text-sm" {
                             li { a href="/pricing" class="text-muted-foreground hover:text-foreground transition-colors" { "Pricing" } }
                             li { a href="/our-story" class="text-muted-foreground hover:text-foreground transition-colors" { "Our Story" } }
+                            li { a href="/roadmap" class="text-muted-foreground hover:text-foreground transition-colors" { "Roadmap" } }
                             @for app in apps {
                                 li { a href=(app_link(app, &cfg.app_domain)) class="text-muted-foreground hover:text-foreground transition-colors" { (app.display_name) } }
                             }
@@ -148,28 +267,25 @@ fn footer(cfg: &Config, apps: &[Application]) -> Markup {
     }
 }
 
-fn feedback_launcher() -> Markup {
-    html! {
-        div class="pointer-events-none fixed bottom-4 right-4 z-40 sm:bottom-6 sm:right-6" {
-            a href="/feedback" aria-label="Open feedback page"
-              class="pointer-events-auto group flex h-14 w-[60px] items-center overflow-hidden rounded-2xl border border-border/70 bg-background/85 text-primary shadow-xl shadow-primary/10 backdrop-blur-md transition-all duration-300 hover:w-[204px] hover:border-primary/50 hover:bg-background dark:bg-card/90 sm:h-16 sm:w-16 sm:hover:w-[214px]" {
-                span class="relative inline-flex h-14 w-[60px] shrink-0 items-center justify-center rounded-2xl sm:h-16 sm:w-16" {
-                    span class="absolute inset-0 rounded-2xl bg-gradient-to-br from-primary/18 via-indigo-500/12 to-teal-500/18 opacity-80" {}
-                    (icon("smile-plus", "feedback-launcher__icon-bounce relative z-10 h-7 w-7 sm:h-8 sm:w-8"))
-                }
-                span class="max-w-0 whitespace-nowrap pl-0 pr-0 text-sm font-medium text-foreground opacity-0 transition-all duration-300 group-hover:max-w-[130px] group-hover:pl-4 group-hover:pr-4 group-hover:opacity-100" { "Have feedback?" }
-            }
-        }
-    }
-}
-
-pub fn public_shell(cfg: &Config, user: Option<&User>, apps: &[Application], launcher: bool, content: Markup) -> Markup {
+/// `show_feedback` mirrors the historical `launcher: bool` parameter (the name
+/// changed when the floating widget was retired; the semantic stays the same).
+/// `true` for the marketing pages (Pricing / Our Story / Terms / Privacy);
+/// `false` for the login / register flow where the chrome is intentionally
+/// minimal. The flag is plumbed into `header()` so the top-bar button (and
+/// nothing else) honours it.
+pub fn public_shell(
+    cfg: &Config,
+    user: Option<&User>,
+    apps: &[Application],
+    show_feedback: bool,
+    content: Markup,
+) -> Markup {
     html! {
         div class="flex min-h-screen flex-col" {
-            (header(user))
+            (header(user, show_feedback))
             main class="flex-1" { (content) }
             (footer(cfg, apps))
-            @if launcher { (feedback_launcher()) }
+            @if show_feedback { (feedback_launcher()) }
         }
     }
 }
@@ -182,33 +298,100 @@ struct NavItem {
 
 fn dashboard_items() -> Vec<NavItem> {
     vec![
-        NavItem { title: "Dashboard", href: "/dashboard", icon: "layout-dashboard" },
-        NavItem { title: "Applications", href: "/applications", icon: "app-window" },
-        NavItem { title: "Downloads", href: "/downloads", icon: "download" },
-        NavItem { title: "Membership", href: "/membership", icon: "credit-card" },
-        NavItem { title: "Billing", href: "/billing", icon: "receipt" },
-        NavItem { title: "Settings", href: "/settings", icon: "settings" },
+        NavItem {
+            title: "Dashboard",
+            href: "/dashboard",
+            icon: "layout-dashboard",
+        },
+        NavItem {
+            title: "Applications",
+            href: "/applications",
+            icon: "app-window",
+        },
+        // Downloads moved onto each application card (BUNYIP-100); the
+        // standalone /downloads page is now a redirect to /applications.
+        // Single nav entry covering plan, status, invoices, and payment
+        // history. The standalone "Billing" item went away when /billing
+        // became a 302 redirect into /membership. See
+        // docs/bunyip-upgrade/01-membership-plan-data.md.
+        NavItem {
+            title: "Membership & Billing",
+            href: "/membership",
+            icon: "credit-card",
+        },
+        NavItem {
+            title: "Settings",
+            href: "/settings",
+            icon: "settings",
+        },
     ]
 }
 
 fn admin_items() -> Vec<NavItem> {
     vec![
-        NavItem { title: "Overview", href: "/admin", icon: "layout-dashboard" },
-        NavItem { title: "Users", href: "/admin/users", icon: "users" },
-        NavItem { title: "Memberships", href: "/admin/memberships", icon: "credit-card" },
-        NavItem { title: "Applications", href: "/admin/applications", icon: "app-window" },
-        NavItem { title: "Stripe", href: "/admin/stripe", icon: "banknote" },
-        NavItem { title: "Tier Settings", href: "/admin/tier-settings", icon: "settings" },
-        NavItem { title: "Feedback", href: "/admin/feedback", icon: "message-square-quote" },
-        NavItem { title: "Audit Logs", href: "/admin/audit-logs", icon: "file-text" },
+        NavItem {
+            title: "Overview",
+            href: "/admin",
+            icon: "layout-dashboard",
+        },
+        NavItem {
+            title: "Users",
+            href: "/admin/users",
+            icon: "users",
+        },
+        NavItem {
+            title: "Memberships",
+            href: "/admin/memberships",
+            icon: "credit-card",
+        },
+        NavItem {
+            title: "Applications",
+            href: "/admin/applications",
+            icon: "app-window",
+        },
+        NavItem {
+            title: "Groups",
+            href: "/admin/application-groups",
+            icon: "layers",
+        },
+        NavItem {
+            title: "Entitlements",
+            href: "/admin/entitlements",
+            icon: "key",
+        },
+        NavItem {
+            title: "Stripe",
+            href: "/admin/stripe",
+            icon: "banknote",
+        },
+        NavItem {
+            title: "Tier Settings",
+            href: "/admin/tier-settings",
+            icon: "settings",
+        },
+        NavItem {
+            title: "Feedback",
+            href: "/admin/feedback",
+            icon: "message-square-quote",
+        },
+        NavItem {
+            title: "Audit Logs",
+            href: "/admin/audit-logs",
+            icon: "file-text",
+        },
     ]
 }
 
-const NAV_ACTIVE: &str = "bg-gradient-to-r from-primary to-indigo-500 text-white shadow-md shadow-primary/20";
+const NAV_ACTIVE: &str =
+    "bg-gradient-to-r from-primary to-indigo-500 text-white shadow-md shadow-primary/20";
 const NAV_INACTIVE: &str = "text-muted-foreground hover:bg-accent hover:text-accent-foreground";
 
 fn sidebar(admin: bool, is_admin: bool, active: &str) -> Markup {
-    let items = if admin { admin_items() } else { dashboard_items() };
+    let items = if admin {
+        admin_items()
+    } else {
+        dashboard_items()
+    };
     html! {
         aside class="hidden md:flex w-64 flex-col border-r border-border/50 bg-gradient-to-b from-background via-background to-indigo-950/5 dark:to-indigo-950/20" {
             div class="flex h-16 items-center border-b border-border/50 px-6" {
@@ -258,13 +441,19 @@ fn app_topbar(title: &str, user: &User) -> Markup {
     }
 }
 
-pub fn dashboard_shell(user: &User, active: &str, content: Markup) -> Markup {
+/// `topbar_title` is the heading rendered in the top bar (NOT the browser
+/// `<title>`). `dashboard_response` derives it from the page-title argument by
+/// stripping the ` · Bunyip` brand suffix - that suffix is redundant in the
+/// visual header but is still expected on the browser tab. Pre-stripped here
+/// so every handler keeps its existing `dashboard_response(...)` call shape.
+pub fn dashboard_shell(user: &User, active: &str, topbar_title: &str, content: Markup) -> Markup {
     let is_admin = user.role == UserRole::Admin;
+    let sse = sse_subscriber_script();
     html! {
         div class="flex min-h-screen" {
             (sidebar(false, is_admin, active))
             div class="flex flex-1 flex-col" {
-                (app_topbar("Dashboard", user))
+                (app_topbar(topbar_title, user))
                 main class="relative flex-1 overflow-auto p-6" {
                     div class="pointer-events-none absolute inset-0 bg-gradient-to-br from-indigo-500/[0.02] via-transparent to-teal-500/[0.02]" {}
                     div class="relative" { (content) }
@@ -272,19 +461,22 @@ pub fn dashboard_shell(user: &User, active: &str, content: Markup) -> Markup {
             }
             (feedback_launcher())
         }
+        script { (PreEscaped(sse)) }
     }
 }
 
-pub fn admin_shell(user: &User, active: &str, content: Markup) -> Markup {
+pub fn admin_shell(user: &User, active: &str, topbar_title: &str, content: Markup) -> Markup {
+    let sse = sse_subscriber_script();
     html! {
         div class="flex min-h-screen" {
             (sidebar(true, true, active))
             div class="flex flex-1 flex-col" {
-                (app_topbar("Admin", user))
+                (app_topbar(topbar_title, user))
                 main class="relative flex-1 overflow-auto p-6" {
                     div class="relative" { (content) }
                 }
             }
         }
+        script { (PreEscaped(sse)) }
     }
 }

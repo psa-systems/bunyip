@@ -29,6 +29,14 @@ pub fn html(markup: Markup) -> Response {
     Html(markup.into_string()).into_response()
 }
 
+/// HTML response with an explicit status (e.g. 404 for the not-found fallback,
+/// BUNYIP-186 - the fallback page must carry a real 404, not a soft-404 200).
+pub fn html_status(markup: Markup, status: StatusCode) -> Response {
+    let mut resp = Html(markup.into_string()).into_response();
+    *resp.status_mut() = status;
+    resp
+}
+
 /// 200 HTML response that also relays refreshed cookies.
 pub fn html_cookies(markup: Markup, cookies: &[String]) -> Response {
     let mut resp = Html(markup.into_string()).into_response();
@@ -39,25 +47,16 @@ pub fn html_cookies(markup: Markup, cookies: &[String]) -> Response {
 /// 303 redirect (so a POST -> GET after form submit).
 pub fn redirect(path: &str) -> Response {
     let mut resp = StatusCode::SEE_OTHER.into_response();
-    resp.headers_mut().insert(LOCATION, HeaderValue::from_str(path).unwrap_or(HeaderValue::from_static("/")));
+    resp.headers_mut().insert(
+        LOCATION,
+        HeaderValue::from_str(path).unwrap_or(HeaderValue::from_static("/")),
+    );
     resp
 }
 
 /// 303 redirect that relays cookies (login/logout).
 pub fn redirect_cookies(path: &str, cookies: &[String]) -> Response {
     let mut resp = redirect(path);
-    attach_cookies(&mut resp, cookies);
-    resp
-}
-
-/// htmx-friendly redirect: sets `HX-Redirect` so htmx navigates the whole page,
-/// and a `Location` fallback for non-htmx requests.
-pub fn hx_redirect(path: &str, cookies: &[String]) -> Response {
-    let mut resp = StatusCode::OK.into_response();
-    if let Ok(v) = HeaderValue::from_str(path) {
-        resp.headers_mut().insert("HX-Redirect", v.clone());
-        resp.headers_mut().insert(LOCATION, v);
-    }
     attach_cookies(&mut resp, cookies);
     resp
 }

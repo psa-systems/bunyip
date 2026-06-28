@@ -28,8 +28,10 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
     -- Refresh token absolute TTL: 1h–90d
     refresh_token_ttl_seconds   INT         NOT NULL DEFAULT 2592000
         CHECK (refresh_token_ttl_seconds BETWEEN 3600 AND 7776000),
-    -- Refresh idle TTL
-    refresh_idle_ttl_seconds    INT         NOT NULL DEFAULT 1209600,
+    -- Refresh idle TTL: 1h–90d, mirroring the absolute-TTL bound above so an
+    -- idle window can never exceed the absolute lifetime's legal range.
+    refresh_idle_ttl_seconds    INT         NOT NULL DEFAULT 1209600
+        CHECK (refresh_idle_ttl_seconds BETWEEN 3600 AND 7776000),
     -- Audience for access tokens issued to this client
     audience                    TEXT        NOT NULL,
     dpop_bound                  BOOLEAN     NOT NULL DEFAULT FALSE,

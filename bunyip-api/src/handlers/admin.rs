@@ -12,24 +12,51 @@ use chrono::{Duration, Utc};
 
 use crate::config::Config;
 use crate::errors::AppError;
-use crate::middleware::{AdminUser, AuthenticatedUser};
+use crate::middleware::AdminUser;
 use crate::models::stripe::encrypt_secret;
 use crate::models::{
-    AuditAction, CreateApplication, CreateAuditLog, CreatePasswordResetToken, CreateRefreshToken,
-    DeleteApplicationRequest, MembershipStatus, StripeConfigResponse, SwapApplicationOrderRequest,
-    UpdateApplication, UserResponse,
+    AuditAction, CreateApplication, CreateApplicationGroup, CreateAuditLog,
+    CreatePasswordResetToken, CreateRefreshToken, DeleteApplicationRequest, MembershipStatus,
+    SetApplicationGroupRequest, StripeConfigResponse, SwapApplicationOrderRequest,
+    UpdateApplication, UpdateApplicationGroup, UserResponse,
 };
 use crate::repositories::{
-    ApplicationRepository, AuditLogRepository, InviteRepository, NotificationRepository,
-    StripeConfigRepository, TokenRepository, TotpRepository, UserRepository,
+    ApplicationGroupRepository, ApplicationRepository, AuditLogRepository, InviteRepository,
+    NotificationRepository, StripeConfigRepository, TokenRepository, TotpRepository,
+    UserRepository,
 };
 use crate::responses::{created, get_request_id, paginated, success, success_no_data};
 use crate::services::{
-    AuthService, DownloadCache, EmailService, EncryptionKeySet, JwtService, PasswordService,
+    AppDownloadCache, AuthService, EmailService, EncryptionKeySet, JwtService, PasswordService,
     ReleaseCache, StripeConfig, StripeService, TotpService, WebhookService,
 };
 use crate::validation;
+use bunyip_domain::services::{BunyipEvent, EventBus};
 use bunyip_oci::services::ManifestCache;
+
+/// BUNYIP-145: publish a `claims_changed` event for the given user. Fire-and-
+/// forget: the event bus drops the event silently when no tabs are subscribed.
+/// Mutation handlers call this AFTER the revoke + audit write so a busy SPA
+/// reacting to the SSE delivery never races a half-applied DB change.
+fn announce_claims_changed(bus: &EventBus, user_id: uuid::Uuid) {
+    bus.publish(BunyipEvent::ClaimsChanged { user_id });
+}
+
+/// BUNYIP-144: revoke every refresh-token family belonging to `user_id` so the
+/// next request from any of their tabs 401s on `/auth/refresh`, bounces to
+/// `/login`, and the fresh sign-in mints tokens carrying the just-mutated
+/// claims (role / membership / lifetime / status). Mirrors the pattern
+/// BUNYIP-137 already wired into [`update_user_role`].
+///
+/// Returns `Ok(true)` to signal "sessions revoked" so the audit log can carry
+/// `sessions_revoked: true` metadata. `Ok(false)` is reserved for callers that
+/// want to skip the revoke (a no-op mutation, an already-deactivated user,
+/// etc.) and is currently never returned by this helper itself; gating "did
+/// the mutation actually change something" stays in each handler.
+async fn revoke_user_sessions(pool: &PgPool, user_id: uuid::Uuid) -> Result<bool, AppError> {
+    TokenRepository::revoke_all_user_refresh_tokens(pool, user_id).await?;
+    Ok(true)
+}
 
 // =============================================================================
 // User Management
@@ -42,6 +69,9 @@ pub struct ListUsersQuery {
     pub per_page: Option<i32>,
     pub search: Option<String>,
     pub status: Option<String>,
+    /// When `Some(false)`, list suspended (soft-deleted) accounts instead of
+    /// live ones, so an admin can find and reactivate them (BUNYIP-120).
+    pub active: Option<bool>,
 }
 
 /// GET /v1/admin/users
@@ -67,6 +97,7 @@ pub async fn list_users(
         per_page,
         query.search.as_deref(),
         status_filter,
+        query.active,
     )
     .await?;
 
@@ -106,6 +137,7 @@ pub async fn update_user_status(
     admin: AdminUser,
     pool: web::Data<PgPool>,
     oidc_provider: web::Data<Option<Arc<bunyip_oidc::services::oidc_provider::OidcProvider>>>,
+    bus: web::Data<Arc<EventBus>>,
     path: web::Path<uuid::Uuid>,
     body: web::Json<UpdateUserStatusRequest>,
 ) -> Result<HttpResponse, AppError> {
@@ -113,12 +145,30 @@ pub async fn update_user_status(
     let user_id = path.into_inner();
 
     if body.active {
-        // Reactivate: clear deleted_at (would need new method)
-        // For now, we can't reactivate soft-deleted users through this API
-        return Err(AppError::validation(
-            "active",
-            "Cannot reactivate deleted users through this endpoint",
-        ));
+        // Reactivate: clear deleted_at. `restore` returns false when the user
+        // is not a soft-deleted row (already active or unknown id) so we can
+        // 404 instead of silently succeeding.
+        let restored = UserRepository::restore(&pool, user_id).await?;
+        if !restored {
+            return Err(AppError::not_found("Deleted user"));
+        }
+
+        // BUNYIP-144: revoke any lingering refresh-token families. A soft-
+        // deleted user shouldn't have live tokens (auth middleware drops them
+        // on `deleted_at IS NOT NULL`) but belt-and-braces so a stale token
+        // from a future regression cannot leak past reactivation.
+        let sessions_revoked = revoke_user_sessions(pool.get_ref(), user_id).await?;
+
+        let audit_log = CreateAuditLog::new(AuditAction::AdminUserActivated)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+            .with_resource("user", user_id)
+            .with_metadata(serde_json::json!({
+                "sessions_revoked": sessions_revoked,
+            }));
+        AuditLogRepository::create(&pool, audit_log).await?;
+
+        // BUNYIP-145: tell any open SPA tab the claims set is dirty.
+        announce_claims_changed(bus.as_ref(), user_id);
     } else {
         let target_user = UserRepository::find_by_id(&pool, user_id)
             .await?
@@ -126,17 +176,33 @@ pub async fn update_user_status(
 
         UserRepository::soft_delete(&pool, user_id).await?;
 
+        // BUNYIP-144: a deactivation must take effect immediately. Without
+        // this, an already-signed-in user keeps an admin-claim access token
+        // until it expires (up to 15 min) and a refresh token usable for its
+        // full TTL even though the row now has `deleted_at` set.
+        let sessions_revoked = revoke_user_sessions(pool.get_ref(), user_id).await?;
+
         let audit_log = CreateAuditLog::new(AuditAction::AdminUserDeactivated)
             .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
             .with_resource("user", user_id)
             .with_metadata(serde_json::json!({
                 "target_email": target_user.email,
+                "sessions_revoked": sessions_revoked,
             }));
         AuditLogRepository::create(&pool, audit_log).await?;
 
         if let Some(provider) = oidc_provider.as_ref().as_ref().cloned() {
             tokio::spawn(dispatch_lifecycle_event(provider, user_id, "user.deleted"));
         }
+
+        // BUNYIP-145: also publish a session_revoked event so any tabs the
+        // user has open redirect to /login immediately. claims_changed alone
+        // would also catch them on next refresh but session_revoked is the
+        // proactive surface BUNYIP-145's design uses for explicit revoke.
+        bus.publish(BunyipEvent::SessionRevoked {
+            user_id,
+            reason: "admin_deactivate",
+        });
     }
 
     Ok(success_no_data(request_id))
@@ -209,6 +275,7 @@ pub async fn update_user_role(
     req: HttpRequest,
     admin: AdminUser,
     pool: web::Data<PgPool>,
+    bus: web::Data<Arc<EventBus>>,
     path: web::Path<uuid::Uuid>,
     body: web::Json<UpdateUserRoleRequest>,
 ) -> Result<HttpResponse, AppError> {
@@ -239,10 +306,28 @@ pub async fn update_user_role(
 
     let updated_user = UserRepository::update_role(&pool, user_id, &body.role).await?;
 
+    // Revoke the target user's existing sessions when the role actually changes
+    // (BUNYIP-137). A privilege change must take effect immediately: otherwise a
+    // demoted admin keeps an admin-claim access token until it expires (up to
+    // 15 min) and an admin-capable refresh token for up to its full lifetime.
+    // Revoking forces a re-login that mints tokens carrying the new role claim.
+    let role_changed = old_role != body.role;
+    if role_changed {
+        TokenRepository::revoke_all_user_refresh_tokens(pool.get_ref(), user_id).await?;
+        // BUNYIP-145: send a session_revoked event so the user's open tabs
+        // redirect to /login at once (claims_changed would also work but
+        // session_revoked carries the explicit reason the SPA can flash).
+        bus.publish(BunyipEvent::SessionRevoked {
+            user_id,
+            reason: "role_change",
+        });
+    }
+
     tracing::info!(
         admin_id = %admin.0.sub,
         target_user_id = %user_id,
         new_role = %body.role,
+        sessions_revoked = role_changed,
         "Admin changed user role"
     );
 
@@ -253,10 +338,155 @@ pub async fn update_user_role(
         .with_new_values(serde_json::json!({ "role": &body.role }))
         .with_metadata(serde_json::json!({
             "target_email": target_user.email,
+            "sessions_revoked": role_changed,
         }));
     AuditLogRepository::create(&pool, audit_log).await?;
 
     Ok(success(UserResponse::from(updated_user), request_id))
+}
+
+/// Request body for admin email correction (BUNYIP-119).
+#[derive(Debug, Deserialize)]
+pub struct UpdateUserEmailRequest {
+    pub email: String,
+    /// When true the corrected address is stored already-verified; when
+    /// false (the default) the user keeps an unverified address until they
+    /// complete the verification flow.
+    #[serde(default)]
+    pub verified: bool,
+}
+
+/// PUT /v1/admin/users/{user_id}/email
+/// Correct a user's email address (BUNYIP-119). Admin-only override of the
+/// normal user-initiated, email-confirmed change flow: the new address is
+/// written directly, optionally marked verified in the same edit.
+pub async fn update_user_email(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+    body: web::Json<UpdateUserEmailRequest>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let user_id = path.into_inner();
+
+    // Normalize like the rest of the auth surface (lower-cased, trimmed).
+    let new_email = body.email.trim().to_lowercase();
+    crate::validation::validate_email(&new_email)?;
+
+    let target_user = UserRepository::find_by_id(&pool, user_id)
+        .await?
+        .ok_or(AppError::not_found("User"))?;
+    let old_email = target_user.email.clone();
+
+    // No-op edits that only flip verification are still allowed, but a real
+    // address change must not collide with another live account.
+    if new_email != old_email.to_lowercase() {
+        if let Some(existing) = UserRepository::find_by_email(&pool, &new_email).await? {
+            if existing.id != user_id {
+                return Err(AppError::conflict("Email already registered"));
+            }
+        }
+    }
+
+    UserRepository::update_email(pool.get_ref(), user_id, &new_email, body.verified).await?;
+
+    tracing::info!(
+        admin_id = %admin.0.sub,
+        target_user_id = %user_id,
+        verified = body.verified,
+        "Admin changed user email"
+    );
+
+    let audit_log = CreateAuditLog::new(AuditAction::AdminUserEmailChanged)
+        .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+        .with_resource("user", user_id)
+        .with_old_values(serde_json::json!({ "email": old_email }))
+        .with_new_values(
+            serde_json::json!({ "email": new_email, "email_verified": body.verified }),
+        );
+    AuditLogRepository::create(&pool, audit_log).await?;
+
+    let updated_user = UserRepository::find_by_id(&pool, user_id)
+        .await?
+        .ok_or(AppError::not_found("User"))?;
+
+    Ok(success(UserResponse::from(updated_user), request_id))
+}
+
+/// POST /v1/admin/users/{user_id}/email/verify
+/// Force-verify a user's email address without the user completing the
+/// email-verification flow (BUNYIP-119).
+pub async fn verify_user_email(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let user_id = path.into_inner();
+
+    let target_user = UserRepository::find_by_id(&pool, user_id)
+        .await?
+        .ok_or(AppError::not_found("User"))?;
+
+    UserRepository::set_email_verified(&pool, user_id).await?;
+
+    tracing::info!(
+        admin_id = %admin.0.sub,
+        target_user_id = %user_id,
+        "Admin force-verified user email"
+    );
+
+    let audit_log = CreateAuditLog::new(AuditAction::AdminUserEmailVerified)
+        .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+        .with_resource("user", user_id)
+        .with_metadata(serde_json::json!({
+            "target_email": target_user.email,
+        }));
+    AuditLogRepository::create(&pool, audit_log).await?;
+
+    Ok(success_no_data(request_id))
+}
+
+/// POST /v1/admin/users/{user_id}/two-factor/reset
+/// Clear a user's two-factor authentication (BUNYIP-119): delete their TOTP
+/// secret + recovery codes and flip `two_factor_enabled` off so a locked-out
+/// user can re-enrol from scratch.
+pub async fn reset_user_two_factor(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let user_id = path.into_inner();
+
+    let target_user = UserRepository::find_by_id(&pool, user_id)
+        .await?
+        .ok_or(AppError::not_found("User"))?;
+
+    // Drop the TOTP secret + recovery codes first, then clear the flag. Either
+    // order leaves a consistent "2FA off" state; doing the delete first means a
+    // mid-way failure never leaves the flag off while a stale secret lingers.
+    TotpRepository::delete_by_user_id(&pool, user_id).await?;
+    UserRepository::set_two_factor_enabled(&pool, user_id, false).await?;
+
+    tracing::info!(
+        admin_id = %admin.0.sub,
+        target_user_id = %user_id,
+        "Admin reset user two-factor authentication"
+    );
+
+    let audit_log = CreateAuditLog::new(AuditAction::AdminUserTwoFactorReset)
+        .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+        .with_resource("user", user_id)
+        .with_metadata(serde_json::json!({
+            "target_email": target_user.email,
+        }));
+    AuditLogRepository::create(&pool, audit_log).await?;
+
+    Ok(success_no_data(request_id))
 }
 
 // =============================================================================
@@ -279,6 +509,7 @@ pub async fn grant_membership(
     admin: AdminUser,
     pool: web::Data<PgPool>,
     stripe: web::Data<Arc<StripeService>>,
+    bus: web::Data<Arc<EventBus>>,
     body: web::Json<GrantMembershipRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -315,6 +546,15 @@ pub async fn grant_membership(
         .await?;
     }
 
+    // BUNYIP-144: `grant_free_membership` sets `lifetime_member=true` and
+    // `subscription_status=active`. Both are inputs to `has_member_access`
+    // (the dashboard's per-app gate), so existing tokens minted before the
+    // grant carry stale claims. Force re-login so the next request mints
+    // fresh tokens with the new state.
+    let sessions_revoked = revoke_user_sessions(pool.get_ref(), body.user_id).await?;
+    // BUNYIP-145: notify any open SPA tab so it refreshes in place.
+    announce_claims_changed(bus.as_ref(), body.user_id);
+
     let audit_log = CreateAuditLog::new(AuditAction::AdminMembershipGranted)
         .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
         .with_resource("user", body.user_id)
@@ -322,6 +562,7 @@ pub async fn grant_membership(
             "tier": "free",
             "price_locked": price_locked,
             "locked_price_amount": locked_amount,
+            "sessions_revoked": sessions_revoked,
         }));
     AuditLogRepository::create(&pool, audit_log).await?;
 
@@ -334,6 +575,7 @@ pub async fn revoke_membership(
     req: HttpRequest,
     admin: AdminUser,
     pool: web::Data<PgPool>,
+    bus: web::Data<Arc<EventBus>>,
     body: web::Json<GrantMembershipRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -351,9 +593,22 @@ pub async fn revoke_membership(
     // Clear any grace period
     UserRepository::clear_grace_period(pool.get_ref(), body.user_id).await?;
 
+    // BUNYIP-144: a revoke is a privilege-DOWNGRADE so the security argument
+    // is the strongest of any handler in this set. Without this, the user
+    // keeps an admin-or-active-member claim for the full refresh-token TTL
+    // (30 days for subscribers) after their membership was canceled.
+    let sessions_revoked = revoke_user_sessions(pool.get_ref(), body.user_id).await?;
+    // BUNYIP-145: revoked membership is a privilege-downgrade visible to the
+    // user immediately as "Membership Required" banners. Push the event so
+    // the open tab does not keep flashing the active-member UI.
+    announce_claims_changed(bus.as_ref(), body.user_id);
+
     let audit_log = CreateAuditLog::new(AuditAction::AdminMembershipRevoked)
         .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
-        .with_resource("user", body.user_id);
+        .with_resource("user", body.user_id)
+        .with_metadata(serde_json::json!({
+            "sessions_revoked": sessions_revoked,
+        }));
     AuditLogRepository::create(&pool, audit_log).await?;
 
     Ok(success_no_data(request_id))
@@ -485,7 +740,6 @@ pub async fn swap_application_order(
 
 /// PUT /v1/admin/applications/{app_id}
 /// Update an application
-#[allow(clippy::too_many_arguments)]
 pub async fn update_application(
     req: HttpRequest,
     admin: AdminUser,
@@ -494,7 +748,7 @@ pub async fn update_application(
     body: web::Json<UpdateApplication>,
     webhook_service: web::Data<Arc<WebhookService>>,
     release_cache: web::Data<Option<Arc<ReleaseCache>>>,
-    download_cache: web::Data<Option<Arc<DownloadCache>>>,
+    download_cache: web::Data<Option<Arc<AppDownloadCache>>>,
     manifest_cache: web::Data<Option<Arc<ManifestCache>>>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -504,63 +758,30 @@ pub async fn update_application(
         .await?
         .ok_or(AppError::not_found("Application"))?;
 
-    // All-or-nothing Forgejo validation on merged values
-    let merged_owner = body
-        .forgejo_owner
-        .as_ref()
-        .or(old_app.forgejo_owner.as_ref());
-    let merged_repo = body.forgejo_repo.as_ref().or(old_app.forgejo_repo.as_ref());
-    let merged_tag = body
-        .pinned_release_tag
-        .as_ref()
-        .or(old_app.pinned_release_tag.as_ref());
-    let forgejo_any = merged_owner.is_some() || merged_repo.is_some() || merged_tag.is_some();
-    let forgejo_all = merged_owner.is_some() && merged_repo.is_some() && merged_tag.is_some();
-    if forgejo_any && !forgejo_all {
-        return Err(AppError::validation(
-            "forgejo",
-            "forgejo_owner, forgejo_repo, and pinned_release_tag must all be set together",
-        ));
+    // Validate the MERGED distribution config (body values overlaid on the
+    // existing row) using the shared model rules, so a bad value is a clean
+    // 400 instead of a DB CHECK-constraint 500 and create/update cannot drift.
+    if let Err((field, message)) = body.distribution_merged(&old_app).validate() {
+        return Err(AppError::validation(field, &message));
     }
 
-    // All-or-nothing OCI validation on merged values
-    let merged_oci_owner = body
-        .oci_image_owner
-        .as_ref()
-        .or(old_app.oci_image_owner.as_ref());
-    let merged_oci_name = body
-        .oci_image_name
-        .as_ref()
-        .or(old_app.oci_image_name.as_ref());
-    let merged_oci_tag = body
-        .pinned_image_tag
-        .as_ref()
-        .or(old_app.pinned_image_tag.as_ref());
-    let oci_any =
-        merged_oci_owner.is_some() || merged_oci_name.is_some() || merged_oci_tag.is_some();
-    let oci_all =
-        merged_oci_owner.is_some() && merged_oci_name.is_some() && merged_oci_tag.is_some();
-    if oci_any && !oci_all {
-        return Err(AppError::validation(
-            "oci",
-            "oci_image_owner, oci_image_name, and pinned_image_tag must all be set together",
-        ));
-    }
-
-    // Capture old tags before update for cache invalidation
-    let old_tag = old_app.pinned_release_tag.clone();
+    // Capture the old artifact source before update for cache invalidation
+    let old_source = old_app.download_source();
     let old_pinned_image_tag = old_app.pinned_image_tag.clone();
 
     let app = ApplicationRepository::update(&pool, app_id, &body).await?;
 
-    // Invalidate caches if the pinned release tag changed
-    if let Some(old_tag_str) = old_tag.as_deref() {
-        if old_tag != app.pinned_release_tag {
+    // Invalidate caches if the download source (owner/repo/package/tag) changed
+    if let Some(old_source) = old_source {
+        if app.download_source().as_ref() != Some(&old_source) {
             if let Some(rc) = release_cache.get_ref().as_ref() {
-                rc.invalidate(app.id, old_tag_str).await;
+                rc.invalidate(app.id, &old_source).await;
             }
             if let Some(dc) = download_cache.get_ref().as_ref() {
-                if let Err(e) = dc.invalidate_app_tag(app.id, old_tag_str).await {
+                if let Err(e) = dc
+                    .invalidate_app_version(app.id, old_source.version())
+                    .await
+                {
                     tracing::warn!(error = %e, "download cache invalidation failed");
                 }
             }
@@ -622,6 +843,66 @@ pub async fn update_application(
     Ok(success(app, request_id))
 }
 
+/// Body for [`replay_account_delete`]: which app to re-notify (BUNYIP-211).
+#[derive(Debug, Deserialize)]
+pub struct ReplayAccountDeleteRequest {
+    /// Slug of the connected app whose `account_deleted` webhook to re-fire.
+    pub app_slug: String,
+}
+
+/// POST /v1/admin/account-deletes/{user_id}/replay
+/// BUNYIP-211: re-fire the `account_deleted` webhook to a single app for a user
+/// whose original delete dispatch failed (its row sits in
+/// `account_delete_dispatch_failures`). Admin-gated. Lets ops resolve a stuck
+/// downstream purge without re-deleting the user. The outcome is recorded the
+/// same way the delete fan-out records it (audit row, and a fresh failure row
+/// if this attempt also exhausts), so the replay is itself observable.
+pub async fn replay_account_delete(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    webhook_service: web::Data<Arc<WebhookService>>,
+    path: web::Path<uuid::Uuid>,
+    body: web::Json<ReplayAccountDeleteRequest>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let user_id = path.into_inner();
+
+    let app = ApplicationRepository::find_by_slug(&pool, &body.app_slug)
+        .await?
+        .ok_or(AppError::not_found("Application"))?;
+
+    let outcome = webhook_service
+        .dispatch_account_deleted(&app, user_id)
+        .await;
+    crate::handlers::user::record_account_delete_dispatch(&pool, user_id, &app, &outcome).await;
+
+    tracing::info!(
+        admin_id = %admin.0.sub,
+        user_id = %user_id,
+        app_slug = %app.slug,
+        delivered = outcome.is_ok(),
+        "admin replayed account_deleted webhook"
+    );
+
+    match outcome {
+        Ok(()) => Ok(success(
+            serde_json::json!({
+                "user_id": user_id,
+                "app_slug": app.slug,
+                "status": "delivered",
+            }),
+            request_id,
+        )),
+        // Surface the failure to the admin (the failure row is already
+        // persisted by record_account_delete_dispatch for a later retry).
+        Err(err) => Err(AppError::internal(format!(
+            "account_deleted webhook to {} still failing: {err}",
+            app.slug
+        ))),
+    }
+}
+
 /// POST /v1/admin/applications
 /// Create a new application
 pub async fn create_application(
@@ -668,6 +949,12 @@ pub async fn create_application(
         return Err(AppError::conflict(
             "An application with this slug already exists",
         ));
+    }
+
+    // Validate the distribution config (Forgejo downloads + OCI image) with
+    // the shared model rules, so a product can be fully created in one call.
+    if let Err((field, message)) = body.distribution().validate() {
+        return Err(AppError::validation(field, &message));
     }
 
     let app = ApplicationRepository::create(&pool, &body).await?;
@@ -746,6 +1033,142 @@ pub async fn delete_application(
 }
 
 // =============================================================================
+// Application Groups (BUNYIP-100)
+// =============================================================================
+
+/// GET /v1/admin/application-groups
+/// List all application groups.
+pub async fn list_all_application_groups(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let groups = ApplicationGroupRepository::list(&pool).await?;
+    Ok(success(serde_json::json!({ "groups": groups }), request_id))
+}
+
+/// POST /v1/admin/application-groups
+/// Create an application group.
+pub async fn create_application_group(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+    body: web::Json<CreateApplicationGroup>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+
+    if body.name.trim().is_empty() {
+        return Err(AppError::validation("name", "Name is required"));
+    }
+    if body.display_name.trim().is_empty() {
+        return Err(AppError::validation(
+            "display_name",
+            "Display name is required",
+        ));
+    }
+    validation::validate_slug(&body.slug).map_err(|_| {
+        AppError::validation(
+            "slug",
+            "Slug must contain only lowercase letters, numbers, and hyphens",
+        )
+    })?;
+    if ApplicationGroupRepository::find_by_slug(&pool, &body.slug)
+        .await?
+        .is_some()
+    {
+        return Err(AppError::conflict(
+            "An application group with this slug already exists",
+        ));
+    }
+
+    let group = ApplicationGroupRepository::create(&pool, &body).await?;
+    Ok(created(group, request_id))
+}
+
+/// PUT /v1/admin/application-groups/{group_id}
+/// Update an application group.
+pub async fn update_application_group(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+    body: web::Json<UpdateApplicationGroup>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let group_id = path.into_inner();
+
+    ApplicationGroupRepository::find_by_id(&pool, group_id)
+        .await?
+        .ok_or(AppError::not_found("Application group"))?;
+
+    if let Some(slug) = body.slug.as_deref() {
+        validation::validate_slug(slug).map_err(|_| {
+            AppError::validation(
+                "slug",
+                "Slug must contain only lowercase letters, numbers, and hyphens",
+            )
+        })?;
+        // A slug change must not collide with a different group.
+        if let Some(existing) = ApplicationGroupRepository::find_by_slug(&pool, slug).await? {
+            if existing.id != group_id {
+                return Err(AppError::conflict(
+                    "An application group with this slug already exists",
+                ));
+            }
+        }
+    }
+
+    let group = ApplicationGroupRepository::update(&pool, group_id, &body).await?;
+    Ok(success(group, request_id))
+}
+
+/// DELETE /v1/admin/application-groups/{group_id}
+/// Delete an application group. Members are ungrouped (FK ON DELETE SET NULL).
+pub async fn delete_application_group(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let group_id = path.into_inner();
+
+    ApplicationGroupRepository::find_by_id(&pool, group_id)
+        .await?
+        .ok_or(AppError::not_found("Application group"))?;
+
+    ApplicationGroupRepository::delete(&pool, group_id).await?;
+    Ok(success_no_data(request_id))
+}
+
+/// PUT /v1/admin/applications/{app_id}/group
+/// Assign an application to a group, or clear it (`group_id = null`).
+pub async fn set_application_group(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+    body: web::Json<SetApplicationGroupRequest>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let app_id = path.into_inner();
+
+    ApplicationRepository::find_by_id(&pool, app_id)
+        .await?
+        .ok_or(AppError::not_found("Application"))?;
+
+    if let Some(group_id) = body.group_id {
+        ApplicationGroupRepository::find_by_id(&pool, group_id)
+            .await?
+            .ok_or(AppError::not_found("Application group"))?;
+    }
+
+    ApplicationRepository::set_group(&pool, app_id, body.group_id).await?;
+    Ok(success_no_data(request_id))
+}
+
+// =============================================================================
 // Audit Logs
 // =============================================================================
 
@@ -804,6 +1227,52 @@ pub struct DashboardStats {
 
 /// GET /v1/admin/stats
 /// Get dashboard statistics
+/// Collect the dashboard user/application counts. Shared by `get_dashboard_stats`
+/// and `get_system_health` so the two never drift, and every DB error propagates
+/// (no `.ok().flatten()` swallowing).
+async fn collect_dashboard_stats(pool: &PgPool) -> Result<DashboardStats, AppError> {
+    // Get user counts by status
+    let total_users: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE deleted_at IS NULL")
+        .fetch_one(pool)
+        .await?;
+
+    let active_members: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM users WHERE subscription_status = 'active' AND deleted_at IS NULL",
+    )
+    .fetch_one(pool)
+    .await?;
+
+    let past_due_members: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM users WHERE subscription_status = 'past_due' AND deleted_at IS NULL",
+    )
+    .fetch_one(pool)
+    .await?;
+
+    let grace_period_members: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM users WHERE subscription_status = 'grace_period' AND deleted_at IS NULL",
+    )
+    .fetch_one(pool)
+    .await?;
+
+    let total_applications: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM applications")
+        .fetch_one(pool)
+        .await?;
+
+    let active_applications: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM applications WHERE is_active = TRUE")
+            .fetch_one(pool)
+            .await?;
+
+    Ok(DashboardStats {
+        total_users: total_users.0,
+        active_members: active_members.0,
+        past_due_members: past_due_members.0,
+        grace_period_members: grace_period_members.0,
+        total_applications: total_applications.0,
+        active_applications: active_applications.0,
+    })
+}
+
 pub async fn get_dashboard_stats(
     req: HttpRequest,
     _admin: AdminUser,
@@ -811,46 +1280,7 @@ pub async fn get_dashboard_stats(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
-    // Get user counts by status
-    let total_users: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE deleted_at IS NULL")
-        .fetch_one(pool.get_ref())
-        .await?;
-
-    let active_members: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM users WHERE subscription_status = 'active' AND deleted_at IS NULL",
-    )
-    .fetch_one(pool.get_ref())
-    .await?;
-
-    let past_due_members: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM users WHERE subscription_status = 'past_due' AND deleted_at IS NULL",
-    )
-    .fetch_one(pool.get_ref())
-    .await?;
-
-    let grace_period_members: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM users WHERE subscription_status = 'grace_period' AND deleted_at IS NULL",
-    )
-    .fetch_one(pool.get_ref())
-    .await?;
-
-    let total_applications: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM applications")
-        .fetch_one(pool.get_ref())
-        .await?;
-
-    let active_applications: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM applications WHERE is_active = TRUE")
-            .fetch_one(pool.get_ref())
-            .await?;
-
-    let stats = DashboardStats {
-        total_users: total_users.0,
-        active_members: active_members.0,
-        past_due_members: past_due_members.0,
-        grace_period_members: grace_period_members.0,
-        total_applications: total_applications.0,
-        active_applications: active_applications.0,
-    };
+    let stats = collect_dashboard_stats(pool.get_ref()).await?;
 
     Ok(success(stats, request_id))
 }
@@ -865,13 +1295,18 @@ pub async fn admin_reset_password(
     req: HttpRequest,
     admin: AdminUser,
     pool: web::Data<PgPool>,
-    jwt_service: web::Data<Arc<JwtService>>,
     email_service: web::Data<Arc<EmailService>>,
     path: web::Path<uuid::Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let user_id = path.into_inner();
     let admin_user_id = admin.0.sub;
+
+    // JwtService is registered as a bare `Arc<JwtService>` (not `web::Data`),
+    // so read it from app_data directly - the documented canonical path.
+    let jwt_service = req
+        .app_data::<Arc<JwtService>>()
+        .ok_or_else(|| AppError::internal("JWT service not configured"))?;
 
     // Find the user
     let user = UserRepository::find_by_id(&pool, user_id)
@@ -918,12 +1353,17 @@ pub async fn impersonate_user(
     req: HttpRequest,
     admin: AdminUser,
     pool: web::Data<PgPool>,
-    jwt_service: web::Data<Arc<JwtService>>,
     path: web::Path<uuid::Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let target_user_id = path.into_inner();
     let admin_user_id = admin.0.sub;
+
+    // JwtService is registered as a bare `Arc<JwtService>` (not `web::Data`),
+    // so read it from app_data directly - the documented canonical path.
+    let jwt_service = req
+        .app_data::<Arc<JwtService>>()
+        .ok_or_else(|| AppError::internal("JWT service not configured"))?;
 
     // Prevent self-impersonation
     if admin_user_id == target_user_id {
@@ -1053,14 +1493,14 @@ pub async fn mark_all_notifications_read(
 /// Send a test welcome email to the authenticated user
 pub async fn send_test_email(
     req: HttpRequest,
-    user: AuthenticatedUser,
+    admin: AdminUser,
     email_service: web::Data<Arc<EmailService>>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
-    email_service.send_welcome(&user.0.email, 300).await?;
+    email_service.send_welcome(&admin.0.email, 300).await?;
 
-    tracing::info!(email = %user.0.email, "Test email sent");
+    tracing::info!(email = %admin.0.email, "Test email sent");
 
     Ok(success_no_data(request_id))
 }
@@ -1185,6 +1625,7 @@ pub async fn get_system_health(
     req: HttpRequest,
     _admin: AdminUser,
     pool: web::Data<PgPool>,
+    server_start: web::Data<std::time::Instant>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
@@ -1203,19 +1644,16 @@ pub async fn get_system_health(
         },
     };
 
-    // Get database stats
-    let db_stats: Option<(i64, i64, i64)> = sqlx::query_as(
-        r#"
-        SELECT
-            (SELECT COUNT(*) FROM users WHERE deleted_at IS NULL) as users,
-            (SELECT COUNT(*) FROM users WHERE subscription_status = 'active') as active_subs,
-            (SELECT COUNT(*) FROM audit_logs WHERE created_at > NOW() - INTERVAL '1 hour') as recent_logs
-        "#
+    // Reuse the dashboard counts (no duplicated SQL) and surface the recent
+    // audit-log volume. Errors propagate rather than being swallowed by
+    // `.ok().flatten()`, so a failing stats query degrades the health report
+    // honestly instead of silently dropping the stats block.
+    let stats = collect_dashboard_stats(pool.get_ref()).await?;
+    let recent_logs: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM audit_logs WHERE created_at > NOW() - INTERVAL '1 hour'",
     )
-    .fetch_optional(pool.get_ref())
-    .await
-    .ok()
-    .flatten();
+    .fetch_one(pool.get_ref())
+    .await?;
 
     let overall_status = if db_health.status == "healthy" {
         "healthy"
@@ -1226,21 +1664,18 @@ pub async fn get_system_health(
     let health = SystemHealth {
         status: overall_status.to_string(),
         database: db_health,
-        uptime_seconds: 0, // Would need to track startup time
+        uptime_seconds: server_start.elapsed().as_secs(),
         version: env!("CARGO_PKG_VERSION").to_string(),
     };
 
-    let mut response = serde_json::json!({
+    let response = serde_json::json!({
         "health": health,
+        "stats": {
+            "total_users": stats.total_users,
+            "active_members": stats.active_members,
+            "audit_logs_last_hour": recent_logs.0,
+        },
     });
-
-    if let Some((users, active_members, recent_logs)) = db_stats {
-        response["stats"] = serde_json::json!({
-            "total_users": users,
-            "active_members": active_members,
-            "audit_logs_last_hour": recent_logs
-        });
-    }
 
     Ok(success(response, request_id))
 }
@@ -1349,6 +1784,30 @@ pub async fn update_stripe_config(
         }
     }
 
+    // BUNYIP-189: bootstrap a default app-tagged product + recurring
+    // price when no app-tagged price exists yet. Closes the silent-400
+    // gotcha from BUNYIP-A-5 gotcha 3 - a fresh Stripe account no
+    // longer needs an out-of-band `stripe products create` step to
+    // make the Subscribe button work. Idempotent; a re-save when a
+    // price already exists is a no-op. Failure to bootstrap does NOT
+    // fail the config save (the keys are still valid and the admin can
+    // create the product by hand); the failure is logged.
+    let bootstrap_created = match stripe_service.bootstrap_default_product_if_missing().await {
+        Ok(Some((product, price))) => {
+            tracing::info!(
+                product_id = %product.id,
+                price_id = %price.id,
+                "BUNYIP-189: bootstrapped default Stripe product + price"
+            );
+            Some((product.id, price.id))
+        }
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "BUNYIP-189: bootstrap_default_product failed; admin must create product manually");
+            None
+        }
+    };
+
     let audit_log = CreateAuditLog::new(AuditAction::AdminStripeConfigUpdated)
         .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
         .with_metadata(serde_json::json!({
@@ -1356,7 +1815,15 @@ pub async fn update_stripe_config(
                 "secret_key": secret_key_plain.is_some(),
                 "webhook_secret": webhook_secret_plain.is_some(),
                 "app_tag": app_tag,
-            }
+            },
+            // BUNYIP-189: surface the auto-bootstrap outcome in the
+            // audit log so an operator chasing the "where did this
+            // product come from" question can trace it to the config
+            // save that produced it.
+            "bootstrap": bootstrap_created.as_ref().map(|(p, pr)| serde_json::json!({
+                "product_id": p,
+                "price_id": pr,
+            })),
         }));
     AuditLogRepository::create(&pool, audit_log).await?;
 
@@ -1378,6 +1845,7 @@ pub async fn grant_lifetime_membership(
     admin: AdminUser,
     pool: web::Data<PgPool>,
     stripe: web::Data<Arc<StripeService>>,
+    bus: web::Data<Arc<EventBus>>,
     path: web::Path<uuid::Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -1400,6 +1868,20 @@ pub async fn grant_lifetime_membership(
             .await?;
     }
 
+    // BUNYIP-144: lifetime is a privilege-elevation that feeds directly into
+    // `has_member_access` ("role=admin OR lifetime_member OR ..."), gating
+    // every per-app tile on the dashboard (Mokosh / Drillmark / Lets Chat).
+    // Without revoking, the customer keeps seeing tiles greyed out until
+    // their access token expires (15 min) - and even after that the refresh
+    // remints stale claims unless every tab triggers a fresh refresh. This
+    // is the exact bug the brendon@netcal.com triage on 2026-06-19 hit.
+    let sessions_revoked = revoke_user_sessions(pool.get_ref(), user_id).await?;
+    // BUNYIP-145: same brendon@netcal.com bug, UX half. The revoke above
+    // closes the security gap (next request 401s); the publish below
+    // closes the UX gap (open tab updates without the customer having to
+    // hit F5 OR be bounced to /login).
+    announce_claims_changed(bus.as_ref(), user_id);
+
     AuditLogRepository::create(
         &pool,
         CreateAuditLog::new(AuditAction::AdminMembershipGranted)
@@ -1408,6 +1890,44 @@ pub async fn grant_lifetime_membership(
             .with_metadata(serde_json::json!({
                 "tier": "lifetime",
                 "target_email": user.email,
+                "sessions_revoked": sessions_revoked,
+            })),
+    )
+    .await?;
+
+    Ok(success(UserResponse::from(user), request_id))
+}
+
+/// POST /v1/admin/users/{user_id}/lifetime/revoke
+pub async fn revoke_lifetime_membership(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    bus: web::Data<Arc<EventBus>>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let user_id = path.into_inner();
+
+    let user = UserRepository::revoke_lifetime_membership(&pool, user_id).await?;
+
+    // BUNYIP-144: privilege-downgrade. Cut existing sessions immediately so
+    // the user does not retain `lifetime_member=true` JWT claims past the
+    // revoke (otherwise they'd see "Active" on every app tile for the full
+    // refresh-token TTL).
+    let sessions_revoked = revoke_user_sessions(pool.get_ref(), user_id).await?;
+    // BUNYIP-145: tell the open tab to update in place.
+    announce_claims_changed(bus.as_ref(), user_id);
+
+    AuditLogRepository::create(
+        &pool,
+        CreateAuditLog::new(AuditAction::AdminMembershipRevoked)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+            .with_resource("user", user_id)
+            .with_metadata(serde_json::json!({
+                "tier": "lifetime",
+                "target_email": user.email,
+                "sessions_revoked": sessions_revoked,
             })),
     )
     .await?;
@@ -1713,7 +2233,16 @@ pub async fn get_key_health(
         if check.status == "unhealthy" {
             any_unhealthy = true;
         }
-        checks.insert(key_id.to_string(), serde_json::to_value(&check).unwrap());
+        // `to_value` is practically infallible for the `KeyHealthCheck`
+        // struct today (only string + enum fields), but the contract leaks
+        // a panic surface that a future numeric field would expose (e.g.
+        // an `f64` would serialise NaN as Err). Fail-soft with a null and
+        // an error log instead of taking down the whole endpoint.
+        let value = serde_json::to_value(&check).unwrap_or_else(|e| {
+            tracing::error!(key_id = %key_id, error = %e, "Failed to serialize key health check; emitting null");
+            serde_json::Value::Null
+        });
+        checks.insert(key_id.to_string(), value);
     }
 
     let overall_status = if any_unhealthy { "degraded" } else { "healthy" };
@@ -1899,13 +2428,15 @@ pub async fn reencrypt_key(
                 _ => None,
             };
 
-            StripeConfigRepository::update_encryption(
+            StripeConfigRepository::update(
                 &pool,
                 new_sk.as_ref().map(|(ct, _)| ct.clone()),
                 new_sk.as_ref().map(|(_, n)| n.clone()),
                 new_wh.as_ref().map(|(ct, _)| ct.clone()),
                 new_wh.as_ref().map(|(_, n)| n.clone()),
+                admin.0.sub,
                 current_version,
+                None,
             )
             .await?;
 
@@ -2046,12 +2577,15 @@ mod tests {
             container_name: None,
             health_check_url: None,
             is_active: None,
+            is_hosted: None,
             maintenance_mode: None,
             maintenance_message: None,
             webhook_url: None,
             forgejo_owner: None,
             forgejo_repo: None,
             pinned_release_tag: None,
+            artifact_source: None,
+            forgejo_package: None,
             oci_image_owner: None,
             oci_image_name: None,
             pinned_image_tag: Some("v2.0.0".into()),

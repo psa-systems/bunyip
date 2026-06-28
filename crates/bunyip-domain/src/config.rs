@@ -1,6 +1,11 @@
 use std::env;
 use tracing::info;
 
+/// The file-or-env secret reader now lives in dunite-core (PSA-37), shared by
+/// every dunite consumer. Re-exported here so existing `secret_env(...)` and
+/// `crate::config::secret_env(...)` call sites keep resolving unchanged.
+pub use dunite_core::services::secret_env;
+
 /// Application configuration loaded from environment variables
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -12,8 +17,14 @@ pub struct Config {
     pub port: u16,
     /// Log level (RUST_LOG)
     pub log_level: String,
-    /// CORS allowed origin
+    /// CORS allowed origin(s). Comma-separated when multiple SPAs hit bunyip-api
+    /// from different origins (bunyip-web + mokosh-apps + drillmark, etc.).
     pub cors_origin: String,
+    /// Single absolute URL of the bunyip-web login UI (e.g. `https://a8n.systems`).
+    /// Used by the OIDC `/oauth2/authorize` handler to redirect unauthenticated
+    /// requests to the login page. Distinct from `cors_origin` because the
+    /// latter is now a comma-list and can't be used to build URLs.
+    pub web_origin: String,
     /// Environment (development, production)
     pub environment: String,
     /// Application name used in emails, JWT issuer, etc.
@@ -24,6 +35,14 @@ pub struct Config {
     pub cookie_domain: Option<String>,
     /// Auto-ban configuration
     pub auto_ban: AutoBanConfig,
+    /// CIDR ranges of trusted reverse proxies. `X-Forwarded-For` / `X-Real-IP`
+    /// are honoured only when the immediate socket peer falls inside one of
+    /// these ranges; otherwise the real socket address is used. This closes the
+    /// IP-spoofing vector where any client could forge its IP to evade the
+    /// auto-ban or to ban a victim. Parsed from `TRUSTED_PROXY_CIDR`
+    /// (comma-separated CIDRs); empty by default, meaning forwarding headers
+    /// are never trusted.
+    pub trusted_proxies: Vec<ipnetwork::IpNetwork>,
     /// TOTP encryption key (32 bytes) for encrypting TOTP secrets at rest
     pub totp_encryption_key: [u8; 32],
     /// Previous TOTP encryption key for rotation (optional)
@@ -76,6 +95,11 @@ pub struct EmailConfig {
     pub base_url: String,
     /// Whether to actually send emails (false in dev mode)
     pub enabled: bool,
+    /// Whether to log magic-link/reset/email-change URLs (token included) at
+    /// DEBUG when email sending is disabled. Opt-in for local development only
+    /// (EMAIL_LOG_TOKENS=true); forced off in production so single-use bearer
+    /// tokens are never written to logs (BUNYIP-204).
+    pub log_tokens: bool,
     /// Application name for email subjects and templates
     pub app_name: String,
     /// Admin recipients for operational notifications
@@ -92,6 +116,15 @@ impl EmailConfig {
 
         let smtp_host = env::var("SMTP_HOST").unwrap_or_else(|_| "localhost".to_string());
         let has_smtp = !smtp_host.is_empty() && smtp_host != "localhost";
+
+        // EMAIL_LOG_TOKENS lets local development log the full magic-link /
+        // reset / email-change URL (token included) at DEBUG when email sending
+        // is disabled. It defaults off and is forced off in production so the
+        // single-use bearer token can never reach a production log (BUNYIP-204).
+        let log_tokens = !is_production
+            && env::var("EMAIL_LOG_TOKENS")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false);
 
         // SMTP_TLS: "implicit" (port 465) or "starttls" (port 587)
         let smtp_tls = match env::var("SMTP_TLS")
@@ -117,7 +150,9 @@ impl EmailConfig {
                 .unwrap_or(default_port),
             smtp_tls,
             smtp_username: env::var("SMTP_USERNAME").unwrap_or_default(),
-            smtp_password: env::var("SMTP_PASSWORD").unwrap_or_default(),
+            // SMTP_PASSWORD is a secret: supports the SMTP_PASSWORD_FILE
+            // compose-secret convention.
+            smtp_password: secret_env("SMTP_PASSWORD").unwrap_or_default(),
             from_email: parse_smtp_from_email(
                 &env::var("SMTP_FROM").unwrap_or_else(|_| "noreply@localhost".to_string()),
             ),
@@ -128,6 +163,7 @@ impl EmailConfig {
                 .or_else(|_| env::var("CORS_ORIGIN"))
                 .unwrap_or_else(|_| "http://localhost:5173".to_string()),
             enabled: (is_production && has_smtp) || force_enabled,
+            log_tokens,
             app_name: env::var("APP_NAME").unwrap_or_else(|_| "localhost".to_string()),
             admin_notification_emails: env::var("ADMIN_NOTIFICATION_EMAILS")
                 .unwrap_or_default()
@@ -161,6 +197,24 @@ fn parse_smtp_from_name(smtp_from: &str) -> String {
         }
     }
     "localhost".to_string()
+}
+
+/// Parse a comma-separated list of CIDR ranges into trusted-proxy networks.
+/// Invalid entries are logged and skipped rather than aborting startup, so a
+/// single typo cannot take the whole service down; an empty or all-invalid
+/// list means no proxy is trusted and forwarding headers are ignored.
+fn parse_trusted_proxies(raw: &str) -> Vec<ipnetwork::IpNetwork> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter_map(|entry| match entry.parse::<ipnetwork::IpNetwork>() {
+            Ok(net) => Some(net),
+            Err(e) => {
+                tracing::warn!(entry, error = %e, "ignoring invalid TRUSTED_PROXY_CIDR entry");
+                None
+            }
+        })
+        .collect()
 }
 
 /// Auto-ban configuration
@@ -224,6 +278,16 @@ pub struct TierConfig {
     pub standard_product_id: Option<String>,
 }
 
+/// Single source for the `$0` Stripe price id read from the environment.
+/// Both `TierConfig` and the Stripe service's `StripeConfig` read through this
+/// so the env-derived value can never diverge between them (empty string is
+/// treated as unset).
+pub fn free_price_id_from_env() -> Option<String> {
+    env::var("STRIPE_FREE_PRICE_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
 impl TierConfig {
     /// Load tier configuration from environment variables
     pub fn from_env() -> Self {
@@ -244,9 +308,7 @@ impl TierConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(30),
-            free_price_id: env::var("STRIPE_FREE_PRICE_ID")
-                .ok()
-                .filter(|s| !s.is_empty()),
+            free_price_id: free_price_id_from_env(),
             early_adopter_price_id: None,
             standard_price_id: None,
             lifetime_product_id: None,
@@ -306,8 +368,13 @@ pub struct DownloadConfig {
 impl DownloadConfig {
     pub fn from_env() -> Self {
         Self {
-            forgejo_base_url: env::var("FORGEJO_BASE_URL").ok().filter(|s| !s.is_empty()),
-            forgejo_api_token: env::var("FORGEJO_API_TOKEN").ok().filter(|s| !s.is_empty()),
+            // Trimmed like its paired token so a stray trailing newline/space
+            // (echo/heredoc artifact) cannot produce malformed upstream URLs.
+            forgejo_base_url: env::var("FORGEJO_BASE_URL")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            forgejo_api_token: secret_env("FORGEJO_API_TOKEN"),
             cache_dir: env::var("DOWNLOAD_CACHE_DIR")
                 .unwrap_or_else(|_| "/var/cache/bunyip-downloads".to_string()),
             cache_max_bytes: env::var("DOWNLOAD_CACHE_MAX_BYTES")
@@ -340,15 +407,82 @@ pub struct OciConfig {
     pub enabled: bool,
     pub port: u16,
     pub service: String,
+    /// Full token-endpoint realm URL advertised in `WWW-Authenticate`.
+    /// Defaults to `https://{service}/auth/token`. Override for deployments
+    /// where the registry is not served over HTTPS on the service hostname
+    /// (e.g. local verification: `http://localhost:18081/auth/token`).
+    pub realm: Option<String>,
     pub blob_cache_dir: String,
     pub blob_cache_max_bytes: u64,
     pub manifest_cache_ttl_secs: u64,
     pub concurrent_manifests_per_user: u32,
+    /// Daily cap on pulls per user, metered per TAG-addressed manifest request
+    /// (BUNYIP-43). Digest-addressed requests (the multi-arch platform-manifest
+    /// follow-ups within a pull) are NOT metered, so one `docker pull` no longer
+    /// burns 3+; a client that issues both HEAD and GET by tag meters twice, so
+    /// effective logical pulls are roughly half this number for such clients.
+    /// (A direct by-digest pull, `docker pull slug@sha256:...`, is unmetered.)
     pub pulls_per_user_per_day: u32,
     pub token_ttl_secs: u64,
 }
 
 impl OciConfig {
+    /// The realm URL Docker clients must hit to exchange credentials for a
+    /// registry bearer token.
+    pub fn realm_url(&self) -> String {
+        self.realm
+            .clone()
+            .unwrap_or_else(|| format!("https://{}/auth/token", self.service))
+    }
+
+    /// Validate the realm/service pair. Called at startup when the registry is
+    /// enabled so misconfiguration fails fast instead of surfacing as opaque
+    /// docker-login failures.
+    ///
+    /// Hard errors: an empty/missing service hostname (the realm would derive
+    /// to `https:///auth/token`), a realm that is not a valid URL or has no
+    /// host, or one containing quotes or control characters (it is
+    /// interpolated into a quoted `WWW-Authenticate` header value, where such
+    /// characters produce a malformed or silently-dropped header). A realm
+    /// host that differs from the service host is only a warning:
+    /// split-horizon setups exist, but it is almost always a mistake.
+    pub fn validate(&self) -> Result<(), String> {
+        let service_host = self.service.split(':').next().unwrap_or("");
+        if service_host.is_empty() {
+            return Err(
+                "OCI_REGISTRY_SERVICE is empty; set it to the public registry hostname \
+                 (e.g. registry.example.com)"
+                    .to_string(),
+            );
+        }
+
+        let realm = self.realm_url();
+        if realm.chars().any(|c| c == '"' || c.is_control()) {
+            return Err(format!(
+                "OCI registry realm contains quotes or control characters: {realm:?}"
+            ));
+        }
+        let parsed = url::Url::parse(&realm)
+            .map_err(|e| format!("OCI registry realm is not a valid URL ({realm}): {e}"))?;
+
+        let realm_host = parsed.host_str().unwrap_or("");
+        if realm_host.is_empty() {
+            return Err(format!(
+                "OCI registry realm has no host ({realm}); check OCI_REGISTRY_SERVICE / \
+                 OCI_REGISTRY_REALM"
+            ));
+        }
+        if realm_host != service_host {
+            tracing::warn!(
+                realm = %realm,
+                service = %self.service,
+                "OCI realm host does not match OCI_REGISTRY_SERVICE; docker clients will \
+                 be told to fetch tokens from a different host than the registry they use"
+            );
+        }
+        Ok(())
+    }
+
     pub fn from_env() -> Self {
         Self {
             enabled: env::var("OCI_REGISTRY_ENABLED")
@@ -360,6 +494,9 @@ impl OciConfig {
                 .unwrap_or(18081),
             service: env::var("OCI_REGISTRY_SERVICE")
                 .unwrap_or_else(|_| "oci.example.com".to_string()),
+            realm: env::var("OCI_REGISTRY_REALM")
+                .ok()
+                .filter(|s| !s.is_empty()),
             blob_cache_dir: env::var("OCI_BLOB_CACHE_DIR")
                 .unwrap_or_else(|_| "/var/cache/bunyip-oci".to_string()),
             blob_cache_max_bytes: env::var("OCI_BLOB_CACHE_MAX_BYTES")
@@ -433,8 +570,7 @@ impl OidcConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(600)
-                .min(900)
-                .max(60),
+                .clamp(60, 900),
             refresh_token_ttl_secs: env::var("OIDC_REFRESH_TOKEN_TTL_SECONDS")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -466,11 +602,28 @@ impl Config {
     /// # Errors
     /// Returns an error if required environment variables are missing
     pub fn from_env() -> Result<Self, ConfigError> {
-        // Load .env file if it exists (ignore errors if not found)
+        // Load .env file if it exists (ignore errors if not found), then parse
+        // the resulting process env. The load is kept separate from parsing so
+        // tests can exercise `from_env_inner` against a controlled process env
+        // without a repo-root `.env` re-injecting values mid-test (BUNYIP-102).
         let _ = dotenvy::dotenv();
+        Self::from_env_inner()
+    }
 
-        let database_url = env::var("DATABASE_URL")
-            .map_err(|_| ConfigError::MissingEnv("DATABASE_URL".to_string()))?;
+    /// Parse configuration from the current process environment only.
+    ///
+    /// Unlike [`Config::from_env`], this does NOT load a `.env` file; it reads
+    /// solely the variables already present in the process env. Production code
+    /// should call [`Config::from_env`]; this exists so tests can pin the env
+    /// deterministically (BUNYIP-102).
+    ///
+    /// # Errors
+    /// Returns an error if required environment variables are missing.
+    pub fn from_env_inner() -> Result<Self, ConfigError> {
+        // DATABASE_URL embeds the postgres password, so it supports the
+        // DATABASE_URL_FILE secret convention like every other secret.
+        let database_url = secret_env("DATABASE_URL")
+            .ok_or_else(|| ConfigError::MissingEnv("DATABASE_URL".to_string()))?;
 
         let host = env::var("HOST_IP").unwrap_or_else(|_| "0.0.0.0".to_string());
 
@@ -489,16 +642,46 @@ impl Config {
         let cors_origin =
             env::var("CORS_ORIGIN").unwrap_or_else(|_| "http://localhost:5173".to_string());
 
+        // BUNYIP_WEB_ORIGIN is the single absolute URL of the bunyip-web login
+        // UI. Falls back to the first entry of CORS_ORIGIN for ergonomics on
+        // single-RP deployments (dev, RP-less self-hosters); on a multi-RP
+        // deployment (c-01: bunyip + mokosh-apps + drillmark) the operator MUST
+        // set it explicitly so the OIDC authorize handler doesn't try to
+        // concatenate a comma-list onto `/login`.
+        let web_origin = env::var("BUNYIP_WEB_ORIGIN")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                cors_origin
+                    .split(',')
+                    .next()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("http://localhost:5173")
+                    .to_string()
+            });
+
         let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| "production".to_string());
         let app_name = env::var("APP_NAME").unwrap_or_else(|_| "localhost".to_string());
         let is_production = environment == "production";
         let email = EmailConfig::from_env(is_production);
+
+        // Fail fast: a production deployment with email disabled would silently
+        // degrade to the dev-mode path. Before BUNYIP-204 that path logged the
+        // full magic-link / reset / email-change URL (single-use bearer token
+        // included) at INFO, handing account-takeover credentials to anyone with
+        // log read access. Refuse to start instead of degrading silently.
+        if is_production && !email.enabled {
+            return Err(ConfigError::EmailDisabledInProduction);
+        }
 
         // Cookie domain: must be set explicitly via COOKIE_DOMAIN env var.
         // None means cookies are scoped to the exact hostname (suitable for localhost).
         let cookie_domain = env::var("COOKIE_DOMAIN").ok().filter(|s| !s.is_empty());
 
         let auto_ban = AutoBanConfig::from_env();
+        let trusted_proxies =
+            parse_trusted_proxies(&env::var("TRUSTED_PROXY_CIDR").unwrap_or_default());
 
         let totp_encryption_key = Self::load_totp_encryption_key(&environment);
         let stripe_encryption_key = Self::load_stripe_encryption_key(&environment);
@@ -526,11 +709,13 @@ impl Config {
             port,
             log_level,
             cors_origin,
+            web_origin,
             environment,
             app_name,
             email,
             cookie_domain,
             auto_ban,
+            trusted_proxies,
             totp_encryption_key,
             totp_encryption_key_prev,
             totp_key_version,
@@ -558,11 +743,11 @@ impl Config {
         self.environment == "production"
     }
 
-    /// Load TOTP encryption key from TOTP_ENCRYPTION_KEY env var (hex-encoded 32 bytes).
-    /// In development, defaults to 32 zero bytes.
+    /// Load TOTP encryption key from TOTP_ENCRYPTION_KEY (env var or _FILE
+    /// secret, hex-encoded 32 bytes). In development, defaults to 32 zero bytes.
     fn load_totp_encryption_key(environment: &str) -> [u8; 32] {
-        match env::var("TOTP_ENCRYPTION_KEY") {
-            Ok(hex_str) => {
+        match secret_env("TOTP_ENCRYPTION_KEY") {
+            Some(hex_str) => {
                 let bytes =
                     hex::decode(hex_str.trim()).expect("TOTP_ENCRYPTION_KEY must be valid hex");
                 let key: [u8; 32] = bytes
@@ -570,20 +755,26 @@ impl Config {
                     .expect("TOTP_ENCRYPTION_KEY must be exactly 32 bytes (64 hex chars)");
                 key
             }
-            Err(_) => {
+            None => {
                 if environment == "production" {
                     panic!("TOTP_ENCRYPTION_KEY must be set in production");
                 }
+                // Loud, because data encrypted under the zero key is not
+                // protected and will fail to decrypt once a real key is set.
+                tracing::warn!(
+                    "TOTP_ENCRYPTION_KEY is not set; using the all-zero DEVELOPMENT key. \
+                     TOTP secrets encrypted with it are NOT protected."
+                );
                 [0u8; 32]
             }
         }
     }
 
-    /// Load Stripe encryption key from STRIPE_ENCRYPTION_KEY env var (hex-encoded 32 bytes).
-    /// In development, defaults to 32 zero bytes.
+    /// Load Stripe encryption key from STRIPE_ENCRYPTION_KEY (env var or _FILE
+    /// secret, hex-encoded 32 bytes). In development, defaults to 32 zero bytes.
     fn load_stripe_encryption_key(environment: &str) -> [u8; 32] {
-        match env::var("STRIPE_ENCRYPTION_KEY") {
-            Ok(hex_str) => {
+        match secret_env("STRIPE_ENCRYPTION_KEY") {
+            Some(hex_str) => {
                 let bytes =
                     hex::decode(hex_str.trim()).expect("STRIPE_ENCRYPTION_KEY must be valid hex");
                 let key: [u8; 32] = bytes
@@ -591,19 +782,23 @@ impl Config {
                     .expect("STRIPE_ENCRYPTION_KEY must be exactly 32 bytes (64 hex chars)");
                 key
             }
-            Err(_) => {
+            None => {
                 if environment == "production" {
                     panic!("STRIPE_ENCRYPTION_KEY must be set in production");
                 }
+                tracing::warn!(
+                    "STRIPE_ENCRYPTION_KEY is not set; using the all-zero DEVELOPMENT key. \
+                     Stripe credentials encrypted with it are NOT protected."
+                );
                 [0u8; 32]
             }
         }
     }
 
-    /// Load an optional encryption key from an env var (hex-encoded 32 bytes).
-    /// Returns `None` if the env var is not set.
+    /// Load an optional encryption key (hex-encoded 32 bytes) from an env var
+    /// or its `_FILE` secret. Returns `None` if not set.
     fn load_optional_encryption_key(env_var: &str) -> Option<[u8; 32]> {
-        env::var(env_var).ok().map(|hex_str| {
+        secret_env(env_var).map(|hex_str| {
             let bytes = hex::decode(hex_str.trim())
                 .unwrap_or_else(|_| panic!("{env_var} must be valid hex"));
             let key: [u8; 32] = bytes
@@ -627,28 +822,43 @@ pub enum ConfigError {
 
     #[error("Invalid value for {0}: {1}")]
     InvalidValue(String, String),
+
+    #[error(
+        "Email sending is disabled in a production deployment. Set SMTP_HOST (not \"localhost\") \
+         so transactional emails can be delivered, or set EMAIL_ENABLED=true. Refusing to start: \
+         the disabled path would log single-use login/reset tokens instead of emailing them."
+    )]
+    EmailDisabledInProduction,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Crate-wide lock serializing env-var-mutating tests (BUNYIP-36); every
+    // test below that touches process env must hold it.
+    use crate::test_support::env_lock;
     use std::env;
 
     #[test]
     fn test_config_defaults() {
-        // Set required env vars
+        let _env = env_lock();
+        // Exercise the parse via from_env_inner so dotenvy::dotenv() is NOT
+        // called: a repo-root `.env` (e.g. one setting RUST_LOG=info,bunyip_api=debug)
+        // can no longer re-inject values after the removals below and clobber the
+        // code defaults asserted here. This keeps the test deterministic regardless
+        // of the working tree's `.env` (BUNYIP-102).
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
         // Use development to avoid requiring TOTP_ENCRYPTION_KEY
         env::set_var("ENVIRONMENT", "development");
-        env::remove_var("HOST_IP");
-        env::remove_var("APP_PORT");
+        env::set_var("HOST_IP", "0.0.0.0");
+        env::set_var("APP_PORT", "4000");
         env::remove_var("RUST_LOG");
         env::remove_var("CORS_ORIGIN");
         env::remove_var("SMTP_HOST");
         env::remove_var("EMAIL_ENABLED");
         env::remove_var("COOKIE_DOMAIN");
 
-        let config = Config::from_env().unwrap();
+        let config = Config::from_env_inner().unwrap();
 
         assert_eq!(config.host, "0.0.0.0");
         assert_eq!(config.port, 4000);
@@ -658,6 +868,45 @@ mod tests {
         assert!(!config.email.enabled);
         // In development mode without COOKIE_DOMAIN set, it should be None (for localhost)
         assert!(config.cookie_domain.is_none());
+    }
+
+    #[test]
+    fn test_production_email_disabled_fails_fast() {
+        // A production deployment without SMTP configured must refuse to start
+        // rather than silently degrade to the token-logging dev path (BUNYIP-204).
+        // The email check runs before the TOTP/Stripe key loading, so no
+        // encryption keys are required to exercise it.
+        let _env = env_lock();
+        env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
+        env::set_var("ENVIRONMENT", "production");
+        env::remove_var("SMTP_HOST");
+        env::remove_var("EMAIL_ENABLED");
+
+        let err = Config::from_env_inner().expect_err("production without SMTP must fail");
+        assert!(matches!(err, ConfigError::EmailDisabledInProduction));
+
+        env::remove_var("ENVIRONMENT");
+    }
+
+    #[test]
+    fn test_email_log_tokens_forced_off_in_production() {
+        // EMAIL_LOG_TOKENS only takes effect outside production; in production it
+        // is forced off so single-use tokens never reach a log (BUNYIP-204).
+        let _env = env_lock();
+        env::set_var("EMAIL_LOG_TOKENS", "true");
+
+        assert!(
+            EmailConfig::from_env(false).log_tokens,
+            "EMAIL_LOG_TOKENS=true should enable token logging in development"
+        );
+        assert!(
+            !EmailConfig::from_env(true).log_tokens,
+            "EMAIL_LOG_TOKENS must be ignored in production"
+        );
+
+        env::remove_var("EMAIL_LOG_TOKENS");
+        // Default (unset) is off.
+        assert!(!EmailConfig::from_env(false).log_tokens);
     }
 
     #[test]
@@ -715,8 +964,11 @@ mod tests {
         Config::load_optional_encryption_key("TEST_OPTIONAL_KEY_SHORT");
     }
 
+    // secret_env tests moved to dunite-core with the function (PSA-37).
+
     #[test]
     fn download_config_defaults_when_forgejo_unset() {
+        let _env = env_lock();
         env::remove_var("FORGEJO_BASE_URL");
         env::remove_var("FORGEJO_API_TOKEN");
         env::remove_var("DOWNLOAD_CACHE_DIR");
@@ -736,6 +988,7 @@ mod tests {
 
     #[test]
     fn download_config_enabled_when_forgejo_set() {
+        let _env = env_lock();
         env::set_var("FORGEJO_BASE_URL", "https://git.example.com");
         env::set_var("FORGEJO_API_TOKEN", "test-token");
         let cfg = DownloadConfig::from_env();
@@ -770,6 +1023,7 @@ mod tests {
 
     #[test]
     fn oci_config_defaults() {
+        let _env = env_lock();
         env::remove_var("OCI_REGISTRY_ENABLED");
         env::remove_var("OCI_REGISTRY_PORT");
         env::remove_var("OCI_REGISTRY_SERVICE");
@@ -791,8 +1045,90 @@ mod tests {
         assert_eq!(cfg.token_ttl_secs, 900);
     }
 
+    // Realm assertions live in ONE self-contained test module (and
+    // OCI_REGISTRY_REALM is touched by no env-var test) to avoid the parallel
+    // env-var races tracked in BUNYIP-36. All assertions are computed from
+    // explicit structs, never from process env.
+    fn oci_cfg(service: &str, realm: Option<&str>) -> OciConfig {
+        OciConfig {
+            enabled: false,
+            port: 18081,
+            service: service.to_string(),
+            realm: realm.map(str::to_string),
+            blob_cache_dir: String::new(),
+            blob_cache_max_bytes: 0,
+            manifest_cache_ttl_secs: 0,
+            concurrent_manifests_per_user: 0,
+            pulls_per_user_per_day: 0,
+            token_ttl_secs: 0,
+        }
+    }
+
+    #[test]
+    fn oci_config_realm_default_and_override() {
+        let cfg = oci_cfg("registry.example.com", None);
+        assert_eq!(cfg.realm_url(), "https://registry.example.com/auth/token");
+
+        let with_override = oci_cfg(
+            "registry.example.com",
+            Some("http://localhost:18081/auth/token"),
+        );
+        assert_eq!(
+            with_override.realm_url(),
+            "http://localhost:18081/auth/token"
+        );
+    }
+
+    #[test]
+    fn oci_config_validate_accepts_sane_configs() {
+        // Default realm derived from the service host.
+        assert!(oci_cfg("registry.example.com", None).validate().is_ok());
+        // Explicit realm on the same host, different port (dev: localhost).
+        assert!(
+            oci_cfg("localhost:18081", Some("http://localhost:18081/auth/token"))
+                .validate()
+                .is_ok()
+        );
+        // Mismatched hosts only warn; still Ok.
+        assert!(oci_cfg(
+            "registry.example.com",
+            Some("https://auth.example.com/token")
+        )
+        .validate()
+        .is_ok());
+    }
+
+    #[test]
+    fn oci_config_validate_rejects_malformed_realms() {
+        // Not a URL.
+        assert!(oci_cfg("svc", Some("not a url")).validate().is_err());
+        // Embedded double quote would break the WWW-Authenticate header.
+        assert!(oci_cfg("svc", Some("https://h/\"evil")).validate().is_err());
+        // Control character (e.g. stray CR from a mis-edited .env).
+        assert!(oci_cfg("svc", Some("https://h/auth\r")).validate().is_err());
+    }
+
+    #[test]
+    fn oci_config_validate_rejects_empty_service() {
+        // Empty service (e.g. OCI_REGISTRY_ENABLED=true with the compose
+        // default ${OCI_REGISTRY_SERVICE:-}) must fail fast at startup: the
+        // derived realm would be unusable.
+        assert!(oci_cfg("", None).validate().is_err());
+        // Port-only service is still an empty host.
+        assert!(oci_cfg(":18081", None).validate().is_err());
+        // Note: an EXPLICIT realm written as https:///auth/token is not
+        // rejected here because the WHATWG URL parser normalizes it (extra
+        // slashes are skipped, so "auth" becomes the host). The empty-service
+        // check above is what protects the derived-realm path; an explicit
+        // realm pointing at the wrong host triggers the mismatch warning.
+        assert!(oci_cfg("svc", Some("https:///auth/token"))
+            .validate()
+            .is_ok());
+    }
+
     #[test]
     fn oci_config_enabled_when_set() {
+        let _env = env_lock();
         env::set_var("OCI_REGISTRY_ENABLED", "true");
         let cfg = OciConfig::from_env();
         assert!(cfg.enabled);

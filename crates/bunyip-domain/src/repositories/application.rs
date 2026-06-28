@@ -24,6 +24,22 @@ impl ApplicationRepository {
         Ok(apps)
     }
 
+    /// List active HOSTED applications (hub launch tiles). Excludes
+    /// catalog-only distribution products (is_hosted = FALSE).
+    pub async fn list_active_hosted(pool: &PgPool) -> Result<Vec<Application>, AppError> {
+        let apps = sqlx::query_as::<_, Application>(
+            r#"
+            SELECT * FROM applications
+            WHERE is_active = TRUE AND is_hosted = TRUE
+            ORDER BY sort_order ASC, display_name ASC
+            "#,
+        )
+        .fetch_all(pool)
+        .await?;
+
+        Ok(apps)
+    }
+
     /// Find application by ID
     pub async fn find_by_id(pool: &PgPool, id: Uuid) -> Result<Option<Application>, AppError> {
         let app = sqlx::query_as::<_, Application>(
@@ -69,6 +85,32 @@ impl ApplicationRepository {
         Ok(app)
     }
 
+    /// Toggle whether a product requires a per-product entitlement (BUNYIP-39).
+    /// FALSE keeps it open to all members; TRUE gates it behind an entitlement.
+    pub async fn set_requires_entitlement(
+        pool: &PgPool,
+        app_id: Uuid,
+        requires_entitlement: bool,
+    ) -> Result<(), AppError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE applications
+            SET requires_entitlement = $1, updated_at = NOW()
+            WHERE id = $2
+            "#,
+        )
+        .bind(requires_entitlement)
+        .bind(app_id)
+        .execute(pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(AppError::not_found("Application"));
+        }
+
+        Ok(())
+    }
+
     /// Toggle maintenance mode
     pub async fn set_maintenance_mode(
         pool: &PgPool,
@@ -76,7 +118,7 @@ impl ApplicationRepository {
         maintenance: bool,
         message: Option<&str>,
     ) -> Result<(), AppError> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE applications
             SET maintenance_mode = $1, maintenance_message = $2, updated_at = NOW()
@@ -89,12 +131,16 @@ impl ApplicationRepository {
         .execute(pool)
         .await?;
 
+        if result.rows_affected() == 0 {
+            return Err(AppError::not_found("Application"));
+        }
+
         Ok(())
     }
 
     /// Toggle active status
     pub async fn set_active(pool: &PgPool, app_id: Uuid, active: bool) -> Result<(), AppError> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE applications
             SET is_active = $1, updated_at = NOW()
@@ -106,6 +152,40 @@ impl ApplicationRepository {
         .execute(pool)
         .await?;
 
+        if result.rows_affected() == 0 {
+            return Err(AppError::not_found("Application"));
+        }
+
+        Ok(())
+    }
+
+    /// Assign an application to a group, or clear it (`group_id = None`).
+    ///
+    /// Deliberately separate from [`Self::update`]: that method COALESCEs every
+    /// field and is called with partial bodies (e.g. an is_active toggle), so
+    /// it can neither clear `group_id` to NULL nor be trusted to leave it
+    /// untouched. A direct `SET group_id = $1` here both sets and clears.
+    pub async fn set_group(
+        pool: &PgPool,
+        app_id: Uuid,
+        group_id: Option<Uuid>,
+    ) -> Result<(), AppError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE applications
+            SET group_id = $1, updated_at = NOW()
+            WHERE id = $2
+            "#,
+        )
+        .bind(group_id)
+        .bind(app_id)
+        .execute(pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(AppError::not_found("Application"));
+        }
+
         Ok(())
     }
 
@@ -115,7 +195,7 @@ impl ApplicationRepository {
         app_id: Uuid,
         version: &str,
     ) -> Result<(), AppError> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE applications
             SET version = $1, updated_at = NOW()
@@ -126,6 +206,10 @@ impl ApplicationRepository {
         .bind(app_id)
         .execute(pool)
         .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(AppError::not_found("Application"));
+        }
 
         Ok(())
     }
@@ -148,17 +232,22 @@ impl ApplicationRepository {
                 container_name      = COALESCE($7, container_name),
                 health_check_url    = COALESCE($8, health_check_url),
                 is_active           = COALESCE($9, is_active),
-                maintenance_mode    = COALESCE($10, maintenance_mode),
-                maintenance_message = COALESCE($11, maintenance_message),
-                webhook_url         = COALESCE($12, webhook_url),
-                forgejo_owner       = COALESCE($13, forgejo_owner),
-                forgejo_repo        = COALESCE($14, forgejo_repo),
-                pinned_release_tag  = COALESCE($15, pinned_release_tag),
-                oci_image_owner     = COALESCE($16, oci_image_owner),
-                oci_image_name      = COALESCE($17, oci_image_name),
-                pinned_image_tag    = COALESCE($18, pinned_image_tag),
+                is_hosted           = COALESCE($10, is_hosted),
+                maintenance_mode    = COALESCE($11, maintenance_mode),
+                maintenance_message = COALESCE($12, maintenance_message),
+                webhook_url         = COALESCE($13, webhook_url),
+                forgejo_owner       = COALESCE($14, forgejo_owner),
+                forgejo_repo        = COALESCE($15, forgejo_repo),
+                pinned_release_tag  = COALESCE($16, pinned_release_tag),
+                artifact_source     = COALESCE($17, artifact_source),
+                -- Empty string clears forgejo_package back to NULL (= fall back
+                -- to forgejo_repo); NULL/omitted keeps the current value.
+                forgejo_package     = NULLIF(COALESCE($18, forgejo_package), ''),
+                oci_image_owner     = COALESCE($19, oci_image_owner),
+                oci_image_name      = COALESCE($20, oci_image_name),
+                pinned_image_tag    = COALESCE($21, pinned_image_tag),
                 updated_at          = NOW()
-            WHERE id = $19
+            WHERE id = $22
             RETURNING *
             "#,
         )
@@ -171,12 +260,15 @@ impl ApplicationRepository {
         .bind(data.container_name.as_deref())
         .bind(data.health_check_url.as_deref())
         .bind(data.is_active)
+        .bind(data.is_hosted)
         .bind(data.maintenance_mode)
         .bind(data.maintenance_message.as_deref())
         .bind(data.webhook_url.as_deref())
         .bind(data.forgejo_owner.as_deref())
         .bind(data.forgejo_repo.as_deref())
         .bind(data.pinned_release_tag.as_deref())
+        .bind(data.artifact_source.as_deref())
+        .bind(data.forgejo_package.as_deref())
         .bind(data.oci_image_owner.as_deref())
         .bind(data.oci_image_name.as_deref())
         .bind(data.pinned_image_tag.as_deref())
@@ -187,23 +279,22 @@ impl ApplicationRepository {
         Ok(app)
     }
 
-    /// Returns the previously-pinned tag for an application (for cache invalidation).
-    pub async fn get_pinned_tag(pool: &PgPool, app_id: Uuid) -> Result<Option<String>, AppError> {
-        let row: Option<(Option<String>,)> =
-            sqlx::query_as("SELECT pinned_release_tag FROM applications WHERE id = $1")
-                .bind(app_id)
-                .fetch_optional(pool)
-                .await?;
-        Ok(row.and_then(|r| r.0))
-    }
-
-    /// Create a new application (admin)
+    /// Create a new application (admin). Distribution coordinates (Forgejo
+    /// downloads + OCI image) can be supplied at creation so a product is
+    /// usable in one call; artifact_source falls back to the column default
+    /// ('release') when not provided.
     pub async fn create(pool: &PgPool, data: &CreateApplication) -> Result<Application, AppError> {
         let app = sqlx::query_as::<_, Application>(
             r#"
             INSERT INTO applications (name, slug, display_name, description, icon_url,
-                container_name, health_check_url, subdomain, webhook_url, version, source_code_url)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                container_name, health_check_url, subdomain, webhook_url, version, source_code_url,
+                is_hosted,
+                forgejo_owner, forgejo_repo, forgejo_package, pinned_release_tag, artifact_source,
+                oci_image_owner, oci_image_name, pinned_image_tag)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                COALESCE($12, TRUE),
+                $13, $14, $15, $16, COALESCE($17, 'release'),
+                $18, $19, $20)
             RETURNING *
             "#,
         )
@@ -218,6 +309,15 @@ impl ApplicationRepository {
         .bind(data.webhook_url.as_deref())
         .bind(data.version.as_deref())
         .bind(data.source_code_url.as_deref())
+        .bind(data.is_hosted)
+        .bind(data.forgejo_owner.as_deref())
+        .bind(data.forgejo_repo.as_deref())
+        .bind(data.forgejo_package.as_deref())
+        .bind(data.pinned_release_tag.as_deref())
+        .bind(data.artifact_source.as_deref())
+        .bind(data.oci_image_owner.as_deref())
+        .bind(data.oci_image_name.as_deref())
+        .bind(data.pinned_image_tag.as_deref())
         .fetch_one(pool)
         .await?;
 
@@ -244,7 +344,7 @@ impl ApplicationRepository {
         app_id_a: Uuid,
         app_id_b: Uuid,
     ) -> Result<(), AppError> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE applications AS a
             SET sort_order = b.sort_order, updated_at = NOW()
@@ -257,6 +357,13 @@ impl ApplicationRepository {
         .bind(&[app_id_a, app_id_b][..])
         .execute(pool)
         .await?;
+
+        // Each id pins to the OTHER row's sort_order, so a real swap touches
+        // both rows. Zero rows means one (or both) ids were missing or equal;
+        // report that instead of silently succeeding.
+        if result.rows_affected() == 0 {
+            return Err(AppError::not_found("Application"));
+        }
 
         Ok(())
     }
@@ -320,12 +427,15 @@ mod tests {
             container_name: None,
             health_check_url: None,
             is_active: None,
+            is_hosted: None,
             maintenance_mode: None,
             maintenance_message: None,
             webhook_url: None,
             forgejo_owner: None,
             forgejo_repo: None,
             pinned_release_tag: None,
+            artifact_source: None,
+            forgejo_package: None,
             oci_image_owner: Some("a8n".into()),
             oci_image_name: Some("rus".into()),
             pinned_image_tag: Some("v1".into()),
