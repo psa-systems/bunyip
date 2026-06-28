@@ -2,6 +2,7 @@ mod api;
 mod auth;
 mod config;
 mod handlers;
+mod security;
 mod util;
 mod views;
 mod web;
@@ -363,6 +364,9 @@ async fn main() {
         // Static + fallback
         .nest_service("/assets", ServeDir::new("assets"))
         .fallback(public::not_found)
+        // BUNYIP-232: stamp a Content-Security-Policy onto every response (the
+        // remaining security header the edge proxy does not set for bunyip-web).
+        .layer(security::csp_layer(&cfg))
         .layer(CompressionLayer::new())
         .with_state(state);
 
