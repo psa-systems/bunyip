@@ -1,46 +1,78 @@
 #!/usr/bin/env nu
 
-# Get image tags for the release pipeline.
+# Resolve the single publish tag and train for the build workflow.
 #
-# Version tags are IMMUTABLE: a `vX.Y.Z` image tag is published ONLY when the
-# build is a tag event - in CI when $GITHUB_REF is `refs/tags/vX.Y.Z`, and
-# locally when HEAD sits exactly on a `v*` tag. Branch builds (main, feature-*,
-# workflow_dispatch) publish ONLY `latest`, so a routine push can never
-# overwrite an already-released version tag (BUNYIP-59). Version-tagged images
-# therefore come exclusively from the `v*` tag push that create-release makes.
+# The publish MODE is derived from the workflow TRIGGER (not from `git
+# describe`) and passed in via --mode:
+# - release: an exact `v*` tag push. Publishes ONLY the immutable <version> artifact.
+# - latest:  a push to main. Publishes ONLY the rolling `latest` artifact.
+# - dry-run: a workflow_dispatch. The caller builds and prints but mutates nothing.
 #
-# When used as a module (`use get-tags.nu`), returns list<string>.
-# When run as a script, use --joined to get comma-separated output suitable for
-# capturing in a subprocess.
+# Deriving the mode from the trigger is what removes the twin-publish race
+# (governance GOV-13 / claude-run CLAUDE-122). The release commit is
+# simultaneously a push to `main` AND the `v*` tag push, so both workflow
+# events fire. With `git describe` as the source of truth, both runs resolved
+# the identical `[vX.Y.Z, latest]` set and raced to write the same destination
+# (a 409 on immutable generic-package files, an overwrite race on the OCI
+# `latest` tag). Trigger-derived modes return DISJOINT tag sets: the tag-push
+# run publishes only `vX.Y.Z`, the branch-push run publishes only `latest`, so
+# the two runs never write the same destination.
+#
+# A dry-run still resolves to one of the two real publish trains so the caller
+# can exercise either path:
+# - --simulate-tag v9.9.9  -> resolve the `release` train (prints the exact
+#                             <version> URLs a tag build would write).
+# - --simulate-tag "" (default) -> resolve the `latest` train.
+#
+# Returns a record { mode, train, tag, describe }:
+# - train: release | latest (the effective publish branch)
+# - tag:   <version> for release (e.g. v1.2.3) or `latest` for latest
+# - describe: `git describe --tags --always`, kept for build-metadata /
+#             diagnostics only; it no longer decides the train.
+#
+# When used as a module (`use get-tags.nu`) it returns the record. When run as a
+# script for a workflow step, pass --json to serialize the record for capture
+# (e.g. `^nu oci-build/get-tags.nu --mode latest --json | from json`).
 export def main [
-    --joined(-j)  # Output as comma-separated string instead of a list
+    --mode: string                  # release | latest | dry-run (from the trigger)
+    --ref-name: string = ""         # tag ref name for release mode (e.g. v1.2.3)
+    --simulate-tag: string = ""      # dry-run only: simulate a release of this version
+    --json(-j)                       # Serialize the record to JSON for shell capture
 ] {
     use std log
+    let describe = (^git describe --tags --always | str trim)
+    log info $"[get-tags] mode: ($mode) ref-name: ($ref_name) simulate-tag: ($simulate_tag) describe: ($describe)"
 
-    # The CI ref is authoritative for the event type; fall back to an
-    # exact-tag check for local / manual runs where GITHUB_REF is unset.
-    let ci_ref = ($env.GITHUB_REF? | default "")
-    let tag = if ($ci_ref | str starts-with "refs/tags/") {
-        # CI tag event: this is the release build.
-        $ci_ref | str replace "refs/tags/" ""
-    } else if ($ci_ref | is-empty) {
-        # Local / manual run with no CI ref: emit a version tag only when HEAD
-        # is exactly on a tag.
-        let exact = (do { ^git describe --tags --exact-match HEAD } | complete)
-        if $exact.exit_code == 0 { $exact.stdout | str trim } else { "" }
+    # Resolve the effective publish train and its version (if any). A dry-run
+    # maps onto a real train so both publish paths can be exercised without a
+    # registry mutation.
+    let effective = if $mode == "release" {
+        { train: "release", version: $ref_name }
+    } else if $mode == "latest" {
+        { train: "latest", version: "" }
+    } else if $mode == "dry-run" {
+        if ($simulate_tag | is-not-empty) {
+            { train: "release", version: $simulate_tag }
+        } else {
+            { train: "latest", version: "" }
+        }
     } else {
-        # CI branch build (refs/heads/...): never a version tag, even if the
-        # commit happens to coincide with a tag - keeps release tags immutable.
-        ""
+        error make { msg: $"[get-tags] Unknown mode: '($mode)'. Expected release|latest|dry-run." }
     }
 
-    let tags = if ($tag | str starts-with "v") {
-        log info $"[get-tags] Tag build. Resolved tags: [($tag), latest]"
-        [$tag, "latest"]
-    } else {
-        log info "[get-tags] Non-tag build. Resolved tags: [latest]"
-        ["latest"]
+    if $effective.train == "release" and ($effective.version | is-empty) {
+        error make { msg: "[get-tags] release train requires a non-empty version (--ref-name for a tag build, or --simulate-tag for a dry-run)." }
     }
 
-    if $joined { $tags | str join "," } else { $tags }
+    let tag = if $effective.train == "release" { $effective.version } else { "latest" }
+    log info $"[get-tags] Resolved train: ($effective.train) tag: ($tag)"
+
+    let resolved = {
+        mode: $mode
+        train: $effective.train
+        tag: $tag
+        describe: $describe
+    }
+
+    if $json { $resolved | to json --raw } else { $resolved }
 }
