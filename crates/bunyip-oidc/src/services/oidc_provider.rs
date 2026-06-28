@@ -364,11 +364,10 @@ impl OidcProvider {
                 id, client_id, client_secret_hash, client_type, name,
                 redirect_uris, post_logout_redirect_uris,
                 backchannel_logout_uri, lifecycle_event_uri,
-                allowed_scopes, allowed_grant_types,
-                token_endpoint_auth_method, require_pkce,
+                allowed_scopes,
                 access_token_ttl_seconds, refresh_token_ttl_seconds,
                 refresh_idle_ttl_seconds, audience,
-                dpop_bound, created_at, disabled_at,
+                created_at, disabled_at,
                 tenant_claim_name
             FROM oauth_clients
             WHERE client_id = $1 AND disabled_at IS NULL
@@ -854,31 +853,16 @@ impl OidcProvider {
         .await
         .map_err(|e| AppError::internal(format!("Failed to mark refresh token used: {e}")))?;
 
-        // Load client for TTL values. Runtime query so the BUNYIP-61
-        // `tenant_claim_name` column addition does not force a
-        // `.sqlx/` cache regen here.
-        let client = sqlx::query_as::<_, OAuthClient>(
-            r#"
-            SELECT id, client_id, client_secret_hash, client_type, name,
-                   redirect_uris, post_logout_redirect_uris,
-                   backchannel_logout_uri, lifecycle_event_uri,
-                   allowed_scopes, allowed_grant_types,
-                   token_endpoint_auth_method, require_pkce,
-                   access_token_ttl_seconds, refresh_token_ttl_seconds,
-                   refresh_idle_ttl_seconds, audience,
-                   dpop_bound, created_at, disabled_at,
-                   tenant_claim_name
-            FROM oauth_clients
-            WHERE client_id = $1 AND disabled_at IS NULL
-            "#,
-        )
-        .bind(old.client_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| AppError::internal(format!("Failed to load client during rotation: {e}")))?
-        .ok_or(AppError::OidcInvalidGrant(
-            "client not found or disabled".into(),
-        ))?;
+        // Load client for TTL values. Reuse `load_client()` instead of
+        // duplicating the column list: the client config is read-only here and
+        // not part of the rotation's atomicity (it reads outside the tx on the
+        // pool), so a single source of truth for the SELECT is preferable.
+        let client = self
+            .load_client(old.client_id)
+            .await?
+            .ok_or(AppError::OidcInvalidGrant(
+                "client not found or disabled".into(),
+            ))?;
 
         // Issue new refresh token
         let raw_new = generate_opaque_token(32);
@@ -887,7 +871,12 @@ impl OidcProvider {
         let idle_ttl = Duration::seconds(client.refresh_idle_ttl_seconds as i64);
         let abs_ttl = Duration::seconds(client.refresh_token_ttl_seconds as i64);
         let new_idle_exp = now + idle_ttl;
-        let new_abs_exp = now + abs_ttl;
+        // Cap the absolute expiry at the family's original deadline: rotation
+        // refreshes the idle window but must never push the absolute TTL out, or
+        // a token refreshed before each idle expiry would live forever. Take the
+        // earlier of the inherited deadline and a fresh `now + abs_ttl` (the
+        // latter only matters if the client's configured TTL shrank).
+        let new_abs_exp = old.absolute_expires_at.min(now + abs_ttl);
 
         // Runtime query: the BUNYIP-63 `selected_tenant_id` column is
         // mirrored from `old` so every row in the family carries the
@@ -1266,14 +1255,10 @@ pub struct OAuthClient {
     pub backchannel_logout_uri: Option<String>,
     pub lifecycle_event_uri: Option<String>,
     pub allowed_scopes: Vec<String>,
-    pub allowed_grant_types: Vec<String>,
-    pub token_endpoint_auth_method: String,
-    pub require_pkce: bool,
     pub access_token_ttl_seconds: i32,
     pub refresh_token_ttl_seconds: i32,
     pub refresh_idle_ttl_seconds: i32,
     pub audience: String,
-    pub dpop_bound: bool,
     pub created_at: DateTime<Utc>,
     pub disabled_at: Option<DateTime<Utc>>,
     /// BUNYIP-61: when non-null, /authorize gates on
@@ -1505,14 +1490,10 @@ mod tests {
             backchannel_logout_uri: None,
             lifecycle_event_uri: None,
             allowed_scopes: vec!["openid".to_string()],
-            allowed_grant_types: vec!["authorization_code".to_string()],
-            token_endpoint_auth_method: "none".to_string(),
-            require_pkce: true,
             access_token_ttl_seconds: 600,
             refresh_token_ttl_seconds: 2_592_000,
             refresh_idle_ttl_seconds: 1_209_600,
             audience: "https://api.example.com".to_string(),
-            dpop_bound: false,
             created_at: Utc::now(),
             disabled_at: None,
             tenant_claim_name: None,
