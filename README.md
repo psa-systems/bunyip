@@ -89,7 +89,7 @@ cp .env.example .env
 docker compose up --detach
 ```
 
-Pin a specific release instead of `:latest` by setting `BUNYIP_API_IMAGE` / `BUNYIP_WEB_IMAGE` to a tagged image (e.g. `dev.a8n.run/psa-systems-private/bunyip-api:v0.2.0`).
+`BUNYIP_API_IMAGE` and `BUNYIP_WEB_IMAGE` are required (BUNYIP-237): compose refuses to start without them. Set both to a pinned release tag, e.g. `dev.a8n.run/psa-systems-private/bunyip-api:v0.4.1`. The previous `:latest` default could leave the LB serving two different builds during a rolling restart; pinning a release tag makes the deploy reproducible. Bump both vars on a deliberate operator action when promoting a new release.
 
 ### Update checking
 

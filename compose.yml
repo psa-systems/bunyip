@@ -94,7 +94,15 @@ services:
   # HOST_IP:APP_PORT inside the container and IS the OIDC issuer (Ed25519 keys
   # mounted from ./secrets/oidc).
   api:
-    image: ${BUNYIP_API_IMAGE:-dev.a8n.run/psa-systems-private/bunyip-api:latest}
+    # BUNYIP-237: BUNYIP_API_IMAGE must be set explicitly to a pinned tag
+    # (e.g. `dev.a8n.run/psa-systems-private/bunyip-api:v0.4.1`). The
+    # previous default of `:latest` plus `pull_policy: always` resolves the
+    # tag at restart time, so two restarts seconds apart can pull two
+    # different digests and the LB serves mixed builds. Fail loud at
+    # `compose up` when the var is missing instead of silently pulling
+    # `:latest`. The `:?<message>` form is the docker-compose required-var
+    # marker; the message is printed alongside the abort.
+    image: ${BUNYIP_API_IMAGE:?BUNYIP_API_IMAGE must be a pinned image tag e.g. dev.a8n.run/psa-systems-private/bunyip-api:v0.4.1 - see compose.yml comment}
     container_name: bunyip-api
     restart: unless-stopped
     environment:
@@ -198,7 +206,11 @@ services:
   # Axum SSR frontend (bunyip-web). Published image; reaches the api over the
   # internal network and serves the browser-facing pages + /assets.
   web:
-    image: ${BUNYIP_WEB_IMAGE:-dev.a8n.run/psa-systems-private/bunyip-web:latest}
+    # BUNYIP-237: BUNYIP_WEB_IMAGE must be set explicitly to a pinned tag
+    # (e.g. `dev.a8n.run/psa-systems-private/bunyip-web:v0.4.1`). See the
+    # comment on the `api` service above for the rationale - same failure
+    # mode (`:latest` + `pull_policy: always` resolving at restart time).
+    image: ${BUNYIP_WEB_IMAGE:?BUNYIP_WEB_IMAGE must be a pinned image tag e.g. dev.a8n.run/psa-systems-private/bunyip-web:v0.4.1 - see compose.yml comment on api service}
     container_name: bunyip-web
     restart: unless-stopped
     environment:
