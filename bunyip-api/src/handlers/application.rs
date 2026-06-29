@@ -9,9 +9,38 @@ use crate::errors::AppError;
 use crate::middleware::OptionalUser;
 use crate::models::ApplicationResponse;
 use crate::repositories::{
-    ApplicationGroupRepository, ApplicationRepository, EntitlementRepository,
+    ApplicationGroupRepository, ApplicationRepository, EntitlementRepository, UserRepository,
 };
 use crate::responses::{get_request_id, success};
+use crate::services::AccessTokenClaims;
+
+/// BUNYIP-229: resolve `has_member_access` from the DB user row instead of
+/// the JWT claim cache. The JWT was minted at login (or last refresh) and
+/// holds a snapshot of `trial_ends_at`, `lifetime_member`, `membership_status`
+/// that goes stale the moment ANY out-of-band path flips one of them: a
+/// cross-browser email verify firing BUNYIP-221's grant, an admin tier flip
+/// from /admin/users, a scheduled trial expiry, the BUNYIP-225 sibling-sub
+/// cancel cleanup. The launcher reads this access bit on every dashboard
+/// load, so a one-row DB read here is the simplest correctness fix that
+/// works regardless of which handler caused the flip.
+///
+/// Anonymous callers (no claims) get `false` per existing semantics. A DB
+/// read failure for an authenticated user falls back to the JWT cache so the
+/// endpoint never errors out for a transient outage.
+async fn resolve_has_member_access(pool: &PgPool, user: &OptionalUser) -> bool {
+    let Some(claims) = user.0.as_ref() else {
+        return false;
+    };
+    match UserRepository::find_by_id(pool, claims.sub).await {
+        Ok(Some(u)) => AccessTokenClaims::has_member_access_static(
+            &u.role,
+            u.lifetime_member,
+            u.trial_ends_at.map(|t| t.timestamp()),
+            &u.membership_status,
+        ),
+        Ok(None) | Err(_) => claims.has_member_access(),
+    }
+}
 
 /// GET /v1/application-groups
 /// List application groups (display metadata) so the web layer can render
@@ -37,11 +66,9 @@ pub async fn list_applications(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
-    let has_access = user
-        .0
-        .as_ref()
-        .map(|claims| claims.has_member_access())
-        .unwrap_or(false);
+    // BUNYIP-229: read fresh from DB instead of trusting the JWT claim
+    // cache. See `resolve_has_member_access` for why.
+    let has_access = resolve_has_member_access(&pool, &user).await;
 
     let apps = ApplicationRepository::list_active_hosted(&pool).await?;
 
@@ -67,11 +94,8 @@ pub async fn get_application(
     let request_id = get_request_id(&req);
     let slug = path.into_inner();
 
-    let has_access = user
-        .0
-        .as_ref()
-        .map(|claims| claims.has_member_access())
-        .unwrap_or(false);
+    // BUNYIP-229: read fresh from DB instead of trusting the JWT claim cache.
+    let has_access = resolve_has_member_access(&pool, &user).await;
 
     let app = ApplicationRepository::find_active_by_slug(&pool, &slug)
         .await?
