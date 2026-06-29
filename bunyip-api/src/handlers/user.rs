@@ -33,6 +33,27 @@ pub struct DeleteAccountRequest {
     pub totp_code: Option<String>,
 }
 
+/// Query for `DELETE /v1/users/me`. `?purge=1` opts into a HARD delete of the
+/// row instead of the default soft delete, honoured ONLY on non-production
+/// deployments that also set `BUNYIP_E2E_BOOTSTRAP_ALLOW=true` (see
+/// `Config::e2e_purge_enabled`). Used by the e2e suite so disposable test
+/// accounts do not accumulate; ignored everywhere else (BUNYIP-246).
+#[derive(Debug, Deserialize)]
+pub struct DeleteAccountQuery {
+    #[serde(default)]
+    pub purge: Option<String>,
+}
+
+impl DeleteAccountQuery {
+    /// True when the caller asked to purge (`?purge=1|true|yes`).
+    fn wants_purge(&self) -> bool {
+        matches!(
+            self.purge.as_deref().map(str::trim),
+            Some("1") | Some("true") | Some("yes")
+        )
+    }
+}
+
 /// Request body for changing password
 #[derive(Debug, Deserialize)]
 pub struct ChangePasswordRequest {
@@ -723,6 +744,7 @@ pub async fn delete_account(
     webhook_service: web::Data<Arc<WebhookService>>,
     event_bus: web::Data<Arc<EventBus>>,
     oidc_provider: web::Data<Option<Arc<bunyip_oidc::services::oidc_provider::OidcProvider>>>,
+    query: web::Query<DeleteAccountQuery>,
     body: web::Json<DeleteAccountRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -764,6 +786,39 @@ pub async fn delete_account(
                 "Invalid two-factor authentication code",
             ));
         }
+    }
+
+    // BUNYIP-246: non-production e2e hard purge. After the same ownership proof
+    // the soft-delete path requires (password, and TOTP when enabled), an
+    // opted-in `?purge` physically removes the row so disposable e2e accounts do
+    // not accumulate on staging. Gated to a non-production environment +
+    // BUNYIP_E2E_BOOTSTRAP_ALLOW, so production always falls through to the soft
+    // delete below regardless of the flag. Disposable accounts have no Stripe
+    // customer, OIDC sessions, or connected apps, so this skips the downstream
+    // cascade and just revokes tokens and clears cookies (writing the usual
+    // post-delete audit row would FK-violate against the row we just removed).
+    if query.wants_purge() && config.e2e_purge_enabled() {
+        UserRepository::hard_delete(&pool, user.0.sub).await?;
+        TokenRepository::revoke_all_user_refresh_tokens(pool.get_ref(), user.0.sub).await?;
+        crate::handlers::auth::revoke_op_sessions(&oidc_provider, user.0.sub).await;
+
+        tracing::info!(
+            user_id = %user.0.sub,
+            user_email = %user.0.email,
+            "Hard-purged e2e account (non-production)"
+        );
+
+        let secure = config.is_production();
+        let cookie_domain = config.cookie_domain.as_deref();
+        let mut response = HttpResponse::Ok().json(crate::responses::ApiResponse::<()> {
+            success: true,
+            data: None,
+            meta: crate::responses::ResponseMeta::new(request_id),
+        });
+        for cookie in AuthCookies::clear(secure, cookie_domain) {
+            response.add_cookie(&cookie).ok();
+        }
+        return Ok(response);
     }
 
     // Cancel active Stripe subscription if one exists

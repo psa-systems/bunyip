@@ -502,6 +502,96 @@ impl UserRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    /// HARD-delete a single user row and the dependents that do NOT cascade
+    /// (BUNYIP-246).
+    ///
+    /// Most child tables FK `users(id) ON DELETE CASCADE`, but `audit_logs`
+    /// references `users(id)` via `actor_id` with no cascade, so a bare
+    /// `DELETE FROM users` would fail with a foreign-key violation the moment
+    /// the account has any history (register / login / reset all write audit
+    /// rows). This is only ever reached from non-production e2e cleanup paths
+    /// (the `?purge` flag, the disposable reaper, and `bunyip-e2e-bootstrap`),
+    /// so it is safe to drop the actor's audit rows in the same transaction;
+    /// we are only ever erasing test data. Returns the number of user rows
+    /// removed.
+    pub async fn hard_delete(pool: &PgPool, user_id: Uuid) -> Result<u64, AppError> {
+        let mut tx = pool.begin().await?;
+        sqlx::query("DELETE FROM audit_logs WHERE actor_id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        let result = sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(result.rows_affected())
+    }
+
+    /// HARD-delete every user row matching an exact email (BUNYIP-246), with the
+    /// same non-cascade-dependent handling as [`Self::hard_delete`]. Because the
+    /// email uniqueness index is partial (`WHERE deleted_at IS NULL`), one email
+    /// can name an active row plus soft-deleted rows; this removes them all,
+    /// preserving the `bunyip-e2e-bootstrap --cleanup` by-email semantics.
+    /// Returns the number of user rows removed.
+    pub async fn hard_delete_by_email(pool: &PgPool, email: &str) -> Result<u64, AppError> {
+        let mut tx = pool.begin().await?;
+        sqlx::query(
+            "DELETE FROM audit_logs WHERE actor_id IN (SELECT id FROM users WHERE email = $1)",
+        )
+        .bind(email)
+        .execute(&mut *tx)
+        .await?;
+        let result = sqlx::query("DELETE FROM users WHERE email = $1")
+            .bind(email)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(result.rows_affected())
+    }
+
+    /// HARD-delete e2e disposable accounts older than `max_age_secs` whose email
+    /// matches `pattern` (a SQL `LIKE` pattern, e.g. `%+e2e-%` for the disposable
+    /// subaddress marker), with the same non-cascade-dependent handling as
+    /// [`Self::hard_delete`] (BUNYIP-246). The reaper safety net for crashed e2e
+    /// runs. `now()` is the transaction timestamp, so the audit-row subquery and
+    /// the user delete evaluate the age cutoff identically. Returns the number of
+    /// user rows removed.
+    pub async fn hard_delete_stale_disposable(
+        pool: &PgPool,
+        pattern: &str,
+        max_age_secs: i64,
+    ) -> Result<u64, AppError> {
+        let mut tx = pool.begin().await?;
+        sqlx::query(
+            r#"
+            DELETE FROM audit_logs
+            WHERE actor_id IN (
+                SELECT id FROM users
+                WHERE email LIKE $1
+                  AND created_at < NOW() - ($2::double precision * INTERVAL '1 second')
+            )
+            "#,
+        )
+        .bind(pattern)
+        .bind(max_age_secs)
+        .execute(&mut *tx)
+        .await?;
+        let result = sqlx::query(
+            r#"
+            DELETE FROM users
+            WHERE email LIKE $1
+              AND created_at < NOW() - ($2::double precision * INTERVAL '1 second')
+            "#,
+        )
+        .bind(pattern)
+        .bind(max_age_secs)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(result.rows_affected())
+    }
+
     /// Set two_factor_enabled flag on a user
     pub async fn set_two_factor_enabled(
         pool: &PgPool,

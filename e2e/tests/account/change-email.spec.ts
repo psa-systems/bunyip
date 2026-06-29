@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { routes } from '../../lib/api';
 import { env } from '../../lib/env';
-import { registerDisposable, deleteMe, disposableEmail } from '../../lib/accounts';
+import { registerDisposable, deleteMe, disposableEmail, DISPOSABLE_PASSWORD } from '../../lib/accounts';
 import { waitForLink, tokenFromLink, EMAIL_CHANGE_RE, EMAIL_VERIFY_RE } from '../../lib/mail-sink';
 
 // Change-email coverage (BUNYIP-149).
@@ -87,7 +87,8 @@ test.describe('change email', () => {
       expect(me.status(), `GET ${routes.userMe}`).toBe(200);
       expect(await me.text(), 'current user should report the new email').toContain(newEmail);
     } finally {
-      await deleteMe(reauth);
+      // The email changed but the password did not; purge with it (BUNYIP-246).
+      await deleteMe(reauth, DISPOSABLE_PASSWORD);
       await owner.dispose();
       await reauth.dispose();
     }

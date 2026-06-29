@@ -127,6 +127,18 @@ secret; a manual dispatch lets the operator pick.
   shared state is touched. (This replaced an earlier Mailpit-on-c-01 design and
   the plaintext SMTP app change; both were dropped in favour of reusing
   Stalwart.)
+- **Disposable-account hard delete + reaper (staging only, BUNYIP-246):** the
+  per-spec self-delete calls `DELETE /v1/users/me?purge=1`, which HARD-deletes
+  the row instead of soft-deleting it, so disposable accounts do not pile up as
+  soft-deleted rows. The purge is honoured ONLY on a non-production deployment
+  whose running bunyip-api has `BUNYIP_E2E_BOOTSTRAP_ALLOW=true` set in its
+  server env (the same flag the bootstrap binary uses; set it on the staging api
+  container, not just for the one-off `just e2e-bootstrap` invocation).
+  Production never sets it, so `?purge` is ignored there and the endpoint
+  soft-deletes as before. That same gate also enables a background reaper in
+  bunyip-api that hourly hard-deletes any disposable row (email matching the
+  `+e2e-` subaddress marker) older than 6h, a safety net for a crashed run whose
+  `finally` never ran. The reaper is never spawned in production.
 - **Registration rate limit (BUNYIP-150 / 196 / 197):** `/v1/auth/register` is
   capped 3/hour/IP as a production anti-abuse control. The deployed-instance
   e2e suite self-provisions disposable accounts from the single CI runner egress
