@@ -197,3 +197,4 @@ Project context, plans, audits, and architecture decisions live in [`For AI/`](F
 - Merge target is `main` (via PR).
 - Dev container naming follows `dev-bunyip-<service>-${USER}` and network `dev-bunyip-private-${USER}`; the production stack (`compose.yml`) drops the `dev-` prefix.
 - Releases: `just create-release <major|minor|hotfix>` bumps the workspace version and opens a release PR; merging it tags `vX.Y.Z` and publishes the images (see [`.forgejo/workflows/create-release.yml`](.forgejo/workflows/create-release.yml)).
+- CI secrets + variables: the workflows under [`.forgejo/workflows/`](.forgejo/workflows/) read a fixed set of repository-level Forgejo Actions secrets and variables (the registry/release PAT, the runner label, and the staging/production E2E sets). The authoritative list of names and what each is for is in [`e2e/README.md`](e2e/README.md#forgejo-actions-secrets-and-variables); values are never recorded in the repo.

@@ -86,7 +86,7 @@ test runs.
 | `E2E_STRIPE_SECRET_KEY` | no | Stripe test-mode key (`sk_test_...`). Used by teardown to cancel test-mode subscriptions AND as the gate for the billing specs - when set (the operator provisions it as `E2E_STAGING_STRIPE_SECRET_KEY` alongside staging Stripe test mode), `subscribe`/`billing-portal` run; unset, they skip (BUNYIP-151) |
 | `E2E_MAIL_SINK_URL` | no | Staging mail-sink JMAP base URL with the E2E mailbox credentials embedded (`https://nate%40a8n.run:pass@mail.a8n.run`, the Stalwart server). The email-driven specs read token links from this mailbox; unset (e.g. production) makes them skip (BUNYIP-150) |
 
-## Secret layout
+## Forgejo Actions secrets and variables
 
 Locally: the plain `E2E_*` names above, one environment at a time, in
 `e2e/.env`. In CI: Forgejo Actions secrets hold staging and production side by
@@ -95,6 +95,43 @@ plain `E2E_*` names, so the suite stays environment-agnostic. Test-only vars use
 `E2E_STAGING_*` / `E2E_PRODUCTION_*`; the OP host follows the deployment's own
 `OIDC_ISSUER_*` name. Automatic runs resolve to staging; production is
 manual-dispatch only. See `dev-docs/e2e.md` for provisioning + rotation sources.
+
+The tables below are the authoritative list of every repository-level Forgejo
+Actions **secret** and **variable** the workflows (`.forgejo/workflows/*.yml`)
+consume. Names and purpose only - VALUES live in the Forgejo secret store and
+never in this repo. Set them under the repo's Settings -> Actions -> Secrets /
+Variables.
+
+### Build and release (non-E2E)
+
+Consumed by the image-build and release workflows, not the suite.
+
+| Name | Kind | Consumed by | Purpose |
+| --- | --- | --- | --- |
+| `PSA_SYSTEMS_PRIVATE_PACKAGE_PAT` | secret | `build-api`, `build-web`, `create-release` | Forgejo PAT. Registry push password for the published images (`REGISTRY_PASSWORD`) and the releases-API call in `create-release`. Needs `write:repository` (releases) plus package-write (image push) scope. |
+| `PSA_SYSTEMS_PRIVATE_PACKAGE_OWNER` | variable | `build-api`, `build-web` | Registry owner/org path segment for the published images (`REGISTRY_OWNER`). |
+| `RUNS_ON_OPENSUSE_BASE_LATEST` | variable | `build-api`, `build-web`, `create-release` | Runner label selecting the build/release runner (`runs-on`). |
+
+### E2E (consumed by `e2e.yml`)
+
+`e2e.yml` picks the staging or production value per `inputs.environment` and
+exposes it on the plain `E2E_*` name the suite reads (the Configuration table
+above describes what each plain name does). All E2E secrets are required EXCEPT
+the two marked optional. Production has no mail sink, so there is deliberately no
+`E2E_PRODUCTION_MAIL_SINK_URL`.
+
+| Staging secret | Production secret | Req | Purpose (plain name) |
+| --- | --- | --- | --- |
+| `E2E_STAGING_BASE_URL` | `E2E_PRODUCTION_BASE_URL` | yes | hub-web apex the suite navigates to (`E2E_BASE_URL`) |
+| `OIDC_ISSUER_STAGING` | `OIDC_ISSUER_PRODUCTION` | yes | OIDC OP + API host (`E2E_OP_BASE_URL`) |
+| `E2E_STAGING_EMAIL` | `E2E_PRODUCTION_EMAIL` | yes | dedicated E2E account login (`E2E_EMAIL`) |
+| `E2E_STAGING_PASSWORD` | `E2E_PRODUCTION_PASSWORD` | yes | password for that account (`E2E_PASSWORD`) |
+| `E2E_STAGING_TENANT_ID` | `E2E_PRODUCTION_TENANT_ID` | yes | UUID of the E2E tenant (`E2E_TENANT_ID`) |
+| `E2E_STAGING_OIDC_CLIENT_ID` | `E2E_PRODUCTION_OIDC_CLIENT_ID` | yes | public PKCE client id (`E2E_OIDC_CLIENT_ID`) |
+| `E2E_STAGING_OIDC_REDIRECT_URI` | `E2E_PRODUCTION_OIDC_REDIRECT_URI` | yes | registered redirect_uri, exact match (`E2E_OIDC_REDIRECT_URI`) |
+| `E2E_STAGING_TOTP_SECRET` | `E2E_PRODUCTION_TOTP_SECRET` | yes | base32 TOTP secret for the account (`E2E_TOTP_SECRET`) |
+| `E2E_STAGING_STRIPE_SECRET_KEY` | `E2E_PRODUCTION_STRIPE_SECRET_KEY` | no | Stripe test-mode key; gates the billing specs (`E2E_STRIPE_SECRET_KEY`, BUNYIP-151) |
+| `E2E_STAGING_MAIL_SINK_URL` | (none - staging only) | no | JMAP mail sink; gates the email-driven specs (`E2E_MAIL_SINK_URL`, BUNYIP-150). Production resolves empty, so those specs skip there |
 
 ## Blocked specs (`test.fixme`) and their blockers
 
