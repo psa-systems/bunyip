@@ -514,6 +514,20 @@ impl UserRepository {
     /// so it is safe to drop the actor's audit rows in the same transaction;
     /// we are only ever erasing test data. Returns the number of user rows
     /// removed.
+    ///
+    /// LIMITATION: `audit_logs` is the only non-cascade dependent the current
+    /// disposable specs (`password-reset`, `magic-link`, `change-email`)
+    /// populate, so it is the only one cleared here. Other tables reference
+    /// `users(id)` without a cascade too - `oauth_authorization_codes.user_id`
+    /// (written by an OIDC authorize), `admin_notifications.user_id` (written by
+    /// a feedback submission), and the admin `*_by` columns. A future disposable
+    /// spec that exercises those flows would FK-block here; extend this method
+    /// (or give those FKs `ON DELETE CASCADE` / `SET NULL`) when that lands.
+    /// There is no production impact (this path never runs in production), but
+    /// the failure is not silent-safe: the per-test purge would error and leak
+    /// that account, and because the reaper deletes in bulk, a single blocking
+    /// row would roll back and stall the whole sweep until the method is
+    /// extended.
     pub async fn hard_delete(pool: &PgPool, user_id: Uuid) -> Result<u64, AppError> {
         let mut tx = pool.begin().await?;
         sqlx::query("DELETE FROM audit_logs WHERE actor_id = $1")
