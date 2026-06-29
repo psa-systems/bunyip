@@ -43,8 +43,29 @@ jobs:
         shell: nu {0}
         env:
           FORGEJO_TOKEN: ${{ secrets.PSA_SYSTEMS_PRIVATE_PACKAGE_PAT }}
+          # BUNYIP-236: pass `head.ref` via an env var instead of interpolating
+          # `${{ github.event.pull_request.head.ref }}` directly into the
+          # script body. Forgejo Actions expand `${{ ... }}` into the script
+          # TEXT before the shell runs, so a branch named
+          # `release/v1.0.0"; ^rm -rf /; #` would inject literal shell into
+          # nushell and execute under this workflow's `contents: write` token.
+          # Reading from `$env.PR_BRANCH` keeps the value as data the runtime
+          # binds, not text the shell parses. Mirror of the PMS-500 fix.
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
-          let branch = "${{ github.event.pull_request.head.ref }}"
+          let branch = $env.PR_BRANCH
+          # BUNYIP-236 defence in depth: the job-level `if:` already requires
+          # `head.ref` to startsWith `release/v`, but startsWith accepts a
+          # smuggled-suffix branch like `release/v1"; ...`. Reject any value
+          # that does not match strict semver before any downstream command
+          # uses it. The downstream uses (git describe / git log / http post)
+          # all take the value as a data arg now (env-mapped, not
+          # interpolated), so this second check is belt-and-braces - if the
+          # env-var hardening above were ever reverted, this still keeps the
+          # injection vector closed.
+          if not ($branch =~ '^release/v[0-9]+\.[0-9]+\.[0-9]+$') {
+              error make { msg: $"Refusing release for non-semver branch ($branch)" }
+          }
           let tag = ($branch | str replace "release/" "")
 
           # Build changelog from commits since the previous tag
