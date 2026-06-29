@@ -88,6 +88,19 @@ jobs:
         # builder image a prior run left behind so the rebuild can re-tag; the
         # `|| true` keeps the first run (tag absent) green, matching the
         # `docker image rm` cleanup in the justfile's `dev-clean-all` recipe.
+        #
+        # BUNYIP-241: buildkit's default-on provenance / SBOM attestation makes
+        # the exporter emit BOTH an image manifest AND an attestation manifest
+        # list and name both under the requested tag, which collides inside a
+        # single run ("image already exists" after `naming to ... done`). The
+        # check step does not consume the resulting image (it only validates
+        # that the build succeeds), so `--provenance=false` collapses the
+        # export to one manifest with no observable downside.
         run: |
           docker image rm bunyip-api-builder:check 2>/dev/null || true
-          docker build --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .
+          docker build \
+            --provenance=false \
+            --file bunyip-api/oci-build/Dockerfile \
+            --target builder \
+            --tag bunyip-api-builder:check \
+            .
