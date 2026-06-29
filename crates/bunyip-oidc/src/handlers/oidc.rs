@@ -471,6 +471,22 @@ pub async fn authorize(
         .map(String::as_str)
         .filter(|s| !granted_set.contains(s))
         .collect();
+    // BUNYIP-234: log every decision the consent gate makes so the consent
+    // loop ("Allow does nothing, page just refreshes") can be diagnosed from
+    // the trace. Pair with the `consent_grant` log emitted by
+    // /v1/users/me/consents to triangulate (a) identity drift between the
+    // consent write and this read (different user_id -> different rows),
+    // (b) persistence visibility (write committed but read sees an older
+    // snapshot), or (c) scope-name mismatch in the union.
+    tracing::info!(
+        target: "consent_gate",
+        user_id = %session.user_id,
+        client_id = %client_id,
+        requested_scopes = ?requested_scopes,
+        granted_scopes = ?granted,
+        missing_scopes = ?missing,
+        "BUNYIP-234: authorize consent-gate evaluation"
+    );
     if !missing.is_empty() {
         // Hand control to bunyip-web. The consent page reads every authorize
         // parameter back from the URL so a successful Allow can issue a
