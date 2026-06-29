@@ -26,18 +26,24 @@
 //!   chars; the full password never leaves the browser -> added to `connect-src`
 //!
 //! `frame-ancestors 'none'` (with the proxy's `X-Frame-Options: DENY`) blocks
-//! framing; `form-action` keeps form posts on bunyip-web AND on the Stripe-hosted
-//! destinations the membership flows redirect to (see below). SSO is driven by
-//! top-level navigations (`Location` redirects), which CSP does not constrain, so
-//! the OIDC hop to bunyip-api keeps working.
+//! framing. `form-action` is the subtle one: per CSP3 it constrains the ENTIRE
+//! redirect chain of a form submission, not just the form's action URL, and
+//! Chromium + WebKit enforce that (Firefox only checks the action URL). Two
+//! flows submit a form on bunyip-web and then redirect cross-origin, so both
+//! redirect families must be whitelisted:
 //!
-//! BUNYIP-235: `form-action` must include `checkout.stripe.com` and
-//! `billing.stripe.com`. The `/membership/subscribe` form posts to a
-//! same-origin handler that 302s to `https://checkout.stripe.com/...`; per
-//! CSP3 the form-action directive applies to the entire request chain
-//! INCLUDING the server-side redirect target, so `form-action 'self'` alone
-//! silently drops every Subscribe click on the way to Stripe. Same shape for
-//! the billing portal at billing.stripe.com.
+//! - BUNYIP-235 (Stripe): `/membership/subscribe` posts to a same-origin handler
+//!   that 302s to `https://checkout.stripe.com/...` (and the billing portal to
+//!   `billing.stripe.com`), so both Stripe origins are in `form-action`.
+//! - BUNYIP-249 (OIDC login): the `/login` and `/login/2fa` forms post to
+//!   bunyip-web and 303 to the OIDC authorize endpoint at
+//!   `{api_public_origin}/oauth2/authorize`, which redirects on to the requesting
+//!   app's callback under `*.{app_domain}`. So `form-action` must also include
+//!   the bunyip-api origin and the child-app wildcard. Without them Chrome/Safari
+//!   users with 2FA are stuck on `/login/2fa` (the submit is refused before the
+//!   redirect) while Firefox slips through. An earlier note here got this wrong
+//!   by assuming the OIDC hop was an unconstrained top-level `Location` redirect;
+//!   it is the redirect TARGET of a form POST, which `form-action` does constrain.
 //!
 //! Because `'unsafe-inline'` is honoured only when no nonce/hash source is
 //! present, the inline scripts/styles above keep executing under this policy.
@@ -52,14 +58,27 @@ use crate::config::Config;
 ///
 /// `api_public_origin` is the browser-facing bunyip-api origin (the same value
 /// the SSE subscriber connects to); it is whitelisted in `connect-src` so the
-/// dashboard `EventSource` is not blocked.
-fn policy(api_public_origin: &str) -> String {
+/// dashboard `EventSource` is not blocked, and in `form-action` so the OIDC
+/// login redirect chain is not blocked. `app_domain` is the apex child apps live
+/// under; its `*.` wildcard covers the OIDC callback origins in `form-action`.
+fn policy(api_public_origin: &str, app_domain: &str) -> String {
+    // BUNYIP-249: form-action is checked against the WHOLE submission redirect
+    // chain (CSP3), so the OIDC login forms need the authorize origin and the
+    // child-app callback wildcard, not just 'self' (see the module docs).
+    // `https://*.{app_domain}` also covers `api_public_origin` when the api is on
+    // the apex, but the api origin is listed explicitly so an off-apex api still
+    // works; the wildcard is omitted in dev where `app_domain` is empty.
+    let app_callbacks = if app_domain.is_empty() {
+        String::new()
+    } else {
+        format!(" https://*.{app_domain}")
+    };
     format!(
         "default-src 'self'; \
          base-uri 'self'; \
          object-src 'none'; \
          frame-ancestors 'none'; \
-         form-action 'self' https://checkout.stripe.com https://billing.stripe.com; \
+         form-action 'self' {api_public_origin}{app_callbacks} https://checkout.stripe.com https://billing.stripe.com; \
          img-src 'self' data: https:; \
          font-src 'self' https://fonts.gstatic.com https://ka-f.fontawesome.com; \
          style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
@@ -76,7 +95,7 @@ fn policy(api_public_origin: &str) -> String {
 /// (`handlers::admin::with_attachment_hardening`), and this default policy must
 /// not clobber that hardening.
 pub fn csp_layer(cfg: &Config) -> SetResponseHeaderLayer<HeaderValue> {
-    let value = HeaderValue::from_str(&policy(&cfg.api_public_origin))
+    let value = HeaderValue::from_str(&policy(&cfg.api_public_origin, &cfg.app_domain))
         .expect("CSP policy is valid header value");
     SetResponseHeaderLayer::if_not_present(CONTENT_SECURITY_POLICY, value)
 }
@@ -103,7 +122,7 @@ mod tests {
 
     #[test]
     fn policy_includes_required_directives() {
-        let p = policy("https://api.example.com");
+        let p = policy("https://api.example.com", "example.com");
         // Self-by-default, framing locked down, and the inline assets the SSR
         // pages actually emit are allowed.
         assert!(p.contains("default-src 'self'"));
@@ -112,6 +131,27 @@ mod tests {
         assert!(p.contains("style-src 'self' 'unsafe-inline'"));
         // The browser-facing api origin is whitelisted for the SSE EventSource.
         assert!(p.contains("connect-src 'self' https://api.example.com"));
+        // BUNYIP-249: form-action must allow the OIDC login redirect chain (the
+        // authorize origin + the child-app callback wildcard), or Chromium and
+        // WebKit block 2FA login - form-action is checked on the redirect chain.
+        assert!(p.contains(
+            "form-action 'self' https://api.example.com https://*.example.com \
+             https://checkout.stripe.com https://billing.stripe.com"
+        ));
+    }
+
+    #[test]
+    fn form_action_omits_child_app_wildcard_without_app_domain() {
+        // In dev `app_domain` is empty (loopback IS the public origin), so no
+        // `*.` child-app source is emitted - only the api origin is added.
+        let p = policy("http://localhost:4401", "");
+        assert!(p.contains(
+            "form-action 'self' http://localhost:4401 https://checkout.stripe.com https://billing.stripe.com"
+        ));
+        assert!(
+            !p.contains("*."),
+            "no wildcard form-action source without app_domain; got: {p}"
+        );
     }
 
     #[test]
@@ -121,7 +161,7 @@ mod tests {
         // an explicit connect-src allowance the browser blocks the
         // request and the breach indicator stays stuck pending. Pin the
         // substring so a future tightening surfaces in CI before it ships.
-        let p = policy("https://api.example.com");
+        let p = policy("https://api.example.com", "example.com");
         assert!(
             p.contains("https://api.pwnedpasswords.com"),
             "connect-src must allow the HIBP k-anonymity endpoint; got: {p}"
@@ -136,9 +176,9 @@ mod tests {
         // and per CSP3 the directive applies to redirect targets. Pinning the
         // substring here so a future tightening (dropping back to `'self'`)
         // surfaces in CI before it ships and breaks every Subscribe button.
-        let p = policy("https://api.example.com");
+        let p = policy("https://api.example.com", "example.com");
         assert!(
-            p.contains("form-action 'self' https://checkout.stripe.com https://billing.stripe.com"),
+            p.contains("https://checkout.stripe.com https://billing.stripe.com"),
             "form-action must allow Stripe Checkout + billing portal redirects; got: {p}"
         );
     }
