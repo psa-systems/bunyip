@@ -133,6 +133,19 @@ the two marked optional. Production has no mail sink, so there is deliberately n
 | `E2E_STAGING_STRIPE_SECRET_KEY` | `E2E_PRODUCTION_STRIPE_SECRET_KEY` | no | Stripe test-mode key; gates the billing specs (`E2E_STRIPE_SECRET_KEY`, BUNYIP-151) |
 | `E2E_STAGING_MAIL_SINK_URL` | (none - staging only) | no | JMAP mail sink; gates the email-driven specs (`E2E_MAIL_SINK_URL`, BUNYIP-150). Production resolves empty, so those specs skip there |
 
+## Disposable accounts (cleanup)
+
+The email-driven specs (`password-reset`, `magic-link`, `change-email`) register
+a throwaway account per run (`lib/accounts.ts`) and self-delete it in a
+`finally`. The self-delete calls `DELETE /v1/users/me?purge=1`, which
+HARD-deletes the row rather than soft-deleting it, so accounts do not accumulate
+on staging (BUNYIP-246). The purge is gated SERVER-side: bunyip-api honours it
+only on a non-production deployment whose env sets `BUNYIP_E2E_BOOTSTRAP_ALLOW=true`
+(see `dev-docs/e2e.md`). Production ignores the flag and soft-deletes as normal,
+and these specs skip there anyway. The same gate enables a bunyip-api background
+reaper that hard-deletes any leaked disposable (a crashed run whose `finally`
+never ran) older than 6h; it never runs in production.
+
 ## Blocked specs (`test.fixme`) and their blockers
 
 | Blocker | Specs | Unblocks when |
