@@ -20,6 +20,10 @@
 //! - the browser-facing bunyip-api origin the dashboard `EventSource` subscribes
 //!   to (`/v1/events`), which is a distinct origin from bunyip-web even in dev
 //!   (different port) -> added to `connect-src`
+//! - HaveIBeenPwned k-anonymity API (`api.pwnedpasswords.com`) for the
+//!   BUNYIP-240 live breach check on `/register` + `/reset-password`. The
+//!   browser hashes the password with SHA-1 and sends only the first 5 hex
+//!   chars; the full password never leaves the browser -> added to `connect-src`
 //!
 //! `frame-ancestors 'none'` (with the proxy's `X-Frame-Options: DENY`) blocks
 //! framing; `form-action 'self'` keeps form posts on bunyip-web. SSO is driven by
@@ -51,7 +55,7 @@ fn policy(api_public_origin: &str) -> String {
          font-src 'self' https://fonts.gstatic.com https://ka-f.fontawesome.com; \
          style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
          script-src 'self' 'unsafe-inline' https://unpkg.com https://kit.fontawesome.com; \
-         connect-src 'self' {api_public_origin} https://ka-f.fontawesome.com"
+         connect-src 'self' {api_public_origin} https://ka-f.fontawesome.com https://api.pwnedpasswords.com"
     )
 }
 
@@ -99,6 +103,20 @@ mod tests {
         assert!(p.contains("style-src 'self' 'unsafe-inline'"));
         // The browser-facing api origin is whitelisted for the SSE EventSource.
         assert!(p.contains("connect-src 'self' https://api.example.com"));
+    }
+
+    #[test]
+    fn policy_connect_src_allows_hibp_for_breach_check() {
+        // BUNYIP-240: the live password-breach check on /register +
+        // /reset-password runs a fetch() to api.pwnedpasswords.com. Without
+        // an explicit connect-src allowance the browser blocks the
+        // request and the breach indicator stays stuck pending. Pin the
+        // substring so a future tightening surfaces in CI before it ships.
+        let p = policy("https://api.example.com");
+        assert!(
+            p.contains("https://api.pwnedpasswords.com"),
+            "connect-src must allow the HIBP k-anonymity endpoint; got: {p}"
+        );
     }
 
     /// AC: Content-Security-Policy is present on bunyip-web responses, asserted
