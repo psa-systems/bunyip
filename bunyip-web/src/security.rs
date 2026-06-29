@@ -22,9 +22,18 @@
 //!   (different port) -> added to `connect-src`
 //!
 //! `frame-ancestors 'none'` (with the proxy's `X-Frame-Options: DENY`) blocks
-//! framing; `form-action 'self'` keeps form posts on bunyip-web. SSO is driven by
+//! framing; `form-action` keeps form posts on bunyip-web AND on the Stripe-hosted
+//! destinations the membership flows redirect to (see below). SSO is driven by
 //! top-level navigations (`Location` redirects), which CSP does not constrain, so
 //! the OIDC hop to bunyip-api keeps working.
+//!
+//! BUNYIP-235: `form-action` must include `checkout.stripe.com` and
+//! `billing.stripe.com`. The `/membership/subscribe` form posts to a
+//! same-origin handler that 302s to `https://checkout.stripe.com/...`; per
+//! CSP3 the form-action directive applies to the entire request chain
+//! INCLUDING the server-side redirect target, so `form-action 'self'` alone
+//! silently drops every Subscribe click on the way to Stripe. Same shape for
+//! the billing portal at billing.stripe.com.
 //!
 //! Because `'unsafe-inline'` is honoured only when no nonce/hash source is
 //! present, the inline scripts/styles above keep executing under this policy.
@@ -46,7 +55,7 @@ fn policy(api_public_origin: &str) -> String {
          base-uri 'self'; \
          object-src 'none'; \
          frame-ancestors 'none'; \
-         form-action 'self'; \
+         form-action 'self' https://checkout.stripe.com https://billing.stripe.com; \
          img-src 'self' data: https:; \
          font-src 'self' https://fonts.gstatic.com https://ka-f.fontawesome.com; \
          style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
@@ -99,6 +108,21 @@ mod tests {
         assert!(p.contains("style-src 'self' 'unsafe-inline'"));
         // The browser-facing api origin is whitelisted for the SSE EventSource.
         assert!(p.contains("connect-src 'self' https://api.example.com"));
+    }
+
+    #[test]
+    fn policy_form_action_allows_stripe_hosted_destinations() {
+        // BUNYIP-235: `form-action` MUST include `checkout.stripe.com` and
+        // `billing.stripe.com`. The /membership/subscribe form posts to a
+        // same-origin handler that 302s to those Stripe-hosted destinations,
+        // and per CSP3 the directive applies to redirect targets. Pinning the
+        // substring here so a future tightening (dropping back to `'self'`)
+        // surfaces in CI before it ships and breaks every Subscribe button.
+        let p = policy("https://api.example.com");
+        assert!(
+            p.contains("form-action 'self' https://checkout.stripe.com https://billing.stripe.com"),
+            "form-action must allow Stripe Checkout + billing portal redirects; got: {p}"
+        );
     }
 
     /// AC: Content-Security-Policy is present on bunyip-web responses, asserted
