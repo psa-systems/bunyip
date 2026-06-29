@@ -160,6 +160,20 @@ pub async fn grant_consent(
         .as_ref()
         .ok_or_else(|| AppError::not_found("OIDC provider not configured"))?;
     let _ = &pool; // pool unused; provider owns its own pool. Kept for symmetry with sibling handlers.
+                   // BUNYIP-234: log the (user_id, client_id, scopes) the write is keyed
+                   // on so the consent-loop investigation can correlate the write here
+                   // with the read that the next /oauth2/authorize call performs via
+                   // `provider.get_granted_scopes`. If the two don't match a row, the
+                   // loop is identity-mismatch (user_id drift between access_token and
+                   // op_session); if they DO match but the read sees a different scope
+                   // set, it's a persistence / visibility issue.
+    tracing::info!(
+        target: "consent_grant",
+        user_id = %user.0.sub,
+        client_id = %body.client_id,
+        scopes = ?body.scopes,
+        "BUNYIP-234: persisting consent grant"
+    );
     provider
         .add_scopes_to_grant(user.0.sub, body.client_id, &body.scopes)
         .await

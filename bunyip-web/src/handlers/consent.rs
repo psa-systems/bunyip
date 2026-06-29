@@ -161,6 +161,18 @@ pub async fn consent_post(
     } else {
         f.continue_url.clone()
     };
+    // BUNYIP-234: log the redirect target + scopes so the consent-loop
+    // investigation can confirm the user is actually being sent back to
+    // /oauth2/authorize (and not, e.g., a stale or malformed continue_url
+    // that loops within bunyip-web). Pair with `consent_grant` and
+    // `consent_gate` traces on bunyip-api to follow the request chain.
+    tracing::info!(
+        target: "consent_post",
+        client_id = %f.client_id,
+        scopes = ?f.scopes,
+        continue_url = %dest,
+        "BUNYIP-234: consent saved, redirecting to authorize"
+    );
     redirect_cookies(&dest, &c.set_cookies)
 }
 
