@@ -540,6 +540,46 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // BUNYIP-246: e2e disposable-account reaper (non-production safety net).
+    // Catches disposable test accounts a crashed e2e run created but never
+    // self-deleted (its per-test `DELETE /v1/users/me?purge` never ran). Spawned
+    // ONLY when hard-purge is permitted (non-production environment +
+    // BUNYIP_E2E_BOOTSTRAP_ALLOW=true), so it can never touch a real user on
+    // production. Hard-deletes rows whose email carries the disposable
+    // subaddress marker `+e2e-` and that are older than the age threshold.
+    if config.e2e_purge_enabled() {
+        // Hourly sweep; only disposables older than 6h are eligible, so the
+        // reaper can never race a live test mid-run. The `+e2e-` marker is the
+        // plus-subaddress every disposable email carries (e2e/lib/accounts.ts).
+        const E2E_REAPER_INTERVAL_SECS: u64 = 3600;
+        const E2E_REAPER_MAX_AGE_SECS: i64 = 6 * 3600;
+        const E2E_DISPOSABLE_EMAIL_PATTERN: &str = "%+e2e-%";
+        let reaper_pool = pool.clone();
+        tokio::spawn(async move {
+            info!("E2E disposable-account reaper started (non-production)");
+            let mut interval = tokio::time::interval(Duration::from_secs(E2E_REAPER_INTERVAL_SECS));
+            loop {
+                interval.tick().await;
+                match UserRepository::hard_delete_stale_disposable(
+                    &reaper_pool,
+                    E2E_DISPOSABLE_EMAIL_PATTERN,
+                    E2E_REAPER_MAX_AGE_SECS,
+                )
+                .await
+                {
+                    Ok(reaped) => {
+                        if reaped > 0 {
+                            info!(reaped, "Reaped stale e2e disposable accounts");
+                        }
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Failed to reap stale e2e disposable accounts");
+                    }
+                }
+            }
+        });
+    }
+
     info!(address = %server_addr, "Starting HTTP server");
 
     // Pre-clone OCI handles for the OCI server (primary closure moves the originals)

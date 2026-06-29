@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { routes } from '../../lib/api';
 import { env } from '../../lib/env';
-import { registerDisposable, deleteMe } from '../../lib/accounts';
+import { registerDisposable, deleteMe, DISPOSABLE_PASSWORD } from '../../lib/accounts';
 import { waitForLink, tokenFromLink, MAGIC_LINK_RE } from '../../lib/mail-sink';
 
 // Magic-link (passwordless) login coverage (BUNYIP-149).
@@ -43,7 +43,9 @@ test.describe('magic-link login', () => {
       const me = await follower.get(routes.memberships);
       expect(me.status(), 'magic-link session should read memberships').toBe(200);
     } finally {
-      await deleteMe(owner);
+      // `owner` still holds the register session; purge with the disposable
+      // account password (BUNYIP-246).
+      await deleteMe(owner, DISPOSABLE_PASSWORD);
       await owner.dispose();
       await follower.dispose();
     }

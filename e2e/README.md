@@ -96,6 +96,19 @@ plain `E2E_*` names, so the suite stays environment-agnostic. Test-only vars use
 `OIDC_ISSUER_*` name. Automatic runs resolve to staging; production is
 manual-dispatch only. See `dev-docs/e2e.md` for provisioning + rotation sources.
 
+## Disposable accounts (cleanup)
+
+The email-driven specs (`password-reset`, `magic-link`, `change-email`) register
+a throwaway account per run (`lib/accounts.ts`) and self-delete it in a
+`finally`. The self-delete calls `DELETE /v1/users/me?purge=1`, which
+HARD-deletes the row rather than soft-deleting it, so accounts do not accumulate
+on staging (BUNYIP-246). The purge is gated SERVER-side: bunyip-api honours it
+only on a non-production deployment whose env sets `BUNYIP_E2E_BOOTSTRAP_ALLOW=true`
+(see `dev-docs/e2e.md`). Production ignores the flag and soft-deletes as normal,
+and these specs skip there anyway. The same gate enables a bunyip-api background
+reaper that hard-deletes any leaked disposable (a crashed run whose `finally`
+never ran) older than 6h; it never runs in production.
+
 ## Blocked specs (`test.fixme`) and their blockers
 
 | Blocker | Specs | Unblocks when |

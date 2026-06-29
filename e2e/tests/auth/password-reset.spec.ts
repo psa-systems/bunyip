@@ -55,8 +55,9 @@ test.describe('password reset', () => {
       ).toBeTruthy();
     } finally {
       // The reset revoked the original session on `owner`; delete via the
-      // re-authenticated context instead.
-      await deleteMe(reauth);
+      // re-authenticated context instead. The account's password is now the
+      // reset value, so purge with that (BUNYIP-246).
+      await deleteMe(reauth, NEW_PASSWORD);
       await owner.dispose();
       await reauth.dispose();
     }

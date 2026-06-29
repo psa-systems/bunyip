@@ -48,9 +48,18 @@ export async function registerDisposable(ctx: APIRequestContext): Promise<Dispos
 
 // Best-effort self-delete via DELETE /v1/users/me on an authenticated context.
 // Never throws - cleanup must not turn a passing spec red. Call in a `finally`.
-export async function deleteMe(ctx: APIRequestContext): Promise<void> {
+//
+// `?purge=1` asks the API to HARD-delete the row instead of soft-deleting it,
+// so disposable accounts do not pile up as soft-deleted rows on staging. The
+// purge is honoured only server-side on a non-production deployment that sets
+// BUNYIP_E2E_BOOTSTRAP_ALLOW=true; production ignores the flag and soft-deletes,
+// and the email-driven specs skip there anyway (BUNYIP-246). The endpoint
+// requires the same ownership proof as a normal delete, so the caller passes
+// the account's current password (disposable accounts never enable 2FA, so the
+// password alone suffices). The reaper sweeps anything this misses.
+export async function deleteMe(ctx: APIRequestContext, password: string): Promise<void> {
   try {
-    await ctx.delete(routes.userMe);
+    await ctx.delete(`${routes.userMe}?purge=1`, { data: { password } });
   } catch (err) {
     console.warn(`[accounts] self-delete failed (will be swept later): ${String(err)}`);
   }

@@ -743,6 +743,18 @@ impl Config {
         self.environment == "production"
     }
 
+    /// True when this process may HARD-delete e2e test accounts: a real
+    /// non-production environment AND the operator-set
+    /// `BUNYIP_E2E_BOOTSTRAP_ALLOW=true`. Mirrors the `bunyip-e2e-bootstrap`
+    /// guards so the `?purge` flag on `DELETE /v1/users/me` and the
+    /// disposable-account reaper can never fire in production (BUNYIP-246).
+    pub fn e2e_purge_enabled(&self) -> bool {
+        let allowed = secret_env("BUNYIP_E2E_BOOTSTRAP_ALLOW")
+            .map(|v| v.trim() == "true")
+            .unwrap_or(false);
+        e2e_env_allows_purge(&self.environment) && allowed
+    }
+
     /// Load TOTP encryption key from TOTP_ENCRYPTION_KEY (env var or _FILE
     /// secret, hex-encoded 32 bytes). In development, defaults to 32 zero bytes.
     fn load_totp_encryption_key(environment: &str) -> [u8; 32] {
@@ -831,6 +843,16 @@ pub enum ConfigError {
     EmailDisabledInProduction,
 }
 
+/// Pure half of [`Config::e2e_purge_enabled`]: the environment must be a real
+/// non-production name. Empty / unset (which `Config` treats as production) and
+/// `production` / `prod` all forbid e2e hard-deletes (BUNYIP-246).
+pub(crate) fn e2e_env_allows_purge(environment: &str) -> bool {
+    let env_name = environment.trim();
+    !env_name.is_empty()
+        && !env_name.eq_ignore_ascii_case("production")
+        && !env_name.eq_ignore_ascii_case("prod")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -838,6 +860,25 @@ mod tests {
     // test below that touches process env must hold it.
     use crate::test_support::env_lock;
     use std::env;
+
+    #[test]
+    fn e2e_env_allows_purge_only_for_real_non_prod_names() {
+        // Real non-production names permit the e2e hard-delete path.
+        for env_name in ["staging", "Staging", "dev", "development", "test", "ci"] {
+            assert!(
+                e2e_env_allows_purge(env_name),
+                "{env_name} should allow purge"
+            );
+        }
+        // Production-like and empty/unset names forbid it, so `?purge` and the
+        // reaper can never hard-delete on prod (BUNYIP-246).
+        for env_name in ["production", "Production", "PROD", "prod", "", "   "] {
+            assert!(
+                !e2e_env_allows_purge(env_name),
+                "{env_name:?} must forbid purge"
+            );
+        }
+    }
 
     #[test]
     fn test_config_defaults() {

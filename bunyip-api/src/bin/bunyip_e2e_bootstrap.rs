@@ -34,6 +34,7 @@ use sqlx::PgPool;
 
 use bunyip_api::config::{secret_env, Config};
 use bunyip_api::models::UserRole;
+use bunyip_api::repositories::UserRepository;
 use bunyip_api::services::PasswordService;
 
 /// The two accounts the suite drives. Emails are lowercase literals so the
@@ -216,13 +217,13 @@ async fn cleanup(pool: &PgPool, dry_run: bool) -> anyhow::Result<()> {
             continue;
         }
 
-        let result = sqlx::query("DELETE FROM users WHERE email = $1")
-            .bind(email)
-            .execute(pool)
+        // Shared hard-delete path (BUNYIP-246): also clears the non-cascade
+        // audit_logs rows that would otherwise block `DELETE FROM users`.
+        let removed = UserRepository::hard_delete_by_email(pool, email)
             .await
-            .with_context(|| format!("failed to delete {email}"))?;
+            .map_err(|e| anyhow::anyhow!("failed to delete {email}: {e}"))?;
 
-        if result.rows_affected() > 0 {
+        if removed > 0 {
             println!("deleted {email}");
         } else {
             println!("{email} absent, nothing to delete");
