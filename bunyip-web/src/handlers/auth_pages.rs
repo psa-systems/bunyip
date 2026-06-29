@@ -17,10 +17,26 @@ use crate::views::ui::{button_class, error_box};
 use crate::web::{html, html_cookies, redirect, redirect_cookies, AppState};
 
 fn field(id: &str, label: &str, ty: &str, placeholder: &str, autocomplete: &str) -> Markup {
+    field_with_value(id, label, ty, placeholder, autocomplete, "")
+}
+
+/// BUNYIP-240: like `field`, but preserves a pre-filled `value` across
+/// server re-renders so an error-rejected password / email doesn't blank
+/// out. For password fields the browser's autocomplete also recovers the
+/// value, but only if the user is not typing into a fresh field; the
+/// explicit `value=` is the durable path.
+fn field_with_value(
+    id: &str,
+    label: &str,
+    ty: &str,
+    placeholder: &str,
+    autocomplete: &str,
+    value: &str,
+) -> Markup {
     html! {
         div class="space-y-2" {
             label for=(id) class="text-sm font-medium leading-none" { (label) }
-            input id=(id) name=(id) type=(ty) placeholder=(placeholder) autocomplete=(autocomplete) class=(dashboard_input());
+            input id=(id) name=(id) type=(ty) placeholder=(placeholder) autocomplete=(autocomplete) value=(value) class=(dashboard_input());
         }
     }
 }
@@ -29,14 +45,200 @@ fn submit_btn(label: &str) -> Markup {
     html! { button type="submit" class=(button_class("default", "default", "w-full")) { (label) } }
 }
 
+/// BUNYIP-240: per-requirement password indicators. Each `<li>` carries a
+/// stable id so the inline `password_live_validation_script()` below can
+/// flip its leading indicator between three states: `pw-pending` (neutral
+/// circle while the user has not satisfied this rule yet), `pw-pass` (green
+/// check), `pw-fail` (red x). The fourth indicator (`pw-breach`) is
+/// driven by the HaveIBeenPwned k-anonymity lookup: only the first 5 chars
+/// of the SHA-1 hash ever leave the browser, so the actual password never
+/// crosses any wire to HIBP or to bunyip.
 fn pw_reqs() -> Markup {
     html! {
-        ul class="text-xs text-muted-foreground space-y-1 mt-2" {
-            li { "At least 12 characters" }
-            li { "Upper and lowercase letters" }
-            li { "At least one digit and one special character" }
+        ul id="pw-reqs" class="text-xs text-muted-foreground space-y-1 mt-2" {
+            li id="pw-len" class="pw-pending" {
+                span class="pw-indicator inline-block w-3 mr-1" { "○" }
+                "At least 12 characters"
+            }
+            li id="pw-case" class="pw-pending" {
+                span class="pw-indicator inline-block w-3 mr-1" { "○" }
+                "Upper and lowercase letters"
+            }
+            li id="pw-digit" class="pw-pending" {
+                span class="pw-indicator inline-block w-3 mr-1" { "○" }
+                "At least one digit and one special character"
+            }
+            li id="pw-breach" class="pw-pending" {
+                span class="pw-indicator inline-block w-3 mr-1" { "○" }
+                "Not found in a known data breach"
+            }
         }
+        // Sub-input for confirm-password match feedback; toggled by the same
+        // inline script. Empty until the user types into the Confirm field.
+        p id="pw-confirm-msg" class="text-xs mt-1 pw-pending" {}
     }
+}
+
+/// BUNYIP-240: inline JS that drives the per-rule indicators and the HIBP
+/// breach check. Lives in the SSR shell next to the password form because
+/// the CSP allows inline scripts on bunyip-web (see `crate::security`).
+/// Idempotent: the script attaches `input` listeners only when both the
+/// password + confirm fields exist and only when no previous attachment
+/// flag is set. Graceful degradation: no JS, the static rules list still
+/// renders and the server-side `password_ok()` is the final backstop.
+fn password_live_validation_script() -> Markup {
+    use maud::PreEscaped;
+    PreEscaped(String::from(
+        r#"<script>
+(function () {
+  var pw = document.getElementById('password');
+  var cf = document.getElementById('confirm');
+  if (!pw || pw.dataset.pwInit === '1') return;
+  pw.dataset.pwInit = '1';
+
+  // Tailwind utility classes for the three visual states. The leading
+  // indicator glyph + the row text color flip together so the row reads as
+  // pass/fail at a glance.
+  var STATES = {
+    pending: { cls: 'text-muted-foreground',                glyph: '○' }, // ○
+    pass:    { cls: 'text-teal-600 dark:text-teal-400',     glyph: '✓' }, // ✓
+    fail:    { cls: 'text-destructive',                     glyph: '✗' }  // ✗
+  };
+  function setState(row, state) {
+    if (!row) return;
+    var s = STATES[state];
+    row.className = (row.className || '')
+      .replace(/\b(text-muted-foreground|text-teal-600|dark:text-teal-400|text-destructive|pw-pending|pw-pass|pw-fail)\b/g, '')
+      .trim() + ' pw-' + state + ' ' + s.cls;
+    var ind = row.querySelector('.pw-indicator');
+    if (ind) ind.textContent = s.glyph;
+  }
+  function rowState(row) {
+    if (!row) return 'pending';
+    if (row.classList.contains('pw-pass')) return 'pass';
+    if (row.classList.contains('pw-fail')) return 'fail';
+    return 'pending';
+  }
+
+  var rowLen    = document.getElementById('pw-len');
+  var rowCase   = document.getElementById('pw-case');
+  var rowDigit  = document.getElementById('pw-digit');
+  var rowBreach = document.getElementById('pw-breach');
+  var submit    = pw.form ? pw.form.querySelector('button[type="submit"]') : null;
+  var confirmMsg = document.getElementById('pw-confirm-msg');
+
+  // Mirror the server-side `password_ok()` rules verbatim (handlers/mod.rs:95).
+  function checkLocal(v) {
+    setState(rowLen,   v.length >= 12 ? 'pass' : (v.length > 0 ? 'fail' : 'pending'));
+    var hasLower = /[a-z]/.test(v);
+    var hasUpper = /[A-Z]/.test(v);
+    setState(rowCase,  (hasLower && hasUpper) ? 'pass' : (v.length > 0 ? 'fail' : 'pending'));
+    var hasDigit   = /\d/.test(v);
+    var hasSpecial = /[^A-Za-z0-9]/.test(v);
+    setState(rowDigit, (hasDigit && hasSpecial) ? 'pass' : (v.length > 0 ? 'fail' : 'pending'));
+  }
+
+  // HaveIBeenPwned k-anonymity: SHA-1 client-side, send only the first 5
+  // hex chars to api.pwnedpasswords.com/range/{prefix}, scan the returned
+  // list for the matching 35-char suffix. The full password never leaves
+  // the browser. https://haveibeenpwned.com/API/v3#PwnedPasswords
+  function bytesToHex(bytes) {
+    var out = '';
+    for (var i = 0; i < bytes.length; i++) {
+      var h = bytes[i].toString(16);
+      out += h.length === 1 ? '0' + h : h;
+    }
+    return out.toUpperCase();
+  }
+  async function checkBreach(v) {
+    if (!v || !window.crypto || !window.crypto.subtle) {
+      setState(rowBreach, 'pending');
+      return;
+    }
+    try {
+      var enc = new TextEncoder().encode(v);
+      var hashBuf = await window.crypto.subtle.digest('SHA-1', enc);
+      var hash = bytesToHex(new Uint8Array(hashBuf));
+      var prefix = hash.slice(0, 5);
+      var suffix = hash.slice(5);
+      var resp = await fetch('https://api.pwnedpasswords.com/range/' + prefix);
+      if (!resp.ok) {
+        // Network / API hiccup is non-fatal; leave the row pending so the
+        // user isn't blocked on an outage.
+        setState(rowBreach, 'pending');
+        return;
+      }
+      var body = await resp.text();
+      var lines = body.split(/\r?\n/);
+      var seen = false;
+      for (var i = 0; i < lines.length; i++) {
+        var s = lines[i].split(':')[0];
+        if (s && s.toUpperCase() === suffix) { seen = true; break; }
+      }
+      setState(rowBreach, seen ? 'fail' : 'pass');
+    } catch (_e) {
+      setState(rowBreach, 'pending');
+    }
+  }
+
+  // Debounce the breach check: avoid hammering HIBP on every keystroke. The
+  // local rules update immediately; the breach check waits for 500ms of
+  // typing-silence + at least one local rule passing.
+  var breachTimer = null;
+  function scheduleBreach(v) {
+    if (breachTimer) clearTimeout(breachTimer);
+    if (!v) { setState(rowBreach, 'pending'); return; }
+    setState(rowBreach, 'pending');
+    breachTimer = setTimeout(function () { checkBreach(v); }, 500);
+  }
+
+  function refreshSubmit() {
+    if (!submit) return;
+    var all = ['pw-len','pw-case','pw-digit','pw-breach']
+      .map(function (id) { return document.getElementById(id); })
+      .every(function (r) { return rowState(r) === 'pass'; });
+    var match = cf && cf.value.length > 0 && cf.value === pw.value;
+    submit.disabled = !(all && match);
+  }
+  function refreshConfirm() {
+    if (!cf || !confirmMsg) return;
+    if (cf.value.length === 0) {
+      confirmMsg.textContent = '';
+      confirmMsg.className = 'text-xs mt-1';
+      return;
+    }
+    if (cf.value === pw.value) {
+      confirmMsg.textContent = '✓ Passwords match';
+      confirmMsg.className = 'text-xs mt-1 text-teal-600 dark:text-teal-400';
+    } else {
+      confirmMsg.textContent = '✗ Passwords do not match';
+      confirmMsg.className = 'text-xs mt-1 text-destructive';
+    }
+  }
+
+  pw.addEventListener('input', function () {
+    checkLocal(pw.value);
+    scheduleBreach(pw.value);
+    refreshConfirm();
+    refreshSubmit();
+  });
+  if (cf) {
+    cf.addEventListener('input', function () {
+      refreshConfirm();
+      refreshSubmit();
+    });
+  }
+  // Initial pass so a value preserved across a server re-render (BUNYIP-240
+  // preserves typed password on rejection) immediately reflects state.
+  if (pw.value) {
+    checkLocal(pw.value);
+    scheduleBreach(pw.value);
+  }
+  refreshConfirm();
+  refreshSubmit();
+})();
+</script>"#,
+    ))
 }
 
 /// Validate and normalise a post-login redirect target.
@@ -243,7 +445,7 @@ pub struct RegisterForm {
     pub confirm: String,
 }
 
-fn register_card(error: Option<&str>) -> Markup {
+fn register_card(error: Option<&str>, email: &str) -> Markup {
     auth_card(
         "shield",
         "bg-primary/10 text-primary",
@@ -252,7 +454,13 @@ fn register_card(error: Option<&str>) -> Markup {
         html! {
             form method="post" action="/register" class="space-y-4" {
                 @if let Some(e) = error { (error_box(e)) }
-                (field("email", "Email", "email", "you@example.com", "email"))
+                // BUNYIP-240: preserve the typed email on server-side rejection
+                // so the user does not have to retype it. The password fields
+                // intentionally stay blank for re-entry (no value= for type=password
+                // - browsers refuse to render persisted password values for
+                // autofill safety, and re-rendering with a server-known password
+                // would round-trip plaintext through HTML history).
+                (field_with_value("email", "Email", "email", "you@example.com", "email", email))
                 (field("password", "Password", "password", "", "new-password"))
                 (pw_reqs())
                 (field("confirm", "Confirm Password", "password", "", "new-password"))
@@ -269,6 +477,9 @@ fn register_card(error: Option<&str>) -> Markup {
                 a href="/terms" class="underline hover:text-foreground" { "Terms of Service" } " and "
                 a href="/privacy" class="underline hover:text-foreground" { "Privacy Policy" } "."
             }
+            // BUNYIP-240: live per-rule feedback + HIBP breach check. Inline JS;
+            // CSP allows `'unsafe-inline'` on script-src in bunyip-web.
+            (password_live_validation_script())
         },
     )
 }
@@ -283,7 +494,7 @@ pub async fn register_get(State(st): State<AppState>, headers: HeaderMap) -> Res
         &st,
         &headers,
         "Create account · Bunyip",
-        register_card(None),
+        register_card(None, ""),
     )
     .await
 }
@@ -307,7 +518,8 @@ pub async fn register_post(
             &st,
             &headers,
             "Create account · Bunyip",
-            register_card(Some(&e)),
+            // BUNYIP-240: preserve the typed email on rejection.
+            register_card(Some(&e), f.email.trim()),
         )
         .await;
     }
@@ -321,7 +533,7 @@ pub async fn register_post(
                 &st,
                 &headers,
                 "Create account · Bunyip",
-                register_card(Some(&e.user_message())),
+                register_card(Some(&e.user_message()), f.email.trim()),
             )
             .await
         }
@@ -506,6 +718,10 @@ fn reset_confirm_card(token: &str, error: Option<&str>) -> Markup {
                 (field("confirm", "Confirm Password", "password", "", "new-password"))
                 (submit_btn("Reset Password"))
             }
+            // BUNYIP-240: same live-feedback script as /register. The
+            // pw_reqs() rows + the script's id-based binding are identical
+            // across the two forms, so the script is reusable as-is.
+            (password_live_validation_script())
         },
     )
 }
