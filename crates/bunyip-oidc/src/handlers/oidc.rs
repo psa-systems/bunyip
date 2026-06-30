@@ -828,6 +828,26 @@ pub async fn token(
     // Authenticate the client
     authenticate_client(&client, client_secret_opt.as_deref())?;
 
+    // BUNYIP-254: enforce per-client `allowed_grant_types`. The schema
+    // already carries the list; the runtime previously ignored it, so a
+    // client registered code-only (e.g. lets-chat per migration
+    // `20260618032217_register_lets_chat_oidc_client.sql`) could still
+    // use the `refresh_token` grant. RFC 6749 §5.2 names
+    // `unauthorized_client` as the error code for this exact case.
+    if !client
+        .allowed_grant_types
+        .iter()
+        .any(|g| g == &body.grant_type)
+    {
+        return Ok(oidc_error(
+            "unauthorized_client",
+            &format!(
+                "client {} is not registered for grant_type={}",
+                client.client_id, body.grant_type
+            ),
+        ));
+    }
+
     let ip = extract_ip(&req);
     let user_agent = req
         .headers()
@@ -1427,32 +1447,80 @@ fn extract_client_credentials(
     Ok((client_id, form_client_secret.map(|s| s.to_string())))
 }
 
-/// Verify the client secret (for confidential clients).
+/// Verify the client authenticates per its registered method.
+///
+/// BUNYIP-254: previously this returned Ok for any `client_type == "public"`
+/// regardless of the registered `token_endpoint_auth_method`. A confidential
+/// client mis-registered as public would bypass secret verification. Branch
+/// explicitly on the registered method so the schema and runtime stay in
+/// lockstep:
+///
+/// - `client_secret_basic`: a verified Basic-auth secret is required. The
+///   client_type column must NOT be public (a public row with
+///   `client_secret_basic` is a registration bug and is refused).
+/// - `none`: no secret is allowed and `client_type` must be `public`.
+///   Confidential clients cannot register as `none`. PKCE handles
+///   replay protection on this branch (enforced separately at
+///   `/oauth2/authorize`).
+/// - `private_key_jwt`: the schema accepts this value but the runtime
+///   does not yet implement JWT client assertion verification. Refuse
+///   rather than silently fall through; tracked as a follow-up.
 fn authenticate_client(
     client: &OAuthClient,
     provided_secret: Option<&str>,
 ) -> Result<(), AppError> {
-    if client.client_type == "public" {
-        // Public clients have no secret.
-        return Ok(());
+    match client.token_endpoint_auth_method.as_str() {
+        "none" => {
+            if client.client_type != "public" {
+                return Err(AppError::OidcInvalidClient(
+                    "client misregistered: token_endpoint_auth_method=none requires \
+                     client_type=public"
+                        .into(),
+                ));
+            }
+            if provided_secret.is_some() {
+                return Err(AppError::OidcInvalidClient(
+                    "public client must not present a client_secret".into(),
+                ));
+            }
+            Ok(())
+        }
+        "client_secret_basic" => {
+            if client.client_type == "public" {
+                return Err(AppError::OidcInvalidClient(
+                    "client misregistered: token_endpoint_auth_method=client_secret_basic \
+                     requires client_type=confidential"
+                        .into(),
+                ));
+            }
+            let expected_hash = client.client_secret_hash.as_deref().ok_or_else(|| {
+                AppError::OidcInvalidClient("client has no secret configured".into())
+            })?;
+            let secret = provided_secret.ok_or_else(|| {
+                AppError::OidcInvalidClient("client_secret required for confidential client".into())
+            })?;
+            use argon2::{Argon2, PasswordHash, PasswordVerifier};
+            let parsed = PasswordHash::new(expected_hash)
+                .map_err(|_| AppError::OidcInvalidClient("malformed client secret hash".into()))?;
+            Argon2::default()
+                .verify_password(secret.as_bytes(), &parsed)
+                .map_err(|_| AppError::OidcInvalidClient("invalid client_secret".into()))
+        }
+        "private_key_jwt" => {
+            // BUNYIP-254: schema allows this value, but the runtime
+            // does not implement JWT client assertion verification.
+            // Refuse rather than fall through (which would otherwise
+            // either accept any caller or 500). A follow-up ticket
+            // implements `private_key_jwt`; until then registrations
+            // with this method cannot authenticate.
+            Err(AppError::OidcInvalidClient(
+                "token_endpoint_auth_method=private_key_jwt is not yet implemented".into(),
+            ))
+        }
+        other => Err(AppError::OidcInvalidClient(format!(
+            "unsupported token_endpoint_auth_method: {other}"
+        ))),
     }
-
-    let expected_hash = client
-        .client_secret_hash
-        .as_deref()
-        .ok_or_else(|| AppError::OidcInvalidClient("client has no secret configured".into()))?;
-
-    let secret = provided_secret.ok_or_else(|| {
-        AppError::OidcInvalidClient("client_secret required for confidential client".into())
-    })?;
-
-    // Verify Argon2id hash
-    use argon2::{Argon2, PasswordHash, PasswordVerifier};
-    let parsed = PasswordHash::new(expected_hash)
-        .map_err(|_| AppError::OidcInvalidClient("malformed client secret hash".into()))?;
-    Argon2::default()
-        .verify_password(secret.as_bytes(), &parsed)
-        .map_err(|_| AppError::OidcInvalidClient("invalid client_secret".into()))
 }
 
 /// Extract `Authorization: Bearer <token>` from the request.
