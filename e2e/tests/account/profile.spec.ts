@@ -13,9 +13,15 @@ import { tagged } from '../../lib/factories';
 // context dies (BUNYIP-176). The page renders fine for real GPU browsers, so the
 // fault is the CI environment, not the product. This spec therefore exercises
 // the real `POST /settings/profile` endpoint and verifies persistence by
-// re-fetching the `/settings` HTML, both over `page.request` (no render). No CSRF
-// token is needed: bunyip-web's settings forms are cookie + SameSite
-// authenticated with no CSRF field (verified in bunyip-web/src/handlers).
+// re-fetching the `/settings` HTML, both over `page.request` (no render).
+//
+// bunyip-web has no per-form CSRF token, but BUNYIP-259 added an
+// `Origin`/`Referer`-matching middleware (bunyip-web/src/csrf.rs) that fails
+// closed (403) on every state-changing POST whose `Origin` does not match the
+// BFF host. A real browser form submission carries `Origin: <web origin>`, so it
+// passes; `page.request.post` sends no `Origin` by default, so this stand-in
+// must set it explicitly to faithfully replicate the browser submission it
+// replaces. The read-only `GET /settings` re-fetch needs no such header.
 //
 // Non-destructive: profile is the only mutable field group that does not
 // invalidate the session or change credentials. Each run writes run-unique
@@ -28,8 +34,11 @@ test.describe('account profile', () => {
     const phone = '+15555550123';
 
     // Submit the real server-rendered profile form endpoint. page.request
-    // follows the post-submit redirect back to /settings by default.
+    // follows the post-submit redirect back to /settings by default. The
+    // explicit `Origin` mirrors a same-origin browser form POST so the
+    // BUNYIP-259 CSRF middleware admits it (a missing Origin fails closed: 403).
     const post = await page.request.post(env.baseURL + '/settings/profile', {
+      headers: { Origin: new URL(env.baseURL).origin },
       form: { first_name: firstName, last_name: lastName, phone },
     });
     expect(post.ok(), `POST /settings/profile -> ${post.status()}`).toBeTruthy();
