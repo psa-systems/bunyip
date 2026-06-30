@@ -25,6 +25,11 @@ import { attachPageDiagnostics } from '../../lib/page-diagnostics';
 // iteration is precise instead of speculative. Do not drop it.
 test.describe('auth login / session', () => {
   test('login + logout round-trip', async ({ page }) => {
+    // loginViaHub waits out bunyip's 5/min login rate-limit window and resubmits
+    // when a busy run trips it (BUNYIP-267), which can add tens of seconds. Give
+    // this spec 3x the default timeout so the backoff has room to complete
+    // instead of tripping the 60s per-test budget.
+    test.slow();
     const diag = attachPageDiagnostics(page);
 
     try {
