@@ -259,7 +259,7 @@ pub async fn verify_2fa(
         &req,
         user_response.id,
         secure,
-        cookie_domain,
+        config.op_session_cookie_domain(),
     )
     .await;
 
