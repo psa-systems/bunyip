@@ -329,6 +329,28 @@ impl OidcProvider {
         Ok(row)
     }
 
+    /// BUNYIP-255: revoke a single op_session by its opaque sid. Best-
+    /// effort: a missing / already-revoked / expired row is treated as
+    /// success so the login flow does not 401 on a no-op. Used at every
+    /// login path to drop any pre-existing op_session cookie the browser
+    /// is still carrying, closing the session-fixation surface.
+    ///
+    /// Returns `Ok(false)` when no live row matched, `Ok(true)` when a
+    /// row was actually revoked; either outcome is acceptable to the
+    /// caller. Errors only on a hard DB failure.
+    pub async fn revoke_op_session_by_sid(&self, sid: &str) -> Result<bool, AppError> {
+        let result = sqlx::query(
+            "UPDATE op_sessions \
+             SET revoked_at = NOW() \
+             WHERE sid = $1 AND revoked_at IS NULL AND expires_at > NOW()",
+        )
+        .bind(sid)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| AppError::internal(format!("Failed to revoke op_session: {e}")))?;
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Load an active op-session by its opaque sid value.
     pub async fn load_op_session(&self, sid: &str) -> Result<Option<OpSession>, AppError> {
         sqlx::query_as!(

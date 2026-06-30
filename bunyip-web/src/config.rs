@@ -70,4 +70,14 @@ impl Config {
             self.app_domain.clone()
         }
     }
+
+    /// BUNYIP-255: whether the BFF is serving over HTTPS. Derived from
+    /// the configured `api_public_origin`: a production deploy points
+    /// the browser at `https://api.<tld>`, dev points at `http://...`.
+    /// Used to set the `Secure` attribute on cookies bunyip-web emits
+    /// directly (e.g. the `bunyip_2fa` challenge cookie) so the cookie
+    /// is HTTPS-only in production but still usable in local dev.
+    pub fn use_secure_cookies(&self) -> bool {
+        self.api_public_origin.starts_with("https://")
+    }
 }
