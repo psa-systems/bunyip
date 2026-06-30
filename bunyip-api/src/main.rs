@@ -16,7 +16,7 @@ use bunyip_api::{
     middleware::{
         auto_ban::{self, AutoBanService},
         request_id::RequestIdMiddleware,
-        AutoBanMiddleware, SecurityHeaders,
+        AutoBanMiddleware, CspConfig, SecurityHeaders,
     },
     models::{CreateUser, UserRole},
     repositories::{
@@ -654,11 +654,22 @@ async fn main() -> anyhow::Result<()> {
             .supports_credentials()
             .max_age(3600);
 
+        // The OIDC authorize flow legitimately reaches the registered RP app
+        // origins (an OAuth client `redirect_uri` origin; a public API origin
+        // distinct from the serving origin). Those are exactly the configured
+        // CORS_ORIGIN entries, so widen only `connect-src` / `form-action` of
+        // the dunite CSP to allowlist them instead of relaxing the whole
+        // policy or hardcoding a brand origin in the generic crate (BUNYIP-244).
+        let csp = CspConfig {
+            connect_src: cors_origins.clone(),
+            form_action: cors_origins.clone(),
+        };
+
         App::new()
             // Add middleware (order matters - executed in reverse order)
             .wrap(TracingLogger::default())
             .wrap(Logger::default())
-            .wrap(SecurityHeaders)
+            .wrap(SecurityHeaders::with_csp(csp))
             .wrap(RequestIdMiddleware)
             .wrap(cors)
             // Auto-ban runs outermost — rejects banned IPs before CORS processing
@@ -755,7 +766,9 @@ async fn main() -> anyhow::Result<()> {
             App::new()
                 .wrap(TracingLogger::default())
                 .wrap(Logger::default())
-                .wrap(SecurityHeaders)
+                // OCI registry serves no OIDC flow; the locked-down default CSP
+                // (no extra allowlist origins) is correct here.
+                .wrap(SecurityHeaders::new())
                 .wrap(RequestIdMiddleware)
                 .wrap(OciWwwAuthenticate {
                     cfg: std::sync::Arc::new(cfg_oci.clone()),
