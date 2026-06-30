@@ -9,6 +9,26 @@ use crate::models::RateLimitConfig;
 pub struct RateLimitRepository;
 
 impl RateLimitRepository {
+    /// BUNYIP-264: convenience wrapper combining `check_and_increment`
+    /// with `get_retry_after` so any handler can call a single function
+    /// to enforce a rate limit. Returns `Ok(())` when under the cap and
+    /// `Err(AppError::RateLimited)` with an accurate `retry_after`
+    /// when over. Mirrors the bunyip-api private `check_rate_limit` that
+    /// every auth handler uses; lifted here so bunyip-oidc handlers can
+    /// share it without crossing the dependency direction.
+    pub async fn check_rate_limit(
+        pool: &PgPool,
+        key: &str,
+        config: &RateLimitConfig,
+    ) -> Result<(), AppError> {
+        let (_count, exceeded) = Self::check_and_increment(pool, key, config).await?;
+        if exceeded {
+            let retry_after = Self::get_retry_after(pool, key, config).await?;
+            return Err(AppError::RateLimited { retry_after });
+        }
+        Ok(())
+    }
+
     /// Check if rate limit is exceeded and increment counter
     /// Returns the current count and whether the limit is exceeded
     pub async fn check_and_increment(

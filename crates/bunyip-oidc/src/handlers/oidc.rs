@@ -263,6 +263,17 @@ pub async fn authorize(
 ) -> Result<HttpResponse, AppError> {
     let provider = require_provider!(provider);
 
+    // BUNYIP-264: per-IP rate limit before any DB / discovery work.
+    let ip_key = crate::middleware::auth::extract_client_ip(&req)
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".into());
+    crate::repositories::RateLimitRepository::check_rate_limit(
+        &provider.pool,
+        &ip_key,
+        &crate::models::RateLimitConfig::OAUTH_AUTHORIZE,
+    )
+    .await?;
+
     // JwtService is registered in main.rs as a bare `Arc<JwtService>`
     // via `.app_data(jwt_service.clone())` (not wrapped in
     // `web::Data::new(...)`), so the `web::Data<Arc<JwtService>>`
@@ -772,6 +783,20 @@ pub async fn token(
 ) -> Result<HttpResponse, AppError> {
     let provider = require_provider!(provider);
 
+    // BUNYIP-264: per-IP rate limit before any client / credential work.
+    // The token endpoint is the canonical brute-force surface for
+    // `client_secret_basic`; cap requests well above legitimate refresh
+    // cycles but tight enough to make secret-guessing infeasible.
+    let ip_key = crate::middleware::auth::extract_client_ip(&req)
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".into());
+    crate::repositories::RateLimitRepository::check_rate_limit(
+        &pool,
+        &ip_key,
+        &crate::models::RateLimitConfig::OAUTH_TOKEN,
+    )
+    .await?;
+
     let body = &form.0;
 
     // Extract client credentials (Basic auth header or form params)
@@ -1019,6 +1044,18 @@ pub async fn userinfo(
 ) -> Result<HttpResponse, AppError> {
     let provider = require_provider!(provider);
 
+    // BUNYIP-264: per-IP rate limit; silent-SSO + RP profile hydrations
+    // call userinfo regularly so 240/min covers multi-app browsers.
+    let ip_key = crate::middleware::auth::extract_client_ip(&req)
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".into());
+    crate::repositories::RateLimitRepository::check_rate_limit(
+        &pool,
+        &ip_key,
+        &crate::models::RateLimitConfig::OAUTH_USERINFO,
+    )
+    .await?;
+
     let token_str = extract_bearer_token(&req)
         .ok_or_else(|| AppError::OidcInvalidToken("missing Bearer token".into()))?;
 
@@ -1117,6 +1154,18 @@ pub async fn revoke(
     form: web::Form<RevokeRequest>,
 ) -> Result<HttpResponse, AppError> {
     let provider = require_provider!(provider);
+
+    // BUNYIP-264: per-IP rate limit. Legitimate logout calls /oauth2/revoke
+    // once per session; sustained traffic is abuse.
+    let ip_key = crate::middleware::auth::extract_client_ip(&req)
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".into());
+    crate::repositories::RateLimitRepository::check_rate_limit(
+        &provider.pool,
+        &ip_key,
+        &crate::models::RateLimitConfig::OAUTH_REVOKE,
+    )
+    .await?;
 
     // RFC 7009 §2.1: authenticate the client before acting on any token.
     let (client_id_str, client_secret_opt) = extract_client_credentials(

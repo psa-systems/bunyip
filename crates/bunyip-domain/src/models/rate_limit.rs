@@ -114,4 +114,52 @@ impl RateLimitConfig {
         max_requests: 20,
         window_seconds: 60,
     };
+
+    /// BUNYIP-264: `/oauth2/token` per-IP cap. The token endpoint is the
+    /// brute-force surface for `client_secret_basic` (and for code-reuse
+    /// attempts before consume detection kicks in). 60/min covers the
+    /// p99 of legitimate SPA refresh cycles (1 access token per 15 min
+    /// per app, hub + RPs combined) with significant headroom.
+    pub const OAUTH_TOKEN: Self = Self {
+        action: "oauth_token",
+        max_requests: 60,
+        window_seconds: 60,
+    };
+
+    /// BUNYIP-264: `/oauth2/authorize` per-IP cap. Legitimate browser
+    /// flow fires several authorize round-trips per session (initial
+    /// sign-in + per-app silent SSO + tenant picker re-entry); 120/min
+    /// covers a power user juggling multiple apps + tabs.
+    pub const OAUTH_AUTHORIZE: Self = Self {
+        action: "oauth_authorize",
+        max_requests: 120,
+        window_seconds: 60,
+    };
+
+    /// BUNYIP-264: `/oauth2/userinfo` per-IP cap. Silent-SSO + RP profile
+    /// hydrations call userinfo regularly; 240/min covers multi-app
+    /// browsers without throttling.
+    pub const OAUTH_USERINFO: Self = Self {
+        action: "oauth_userinfo",
+        max_requests: 240,
+        window_seconds: 60,
+    };
+
+    /// BUNYIP-264: `/oauth2/revoke` per-IP cap. Logout fires this on
+    /// most sessions; legitimate ceiling is well under 60/min per IP.
+    pub const OAUTH_REVOKE: Self = Self {
+        action: "oauth_revoke",
+        max_requests: 60,
+        window_seconds: 60,
+    };
+
+    /// BUNYIP-264: `/.well-known/jwks.json` + discovery per-IP cap. RPs
+    /// cache aggressively; abuse is the only reason for sustained traffic.
+    /// 120/min lets a legitimate fleet of RPs refresh cache + a few stale
+    /// peers retry without bumping into the limit.
+    pub const OAUTH_DISCOVERY: Self = Self {
+        action: "oauth_discovery",
+        max_requests: 120,
+        window_seconds: 60,
+    };
 }
