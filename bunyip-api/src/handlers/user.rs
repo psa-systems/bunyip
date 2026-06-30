@@ -181,22 +181,56 @@ pub async fn grant_consent(
         .as_ref()
         .ok_or_else(|| AppError::not_found("OIDC provider not configured"))?;
     let _ = &pool; // pool unused; provider owns its own pool. Kept for symmetry with sibling handlers.
-                   // BUNYIP-234: log the (user_id, client_id, scopes) the write is keyed
-                   // on so the consent-loop investigation can correlate the write here
-                   // with the read that the next /oauth2/authorize call performs via
-                   // `provider.get_granted_scopes`. If the two don't match a row, the
-                   // loop is identity-mismatch (user_id drift between access_token and
-                   // op_session); if they DO match but the read sees a different scope
-                   // set, it's a persistence / visibility issue.
+
+    // BUNYIP-261: server-side intersect body.scopes with the client's
+    // registered `allowed_scopes`. The previous handler accepted any
+    // scope string in the request body, so a crafted POST (or an
+    // attacker-controlled child app that bounced the user through
+    // bunyip-web's consent screen with `?missing=admin.god`) could
+    // permanently grant a scope the client was never registered for.
+    // Load the client and refuse the request if the intersection with
+    // its `allowed_scopes` is empty; otherwise persist only the safe
+    // subset. Unknown / disabled client_id falls through to a 400.
+    let client = provider
+        .load_client(body.client_id)
+        .await?
+        .ok_or_else(|| AppError::validation("client_id", "unknown or disabled client"))?;
+    let allowed: std::collections::HashSet<&str> =
+        client.allowed_scopes.iter().map(|s| s.as_str()).collect();
+    let safe_scopes: Vec<String> = body
+        .scopes
+        .iter()
+        .filter(|s| allowed.contains(s.as_str()))
+        .cloned()
+        .collect();
+    if safe_scopes.is_empty() && !body.scopes.is_empty() {
+        // The caller asked for SOME scopes; every one of them was outside
+        // the client's allowlist. Refuse rather than silently writing an
+        // empty grant - the caller's intent was wrong, not a legitimate
+        // "deny all" pass.
+        return Err(AppError::validation(
+            "scopes",
+            "no requested scope is in this client's allowed_scopes",
+        ));
+    }
+
+    // BUNYIP-234: log the (user_id, client_id, scopes) the write is keyed
+    // on so the consent-loop investigation can correlate the write here
+    // with the read that the next /oauth2/authorize call performs via
+    // `provider.get_granted_scopes`. If the two don't match a row, the
+    // loop is identity-mismatch (user_id drift between access_token and
+    // op_session); if they DO match but the read sees a different scope
+    // set, it's a persistence / visibility issue.
     tracing::info!(
         target: "consent_grant",
         user_id = %user.0.sub,
         client_id = %body.client_id,
-        scopes = ?body.scopes,
-        "BUNYIP-234: persisting consent grant"
+        requested = ?body.scopes,
+        granted = ?safe_scopes,
+        "BUNYIP-234 / BUNYIP-261: persisting filtered consent grant"
     );
     provider
-        .add_scopes_to_grant(user.0.sub, body.client_id, &body.scopes)
+        .add_scopes_to_grant(user.0.sub, body.client_id, &safe_scopes)
         .await
         .map_err(|e| AppError::internal(format!("consent persist failed: {e}")))?;
     Ok(success_no_data(request_id))
