@@ -111,6 +111,11 @@ pub fn document(title: &str, body: Markup) -> Markup {
                 script { (PreEscaped(TOAST_JS)) }
             }
             body {
+                // BUNYIP-243: app-wide "service unavailable" banner. Renders
+                // nothing while bunyip-api is reachable; when down it shows on
+                // every page (including /login) so an outage is communicated
+                // instead of reading as a phantom logout or silently empty page.
+                (crate::server_status::banner())
                 (body)
                 // Toast surface: lives at top-right with pointer-events:none
                 // on the container and pointer-events:auto on each pill, so

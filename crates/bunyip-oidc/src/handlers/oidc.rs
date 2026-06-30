@@ -355,6 +355,13 @@ pub async fn authorize(
                 // the re-login form.
                 if stale_cookie_present {
                     let secure = config.is_production();
+                    // BUNYIP-266: clear at the configured cookie_domain so a
+                    // stale domain-scoped sid from a pre-host-only deploy is
+                    // also removed; `clear_op_session_only` already emits a
+                    // no-domain clear in parallel. We hand it the underlying
+                    // `cookie_domain` (not the host-only-helper) so the clear
+                    // covers the worst-case stale cookie shape regardless of
+                    // the current `BUNYIP_COOKIE_SHARED_DOMAIN` setting.
                     let cookie_domain = config.cookie_domain.as_deref();
                     for clear_cookie in crate::middleware::auth::AuthCookies::clear_op_session_only(
                         secure,
@@ -637,6 +644,11 @@ async fn try_silent_sso(
     let device_info = crate::middleware::auth::extract_device_info(req);
     let secure = config.is_production();
     let cookie_domain = config.cookie_domain.as_deref();
+    // BUNYIP-266: op_session cookie is host-only unless the operator
+    // explicitly opted into cross-subdomain sharing. access/refresh
+    // cookies continue to honour `cookie_domain` (tightening those is a
+    // separate ticket).
+    let op_cookie_domain = config.op_session_cookie_domain();
 
     // Path 1: valid access_token cookie.
     if let Some(access_token) = req.cookie("access_token") {
@@ -664,7 +676,7 @@ async fn try_silent_sso(
             let cookies = crate::middleware::auth::AuthCookies::op_session_set(
                 &session.sid,
                 secure,
-                cookie_domain,
+                op_cookie_domain,
             );
             return Ok(Some((session, cookies)));
         }
@@ -729,7 +741,7 @@ async fn try_silent_sso(
     cookies.push(crate::middleware::auth::AuthCookies::op_session(
         &session.sid,
         secure,
-        cookie_domain,
+        op_cookie_domain,
     ));
     Ok(Some((session, cookies)))
 }

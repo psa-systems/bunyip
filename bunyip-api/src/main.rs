@@ -387,6 +387,27 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize OIDC provider (optional — only when OIDC_ISSUER is set)
     let oidc_provider: Option<Arc<OidcProvider>> = if config.oidc.enabled() {
+        // BUNYIP-258: refuse to sign with a dev-named kid in production.
+        // The compose.yml `:?` markers stop a deploy that forgot to set
+        // OIDC_JWT_ACTIVE_KID outright; this guard catches the paste-error
+        // case where an operator filled the var with a leftover dev value
+        // (e.g. copying a staging .env into prod). Tokens minted under a
+        // `dev-*` kid would be advertised by JWKS and consumed by RPs as
+        // legitimate, masking the misconfiguration until rotation.
+        if config.is_production()
+            && config
+                .oidc
+                .jwt_active_kid
+                .to_ascii_lowercase()
+                .starts_with("dev-")
+        {
+            panic!(
+                "OIDC_JWT_ACTIVE_KID={} starts with `dev-` in production. \
+                 Set it to a production kid name (e.g. prod-2026) and \
+                 OIDC_JWT_PRIVATE_KEY_PATH to the matching prod key.",
+                config.oidc.jwt_active_kid
+            );
+        }
         let key_set = OidcKeySet::load(
             &config.oidc.jwt_private_key_path,
             &config.oidc.jwt_active_kid,

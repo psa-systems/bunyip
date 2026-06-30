@@ -33,6 +33,16 @@ pub struct Config {
     pub email: EmailConfig,
     /// Cookie domain (e.g., ".yourdomain.com" for production, empty for localhost)
     pub cookie_domain: Option<String>,
+    /// BUNYIP-266: when `true`, the OP session cookie respects
+    /// `cookie_domain` and is sent to every sibling subdomain. When `false`
+    /// (the default), `cookie_domain` is ignored on the OP session cookie
+    /// and the cookie is host-scoped to the OP origin only, closing the
+    /// "sibling subdomain reads the session cookie" surface. Override with
+    /// `BUNYIP_COOKIE_SHARED_DOMAIN=true` in deployments that genuinely
+    /// need cross-subdomain sharing (e.g. an integration that reads the
+    /// cookie from a sibling host). Hub access/refresh cookies still
+    /// honour `cookie_domain` for now; tightened in a follow-up.
+    pub cookie_shared_domain: bool,
     /// Auto-ban configuration
     pub auto_ban: AutoBanConfig,
     /// CIDR ranges of trusted reverse proxies. `X-Forwarded-For` / `X-Real-IP`
@@ -690,6 +700,21 @@ impl Config {
         // Cookie domain: must be set explicitly via COOKIE_DOMAIN env var.
         // None means cookies are scoped to the exact hostname (suitable for localhost).
         let cookie_domain = env::var("COOKIE_DOMAIN").ok().filter(|s| !s.is_empty());
+        // BUNYIP-266: opt-in cross-subdomain cookie sharing. When unset,
+        // the OP session cookie is host-scoped even if `cookie_domain` is
+        // set. Mismatch (cookie_domain Some + shared false) logs a warn so
+        // an operator who relied on the previous default sees the change.
+        let cookie_shared_domain = env::var("BUNYIP_COOKIE_SHARED_DOMAIN")
+            .ok()
+            .map(|v| matches!(v.as_str(), "true" | "1"))
+            .unwrap_or(false);
+        if cookie_domain.is_some() && !cookie_shared_domain {
+            tracing::warn!(
+                "COOKIE_DOMAIN is set but BUNYIP_COOKIE_SHARED_DOMAIN is not enabled; \
+                 the OP session cookie will be host-only (BUNYIP-266). Set \
+                 BUNYIP_COOKIE_SHARED_DOMAIN=true to restore cross-subdomain sharing."
+            );
+        }
 
         let auto_ban = AutoBanConfig::from_env();
         let trusted_proxies =
@@ -726,6 +751,7 @@ impl Config {
             app_name,
             email,
             cookie_domain,
+            cookie_shared_domain,
             auto_ban,
             trusted_proxies,
             totp_encryption_key,
@@ -753,6 +779,19 @@ impl Config {
     /// Returns true if running in production environment
     pub fn is_production(&self) -> bool {
         self.environment == "production"
+    }
+
+    /// BUNYIP-266: cookie `Domain` applied to the OP session cookie.
+    /// Returns the configured `cookie_domain` only when the operator has
+    /// explicitly enabled cross-subdomain sharing via
+    /// `BUNYIP_COOKIE_SHARED_DOMAIN=true`; otherwise the cookie is
+    /// host-scoped and siblings never receive it.
+    pub fn op_session_cookie_domain(&self) -> Option<&str> {
+        if self.cookie_shared_domain {
+            self.cookie_domain.as_deref()
+        } else {
+            None
+        }
     }
 
     /// True when this process may HARD-delete e2e test accounts: a real
