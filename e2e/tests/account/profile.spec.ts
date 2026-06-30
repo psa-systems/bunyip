@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { bunyipWebPostHeaders } from '../../lib/csrf';
 import { env } from '../../lib/env';
 import { tagged } from '../../lib/factories';
 
@@ -18,10 +19,10 @@ import { tagged } from '../../lib/factories';
 // bunyip-web has no per-form CSRF token, but BUNYIP-259 added an
 // `Origin`/`Referer`-matching middleware (bunyip-web/src/csrf.rs) that fails
 // closed (403) on every state-changing POST whose `Origin` does not match the
-// BFF host. A real browser form submission carries `Origin: <web origin>`, so it
-// passes; `page.request.post` sends no `Origin` by default, so this stand-in
-// must set it explicitly to faithfully replicate the browser submission it
-// replaces. The read-only `GET /settings` re-fetch needs no such header.
+// BFF host. The canonical posture for `page.request`-driven bunyip-web POSTs
+// lives in `e2e/lib/csrf.ts::bunyipWebPostHeaders()` (BUNYIP-287); spread it
+// into every such POST. The read-only `GET /settings` re-fetch needs no such
+// header.
 //
 // Non-destructive: profile is the only mutable field group that does not
 // invalidate the session or change credentials. Each run writes run-unique
@@ -35,10 +36,9 @@ test.describe('account profile', () => {
 
     // Submit the real server-rendered profile form endpoint. page.request
     // follows the post-submit redirect back to /settings by default. The
-    // explicit `Origin` mirrors a same-origin browser form POST so the
-    // BUNYIP-259 CSRF middleware admits it (a missing Origin fails closed: 403).
+    // CSRF helper sets `Origin` so the BUNYIP-259 middleware admits the POST.
     const post = await page.request.post(env.baseURL + '/settings/profile', {
-      headers: { Origin: new URL(env.baseURL).origin },
+      headers: bunyipWebPostHeaders(),
       form: { first_name: firstName, last_name: lastName, phone },
     });
     expect(post.ok(), `POST /settings/profile -> ${post.status()}`).toBeTruthy();
