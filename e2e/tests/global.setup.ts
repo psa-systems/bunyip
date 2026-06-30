@@ -51,6 +51,18 @@ const here = dirname(fileURLToPath(import.meta.url));
 const HUB_STATE_FILE = resolve(here, '..', '.auth', 'hub-state.json');
 
 setup('capture bearer + OP cookies from the hub login', async ({ page }) => {
+  // loginViaHub waits out bunyip's login rate-limit windows and resubmits when a
+  // busy run trips them (BUNYIP-267): the /login per-email 5/min window AND the
+  // /login/2fa per-IP `2fa_verify:{ip}` 5/min window, the latter shared across
+  // every E2E run on the same CI runner IP. A single backoff is ~27s, and this
+  // project then drives the heavier OIDC consent + token-capture flow on top, so
+  // the login leg alone can eat most of the 60s per-test budget. The auth-ui
+  // login.spec already calls test.slow() for exactly this reason; the `setup`
+  // project does the same loginViaHub on a longer path and must get the same
+  // headroom or it trips the 60s timeout mid-backoff (run #1326 failed here at
+  // /login/2fa: "Too many requests. Please wait 26 seconds"). BUNYIP-276.
+  setup.slow();
+
   let token: string | null = null;
   let tokenSourceUrl: string | null = null;
   const allRequestUrls: string[] = [];
