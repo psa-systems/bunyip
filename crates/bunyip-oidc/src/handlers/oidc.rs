@@ -263,6 +263,17 @@ pub async fn authorize(
 ) -> Result<HttpResponse, AppError> {
     let provider = require_provider!(provider);
 
+    // BUNYIP-264: per-IP rate limit before any DB / discovery work.
+    let ip_key = crate::middleware::auth::extract_client_ip(&req)
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".into());
+    crate::repositories::RateLimitRepository::check_rate_limit(
+        &provider.pool,
+        &ip_key,
+        &crate::models::RateLimitConfig::OAUTH_AUTHORIZE,
+    )
+    .await?;
+
     // JwtService is registered in main.rs as a bare `Arc<JwtService>`
     // via `.app_data(jwt_service.clone())` (not wrapped in
     // `web::Data::new(...)`), so the `web::Data<Arc<JwtService>>`
@@ -784,6 +795,20 @@ pub async fn token(
 ) -> Result<HttpResponse, AppError> {
     let provider = require_provider!(provider);
 
+    // BUNYIP-264: per-IP rate limit before any client / credential work.
+    // The token endpoint is the canonical brute-force surface for
+    // `client_secret_basic`; cap requests well above legitimate refresh
+    // cycles but tight enough to make secret-guessing infeasible.
+    let ip_key = crate::middleware::auth::extract_client_ip(&req)
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".into());
+    crate::repositories::RateLimitRepository::check_rate_limit(
+        &pool,
+        &ip_key,
+        &crate::models::RateLimitConfig::OAUTH_TOKEN,
+    )
+    .await?;
+
     let body = &form.0;
 
     // Extract client credentials (Basic auth header or form params)
@@ -802,6 +827,26 @@ pub async fn token(
 
     // Authenticate the client
     authenticate_client(&client, client_secret_opt.as_deref())?;
+
+    // BUNYIP-254: enforce per-client `allowed_grant_types`. The schema
+    // already carries the list; the runtime previously ignored it, so a
+    // client registered code-only (e.g. lets-chat per migration
+    // `20260618032217_register_lets_chat_oidc_client.sql`) could still
+    // use the `refresh_token` grant. RFC 6749 §5.2 names
+    // `unauthorized_client` as the error code for this exact case.
+    if !client
+        .allowed_grant_types
+        .iter()
+        .any(|g| g == &body.grant_type)
+    {
+        return Ok(oidc_error(
+            "unauthorized_client",
+            &format!(
+                "client {} is not registered for grant_type={}",
+                client.client_id, body.grant_type
+            ),
+        ));
+    }
 
     let ip = extract_ip(&req);
     let user_agent = req
@@ -914,6 +959,14 @@ async fn handle_authorization_code_grant(
             // family so every future rotation in this family carries
             // the truthful value instead of resetting to NOW().
             code_row.auth_time,
+            // BUNYIP-257: persist the truthful acr/amr on the family so
+            // every future rotation in this family carries them forward
+            // instead of defaulting to hardcoded pwd/[pwd].
+            code_row.acr.as_deref().unwrap_or("urn:bunyip:loa:pwd"),
+            &code_row
+                .amr
+                .clone()
+                .unwrap_or_else(|| vec!["pwd".to_string()]),
             ip,
             user_agent,
             code_row.selected_tenant_id,
@@ -1009,8 +1062,13 @@ async fn handle_refresh_grant(
         // family's auth_time matches the OIDC Core §2 definition and
         // lets RPs do step-up auth on truthful deltas.
         rotated.auth_time,
-        "urn:bunyip:loa:pwd",
-        &["pwd".to_string()],
+        // BUNYIP-257: read the persisted acr/amr from the rotation
+        // result instead of stamping the hardcoded pwd defaults. The
+        // family carries the truthful values forward so the rotated
+        // at+jwt reports the authentication-method-reference set that
+        // matches OIDC Core §3.1.3.7.
+        &rotated.acr,
+        &rotated.amr,
         rotated.selected_tenant_id,
     )?;
 
@@ -1038,6 +1096,18 @@ pub async fn userinfo(
     pool: web::Data<sqlx::PgPool>,
 ) -> Result<HttpResponse, AppError> {
     let provider = require_provider!(provider);
+
+    // BUNYIP-264: per-IP rate limit; silent-SSO + RP profile hydrations
+    // call userinfo regularly so 240/min covers multi-app browsers.
+    let ip_key = crate::middleware::auth::extract_client_ip(&req)
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".into());
+    crate::repositories::RateLimitRepository::check_rate_limit(
+        &pool,
+        &ip_key,
+        &crate::models::RateLimitConfig::OAUTH_USERINFO,
+    )
+    .await?;
 
     let token_str = extract_bearer_token(&req)
         .ok_or_else(|| AppError::OidcInvalidToken("missing Bearer token".into()))?;
@@ -1137,6 +1207,18 @@ pub async fn revoke(
     form: web::Form<RevokeRequest>,
 ) -> Result<HttpResponse, AppError> {
     let provider = require_provider!(provider);
+
+    // BUNYIP-264: per-IP rate limit. Legitimate logout calls /oauth2/revoke
+    // once per session; sustained traffic is abuse.
+    let ip_key = crate::middleware::auth::extract_client_ip(&req)
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".into());
+    crate::repositories::RateLimitRepository::check_rate_limit(
+        &provider.pool,
+        &ip_key,
+        &crate::models::RateLimitConfig::OAUTH_REVOKE,
+    )
+    .await?;
 
     // RFC 7009 §2.1: authenticate the client before acting on any token.
     let (client_id_str, client_secret_opt) = extract_client_credentials(
@@ -1373,32 +1455,80 @@ fn extract_client_credentials(
     Ok((client_id, form_client_secret.map(|s| s.to_string())))
 }
 
-/// Verify the client secret (for confidential clients).
+/// Verify the client authenticates per its registered method.
+///
+/// BUNYIP-254: previously this returned Ok for any `client_type == "public"`
+/// regardless of the registered `token_endpoint_auth_method`. A confidential
+/// client mis-registered as public would bypass secret verification. Branch
+/// explicitly on the registered method so the schema and runtime stay in
+/// lockstep:
+///
+/// - `client_secret_basic`: a verified Basic-auth secret is required. The
+///   client_type column must NOT be public (a public row with
+///   `client_secret_basic` is a registration bug and is refused).
+/// - `none`: no secret is allowed and `client_type` must be `public`.
+///   Confidential clients cannot register as `none`. PKCE handles
+///   replay protection on this branch (enforced separately at
+///   `/oauth2/authorize`).
+/// - `private_key_jwt`: the schema accepts this value but the runtime
+///   does not yet implement JWT client assertion verification. Refuse
+///   rather than silently fall through; tracked as a follow-up.
 fn authenticate_client(
     client: &OAuthClient,
     provided_secret: Option<&str>,
 ) -> Result<(), AppError> {
-    if client.client_type == "public" {
-        // Public clients have no secret.
-        return Ok(());
+    match client.token_endpoint_auth_method.as_str() {
+        "none" => {
+            if client.client_type != "public" {
+                return Err(AppError::OidcInvalidClient(
+                    "client misregistered: token_endpoint_auth_method=none requires \
+                     client_type=public"
+                        .into(),
+                ));
+            }
+            if provided_secret.is_some() {
+                return Err(AppError::OidcInvalidClient(
+                    "public client must not present a client_secret".into(),
+                ));
+            }
+            Ok(())
+        }
+        "client_secret_basic" => {
+            if client.client_type == "public" {
+                return Err(AppError::OidcInvalidClient(
+                    "client misregistered: token_endpoint_auth_method=client_secret_basic \
+                     requires client_type=confidential"
+                        .into(),
+                ));
+            }
+            let expected_hash = client.client_secret_hash.as_deref().ok_or_else(|| {
+                AppError::OidcInvalidClient("client has no secret configured".into())
+            })?;
+            let secret = provided_secret.ok_or_else(|| {
+                AppError::OidcInvalidClient("client_secret required for confidential client".into())
+            })?;
+            use argon2::{Argon2, PasswordHash, PasswordVerifier};
+            let parsed = PasswordHash::new(expected_hash)
+                .map_err(|_| AppError::OidcInvalidClient("malformed client secret hash".into()))?;
+            Argon2::default()
+                .verify_password(secret.as_bytes(), &parsed)
+                .map_err(|_| AppError::OidcInvalidClient("invalid client_secret".into()))
+        }
+        "private_key_jwt" => {
+            // BUNYIP-254: schema allows this value, but the runtime
+            // does not implement JWT client assertion verification.
+            // Refuse rather than fall through (which would otherwise
+            // either accept any caller or 500). A follow-up ticket
+            // implements `private_key_jwt`; until then registrations
+            // with this method cannot authenticate.
+            Err(AppError::OidcInvalidClient(
+                "token_endpoint_auth_method=private_key_jwt is not yet implemented".into(),
+            ))
+        }
+        other => Err(AppError::OidcInvalidClient(format!(
+            "unsupported token_endpoint_auth_method: {other}"
+        ))),
     }
-
-    let expected_hash = client
-        .client_secret_hash
-        .as_deref()
-        .ok_or_else(|| AppError::OidcInvalidClient("client has no secret configured".into()))?;
-
-    let secret = provided_secret.ok_or_else(|| {
-        AppError::OidcInvalidClient("client_secret required for confidential client".into())
-    })?;
-
-    // Verify Argon2id hash
-    use argon2::{Argon2, PasswordHash, PasswordVerifier};
-    let parsed = PasswordHash::new(expected_hash)
-        .map_err(|_| AppError::OidcInvalidClient("malformed client secret hash".into()))?;
-    Argon2::default()
-        .verify_password(secret.as_bytes(), &parsed)
-        .map_err(|_| AppError::OidcInvalidClient("invalid client_secret".into()))
 }
 
 /// Extract `Authorization: Bearer <token>` from the request.

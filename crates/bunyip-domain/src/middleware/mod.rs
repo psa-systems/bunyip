@@ -7,7 +7,7 @@ pub mod auto_ban;
 
 // Generic kernel middleware.
 pub use dunite_core::middleware::{request_id, security_headers};
-pub use dunite_core::middleware::{RequestIdMiddleware, SecurityHeaders};
+pub use dunite_core::middleware::{CspConfig, RequestIdMiddleware, SecurityHeaders};
 
 // Domain extractors / middleware.
 pub use auth::{

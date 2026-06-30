@@ -45,6 +45,9 @@ password-hash = "0.5"
 aes-gcm = "0.10"
 rand = "0.8"
 sha2 = "0.10"
+# BUNYIP-253: HIBP k-anonymity uses SHA-1 (it's the documented hash for
+# the Pwned Passwords range query). Not used for any other purpose.
+sha1 = "0.10"
 base64 = "0.21"
 ipnetwork = "0.20"
 hmac = "0.12"

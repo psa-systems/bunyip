@@ -10,9 +10,45 @@ use serde::Deserialize;
 
 use crate::api::auth::{self as auth_api, LoginOutcome};
 use crate::api::calls;
+use crate::config::Config;
 use crate::handlers::{auth_page, cookie_of, cookie_value, ctx, dashboard_input, password_ok};
 use crate::views::common::auth_card;
 use crate::views::layout::{document, public_shell};
+
+/// BUNYIP-255: 2FA challenge-token TTL aligned with the JWT exp set in
+/// `crates/bunyip-domain/src/services/jwt.rs::create_2fa_challenge_token`.
+/// Stays under that exp so the cookie never outlives the token it carries.
+const BUNYIP_2FA_COOKIE_MAX_AGE_SECS: u64 = 600;
+
+/// BUNYIP-255: emit the `bunyip_2fa` cookie via a single helper so the
+/// `Secure` / `HttpOnly` / `SameSite` / `Max-Age` attributes can be set
+/// consistently. The previous raw-string emit (`bunyip_2fa=...; Path=/;
+/// HttpOnly; SameSite=Lax`) missed `Secure` (HTTPS-only on production)
+/// and `Max-Age` (the cookie outlived the challenge token).
+fn bunyip_2fa_cookie_set(cfg: &Config, challenge_token: &str) -> String {
+    let secure = if cfg.use_secure_cookies() {
+        "; Secure"
+    } else {
+        ""
+    };
+    format!(
+        "bunyip_2fa={challenge_token}; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age={}",
+        BUNYIP_2FA_COOKIE_MAX_AGE_SECS
+    )
+}
+
+/// BUNYIP-255: matching clear for the `bunyip_2fa` cookie. The clear
+/// MUST share the original cookie's `HttpOnly` / `Secure` / `SameSite`
+/// attributes or browsers may decide the clear is for a different
+/// cookie and leave the live one in the jar.
+fn bunyip_2fa_cookie_clear(cfg: &Config) -> String {
+    let secure = if cfg.use_secure_cookies() {
+        "; Secure"
+    } else {
+        ""
+    };
+    format!("bunyip_2fa=; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age=0")
+}
 use crate::views::ui::{button_class, error_box};
 use crate::web::{html, html_cookies, redirect, redirect_cookies, AppState};
 
@@ -435,9 +471,7 @@ pub async fn login_post(
     {
         Ok((LoginOutcome::SignedIn(_), cookies)) => redirect_cookies(&target, &cookies),
         Ok((LoginOutcome::TwoFactorRequired { challenge_token }, mut cookies)) => {
-            cookies.push(format!(
-                "bunyip_2fa={challenge_token}; Path=/; HttpOnly; SameSite=Lax"
-            ));
+            cookies.push(bunyip_2fa_cookie_set(&st.cfg, &challenge_token));
             // Carry the original ?redirect= forward so the OIDC return-URL
             // survives the 2FA step.
             let path = match f.redirect.as_deref().filter(|s| !s.is_empty()) {
@@ -465,7 +499,7 @@ pub async fn logout(
         .await
         .unwrap_or_default();
     // Also drop any pending-2FA cookie.
-    cleared.push("bunyip_2fa=; Path=/; Max-Age=0".to_string());
+    cleared.push(bunyip_2fa_cookie_clear(&st.cfg));
     // Logout lands on the public homepage by default: a user who
     // clicked "Logout" wanted to be done, not be shown another login
     // form. Callers that DO want the post-logout login-then-redirect
@@ -640,9 +674,7 @@ pub async fn magic_link_get(
         return match auth_api::verify_magic_link(&st.api, &token).await {
             Ok((LoginOutcome::SignedIn(_), cookies)) => redirect_cookies("/dashboard", &cookies),
             Ok((LoginOutcome::TwoFactorRequired { challenge_token }, mut cookies)) => {
-                cookies.push(format!(
-                    "bunyip_2fa={challenge_token}; Path=/; HttpOnly; SameSite=Lax"
-                ));
+                cookies.push(bunyip_2fa_cookie_set(&st.cfg, &challenge_token));
                 redirect_cookies("/login/2fa", &cookies)
             }
             Err(e) => {
@@ -933,7 +965,7 @@ pub async fn twofa_verify_post(
     .await
     {
         Ok((_, mut cookies)) => {
-            cookies.push("bunyip_2fa=; Path=/; Max-Age=0".to_string());
+            cookies.push(bunyip_2fa_cookie_clear(&st.cfg));
             redirect_cookies(&target, &cookies)
         }
         Err(e) => {

@@ -329,6 +329,28 @@ impl OidcProvider {
         Ok(row)
     }
 
+    /// BUNYIP-255: revoke a single op_session by its opaque sid. Best-
+    /// effort: a missing / already-revoked / expired row is treated as
+    /// success so the login flow does not 401 on a no-op. Used at every
+    /// login path to drop any pre-existing op_session cookie the browser
+    /// is still carrying, closing the session-fixation surface.
+    ///
+    /// Returns `Ok(false)` when no live row matched, `Ok(true)` when a
+    /// row was actually revoked; either outcome is acceptable to the
+    /// caller. Errors only on a hard DB failure.
+    pub async fn revoke_op_session_by_sid(&self, sid: &str) -> Result<bool, AppError> {
+        let result = sqlx::query(
+            "UPDATE op_sessions \
+             SET revoked_at = NOW() \
+             WHERE sid = $1 AND revoked_at IS NULL AND expires_at > NOW()",
+        )
+        .bind(sid)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| AppError::internal(format!("Failed to revoke op_session: {e}")))?;
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Load an active op-session by its opaque sid value.
     pub async fn load_op_session(&self, sid: &str) -> Result<Option<OpSession>, AppError> {
         sqlx::query_as!(
@@ -368,7 +390,8 @@ impl OidcProvider {
                 access_token_ttl_seconds, refresh_token_ttl_seconds,
                 refresh_idle_ttl_seconds, audience,
                 created_at, disabled_at,
-                tenant_claim_name
+                tenant_claim_name,
+                allowed_grant_types, token_endpoint_auth_method
             FROM oauth_clients
             WHERE client_id = $1 AND disabled_at IS NULL
             "#,
@@ -686,6 +709,12 @@ impl OidcProvider {
     /// authentication time of the ORIGINAL login, not the time of the
     /// last refresh. This matches OIDC Core §2 and lets RPs do honest
     /// step-up auth on `auth_time` deltas.
+    ///
+    /// BUNYIP-257: `acr` and `amr` are persisted on the family row so
+    /// every rotation carries the ORIGINAL login's authentication
+    /// method-reference set forward instead of the hardcoded `pwd`
+    /// default. Without this the rotated at+jwt lies about MFA / OTP
+    /// to RPs that gate step-up auth on `amr`.
     #[allow(clippy::too_many_arguments)]
     pub async fn issue_refresh_token(
         &self,
@@ -694,16 +723,19 @@ impl OidcProvider {
         op_session_id: Uuid,
         scope: &[String],
         auth_time: DateTime<Utc>,
+        acr: &str,
+        amr: &[String],
         ip: Option<std::net::IpAddr>,
         user_agent: Option<&str>,
         selected_tenant_id: Option<Uuid>,
     ) -> Result<(String, Uuid), AppError> {
         // Create the family. Runtime query so the BUNYIP-262 `auth_time`
-        // column does not force a `.sqlx/` offline-cache regeneration.
+        // and BUNYIP-257 `acr` / `amr` column additions do not force a
+        // `.sqlx/` offline-cache regeneration.
         let family_id: Uuid = sqlx::query_scalar(
             r#"
-            INSERT INTO refresh_token_families (client_id, user_id, op_session_id, auth_time)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO refresh_token_families (client_id, user_id, op_session_id, auth_time, acr, amr)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id
             "#,
         )
@@ -711,6 +743,8 @@ impl OidcProvider {
         .bind(user_id)
         .bind(op_session_id)
         .bind(auth_time)
+        .bind(acr)
+        .bind(amr)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| AppError::internal(format!("Failed to create refresh token family: {e}")))?;
@@ -762,12 +796,13 @@ impl OidcProvider {
         // force a `.sqlx/` cache regen. `RefreshTokenRow` is an ad-hoc
         // struct local to this rotation; mapped via FromRow below.
         // BUNYIP-262: JOIN the family to read the persisted `auth_time`.
+        // BUNYIP-257: also read `acr` / `amr` from the same family row.
         let old = sqlx::query_as::<_, RefreshTokenRotationRow>(
             r#"
             SELECT rt.id, rt.family_id, rt.client_id, rt.user_id, rt.scope,
                    rt.used_at, rt.revoked_at, rt.idle_expires_at,
                    rt.absolute_expires_at, rt.selected_tenant_id,
-                   fam.auth_time
+                   fam.auth_time, fam.acr, fam.amr
             FROM refresh_tokens_v2 rt
             JOIN refresh_token_families fam ON fam.id = rt.family_id
             WHERE rt.token_hash = $1
@@ -971,6 +1006,8 @@ impl OidcProvider {
             client,
             selected_tenant_id: old.selected_tenant_id,
             auth_time: old.auth_time,
+            acr: old.acr,
+            amr: old.amr,
         })
     }
 
@@ -1147,24 +1184,32 @@ impl OidcProvider {
     }
 
     /// Grant entitlement for a user to a client (used during JIT provisioning or admin grant).
+    ///
+    /// BUNYIP-261: refuse to revive a revoked row. The previous
+    /// implementation cleared `revoked_at` via `ON CONFLICT DO UPDATE`,
+    /// so the JIT baseline path at the next /authorize silently
+    /// re-granted any entitlement an admin had explicitly revoked. Skip
+    /// the UPDATE branch entirely when the row is revoked; an admin
+    /// must use a dedicated re-grant flow to undo their own revoke.
     pub async fn grant_entitlement(
         &self,
         user_id: Uuid,
         client_id: Uuid,
         scopes: &[String],
     ) -> Result<(), AppError> {
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO user_application_access
                 (user_id, client_id, granted_scopes, granted_at)
             VALUES ($1, $2, $3, NOW())
             ON CONFLICT (user_id, client_id)
-            DO UPDATE SET granted_scopes = EXCLUDED.granted_scopes, revoked_at = NULL
+            DO UPDATE SET granted_scopes = EXCLUDED.granted_scopes
+            WHERE user_application_access.revoked_at IS NULL
             "#,
-            user_id,
-            client_id,
-            scopes as &[String],
         )
+        .bind(user_id)
+        .bind(client_id)
+        .bind(scopes)
         .execute(&self.pool)
         .await
         .map_err(|e| AppError::internal(format!("Failed to grant entitlement: {e}")))?;
@@ -1204,6 +1249,13 @@ impl OidcProvider {
     /// a new row is inserted with the supplied scopes. Idempotent for any
     /// (user, client) pair.
     ///
+    /// BUNYIP-261: refuse to revive a revoked row. The previous
+    /// implementation cleared `revoked_at` via `ON CONFLICT DO UPDATE`,
+    /// so an attacker who got the user to click "Allow" on a consent
+    /// screen would silently undo an admin-driven revocation. Keep the
+    /// UPDATE branch gated on `revoked_at IS NULL`; a revoked row stays
+    /// revoked until an explicit admin re-grant.
+    ///
     /// Runtime-only query (not `query!`) so this method does not need a
     /// `.sqlx/` offline-cache regen.
     pub async fn add_scopes_to_grant(
@@ -1223,8 +1275,8 @@ impl OidcProvider {
                     SELECT DISTINCT unnest(
                         user_application_access.granted_scopes || EXCLUDED.granted_scopes
                     )
-                ),
-                revoked_at = NULL
+                )
+            WHERE user_application_access.revoked_at IS NULL
             "#,
         )
         .bind(user_id)
@@ -1321,6 +1373,17 @@ pub struct OAuthClient {
     /// gate, no picker. Per-client so multi-RP OPs can keep claim
     /// namespaces from colliding (mokosh_tenant_id vs. letschat_tenant_id).
     pub tenant_claim_name: Option<String>,
+    /// BUNYIP-254: which grant types this client is registered for.
+    /// `/oauth2/token` rejects a grant_type not in this list with
+    /// `unauthorized_client` per RFC 6749 §5.2. Values: any of
+    /// `authorization_code`, `refresh_token`, `client_credentials`.
+    pub allowed_grant_types: Vec<String>,
+    /// BUNYIP-254: how the client authenticates at `/oauth2/token`.
+    /// Schema-constrained to `none` / `client_secret_basic` /
+    /// `private_key_jwt`. The runtime gates `authenticate_client` on
+    /// this value so a confidential client mis-registered as `public`
+    /// can't bypass secret verification.
+    pub token_endpoint_auth_method: String,
 }
 
 /// Active IdP session row.
@@ -1384,6 +1447,12 @@ pub struct RotatedTokens {
     /// reports the truthful "when did the user authenticate?" value
     /// per OIDC Core §2.
     pub auth_time: DateTime<Utc>,
+    /// BUNYIP-257: original-login acr + amr, persisted on the family
+    /// row and carried forward on every rotation so the rotated at+jwt
+    /// reports the truthful auth-method-reference set per OIDC Core
+    /// §3.1.3.7 instead of the hardcoded `pwd` default.
+    pub acr: String,
+    pub amr: Vec<String>,
 }
 
 /// Ad-hoc row used by the rotation transaction. Only fields the
@@ -1407,6 +1476,11 @@ struct RefreshTokenRotationRow {
     /// token issue. Joined into this row so the rotation carries the
     /// original login's auth_time forward to the next at+jwt mint.
     auth_time: DateTime<Utc>,
+    /// BUNYIP-257: persisted on `refresh_token_families` at the initial
+    /// token issue. Joined into this row so the rotation carries the
+    /// original login's acr/amr forward to the next at+jwt mint.
+    acr: String,
+    amr: Vec<String>,
 }
 
 // ── Crypto helpers ────────────────────────────────────────────────────────────
@@ -1657,6 +1731,11 @@ mod tests {
             created_at: Utc::now(),
             disabled_at: None,
             tenant_claim_name: None,
+            allowed_grant_types: vec![
+                "authorization_code".to_string(),
+                "refresh_token".to_string(),
+            ],
+            token_endpoint_auth_method: "none".to_string(),
         }
     }
 

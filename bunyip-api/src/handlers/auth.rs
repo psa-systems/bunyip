@@ -30,6 +30,13 @@ pub type OidcProviderData =
 /// provider is not configured (non-OP deploys), or if session creation fails -
 /// callers simply skip setting the cookie in that case.
 ///
+/// BUNYIP-257: `acr` and `amr` are passed in by the caller so the persisted
+/// op_session row reflects the ACTUAL authentication method (password,
+/// magic-link, MFA, trusted-device, ...) instead of a hardcoded `pwd`
+/// fallback. Every downstream consumer (the /authorize at+jwt mint, the
+/// silent-SSO refresh-token path's family seed, the back-channel logout
+/// fan-out) inherits the truthful value.
+///
 /// BUNYIP-266: `op_session_cookie_domain` is sourced from
 /// `Config::op_session_cookie_domain()`, NOT `Config::cookie_domain`. Without
 /// the explicit `BUNYIP_COOKIE_SHARED_DOMAIN=true` opt-in this resolves to
@@ -41,6 +48,8 @@ pub(crate) async fn establish_op_session(
     user_id: uuid::Uuid,
     secure: bool,
     op_session_cookie_domain: Option<&str>,
+    acr: &str,
+    amr: &[String],
 ) -> Option<actix_web::cookie::Cookie<'static>> {
     let provider = provider.as_ref().as_ref()?;
     let user_agent = req
@@ -48,14 +57,23 @@ pub(crate) async fn establish_op_session(
         .get("User-Agent")
         .and_then(|v| v.to_str().ok());
     let ip = extract_client_ip(req);
+
+    // BUNYIP-255: drop any pre-existing op_session sid the browser
+    // carries BEFORE minting the new one. A pre-login sid planted by a
+    // sibling-subdomain XSS (or a stale cookie from an unrelated
+    // browser session) would otherwise stay live and shadow the new
+    // session, classic session-fixation surface. Best-effort: a revoke
+    // failure here does not block the new login - the new sid wins
+    // anyway because `op_session_set`'s dual-emit clear takes care of
+    // the browser-side stale state.
+    if let Some(stale) = req.cookie(AuthCookies::OP_SESSION_COOKIE) {
+        if let Err(e) = provider.revoke_op_session_by_sid(stale.value()).await {
+            tracing::debug!(error = %e, "Pre-login op_session revoke failed (best-effort)");
+        }
+    }
+
     match provider
-        .create_op_session(
-            user_id,
-            user_agent,
-            ip,
-            "urn:bunyip:loa:pwd",
-            &["pwd".to_string()],
-        )
+        .create_op_session(user_id, user_agent, ip, acr, amr)
         .await
     {
         Ok(session) => Some(AuthCookies::op_session(
@@ -69,6 +87,15 @@ pub(crate) async fn establish_op_session(
         }
     }
 }
+
+/// BUNYIP-257: ACR for a password-only login (no second factor).
+pub(crate) const ACR_PASSWORD: &str = "urn:bunyip:loa:pwd";
+
+/// BUNYIP-257: ACR after a TOTP-verified login (second factor satisfied).
+pub(crate) const ACR_MFA: &str = "urn:bunyip:loa:mfa";
+
+/// BUNYIP-257: ACR for a magic-link login (one-time-password channel).
+pub(crate) const ACR_OTP: &str = "urn:bunyip:loa:otp";
 
 /// Revoke all of a user's OP sessions and fan out back-channel logout tokens.
 ///
@@ -265,6 +292,8 @@ pub async fn register(
         user.id,
         secure,
         config.op_session_cookie_domain(),
+        ACR_PASSWORD,
+        &["pwd".to_string()],
     )
     .await;
 
@@ -324,8 +353,32 @@ pub async fn login(
     let ip_address = extract_client_ip(&req);
     let device_info = extract_device_info(&req);
 
-    // Rate limit by email
-    check_rate_limit(&pool, &body.email.to_lowercase(), &RateLimitConfig::LOGIN).await?;
+    // BUNYIP-255: multi-keyed login rate limit. The previous per-email
+    // window alone left credential spraying ("one password across many
+    // victim emails") under the radar - each victim had a fresh budget,
+    // so an attacker with one common password could try it against
+    // hundreds of accounts in a minute without ever tripping the cap.
+    // Layer per-IP and per-IP-per-email caps so the aggregate guessing
+    // budget from any one source IP is bounded independently of which
+    // email it targets. The existing per-email cap stays in place as
+    // the per-account fallback.
+    let ip_key = ip_address
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".into());
+    let email_key = body.email.to_lowercase();
+    check_rate_limit(
+        &pool,
+        &format!("login_ip:{ip_key}"),
+        &RateLimitConfig::LOGIN,
+    )
+    .await?;
+    check_rate_limit(
+        &pool,
+        &format!("login_ip_email:{ip_key}:{email_key}"),
+        &RateLimitConfig::LOGIN,
+    )
+    .await?;
+    check_rate_limit(&pool, &email_key, &RateLimitConfig::LOGIN).await?;
 
     // Trusted-device cookie (BUNYIP-138): if present and valid, a subscriber
     // skips the 2FA prompt. Forwarded verbatim by the web BFF.
@@ -358,6 +411,8 @@ pub async fn login(
                 user.id,
                 secure,
                 config.op_session_cookie_domain(),
+                ACR_PASSWORD,
+                &["pwd".to_string()],
             )
             .await;
 
@@ -506,6 +561,8 @@ pub async fn verify_magic_link(
                 user.id,
                 secure,
                 config.op_session_cookie_domain(),
+                ACR_OTP,
+                &["otp".to_string()],
             )
             .await;
 
@@ -590,6 +647,8 @@ pub async fn accept_admin_invite(
                 user.id,
                 secure,
                 config.op_session_cookie_domain(),
+                ACR_PASSWORD,
+                &["pwd".to_string()],
             )
             .await;
 
@@ -1176,6 +1235,8 @@ pub async fn setup_admin(
         user.id,
         secure,
         config.op_session_cookie_domain(),
+        ACR_PASSWORD,
+        &["pwd".to_string()],
     )
     .await;
 
