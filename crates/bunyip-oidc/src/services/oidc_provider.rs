@@ -1468,6 +1468,47 @@ impl OidcProvider {
     }
 }
 
+impl OidcProvider {
+    /// BUNYIP-260: verify a self-issued id_token used as a logout hint
+    /// (per OIDC RP-Initiated Logout 1.0 §3) and return the `client_id`
+    /// the token was issued to. Unlike at+jwt verification, `exp` is NOT
+    /// enforced because RPs commonly pass an EXPIRED id_token as the
+    /// hint - they only kept it locally to identify themselves at
+    /// logout, not to authenticate. Signature + issuer + the existence
+    /// of a `kid` from the OP's JWKS are required; that combination is
+    /// enough to identify the client unambiguously.
+    pub async fn verify_id_token_client(&self, id_token_hint: &str) -> Result<Uuid, AppError> {
+        use jsonwebtoken::{Algorithm, Validation};
+
+        let header = jsonwebtoken::decode_header(id_token_hint)
+            .map_err(|_| AppError::OidcInvalidToken("malformed id_token header".into()))?;
+
+        let kid = header
+            .kid
+            .as_deref()
+            .ok_or_else(|| AppError::OidcInvalidToken("id_token missing kid".into()))?;
+
+        let decoding_key = self
+            .keys
+            .decoding_key(kid)
+            .ok_or_else(|| AppError::OidcInvalidToken(format!("unknown kid: {kid}")))?;
+
+        let mut validation = Validation::new(Algorithm::EdDSA);
+        validation.set_issuer(&[self.issuer()]);
+        validation.validate_exp = false; // hint may be expired (spec)
+        validation.validate_aud = false; // we read aud ourselves
+        validation.leeway = 30;
+
+        let data = jsonwebtoken::decode::<IdTokenClaims>(id_token_hint, decoding_key, &validation)
+            .map_err(|e| {
+                AppError::OidcInvalidToken(format!("id_token_hint verification failed: {e}"))
+            })?;
+
+        Uuid::parse_str(&data.claims.aud)
+            .map_err(|_| AppError::OidcInvalidToken("id_token aud is not a client_id".into()))
+    }
+}
+
 #[async_trait::async_trait]
 impl bunyip_domain::middleware::auth::AtJwtVerifier for OidcProvider {
     async fn verify_and_resolve(
