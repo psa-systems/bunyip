@@ -955,6 +955,10 @@ async fn handle_authorization_code_grant(
             user.id,
             code_row.op_session_id,
             &code_row.scope,
+            // BUNYIP-262: persist the original-login auth_time on the
+            // family so every future rotation in this family carries
+            // the truthful value instead of resetting to NOW().
+            code_row.auth_time,
             // BUNYIP-257: persist the truthful acr/amr on the family so
             // every future rotation in this family carries them forward
             // instead of defaulting to hardcoded pwd/[pwd].
@@ -1053,7 +1057,11 @@ async fn handle_refresh_grant(
         &user,
         &rotated.client,
         &rotated.scope,
-        chrono::Utc::now(), // auth_time not re-established on refresh
+        // BUNYIP-262: read the persisted original-login auth_time from
+        // the rotation result instead of stamping `Utc::now()`. The
+        // family's auth_time matches the OIDC Core §2 definition and
+        // lets RPs do step-up auth on truthful deltas.
+        rotated.auth_time,
         // BUNYIP-257: read the persisted acr/amr from the rotation
         // result instead of stamping the hardcoded pwd defaults. The
         // family carries the truthful values forward so the rotated
