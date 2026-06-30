@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext } from '@playwright/test';
+import { expect, test, type APIRequestContext, type APIResponse } from '@playwright/test';
 import { routes } from '../../lib/api';
 import { env } from '../../lib/env';
 import { registerDisposable, deleteMe, DISPOSABLE_PASSWORD } from '../../lib/accounts';
@@ -25,6 +25,49 @@ async function requestResetLink(ctx: APIRequestContext, email: string): Promise<
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+// Parse the 429 Retry-After into a backoff in ms, with a 1s cushion for the
+// window boundary, clamped to [1s, 60s] (the login window). bunyip sets the
+// header to the seconds left in the rate-limit window; default to 5s if it is
+// absent or unparseable.
+function retryAfterMs(res: APIResponse): number {
+  const header = res.headers()['retry-after'];
+  const seconds = header ? Number(header) : 5;
+  const safe = Number.isFinite(seconds) ? seconds : 5;
+  return Math.min(Math.max(safe, 1), 60) * 1_000 + 1_000;
+}
+
+// Confirm the reset, retrying once the per-IP rate limit clears. The confirm
+// endpoint is throttled at 5/min per source IP (RateLimitConfig::LOGIN, keyed
+// by IP in confirm_password_reset), a bucket the whole suite shares because
+// every spec hits the API from the same CI IP. A busy run can fill that window
+// before this spec confirms, so bunyip answers 429 RATE_LIMITED with a
+// Retry-After (run #1332, BUNYIP-278). That is transient - the window resets on
+// its own - and the rate-limit check runs BEFORE the token is consumed, so the
+// reset token survives a 429; honour the Retry-After and resubmit the SAME
+// token rather than failing the spec on a harness-timing blip. A Playwright
+// retry cannot do this: it re-runs the whole flow (register + reset email) and
+// only adds load to the shared bucket.
+async function confirmReset(
+  ctx: APIRequestContext,
+  token: string,
+  newPassword: string,
+): Promise<APIResponse> {
+  const maxAttempts = 3;
+  let confirmed: APIResponse | undefined;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const res = await ctx.post(routes.authPasswordResetConfirm, {
+      data: { token, new_password: newPassword },
+    });
+    confirmed = res;
+    if (res.ok() || res.status() !== 429 || attempt === maxAttempts) {
+      return res;
+    }
+    await new Promise((resolve) => setTimeout(resolve, retryAfterMs(res)));
+  }
+  // Unreachable: the loop always returns on the final attempt; satisfy the type.
+  return confirmed as APIResponse;
 }
 
 // Password-reset coverage (BUNYIP-149).
@@ -55,9 +98,7 @@ test.describe('password reset', () => {
       const link = await requestResetLink(owner, account.email);
       const token = tokenFromLink(link);
 
-      const confirmed = await owner.post(routes.authPasswordResetConfirm, {
-        data: { token, new_password: NEW_PASSWORD },
-      });
+      const confirmed = await confirmReset(owner, token, NEW_PASSWORD);
       expect(
         confirmed.ok(),
         `POST ${routes.authPasswordResetConfirm} -> ${confirmed.status()}: ${await confirmed.text()}`,
