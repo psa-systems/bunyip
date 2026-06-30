@@ -368,7 +368,8 @@ impl OidcProvider {
                 access_token_ttl_seconds, refresh_token_ttl_seconds,
                 refresh_idle_ttl_seconds, audience,
                 created_at, disabled_at,
-                tenant_claim_name
+                tenant_claim_name,
+                allowed_grant_types, token_endpoint_auth_method
             FROM oauth_clients
             WHERE client_id = $1 AND disabled_at IS NULL
             "#,
@@ -1277,6 +1278,17 @@ pub struct OAuthClient {
     /// gate, no picker. Per-client so multi-RP OPs can keep claim
     /// namespaces from colliding (mokosh_tenant_id vs. letschat_tenant_id).
     pub tenant_claim_name: Option<String>,
+    /// BUNYIP-254: which grant types this client is registered for.
+    /// `/oauth2/token` rejects a grant_type not in this list with
+    /// `unauthorized_client` per RFC 6749 §5.2. Values: any of
+    /// `authorization_code`, `refresh_token`, `client_credentials`.
+    pub allowed_grant_types: Vec<String>,
+    /// BUNYIP-254: how the client authenticates at `/oauth2/token`.
+    /// Schema-constrained to `none` / `client_secret_basic` /
+    /// `private_key_jwt`. The runtime gates `authenticate_client` on
+    /// this value so a confidential client mis-registered as `public`
+    /// can't bypass secret verification.
+    pub token_endpoint_auth_method: String,
 }
 
 /// Active IdP session row.
@@ -1604,6 +1616,11 @@ mod tests {
             created_at: Utc::now(),
             disabled_at: None,
             tenant_claim_name: None,
+            allowed_grant_types: vec![
+                "authorization_code".to_string(),
+                "refresh_token".to_string(),
+            ],
+            token_endpoint_auth_method: "none".to_string(),
         }
     }
 
