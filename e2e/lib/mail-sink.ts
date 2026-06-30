@@ -168,50 +168,64 @@ export async function waitForLink(
   const timeoutMs = opts.timeoutMs ?? 30_000;
   const intervalMs = opts.intervalMs ?? 2_000;
   const ctx = await sinkContext();
+  // Remember the most recent transient failure so a timeout reports WHY the
+  // last poll round did not see the mail, rather than a bare "never arrived".
+  let lastError: unknown = null;
   try {
-    const { apiUrl, accountId } = await jmapSession(ctx);
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const resp = await jmapCall(ctx, apiUrl, [
-        [
-          'Email/query',
-          {
-            accountId,
-            filter: { to: toAddress },
-            sort: [{ property: 'receivedAt', isAscending: false }],
-            limit: 20,
-          },
-          'q',
-        ],
-        [
-          'Email/get',
-          {
-            accountId,
-            '#ids': { resultOf: 'q', name: 'Email/query', path: '/ids' },
-            properties: ['id', 'to', 'textBody', 'htmlBody', 'bodyValues'],
-            fetchTextBodyValues: true,
-            fetchHTMLBodyValues: true,
-          },
-          'g',
-        ],
-      ]);
-      const get = resp.methodResponses?.find((m) => m[0] === 'Email/get');
-      const emails = (get?.[1]?.list as JmapEmail[] | undefined) ?? [];
-      for (const email of emails) {
-        // Only this test's own subaddressed mail, never the base mailbox.
-        if (!addressedTo(email, toAddress)) continue;
-        const match = linkRe.exec(bodyText(email));
-        if (match) {
-          // Best-effort cleanup so the shared mailbox does not accumulate.
-          await jmapCall(ctx, apiUrl, [
-            ['Email/set', { accountId, destroy: [email.id] }, 'd'],
-          ]).catch(() => {});
-          return match[0];
+      // Resolve the session and query inside the loop, under a try/catch: a
+      // single transient JMAP/relay hiccup (a session blip, a 5xx) must NOT
+      // abort the whole wait - re-poll on the next interval instead, so the mail
+      // still has its full window to land (BUNYIP-267).
+      try {
+        const { apiUrl, accountId } = await jmapSession(ctx);
+        const resp = await jmapCall(ctx, apiUrl, [
+          [
+            'Email/query',
+            {
+              accountId,
+              filter: { to: toAddress },
+              sort: [{ property: 'receivedAt', isAscending: false }],
+              limit: 20,
+            },
+            'q',
+          ],
+          [
+            'Email/get',
+            {
+              accountId,
+              '#ids': { resultOf: 'q', name: 'Email/query', path: '/ids' },
+              properties: ['id', 'to', 'textBody', 'htmlBody', 'bodyValues'],
+              fetchTextBodyValues: true,
+              fetchHTMLBodyValues: true,
+            },
+            'g',
+          ],
+        ]);
+        const get = resp.methodResponses?.find((m) => m[0] === 'Email/get');
+        const emails = (get?.[1]?.list as JmapEmail[] | undefined) ?? [];
+        for (const email of emails) {
+          // Only this test's own subaddressed mail, never the base mailbox.
+          if (!addressedTo(email, toAddress)) continue;
+          const match = linkRe.exec(bodyText(email));
+          if (match) {
+            // Best-effort cleanup so the shared mailbox does not accumulate.
+            await jmapCall(ctx, apiUrl, [
+              ['Email/set', { accountId, destroy: [email.id] }, 'd'],
+            ]).catch(() => {});
+            return match[0];
+          }
         }
+      } catch (err) {
+        lastError = err;
       }
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
     }
-    throw new Error(`waitForLink: no JMAP mail to ${toAddress} matched ${linkRe} within ${timeoutMs}ms`);
+    const detail = lastError ? ` (last poll error: ${String(lastError)})` : '';
+    throw new Error(
+      `waitForLink: no JMAP mail to ${toAddress} matched ${linkRe} within ${timeoutMs}ms${detail}`,
+    );
   } finally {
     await ctx.dispose();
   }
