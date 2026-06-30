@@ -553,6 +553,14 @@ pub struct OidcConfig {
     /// parties, so deployments that already publish a specific URI must pin it
     /// via `OIDC_LIFECYCLE_EVENT_KEY`. Defaults to a generic URN.
     pub lifecycle_event_key: String,
+    /// BUNYIP-252: audience value bunyip-API enforces on `Bearer at+jwt`
+    /// presentations to `/v1/*` via the `AtJwtVerifier` extractor. An at+jwt
+    /// whose `aud` claim does NOT equal this value is rejected by
+    /// `verify_at_jwt_for_rs`, closing the cross-RP confused-deputy that
+    /// `validate_aud = false` left open on `verify_at_jwt_claims`. The
+    /// userinfo endpoint keeps the permissive verifier per OIDC spec.
+    /// Defaults to `"urn:bunyip:rs"`; override with `OIDC_RS_AUDIENCE`.
+    pub rs_audience: String,
 }
 
 impl OidcConfig {
@@ -588,6 +596,10 @@ impl OidcConfig {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "urn:bunyip:event:user-lifecycle".to_string()),
+            rs_audience: env::var("OIDC_RS_AUDIENCE")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "urn:bunyip:rs".to_string()),
         }
     }
 

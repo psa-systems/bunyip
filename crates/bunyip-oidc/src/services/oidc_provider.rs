@@ -1366,6 +1366,52 @@ pub(crate) fn sha256_bytes(input: &[u8]) -> Vec<u8> {
 // ── at+jwt verification (BUNYIP-55) ──────────────────────────────────────────
 
 impl OidcProvider {
+    /// BUNYIP-252: Resource-Server flavour of [`verify_at_jwt_claims`] that
+    /// pins `aud` to the bunyip-API audience (`OidcConfig::rs_audience`).
+    ///
+    /// The plain `verify_at_jwt_claims` deliberately leaves `aud` unchecked
+    /// because the OIDC userinfo endpoint MUST accept any at+jwt this OP
+    /// issued (per OIDC Core §5.3). Every OTHER bunyip-API surface (the
+    /// `/v1/*` family wired through the `AtJwtVerifier` trait) is a
+    /// Resource Server and per RFC 9068 §4 MUST refuse a token whose `aud`
+    /// does not name it. This method enforces that bind: an at+jwt minted
+    /// for mokosh / drillmark / lets-chat / any future RP is rejected with
+    /// `OidcInvalidToken` when presented as a Bearer credential to
+    /// bunyip-API's own resources.
+    fn verify_at_jwt_for_rs(&self, token: &str) -> Result<AtClaims, AppError> {
+        use jsonwebtoken::{Algorithm, Validation};
+
+        let header = jsonwebtoken::decode_header(token)
+            .map_err(|_| AppError::OidcInvalidToken("malformed JWT header".into()))?;
+
+        if header.typ.as_deref() != Some("at+jwt") {
+            return Err(AppError::OidcInvalidToken("JWT typ must be at+jwt".into()));
+        }
+
+        let kid = header
+            .kid
+            .as_deref()
+            .ok_or_else(|| AppError::OidcInvalidToken("JWT header missing kid".into()))?;
+
+        let decoding_key = self
+            .keys
+            .decoding_key(kid)
+            .ok_or_else(|| AppError::OidcInvalidToken(format!("unknown kid: {kid}")))?;
+
+        let mut validation = Validation::new(Algorithm::EdDSA);
+        validation.set_issuer(&[self.issuer()]);
+        validation.set_audience(&[self.config.rs_audience.as_str()]);
+        validation.validate_exp = true;
+        validation.leeway = 30;
+
+        let data =
+            jsonwebtoken::decode::<AtClaims>(token, decoding_key, &validation).map_err(|e| {
+                AppError::OidcInvalidToken(format!("access token verification failed: {e}"))
+            })?;
+
+        Ok(data.claims)
+    }
+
     /// Verify an `at+jwt` access token's signature, type, issuer, and
     /// expiry, then return its full RFC 9068 claim set.
     ///
@@ -1428,7 +1474,12 @@ impl bunyip_domain::middleware::auth::AtJwtVerifier for OidcProvider {
         &self,
         token: &str,
     ) -> Result<bunyip_domain::services::AccessTokenClaims, AppError> {
-        let claims = self.verify_at_jwt_claims(token)?;
+        // BUNYIP-252: enforce aud == OidcConfig::rs_audience on the RS path.
+        // The userinfo endpoint keeps the permissive `verify_at_jwt_claims`
+        // because the OIDC spec REQUIRES it to accept any at+jwt this OP
+        // issued; the bunyip-API `/v1/*` family is a Resource Server and
+        // must refuse cross-RP tokens.
+        let claims = self.verify_at_jwt_for_rs(token)?;
         let user = bunyip_domain::middleware::auth::resolve_user_for_atjwt(&self.pool, &claims.sub)
             .await?;
         Ok(
