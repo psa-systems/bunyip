@@ -10,6 +10,7 @@ pub mod auth;
 pub mod email;
 pub mod event_bus;
 pub mod jwt;
+pub mod password_breach;
 pub mod stripe;
 pub mod totp;
 pub mod webhook;
