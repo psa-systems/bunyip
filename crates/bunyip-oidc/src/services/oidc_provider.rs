@@ -680,6 +680,12 @@ impl OidcProvider {
     /// Issue the first refresh token in a new family (called after code exchange).
     /// BUNYIP-63: `selected_tenant_id` is carried on every row in the family
     /// so the rotated at+jwt always emits the original tenant claim.
+    ///
+    /// BUNYIP-257: `acr` and `amr` are persisted on the family row so
+    /// every rotation carries the ORIGINAL login's authentication
+    /// method-reference set forward instead of the hardcoded `pwd`
+    /// default. Without this the rotated at+jwt lies about MFA / OTP
+    /// to RPs that gate step-up auth on `amr`.
     #[allow(clippy::too_many_arguments)]
     pub async fn issue_refresh_token(
         &self,
@@ -687,21 +693,27 @@ impl OidcProvider {
         user_id: Uuid,
         op_session_id: Uuid,
         scope: &[String],
+        acr: &str,
+        amr: &[String],
         ip: Option<std::net::IpAddr>,
         user_agent: Option<&str>,
         selected_tenant_id: Option<Uuid>,
     ) -> Result<(String, Uuid), AppError> {
-        // Create the family
-        let family_id = sqlx::query_scalar!(
+        // Create the family. Runtime query so the BUNYIP-257 `acr` /
+        // `amr` column additions do not force a `.sqlx/` offline-cache
+        // regeneration.
+        let family_id: Uuid = sqlx::query_scalar(
             r#"
-            INSERT INTO refresh_token_families (client_id, user_id, op_session_id)
-            VALUES ($1, $2, $3)
+            INSERT INTO refresh_token_families (client_id, user_id, op_session_id, acr, amr)
+            VALUES ($1, $2, $3, $4, $5)
             RETURNING id
             "#,
-            client.client_id,
-            user_id,
-            op_session_id,
         )
+        .bind(client.client_id)
+        .bind(user_id)
+        .bind(op_session_id)
+        .bind(acr)
+        .bind(amr)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| AppError::internal(format!("Failed to create refresh token family: {e}")))?;
@@ -752,13 +764,17 @@ impl OidcProvider {
         // the BUNYIP-63 `selected_tenant_id` column addition does not
         // force a `.sqlx/` cache regen. `RefreshTokenRow` is an ad-hoc
         // struct local to this rotation; mapped via FromRow below.
+        // BUNYIP-257: JOIN the family to read the persisted `acr` / `amr`.
         let old = sqlx::query_as::<_, RefreshTokenRotationRow>(
             r#"
-            SELECT id, family_id, client_id, user_id, scope, used_at, revoked_at,
-                   idle_expires_at, absolute_expires_at, selected_tenant_id
-            FROM refresh_tokens_v2
-            WHERE token_hash = $1
-            FOR UPDATE
+            SELECT rt.id, rt.family_id, rt.client_id, rt.user_id, rt.scope,
+                   rt.used_at, rt.revoked_at, rt.idle_expires_at,
+                   rt.absolute_expires_at, rt.selected_tenant_id,
+                   fam.acr, fam.amr
+            FROM refresh_tokens_v2 rt
+            JOIN refresh_token_families fam ON fam.id = rt.family_id
+            WHERE rt.token_hash = $1
+            FOR UPDATE OF rt
             "#,
         )
         .bind(old_hash)
@@ -927,6 +943,8 @@ impl OidcProvider {
             scope: effective_scope,
             client,
             selected_tenant_id: old.selected_tenant_id,
+            acr: old.acr,
+            amr: old.amr,
         })
     }
 
@@ -1335,6 +1353,12 @@ pub struct RotatedTokens {
     /// `handle_refresh_grant` feeds this into the next at+jwt mint so
     /// the rotated token emits the same tenant claim.
     pub selected_tenant_id: Option<Uuid>,
+    /// BUNYIP-257: original-login acr + amr, persisted on the family
+    /// row and carried forward on every rotation so the rotated at+jwt
+    /// reports the truthful auth-method-reference set per OIDC Core
+    /// §3.1.3.7 instead of the hardcoded `pwd` default.
+    pub acr: String,
+    pub amr: Vec<String>,
 }
 
 /// Ad-hoc row used by the rotation transaction. Only fields the
@@ -1354,6 +1378,11 @@ struct RefreshTokenRotationRow {
     idle_expires_at: DateTime<Utc>,
     absolute_expires_at: DateTime<Utc>,
     selected_tenant_id: Option<Uuid>,
+    /// BUNYIP-257: persisted on `refresh_token_families` at the initial
+    /// token issue. Joined into this row so the rotation carries the
+    /// original login's acr/amr forward to the next at+jwt mint.
+    acr: String,
+    amr: Vec<String>,
 }
 
 // ── Crypto helpers ────────────────────────────────────────────────────────────
