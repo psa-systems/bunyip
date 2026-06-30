@@ -530,11 +530,19 @@ fn download_affordance(g: &AppDownloadGroup, is_member: bool) -> Markup {
     if !is_member {
         return html! { div class="mt-2 text-center" { (upgrade_link()) } };
     }
+    // Label the affordance by the distribution surfaces this product offers:
+    // binary assets only ("Download"), an OCI image only ("OCI"), or both
+    // ("Download/OCI"). BUNYIP-289.
+    let label = match (!g.assets.is_empty(), g.oci.is_some()) {
+        (true, true) => "Download/OCI",
+        (false, true) => "OCI",
+        _ => "Download",
+    };
     // One binary and nothing else: a direct download link, no dialog.
     if opts.len() == 1 {
         if let DownloadOption::DirectLink { href, .. } = &opts[0] {
             return html! {
-                a href=(href) class=(button_class("outline", "default", "w-full mt-2")) { (icon("download", "mr-2 h-4 w-4")) "Download" }
+                a href=(href) class=(button_class("outline", "default", "w-full mt-2")) { (icon("download", "mr-2 h-4 w-4")) (label) }
             };
         }
     }
@@ -544,9 +552,13 @@ fn download_affordance(g: &AppDownloadGroup, is_member: bool) -> Markup {
     html! {
         button type="button" class=(button_class("outline", "default", "w-full mt-2"))
             onclick=(format!("document.getElementById('{dialog_id}').showModal()")) {
-            (icon("download", "mr-2 h-4 w-4")) "Download"
+            (icon("download", "mr-2 h-4 w-4")) (label)
         }
-        dialog id=(dialog_id) class="rounded-lg border bg-card text-card-foreground p-0 w-full max-w-lg backdrop:bg-black/50" {
+        // `m-auto` restores the native modal-dialog centering that Tailwind v4
+        // Preflight removes (it resets `margin:0` on `*`, so the UA's
+        // `dialog:modal { margin:auto }` no longer applies and the dialog pins
+        // to the top-left). BUNYIP-289.
+        dialog id=(dialog_id) class="m-auto rounded-lg border bg-card text-card-foreground p-0 w-full max-w-lg backdrop:bg-black/50" {
             div class="p-6 space-y-4" {
                 div class="flex items-center justify-between gap-4" {
                     h3 class="text-lg font-semibold" { (g.app_display_name) " downloads" }
