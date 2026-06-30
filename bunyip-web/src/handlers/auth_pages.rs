@@ -53,29 +53,52 @@ fn submit_btn(label: &str) -> Markup {
 /// driven by the HaveIBeenPwned k-anonymity lookup: only the first 5 chars
 /// of the SHA-1 hash ever leave the browser, so the actual password never
 /// crosses any wire to HIBP or to bunyip.
+///
+/// BUNYIP-250: the breach row uses a `.pw-label` span (rather than a bare
+/// text node) so the inline script can swap the wording on fail to
+/// "Found in a known data breach. Pick a different password." - the
+/// previous static "Not found ..." label paired with a ✗ glyph read as
+/// the validator being broken. A `<p id="pw-breach-help">` is rendered
+/// hidden and revealed on fail so the user has a one-line path forward.
 fn pw_reqs() -> Markup {
     html! {
-        ul id="pw-reqs" class="text-xs text-muted-foreground space-y-1 mt-2" {
-            li id="pw-len" class="pw-pending" {
-                span class="pw-indicator inline-block w-3 mr-1" { "○" }
-                "At least 12 characters"
+        ul id="pw-reqs" class="text-sm text-muted-foreground space-y-1.5 mt-2" {
+            li id="pw-len" class="pw-pending flex items-center gap-2" {
+                span class="pw-indicator inline-flex justify-center w-4" aria-hidden="true" {
+                    i class="fa-regular fa-circle" {}
+                }
+                span class="pw-label" { "At least 12 characters" }
             }
-            li id="pw-case" class="pw-pending" {
-                span class="pw-indicator inline-block w-3 mr-1" { "○" }
-                "Upper and lowercase letters"
+            li id="pw-case" class="pw-pending flex items-center gap-2" {
+                span class="pw-indicator inline-flex justify-center w-4" aria-hidden="true" {
+                    i class="fa-regular fa-circle" {}
+                }
+                span class="pw-label" { "Upper and lowercase letters" }
             }
-            li id="pw-digit" class="pw-pending" {
-                span class="pw-indicator inline-block w-3 mr-1" { "○" }
-                "At least one digit and one special character"
+            li id="pw-digit" class="pw-pending flex items-center gap-2" {
+                span class="pw-indicator inline-flex justify-center w-4" aria-hidden="true" {
+                    i class="fa-regular fa-circle" {}
+                }
+                span class="pw-label" { "At least one digit and one special character" }
             }
-            li id="pw-breach" class="pw-pending" {
-                span class="pw-indicator inline-block w-3 mr-1" { "○" }
-                "Not found in a known data breach"
+            li id="pw-breach" class="pw-pending flex items-center gap-2"
+                data-label-pass="Not found in a known data breach"
+                data-label-fail="Found in a known data breach. Pick a different password."
+                data-label-pending="Not found in a known data breach" {
+                span class="pw-indicator inline-flex justify-center w-4" aria-hidden="true" {
+                    i class="fa-regular fa-circle" {}
+                }
+                span class="pw-label" { "Not found in a known data breach" }
             }
+        }
+        // Surfaced only when the breach row is in `pw-fail`. Hidden by
+        // default; the inline script toggles `hidden` per state.
+        p id="pw-breach-help" class="text-xs text-destructive mt-1.5 ml-6" hidden {
+            "HaveIBeenPwned has seen this password in a public breach. Even strong passwords are unsafe once leaked - pick a fresh one."
         }
         // Sub-input for confirm-password match feedback; toggled by the same
         // inline script. Empty until the user types into the Confirm field.
-        p id="pw-confirm-msg" class="text-xs mt-1 pw-pending" {}
+        p id="pw-confirm-msg" class="text-sm mt-2 pw-pending" {}
     }
 }
 
@@ -98,12 +121,26 @@ fn password_live_validation_script() -> Markup {
 
   // Tailwind utility classes for the three visual states. The leading
   // indicator glyph + the row text color flip together so the row reads as
-  // pass/fail at a glance.
+  // pass/fail at a glance. BUNYIP-250: glyphs use Font Awesome (the kit is
+  // already loaded under the bunyip-web CSP) so the icons match the rest
+  // of the SaaS shell instead of bare Unicode bullets.
   var STATES = {
-    pending: { cls: 'text-muted-foreground',                glyph: '○' }, // ○
-    pass:    { cls: 'text-teal-600 dark:text-teal-400',     glyph: '✓' }, // ✓
-    fail:    { cls: 'text-destructive',                     glyph: '✗' }  // ✗
+    pending: { cls: 'text-muted-foreground',                icon: 'fa-regular fa-circle' },
+    pass:    { cls: 'text-teal-600 dark:text-teal-400',     icon: 'fa-solid fa-circle-check' },
+    fail:    { cls: 'text-destructive',                     icon: 'fa-solid fa-circle-xmark' }
   };
+  // BUNYIP-250: when a row carries data-label-{pass,fail,pending}, the
+  // visible label flips per state. The breach row uses this so a ✗ stops
+  // appearing next to the contradictory "Not found in a known data breach"
+  // copy.
+  function syncRowLabel(row, state) {
+    if (!row) return;
+    var lbl = row.querySelector('.pw-label');
+    if (!lbl) return;
+    var key = 'label' + state.charAt(0).toUpperCase() + state.slice(1);
+    var next = row.dataset[key];
+    if (typeof next === 'string' && next.length > 0) lbl.textContent = next;
+  }
   function setState(row, state) {
     if (!row) return;
     var s = STATES[state];
@@ -111,7 +148,15 @@ fn password_live_validation_script() -> Markup {
       .replace(/\b(text-muted-foreground|text-teal-600|dark:text-teal-400|text-destructive|pw-pending|pw-pass|pw-fail)\b/g, '')
       .trim() + ' pw-' + state + ' ' + s.cls;
     var ind = row.querySelector('.pw-indicator');
-    if (ind) ind.textContent = s.glyph;
+    if (ind) ind.innerHTML = '<i class="' + s.icon + '"></i>';
+    syncRowLabel(row, state);
+    // BUNYIP-250: the breach row carries a follow-up help paragraph
+    // (#pw-breach-help) that explains what to do; surface it only when
+    // the row is in `fail` so the help text never falsely warns the user.
+    if (row.id === 'pw-breach') {
+      var help = document.getElementById('pw-breach-help');
+      if (help) help.hidden = state !== 'fail';
+    }
   }
   function rowState(row) {
     if (!row) return 'pending';
