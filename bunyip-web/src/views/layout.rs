@@ -103,8 +103,15 @@ pub fn document(title: &str, body: Markup) -> Markup {
                 link rel="preconnect" href="https://fonts.googleapis.com";
                 link rel="preconnect" href="https://fonts.gstatic.com" crossorigin;
                 link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet";
-                script src="https://kit.fontawesome.com/6ab760c0b1.js" crossorigin="anonymous" {}
-                script src="https://unpkg.com/htmx.org@2.0.3" {}
+                // BUNYIP-294: `defer` both third-party CDN scripts so neither
+                // blocks HTML parsing. A render-blocking `<script src>` in
+                // `<head>` gates page-ready timing on CDN latency, which raced the
+                // automated credential fill on chromium CI - the `/login` form was
+                // not settled when typed into, so the submit POSTed empty and the
+                // hub re-rendered the form (mokosh PMS-605). `defer` preserves
+                // execution order and runs after parse, before DOMContentLoaded.
+                script src="https://kit.fontawesome.com/6ab760c0b1.js" crossorigin="anonymous" defer {}
+                script src="https://unpkg.com/htmx.org@2.0.3" defer {}
                 link rel="stylesheet" href="/assets/styles.css";
                 script { (PreEscaped(THEME_FLASH)) }
                 script { (PreEscaped(THEME_TOGGLE)) }
