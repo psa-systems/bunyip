@@ -81,6 +81,33 @@ fn submit_btn(label: &str) -> Markup {
     html! { button type="submit" class=(button_class("default", "default", "w-full")) { (label) } }
 }
 
+/// BUNYIP-282: password input with an inline show/hide eye toggle.
+/// Default state is hidden (`type=password`, `fa-eye` icon, `aria-pressed=false`,
+/// `aria-label="Show password"`); the `password_toggle_script()` flips
+/// `type`, swaps the glyph between `fa-eye` and `fa-eye-slash`, updates
+/// `aria-pressed`, and rewrites `aria-label` on click. The `pr-10` padding
+/// on the input keeps the typed text from running under the button. Scoped
+/// strictly to the signup card; login / reset / change-password fields keep
+/// using `field()`.
+fn password_field(id: &str, label: &str, autocomplete: &str) -> Markup {
+    let input_class = format!("{} pr-10", dashboard_input());
+    html! {
+        div class="space-y-2" {
+            label for=(id) class="text-sm font-medium leading-none" { (label) }
+            div class="relative" {
+                input id=(id) name=(id) type="password" autocomplete=(autocomplete) class=(input_class);
+                button type="button"
+                    data-pw-toggle=(id)
+                    aria-label="Show password"
+                    aria-pressed="false"
+                    class="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center w-7 h-7 rounded text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring" {
+                    i class="fa-regular fa-eye" aria-hidden="true" {}
+                }
+            }
+        }
+    }
+}
+
 /// BUNYIP-240: per-requirement password indicators. Each `<li>` carries a
 /// stable id so the inline `password_live_validation_script()` below can
 /// flip its leading indicator between three states: `pw-pending` (neutral
@@ -322,6 +349,40 @@ fn password_live_validation_script() -> Markup {
     ))
 }
 
+/// BUNYIP-282: inline JS that drives every `[data-pw-toggle]` button. Mirrors
+/// the live-validation script's idempotent-attach pattern so a second render
+/// (e.g. via a future htmx swap) does not double-bind. Click flips the target
+/// input's `type` between `password` and `text`, swaps the FontAwesome eye
+/// glyph, and updates the button's `aria-pressed` + `aria-label` so the
+/// reveal state is announced to assistive tech.
+fn password_toggle_script() -> Markup {
+    use maud::PreEscaped;
+    PreEscaped(String::from(
+        r#"<script>
+(function () {
+  var buttons = document.querySelectorAll('[data-pw-toggle]');
+  buttons.forEach(function (btn) {
+    if (btn.dataset.pwToggleInit === '1') return;
+    btn.dataset.pwToggleInit = '1';
+    var targetId = btn.getAttribute('data-pw-toggle');
+    var input = document.getElementById(targetId);
+    if (!input) return;
+    btn.addEventListener('click', function () {
+      var revealed = input.type === 'text';
+      input.type = revealed ? 'password' : 'text';
+      btn.setAttribute('aria-pressed', revealed ? 'false' : 'true');
+      btn.setAttribute('aria-label', revealed ? 'Show password' : 'Hide password');
+      var icon = btn.querySelector('i');
+      if (icon) {
+        icon.className = revealed ? 'fa-regular fa-eye' : 'fa-regular fa-eye-slash';
+      }
+    });
+  });
+})();
+</script>"#,
+    ))
+}
+
 /// Validate and normalise a post-login redirect target.
 ///
 /// Accepts two shapes:
@@ -540,9 +601,13 @@ fn register_card(error: Option<&str>, email: &str) -> Markup {
                 // autofill safety, and re-rendering with a server-known password
                 // would round-trip plaintext through HTML history).
                 (field_with_value("email", "Email", "email", "you@example.com", "email", email))
-                (field("password", "Password", "password", "", "new-password"))
+                // BUNYIP-282: signup uses the password_field helper so each
+                // input carries an inline eye toggle. Other auth surfaces
+                // (login, reset, change-password) deliberately stay on the
+                // plain `field` helper - reveal toggles are sign-up only.
+                (password_field("password", "Password", "new-password"))
                 (pw_reqs())
-                (field("confirm", "Confirm Password", "password", "", "new-password"))
+                (password_field("confirm", "Confirm Password", "new-password"))
                 (submit_btn("Create Account"))
             }
             div class="mt-6" {
@@ -559,6 +624,9 @@ fn register_card(error: Option<&str>, email: &str) -> Markup {
             // BUNYIP-240: live per-rule feedback + HIBP breach check. Inline JS;
             // CSP allows `'unsafe-inline'` on script-src in bunyip-web.
             (password_live_validation_script())
+            // BUNYIP-282: drive the eye toggle on every `[data-pw-toggle]`
+            // button rendered by `password_field` above.
+            (password_toggle_script())
         },
     )
 }
