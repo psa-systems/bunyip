@@ -502,6 +502,9 @@ dev-clean-all: dev-clean
 
 # Create a release: bump major (vx.0.0), minor (v0.x.0), or hotfix (v0.0.x), push the branch, and open the PR via fj.
 # After the PR merges, the create-release workflow creates the tag and release automatically.
+# Needs a local Rust toolchain (runs `cargo update --workspace`); on a toolchain-less dev
+# box use `create-release-container`, which runs that one step in the rust-builder image.
+# Keep the two recipes in sync (BUNYIP-292).
 [group: 'release']
 create-release bump:
     #!/usr/bin/env nu
@@ -553,6 +556,134 @@ create-release bump:
     # Cargo.lock entries; sync the lock in the same commit or CI's --locked build
     # fails (BUNYIP-59).
     cargo update --workspace
+    git add Cargo.lock
+    git commit --signoff --message $"Release ($tag)"
+
+    # Push release branch
+    git push --set-upstream origin $release_branch
+
+    # Open the release PR via fj. Body lives in a tempfile so the
+    # changelog can grow later without inline escaping pain.
+    let body_file = (mktemp --tmpdir --suffix .md)
+    [
+        $"Automated release PR for ($tag)."
+        ""
+        $"After merge, `.forgejo/workflows/create-release.yml` tags and publishes ($tag) to the Generic Packages registry."
+    ] | str join "\n" | save --force $body_file
+    let fj_result = (^fj --host dev.a8n.run pr create $"Release ($tag)" --body-file $body_file | complete)
+    rm $body_file
+    if $fj_result.exit_code != 0 {
+        print $"(ansi red)fj pr create failed(ansi reset)"
+        print $fj_result.stderr
+        exit 1
+    }
+
+    # `fj pr create` prints `created pull request #N: <title>` on success.
+    # Parse the number out and build the PR URL from `origin` so the user
+    # gets a clickable link instead of just the fj line.
+    let pr_num = (
+        $fj_result.stdout
+        | str trim
+        | parse --regex 'created pull request #(?P<num>\d+)'
+        | get num.0?
+    )
+    let remote = (git remote get-url origin | str trim)
+    let base_url = if ($remote | str starts-with "ssh://") {
+        $remote | str replace "ssh://git@" "https://" | str replace "git.a8n.run" "dev.a8n.run" | str replace ".git" ""
+    } else {
+        $remote | str replace --regex "git@([^:]+):" "https://$1/" | str replace "git.a8n.run" "dev.a8n.run" | str replace ".git" ""
+    }
+    print $"(ansi green)Pushed ($release_branch)(ansi reset)"
+    if ($pr_num | is-not-empty) {
+        print $"PR: ($base_url)/pulls/($pr_num)"
+    } else {
+        # fj output format drifted; fall back to whatever it said.
+        print $"fj output: ($fj_result.stdout | str trim)"
+    }
+    print $"After merging, the create-release workflow will tag and release ($tag) automatically."
+
+# Same as `create-release`, but runs the `cargo update --workspace` lock-sync step inside
+# the pinned rust-builder image instead of on the host. For toolchain-less dev boxes that
+# have no local cargo (see `check-container`). All git / fj steps stay on the host so they
+# use the host ssh key + fj keys.json. Keep in sync with `create-release` (BUNYIP-292).
+[group: 'release']
+create-release-container bump:
+    #!/usr/bin/env nu
+    let bump = "{{ bump }}"
+    let repo = "{{ justfile_directory() }}"
+
+    # This variant shells out to docker for the lock sync; fail fast if it is missing,
+    # before we create the release branch and leave a half-done release behind.
+    if (which docker | is-empty) {
+        print $"(ansi red)docker not found. create-release-container runs cargo in the rust-builder image; use `create-release` on a box with a local Rust toolchain.(ansi reset)"
+        exit 1
+    }
+
+    # Abort if there are uncommitted changes
+    let status = git status --porcelain | str trim
+    if ($status | is-not-empty) {
+        print $"(ansi red)Working tree is dirty. Please stash or commit your changes first.(ansi reset)"
+        exit 1
+    }
+
+    # Switch to main if not already there
+    let branch = git branch --show-current | str trim
+    if $branch != "main" {
+        print $"Switching from ($branch) to main..."
+        git checkout main
+    }
+
+    # Pull latest changes
+    git pull --rebase origin main
+
+    # Calculate next version. bunyip is a workspace, so the single source of
+    # truth is `[workspace.package].version` (not `package.version`).
+    let current = (open Cargo.toml | get workspace.package.version | split row "." | each { into int })
+    let next = match $bump {
+        "major" => [$"($current.0 + 1)" "0" "0"],
+        "minor" => [$"($current.0)" $"($current.1 + 1)" "0"],
+        "hotfix" => [$"($current.0)" $"($current.1)" $"($current.2 + 1)"],
+        _ => { print $"(ansi red)Usage: just create-release-container <major|minor|hotfix>(ansi reset)"; exit 1 }
+    }
+    let bare = ($next | str join ".")
+    let tag = $"v($bare)"
+    let release_branch = $"release/($tag)"
+
+    # Abort if the target tag already exists. A stale manifest version must never
+    # target an already-published release (BUNYIP-59).
+    let existing_tag = (do { ^git rev-parse -q --verify $"refs/tags/($tag)" } | complete)
+    if $existing_tag.exit_code == 0 {
+        print $"(ansi red)Tag ($tag) already exists. Bump past it or delete the stale tag first.(ansi reset)"
+        exit 1
+    }
+
+    # Create release branch, bump the workspace version, and commit
+    git checkout -b $release_branch
+    open Cargo.toml | update workspace.package.version $bare | to toml | collect | save --force Cargo.toml
+    git add Cargo.toml
+    # The workspace crates inherit version.workspace, so the bump changes their Cargo.lock
+    # entries; sync the lock in the same commit or CI's --locked build fails (BUNYIP-59).
+    # The ONLY difference from `create-release`: run cargo in the pinned rust-builder image
+    # (this box has no local toolchain). Mirrors `check-container`'s mounts so the registry
+    # + target caches stay warm. Runs ONLINE so cargo can resolve the dunite-core git
+    # dependency (anon-readable, no token); an --offline run cannot check it out. The
+    # container runs as root, but Cargo.lock lands world-readable in the host-owned repo,
+    # so the host-side git add / commit / checkout all work.
+    let docker_args = [
+        "run" "--rm"
+        "-v" $"($repo):/work"
+        "-v" "dunite-check-cargo-registry:/usr/local/cargo/registry"
+        "-v" "bunyip-check-target:/work/target"
+        "-w" "/work"
+        "-e" "SQLX_OFFLINE=true"
+        "ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie"
+        "bash" "-c" "cargo update --workspace"
+    ]
+    ^docker ...$docker_args
+    if $env.LAST_EXIT_CODE != 0 {
+        print $"(ansi red)cargo update --workspace in the rust-builder container failed (exit ($env.LAST_EXIT_CODE)).(ansi reset)"
+        exit 1
+    }
     git add Cargo.lock
     git commit --signoff --message $"Release ($tag)"
 

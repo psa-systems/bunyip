@@ -39,7 +39,7 @@ is also bunyip's OIDC issuer (it serves `/.well-known/*` + `/oauth2/*`).
 - `just dev-sso` - Traefik-routed stack on `*.a8n.run` (layers `compose.dev-sso.yml` on top). Cross-repo (bunyip + mokosh-server + mokosh-apps), Nebula topology, OIDC client registration, and every spin-up obstacle are documented in `dev-docs/dev-sso-three-repo-runbook.md` - read it before touching dev-sso infra or onboarding a dev box.
 - `just check` - fmt + clippy + build + docker builder stage. `just test`, `just typecheck`, `just lint`, `just fmt`.
 - `just build-docker` - both production images (`build-docker-export` extracts the api static binary). `just migrate` / `migrate-revert`.
-- `just create-release <major|minor|hotfix>` - bump `[workspace.package].version`, push the branch, open the release PR.
+- `just create-release <major|minor|hotfix>` - bump `[workspace.package].version`, push the branch, open the release PR. Needs a local Rust toolchain (it runs `cargo update --workspace` to sync `Cargo.lock`). On a toolchain-less dev box use `just create-release-container <bump>`, which runs only that one cargo step inside the pinned rust-builder image (online, to resolve the dunite-core git dep); every git/fj step stays on the host. Keep the two recipes in sync.
 
 Production runs the published images via `compose.yml` (api + web + postgres,
 images under `dev.a8n.run/psa-systems-private/{bunyip-api,bunyip-web}`).
