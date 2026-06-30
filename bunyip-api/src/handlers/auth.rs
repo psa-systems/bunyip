@@ -42,6 +42,21 @@ pub(crate) async fn establish_op_session(
         .get("User-Agent")
         .and_then(|v| v.to_str().ok());
     let ip = extract_client_ip(req);
+
+    // BUNYIP-255: drop any pre-existing op_session sid the browser
+    // carries BEFORE minting the new one. A pre-login sid planted by a
+    // sibling-subdomain XSS (or a stale cookie from an unrelated
+    // browser session) would otherwise stay live and shadow the new
+    // session, classic session-fixation surface. Best-effort: a revoke
+    // failure here does not block the new login - the new sid wins
+    // anyway because `op_session_set`'s dual-emit clear takes care of
+    // the browser-side stale state.
+    if let Some(stale) = req.cookie(AuthCookies::OP_SESSION_COOKIE) {
+        if let Err(e) = provider.revoke_op_session_by_sid(stale.value()).await {
+            tracing::debug!(error = %e, "Pre-login op_session revoke failed (best-effort)");
+        }
+    }
+
     match provider
         .create_op_session(
             user_id,
@@ -305,8 +320,32 @@ pub async fn login(
     let ip_address = extract_client_ip(&req);
     let device_info = extract_device_info(&req);
 
-    // Rate limit by email
-    check_rate_limit(&pool, &body.email.to_lowercase(), &RateLimitConfig::LOGIN).await?;
+    // BUNYIP-255: multi-keyed login rate limit. The previous per-email
+    // window alone left credential spraying ("one password across many
+    // victim emails") under the radar - each victim had a fresh budget,
+    // so an attacker with one common password could try it against
+    // hundreds of accounts in a minute without ever tripping the cap.
+    // Layer per-IP and per-IP-per-email caps so the aggregate guessing
+    // budget from any one source IP is bounded independently of which
+    // email it targets. The existing per-email cap stays in place as
+    // the per-account fallback.
+    let ip_key = ip_address
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".into());
+    let email_key = body.email.to_lowercase();
+    check_rate_limit(
+        &pool,
+        &format!("login_ip:{ip_key}"),
+        &RateLimitConfig::LOGIN,
+    )
+    .await?;
+    check_rate_limit(
+        &pool,
+        &format!("login_ip_email:{ip_key}:{email_key}"),
+        &RateLimitConfig::LOGIN,
+    )
+    .await?;
+    check_rate_limit(&pool, &email_key, &RateLimitConfig::LOGIN).await?;
 
     // Trusted-device cookie (BUNYIP-138): if present and valid, a subscriber
     // skips the 2FA prompt. Forwarded verbatim by the web BFF.
