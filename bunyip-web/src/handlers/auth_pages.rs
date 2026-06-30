@@ -234,6 +234,7 @@ fn password_live_validation_script() -> Markup {
   async function checkBreach(v) {
     if (!v || !window.crypto || !window.crypto.subtle) {
       setState(rowBreach, 'pending');
+      refreshSubmit();
       return;
     }
     try {
@@ -247,6 +248,7 @@ fn password_live_validation_script() -> Markup {
         // Network / API hiccup is non-fatal; leave the row pending so the
         // user isn't blocked on an outage.
         setState(rowBreach, 'pending');
+        refreshSubmit();
         return;
       }
       var body = await resp.text();
@@ -257,8 +259,15 @@ fn password_live_validation_script() -> Markup {
         if (s && s.toUpperCase() === suffix) { seen = true; break; }
       }
       setState(rowBreach, seen ? 'fail' : 'pass');
+      // BUNYIP-283: refresh the submit gate so the button flips state
+      // when the breach result lands. The input-event refresh ran 500 ms
+      // ago with rowBreach=pending; without this call, a clean password
+      // that resolved to pass leaves the gate computed against the
+      // stale pending state and the button stays disabled.
+      refreshSubmit();
     } catch (_e) {
       setState(rowBreach, 'pending');
+      refreshSubmit();
     }
   }
 
