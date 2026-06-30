@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod handlers;
 mod security;
+mod server_status;
 mod util;
 mod views;
 mod web;
@@ -39,6 +40,12 @@ async fn main() {
     // defaults to `api_url` to preserve dev behaviour and overrides via
     // `BUNYIP_API_PUBLIC_ORIGIN` in production.
     views::layout::install_sse_api_origin(cfg.api_public_origin.clone());
+    // BUNYIP-243: while bunyip-api is unreachable, poll its /health on an
+    // interval and clear the app-wide "service unavailable" banner on recovery.
+    // Idle (no network) while healthy; detection itself is reactive in
+    // `Api::send`. Uses the internal `api_url` (the BFF's server-to-server
+    // origin), not the public SSE origin.
+    server_status::spawn_recovery_poll(cfg.api_url.clone());
     let state = web::AppState {
         api,
         cfg: Arc::clone(&cfg),
