@@ -533,13 +533,22 @@ impl OidcProvider {
             return Err(AppError::OidcInvalidGrant("redirect_uri mismatch".into()));
         }
 
-        // PKCE S256: SHA-256(verifier) == code_challenge
+        // PKCE S256: SHA-256(verifier) == code_challenge. BUNYIP-263:
+        // constant-time compare so a timing oracle cannot leak the stored
+        // code_challenge byte-by-byte to an attacker who can submit many
+        // forged code_verifiers. Both sides are same-length base64url so
+        // ct_eq() is well-defined.
         let challenge_computed = {
             let mut h = Sha256::new();
             h.update(code_verifier.as_bytes());
             URL_SAFE_NO_PAD.encode(h.finalize())
         };
-        if challenge_computed != row.code_challenge {
+        let challenge_match: bool = subtle::ConstantTimeEq::ct_eq(
+            challenge_computed.as_bytes(),
+            row.code_challenge.as_bytes(),
+        )
+        .into();
+        if !challenge_match {
             return Err(AppError::OidcInvalidGrant(
                 "PKCE verification failed".into(),
             ));
@@ -1408,6 +1417,12 @@ impl OidcProvider {
         let mut validation = Validation::new(Algorithm::EdDSA);
         validation.set_issuer(&[self.issuer()]);
         validation.validate_exp = true;
+        // BUNYIP-263: defense in depth - if an at+jwt arrives with a
+        // future `nbf` (clock-skew replay, mint-side bug), refuse to
+        // honour it before its intended start time. The 30s leeway
+        // already absorbs normal clock drift; anything beyond that is
+        // a real signal worth blocking.
+        validation.validate_nbf = true;
         validation.leeway = 30;
         // RFC 9068 does not require an `aud` check on inbound bunyip-API
         // calls; we rely on the issuer + signature + expiry guarantees.
