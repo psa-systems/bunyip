@@ -29,12 +29,18 @@ pub type OidcProviderData =
 /// so it must be created at every login path. Returns `None` when the OP
 /// provider is not configured (non-OP deploys), or if session creation fails -
 /// callers simply skip setting the cookie in that case.
+///
+/// BUNYIP-266: `op_session_cookie_domain` is sourced from
+/// `Config::op_session_cookie_domain()`, NOT `Config::cookie_domain`. Without
+/// the explicit `BUNYIP_COOKIE_SHARED_DOMAIN=true` opt-in this resolves to
+/// `None`, so the session cookie is host-scoped and never sent to sibling
+/// subdomains regardless of how `COOKIE_DOMAIN` is set.
 pub(crate) async fn establish_op_session(
     provider: &OidcProviderData,
     req: &HttpRequest,
     user_id: uuid::Uuid,
     secure: bool,
-    cookie_domain: Option<&str>,
+    op_session_cookie_domain: Option<&str>,
 ) -> Option<actix_web::cookie::Cookie<'static>> {
     let provider = provider.as_ref().as_ref()?;
     let user_agent = req
@@ -52,7 +58,11 @@ pub(crate) async fn establish_op_session(
         )
         .await
     {
-        Ok(session) => Some(AuthCookies::op_session(&session.sid, secure, cookie_domain)),
+        Ok(session) => Some(AuthCookies::op_session(
+            &session.sid,
+            secure,
+            op_session_cookie_domain,
+        )),
         Err(e) => {
             tracing::warn!(error = %e, "Failed to establish OP session at login");
             None
@@ -249,8 +259,14 @@ pub async fn register(
     let secure = config.is_production();
     let cookie_domain = config.cookie_domain.as_deref();
 
-    let op_cookie =
-        establish_op_session(&oidc_provider, &req, user.id, secure, cookie_domain).await;
+    let op_cookie = establish_op_session(
+        &oidc_provider,
+        &req,
+        user.id,
+        secure,
+        config.op_session_cookie_domain(),
+    )
+    .await;
 
     // Send welcome email (in background, don't wait)
     let email = body.email.clone();
@@ -333,8 +349,14 @@ pub async fn login(
             let secure = config.is_production();
             let cookie_domain = config.cookie_domain.as_deref();
 
-            let op_cookie =
-                establish_op_session(&oidc_provider, &req, user.id, secure, cookie_domain).await;
+            let op_cookie = establish_op_session(
+                &oidc_provider,
+                &req,
+                user.id,
+                secure,
+                config.op_session_cookie_domain(),
+            )
+            .await;
 
             let response = AuthResponse {
                 user,
@@ -471,8 +493,14 @@ pub async fn verify_magic_link(
             let secure = config.is_production();
             let cookie_domain = config.cookie_domain.as_deref();
 
-            let op_cookie =
-                establish_op_session(&oidc_provider, &req, user.id, secure, cookie_domain).await;
+            let op_cookie = establish_op_session(
+                &oidc_provider,
+                &req,
+                user.id,
+                secure,
+                config.op_session_cookie_domain(),
+            )
+            .await;
 
             let response = AuthResponse {
                 user,
@@ -549,8 +577,14 @@ pub async fn accept_admin_invite(
             let secure = config.is_production();
             let cookie_domain = config.cookie_domain.as_deref();
 
-            let op_cookie =
-                establish_op_session(&oidc_provider, &req, user.id, secure, cookie_domain).await;
+            let op_cookie = establish_op_session(
+                &oidc_provider,
+                &req,
+                user.id,
+                secure,
+                config.op_session_cookie_domain(),
+            )
+            .await;
 
             let response = AuthResponse {
                 user,
@@ -1120,8 +1154,14 @@ pub async fn setup_admin(
     let secure = config.is_production();
     let cookie_domain = config.cookie_domain.as_deref();
 
-    let op_cookie =
-        establish_op_session(&oidc_provider, &req, user.id, secure, cookie_domain).await;
+    let op_cookie = establish_op_session(
+        &oidc_provider,
+        &req,
+        user.id,
+        secure,
+        config.op_session_cookie_domain(),
+    )
+    .await;
 
     let response = AuthResponse {
         user,

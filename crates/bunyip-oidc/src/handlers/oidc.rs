@@ -355,6 +355,13 @@ pub async fn authorize(
                 // the re-login form.
                 if stale_cookie_present {
                     let secure = config.is_production();
+                    // BUNYIP-266: clear at the configured cookie_domain so a
+                    // stale domain-scoped sid from a pre-host-only deploy is
+                    // also removed; `clear_op_session_only` already emits a
+                    // no-domain clear in parallel. We hand it the underlying
+                    // `cookie_domain` (not the host-only-helper) so the clear
+                    // covers the worst-case stale cookie shape regardless of
+                    // the current `BUNYIP_COOKIE_SHARED_DOMAIN` setting.
                     let cookie_domain = config.cookie_domain.as_deref();
                     for clear_cookie in crate::middleware::auth::AuthCookies::clear_op_session_only(
                         secure,
@@ -637,6 +644,11 @@ async fn try_silent_sso(
     let device_info = crate::middleware::auth::extract_device_info(req);
     let secure = config.is_production();
     let cookie_domain = config.cookie_domain.as_deref();
+    // BUNYIP-266: op_session cookie is host-only unless the operator
+    // explicitly opted into cross-subdomain sharing. access/refresh
+    // cookies continue to honour `cookie_domain` (tightening those is a
+    // separate ticket).
+    let op_cookie_domain = config.op_session_cookie_domain();
 
     // Path 1: valid access_token cookie.
     if let Some(access_token) = req.cookie("access_token") {
@@ -664,7 +676,7 @@ async fn try_silent_sso(
             let cookies = crate::middleware::auth::AuthCookies::op_session_set(
                 &session.sid,
                 secure,
-                cookie_domain,
+                op_cookie_domain,
             );
             return Ok(Some((session, cookies)));
         }
@@ -729,7 +741,7 @@ async fn try_silent_sso(
     cookies.push(crate::middleware::auth::AuthCookies::op_session(
         &session.sid,
         secure,
-        cookie_domain,
+        op_cookie_domain,
     ));
     Ok(Some((session, cookies)))
 }
@@ -1172,6 +1184,17 @@ async fn do_revoke(
 
 #[derive(Debug, Deserialize)]
 pub struct LogoutQuery {
+    /// BUNYIP-260 (OIDC RP-Initiated Logout 1.0 §3): the id_token the OP
+    /// previously issued to the calling RP. When provided, the OP uses
+    /// it to identify the calling client and scopes
+    /// `post_logout_redirect_uri` to that client's allowlist only.
+    /// `Option` to keep legacy callers compiling; the runtime guards in
+    /// `logout` reject the request when it's missing AND a
+    /// `post_logout_redirect_uri` is provided (the cross-RP open
+    /// redirect surface). Bare `/oauth2/logout` with no redirect is
+    /// still accepted so the legacy "just sign me out" flow keeps
+    /// working.
+    pub id_token_hint: Option<String>,
     pub post_logout_redirect_uri: Option<String>,
     pub state: Option<String>,
 }
@@ -1190,20 +1213,53 @@ pub async fn logout(
         None => return Ok(HttpResponse::NotFound().finish()),
     };
 
-    // Close the open redirect (BUNYIP-74): only honour a
-    // post_logout_redirect_uri that is registered for some client, per the
-    // OIDC RP-Initiated Logout spec; anything else falls back to "/". The
-    // `state` parameter is echoed back on the redirect when present. Runtime
-    // query so the lookup needs no `.sqlx/` offline-cache regeneration.
+    // BUNYIP-260 (OIDC RP-Initiated Logout 1.0 §3 + audit finding):
+    // `post_logout_redirect_uri` is honoured ONLY when it belongs to the
+    // client the `id_token_hint` was issued to. The previous lookup
+    // matched the URI against ANY client's allowlist, which let RP-A
+    // bounce a victim mid-logout to RP-A's registered URL with
+    // attacker-chosen `state` while the victim thought they were leaving
+    // RP-B. Now: no hint -> no redirect; hint present + URI not in that
+    // client's allowlist -> no redirect. Bare /oauth2/logout (no
+    // redirect, no hint) still works as a "just sign me out" call.
     let redirect = match &query.post_logout_redirect_uri {
         Some(uri) if !uri.is_empty() => {
-            let registered: Option<i32> = sqlx::query_scalar(
-                "SELECT 1 FROM oauth_clients WHERE $1 = ANY(post_logout_redirect_uris) LIMIT 1",
-            )
-            .bind(uri)
-            .fetch_optional(&provider_arc.pool)
-            .await?;
-            if registered.is_some() {
+            let hint_client_id: Option<Uuid> = match query.id_token_hint.as_deref() {
+                Some(hint) if !hint.is_empty() => provider_arc
+                    .verify_id_token_client(hint)
+                    .await
+                    .map_err(|e| {
+                        tracing::warn!(
+                            error = %e,
+                            "logout: id_token_hint verification failed; ignoring post_logout_redirect_uri"
+                        );
+                    })
+                    .ok(),
+                _ => None,
+            };
+            let allowed = if let Some(client_id) = hint_client_id {
+                let registered: Option<i32> = sqlx::query_scalar(
+                    "SELECT 1 FROM oauth_clients \
+                     WHERE client_id = $1 \
+                       AND disabled_at IS NULL \
+                       AND $2 = ANY(post_logout_redirect_uris) LIMIT 1",
+                )
+                .bind(client_id)
+                .bind(uri)
+                .fetch_optional(&provider_arc.pool)
+                .await?;
+                registered.is_some()
+            } else {
+                // BUNYIP-260: no verified id_token_hint -> no redirect.
+                // Cross-RP open-redirect surface closed.
+                tracing::warn!(
+                    %uri,
+                    "logout: post_logout_redirect_uri supplied without a verified \
+                     id_token_hint; ignoring (cross-RP open-redirect defense)"
+                );
+                false
+            };
+            if allowed {
                 match &query.state {
                     Some(state) if !state.is_empty() => {
                         let sep = if uri.contains('?') { '&' } else { '?' };
