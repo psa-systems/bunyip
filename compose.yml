@@ -138,8 +138,15 @@ services:
       # ── Update checker (operator-facing). Token via update_check_token secret. ──
       BUNYIP_UPDATE_CHECK_URL: ${BUNYIP_UPDATE_CHECK_URL:-}
       OIDC_ISSUER: ${OIDC_ISSUER:-}
-      OIDC_JWT_PRIVATE_KEY_PATH: ${OIDC_JWT_PRIVATE_KEY_PATH:-/run/secrets/oidc/dev-2026.pem}
-      OIDC_JWT_ACTIVE_KID: ${OIDC_JWT_ACTIVE_KID:-dev-2026}
+      # BUNYIP-258: no defaults for OIDC signing key path / active kid. The
+      # previous defaults (`/run/secrets/oidc/dev-2026.pem`, `dev-2026`)
+      # silently signed prod tokens with a dev-named kid when a deploy
+      # forgot to override them - downstream RPs would have happily
+      # consumed `kid=dev-2026` tokens because their JWKS lookup is keyed
+      # on whatever the OP advertises. Fail loud at `compose up` instead.
+      # Mirrors the BUNYIP-237 posture for image pins.
+      OIDC_JWT_PRIVATE_KEY_PATH: ${OIDC_JWT_PRIVATE_KEY_PATH:?OIDC_JWT_PRIVATE_KEY_PATH must be set to the production signing-key path (e.g. /run/secrets/oidc/prod-2026.pem) - no dev default}
+      OIDC_JWT_ACTIVE_KID: ${OIDC_JWT_ACTIVE_KID:?OIDC_JWT_ACTIVE_KID must be set to the active kid name (e.g. prod-2026) - no dev default}
       OIDC_JWT_PUBLIC_KEYS_DIR: /run/secrets/oidc
       # ── Distribution proxy (member downloads + OCI registry, BUNYIP-28) ──
       # Disabled until FORGEJO_BASE_URL (.env) + the forgejo_api_token secret
