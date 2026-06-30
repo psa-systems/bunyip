@@ -680,6 +680,12 @@ impl OidcProvider {
     /// Issue the first refresh token in a new family (called after code exchange).
     /// BUNYIP-63: `selected_tenant_id` is carried on every row in the family
     /// so the rotated at+jwt always emits the original tenant claim.
+    ///
+    /// BUNYIP-262: `auth_time` is persisted on the family row and read by
+    /// every subsequent rotation so the rotated at+jwt carries the
+    /// authentication time of the ORIGINAL login, not the time of the
+    /// last refresh. This matches OIDC Core §2 and lets RPs do honest
+    /// step-up auth on `auth_time` deltas.
     #[allow(clippy::too_many_arguments)]
     pub async fn issue_refresh_token(
         &self,
@@ -687,21 +693,24 @@ impl OidcProvider {
         user_id: Uuid,
         op_session_id: Uuid,
         scope: &[String],
+        auth_time: DateTime<Utc>,
         ip: Option<std::net::IpAddr>,
         user_agent: Option<&str>,
         selected_tenant_id: Option<Uuid>,
     ) -> Result<(String, Uuid), AppError> {
-        // Create the family
-        let family_id = sqlx::query_scalar!(
+        // Create the family. Runtime query so the BUNYIP-262 `auth_time`
+        // column does not force a `.sqlx/` offline-cache regeneration.
+        let family_id: Uuid = sqlx::query_scalar(
             r#"
-            INSERT INTO refresh_token_families (client_id, user_id, op_session_id)
-            VALUES ($1, $2, $3)
+            INSERT INTO refresh_token_families (client_id, user_id, op_session_id, auth_time)
+            VALUES ($1, $2, $3, $4)
             RETURNING id
             "#,
-            client.client_id,
-            user_id,
-            op_session_id,
         )
+        .bind(client.client_id)
+        .bind(user_id)
+        .bind(op_session_id)
+        .bind(auth_time)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| AppError::internal(format!("Failed to create refresh token family: {e}")))?;
@@ -752,13 +761,17 @@ impl OidcProvider {
         // the BUNYIP-63 `selected_tenant_id` column addition does not
         // force a `.sqlx/` cache regen. `RefreshTokenRow` is an ad-hoc
         // struct local to this rotation; mapped via FromRow below.
+        // BUNYIP-262: JOIN the family to read the persisted `auth_time`.
         let old = sqlx::query_as::<_, RefreshTokenRotationRow>(
             r#"
-            SELECT id, family_id, client_id, user_id, scope, used_at, revoked_at,
-                   idle_expires_at, absolute_expires_at, selected_tenant_id
-            FROM refresh_tokens_v2
-            WHERE token_hash = $1
-            FOR UPDATE
+            SELECT rt.id, rt.family_id, rt.client_id, rt.user_id, rt.scope,
+                   rt.used_at, rt.revoked_at, rt.idle_expires_at,
+                   rt.absolute_expires_at, rt.selected_tenant_id,
+                   fam.auth_time
+            FROM refresh_tokens_v2 rt
+            JOIN refresh_token_families fam ON fam.id = rt.family_id
+            WHERE rt.token_hash = $1
+            FOR UPDATE OF rt
             "#,
         )
         .bind(old_hash)
@@ -840,8 +853,8 @@ impl OidcProvider {
             return Err(AppError::OidcInvalidGrant("token family revoked".into()));
         }
 
-        // Scope narrowing only
-        let effective_scope: Vec<String> = match requested_scope {
+        // Scope narrowing only.
+        let mut effective_scope: Vec<String> = match requested_scope {
             Some(req) if !req.is_empty() => {
                 let orig: std::collections::HashSet<&str> =
                     old.scope.iter().map(|s| s.as_str()).collect();
@@ -852,6 +865,36 @@ impl OidcProvider {
             }
             _ => old.scope.clone(),
         };
+
+        // BUNYIP-262: re-intersect with the user's CURRENT
+        // `granted_scopes` for this client. If an admin revoked a scope
+        // between the original code redemption and this refresh, the
+        // narrower set wins. Without this the rotated at+jwt would
+        // carry the original (wider) scope set until the family expired
+        // naturally, which defeats admin-driven scope revocation. The
+        // existing reuse-detection / family-revocation paths above stay
+        // unchanged; this is an additional narrowing.
+        let granted_now: Vec<String> = sqlx::query_scalar(
+            "SELECT granted_scopes \
+             FROM user_application_access \
+             WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL",
+        )
+        .bind(old.user_id)
+        .bind(old.client_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| AppError::internal(format!("DB error loading granted scopes: {e}")))?
+        .unwrap_or_default();
+        if !granted_now.is_empty() {
+            let allowed: std::collections::HashSet<&str> =
+                granted_now.iter().map(|s| s.as_str()).collect();
+            effective_scope.retain(|s| allowed.contains(s.as_str()));
+        }
+        if effective_scope.is_empty() {
+            return Err(AppError::OidcInvalidGrant(
+                "refresh rejected: no scopes remain after intersection with current grants".into(),
+            ));
+        }
 
         // Mark old token used
         sqlx::query!(
@@ -927,6 +970,7 @@ impl OidcProvider {
             scope: effective_scope,
             client,
             selected_tenant_id: old.selected_tenant_id,
+            auth_time: old.auth_time,
         })
     }
 
@@ -1335,6 +1379,11 @@ pub struct RotatedTokens {
     /// `handle_refresh_grant` feeds this into the next at+jwt mint so
     /// the rotated token emits the same tenant claim.
     pub selected_tenant_id: Option<Uuid>,
+    /// BUNYIP-262: original-login auth_time, persisted on the family
+    /// row and carried forward on every rotation so the rotated at+jwt
+    /// reports the truthful "when did the user authenticate?" value
+    /// per OIDC Core §2.
+    pub auth_time: DateTime<Utc>,
 }
 
 /// Ad-hoc row used by the rotation transaction. Only fields the
@@ -1354,6 +1403,10 @@ struct RefreshTokenRotationRow {
     idle_expires_at: DateTime<Utc>,
     absolute_expires_at: DateTime<Utc>,
     selected_tenant_id: Option<Uuid>,
+    /// BUNYIP-262: persisted on `refresh_token_families` at the initial
+    /// token issue. Joined into this row so the rotation carries the
+    /// original login's auth_time forward to the next at+jwt mint.
+    auth_time: DateTime<Utc>,
 }
 
 // ── Crypto helpers ────────────────────────────────────────────────────────────
