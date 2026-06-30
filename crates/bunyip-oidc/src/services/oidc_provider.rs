@@ -1103,24 +1103,32 @@ impl OidcProvider {
     }
 
     /// Grant entitlement for a user to a client (used during JIT provisioning or admin grant).
+    ///
+    /// BUNYIP-261: refuse to revive a revoked row. The previous
+    /// implementation cleared `revoked_at` via `ON CONFLICT DO UPDATE`,
+    /// so the JIT baseline path at the next /authorize silently
+    /// re-granted any entitlement an admin had explicitly revoked. Skip
+    /// the UPDATE branch entirely when the row is revoked; an admin
+    /// must use a dedicated re-grant flow to undo their own revoke.
     pub async fn grant_entitlement(
         &self,
         user_id: Uuid,
         client_id: Uuid,
         scopes: &[String],
     ) -> Result<(), AppError> {
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO user_application_access
                 (user_id, client_id, granted_scopes, granted_at)
             VALUES ($1, $2, $3, NOW())
             ON CONFLICT (user_id, client_id)
-            DO UPDATE SET granted_scopes = EXCLUDED.granted_scopes, revoked_at = NULL
+            DO UPDATE SET granted_scopes = EXCLUDED.granted_scopes
+            WHERE user_application_access.revoked_at IS NULL
             "#,
-            user_id,
-            client_id,
-            scopes as &[String],
         )
+        .bind(user_id)
+        .bind(client_id)
+        .bind(scopes)
         .execute(&self.pool)
         .await
         .map_err(|e| AppError::internal(format!("Failed to grant entitlement: {e}")))?;
@@ -1160,6 +1168,13 @@ impl OidcProvider {
     /// a new row is inserted with the supplied scopes. Idempotent for any
     /// (user, client) pair.
     ///
+    /// BUNYIP-261: refuse to revive a revoked row. The previous
+    /// implementation cleared `revoked_at` via `ON CONFLICT DO UPDATE`,
+    /// so an attacker who got the user to click "Allow" on a consent
+    /// screen would silently undo an admin-driven revocation. Keep the
+    /// UPDATE branch gated on `revoked_at IS NULL`; a revoked row stays
+    /// revoked until an explicit admin re-grant.
+    ///
     /// Runtime-only query (not `query!`) so this method does not need a
     /// `.sqlx/` offline-cache regen.
     pub async fn add_scopes_to_grant(
@@ -1179,8 +1194,8 @@ impl OidcProvider {
                     SELECT DISTINCT unnest(
                         user_application_access.granted_scopes || EXCLUDED.granted_scopes
                     )
-                ),
-                revoked_at = NULL
+                )
+            WHERE user_application_access.revoked_at IS NULL
             "#,
         )
         .bind(user_id)
