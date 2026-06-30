@@ -89,11 +89,14 @@ impl Api {
         if let Some(b) = body {
             rb = rb.json(&b);
         }
-        let resp = rb
-            .send()
-            .await
-            .map_err(|e| ApiError::network(e.to_string()))?;
+        let resp = rb.send().await.map_err(|e| {
+            // BUNYIP-243: a transport failure means bunyip-api is unreachable.
+            crate::server_status::note_transport_error();
+            ApiError::network(e.to_string())
+        })?;
         let status = resp.status().as_u16();
+        // BUNYIP-243: any response clears the down state; a 5xx sets it.
+        crate::server_status::note_status(status);
         let set_cookies = resp
             .headers()
             .get_all(SET_COOKIE)
@@ -155,9 +158,17 @@ impl Api {
         if let Some(c) = cookie {
             rb = rb.header(COOKIE, c);
         }
-        rb.send()
-            .await
-            .map_err(|e| ApiError::network(e.to_string()))
+        match rb.send().await {
+            Ok(resp) => {
+                // BUNYIP-243: classify the streaming-proxy response too.
+                crate::server_status::note_status(resp.status().as_u16());
+                Ok(resp)
+            }
+            Err(e) => {
+                crate::server_status::note_transport_error();
+                Err(ApiError::network(e.to_string()))
+            }
+        }
     }
 
     /// POST a multipart form (feedback submission).
@@ -176,11 +187,14 @@ impl Api {
         if let Some(c) = cookie {
             rb = rb.header(COOKIE, c);
         }
-        let resp = rb
-            .send()
-            .await
-            .map_err(|e| ApiError::network(e.to_string()))?;
+        let resp = rb.send().await.map_err(|e| {
+            // BUNYIP-243: a transport failure means bunyip-api is unreachable.
+            crate::server_status::note_transport_error();
+            ApiError::network(e.to_string())
+        })?;
         let status = resp.status().as_u16();
+        // BUNYIP-243: any response clears the down state; a 5xx sets it.
+        crate::server_status::note_status(status);
         let set_cookies = resp
             .headers()
             .get_all(SET_COOKIE)

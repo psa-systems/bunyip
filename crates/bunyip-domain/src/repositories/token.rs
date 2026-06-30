@@ -439,6 +439,31 @@ impl TokenRepository {
         Ok(token)
     }
 
+    /// BUNYIP-256: mark every still-valid password reset token for the user
+    /// as used, returning the count cleared. Called by
+    /// `request_password_reset` so a fresh reset request invalidates any
+    /// older outstanding tokens for the same user. Cuts the surface to one
+    /// live token per user at a time and matches the common UX ("only the
+    /// most recent link works"); a user staring at three reset emails
+    /// after triple-clicking the form gets a clear single-truth answer.
+    pub async fn revoke_pending_password_reset_tokens(
+        pool: &PgPool,
+        user_id: Uuid,
+    ) -> Result<u64, AppError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE password_reset_tokens
+            SET used_at = NOW()
+            WHERE user_id = $1 AND used_at IS NULL AND expires_at > NOW()
+            "#,
+        )
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
     /// Find password reset token by hash
     pub async fn find_password_reset_token_by_hash(
         pool: &PgPool,

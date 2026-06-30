@@ -737,6 +737,22 @@ impl AuthService {
             return Ok(None);
         }
 
+        // BUNYIP-256: invalidate any still-valid prior reset tokens for
+        // this user before issuing a fresh one. Keeps the live-token
+        // surface at exactly one per user, eliminates the "three reset
+        // emails in my inbox, which one works?" confusion, and matches
+        // the common UX where the latest link is the only working one.
+        let cleared = TokenRepository::revoke_pending_password_reset_tokens(&self.pool, user.id)
+            .await
+            .unwrap_or(0);
+        if cleared > 0 {
+            tracing::info!(
+                user_id = %user.id,
+                cleared,
+                "password reset: revoked prior pending tokens"
+            );
+        }
+
         // Generate token
         let token = generate_secure_token(32);
         let token_hash = self.jwt.hash_token(&token);
