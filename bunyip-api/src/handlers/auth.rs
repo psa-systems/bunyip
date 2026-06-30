@@ -30,6 +30,13 @@ pub type OidcProviderData =
 /// provider is not configured (non-OP deploys), or if session creation fails -
 /// callers simply skip setting the cookie in that case.
 ///
+/// BUNYIP-257: `acr` and `amr` are passed in by the caller so the persisted
+/// op_session row reflects the ACTUAL authentication method (password,
+/// magic-link, MFA, trusted-device, ...) instead of a hardcoded `pwd`
+/// fallback. Every downstream consumer (the /authorize at+jwt mint, the
+/// silent-SSO refresh-token path's family seed, the back-channel logout
+/// fan-out) inherits the truthful value.
+///
 /// BUNYIP-266: `op_session_cookie_domain` is sourced from
 /// `Config::op_session_cookie_domain()`, NOT `Config::cookie_domain`. Without
 /// the explicit `BUNYIP_COOKIE_SHARED_DOMAIN=true` opt-in this resolves to
@@ -41,6 +48,8 @@ pub(crate) async fn establish_op_session(
     user_id: uuid::Uuid,
     secure: bool,
     op_session_cookie_domain: Option<&str>,
+    acr: &str,
+    amr: &[String],
 ) -> Option<actix_web::cookie::Cookie<'static>> {
     let provider = provider.as_ref().as_ref()?;
     let user_agent = req
@@ -64,13 +73,7 @@ pub(crate) async fn establish_op_session(
     }
 
     match provider
-        .create_op_session(
-            user_id,
-            user_agent,
-            ip,
-            "urn:bunyip:loa:pwd",
-            &["pwd".to_string()],
-        )
+        .create_op_session(user_id, user_agent, ip, acr, amr)
         .await
     {
         Ok(session) => Some(AuthCookies::op_session(
@@ -84,6 +87,15 @@ pub(crate) async fn establish_op_session(
         }
     }
 }
+
+/// BUNYIP-257: ACR for a password-only login (no second factor).
+pub(crate) const ACR_PASSWORD: &str = "urn:bunyip:loa:pwd";
+
+/// BUNYIP-257: ACR after a TOTP-verified login (second factor satisfied).
+pub(crate) const ACR_MFA: &str = "urn:bunyip:loa:mfa";
+
+/// BUNYIP-257: ACR for a magic-link login (one-time-password channel).
+pub(crate) const ACR_OTP: &str = "urn:bunyip:loa:otp";
 
 /// Revoke all of a user's OP sessions and fan out back-channel logout tokens.
 ///
@@ -280,6 +292,8 @@ pub async fn register(
         user.id,
         secure,
         config.op_session_cookie_domain(),
+        ACR_PASSWORD,
+        &["pwd".to_string()],
     )
     .await;
 
@@ -397,6 +411,8 @@ pub async fn login(
                 user.id,
                 secure,
                 config.op_session_cookie_domain(),
+                ACR_PASSWORD,
+                &["pwd".to_string()],
             )
             .await;
 
@@ -545,6 +561,8 @@ pub async fn verify_magic_link(
                 user.id,
                 secure,
                 config.op_session_cookie_domain(),
+                ACR_OTP,
+                &["otp".to_string()],
             )
             .await;
 
@@ -629,6 +647,8 @@ pub async fn accept_admin_invite(
                 user.id,
                 secure,
                 config.op_session_cookie_domain(),
+                ACR_PASSWORD,
+                &["pwd".to_string()],
             )
             .await;
 
@@ -1215,6 +1235,8 @@ pub async fn setup_admin(
         user.id,
         secure,
         config.op_session_cookie_domain(),
+        ACR_PASSWORD,
+        &["pwd".to_string()],
     )
     .await;
 

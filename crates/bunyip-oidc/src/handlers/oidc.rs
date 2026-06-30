@@ -935,6 +935,14 @@ async fn handle_authorization_code_grant(
             user.id,
             code_row.op_session_id,
             &code_row.scope,
+            // BUNYIP-257: persist the truthful acr/amr on the family so
+            // every future rotation in this family carries them forward
+            // instead of defaulting to hardcoded pwd/[pwd].
+            code_row.acr.as_deref().unwrap_or("urn:bunyip:loa:pwd"),
+            &code_row
+                .amr
+                .clone()
+                .unwrap_or_else(|| vec!["pwd".to_string()]),
             ip,
             user_agent,
             code_row.selected_tenant_id,
@@ -1026,8 +1034,13 @@ async fn handle_refresh_grant(
         &rotated.client,
         &rotated.scope,
         chrono::Utc::now(), // auth_time not re-established on refresh
-        "urn:bunyip:loa:pwd",
-        &["pwd".to_string()],
+        // BUNYIP-257: read the persisted acr/amr from the rotation
+        // result instead of stamping the hardcoded pwd defaults. The
+        // family carries the truthful values forward so the rotated
+        // at+jwt reports the authentication-method-reference set that
+        // matches OIDC Core §3.1.3.7.
+        &rotated.acr,
+        &rotated.amr,
         rotated.selected_tenant_id,
     )?;
 
