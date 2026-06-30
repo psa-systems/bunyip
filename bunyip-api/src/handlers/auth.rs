@@ -273,7 +273,10 @@ pub async fn register(
     let email_svc = email_service.get_ref().clone();
     tokio::spawn(async move {
         if let Err(e) = email_svc.send_account_created(&email).await {
-            tracing::error!(error = %e, email = %email, "Failed to send account created email");
+            // BUNYIP-265: do not log raw user email at error level (PII +
+            // enumeration channel). The request_id middleware adds correlation;
+            // the failure mode is the load-bearing signal.
+            tracing::error!(error = %e, "Failed to send account created email");
         }
     });
 
@@ -424,7 +427,8 @@ pub async fn request_magic_link(
     let email_svc = email_service.get_ref().clone();
     tokio::spawn(async move {
         if let Err(e) = email_svc.send_magic_link(&email, &token).await {
-            tracing::error!(error = %e, email = %email, "Failed to send magic link email");
+            // BUNYIP-265: drop raw email (PII + enumeration).
+            tracing::error!(error = %e, "Failed to send magic link email");
         }
     });
 
@@ -485,7 +489,10 @@ pub async fn verify_magic_link(
                 let email_svc = email_service.get_ref().clone();
                 tokio::spawn(async move {
                     if let Err(e) = email_svc.send_account_created(&email).await {
-                        tracing::error!(error = %e, email = %email, "Failed to send account created email");
+                        // BUNYIP-265: do not log raw user email at error level (PII +
+                        // enumeration channel). The request_id middleware adds correlation;
+                        // the failure mode is the load-bearing signal.
+                        tracing::error!(error = %e, "Failed to send account created email");
                     }
                 });
             }
@@ -879,7 +886,8 @@ pub async fn request_password_reset(
         let email_svc = email_service.get_ref().clone();
         tokio::spawn(async move {
             if let Err(e) = email_svc.send_password_reset(&email, &token).await {
-                tracing::error!(error = %e, email = %email, "Failed to send password reset email");
+                // BUNYIP-265: drop raw email (PII + enumeration).
+                tracing::error!(error = %e, "Failed to send password reset email");
             }
         });
     }
@@ -918,7 +926,8 @@ pub async fn confirm_password_reset(
     let email_svc = email_service.get_ref().clone();
     tokio::spawn(async move {
         if let Err(e) = email_svc.send_password_changed(&email).await {
-            tracing::error!(error = %e, email = %email, "Failed to send password changed email");
+            // BUNYIP-265: drop raw email (PII + enumeration).
+            tracing::error!(error = %e, "Failed to send password changed email");
         }
     });
 
@@ -959,8 +968,14 @@ pub async fn auth_redirect(
 ) -> Result<HttpResponse, AppError> {
     let target_url = &query.url;
 
+    // BUNYIP-265: log only the URL's path; the query string can carry
+    // OIDC `state` / `code` / `return_to` values that have request-level
+    // sensitivity and do not belong in log files.
+    let target_path = url::Url::parse(target_url)
+        .map(|u| u.path().to_string())
+        .unwrap_or_else(|_| target_url.split('?').next().unwrap_or("").to_string());
     tracing::debug!(
-        target_url = %target_url,
+        target_path = %target_path,
         has_access_token = req.cookie("access_token").is_some(),
         has_refresh_token = req.cookie("refresh_token").is_some(),
         user_authenticated = optional_user.0.is_some(),
@@ -1131,7 +1146,8 @@ pub async fn setup_admin(
     )
     .await?;
 
-    tracing::info!(email = %user.email, "Initial admin user created via setup");
+    // BUNYIP-265: log at info but with user_id only (raw email is PII).
+    tracing::info!(user_id = %user.id, "Initial admin user created via setup");
 
     // Log them in immediately
     let result = auth_service

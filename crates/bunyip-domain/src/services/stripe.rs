@@ -944,8 +944,18 @@ impl StripeService {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            tracing::error!(status = %status, body = %body, "Stripe webhook endpoint creation failed");
+            // BUNYIP-265: do not log the raw Stripe response body; Stripe
+            // error envelopes commonly carry customer email, subscription
+            // id, last-4 PAN digits. Parse to extract the `error.code` /
+            // `error.type` (the operationally-actionable signal) and drop
+            // the body.
+            let (err_code, err_type) = stripe_error_envelope(resp).await;
+            tracing::error!(
+                status = %status,
+                stripe_error_code = %err_code,
+                stripe_error_type = %err_type,
+                "Stripe webhook endpoint creation failed"
+            );
             return Err(AppError::internal("Failed to create webhook endpoint"));
         }
 
@@ -997,8 +1007,14 @@ impl StripeService {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            tracing::error!(status = %status, body = %body, "Stripe webhook endpoint deletion failed");
+            // BUNYIP-265: redact Stripe body, log error.code / error.type only.
+            let (err_code, err_type) = stripe_error_envelope(resp).await;
+            tracing::error!(
+                status = %status,
+                stripe_error_code = %err_code,
+                stripe_error_type = %err_type,
+                "Stripe webhook endpoint deletion failed"
+            );
             return Err(AppError::internal("Failed to delete webhook endpoint"));
         }
 
@@ -1369,6 +1385,33 @@ impl StripeService {
         );
 
         Ok((customer.id.to_string(), client_secret))
+    }
+}
+
+/// BUNYIP-265: parse a Stripe error response into `(code, type)` without
+/// retaining the raw body. Stripe's documented envelope is
+/// `{"error": {"code": "...", "type": "...", "message": "...", ...}}`;
+/// the `message` and adjacent fields commonly contain customer email,
+/// subscription id, last-4 PAN digits and must not reach log files.
+async fn stripe_error_envelope(resp: reqwest::Response) -> (String, String) {
+    #[derive(serde::Deserialize)]
+    struct Envelope {
+        error: Option<Inner>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Inner {
+        #[serde(default)]
+        code: Option<String>,
+        #[serde(default, rename = "type")]
+        ty: Option<String>,
+    }
+    let parsed = resp.json::<Envelope>().await.ok().and_then(|e| e.error);
+    match parsed {
+        Some(inner) => (
+            inner.code.unwrap_or_else(|| "(none)".into()),
+            inner.ty.unwrap_or_else(|| "(none)".into()),
+        ),
+        None => ("(unparseable)".into(), "(unparseable)".into()),
     }
 }
 
