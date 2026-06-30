@@ -179,6 +179,18 @@ impl AuthService {
         self.password
             .validate_not_contains_email(&password, &email)?;
 
+        // BUNYIP-253: server-side HIBP backstop. The /register SPA shipped
+        // BUNYIP-240 with a client-side breach check; this matches it on
+        // the server so any non-browser POST (curl, automation, a
+        // forged fetch) cannot land a breached password in the DB.
+        // `is_breached` fails open on HIBP outage (logged at warn).
+        if crate::services::password_breach::is_breached(&password).await {
+            return Err(AppError::validation(
+                "password",
+                "Password has appeared in a known data breach - pick a different one.",
+            ));
+        }
+
         // Check if email already exists
         if UserRepository::find_by_email(&self.pool, &email)
             .await?
@@ -795,6 +807,17 @@ impl AuthService {
         // Validate new password
         self.password.validate_strength(&new_password)?;
 
+        // BUNYIP-253: server-side HIBP backstop on reset (mirror of the
+        // register check). The /reset-password SPA shipped BUNYIP-240
+        // with a client-side breach check; this closes the bypass for
+        // non-browser POSTs.
+        if crate::services::password_breach::is_breached(&new_password).await {
+            return Err(AppError::validation(
+                "new_password",
+                "Password has appeared in a known data breach - pick a different one.",
+            ));
+        }
+
         let token_hash = self.jwt.hash_token(&token);
 
         // Find and validate token
@@ -872,6 +895,15 @@ impl AuthService {
         self.password.validate_strength(&new_password)?;
         self.password
             .validate_not_contains_email(&new_password, &user.email)?;
+
+        // BUNYIP-253: server-side HIBP backstop on password change (mirror
+        // of register + reset). Closes the bypass for non-browser POSTs.
+        if crate::services::password_breach::is_breached(&new_password).await {
+            return Err(AppError::validation(
+                "new_password",
+                "Password has appeared in a known data breach - pick a different one.",
+            ));
+        }
 
         // Hash and update
         let new_hash = self.password.hash(&new_password)?;
