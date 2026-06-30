@@ -1,6 +1,7 @@
 mod api;
 mod auth;
 mod config;
+mod csrf;
 mod handlers;
 mod security;
 mod server_status;
@@ -371,6 +372,13 @@ async fn main() {
         // Static + fallback
         .nest_service("/assets", ServeDir::new("assets"))
         .fallback(public::not_found)
+        // BUNYIP-259: Origin / Referer CSRF defense on every state-
+        // changing POST. Refuses cross-origin form submissions before
+        // the handler runs. The `/oauth2/*` family is exempted inside
+        // the middleware (those endpoints authenticate via PKCE +
+        // state + nonce + client_secret per spec). The full
+        // synchronizer-token middleware on top of this is a follow-up.
+        .layer(axum::middleware::from_fn(csrf::enforce_origin))
         // BUNYIP-232: stamp a Content-Security-Policy onto every response (the
         // remaining security header the edge proxy does not set for bunyip-web).
         .layer(security::csp_layer(&cfg))
