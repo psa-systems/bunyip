@@ -297,17 +297,15 @@ pub async fn register(
     )
     .await;
 
-    // Send welcome email (in background, don't wait)
-    let email = body.email.clone();
-    let email_svc = email_service.get_ref().clone();
-    tokio::spawn(async move {
-        if let Err(e) = email_svc.send_account_created(&email).await {
-            // BUNYIP-265: do not log raw user email at error level (PII +
-            // enumeration channel). The request_id middleware adds correlation;
-            // the failure mode is the load-bearing signal.
-            tracing::error!(error = %e, "Failed to send account created email");
-        }
-    });
+    // BUNYIP-296: await the welcome inline before returning so the
+    // /onboarding page's auto-fired POST /v1/users/me/email/verify cannot
+    // race the welcome onto the SMTP wire. Best-effort: a mail failure
+    // still logs and continues, because the register itself has already
+    // committed and the user's dashboard access does not depend on the
+    // welcome. BUNYIP-265 rule holds: do not log the raw email address.
+    if let Err(e) = email_service.send_account_created(&body.email).await {
+        tracing::error!(error = %e, "Failed to send account created email");
+    }
 
     let response = AuthResponse {
         user,
@@ -538,18 +536,17 @@ pub async fn verify_magic_link(
             ))
         }
         crate::services::MagicLinkResult::Success(tokens, user, is_new_user) => {
-            // Send account created email for new users (in background, don't wait)
+            // BUNYIP-296: welcome email for a magic-link-created account is
+            // awaited inline to match the register path. Magic-link signup
+            // verifies the email as part of the flow itself so no verify
+            // message follows, meaning the ordering-race concern does not
+            // apply here; the inline await is stylistic uniformity so both
+            // signup paths behave identically. BUNYIP-265 rule holds: do
+            // not log the raw email address.
             if is_new_user {
-                let email = user.email.clone();
-                let email_svc = email_service.get_ref().clone();
-                tokio::spawn(async move {
-                    if let Err(e) = email_svc.send_account_created(&email).await {
-                        // BUNYIP-265: do not log raw user email at error level (PII +
-                        // enumeration channel). The request_id middleware adds correlation;
-                        // the failure mode is the load-bearing signal.
-                        tracing::error!(error = %e, "Failed to send account created email");
-                    }
-                });
+                if let Err(e) = email_service.send_account_created(&user.email).await {
+                    tracing::error!(error = %e, "Failed to send account created email");
+                }
             }
 
             let secure = config.is_production();
