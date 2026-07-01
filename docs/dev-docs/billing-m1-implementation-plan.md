@@ -2,7 +2,7 @@
 
 Snapshot: 2026-05-31. Built on the locked scoping decisions below. This is a
 **plan, not a build** - no billing logic was changed to produce it. Companion to
-`dev-docs/billing-m1-gap-matrix.md` (the audit it sequences). Per-user data model
+`docs/dev-docs/billing-m1-gap-matrix.md` (the audit it sequences). Per-user data model
 stays; no migration touches the `user_id` relationships.
 
 ## Locked decisions (do not re-litigate)

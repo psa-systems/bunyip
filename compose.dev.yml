@@ -65,7 +65,7 @@ services:
       STRIPE_ENCRYPTION_KEY: ${STRIPE_ENCRYPTION_KEY:-}
       # Test-mode Stripe keys for local subscription testing (BUNYIP-175). The
       # webhook secret is the whsec_ printed by `stripe listen`. Empty by default
-      # keeps payment disabled. See dev-docs/stripe-test-mode.md.
+      # keeps payment disabled. See docs/stripe-test-mode.md.
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       # Checkout redirect URLs. Empty default lets the api derive them from
@@ -86,7 +86,7 @@ services:
       DUNITE_GIT_TOKEN: ${DUNITE_GIT_TOKEN:-}
       # ── Distribution proxy (downloads + OCI registry) ─────────────────────
       # Both verticals stay disabled until FORGEJO_BASE_URL + FORGEJO_API_TOKEN
-      # are set in .env. Token scopes: see dev-docs/oci-registry-verification.md.
+      # are set in .env. Token scopes: see docs/oci-registry-verification.md.
       FORGEJO_BASE_URL: ${FORGEJO_BASE_URL:-}
       FORGEJO_API_TOKEN: ${FORGEJO_API_TOKEN:-}
       DOWNLOAD_CACHE_DIR: /var/cache/bunyip-downloads

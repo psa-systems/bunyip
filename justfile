@@ -272,7 +272,7 @@ dev-stop-sso: ensure-env
 # Prerequisites: `just dev-detach` already up with the distribution proxy enabled
 # in .env (FORGEJO_BASE_URL, FORGEJO_API_TOKEN, OCI_REGISTRY_ENABLED=true) and a
 # published image to pull. Runs the docker login/pull matrix from
-# dev-docs/oci-registry-verification.md and exits non-zero on the first failure.
+# docs/oci-registry-verification.md and exits non-zero on the first failure.
 [group: 'dev']
 verify-oci slug="bunyip-api" owner="psa-systems-private" image="bunyip-api" tag="v0.1.1":
     #!/usr/bin/env nu

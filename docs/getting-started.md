@@ -54,7 +54,7 @@ The login page has a "Continue with Google" button (visible when `BUNYIP_OIDC_IS
 
 For this to work end to end you need:
 
-- mokosh-server's Google OAuth client configured with the right redirect URIs (see `mokosh-server/dev-docs/milestone-1-handoff.md`).
+- mokosh-server's Google OAuth client configured with the right redirect URIs (see `mokosh-server/docs/dev-docs/CHANGELOG.md`).
 - The bunyip OAuth client (in mokosh_auth.oauth_clients) registered with `<bunyip-origin>/auth/callback`.
 
 ## Cross-project domain layout
@@ -94,7 +94,7 @@ All cargo runs inside the dev container; never `cargo build` on the host.
 - `compose.yml` - production / self-host reference deployment (pulls published images).
 - `compose.dev.yml` - dev stack (bind-mount source, cargo watch / dx serve).
 - `compose.dev-sso.yml` - overlay for testing against a real mokosh-server.
-- `dev-docs/milestone-1-handoff.md` - the May 15 snapshot of M1 architecture + open asks.
+- `docs/dev-docs/CHANGELOG.md` - the May 15 snapshot of M1 architecture + open asks.
 - `For AI/` - gitignored AI working context; not part of the codebase.
 - `docs/` - this folder; user / operator documentation.
 
@@ -108,7 +108,7 @@ All cargo runs inside the dev container; never `cargo build` on the host.
 
 ## Next steps
 
-- For the M1 architecture deep dive: `dev-docs/milestone-1-handoff.md`.
+- For the M1 architecture deep dive: `docs/dev-docs/CHANGELOG.md`.
 - For the bunyip / mokosh ownership split: `For AI/bunyip-mokosh-boundaries.md` (local-only).
 - For deployment / self-host: README "Self-host" section.
 - For YouTrack tickets: filter by Milestone 1 in the PSA Systems project, or look at [PSA-1](https://niceguyit.myjetbrains.com/youtrack/issue/PSA-1).

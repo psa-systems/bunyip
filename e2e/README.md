@@ -94,7 +94,7 @@ side; `.forgejo/workflows/e2e.yml` selects per var and exposes the result on the
 plain `E2E_*` names, so the suite stays environment-agnostic. Test-only vars use
 `E2E_STAGING_*` / `E2E_PRODUCTION_*`; the OP host follows the deployment's own
 `OIDC_ISSUER_*` name. Automatic runs resolve to staging; production is
-manual-dispatch only. See `dev-docs/e2e.md` for provisioning + rotation sources.
+manual-dispatch only. See `docs/e2e.md` for provisioning + rotation sources.
 
 The tables below are the authoritative list of every repository-level Forgejo
 Actions **secret** and **variable** the workflows (`.forgejo/workflows/*.yml`)
@@ -141,7 +141,7 @@ a throwaway account per run (`lib/accounts.ts`) and self-delete it in a
 HARD-deletes the row rather than soft-deleting it, so accounts do not accumulate
 on staging (BUNYIP-246). The purge is gated SERVER-side: bunyip-api honours it
 only on a non-production deployment whose env sets `BUNYIP_E2E_BOOTSTRAP_ALLOW=true`
-(see `dev-docs/e2e.md`). Production ignores the flag and soft-deletes as normal,
+(see `docs/e2e.md`). Production ignores the flag and soft-deletes as normal,
 and these specs skip there anyway. The same gate enables a bunyip-api background
 reaper that hard-deletes any leaked disposable (a crashed run whose `finally`
 never ran) older than 6h; it never runs in production.
@@ -162,6 +162,6 @@ independent of the fixme and stays after the fixme is lifted.
 
 ## CI
 
-See `dev-docs/e2e.md` for the workflow shape, the deploy-sync / health gate
+See `docs/e2e.md` for the workflow shape, the deploy-sync / health gate
 scripts (`scripts/wait-for-deploy.mjs`, `scripts/health-check.mjs`), the
 production-skip safety gate, and how to add a new spec.

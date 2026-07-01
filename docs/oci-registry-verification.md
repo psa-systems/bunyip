@@ -193,7 +193,7 @@ Verified 2026-06-02 against dev.a8n.run (Forgejo), image
 
 `just dev-sso` (or the api-only overlay) routes the registry through Traefik on
 `<user>-bunyip-registry.a8n.run` with a real certificate. Wiring details live
-in `dev-docs/dev-sso-three-repo-runbook.md` section 9. Differences from the
+in `docs/dev-sso-three-repo-runbook.md` section 9. Differences from the
 localhost procedure above:
 
 - Do NOT set `OCI_REGISTRY_SERVICE` / `OCI_REGISTRY_REALM` in `.env`; the

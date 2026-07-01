@@ -1055,7 +1055,7 @@ pub async fn membership_subscribe(State(st): State<AppState>, headers: HeaderMap
 fn humanise_checkout_error(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.contains("No active price configured") {
-        return "Stripe checkout is not configured. An admin must create at least one tagged product and recurring price before subscriptions can be opened. See dev-docs/stripe-test-mode.md.".to_string();
+        return "Stripe checkout is not configured. An admin must create at least one tagged product and recurring price before subscriptions can be opened. See docs/stripe-test-mode.md.".to_string();
     }
     if trimmed.contains("Stripe is not configured") || trimmed.contains("STRIPE_SECRET_KEY") {
         return "Stripe is not configured on this deployment. Set the Stripe keys in the admin Stripe page (or via env) before subscribing.".to_string();
