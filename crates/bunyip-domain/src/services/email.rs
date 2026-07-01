@@ -329,6 +329,11 @@ impl EmailService {
                 )
                 .map_err(|e| AppError::internal(format!("Email build error: {}", e)))?;
 
+            // BUNYIP-309: log the handoff to the transport so an attempt is
+            // visible even when the send below fails. Pairs with the
+            // "Email sent successfully" line to bracket every delivery.
+            tracing::info!(to = %to, subject = %subject, "Email queued for delivery");
+
             transport
                 .send(email)
                 .await
