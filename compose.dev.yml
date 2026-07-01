@@ -146,6 +146,7 @@ services:
       BUNYIP_API_URL: ${BUNYIP_API_URL:-http://api:4401}
       BUNYIP_APP_DOMAIN: ${BUNYIP_APP_DOMAIN:-localhost}
       BUNYIP_SHOW_BUSINESS_PRICING: ${BUNYIP_SHOW_BUSINESS_PRICING:-false}
+      BUNYIP_COMMUNITY_URL: ${BUNYIP_COMMUNITY_URL:-}
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - .:/app
