@@ -1,11 +1,15 @@
 {% extends "base.txt" %}
 {% block content %}
-Verify Your Email Address
--------------------------
+Verify your email
 
-Click the link below to verify your {{ app_name }} account email address.
+Confirm this address so {{ app_name }} can send you important account
+updates. It also unlocks features that need a verified email, like
+resetting your password.
 
-{{ verify_url }}
+Verify: {{ verify_url }}
 
-This link expires in 1 hour. If you didn't request this, you can safely ignore this email.
+---
+
+This link expires in 1 hour. Didn't request this? You can safely ignore
+this email.
 {% endblock %}

@@ -1,11 +1,14 @@
 {% extends "base.txt" %}
 {% block content %}
 Sign in to {{ app_name }}
---------------------
 
-Click the link below to sign in to your account. This link expires in 15 minutes.
+You asked for a one-time sign-in link. Follow the link below to jump
+straight in - no password needed.
 
-{{ magic_link_url }}
+Sign in: {{ magic_link_url }}
 
-If you didn't request this link, you can safely ignore this email.
+---
+
+This link expires in 15 minutes and only works once. Didn't request
+this? Ignore this email and no one signs in.
 {% endblock %}
