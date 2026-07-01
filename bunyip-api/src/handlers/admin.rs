@@ -2577,7 +2577,10 @@ mod tests {
             sql.contains("subscription_tier, 'standard') = $3"),
             "must filter on the (coalesced) tier bind"
         );
-        assert!(sql.contains("deleted_at IS NULL"), "must exclude soft-deleted");
+        assert!(
+            sql.contains("deleted_at IS NULL"),
+            "must exclude soft-deleted"
+        );
         assert!(
             sql.contains("ORDER BY created_at ASC"),
             "must order oldest-first for stable slot order"

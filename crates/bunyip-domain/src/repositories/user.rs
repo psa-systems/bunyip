@@ -723,10 +723,7 @@ impl UserRepository {
         let trial_ends_at = tier
             .trial_days(early_adopter_trial_days, standard_trial_days)
             .map(|days| chrono::Utc::now() + chrono::Duration::days(days));
-        let lifetime_member = matches!(
-            tier,
-            SubscriptionTier::Lifetime | SubscriptionTier::Free
-        );
+        let lifetime_member = matches!(tier, SubscriptionTier::Lifetime | SubscriptionTier::Free);
 
         sqlx::query(
             r#"

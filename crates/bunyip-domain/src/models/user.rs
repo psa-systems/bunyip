@@ -156,7 +156,11 @@ impl SubscriptionTier {
     /// windows (BUNYIP-291, AC1). `Lifetime` / `Free` never trial (`None`);
     /// `EarlyAdopter` and `Standard` read their length from the tier settings
     /// rather than any hardcoded constant.
-    pub fn trial_days(&self, early_adopter_trial_days: i64, standard_trial_days: i64) -> Option<i64> {
+    pub fn trial_days(
+        &self,
+        early_adopter_trial_days: i64,
+        standard_trial_days: i64,
+    ) -> Option<i64> {
         match self {
             SubscriptionTier::Lifetime | SubscriptionTier::Free => None,
             SubscriptionTier::EarlyAdopter => Some(early_adopter_trial_days),
@@ -167,7 +171,11 @@ impl SubscriptionTier {
     /// Signup trial label surfaced to the user / recorded in audit metadata
     /// (BUNYIP-291, AC2), e.g. "Early Adopter - 90-day trial". Tiers without a
     /// trial return `None`.
-    pub fn trial_label(&self, early_adopter_trial_days: i64, standard_trial_days: i64) -> Option<String> {
+    pub fn trial_label(
+        &self,
+        early_adopter_trial_days: i64,
+        standard_trial_days: i64,
+    ) -> Option<String> {
         self.trial_days(early_adopter_trial_days, standard_trial_days)
             .map(|days| format!("{} - {}-day trial", self.display_name(), days))
     }
@@ -370,8 +378,14 @@ mod tests {
         // BUNYIP-291 AC1: lifetime slots fill first, then early-adopter, then
         // everyone else is standard. Caps here: 5 lifetime, 5 early-adopter.
         // A free lifetime slot wins regardless of early-adopter occupancy.
-        assert_eq!(SubscriptionTier::select(0, 0, 5, 5), SubscriptionTier::Lifetime);
-        assert_eq!(SubscriptionTier::select(4, 5, 5, 5), SubscriptionTier::Lifetime);
+        assert_eq!(
+            SubscriptionTier::select(0, 0, 5, 5),
+            SubscriptionTier::Lifetime
+        );
+        assert_eq!(
+            SubscriptionTier::select(4, 5, 5, 5),
+            SubscriptionTier::Lifetime
+        );
         // Lifetime full: land in the early-adopter pool while it has room.
         assert_eq!(
             SubscriptionTier::select(5, 0, 5, 5),
@@ -430,7 +444,9 @@ mod tests {
     fn trial_label_distinguishes_early_adopter_from_standard() {
         // BUNYIP-291 AC2: the applied trial is labeled at signup.
         assert_eq!(
-            SubscriptionTier::EarlyAdopter.trial_label(90, 30).as_deref(),
+            SubscriptionTier::EarlyAdopter
+                .trial_label(90, 30)
+                .as_deref(),
             Some("Early Adopter - 90-day trial")
         );
         assert_eq!(

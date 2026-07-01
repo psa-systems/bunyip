@@ -668,7 +668,10 @@ pub async fn memberships(
     // BUNYIP-291 AC4: members-by-tier view. Only accept known tier slugs so a
     // junk query param falls back to the unfiltered "All" list.
     let tier = match q.tier.as_deref() {
-        Some(t @ ("early_adopter" | "standard" | "lifetime" | "free")) => t,
+        Some("early_adopter") => "early_adopter",
+        Some("standard") => "standard",
+        Some("lifetime") => "lifetime",
+        Some("free") => "free",
         _ => "",
     };
     let data = admin_api::memberships(&st.api, c.forward.as_deref(), page, 20, "", tier)
@@ -680,7 +683,9 @@ pub async fn memberships(
     // Early-adopter slot occupancy comes from the tier config (used vs total),
     // surfaced when viewing that tier so admins can see if the pool is full.
     let tier_cfg = if tier == "early_adopter" {
-        admin_api::tier_config(&st.api, c.forward.as_deref()).await.ok()
+        admin_api::tier_config(&st.api, c.forward.as_deref())
+            .await
+            .ok()
     } else {
         None
     };
