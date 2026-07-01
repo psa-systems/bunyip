@@ -118,6 +118,59 @@ impl SubscriptionTier {
             SubscriptionTier::Standard => "standard",
         }
     }
+
+    /// Human-readable tier name for labels and audit metadata.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            SubscriptionTier::Lifetime => "Lifetime",
+            SubscriptionTier::Free => "Free",
+            SubscriptionTier::EarlyAdopter => "Early Adopter",
+            SubscriptionTier::Standard => "Standard",
+        }
+    }
+
+    /// Pick the tier a newly-verified account should receive from the current
+    /// slot occupancy and the admin-configured caps (BUNYIP-291, AC1).
+    ///
+    /// Lifetime slots fill first, then early-adopter slots; everyone after the
+    /// early-adopter cap is `Standard`. The boundary is `<`: once `ea_count`
+    /// reaches `ea_slots` the pool is full and the next account is `Standard`.
+    /// This is the pure decision extracted from the tier-grant transaction so
+    /// the 90-vs-30 boundary is unit-testable without a database.
+    pub fn select(
+        lifetime_count: i64,
+        early_adopter_count: i64,
+        lifetime_slots: i64,
+        early_adopter_slots: i64,
+    ) -> SubscriptionTier {
+        if lifetime_count < lifetime_slots {
+            SubscriptionTier::Lifetime
+        } else if early_adopter_count < early_adopter_slots {
+            SubscriptionTier::EarlyAdopter
+        } else {
+            SubscriptionTier::Standard
+        }
+    }
+
+    /// Trial length in days for this tier, given the admin-configured trial
+    /// windows (BUNYIP-291, AC1). `Lifetime` / `Free` never trial (`None`);
+    /// `EarlyAdopter` and `Standard` read their length from the tier settings
+    /// rather than any hardcoded constant.
+    pub fn trial_days(&self, early_adopter_trial_days: i64, standard_trial_days: i64) -> Option<i64> {
+        match self {
+            SubscriptionTier::Lifetime | SubscriptionTier::Free => None,
+            SubscriptionTier::EarlyAdopter => Some(early_adopter_trial_days),
+            SubscriptionTier::Standard => Some(standard_trial_days),
+        }
+    }
+
+    /// Signup trial label surfaced to the user / recorded in audit metadata
+    /// (BUNYIP-291, AC2), e.g. "Early Adopter - 90-day trial". Tiers without a
+    /// trial return `None`.
+    pub fn trial_label(&self, early_adopter_trial_days: i64, standard_trial_days: i64) -> Option<String> {
+        self.trial_days(early_adopter_trial_days, standard_trial_days)
+            .map(|days| format!("{} - {}-day trial", self.display_name(), days))
+    }
 }
 
 impl From<&str> for SubscriptionTier {
@@ -303,6 +356,66 @@ impl From<User> for UserResponse {
 mod tests {
     use super::*;
     use chrono::Utc;
+
+    #[test]
+    fn select_tier_fills_lifetime_then_early_adopter_then_standard() {
+        // BUNYIP-291 AC1: lifetime slots fill first, then early-adopter, then
+        // everyone else is standard. Caps here: 5 lifetime, 5 early-adopter.
+        // A free lifetime slot wins regardless of early-adopter occupancy.
+        assert_eq!(SubscriptionTier::select(0, 0, 5, 5), SubscriptionTier::Lifetime);
+        assert_eq!(SubscriptionTier::select(4, 5, 5, 5), SubscriptionTier::Lifetime);
+        // Lifetime full: land in the early-adopter pool while it has room.
+        assert_eq!(
+            SubscriptionTier::select(5, 0, 5, 5),
+            SubscriptionTier::EarlyAdopter
+        );
+        assert_eq!(
+            SubscriptionTier::select(5, 4, 5, 5),
+            SubscriptionTier::EarlyAdopter
+        );
+    }
+
+    #[test]
+    fn select_tier_boundary_is_exclusive_next_account_is_standard() {
+        // The Nth early adopter (ea_count == ea_slots - 1) still gets early
+        // adopter; the very next account (ea_count == ea_slots) tips to
+        // standard. This pins the 90-vs-30 trial boundary.
+        assert_eq!(
+            SubscriptionTier::select(5, 49, 5, 50),
+            SubscriptionTier::EarlyAdopter
+        );
+        assert_eq!(
+            SubscriptionTier::select(5, 50, 5, 50),
+            SubscriptionTier::Standard
+        );
+    }
+
+    #[test]
+    fn trial_days_come_from_settings_not_a_constant() {
+        // BUNYIP-291 AC1: 90 for early adopter, 30 for standard, sourced from
+        // the passed-in (admin-configured) values; lifetime/free never trial.
+        assert_eq!(SubscriptionTier::EarlyAdopter.trial_days(90, 30), Some(90));
+        assert_eq!(SubscriptionTier::Standard.trial_days(90, 30), Some(30));
+        assert_eq!(SubscriptionTier::Lifetime.trial_days(90, 30), None);
+        assert_eq!(SubscriptionTier::Free.trial_days(90, 30), None);
+        // Different admin config flows straight through (no hardcoded 90/30).
+        assert_eq!(SubscriptionTier::EarlyAdopter.trial_days(60, 14), Some(60));
+        assert_eq!(SubscriptionTier::Standard.trial_days(60, 14), Some(14));
+    }
+
+    #[test]
+    fn trial_label_distinguishes_early_adopter_from_standard() {
+        // BUNYIP-291 AC2: the applied trial is labeled at signup.
+        assert_eq!(
+            SubscriptionTier::EarlyAdopter.trial_label(90, 30).as_deref(),
+            Some("Early Adopter - 90-day trial")
+        );
+        assert_eq!(
+            SubscriptionTier::Standard.trial_label(90, 30).as_deref(),
+            Some("Standard - 30-day trial")
+        );
+        assert_eq!(SubscriptionTier::Lifetime.trial_label(90, 30), None);
+    }
 
     fn test_user() -> User {
         User {

@@ -1384,13 +1384,12 @@ impl AuthService {
             .expect("TierConfig lock poisoned")
             .clone();
 
-        let tier = if lifetime_count < tc.lifetime_slots {
-            SubscriptionTier::Lifetime
-        } else if early_adopter_count < tc.early_adopter_slots {
-            SubscriptionTier::EarlyAdopter
-        } else {
-            SubscriptionTier::Standard
-        };
+        let tier = SubscriptionTier::select(
+            lifetime_count,
+            early_adopter_count,
+            tc.lifetime_slots,
+            tc.early_adopter_slots,
+        );
 
         UserRepository::assign_subscription_tier(
             &mut *tx,
