@@ -7,6 +7,17 @@
 # dependencies from the root Cargo.toml), so the Docker context is the repo
 # root and the build compiles just the bunyip-web binary. The glibc builder
 # image carries bun + tailwind for the CSS step.
+#
+# BUNYIP-299: the "Guard - bunyip-web must be Axum SSR" step below rejects any
+# tree whose bunyip-web/Cargo.toml lacks an `axum` dependency. bunyip-web
+# pivoted from a Dioxus WASM SPA (Caddy on :8080) to Axum SSR (Maud + htmx on
+# :4400) at 20c6c62 (2026-05-30). Before that pivot, `bunyip-web/Cargo.toml`
+# listed `dioxus = ...` and no axum. On 2026-07-01T04:58Z, a build of the
+# pre-pivot v0.1.1 commit (2630bf8) landed on :latest and the Dioxus artifact
+# 502'd a8n.systems until we caught it. The sniff test below cannot false-
+# positive against any release since v0.2.0 and definitively rejects the
+# pre-pivot Dioxus tree that caused the incident, regardless of how the
+# trigger's ref plumbing resolved.
 name: Build Web image
 
 on:
@@ -52,6 +63,30 @@ jobs:
         uses: https://code.forgejo.org/actions/checkout@v5
         with:
           fetch-depth: 0
+
+      # BUNYIP-299: refuse to build any tree whose bunyip-web/Cargo.toml lacks
+      # an `axum` direct dependency. This catches the specific class of failure
+      # that hit us on 2026-07-01: a build of the pre-May-30 Dioxus tree
+      # (commit 2630bf8) landed on :latest and 502'd a8n.systems because the
+      # Dioxus SPA binds Caddy on :8080 and Traefik was labelled to reach :4400.
+      # Every bunyip-web tree since 20c6c62 (2026-05-30) is Axum SSR and has
+      # `axum = ...` at the top of bunyip-web/Cargo.toml; every Dioxus-era
+      # tree has `dioxus = ...` and no axum line. The sniff test is
+      # zero-assumption about trigger plumbing (works on push, tag, and
+      # workflow_dispatch alike) so a future history rewrite or force-push
+      # side effect cannot silently roll production onto a pre-pivot ref.
+      - name: Guard - bunyip-web must be Axum SSR
+        shell: nu {0}
+        run: |
+          let cargo = (open bunyip-web/Cargo.toml)
+          let has_axum = ($cargo | get -o dependencies | default {} | columns | any {|c| $c == "axum"})
+          if not $has_axum {
+            print "error: bunyip-web/Cargo.toml has no `axum` direct dependency."
+            print "error: this looks like a pre-2026-05-30 Dioxus tree; refusing to build/publish."
+            print "error: see BUNYIP-299 for the mispush incident that motivated this guard."
+            exit 1
+          }
+          print "guard: bunyip-web/Cargo.toml has an axum dependency; tree is Axum SSR"
 
       - name: Verify Docker availability
         run: |
