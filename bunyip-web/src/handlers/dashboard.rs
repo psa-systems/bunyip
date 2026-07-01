@@ -141,6 +141,34 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
     dashboard_response(&c, &user, "/dashboard", "Dashboard · Bunyip", content)
 }
 
+/// BUNYIP-329: decide where `/community` sends the caller. A member with a
+/// configured Let's Chat URL is redirected into it (authenticated via their
+/// existing OP session); a non-member is sent to the membership upsell; and if
+/// the feature is unconfigured there is nowhere to go, so fall back to the
+/// dashboard. Pure so the routing decision is unit-testable without a request.
+fn community_redirect_target<'a>(community_url: &'a str, is_member: bool) -> &'a str {
+    match (is_member, community_url.is_empty()) {
+        (true, false) => community_url,
+        (false, _) => "/membership",
+        (true, true) => "/dashboard",
+    }
+}
+
+/// GET /community - drop an authenticated member into the team Let's Chat
+/// ("Community") instance (BUNYIP-329). The target URL already runs Let's
+/// Chat's OIDC client against bunyip-api, so the member's existing OP session
+/// logs them in with no separate login (the same single-sign-in bridge the app
+/// tiles use). Non-members are routed to the membership upsell instead.
+pub async fn community(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match guard(&st, &headers, "/community").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let is_member = has_active_membership(Some(&user));
+    let target = community_redirect_target(&st.cfg.community_url, is_member);
+    redirect_cookies(target, &c.set_cookies)
+}
+
 pub fn membership_badge(user: &User) -> Markup {
     // Admins have all-access regardless of membership status (mirrors
     // `has_active_membership`, which treats role == Admin as access-granted).
@@ -1910,6 +1938,32 @@ mod tests {
             last_name: None,
             phone: None,
         }
+    }
+
+    #[test]
+    fn community_sends_member_into_lets_chat() {
+        // BUNYIP-329: a member with a configured Let's Chat URL is redirected
+        // straight into it (authenticated via their existing OP session).
+        let url = "https://chat.a8n.systems/auth/bunyip";
+        assert_eq!(community_redirect_target(url, true), url);
+    }
+
+    #[test]
+    fn community_upsells_non_members() {
+        // A non-member hitting /community is sent to the membership upsell,
+        // never into the members-only community.
+        assert_eq!(
+            community_redirect_target("https://chat.a8n.systems/auth/bunyip", false),
+            "/membership"
+        );
+    }
+
+    #[test]
+    fn community_falls_back_to_dashboard_when_unconfigured() {
+        // Feature off (empty URL): even a member has nowhere to go, so avoid a
+        // dead external link and return to the dashboard.
+        assert_eq!(community_redirect_target("", true), "/dashboard");
+        assert_eq!(community_redirect_target("", false), "/membership");
     }
 
     #[test]

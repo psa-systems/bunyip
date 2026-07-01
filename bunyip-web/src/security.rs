@@ -117,6 +117,7 @@ mod tests {
             oidc_issuer: "http://localhost:4401".into(),
             app_domain: String::new(),
             show_business_pricing: false,
+            community_url: String::new(),
         }
     }
 

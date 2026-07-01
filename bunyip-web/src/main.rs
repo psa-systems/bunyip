@@ -120,6 +120,7 @@ async fn main() {
         .route("/checkout/success", get(dash::checkout_success))
         .route("/membership-required", get(dash::membership_required))
         .route("/membership", get(dash::membership))
+        .route("/community", get(dash::community))
         .route(
             "/membership/subscribe",
             axum::routing::post(dash::membership_subscribe),
