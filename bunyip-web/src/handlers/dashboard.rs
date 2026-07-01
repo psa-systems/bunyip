@@ -958,8 +958,16 @@ pub async fn membership(
                                 div { p class="text-sm text-muted-foreground" { "Price" } p class="font-medium" { @if m.price_locked { @if let Some(a)=m.locked_price_amount { "$" (a/100) "/month" } @else { "$3/month" } } @else { "$3/month" } } }
                                 div { p class="text-sm text-muted-foreground" { "Status" } p class="font-medium" { (status_label(&m.status)) } }
                                 div { p class="text-sm text-muted-foreground" { "Next Billing" } p class="font-medium" {
-                                    @let end = m.current_period_end.as_deref().map(fmt_date_iso).unwrap_or_else(|| "N/A".into());
-                                    @if will_cancel { "Canceled - ends " (end) } @else { (end) } } }
+                                    // BUNYIP-330: current_period_end is None until the
+                                    // Stripe subscription webhook syncs it. Show the
+                                    // concrete date when known; otherwise a plain-English
+                                    // phrase, never the bare "N/A" it used to print.
+                                    @let end = m.current_period_end.as_deref().map(fmt_date_iso);
+                                    @if will_cancel {
+                                        @if let Some(d) = end { "Canceled - ends " (d) } @else { "Canceled - ends at the end of the current billing period" }
+                                    } @else {
+                                        @if let Some(d) = end { (d) } @else { "End of the current billing period" }
+                                    } } }
                             }
                             div class="flex gap-4 pt-4" {
                                 @if will_cancel {
@@ -969,13 +977,16 @@ pub async fn membership(
                                     // offers the two distinct cancel modes (keep
                                     // access until period end vs cancel now) as a
                                     // choice, rather than two sibling buttons.
-                                    @let end = m.current_period_end.as_deref().map(fmt_date_iso).unwrap_or_else(|| "N/A".into());
+                                    // BUNYIP-330: see Next Billing above - fall back to a
+                                    // readable phrase instead of "N/A" when the period end
+                                    // has not synced from Stripe yet.
+                                    @let end = m.current_period_end.as_deref().map(fmt_date_iso);
                                     details class="group" {
                                         summary class=(button_class("outline", "default", "cursor-pointer list-none")) { "Cancel Membership" }
                                         div class="mt-3 w-full max-w-md rounded-md border p-3 space-y-3 text-sm" {
                                             p class="text-muted-foreground" { "How would you like to cancel?" }
                                             form method="post" action="/membership/cancel" {
-                                                button type="submit" class=(button_class("outline", "sm", "w-full justify-start")) { "Cancel at period end - keep access until " (end) }
+                                                button type="submit" class=(button_class("outline", "sm", "w-full justify-start")) { @if let Some(d) = end { "Cancel at period end - keep access until " (d) } @else { "Cancel at period end - keep access until the end of your current billing period" } }
                                             }
                                             form method="post" action="/membership/cancel-now" onsubmit="return confirm('Cancel immediately? You will lose access right now.')" {
                                                 button type="submit" class=(button_class("destructive", "sm", "w-full justify-start")) { "Cancel immediately - lose access now" }
