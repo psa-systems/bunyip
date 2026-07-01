@@ -29,6 +29,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 
+# BUNYIP-308: unverified base64url decode of the at+jwt payload, used by
+# `auth::authenticate` to compare the cookie's `role` claim against the DB
+# role reported by /users/me. Signature verification is not needed - the
+# /users/me call has already validated the token; we only decode to detect a
+# stale-role mismatch and rotate through /auth/refresh.
+base64 = "0.21"
+
 # Percent-encode the OIDC return URL when shuttling it through the 2FA hop.
 urlencoding = "2"
 
