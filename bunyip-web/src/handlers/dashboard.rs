@@ -937,8 +937,23 @@ pub async fn membership(
                                 @if will_cancel {
                                     form method="post" action="/membership/reactivate" { button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Reactivate Membership" } }
                                 } @else {
-                                    form method="post" action="/membership/cancel" { button type="submit" class=(button_class("outline", "default", "")) { "Cancel Membership" } }
-                                    form method="post" action="/membership/cancel-now" onsubmit="return confirm('Cancel immediately? You will lose access right now.')" { button type="submit" class=(button_class("destructive", "default", "")) { "Cancel Now" } }
+                                    // BUNYIP-291 AC3: a single cancel control that
+                                    // offers the two distinct cancel modes (keep
+                                    // access until period end vs cancel now) as a
+                                    // choice, rather than two sibling buttons.
+                                    @let end = m.current_period_end.as_deref().map(fmt_date_iso).unwrap_or_else(|| "N/A".into());
+                                    details class="group" {
+                                        summary class=(button_class("outline", "default", "cursor-pointer list-none")) { "Cancel Membership" }
+                                        div class="mt-3 w-full max-w-md rounded-md border p-3 space-y-3 text-sm" {
+                                            p class="text-muted-foreground" { "How would you like to cancel?" }
+                                            form method="post" action="/membership/cancel" {
+                                                button type="submit" class=(button_class("outline", "sm", "w-full justify-start")) { "Cancel at period end - keep access until " (end) }
+                                            }
+                                            form method="post" action="/membership/cancel-now" onsubmit="return confirm('Cancel immediately? You will lose access right now.')" {
+                                                button type="submit" class=(button_class("destructive", "sm", "w-full justify-start")) { "Cancel immediately - lose access now" }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
