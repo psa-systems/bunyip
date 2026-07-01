@@ -135,32 +135,6 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                     }
                 }
             }
-
-            // BUNYIP-329: Community (Let's Chat). Shown to members once a
-            // Let's Chat instance is configured; the button opens /community,
-            // which redirects into the instance authenticated via the OIDC
-            // bridge. target=_blank matches the app-tile launch behavior.
-            @if is_member && st.cfg.community_enabled() {
-                div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50 overflow-hidden" {
-                    div class="h-1 bg-gradient-to-r from-teal-500 via-indigo-500 to-primary" {}
-                    div class="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between" {
-                        div class="flex items-center gap-3" {
-                            div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-teal-500 to-indigo-500" {
-                                (icon("message-square-quote", "h-4 w-4 text-white"))
-                            }
-                            div {
-                                h3 class="text-lg font-semibold leading-none tracking-tight" { "Community" }
-                                p class="mt-1 text-sm text-muted-foreground" { "Join the community and chat with us." }
-                            }
-                        }
-                        a href="/community" target="_blank" rel="noopener noreferrer" {
-                            span class=(button_class("default", "default", "gap-2 bg-gradient-to-r from-teal-500 to-indigo-500 text-white border-0 shadow-md shadow-indigo-500/15")) {
-                                "Open Community " (icon("external-link", "h-4 w-4"))
-                            }
-                        }
-                    }
-                }
-            }
         }
     };
 
