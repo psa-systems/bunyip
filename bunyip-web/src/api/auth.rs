@@ -68,6 +68,7 @@ fn parse_login(value: Value) -> Result<LoginOutcome, ApiError> {
         status: 0,
         code: "DECODE_ERROR".into(),
         message: e.to_string(),
+        retry_after: None,
     })?;
     Ok(LoginOutcome::SignedIn(auth.user))
 }
@@ -142,6 +143,7 @@ pub async fn verify_2fa(
         status: 0,
         code: "DECODE_ERROR".into(),
         message: e.to_string(),
+        retry_after: None,
     })?;
     Ok((auth.user, cookies))
 }
@@ -261,6 +263,7 @@ pub async fn accept_invite(
         status: 0,
         code: "DECODE_ERROR".into(),
         message: e.to_string(),
+        retry_after: None,
     })?;
     Ok((None, Some(auth.user), cookies))
 }
