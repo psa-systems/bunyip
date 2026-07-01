@@ -622,6 +622,28 @@ impl TokenRepository {
         Ok(count.0)
     }
 
+    /// Oldest email change request `created_at` within the window (for
+    /// computing an accurate `retry_after`, BUNYIP-313). Returns `None` when
+    /// there are no in-window requests.
+    pub async fn oldest_recent_email_change_request(
+        pool: &PgPool,
+        user_id: Uuid,
+        since: DateTime<Utc>,
+    ) -> Result<Option<DateTime<Utc>>, AppError> {
+        let row: (Option<DateTime<Utc>>,) = sqlx::query_as(
+            r#"
+            SELECT MIN(created_at) FROM email_change_requests
+            WHERE user_id = $1 AND created_at > $2
+            "#,
+        )
+        .bind(user_id)
+        .bind(since)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(row.0)
+    }
+
     // ==============================
     // Email Verification Tokens
     // ==============================
@@ -704,6 +726,28 @@ impl TokenRepository {
         .await?;
 
         Ok(count.0)
+    }
+
+    /// Oldest email verification token `created_at` within the window (for
+    /// computing an accurate `retry_after`, BUNYIP-313). Returns `None` when
+    /// there are no in-window tokens.
+    pub async fn oldest_recent_email_verification_token(
+        pool: &PgPool,
+        user_id: Uuid,
+        since: DateTime<Utc>,
+    ) -> Result<Option<DateTime<Utc>>, AppError> {
+        let row: (Option<DateTime<Utc>>,) = sqlx::query_as(
+            r#"
+            SELECT MIN(created_at) FROM email_verification_tokens
+            WHERE user_id = $1 AND created_at > $2
+            "#,
+        )
+        .bind(user_id)
+        .bind(since)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(row.0)
     }
 
     // =====================

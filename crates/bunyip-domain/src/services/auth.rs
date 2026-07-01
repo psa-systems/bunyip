@@ -102,6 +102,29 @@ fn session_idle_expired(role: &str, last_active: DateTime<Utc>, now: DateTime<Ut
     }
 }
 
+// --- email resend rate-limit policy (BUNYIP-313) ---------------------------
+
+/// Rolling window, in seconds, over which email-verify and email-change resend
+/// requests are counted. Single source of truth shared by both limiters and
+/// reusable by the admin read path (BUNYIP-315).
+pub const RESEND_LIMIT_WINDOW_SECS: i64 = 3600;
+
+/// Maximum resend requests permitted within [`RESEND_LIMIT_WINDOW_SECS`]; the
+/// next request past this count is throttled. Shared source of truth for both
+/// limiters and the admin read path (BUNYIP-315).
+pub const RESEND_LIMIT_MAX: i64 = 3;
+
+/// Seconds until a throttled user may resend, given the oldest in-window
+/// request's `created_at`. The window frees up one window-length after that
+/// request, so `retry_after = oldest + window - now`. Clamped to `>= 1` so a
+/// just-expired window still reports a truthful, positive `Retry-After`
+/// (BUNYIP-313). Pure and unit-testable: no clock or DB dependency.
+fn resend_retry_after_secs(oldest: DateTime<Utc>, now: DateTime<Utc>) -> u64 {
+    (oldest + Duration::seconds(RESEND_LIMIT_WINDOW_SECS) - now)
+        .num_seconds()
+        .max(1) as u64
+}
+
 // --- trusted-device policy (BUNYIP-138) -------------------------------------
 
 /// How long a remembered device may skip the login TOTP prompt. Using the
@@ -997,13 +1020,20 @@ impl AuthService {
         let old_email = user.email.clone();
 
         if user.email_verified {
-            // Rate limit: 3 requests per hour
-            let since = Utc::now() - Duration::hours(1);
+            // Rate limit: RESEND_LIMIT_MAX requests per rolling window.
+            let since = Utc::now() - Duration::seconds(RESEND_LIMIT_WINDOW_SECS);
             let count =
                 TokenRepository::count_recent_email_change_requests(&self.pool, user_id, since)
                     .await?;
-            if count >= 3 {
-                return Err(AppError::RateLimited { retry_after: 3600 });
+            if count >= RESEND_LIMIT_MAX {
+                // Report the real time until the oldest in-window request ages
+                // out, not a hardcoded full window (BUNYIP-313).
+                let oldest =
+                    TokenRepository::oldest_recent_email_change_request(&self.pool, user_id, since)
+                        .await?
+                        .unwrap_or_else(Utc::now);
+                let retry_after = resend_retry_after_secs(oldest, Utc::now());
+                return Err(AppError::RateLimited { retry_after });
             }
 
             // Cancel any pending requests
@@ -1155,13 +1185,20 @@ impl AuthService {
             return Err(AppError::validation("email", "Email is already verified"));
         }
 
-        // Rate limit: 3 requests per hour
-        let since = Utc::now() - Duration::hours(1);
+        // Rate limit: RESEND_LIMIT_MAX requests per rolling window.
+        let since = Utc::now() - Duration::seconds(RESEND_LIMIT_WINDOW_SECS);
         let count =
             TokenRepository::count_recent_email_verification_tokens(&self.pool, user_id, since)
                 .await?;
-        if count >= 3 {
-            return Err(AppError::RateLimited { retry_after: 3600 });
+        if count >= RESEND_LIMIT_MAX {
+            // Report the real time until the oldest in-window request ages out,
+            // not a hardcoded full window (BUNYIP-313).
+            let oldest =
+                TokenRepository::oldest_recent_email_verification_token(&self.pool, user_id, since)
+                    .await?
+                    .unwrap_or_else(Utc::now);
+            let retry_after = resend_retry_after_secs(oldest, Utc::now());
+            return Err(AppError::RateLimited { retry_after });
         }
 
         // Generate token
@@ -1688,6 +1725,37 @@ mod tests {
         // absolute TTL bounds it, unchanged behavior).
         let very_stale = now - Duration::days(60);
         assert!(!session_idle_expired("subscriber", very_stale, now));
+    }
+
+    #[test]
+    fn retry_after_is_small_when_oldest_request_near_expiry() {
+        // Oldest in-window request was made 59m59s ago, so it ages out of the
+        // 1-hour window in ~1s: retry_after must be small, not a full window.
+        let now = Utc::now();
+        let oldest = now - Duration::seconds(RESEND_LIMIT_WINDOW_SECS - 1);
+        let retry = resend_retry_after_secs(oldest, now);
+        assert!(retry <= 2, "expected small retry_after, got {retry}");
+        assert!(
+            retry >= 1,
+            "retry_after must be clamped to >= 1, got {retry}"
+        );
+    }
+
+    #[test]
+    fn retry_after_is_near_full_window_when_oldest_just_made() {
+        // Oldest request made just now: the window frees up in ~1 hour.
+        let now = Utc::now();
+        let retry = resend_retry_after_secs(now, now);
+        assert_eq!(retry, RESEND_LIMIT_WINDOW_SECS as u64);
+    }
+
+    #[test]
+    fn retry_after_clamps_to_one_for_expired_window() {
+        // Oldest request already older than the window (edge race): still
+        // reports a truthful, positive Retry-After rather than 0 or negative.
+        let now = Utc::now();
+        let oldest = now - Duration::seconds(RESEND_LIMIT_WINDOW_SECS + 120);
+        assert_eq!(resend_retry_after_secs(oldest, now), 1);
     }
 
     #[test]
