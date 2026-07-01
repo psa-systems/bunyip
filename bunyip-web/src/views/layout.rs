@@ -34,6 +34,22 @@ fn sse_api_origin() -> &'static str {
         .unwrap_or("http://localhost:4401")
 }
 
+/// BUNYIP-329: whether the Community (Let's Chat) nav entry is shown. Set once
+/// from `main` out of `Config::community_enabled()`, so the sidebar can gate
+/// the item without threading config through every `dashboard_response` caller
+/// (same pattern as [`SSE_API_ORIGIN`]).
+static COMMUNITY_ENABLED: OnceLock<bool> = OnceLock::new();
+
+/// Install the Community feature flag. Called once from `main` before serving.
+/// Idempotent (the underlying `OnceLock` ignores subsequent sets).
+pub fn install_community_enabled(enabled: bool) {
+    let _ = COMMUNITY_ENABLED.set(enabled);
+}
+
+fn community_enabled() -> bool {
+    *COMMUNITY_ENABLED.get().unwrap_or(&false)
+}
+
 const THEME_FLASH: &str = r#"(function(){try{var r=document.documentElement;var theme='system',hc=false;var raw=localStorage.getItem('theme-storage');if(raw){var p=JSON.parse(raw);theme=(p&&p.state&&p.state.theme)||'system';hc=!!(p&&p.state&&p.state.highContrast);}var dark=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;r.classList.add(theme==='system'?(dark?'dark':'light'):theme);if(hc)r.classList.add('high-contrast');}catch(e){}})();"#;
 
 const THEME_TOGGLE: &str = r#"function bunyipState(){try{var raw=localStorage.getItem('theme-storage');if(raw)return JSON.parse(raw).state||{};}catch(e){}return{};}
@@ -308,13 +324,23 @@ struct NavItem {
     icon: &'static str,
 }
 
-fn dashboard_items() -> Vec<NavItem> {
-    vec![
-        NavItem {
-            title: "Dashboard",
-            href: "/dashboard",
-            icon: "layout-dashboard",
-        },
+fn dashboard_items(is_member: bool) -> Vec<NavItem> {
+    let mut items = vec![NavItem {
+        title: "Dashboard",
+        href: "/dashboard",
+        icon: "layout-dashboard",
+    }];
+    // BUNYIP-329: Community (Let's Chat) sits high in the nav so it is front
+    // and centre, but only for members and only when an instance is configured
+    // (the `/community` route otherwise has nowhere to send them).
+    if is_member && community_enabled() {
+        items.push(NavItem {
+            title: "Community",
+            href: "/community",
+            icon: "message-square-quote",
+        });
+    }
+    items.extend([
         NavItem {
             title: "Applications",
             href: "/applications",
@@ -336,7 +362,8 @@ fn dashboard_items() -> Vec<NavItem> {
             href: "/settings",
             icon: "settings",
         },
-    ]
+    ]);
+    items
 }
 
 fn admin_items() -> Vec<NavItem> {
@@ -398,11 +425,11 @@ const NAV_ACTIVE: &str =
     "bg-gradient-to-r from-primary to-indigo-500 text-white shadow-md shadow-primary/20";
 const NAV_INACTIVE: &str = "text-muted-foreground hover:bg-accent hover:text-accent-foreground";
 
-fn sidebar(admin: bool, is_admin: bool, active: &str) -> Markup {
+fn sidebar(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup {
     let items = if admin {
         admin_items()
     } else {
-        dashboard_items()
+        dashboard_items(is_member)
     };
     html! {
         aside class="hidden md:flex w-64 flex-col border-r border-border/50 bg-gradient-to-b from-background via-background to-indigo-950/5 dark:to-indigo-950/20" {
@@ -414,7 +441,12 @@ fn sidebar(admin: bool, is_admin: bool, active: &str) -> Markup {
             }
             nav class="flex-1 space-y-1 p-4" {
                 @for item in &items {
+                    // BUNYIP-329: Community launches the external Let's Chat
+                    // instance, so open it in a new tab and keep the Bunyip tab.
+                    @let external = item.href == "/community";
                     a href=(item.href)
+                      target=[external.then_some("_blank")]
+                      rel=[external.then_some("noopener noreferrer")]
                       class={ "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-all " (if active == item.href { NAV_ACTIVE } else { NAV_INACTIVE }) } {
                         (icon(item.icon, "h-4 w-4"))
                         (item.title)
@@ -460,10 +492,11 @@ fn app_topbar(title: &str, user: &User) -> Markup {
 /// so every handler keeps its existing `dashboard_response(...)` call shape.
 pub fn dashboard_shell(user: &User, active: &str, topbar_title: &str, content: Markup) -> Markup {
     let is_admin = user.role == UserRole::Admin;
+    let is_member = crate::util::has_active_membership(Some(user));
     let sse = sse_subscriber_script();
     html! {
         div class="flex min-h-screen" {
-            (sidebar(false, is_admin, active))
+            (sidebar(false, is_admin, active, is_member))
             div class="flex flex-1 flex-col" {
                 (app_topbar(topbar_title, user))
                 main class="relative flex-1 overflow-auto p-6" {
@@ -481,7 +514,7 @@ pub fn admin_shell(user: &User, active: &str, topbar_title: &str, content: Marku
     let sse = sse_subscriber_script();
     html! {
         div class="flex min-h-screen" {
-            (sidebar(true, true, active))
+            (sidebar(true, true, active, true))
             div class="flex flex-1 flex-col" {
                 (app_topbar(topbar_title, user))
                 main class="relative flex-1 overflow-auto p-6" {

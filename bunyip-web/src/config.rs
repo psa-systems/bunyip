@@ -36,6 +36,16 @@ pub struct Config {
     pub app_domain: String,
     /// Show the business pricing tier on the pricing page.
     pub show_business_pricing: bool,
+    /// BUNYIP-329: URL of the team Let's Chat ("Community") instance the
+    /// authenticated Community button opens. Empty disables the feature (the
+    /// button is hidden and `/community` sends the user back to the dashboard),
+    /// so a deploy without a Let's Chat instance never shows a dead link.
+    /// Let's Chat is already registered as an OIDC client of bunyip-api, so
+    /// opening this URL logs the member in via their existing OP session (the
+    /// same single-sign-in bridge the app tiles use). Set it to the login-init
+    /// path (e.g. `https://chat.a8n.systems/auth/bunyip`) so the OIDC flow
+    /// fires immediately rather than landing on Let's Chat's own login page.
+    pub community_url: String,
 }
 
 impl Config {
@@ -59,7 +69,15 @@ impl Config {
             show_business_pricing: var("BUNYIP_SHOW_BUSINESS_PRICING")
                 .map(|v| v == "true")
                 .unwrap_or(false),
+            community_url: var("BUNYIP_COMMUNITY_URL").unwrap_or_default(),
         }
+    }
+
+    /// BUNYIP-329: whether the Community (Let's Chat) feature is configured.
+    /// Gates the dashboard Community button so it only renders when an
+    /// instance URL is set.
+    pub fn community_enabled(&self) -> bool {
+        !self.community_url.is_empty()
     }
 
     /// Apex domain or `localhost` fallback (used for app launch URLs + legal copy).

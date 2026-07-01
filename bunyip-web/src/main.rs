@@ -41,6 +41,9 @@ async fn main() {
     // defaults to `api_url` to preserve dev behaviour and overrides via
     // `BUNYIP_API_PUBLIC_ORIGIN` in production.
     views::layout::install_sse_api_origin(cfg.api_public_origin.clone());
+    // BUNYIP-329: gate the Community nav entry on whether a Let's Chat instance
+    // is configured (BUNYIP_COMMUNITY_URL).
+    views::layout::install_community_enabled(cfg.community_enabled());
     // BUNYIP-243: while bunyip-api is unreachable, poll its /health on an
     // interval and clear the app-wide "service unavailable" banner on recovery.
     // Idle (no network) while healthy; detection itself is reactive in
@@ -120,6 +123,7 @@ async fn main() {
         .route("/checkout/success", get(dash::checkout_success))
         .route("/membership-required", get(dash::membership_required))
         .route("/membership", get(dash::membership))
+        .route("/community", get(dash::community))
         .route(
             "/membership/subscribe",
             axum::routing::post(dash::membership_subscribe),
