@@ -128,7 +128,7 @@ Map the tagged product's **id** into the tier config (lifetime / early-adopter /
 standard) so `resolve_tier_for_product` (`bunyip-api/src/handlers/webhook.rs`)
 resolves a tier; otherwise a created subscription still activates membership but
 leaves the tier unchanged (the webhook logs `resolved_tier=None`). Note the M1
-billing plan (`dev-docs/billing-m1-implementation-plan.md`, decision 1) collapses
+billing plan (`docs/dev-docs/billing-m1-implementation-plan.md`, decision 1) collapses
 to a single plan and removes the tiers, so this step may be retired.
 
 ## Step 5 - drive the lifecycle
@@ -175,5 +175,5 @@ Verified end to end on the dev-sso stack with provisioned test-mode keys:
 
 Outstanding: tier resolution from a mapped product (Step 4) is intentionally not
 wired, since the M1 plan removes the tiers
-(`dev-docs/billing-m1-implementation-plan.md`, decision 1). Revisit only if the
+(`docs/dev-docs/billing-m1-implementation-plan.md`, decision 1). Revisit only if the
 single-plan collapse is abandoned.

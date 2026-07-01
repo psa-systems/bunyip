@@ -12,7 +12,7 @@ secrets/
 .vscode/
 node_modules/
 **/node_modules/
-dev-docs/
+docs/
 # Generated Tailwind output; rebuilt inside the web image.
 bunyip-web/assets/styles.css
 *.rs.bk

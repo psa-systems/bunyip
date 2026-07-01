@@ -1273,7 +1273,7 @@ pub async fn setup_admin(
 // ── /v1/auth/memberships ────────────────────────────────────────────────────
 //
 // Synthetic single-tenant stub. Bunyip's M1 scope (per
-// `dev-docs/milestone-1-handoff.md`) is "one user = one account"; the
+// `docs/dev-docs/CHANGELOG.md`) is "one user = one account"; the
 // real organisations + memberships domain is the phase-04 multi-tenant
 // work and has no tables yet. Until that ships, the mokosh-clients SPA
 // (`src/hooks/auth.rs:240+`) hits this endpoint to populate its tenant

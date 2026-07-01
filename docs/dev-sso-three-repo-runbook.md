@@ -281,8 +281,9 @@ See 3.7.
 - **Open PRs** from this session: `fix/dev-sso-nebula-secure-list` (bunyip +
   mokosh-apps), `fix/dev-sso-private-network-external`, `feat/dev-ensure-oidc-keys`;
   mokosh-server already carries the nebula-secure change.
-- The `milestone-1-handoff.md` and `bunyip-on-dunite-scaffold.md` docs predate the
-  rebuild landing and are stale on "mock backend / don't persist in bunyip-api".
+- The milestone-1 handoff (now distilled into `docs/dev-docs/CHANGELOG.md`) and
+  `docs/dev-docs/bunyip-on-dunite-scaffold.md` predate the rebuild landing and are
+  stale on "mock backend / don't persist in bunyip-api".
 
 ## 9. OCI registry subdomain (distribution proxy, BUNYIP-32)
 
@@ -291,7 +292,7 @@ per-developer hostname, `<user>-bunyip-registry.a8n.run`, with a real
 certificate. Members (or you, testing) docker-login with bunyip credentials;
 bunyip fetches the actual images from the private Forgejo with a server-side
 service token. Procedures and configuration rules live in
-`dev-docs/oci-registry-verification.md` (which has a dedicated dev-sso
+`docs/oci-registry-verification.md` (which has a dedicated dev-sso
 section); this section covers only the dev-sso-specific wiring.
 
 ### Required .env additions
@@ -343,7 +344,7 @@ let registry = $"($user_name)-bunyip-registry.a8n.run"
 ```
 
 The rest of the matrix (denials, cache hits, rate limits) is identical to the
-localhost procedure in `dev-docs/oci-registry-verification.md`. The binary
+localhost procedure in `docs/oci-registry-verification.md`. The binary
 download proxy rides the api with no extra routing; exercise it via the web UI
 /downloads page or `/v1/downloads` with a bearer token.
 
@@ -364,7 +365,7 @@ elsewhere:
 - **OCI basics** (auth challenge, admin docker login, entitled pull,
   pinned-tag enforcement): run `just verify-oci` - it checks all of them with
   pass/fail output. The manual procedure behind it is
-  `dev-docs/oci-registry-verification.md` (the BUNYIP-31 runbook).
+  `docs/oci-registry-verification.md` (the BUNYIP-31 runbook).
 - **Traefik-hostname routing**: section 9 above.
 
 What this section adds: the credential matrix (including non-member denials),

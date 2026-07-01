@@ -151,7 +151,7 @@ services:
       # ── Distribution proxy (member downloads + OCI registry, BUNYIP-28) ──
       # Disabled until FORGEJO_BASE_URL (.env) + the forgejo_api_token secret
       # file are set. Configuration rules, token scopes, and the reverse-proxy
-      # requirements live in ONE place: dev-docs/oci-registry-verification.md
+      # requirements live in ONE place: docs/oci-registry-verification.md
       # (Production notes). Every ${VAR} below is documented in .env.example.
       FORGEJO_BASE_URL: ${FORGEJO_BASE_URL:-}
       DOWNLOAD_CACHE_DIR: /var/cache/bunyip-downloads
@@ -200,7 +200,7 @@ services:
       # inside the container).
       - ./secrets/oidc:/run/secrets/oidc:ro
       # Distribution caches MUST be NAMED volumes, never host bind-mounts.
-      # Why + the bind-mount workaround: dev-docs/oci-registry-verification.md
+      # Why + the bind-mount workaround: docs/oci-registry-verification.md
       # (Production notes).
       - oci-cache:/var/cache/bunyip-oci
       - download-cache:/var/cache/bunyip-downloads
