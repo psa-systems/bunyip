@@ -272,6 +272,14 @@ impl User {
         SubscriptionTier::from(self.subscription_tier.as_str())
     }
 
+    /// Whether a new checkout should carry the one-time signup free trial
+    /// (BUNYIP-209 / BUNYIP-225). Eligible only until the trial has been used:
+    /// a returning member who cancels and resubscribes has `has_used_trial =
+    /// true`, so they bill immediately with no second free trial.
+    pub fn trial_eligible(&self) -> bool {
+        !self.has_used_trial
+    }
+
     /// Check if the user is allowed to access protected features.
     ///
     /// Access is granted when ANY of the following are true:
@@ -401,6 +409,21 @@ mod tests {
         // Different admin config flows straight through (no hardcoded 90/30).
         assert_eq!(SubscriptionTier::EarlyAdopter.trial_days(60, 14), Some(60));
         assert_eq!(SubscriptionTier::Standard.trial_days(60, 14), Some(14));
+    }
+
+    #[test]
+    fn returning_member_is_not_eligible_for_a_second_trial() {
+        // BUNYIP-291 AC5 (regression on BUNYIP-225): a first-timer gets the
+        // signup trial; once has_used_trial is set (a prior trial checkout
+        // completed), resubscribing after a cancel grants no new free trial.
+        let mut u = test_user();
+        u.has_used_trial = false;
+        assert!(u.trial_eligible(), "first-timer should be trial-eligible");
+        u.has_used_trial = true;
+        assert!(
+            !u.trial_eligible(),
+            "returning member must not get a second free trial"
+        );
     }
 
     #[test]
