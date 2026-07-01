@@ -87,9 +87,18 @@ async function probe(url) {
 
 // Hub /healthz probe. bunyip-web returns a soft-404 fallback (HTTP 200 + HTML)
 // for unknown paths, so a 200 alone does NOT prove /healthz is the real endpoint
-// - require the JSON liveness body `{"status":"ok"}`. `soft` (prod apex only,
-// for now) downgrades a missing/blank endpoint to a warning; a network failure
-// is always fatal.
+// - require the JSON liveness body `{"status":"ok"}`. `soft` downgrades a
+// missing/blank endpoint to a warning; a network failure is always fatal.
+//
+// Two callers set `soft: true` today:
+// - `hubIsProdApex` (BUNYIP-185): psa.systems does not yet serve /healthz.
+// - `E2E_HUB_SOFT` env var (BUNYIP-301): set from `.forgejo/workflows/e2e.yml`
+//   ONLY on `pull_request` events. A PR's own SHA never deploys, so a broken
+//   staging deploy is not a signal about THIS PR's quality; downgrading to a
+//   warning stops staging outages from deadlocking outage-fix PRs. The push
+//   (post-merge deploy) path uses `wait-for-deploy.mjs` instead of this
+//   script, so post-merge staging-broken alerting is unchanged. Production
+//   `workflow_dispatch` also stays hard: E2E_HUB_SOFT is `'false'` for it.
 async function probeHub(url, { soft = false } = {}) {
   console.log(`PR mode: probing ${url} (timeout ${TIMEOUT_MS / 1000}s)...`);
   const controller = new AbortController();
@@ -114,7 +123,7 @@ async function probeHub(url, { soft = false } = {}) {
         ? `200 but not the /healthz JSON {"status":"ok"} (ct=${ct}); a soft-404 fallback is masking a missing endpoint`
         : `HTTP ${res.status}`;
       if (soft) {
-        console.warn(`${url} -> ${detail}; prod /healthz not deployed yet, continuing.`);
+        console.warn(`${url} -> ${detail}; hub probe soft (prod-apex carve-out or E2E_HUB_SOFT), continuing.`);
         return;
       }
       console.error(`${url} -> ${detail}.`);
@@ -132,6 +141,9 @@ async function probeHub(url, { soft = false } = {}) {
 // API/OP host is a hard gate (its /health exists everywhere).
 await probe(healthUrl);
 // Hub /healthz: hard + body-validating, except the prod apex stays soft until
-// psa.systems serves it (BUNYIP-185).
-await probeHub(hubHealthzUrl, { soft: hubIsProdApex });
+// psa.systems serves it (BUNYIP-185) OR the caller sets E2E_HUB_SOFT=true
+// (BUNYIP-301: set by e2e.yml on pull_request so a broken staging deploy does
+// not deadlock outage-fix PRs). See probeHub docstring for the full contract.
+const hubSoft = hubIsProdApex || process.env.E2E_HUB_SOFT === 'true';
+await probeHub(hubHealthzUrl, { soft: hubSoft });
 console.log('Reachability checks complete. Proceeding.');

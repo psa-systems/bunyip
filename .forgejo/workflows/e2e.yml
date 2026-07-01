@@ -121,6 +121,14 @@ jobs:
 
       - name: Verify deployment is reachable (pull_request / production dispatch)
         if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
+        # BUNYIP-301: soften the hub /healthz probe ONLY on pull_request. A PR's
+        # SHA never deploys, so a broken staging deploy is not a signal about
+        # this PR's quality; the hard check would otherwise deadlock any PR
+        # that lands during an outage (including the PR that fixes the outage,
+        # which is the failure mode we hit on the BUNYIP-299 CI hardening PR).
+        # Production dispatch keeps the hard check.
+        env:
+          E2E_HUB_SOFT: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
         run: node24 scripts/health-check.mjs
 
       # E2E seed readiness (BUNYIP-163). Writes `bootstrapped` as a step output;
