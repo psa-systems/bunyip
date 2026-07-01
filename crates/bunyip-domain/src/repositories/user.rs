@@ -718,17 +718,12 @@ impl UserRepository {
     where
         E: sqlx::Executor<'e, Database = Postgres>,
     {
-        let (lifetime_member, trial_ends_at) = match tier {
-            SubscriptionTier::Lifetime | SubscriptionTier::Free => (true, None),
-            SubscriptionTier::EarlyAdopter => {
-                let ends = chrono::Utc::now() + chrono::Duration::days(early_adopter_trial_days);
-                (false, Some(ends))
-            }
-            SubscriptionTier::Standard => {
-                let ends = chrono::Utc::now() + chrono::Duration::days(standard_trial_days);
-                (false, Some(ends))
-            }
-        };
+        // Trial length is the tier's admin-configured window (BUNYIP-291 AC1);
+        // lifetime/free never trial and are permanently entitled.
+        let trial_ends_at = tier
+            .trial_days(early_adopter_trial_days, standard_trial_days)
+            .map(|days| chrono::Utc::now() + chrono::Duration::days(days));
+        let lifetime_member = matches!(tier, SubscriptionTier::Lifetime | SubscriptionTier::Free);
 
         sqlx::query(
             r#"

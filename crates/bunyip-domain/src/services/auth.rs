@@ -1384,13 +1384,12 @@ impl AuthService {
             .expect("TierConfig lock poisoned")
             .clone();
 
-        let tier = if lifetime_count < tc.lifetime_slots {
-            SubscriptionTier::Lifetime
-        } else if early_adopter_count < tc.early_adopter_slots {
-            SubscriptionTier::EarlyAdopter
-        } else {
-            SubscriptionTier::Standard
-        };
+        let tier = SubscriptionTier::select(
+            lifetime_count,
+            early_adopter_count,
+            tc.lifetime_slots,
+            tc.early_adopter_slots,
+        );
 
         UserRepository::assign_subscription_tier(
             &mut *tx,
@@ -1411,6 +1410,11 @@ impl AuthService {
                 .with_metadata(serde_json::json!({
                     "trigger": trigger.as_str(),
                     "subscription_tier": tier.as_str(),
+                    // BUNYIP-291 AC2: record the applied trial explicitly so the
+                    // early-adopter (90-day) vs standard (30-day) grant is
+                    // labeled at signup rather than inferred from the tier.
+                    "trial_days": tier.trial_days(tc.early_adopter_trial_days, tc.standard_trial_days),
+                    "trial_label": tier.trial_label(tc.early_adopter_trial_days, tc.standard_trial_days),
                 })),
         )
         .await?;

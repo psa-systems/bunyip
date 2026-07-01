@@ -228,10 +228,16 @@ pub async fn memberships(
     page: u32,
     page_size: u32,
     status: &str,
+    tier: &str,
 ) -> Result<PaginatedResponse<AdminMembership>, ApiError> {
     let mut path = format!("/admin/memberships?page={page}&page_size={page_size}");
     if !status.is_empty() {
         path.push_str(&format!("&status={status}"));
+    }
+    // BUNYIP-291 AC4: the tier filter drives the members-by-tier view; the
+    // API gives it precedence over `status`.
+    if !tier.is_empty() {
+        path.push_str(&format!("&tier={tier}"));
     }
     parse(api.get(&path, cookie).await?)
 }

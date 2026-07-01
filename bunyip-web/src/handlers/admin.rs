@@ -650,6 +650,9 @@ pub async fn user_detail(
 #[derive(Deserialize)]
 pub struct PageQuery {
     pub page: Option<u32>,
+    /// BUNYIP-291 AC4: active tier filter for the members-by-tier view.
+    #[serde(default)]
+    pub tier: Option<String>,
 }
 
 pub async fn memberships(
@@ -662,17 +665,72 @@ pub async fn memberships(
         Err(r) => return r,
     };
     let page = q.page.unwrap_or(1).max(1);
-    let data = admin_api::memberships(&st.api, c.forward.as_deref(), page, 20, "")
+    // BUNYIP-291 AC4: members-by-tier view. Only accept known tier slugs so a
+    // junk query param falls back to the unfiltered "All" list.
+    let tier = match q.tier.as_deref() {
+        Some("early_adopter") => "early_adopter",
+        Some("standard") => "standard",
+        Some("lifetime") => "lifetime",
+        Some("free") => "free",
+        _ => "",
+    };
+    let data = admin_api::memberships(&st.api, c.forward.as_deref(), page, 20, "", tier)
         .await
         .ok();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
     let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
 
+    // Early-adopter slot occupancy comes from the tier config (used vs total),
+    // surfaced when viewing that tier so admins can see if the pool is full.
+    let tier_cfg = if tier == "early_adopter" {
+        admin_api::tier_config(&st.api, c.forward.as_deref())
+            .await
+            .ok()
+    } else {
+        None
+    };
+
+    let tab = |slug: &str, label: &str| {
+        let active = tier == slug;
+        let href = if slug.is_empty() {
+            "/admin/memberships".to_string()
+        } else {
+            format!("/admin/memberships?tier={slug}")
+        };
+        let cls = if active {
+            "border-b-2 border-primary px-3 py-2 text-sm font-semibold text-foreground"
+        } else {
+            "border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground hover:text-foreground"
+        };
+        html! { a href=(href) class=(cls) { (label) } }
+    };
+    let list_base = if tier.is_empty() {
+        "/admin/memberships".to_string()
+    } else {
+        format!("/admin/memberships?tier={tier}")
+    };
+
     let content = html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Memberships" } p class="mt-2 text-muted-foreground" { "Review members and their subscription status." } }
+            nav class="flex items-center gap-2 border-b border-border/50" aria-label="Filter by tier" {
+                (tab("", "All"))
+                (tab("early_adopter", "Early Adopter"))
+                (tab("standard", "Standard"))
+                (tab("lifetime", "Lifetime"))
+            }
+            @if let Some(cfg) = &tier_cfg {
+                @let full = cfg.early_adopter_slots_used >= cfg.early_adopter_slots;
+                div class="rounded-lg border p-4 text-sm flex items-center gap-2" {
+                    (icon("users", "h-4 w-4 text-primary"))
+                    span {
+                        b { (cfg.early_adopter_slots_used) " of " (cfg.early_adopter_slots) } " early-adopter slots filled."
+                        @if full { " " (badge("secondary", "All slots filled")) }
+                    }
+                }
+            }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "All Memberships" } }
+                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { @if tier.is_empty() { "All Memberships" } @else { "Members by tier" } } }
                 div class="p-6 pt-0" {
                     div class="divide-y" {
                         @for m in &items {
@@ -699,7 +757,7 @@ pub async fn memberships(
                         }
                         @if items.is_empty() { p class="text-center text-muted-foreground py-8" { "No memberships found" } }
                     }
-                    (pager("/admin/memberships", page, total_pages))
+                    (pager(&list_base, page, total_pages))
                 }
             }
         }

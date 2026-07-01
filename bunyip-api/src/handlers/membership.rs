@@ -127,6 +127,11 @@ pub async fn create_checkout(
         }
     };
 
+    // BUNYIP-209 / BUNYIP-225: decide trial eligibility before the customer
+    // lookup partially moves `db_user`. Returning members (has_used_trial)
+    // bill immediately with no second free trial.
+    let eligible_for_trial = db_user.trial_eligible();
+
     // Get or create Stripe customer
     let customer_id = match db_user.stripe_customer_id {
         Some(id) => id,
@@ -138,10 +143,9 @@ pub async fn create_checkout(
     };
     tx.commit().await?;
 
-    // Create checkout session with the price. BUNYIP-209: grant the one-time
-    // signup free trial only when the user has never used it. Returning users
-    // (has_used_trial = TRUE) get the existing immediate-billing flow.
-    let eligible_for_trial = !db_user.has_used_trial;
+    // Create checkout session with the price. `eligible_for_trial` was decided
+    // above (BUNYIP-209/225): the one-time signup free trial is granted only
+    // when the user has never used it; returning users bill immediately.
     let (session_id, checkout_url) = stripe
         .create_checkout_session(&customer_id, db_user.id, &price_id, eligible_for_trial)
         .await?;
