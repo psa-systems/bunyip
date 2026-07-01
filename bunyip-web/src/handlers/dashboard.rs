@@ -172,7 +172,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
 /// existing OP session); a non-member is sent to the membership upsell; and if
 /// the feature is unconfigured there is nowhere to go, so fall back to the
 /// dashboard. Pure so the routing decision is unit-testable without a request.
-fn community_redirect_target<'a>(community_url: &'a str, is_member: bool) -> &'a str {
+fn community_redirect_target(community_url: &str, is_member: bool) -> &str {
     match (is_member, community_url.is_empty()) {
         (true, false) => community_url,
         (false, _) => "/membership",
