@@ -1,11 +1,14 @@
 {% extends "base.txt" %}
 {% block content %}
-Verify Your New Email Address
------------------------------
+Confirm your new email
 
-We received a request to change your {{ app_name }} account email to this address. Click the link below to confirm the change.
+Someone asked to change your {{ app_name }} account email to this
+address. Click the link below to make the change take effect.
 
-{{ verify_url }}
+Confirm: {{ verify_url }}
 
-This link expires in 1 hour. If you didn't request this change, you can safely ignore this email.
+---
+
+This link expires in 1 hour. Didn't request this change? Ignore this
+email and your account stays on its current address.
 {% endblock %}

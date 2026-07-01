@@ -1,3 +1,25 @@
+<!--
+  BUNYIP-288: palette resolved from bunyip-web's dark-mode tokens in
+  bunyip-web/input.css so the email visual matches the live dashboard the
+  CTA lands on. HSL -> HEX resolution table (documented here so a future
+  palette refresh has a greppable trail):
+
+    --background:         hsl(120,  8%,  9%) -> #151915  (body)
+    --card / bg elevated: hsl(120,  8%, 12%) -> #1c211c  (card)
+    --foreground:         hsl(120, 21%, 96%) -> #f3f7f3  (near-white)
+    --primary:            hsl(116, 28%, 31%) -> #395f39  (forest green)
+    --primary bright:     hsl(116, 34%, 46%) -> #4d9a54  (gradient end / hover)
+    --primary-foreground: hsl(  0,  0%,100%) -> #ffffff
+    --muted-foreground:   hsl(113, 15%, 60%) -> #93a795  (footer, muted body)
+    accent border:        primary at 20% alpha -> rgba(57, 95, 57, 0.20)
+
+  Email clients cannot evaluate CSS variables; the palette is baked in as
+  resolved HEX. Dark palette only: the live dashboard defaults to dark and a
+  single confident palette renders more predictably across mail clients than
+  a `prefers-color-scheme` swap (some clients render the dark CSS inside a
+  light shell). Follow-up ticket can add light-mode support if user
+  feedback warrants.
+-->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -8,8 +30,8 @@
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       line-height: 1.6;
-      color: #e8e8ed;
-      background-color: #0d0b14;
+      color: #cbd6cc;
+      background-color: #151915;
       margin: 0;
       padding: 0;
     }
@@ -19,14 +41,14 @@
       padding: 40px 20px;
     }
     .card {
-      background: #131122;
+      background: #1c211c;
       border-radius: 12px;
-      border: 1px solid rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(57, 95, 57, 0.20);
       overflow: hidden;
     }
     .header {
-      background: #0d0b14;
-      border-bottom: 1px solid rgba(99, 102, 241, 0.2);
+      background: #151915;
+      border-bottom: 1px solid rgba(57, 95, 57, 0.24);
       padding: 24px;
       text-align: center;
     }
@@ -37,35 +59,32 @@
     }
     .logo-brand {
       font-weight: 800;
-      background: linear-gradient(135deg, #f97316, #6366f1);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
+      color: #f3f7f3;
     }
     .logo-tld {
       font-weight: 300;
-      color: #a1a1b5;
+      color: #93a795;
     }
     .content {
       padding: 32px;
     }
     h1 {
-      color: #f0f0f5;
+      color: #f3f7f3;
       font-size: 24px;
       margin-top: 0;
       margin-bottom: 16px;
     }
     h2 {
-      color: #e0e0e8;
+      color: #e5efe6;
     }
     p {
-      color: #a1a1b5;
+      color: #cbd6cc;
       margin: 0 0 16px;
     }
     .button {
       display: inline-block;
-      background: linear-gradient(135deg, #f97316 0%, #6366f1 100%);
-      color: white !important;
+      background: #395f39;
+      color: #ffffff !important;
       text-decoration: none;
       padding: 14px 28px;
       border-radius: 8px;
@@ -77,26 +96,26 @@
       margin: 24px 0;
     }
     .muted {
-      color: #6b6b80;
+      color: #93a795;
       font-size: 14px;
     }
     .link-fallback {
-      color: #6b6b80;
+      color: #93a795;
       font-size: 12px;
       word-break: break-all;
     }
     .highlight {
-      color: #f97316;
+      color: #4d9a54;
       font-weight: 600;
     }
     .footer {
       text-align: center;
       padding: 24px;
-      color: #6b6b80;
+      color: #93a795;
       font-size: 14px;
     }
     .footer a {
-      color: #6366f1;
+      color: #4d9a54;
       text-decoration: none;
     }
     .footer a:hover {
@@ -107,15 +126,15 @@
       margin: 16px 0;
     }
     li {
-      color: #a1a1b5;
+      color: #cbd6cc;
       margin-bottom: 8px;
     }
     strong {
-      color: #f0f0f5;
+      color: #f3f7f3;
     }
     .divider {
       border: none;
-      border-top: 1px solid rgba(99, 102, 241, 0.12);
+      border-top: 1px solid rgba(57, 95, 57, 0.18);
       margin: 24px 0;
     }
   </style>

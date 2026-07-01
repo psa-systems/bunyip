@@ -1,14 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Verify Your New Email{% endblock %}
+{% block title %}Confirm your new {{ app_name }} email{% endblock %}
 {% block content %}
-<h1>Verify your new email address</h1>
-<p>We received a request to change your {{ app_name }} account email to this address. Click below to confirm the change.</p>
+<h1>Confirm your new email</h1>
+<p>Someone asked to change your {{ app_name }} account email to this address. Click below to make the change take effect.</p>
 
 <div class="button-container">
-  <a href="{{ verify_url }}" class="button">Verify Email Address</a>
+  <a href="{{ verify_url }}" class="button">Confirm New Email</a>
 </div>
 
-<p class="muted">This link expires in <span class="highlight">1 hour</span>. If you didn't request this change, you can safely ignore this email.</p>
+<p class="muted">This link expires in <span class="highlight">1 hour</span>. Didn't request this change? Ignore this email and your account stays on its current address.</p>
 
 <hr class="divider">
 

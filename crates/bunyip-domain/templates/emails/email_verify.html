@@ -1,14 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Verify Your Email{% endblock %}
+{% block title %}Verify your {{ app_name }} email{% endblock %}
 {% block content %}
-<h1>Verify your email address</h1>
-<p>Click the button below to verify your {{ app_name }} account email address.</p>
+<h1>Verify your email</h1>
+<p>Confirm this address so {{ app_name }} can send you important account updates. It also unlocks features that need a verified email, like resetting your password.</p>
 
 <div class="button-container">
-  <a href="{{ verify_url }}" class="button">Verify Email Address</a>
+  <a href="{{ verify_url }}" class="button">Verify Email</a>
 </div>
 
-<p class="muted">This link expires in <span class="highlight">1 hour</span>. If you didn't request this, you can safely ignore this email.</p>
+<p class="muted">This link expires in <span class="highlight">1 hour</span>. Didn't request this? You can safely ignore this email.</p>
 
 <hr class="divider">
 
