@@ -9,6 +9,14 @@
 // `{status,version}`), distinct from the `/v1/*` JSON API. On bunyip the
 // OIDC OP and the `/v1/*` API share one host (api.<tld>); resolve it the same
 // way the deploy-sync gate does.
+//
+// BUNYIP-303: on exit, writes `hub_live=<true|false>` to $GITHUB_OUTPUT so
+// e2e.yml can skip the Playwright suite when the soft-probe caught a broken
+// hub. Playwright otherwise sits for 3 minutes waiting for a DOM node that
+// will never appear (the mispushed-image case), then fails the whole run
+// against a PR the reviewer can do nothing about.
+
+import fs from 'node:fs';
 
 function pick(...values) {
   for (const v of values) {
@@ -124,12 +132,13 @@ async function probeHub(url, { soft = false } = {}) {
         : `HTTP ${res.status}`;
       if (soft) {
         console.warn(`${url} -> ${detail}; hub probe soft (prod-apex carve-out or E2E_HUB_SOFT), continuing.`);
-        return;
+        return false;
       }
       console.error(`${url} -> ${detail}.`);
       process.exit(1);
     }
     console.log(`${url} -> 200 {"status":"ok"} ok.`);
+    return true;
   } catch (err) {
     console.error(`Could not reach ${url}: ${String(err)}`);
     process.exit(1);
@@ -145,5 +154,11 @@ await probe(healthUrl);
 // (BUNYIP-301: set by e2e.yml on pull_request so a broken staging deploy does
 // not deadlock outage-fix PRs). See probeHub docstring for the full contract.
 const hubSoft = hubIsProdApex || process.env.E2E_HUB_SOFT === 'true';
-await probeHub(hubHealthzUrl, { soft: hubSoft });
+const hubLive = await probeHub(hubHealthzUrl, { soft: hubSoft });
+// BUNYIP-303: emit the hub liveness to $GITHUB_OUTPUT so e2e.yml's suite step
+// can skip (not run + fail) when soft mode caught the hub down. Only fires
+// inside CI where GITHUB_OUTPUT is set; local invocations no-op.
+if (process.env.GITHUB_OUTPUT) {
+  fs.appendFileSync(process.env.GITHUB_OUTPUT, `hub_live=${hubLive ? 'true' : 'false'}\n`);
+}
 console.log('Reachability checks complete. Proceeding.');
