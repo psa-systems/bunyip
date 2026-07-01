@@ -620,7 +620,28 @@ pub struct ListMembershipsQuery {
     pub page: Option<i32>,
     pub per_page: Option<i32>,
     pub status: Option<String>,
+    /// BUNYIP-291 AC4: filter by subscription tier (`early_adopter` /
+    /// `standard` / `lifetime` / `free`) for the members-by-tier admin view.
+    /// Takes precedence over `status`.
+    pub tier: Option<String>,
 }
+
+/// SQL backing the BUNYIP-291 members-by-tier filter. Ordered by `created_at`
+/// ASC so early-adopter slot holders list in the deterministic order they
+/// claimed their slots (earliest first = slot 1..N), making occupancy
+/// referenceable. Held as a const so the ordering/predicate is unit-testable
+/// without a live database.
+const MEMBERS_BY_TIER_SQL: &str = r#"
+            SELECT id AS user_id, email AS user_email, stripe_customer_id,
+                   subscription_status AS status,
+                   COALESCE(subscription_tier, 'standard') AS subscription_tier,
+                   subscription_override_by,
+                   created_at
+            FROM users
+            WHERE COALESCE(subscription_tier, 'standard') = $3 AND deleted_at IS NULL
+            ORDER BY created_at ASC
+            LIMIT $1 OFFSET $2
+            "#;
 
 /// GET /v1/admin/memberships
 /// List all memberships with pagination (sourced from users table)
@@ -636,7 +657,25 @@ pub async fn list_memberships(
     let per_page = query.per_page.unwrap_or(20).min(100);
     let offset = (page - 1) * per_page;
 
-    let (memberships, total) = if let Some(ref status) = query.status {
+    let (memberships, total) = if let Some(ref tier) = query.tier {
+        // BUNYIP-291 AC4: members-by-tier view. All (non-deleted) holders of
+        // the tier, oldest first so early-adopter slots read in claim order.
+        let rows = sqlx::query_as::<_, crate::models::AdminMembershipResponse>(MEMBERS_BY_TIER_SQL)
+            .bind(per_page)
+            .bind(offset)
+            .bind(tier)
+            .fetch_all(pool.get_ref())
+            .await?;
+
+        let total: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM users WHERE COALESCE(subscription_tier, 'standard') = $1 AND deleted_at IS NULL",
+        )
+        .bind(tier)
+        .fetch_one(pool.get_ref())
+        .await?;
+
+        (rows, total.0)
+    } else if let Some(ref status) = query.status {
         let rows = sqlx::query_as::<_, crate::models::AdminMembershipResponse>(
             r#"
             SELECT id AS user_id, email AS user_email, stripe_customer_id,
@@ -2526,6 +2565,23 @@ mod tests {
     async fn maybe_pool() -> Option<PgPool> {
         let url = std::env::var("DATABASE_URL").ok()?;
         PgPool::connect(&url).await.ok()
+    }
+
+    #[test]
+    fn members_by_tier_sql_filters_by_tier_and_orders_by_claim_order() {
+        // BUNYIP-291 AC4: the members-by-tier list must filter on the tier
+        // column, exclude soft-deleted rows, and order oldest-first so
+        // early-adopter slot occupancy reads in the order slots were claimed.
+        let sql = MEMBERS_BY_TIER_SQL;
+        assert!(
+            sql.contains("subscription_tier, 'standard') = $3"),
+            "must filter on the (coalesced) tier bind"
+        );
+        assert!(sql.contains("deleted_at IS NULL"), "must exclude soft-deleted");
+        assert!(
+            sql.contains("ORDER BY created_at ASC"),
+            "must order oldest-first for stable slot order"
+        );
     }
 
     #[actix_rt::test]
