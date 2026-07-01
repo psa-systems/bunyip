@@ -11,7 +11,7 @@ pub mod auth;
 pub mod calls;
 pub mod types;
 
-use reqwest::header::{ACCEPT, COOKIE, SET_COOKIE};
+use reqwest::header::{ACCEPT, COOKIE, RETRY_AFTER, SET_COOKIE};
 use reqwest::Method;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -28,6 +28,10 @@ pub struct Resp {
     pub status: u16,
     pub body: Value,
     pub set_cookies: Vec<String>,
+    /// The `Retry-After` header value (whole seconds), captured for 429
+    /// responses so `error_from` can surface an accurate wait time
+    /// (BUNYIP-314). `None` when the header is absent or non-numeric.
+    pub retry_after_header: Option<u64>,
 }
 
 impl Resp {
@@ -41,6 +45,23 @@ pub struct ApiError {
     pub status: u16,
     pub code: String,
     pub message: String,
+    /// Seconds the caller should wait before retrying, for a 429 response
+    /// (BUNYIP-314). Read from the `Retry-After` header, falling back to the
+    /// `error.details.retry_after` body field. `None` for non-throttle errors.
+    pub retry_after: Option<u64>,
+}
+
+/// Standard human phrasing for a `Retry-After` duration in seconds
+/// (BUNYIP-314): under a minute rounds up to "a minute", an hour or more
+/// collapses to "an hour", and anything in between rounds the minutes up.
+pub fn humanize_retry_after(secs: u64) -> String {
+    if secs >= 3600 {
+        "in about an hour".to_string()
+    } else if secs < 60 {
+        "in about a minute".to_string()
+    } else {
+        format!("in about {} minutes", secs.div_ceil(60))
+    }
 }
 
 impl ApiError {
@@ -49,15 +70,39 @@ impl ApiError {
             status: 0,
             code: "NETWORK_ERROR".into(),
             message: msg.into(),
+            retry_after: None,
         }
     }
 
     pub fn user_message(&self) -> String {
+        if self.status == 429 {
+            if let Some(secs) = self.retry_after {
+                return format!(
+                    "Too many attempts. Please try again {}.",
+                    humanize_retry_after(secs)
+                );
+            }
+        }
         if self.message.is_empty() {
             "An unexpected error occurred".into()
         } else {
             self.message.clone()
         }
+    }
+
+    /// Verification-email-specific copy for a throttled (429) resend
+    /// (BUNYIP-314). Falls back to the generic `user_message()` for any other
+    /// error so non-429 handling is unchanged.
+    pub fn verification_message(&self) -> String {
+        if self.status == 429 {
+            if let Some(secs) = self.retry_after {
+                return format!(
+                    "You have requested too many verification emails. Please try again {}.",
+                    humanize_retry_after(secs)
+                );
+            }
+        }
+        self.user_message()
     }
 }
 
@@ -103,6 +148,7 @@ impl Api {
             .iter()
             .filter_map(|v| v.to_str().ok().map(str::to_string))
             .collect();
+        let retry_after_header = retry_after_from_headers(resp.headers());
         let text = resp.text().await.unwrap_or_default();
         let body = if text.trim().is_empty() {
             Value::Null
@@ -113,6 +159,7 @@ impl Api {
             status,
             body,
             set_cookies,
+            retry_after_header,
         })
     }
 
@@ -201,14 +248,27 @@ impl Api {
             .iter()
             .filter_map(|v| v.to_str().ok().map(str::to_string))
             .collect();
+        let retry_after_header = retry_after_from_headers(resp.headers());
         let text = resp.text().await.unwrap_or_default();
         let body = serde_json::from_str(&text).unwrap_or(Value::Null);
         Ok(Resp {
             status,
             body,
             set_cookies,
+            retry_after_header,
         })
     }
+}
+
+/// Parse the `Retry-After` header as whole seconds (BUNYIP-314). bunyip-api
+/// emits it as an integer count of seconds (dunite-core `AppError::RateLimited`);
+/// the HTTP-date form is not produced by the API, so only the delta-seconds
+/// form is honoured here.
+fn retry_after_from_headers(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    headers
+        .get(RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
 }
 
 /// Turn the `{ success, error: { code, message } }` envelope into an `ApiError`.
@@ -225,10 +285,18 @@ pub fn error_from(resp: &Resp) -> ApiError {
         .filter(|m| !m.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| format!("Request failed ({})", resp.status));
+    // BUNYIP-314: prefer the `Retry-After` header, fall back to the
+    // `error.details.retry_after` field in the JSON envelope.
+    let retry_after = resp.retry_after_header.or_else(|| {
+        err.and_then(|e| e.get("details"))
+            .and_then(|d| d.get("retry_after"))
+            .and_then(Value::as_u64)
+    });
     ApiError {
         status: resp.status,
         code,
         message,
+        retry_after,
     }
 }
 
@@ -249,8 +317,136 @@ pub fn parse<T: DeserializeOwned>(resp: Resp) -> Result<T, ApiError> {
             status: 0,
             code: "DECODE_ERROR".into(),
             message: e.to_string(),
+            retry_after: None,
         })
     } else {
         Err(error_from(&resp))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // BUNYIP-314: humanizer boundaries (minute / minutes / hour).
+    #[test]
+    fn humanize_under_a_minute_says_a_minute() {
+        assert_eq!(humanize_retry_after(1), "in about a minute");
+        assert_eq!(humanize_retry_after(59), "in about a minute");
+    }
+
+    #[test]
+    fn humanize_sixty_seconds_crosses_into_minutes() {
+        // 60s is the first value past the "a minute" boundary; ceil(60/60) = 1.
+        assert_eq!(humanize_retry_after(60), "in about 1 minutes");
+    }
+
+    #[test]
+    fn humanize_rounds_minutes_up() {
+        assert_eq!(humanize_retry_after(61), "in about 2 minutes");
+        assert_eq!(humanize_retry_after(120), "in about 2 minutes");
+    }
+
+    #[test]
+    fn humanize_just_under_an_hour_says_minutes() {
+        // 3599s -> ceil(3599/60) = 60 minutes, still under the hour boundary.
+        assert_eq!(humanize_retry_after(3599), "in about 60 minutes");
+    }
+
+    #[test]
+    fn humanize_an_hour_or_more_says_an_hour() {
+        assert_eq!(humanize_retry_after(3600), "in about an hour");
+        assert_eq!(humanize_retry_after(7200), "in about an hour");
+    }
+
+    fn err_resp(status: u16, retry_after_header: Option<u64>, body: Value) -> Resp {
+        Resp {
+            status,
+            body,
+            set_cookies: vec![],
+            retry_after_header,
+        }
+    }
+
+    #[test]
+    fn error_from_reads_retry_after_header() {
+        let resp = err_resp(
+            429,
+            Some(90),
+            json!({ "error": { "code": "RATE_LIMITED", "message": "Too many requests." } }),
+        );
+        let e = error_from(&resp);
+        assert_eq!(e.status, 429);
+        assert_eq!(e.retry_after, Some(90));
+    }
+
+    #[test]
+    fn error_from_falls_back_to_details_retry_after() {
+        // No header: the body's `details.retry_after` is used instead.
+        let resp = err_resp(
+            429,
+            None,
+            json!({ "error": { "code": "RATE_LIMITED", "message": "x", "details": { "retry_after": 1800 } } }),
+        );
+        assert_eq!(error_from(&resp).retry_after, Some(1800));
+    }
+
+    #[test]
+    fn error_from_prefers_header_over_details() {
+        let resp = err_resp(
+            429,
+            Some(45),
+            json!({ "error": { "code": "RATE_LIMITED", "details": { "retry_after": 1800 } } }),
+        );
+        assert_eq!(error_from(&resp).retry_after, Some(45));
+    }
+
+    #[test]
+    fn user_message_for_429_uses_humanized_retry() {
+        let resp = err_resp(
+            429,
+            Some(1800),
+            json!({ "error": { "code": "RATE_LIMITED", "message": "raw dunite text" } }),
+        );
+        let e = error_from(&resp);
+        assert_eq!(
+            e.user_message(),
+            "Too many attempts. Please try again in about 30 minutes."
+        );
+        assert_eq!(
+            e.verification_message(),
+            "You have requested too many verification emails. Please try again in about 30 minutes."
+        );
+    }
+
+    #[test]
+    fn non_429_error_handling_is_unchanged() {
+        // A 500 keeps its raw message and no retry_after; both message
+        // helpers fall through to the plain message.
+        let resp = err_resp(
+            500,
+            None,
+            json!({ "error": { "code": "INTERNAL_ERROR", "message": "Server exploded" } }),
+        );
+        let e = error_from(&resp);
+        assert_eq!(e.retry_after, None);
+        assert_eq!(e.user_message(), "Server exploded");
+        assert_eq!(e.verification_message(), "Server exploded");
+    }
+
+    #[test]
+    fn a_429_without_retry_after_keeps_raw_message() {
+        // Defensive: a 429 that somehow carries no Retry-After must not panic
+        // and falls back to the API's message verbatim.
+        let resp = err_resp(
+            429,
+            None,
+            json!({ "error": { "code": "RATE_LIMITED", "message": "Too many requests." } }),
+        );
+        let e = error_from(&resp);
+        assert_eq!(e.retry_after, None);
+        assert_eq!(e.user_message(), "Too many requests.");
+        assert_eq!(e.verification_message(), "Too many requests.");
     }
 }

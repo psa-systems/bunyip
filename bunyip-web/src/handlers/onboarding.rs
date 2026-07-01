@@ -77,17 +77,24 @@ pub async fn onboarding_get(
     }
 
     // Auto-send the verification email on first arrival only (cookie-gated, see
-    // VERIFY_SENT_COOKIE). The result is intentionally ignored: a failure
-    // (including the 3/hour rate limit) must not break the page, and the Resend
-    // control stays available either way.
+    // VERIFY_SENT_COOKIE). A failure must not break the page and the Resend
+    // control stays available either way, but a 429 is no longer swallowed
+    // silently (BUNYIP-314): surface the standard "try again in about N
+    // minutes" copy via the page's error slot so a throttled user knows why no
+    // email arrived. Other errors stay silent, exactly as before.
+    let mut send_error: Option<String> = None;
     if !user.email_verified && cookie_value(&headers, VERIFY_SENT_COOKIE).is_none() {
-        let _ = auth_api::request_email_verification(&st.api, c.forward.as_deref()).await;
+        if let Err(e) = auth_api::request_email_verification(&st.api, c.forward.as_deref()).await {
+            if e.status == 429 {
+                send_error = Some(e.verification_message());
+            }
+        }
         c.set_cookies.push(format!(
             "{VERIFY_SENT_COOKIE}=1; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600"
         ));
     }
 
-    let content = onboarding_content(&user, q.error.as_deref());
+    let content = onboarding_content(&user, q.error.as_deref().or(send_error.as_deref()));
     dashboard_response(&c, &user, "/onboarding", "Welcome · Bunyip", content)
 }
 

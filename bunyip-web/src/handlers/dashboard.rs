@@ -1672,8 +1672,11 @@ pub async fn settings_resend_verification(
             ),
             &c.set_cookies,
         ),
+        // BUNYIP-314: a throttled resend surfaces the standard verification
+        // "try again in about N minutes" copy (from the real Retry-After);
+        // other errors keep their generic message.
         Err(e) => redirect_cookies(
-            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &format!("/settings?error={}", urlenc(&e.verification_message())),
             &c.set_cookies,
         ),
     }
