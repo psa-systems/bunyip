@@ -173,12 +173,31 @@ pub fn badge(variant: &str, text: &str) -> Markup {
     }
 }
 
+/// Cap a banner message before it is rendered. The value is already
+/// Maud-escaped (so this is not an XSS guard); it bounds a hand-crafted
+/// `?ok=` / `?error=` link that stuffs the param with kilobytes of text to blow
+/// up the page. ~256 bytes is ample for the short status strings these banners
+/// legitimately carry. Truncation lands on a char boundary. Applied inside
+/// [`error_box`] and [`success_box`] so every banner caller is bounded without
+/// each having to remember to clamp (BUNYIP-324).
+fn clamp_msg(s: &str) -> String {
+    const MAX: usize = 256;
+    if s.len() <= MAX {
+        return s.to_string();
+    }
+    let mut end = MAX;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_string()
+}
+
 /// Destructive inline error box (replaces the shadcn Alert for error display).
 pub fn error_box(msg: &str) -> Markup {
     html! {
         div class="rounded-lg border border-destructive/50 p-3 text-sm text-destructive flex items-center gap-2" {
             (icon("alert-circle", "h-4 w-4"))
-            (msg)
+            (clamp_msg(msg))
         }
     }
 }
@@ -191,7 +210,45 @@ pub fn success_box(msg: &str) -> Markup {
     html! {
         div class="rounded-lg border p-3 text-sm flex items-center gap-2" {
             (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400"))
-            (msg)
+            (clamp_msg(msg))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{clamp_msg, error_box, success_box};
+
+    #[test]
+    fn clamp_passes_short_through() {
+        assert_eq!(
+            clamp_msg("Verification email sent to u@example.com"),
+            "Verification email sent to u@example.com"
+        );
+    }
+
+    #[test]
+    fn clamp_bounds_oversized_input() {
+        let long = "a".repeat(10_000);
+        assert_eq!(clamp_msg(&long).len(), 256);
+    }
+
+    #[test]
+    fn clamp_lands_on_char_boundary() {
+        // 3-byte chars straddle the 256-byte cap (256 % 3 != 0); the boundary
+        // walk must step back rather than panic on a mid-char slice.
+        let s = "\u{20ac}".repeat(100); // 300 bytes of U+20AC (euro sign)
+        let out = clamp_msg(&s);
+        assert!(out.len() <= 256);
+        assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn banners_clamp_their_message() {
+        // The clamp is applied inside the shared banner helpers, so an
+        // oversized ?ok= / ?error= param cannot bloat the rendered page.
+        let long = "z".repeat(10_000);
+        assert!(success_box(&long).into_string().matches('z').count() <= 256);
+        assert!(error_box(&long).into_string().matches('z').count() <= 256);
     }
 }

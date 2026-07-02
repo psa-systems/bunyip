@@ -18,7 +18,7 @@ use crate::api::types::{
 };
 use crate::handlers::{dashboard_response, guard, needs_onboarding, password_ok, rotating_index};
 use crate::util::{app_gradient, days_until, has_active_membership, urlenc};
-use crate::views::ui::{badge, button_class, error_box, icon};
+use crate::views::ui::{badge, button_class, error_box, icon, success_box};
 use crate::web::{redirect_cookies, AppState};
 
 const TAGLINES: [&str; 5] = [
@@ -904,8 +904,8 @@ pub async fn membership(
             // BUNYIP-187: flash banners surface checkout failures (and any
             // other ?error= / ?ok= flash) at the top of the page so the
             // user sees why a click "did nothing".
-            @if let Some(ok) = &q.ok { div class="rounded-lg border p-3 text-sm flex items-center gap-2" { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) (clamp_msg(ok)) } }
-            @if let Some(e) = &q.error { (error_box(&clamp_msg(e))) }
+            @if let Some(ok) = &q.ok { (success_box(ok)) }
+            @if let Some(e) = &q.error { (error_box(e)) }
             @if past_due {
                 div class="rounded-lg border border-destructive/50 p-4 text-sm text-destructive flex items-center gap-2" {
                     (icon("alert-triangle", "h-4 w-4")) "Your payment failed. Update your payment method within 30 days to avoid losing access."
@@ -1240,8 +1240,8 @@ pub async fn settings(
     let content = html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Settings" } p class="mt-2 text-muted-foreground" { "Manage your account settings and preferences." } }
-            @if let Some(ok) = &q.ok { div class="rounded-lg border p-3 text-sm flex items-center gap-2" { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) (clamp_msg(ok)) } }
-            @if let Some(e) = &q.error { (error_box(&clamp_msg(e))) }
+            @if let Some(ok) = &q.ok { (success_box(ok)) }
+            @if let Some(e) = &q.error { (error_box(e)) }
 
             // Account info
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50 overflow-hidden" {
@@ -1801,23 +1801,6 @@ pub async fn settings_delete(
             &c.set_cookies,
         ),
     }
-}
-
-/// Cap a user-supplied `?ok=`/`?error=` query-param message before it is
-/// rendered. The value is already Maud-escaped (so this is not an XSS guard);
-/// it bounds a hand-crafted link that stuffs the param with kilobytes of text
-/// to blow up the page. ~256 bytes is ample for the short status strings these
-/// params legitimately carry. Truncation lands on a char boundary.
-fn clamp_msg(s: &str) -> String {
-    const MAX: usize = 256;
-    if s.len() <= MAX {
-        return s.to_string();
-    }
-    let mut end = MAX;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    s[..end].to_string()
 }
 
 // ===========================================================================
