@@ -219,11 +219,23 @@ async function fillTotpStep(page: Page): Promise<void> {
     .first();
   await codeInput.waitFor({ state: 'visible', timeout: 10_000 });
   // DOM-set, not fill(): same CI no-op applies to this input (BUNYIP-168).
+  // setInputValue dispatches a bubbling `input` event, which the BUNYIP-331
+  // data-otp-autosubmit snippet reacts to by submitting the form once the six
+  // digits are present. Wait for that navigation off /login/2fa; only click the
+  // submit button as a fallback if the auto-submit did not fire, so we never
+  // double-POST (a second submit would trip the 2fa_verify rate limit and hit
+  // TOTP replay rejection).
   await setInputValue(codeInput, code);
-  await form
-    .getByRole('button', { name: /verify|continue|submit|sign ?in|log ?in/i })
-    .first()
-    .click();
+  const autoSubmitted = await page
+    .waitForURL((url) => !/\/login\/(2fa|mfa)(\/|$|\?)/.test(url.pathname), { timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!autoSubmitted) {
+    await form
+      .getByRole('button', { name: /verify|continue|submit|sign ?in|log ?in/i })
+      .first()
+      .click();
+  }
 }
 
 // Browser-driven logout: GET /logout clears the access_token / refresh_token /

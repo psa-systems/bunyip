@@ -1029,19 +1029,24 @@ fn twofa_card(error: Option<&str>, redirect: Option<&str>) -> Markup {
                     input type="hidden" name="redirect" value=(redirect);
                 }
                 @if let Some(e) = error { (error_box(e)) }
+                // Trusted device opt-in (BUNYIP-138). Honored only for
+                // subscribers; the API ignores it for admins. Ordered BEFORE
+                // the code input (BUNYIP-331) so the choice stays reachable:
+                // a complete code auto-submits the form, so a checkbox below it
+                // would be skipped past on autofill / fast entry.
+                label class="flex items-center gap-2 text-sm text-muted-foreground" {
+                    input type="checkbox" name="trust_device" value="on" class="h-4 w-4";
+                    "Trust this device for 30 days (skip codes here)"
+                }
                 div class="space-y-2" {
                     label for="code" class="text-sm font-medium leading-none" { "Authentication Code" }
                     // BUNYIP-117: maxlength + pattern so the browser bounds
                     // and format-checks the 6-digit TOTP before submit.
                     // Authoritative validation still happens in the domain
-                    // (services::totp::verify_code).
-                    input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000 000" autocomplete="one-time-code" class={ (dashboard_input()) " text-center text-lg tracking-widest" };
-                }
-                // Trusted device opt-in (BUNYIP-138). Honored only for
-                // subscribers; the API ignores it for admins.
-                label class="flex items-center gap-2 text-sm text-muted-foreground" {
-                    input type="checkbox" name="trust_device" value="on" class="h-4 w-4";
-                    "Trust this device for 30 days (skip codes here)"
+                    // (services::totp::verify_code). BUNYIP-331:
+                    // data-otp-autosubmit submits the form once the code is
+                    // a complete six digits (typed / pasted / autofilled).
+                    input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000 000" autocomplete="one-time-code" data-otp-autosubmit class={ (dashboard_input()) " text-center text-lg tracking-widest" };
                 }
                 (submit_btn("Verify"))
             }
