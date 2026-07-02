@@ -182,3 +182,16 @@ pub fn error_box(msg: &str) -> Markup {
         }
     }
 }
+
+/// Success / confirmation banner, the teal-check counterpart to [`error_box`].
+/// Matches the inline `?ok=` banner the settings page renders, so the
+/// onboarding page can show the same "verification email sent" feedback for a
+/// resend that originated there (BUNYIP-324).
+pub fn success_box(msg: &str) -> Markup {
+    html! {
+        div class="rounded-lg border p-3 text-sm flex items-center gap-2" {
+            (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400"))
+            (msg)
+        }
+    }
+}

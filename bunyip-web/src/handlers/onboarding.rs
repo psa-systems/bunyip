@@ -15,7 +15,7 @@ use crate::api::auth as auth_api;
 use crate::api::types::User;
 use crate::handlers::{cookie_value, dashboard_input, dashboard_response, guard, needs_onboarding};
 use crate::util::urlenc;
-use crate::views::ui::{button_class, error_box, icon};
+use crate::views::ui::{button_class, error_box, icon, success_box};
 use crate::web::{redirect_cookies, AppState};
 
 /// Set after the onboarding page auto-sends the verification email so a refresh
@@ -31,6 +31,9 @@ const VERIFY_SENT_COOKIE: &str = "bunyip_onboard_verify_sent";
 #[derive(Deserialize)]
 pub struct OnboardingQuery {
     pub error: Option<String>,
+    /// BUNYIP-324: success feedback (e.g. "Verification email sent to ...")
+    /// carried back here when a resend originated on the onboarding page.
+    pub ok: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -94,7 +97,11 @@ pub async fn onboarding_get(
         ));
     }
 
-    let content = onboarding_content(&user, q.error.as_deref().or(send_error.as_deref()));
+    let content = onboarding_content(
+        &user,
+        q.error.as_deref().or(send_error.as_deref()),
+        q.ok.as_deref(),
+    );
     dashboard_response(&c, &user, "/onboarding", "Welcome · Bunyip", content)
 }
 
@@ -162,7 +169,7 @@ fn name_present(v: &Option<String>) -> bool {
     matches!(v.as_deref().map(str::trim), Some(s) if !s.is_empty())
 }
 
-fn onboarding_content(user: &User, error: Option<&str>) -> Markup {
+fn onboarding_content(user: &User, error: Option<&str>, ok: Option<&str>) -> Markup {
     let name_done = name_present(&user.first_name) && name_present(&user.last_name);
     html! {
         div class="mx-auto max-w-2xl space-y-6" {
@@ -170,6 +177,7 @@ fn onboarding_content(user: &User, error: Option<&str>) -> Markup {
                 h1 class="text-3xl font-bold" { "Welcome to Bunyip" }
                 p class="mt-2 text-muted-foreground" { "Two quick steps and your account is ready." }
             }
+            @if let Some(ok) = ok { (success_box(ok)) }
             @if let Some(e) = error { (error_box(e)) }
 
             // Step 1: name.
@@ -214,5 +222,74 @@ fn step_card(icon_name: &str, gradient: &str, title: &str, done: bool, body: Mar
             }
             div class="p-6 pt-4" { (body) }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::onboarding_content;
+    use crate::api::types::{MembershipStatus, SubscriptionTier, User, UserRole};
+
+    /// A named-but-unverified user: the state in which the onboarding page shows
+    /// the "Resend verification email" control whose feedback BUNYIP-324 routes
+    /// back here.
+    fn unverified_user() -> User {
+        User {
+            id: "u1".into(),
+            email: "u@example.com".into(),
+            role: UserRole::Subscriber,
+            email_verified: false,
+            two_factor_enabled: false,
+            membership_status: MembershipStatus::None,
+            price_locked: false,
+            locked_price_id: None,
+            locked_price_amount: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+            subscription_tier: SubscriptionTier::Free,
+            trial_ends_at: None,
+            lifetime_member: false,
+            first_name: Some("Ada".into()),
+            last_name: Some("Lovelace".into()),
+            phone: None,
+        }
+    }
+
+    // BUNYIP-324: before the fix, a resend that originated on /onboarding
+    // redirected to /settings, was bounced back to /onboarding by the
+    // onboarding gate (dropping the query param), and the page rendered no
+    // feedback. These assert the queued-success and send-failure indications
+    // now render here.
+
+    #[test]
+    fn renders_queued_success_indication() {
+        let html = onboarding_content(
+            &unverified_user(),
+            None,
+            Some("Verification email sent to u@example.com"),
+        )
+        .into_string();
+        assert!(
+            html.contains("Verification email sent to u@example.com"),
+            "onboarding page must show the resend success indication"
+        );
+    }
+
+    #[test]
+    fn renders_send_failure_indication() {
+        let msg = "You have requested too many verification emails. Please try again in about 42 minutes.";
+        let html = onboarding_content(&unverified_user(), Some(msg), None).into_string();
+        assert!(
+            html.contains("too many verification emails"),
+            "onboarding page must show the resend failure indication"
+        );
+    }
+
+    #[test]
+    fn no_feedback_boxes_when_both_none() {
+        let html = onboarding_content(&unverified_user(), None, None).into_string();
+        // The success banner uses the teal check; absent when there is nothing
+        // to report, so a plain page load stays clean.
+        assert!(!html.contains("Verification email sent"));
     }
 }

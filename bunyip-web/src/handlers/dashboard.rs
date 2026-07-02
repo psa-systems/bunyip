@@ -16,7 +16,7 @@ use crate::api::types::{
     AppDownloadGroup, Application, Membership, MembershipStatus, SubscriptionTier,
     TwoFactorSetupResponse, User,
 };
-use crate::handlers::{dashboard_response, guard, password_ok, rotating_index};
+use crate::handlers::{dashboard_response, guard, needs_onboarding, password_ok, rotating_index};
 use crate::util::{app_gradient, days_until, has_active_membership, urlenc};
 use crate::views::ui::{badge, button_class, error_box, icon};
 use crate::web::{redirect_cookies, AppState};
@@ -1729,10 +1729,22 @@ pub async fn settings_resend_verification(
         Ok(v) => v,
         Err(r) => return r,
     };
+    // BUNYIP-324: the resend control lives on BOTH /settings and /onboarding.
+    // An onboarding-incomplete user is bounced off /settings by the onboarding
+    // gate (handlers::mod::guard), which drops the ?ok / ?error feedback param,
+    // so they saw nothing after a resend. Route the feedback back to the page
+    // they were actually on: the two pages are mutually exclusive by onboarding
+    // state, so `needs_onboarding` reconstructs the origin server-side without
+    // trusting any client-supplied redirect target. Both pages render ?ok/?error.
+    let dest = if needs_onboarding(&st, &user).await {
+        "/onboarding"
+    } else {
+        "/settings"
+    };
     match auth_api::request_email_verification(&st.api, c.forward.as_deref()).await {
         Ok(()) => redirect_cookies(
             &format!(
-                "/settings?ok={}",
+                "{dest}?ok={}",
                 urlenc(&format!("Verification email sent to {}", user.email))
             ),
             &c.set_cookies,
@@ -1741,7 +1753,7 @@ pub async fn settings_resend_verification(
         // "try again in about N minutes" copy (from the real Retry-After);
         // other errors keep their generic message.
         Err(e) => redirect_cookies(
-            &format!("/settings?error={}", urlenc(&e.verification_message())),
+            &format!("{dest}?error={}", urlenc(&e.verification_message())),
             &c.set_cookies,
         ),
     }
