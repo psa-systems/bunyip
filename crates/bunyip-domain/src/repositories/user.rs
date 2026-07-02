@@ -450,6 +450,25 @@ impl UserRepository {
         Ok(row.is_some())
     }
 
+    /// Check whether an email is reserved by any user, active OR soft-deleted
+    /// (BUNYIP-330). Register / email-change / invite-accept guard against
+    /// this so a deleted account's email stays permanently locked and can't
+    /// be re-claimed by a new user. Login / OCI-auth continue to use
+    /// [`Self::email_exists`] / [`Self::find_by_email`], which filter to
+    /// non-deleted rows (a deleted user can't sign in).
+    pub async fn email_reserved<'e, E>(executor: E, email: &str) -> Result<bool, AppError>
+    where
+        E: sqlx::Executor<'e, Database = Postgres>,
+    {
+        let row: Option<(Uuid,)> =
+            sqlx::query_as("SELECT id FROM users WHERE LOWER(email) = LOWER($1)")
+                .bind(email)
+                .fetch_optional(executor)
+                .await?;
+
+        Ok(row.is_some())
+    }
+
     /// Update last login timestamp
     pub async fn update_last_login(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {
         sqlx::query(

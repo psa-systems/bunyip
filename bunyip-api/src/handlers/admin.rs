@@ -380,13 +380,13 @@ pub async fn update_user_email(
     let old_email = target_user.email.clone();
 
     // No-op edits that only flip verification are still allowed, but a real
-    // address change must not collide with another live account.
-    if new_email != old_email.to_lowercase() {
-        if let Some(existing) = UserRepository::find_by_email(&pool, &new_email).await? {
-            if existing.id != user_id {
-                return Err(AppError::conflict("Email already registered"));
-            }
-        }
+    // address change must not collide with another live OR soft-deleted
+    // account (BUNYIP-330: soft-deleted emails are permanently reserved, so
+    // even an admin cannot rename a user's email onto a reserved identity).
+    if new_email != old_email.to_lowercase()
+        && UserRepository::email_reserved(pool.get_ref(), &new_email).await?
+    {
+        return Err(AppError::conflict("Email already registered"));
     }
 
     UserRepository::update_email(pool.get_ref(), user_id, &new_email, body.verified).await?;
