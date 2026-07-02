@@ -75,6 +75,21 @@ function bunyipToggleContrast(){var on=document.documentElement.classList.toggle
 const TOAST_JS: &str = r#"window.bunyipToast=function(msg,kind){var root=document.getElementById('bunyip-toast-root');if(!root)return;while(root.children.length>=5){root.removeChild(root.firstChild);}kind=kind||'info';var palette={success:'bg-emerald-600 text-white',error:'bg-red-600 text-white',info:'bg-slate-800 text-white'}[kind]||'bg-slate-800 text-white';var pill=document.createElement('div');pill.className='pointer-events-auto rounded-md px-4 py-2 text-sm shadow-lg '+palette;pill.setAttribute('role','status');pill.textContent=msg;pill.style.transition='opacity 200ms ease, transform 200ms ease';pill.style.opacity='0';pill.style.transform='translateY(-8px)';root.appendChild(pill);requestAnimationFrame(function(){pill.style.opacity='1';pill.style.transform='translateY(0)';});setTimeout(function(){pill.style.opacity='0';pill.style.transform='translateY(-8px)';setTimeout(function(){if(pill.parentNode)pill.parentNode.removeChild(pill);},250);},2500);};
 (function(){try{var url=new URL(window.location.href);var ok=url.searchParams.get('toast_ok');var err=url.searchParams.get('toast_err');if(ok||err){url.searchParams.delete('toast_ok');url.searchParams.delete('toast_err');history.replaceState(null,'',url.pathname+(url.search||'')+url.hash);if(ok)window.bunyipToast(ok,'success');if(err)window.bunyipToast(err,'error');}}catch(e){}})();"#;
 
+/// BUNYIP-331: auto-submit a 2FA form the moment its six-digit TOTP field is
+/// complete, so the user does not click a submit button (governance
+/// Authentication UX Standards, GOV-19). Opt-in per field via
+/// `data-otp-autosubmit`; one delegated `input` listener covers every current
+/// and future one-time-code field.
+///
+/// Recovery-code safe: the exact `^[0-9]{6}$` gate never matches a dashed
+/// `XXXX-XXXX` recovery code, so combined TOTP/recovery fields never fire.
+/// `checkValidity()` gate: a multi-field form only auto-submits once its other
+/// required inputs are valid, so this never half-submits. The per-form
+/// `otpSubmitting` flag guards against a double submit while navigation is in
+/// flight. The input event also fires on paste and OS/browser OTP autofill, so
+/// a one-tap autofill submits too.
+const OTP_AUTOSUBMIT_JS: &str = r#"(function(){var OTP=/^[0-9]{6}$/;document.addEventListener('input',function(e){var el=e.target;if(!el||typeof el.matches!=='function'||!el.matches('input[data-otp-autosubmit]'))return;if(!OTP.test(el.value))return;var form=el.form;if(!form||form.dataset.otpSubmitting==='1')return;if(typeof form.checkValidity==='function'&&!form.checkValidity())return;form.dataset.otpSubmitting='1';if(typeof form.requestSubmit==='function'){form.requestSubmit();}else{form.submit();}});})();"#;
+
 /// BUNYIP-145: Server-Sent Events subscriber injected into every
 /// authenticated shell (dashboard + admin). Opens a long-lived
 /// `EventSource` against bunyip-api's `/v1/events` and reacts to four
@@ -132,6 +147,7 @@ pub fn document(title: &str, body: Markup) -> Markup {
                 script { (PreEscaped(THEME_FLASH)) }
                 script { (PreEscaped(THEME_TOGGLE)) }
                 script { (PreEscaped(TOAST_JS)) }
+                script { (PreEscaped(OTP_AUTOSUBMIT_JS)) }
             }
             body {
                 // BUNYIP-243: app-wide "service unavailable" banner. Renders

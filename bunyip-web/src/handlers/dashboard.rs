@@ -1846,7 +1846,9 @@ fn twofa_setup_view(setup: &TwoFactorSetupResponse, error: Option<&str>) -> Mark
                         // BUNYIP-117: bound the TOTP edge before submit
                         // (maxlength + pattern). Authoritative check is
                         // still domain-side via `services::totp::verify_code`.
-                        div class="space-y-2" { label class="text-sm font-medium" { "Verification Code" } input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000000" autocomplete="one-time-code" class=(crate::handlers::dashboard_input()); }
+                        // BUNYIP-331: data-otp-autosubmit submits this
+                        // single-field form once the six-digit code is complete.
+                        div class="space-y-2" { label class="text-sm font-medium" { "Verification Code" } input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000000" autocomplete="one-time-code" data-otp-autosubmit class=(crate::handlers::dashboard_input()); }
                         button type="submit" class=(button_class("default", "default", "w-full")) { "Verify & Enable" }
                     }
                 }
