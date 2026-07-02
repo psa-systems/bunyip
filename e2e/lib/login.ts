@@ -210,7 +210,6 @@ async function readLoginError(page: Page): Promise<string | null> {
 // 6 digits, SHA-1 - the otplib defaults match bunyip's TOTP module). Fill it
 // into the `/login/2fa` form (field `code`) and submit.
 async function fillTotpStep(page: Page): Promise<void> {
-  const code = authenticator.generate(env.totpSecret);
   const form = page.locator('form').first();
   const codeInput = form
     .locator(
@@ -218,13 +217,24 @@ async function fillTotpStep(page: Page): Promise<void> {
     )
     .first();
   await codeInput.waitFor({ state: 'visible', timeout: 10_000 });
+
+  // The server verifies with skew=0 (BUNYIP-201): only the current 30s TOTP
+  // step is accepted. A code generated in the final moment of a step can expire
+  // before the POST lands, surfacing as "Invalid verification code". If little
+  // time remains in the window, wait for the next step before generating so the
+  // submitted code carries a full step of validity.
+  const remaining = authenticator.timeRemaining();
+  if (remaining < 5) {
+    await page.waitForTimeout((remaining + 1) * 1_000);
+  }
+  const code = authenticator.generate(env.totpSecret);
+
   // DOM-set, not fill(): same CI no-op applies to this input (BUNYIP-168).
   // setInputValue dispatches a bubbling `input` event, which the BUNYIP-331
   // data-otp-autosubmit snippet reacts to by submitting the form once the six
   // digits are present. Wait for that navigation off /login/2fa; only click the
   // submit button as a fallback if the auto-submit did not fire, so we never
-  // double-POST (a second submit would trip the 2fa_verify rate limit and hit
-  // TOTP replay rejection).
+  // double-POST (a second submit would trip the per-IP 2fa_verify rate limit).
   await setInputValue(codeInput, code);
   const autoSubmitted = await page
     .waitForURL((url) => !/\/login\/(2fa|mfa)(\/|$|\?)/.test(url.pathname), { timeout: 15_000 })
