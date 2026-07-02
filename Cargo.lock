@@ -779,6 +779,7 @@ name = "bunyip-web"
 version = "0.6.0"
 dependencies = [
  "axum",
+ "base64 0.21.7",
  "chrono",
  "maud",
  "qrcode",
