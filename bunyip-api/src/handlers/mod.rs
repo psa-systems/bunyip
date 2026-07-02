@@ -17,14 +17,40 @@ use crate::services::TotpService;
 /// `RateLimitConfig` (auth, totp, feedback). Increments the counter and, when
 /// the cap is hit, looks up the reset window so the error carries an accurate
 /// `Retry-After`.
+/// Whether a rate-limit trip should be logged, given the post-increment
+/// `count` and the window `max_requests`. Only the FIRST request past the cap
+/// in a window is logged (`count == max_requests + 1`); the counter increments
+/// monotonically on every attempt within the window, so later over-limit
+/// requests are silent. This keeps a credential-stuffing burst from flooding
+/// the admin error log and evicting other diagnostics from the shared ring
+/// (BUNYIP-327 review). The counter resets when the window rolls over, so each
+/// new window logs its first trip again. Pure + unit-tested.
+fn should_log_rate_limit_trip(count: i32, max_requests: i32) -> bool {
+    count == max_requests + 1
+}
+
 pub(crate) async fn check_rate_limit(
     pool: &PgPool,
     key: &str,
     config: &RateLimitConfig,
 ) -> Result<(), AppError> {
-    let (_count, exceeded) = RateLimitRepository::check_and_increment(pool, key, config).await?;
+    let (count, exceeded) = RateLimitRepository::check_and_increment(pool, key, config).await?;
     if exceeded {
         let retry_after = RateLimitRepository::get_retry_after(pool, key, config).await?;
+        // BUNYIP-327: surface the trip at ERROR with the affected client so it
+        // lands in the admin error-log view and is attributable. `key` is the
+        // client identity for this action (IP or email, per the caller). Logged
+        // once per window (see `should_log_rate_limit_trip`) so a burst does not
+        // flood the buffer; the 429 itself is still returned on every request.
+        if should_log_rate_limit_trip(count, config.max_requests) {
+            tracing::error!(
+                category = "rate_limit",
+                client = %key,
+                action = %config.action,
+                retry_after,
+                "rate limit exceeded"
+            );
+        }
         return Err(AppError::RateLimited { retry_after });
     }
     Ok(())
@@ -73,7 +99,7 @@ pub(crate) async fn require_totp_if_enabled(
 
 #[cfg(test)]
 mod tests {
-    use super::totp_reprompt_required;
+    use super::{should_log_rate_limit_trip, totp_reprompt_required};
 
     #[test]
     fn totp_reprompt_required_only_when_2fa_enabled() {
@@ -81,6 +107,27 @@ mod tests {
         // verified TOTP exists does (BUNYIP-138).
         assert!(totp_reprompt_required(true));
         assert!(!totp_reprompt_required(false));
+    }
+
+    #[test]
+    fn rate_limit_trip_logs_only_the_first_over_limit_request() {
+        // Config allowing 5/window: counts 1..=5 are within cap (not even a
+        // trip); count 6 is the first over-limit request and is the only one
+        // logged; counts 7+ in the same window stay silent (BUNYIP-327).
+        let max = 5;
+        assert!(
+            !should_log_rate_limit_trip(5, max),
+            "at the cap is not a trip"
+        );
+        assert!(should_log_rate_limit_trip(6, max), "first over-limit logs");
+        assert!(
+            !should_log_rate_limit_trip(7, max),
+            "second over-limit is silent"
+        );
+        assert!(
+            !should_log_rate_limit_trip(100, max),
+            "later bursts stay silent"
+        );
     }
 }
 
@@ -133,9 +180,9 @@ pub use webhook::stripe_webhook;
 // Admin handlers
 pub use admin::{
     admin_reset_password, create_admin_invite, create_application, create_application_group,
-    delete_application, delete_application_group, delete_user, get_dashboard_stats, get_key_health,
-    get_key_health_by_id, get_stripe_config, get_system_health, get_tier_config, get_user,
-    grant_lifetime_membership, grant_membership, impersonate_user, key_rotation_status,
+    delete_application, delete_application_group, delete_user, get_dashboard_stats, get_error_logs,
+    get_key_health, get_key_health_by_id, get_stripe_config, get_system_health, get_tier_config,
+    get_user, grant_lifetime_membership, grant_membership, impersonate_user, key_rotation_status,
     list_admin_invites, list_all_application_groups, list_all_applications, list_audit_logs,
     list_memberships, list_notifications, list_users, mark_all_notifications_read,
     mark_notification_read, reencrypt_key, replay_account_delete, reset_user_two_factor,

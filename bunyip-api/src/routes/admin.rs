@@ -149,6 +149,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             )
             // Audit logs
             .route("/audit-logs", web::get().to(handlers::list_audit_logs))
+            // Error log ring buffer (BUNYIP-327)
+            .route("/logs", web::get().to(handlers::get_error_logs))
             // Feedback
             .route("/feedback", web::get().to(handlers::list_feedback))
             .route("/feedback/export", web::get().to(handlers::export_feedback))

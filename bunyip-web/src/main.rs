@@ -193,6 +193,7 @@ async fn main() {
         // Admin
         .route("/admin", get(handlers::admin::dashboard))
         .route("/admin/audit-logs", get(handlers::admin::audit_logs))
+        .route("/admin/logs", get(handlers::admin::logs))
         .route("/admin/users", get(handlers::admin::users))
         .route("/admin/users/:id", get(handlers::admin::user_detail))
         .route(

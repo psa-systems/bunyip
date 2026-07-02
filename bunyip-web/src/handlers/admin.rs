@@ -14,8 +14,8 @@ use serde_json::json;
 
 use crate::api::admin as admin_api;
 use crate::api::types::{
-    AdminApplication, AdminAuditLog, AdminFeedbackDetail, ApplicationGroup, FeedbackAttachmentMeta,
-    FeedbackStatus, User, UserEntitlement,
+    AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, ApplicationGroup,
+    FeedbackAttachmentMeta, FeedbackStatus, User, UserEntitlement,
 };
 use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
@@ -200,6 +200,102 @@ pub async fn audit_logs(
         "Audit Logs · Bunyip",
         content,
     )
+}
+
+// ===========================================================================
+// Error Log (BUNYIP-327)
+// ===========================================================================
+
+#[derive(Deserialize)]
+pub struct LogsQuery {
+    pub category: Option<String>,
+}
+
+/// Render a single captured ERROR entry: message + category/level badges, the
+/// route/client attribution line, and any extra structured fields.
+fn log_row(e: &AdminErrorLog) -> Markup {
+    html! {
+        div class="flex items-start justify-between py-4 border-b last:border-0" {
+            div class="flex items-start gap-4 min-w-0" {
+                div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-destructive/10" { (icon("alert-triangle", "h-5 w-5 text-destructive")) }
+                div class="min-w-0" {
+                    div class="flex items-center gap-2 flex-wrap" {
+                        p class="font-medium break-words" { (e.message) }
+                        (badge("destructive", "Error"))
+                        @if let Some(cat) = &e.category { (badge("warning", cat)) }
+                    }
+                    p class="text-sm text-muted-foreground break-words" {
+                        span class="font-mono" { (e.target) }
+                        @if let Some(r) = &e.route { " • " (r) }
+                        @if let Some(cl) = &e.client { " • client " span class="font-medium text-foreground" { (cl) } }
+                    }
+                    @if !e.fields.is_empty() {
+                        p class="text-xs text-muted-foreground mt-1 font-mono break-words" {
+                            @for (k, v) in &e.fields { (k) "=" (v) "  " }
+                        }
+                    }
+                }
+            }
+            p class="text-sm text-muted-foreground whitespace-nowrap" { (relative_time(&e.timestamp)) }
+        }
+    }
+}
+
+/// Admin error-log view (BUNYIP-327): newest-first ERROR events from the API's
+/// in-memory ring buffer, filterable by category. Warnings never appear (the
+/// buffer captures ERROR only).
+pub async fn logs(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<LogsQuery>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let category = q
+        .category
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let data = admin_api::error_logs(&st.api, c.forward.as_deref(), category)
+        .await
+        .ok();
+    let entries = data.as_ref().map(|d| d.entries.clone()).unwrap_or_default();
+    let matched = data.as_ref().map(|d| d.matched).unwrap_or(0);
+    let buffered = data.as_ref().map(|d| d.buffered).unwrap_or(0);
+    let capacity = data.as_ref().map(|d| d.capacity).unwrap_or(0);
+    let reachable = data.is_some();
+
+    let content = html! {
+        div class="space-y-6" {
+            div { h1 class="text-3xl font-bold" { "Error Logs" } p class="mt-2 text-muted-foreground" { "Live ERROR-level events from the API, held in memory and rotated (newest first). Warnings are excluded." } }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6" {
+                    div class="flex items-center justify-between gap-4 flex-wrap" {
+                        div class="flex items-center gap-3" { (icon("alert-triangle", "h-5 w-5 text-destructive")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Captured Errors" } }
+                        div class="flex items-center gap-2 text-sm" {
+                            a href="/admin/logs" class=(button_class(if category.is_none() { "secondary" } else { "outline" }, "sm", "")) { "All" }
+                            a href="/admin/logs?category=rate_limit" class=(button_class(if category == Some("rate_limit") { "secondary" } else { "outline" }, "sm", "")) { "Rate limit" }
+                        }
+                    }
+                    @if reachable {
+                        p class="text-sm text-muted-foreground" { "Showing " (matched) " of " (buffered) " buffered (capacity " (capacity) ")." }
+                    }
+                }
+                div class="p-6 pt-0" {
+                    @if !reachable {
+                        (error_box("Could not reach the API to load error logs."))
+                    } @else if entries.is_empty() {
+                        p class="text-center text-muted-foreground py-8" { "No errors captured" @if category.is_some() { " in this category" } "." }
+                    } @else {
+                        div class="space-y-0" { @for e in &entries { (log_row(e)) } }
+                    }
+                }
+            }
+        }
+    };
+    admin_response(&c, &user, "/admin/logs", "Error Logs · Bunyip", content)
 }
 
 // ===========================================================================
@@ -3627,5 +3723,40 @@ mod tests {
             json!("https://dev.a8n.run/psa-systems/mokosh")
         );
         assert!(body.get("icon_url").is_none());
+    }
+}
+
+#[cfg(test)]
+mod error_log_tests {
+    use super::log_row;
+    use crate::api::types::AdminErrorLog;
+    use std::collections::BTreeMap;
+
+    fn entry() -> AdminErrorLog {
+        let mut fields = BTreeMap::new();
+        fields.insert("action".to_string(), "login".to_string());
+        AdminErrorLog {
+            timestamp: "2026-07-02T12:00:00Z".into(),
+            level: "ERROR".into(),
+            target: "bunyip_api::handlers".into(),
+            message: "rate limit exceeded".into(),
+            category: Some("rate_limit".into()),
+            route: Some("/v1/auth/login".into()),
+            client: Some("1.2.3.4".into()),
+            fields,
+        }
+    }
+
+    // BUNYIP-327 AC: an error event renders with its message, category and the
+    // client it is attributable to, and is always tagged as an error.
+    #[test]
+    fn renders_message_category_client_and_fields() {
+        let html = log_row(&entry()).into_string();
+        assert!(html.contains("rate limit exceeded"), "message shown");
+        assert!(html.contains("rate_limit"), "category shown");
+        assert!(html.contains("1.2.3.4"), "client shown");
+        assert!(html.contains("/v1/auth/login"), "route shown");
+        assert!(html.contains("action=login"), "extra fields shown");
+        assert!(html.contains("Error"), "tagged as an error");
     }
 }
