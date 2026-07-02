@@ -16,9 +16,9 @@ use crate::api::types::{
     AppDownloadGroup, Application, Membership, MembershipStatus, SubscriptionTier,
     TwoFactorSetupResponse, User,
 };
-use crate::handlers::{dashboard_response, guard, password_ok, rotating_index};
+use crate::handlers::{dashboard_response, guard, needs_onboarding, password_ok, rotating_index};
 use crate::util::{app_gradient, days_until, has_active_membership, urlenc};
-use crate::views::ui::{badge, button_class, error_box, icon};
+use crate::views::ui::{badge, button_class, error_box, icon, success_box};
 use crate::web::{redirect_cookies, AppState};
 
 const TAGLINES: [&str; 5] = [
@@ -904,8 +904,8 @@ pub async fn membership(
             // BUNYIP-187: flash banners surface checkout failures (and any
             // other ?error= / ?ok= flash) at the top of the page so the
             // user sees why a click "did nothing".
-            @if let Some(ok) = &q.ok { div class="rounded-lg border p-3 text-sm flex items-center gap-2" { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) (clamp_msg(ok)) } }
-            @if let Some(e) = &q.error { (error_box(&clamp_msg(e))) }
+            @if let Some(ok) = &q.ok { (success_box(ok)) }
+            @if let Some(e) = &q.error { (error_box(e)) }
             @if past_due {
                 div class="rounded-lg border border-destructive/50 p-4 text-sm text-destructive flex items-center gap-2" {
                     (icon("alert-triangle", "h-4 w-4")) "Your payment failed. Update your payment method within 30 days to avoid losing access."
@@ -1240,8 +1240,8 @@ pub async fn settings(
     let content = html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Settings" } p class="mt-2 text-muted-foreground" { "Manage your account settings and preferences." } }
-            @if let Some(ok) = &q.ok { div class="rounded-lg border p-3 text-sm flex items-center gap-2" { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) (clamp_msg(ok)) } }
-            @if let Some(e) = &q.error { (error_box(&clamp_msg(e))) }
+            @if let Some(ok) = &q.ok { (success_box(ok)) }
+            @if let Some(e) = &q.error { (error_box(e)) }
 
             // Account info
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50 overflow-hidden" {
@@ -1729,10 +1729,22 @@ pub async fn settings_resend_verification(
         Ok(v) => v,
         Err(r) => return r,
     };
+    // BUNYIP-324: the resend control lives on BOTH /settings and /onboarding.
+    // An onboarding-incomplete user is bounced off /settings by the onboarding
+    // gate (handlers::mod::guard), which drops the ?ok / ?error feedback param,
+    // so they saw nothing after a resend. Route the feedback back to the page
+    // they were actually on: the two pages are mutually exclusive by onboarding
+    // state, so `needs_onboarding` reconstructs the origin server-side without
+    // trusting any client-supplied redirect target. Both pages render ?ok/?error.
+    let dest = if needs_onboarding(&st, &user).await {
+        "/onboarding"
+    } else {
+        "/settings"
+    };
     match auth_api::request_email_verification(&st.api, c.forward.as_deref()).await {
         Ok(()) => redirect_cookies(
             &format!(
-                "/settings?ok={}",
+                "{dest}?ok={}",
                 urlenc(&format!("Verification email sent to {}", user.email))
             ),
             &c.set_cookies,
@@ -1741,7 +1753,7 @@ pub async fn settings_resend_verification(
         // "try again in about N minutes" copy (from the real Retry-After);
         // other errors keep their generic message.
         Err(e) => redirect_cookies(
-            &format!("/settings?error={}", urlenc(&e.verification_message())),
+            &format!("{dest}?error={}", urlenc(&e.verification_message())),
             &c.set_cookies,
         ),
     }
@@ -1789,23 +1801,6 @@ pub async fn settings_delete(
             &c.set_cookies,
         ),
     }
-}
-
-/// Cap a user-supplied `?ok=`/`?error=` query-param message before it is
-/// rendered. The value is already Maud-escaped (so this is not an XSS guard);
-/// it bounds a hand-crafted link that stuffs the param with kilobytes of text
-/// to blow up the page. ~256 bytes is ample for the short status strings these
-/// params legitimately carry. Truncation lands on a char boundary.
-fn clamp_msg(s: &str) -> String {
-    const MAX: usize = 256;
-    if s.len() <= MAX {
-        return s.to_string();
-    }
-    let mut end = MAX;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    s[..end].to_string()
 }
 
 // ===========================================================================
