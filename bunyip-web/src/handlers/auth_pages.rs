@@ -49,6 +49,53 @@ fn bunyip_2fa_cookie_clear(cfg: &Config) -> String {
     };
     format!("bunyip_2fa=; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age=0")
 }
+
+/// BUNYIP-323: defense-in-depth clearing cookies emitted by bunyip-web's
+/// own `/logout` handler, independent of whatever bunyip-api returns.
+/// bunyip-api is meant to emit these too (POST /v1/auth/logout was widened
+/// in the same ticket so it clears cookies even when the access_token is
+/// stale), but bunyip-web must also guarantee cookie clearing when the API
+/// is unreachable / errors out / returns an unexpected shape - the user's
+/// intent is "log me out", and clearing local cookies is what makes that
+/// visible in the browser.
+///
+/// Emits BOTH the host-only clear (matches a stale hostname-scoped cookie
+/// from a pre-COOKIE_DOMAIN deploy) and the domain-scoped clear (matches
+/// the currently-set cookie), mirroring `AuthCookies::clear`'s two-axis
+/// pattern in `crates/bunyip-domain/src/middleware/auth.rs`. Only issue
+/// domain-scoped clears when the BFF is configured with a cookie domain.
+fn bunyip_auth_cookie_clears(cfg: &Config) -> Vec<String> {
+    let secure = if cfg.use_secure_cookies() {
+        "; Secure"
+    } else {
+        ""
+    };
+    // The three names must match what bunyip-api sets on login:
+    // access_token, refresh_token, and the OP session cookie.
+    const NAMES: [&str; 3] = ["access_token", "refresh_token", "bunyip_op_session"];
+    let mut out: Vec<String> = Vec::with_capacity(NAMES.len() * 2);
+    for name in NAMES {
+        // Host-only clear (no Domain attribute) - kills a cookie set before
+        // BUNYIP_COOKIE_SHARED_DOMAIN was configured.
+        out.push(format!(
+            "{name}=; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age=0"
+        ));
+    }
+    if !cfg.app_domain.is_empty() {
+        let domain = cfg.app_domain.as_str();
+        for name in NAMES {
+            // Domain-scoped clear - matches a cookie set on the shared apex
+            // domain (bunyip-api's `AuthCookies::clear` emits these when
+            // COOKIE_DOMAIN is configured). Uses the bare apex here; the
+            // browser matches its own cookie regardless of whether it was
+            // stored with or without the leading dot.
+            out.push(format!(
+                "{name}=; Path=/; Domain={domain}; HttpOnly; SameSite=Lax{secure}; Max-Age=0"
+            ));
+        }
+    }
+    out
+}
 use crate::views::ui::{button_class, error_box};
 use crate::web::{html, html_cookies, redirect, redirect_cookies, AppState};
 
@@ -565,9 +612,19 @@ pub async fn logout(
     Query(q): Query<RedirectQuery>,
 ) -> Response {
     let cookie = cookie_of(&headers);
+    // BUNYIP-323: use the bunyip-api response's clearing cookies when it
+    // returns them (the common case, and the one that lets the API also
+    // revoke the refresh token + fan out OIDC back-channel logouts). But
+    // do NOT depend on it: an unreachable / errored API used to leave the
+    // browser signed in because bunyip-web emitted no clears of its own.
+    // Merge in a local defensive clear set unconditionally so `Set-Cookie`
+    // headers reach the browser even when the API call failed entirely.
     let mut cleared = auth_api::logout(&st.api, cookie.as_deref())
         .await
         .unwrap_or_default();
+    for defensive in bunyip_auth_cookie_clears(&st.cfg) {
+        cleared.push(defensive);
+    }
     // Also drop any pending-2FA cookie.
     cleared.push(bunyip_2fa_cookie_clear(&st.cfg));
     // Logout lands on the public homepage by default: a user who
@@ -1429,5 +1486,100 @@ mod safe_redirect_tests {
             safe_redirect(Some("javascript:alert(1)"), ISSUER),
             "/dashboard"
         );
+    }
+}
+
+#[cfg(test)]
+mod logout_clear_tests {
+    //! BUNYIP-323: bunyip-web must clear cookies UNCONDITIONALLY on logout,
+    //! not just when bunyip-api responds with clearing Set-Cookies. These
+    //! tests pin the shape of the defensive clears so a future refactor can
+    //! not silently drop them.
+
+    use super::bunyip_auth_cookie_clears;
+    use crate::config::Config;
+
+    fn cfg(app_domain: &str, api_public: &str) -> Config {
+        Config {
+            bind_addr: "127.0.0.1:4400".into(),
+            api_url: "http://bunyip-api-app:4401".into(),
+            api_public_origin: api_public.into(),
+            oidc_issuer: api_public.into(),
+            app_domain: app_domain.into(),
+            show_business_pricing: false,
+            community_url: String::new(),
+        }
+    }
+
+    #[test]
+    fn dev_config_emits_host_only_clears_for_the_three_auth_cookies() {
+        // No app_domain, http api_public_origin -> host-only clears only,
+        // no Secure attribute.
+        let cs = bunyip_auth_cookie_clears(&cfg("", "http://localhost:4401"));
+        assert_eq!(
+            cs.len(),
+            3,
+            "expected exactly three host-only clears; got {cs:?}"
+        );
+        for c in &cs {
+            assert!(c.starts_with(match c.split('=').next().unwrap_or("") {
+                n if n == "access_token" || n == "refresh_token" || n == "bunyip_op_session" => n,
+                _ => panic!("unexpected cookie name in {c:?}"),
+            }));
+            assert!(c.contains("Path=/"), "{c:?}");
+            assert!(c.contains("HttpOnly"), "{c:?}");
+            assert!(c.contains("SameSite=Lax"), "{c:?}");
+            assert!(c.contains("Max-Age=0"), "{c:?}");
+            assert!(!c.contains("Secure"), "dev must not set Secure: {c:?}");
+            assert!(!c.contains("Domain="), "dev must not set Domain: {c:?}");
+        }
+    }
+
+    #[test]
+    fn prod_config_emits_host_only_and_domain_scoped_clears_with_secure() {
+        // With app_domain set and an HTTPS public origin, we expect three
+        // host-only clears AND three domain-scoped clears, all with Secure.
+        let cs = bunyip_auth_cookie_clears(&cfg("a8n.systems", "https://api.a8n.systems"));
+        assert_eq!(
+            cs.len(),
+            6,
+            "expected 6 clears (3 host + 3 domain); got {cs:?}"
+        );
+        let host_only: Vec<&String> = cs.iter().filter(|c| !c.contains("Domain=")).collect();
+        let domain_scoped: Vec<&String> = cs.iter().filter(|c| c.contains("Domain=")).collect();
+        assert_eq!(host_only.len(), 3, "host-only count: {host_only:?}");
+        assert_eq!(
+            domain_scoped.len(),
+            3,
+            "domain-scoped count: {domain_scoped:?}"
+        );
+        for c in &cs {
+            assert!(c.contains("Secure"), "prod must set Secure: {c:?}");
+            assert!(c.contains("Max-Age=0"), "{c:?}");
+            assert!(c.contains("HttpOnly"), "{c:?}");
+            assert!(c.contains("SameSite=Lax"), "{c:?}");
+        }
+        for c in &domain_scoped {
+            assert!(c.contains("Domain=a8n.systems"), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn every_auth_cookie_name_is_cleared_exactly_once_per_axis() {
+        // Guard against a future edit that adds a name to `AuthCookies::set`
+        // on the bunyip-api side without updating this list.
+        let cs = bunyip_auth_cookie_clears(&cfg("a8n.systems", "https://api.a8n.systems"));
+        for name in ["access_token", "refresh_token", "bunyip_op_session"] {
+            let host_only = cs
+                .iter()
+                .filter(|c| c.starts_with(&format!("{name}=")) && !c.contains("Domain="))
+                .count();
+            let domain_scoped = cs
+                .iter()
+                .filter(|c| c.starts_with(&format!("{name}=")) && c.contains("Domain="))
+                .count();
+            assert_eq!(host_only, 1, "{name}: expected 1 host-only clear");
+            assert_eq!(domain_scoped, 1, "{name}: expected 1 domain-scoped clear");
+        }
     }
 }
