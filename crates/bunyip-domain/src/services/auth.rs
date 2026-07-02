@@ -1033,6 +1033,14 @@ impl AuthService {
                         .await?
                         .unwrap_or_else(Utc::now);
                 let retry_after = resend_retry_after_secs(oldest, Utc::now());
+                // BUNYIP-327: attributable rate-limit trip for the admin log view.
+                tracing::error!(
+                    category = "rate_limit",
+                    client = %user_id,
+                    action = "email_change_resend",
+                    retry_after,
+                    "email change resend rate limit exceeded"
+                );
                 return Err(AppError::RateLimited { retry_after });
             }
 
@@ -1198,6 +1206,14 @@ impl AuthService {
                     .await?
                     .unwrap_or_else(Utc::now);
             let retry_after = resend_retry_after_secs(oldest, Utc::now());
+            // BUNYIP-327: attributable rate-limit trip for the admin log view.
+            tracing::error!(
+                category = "rate_limit",
+                client = %user_id,
+                action = "email_verify_resend",
+                retry_after,
+                "email verification resend rate limit exceeded"
+            );
             return Err(AppError::RateLimited { retry_after });
         }
 

@@ -51,8 +51,12 @@ async fn main() -> anyhow::Result<()> {
     // Load configuration
     let config = Config::from_env()?;
 
-    // Initialize tracing/logging
-    init_tracing(&config.log_level);
+    // Initialize tracing/logging. The error-log buffer (BUNYIP-327) is created
+    // first so the capture layer can be wired into the subscriber; the same
+    // buffer is registered as app data below so the admin log view can read it.
+    let error_log =
+        bunyip_api::error_log::ErrorLogBuffer::new(bunyip_api::error_log::DEFAULT_CAPACITY);
+    init_tracing(&config.log_level, error_log.clone());
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -680,6 +684,8 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::Data::new(pool.clone()))
             // Server start instant for uptime reporting
             .app_data(web::Data::new(server_start))
+            // In-memory error-log buffer for the admin log view (BUNYIP-327).
+            .app_data(web::Data::new(error_log.clone()))
             // Add services to app state
             .app_data(jwt_service.clone())
             // Register the at+jwt verifier (BUNYIP-55) as an
@@ -974,13 +980,18 @@ async fn upsert_lets_chat_oidc_client(pool: &sqlx::PgPool) -> anyhow::Result<()>
     Ok(())
 }
 
-/// Initialize tracing subscriber with compact human-readable output
-fn init_tracing(log_level: &str) {
+/// Initialize tracing subscriber with compact human-readable output, plus the
+/// BUNYIP-327 error-log capture layer that copies ERROR-level events into the
+/// in-memory buffer backing the admin log view. The capture layer filters to
+/// ERROR internally; ERROR outranks the usual `info`/`warn` verbosities, so the
+/// shared `EnvFilter` admits those events to it in any normal configuration.
+fn init_tracing(log_level: &str, error_log: bunyip_api::error_log::ErrorLogBuffer) {
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
 
     tracing_subscriber::registry()
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer().compact())
+        .with(bunyip_api::error_log::ErrorLogLayer::new(error_log))
         .init();
 }

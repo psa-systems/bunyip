@@ -1250,6 +1250,61 @@ pub async fn list_audit_logs(
 }
 
 // =============================================================================
+// Error Log (BUNYIP-327)
+// =============================================================================
+
+/// Query parameters for the in-memory error log view.
+#[derive(Debug, Deserialize)]
+pub struct ErrorLogsQuery {
+    /// Exact-match category filter (e.g. `rate_limit`). Absent -> all errors.
+    pub category: Option<String>,
+    /// Cap on how many newest entries to return (defaults to the full buffer,
+    /// hard-capped at the buffer capacity).
+    pub limit: Option<usize>,
+}
+
+/// Envelope for the error-log response: the entries plus the buffer's live
+/// size and capacity, so the view can show "showing N of CAP (rotated)".
+#[derive(Debug, Serialize)]
+pub struct ErrorLogsResponse {
+    pub entries: Vec<crate::error_log::ErrorLogEntry>,
+    /// Entries matching the filter before `limit` truncation.
+    pub matched: usize,
+    /// Total entries currently held (all categories).
+    pub buffered: usize,
+    /// Maximum entries retained before rotation.
+    pub capacity: usize,
+}
+
+/// GET /v1/admin/logs
+/// Return the newest-first ERROR-level events from the in-memory ring buffer,
+/// optionally filtered by category (BUNYIP-327). Admin-only via [`AdminUser`].
+pub async fn get_error_logs(
+    req: HttpRequest,
+    _admin: AdminUser,
+    logs: web::Data<crate::error_log::ErrorLogBuffer>,
+    query: web::Query<ErrorLogsQuery>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+
+    let mut entries = logs.snapshot(query.category.as_deref());
+    let matched = entries.len();
+    if let Some(limit) = query.limit {
+        entries.truncate(limit.min(logs.capacity()));
+    }
+
+    Ok(success(
+        ErrorLogsResponse {
+            entries,
+            matched,
+            buffered: logs.len(),
+            capacity: logs.capacity(),
+        },
+        request_id,
+    ))
+}
+
+// =============================================================================
 // Dashboard Stats
 // =============================================================================
 

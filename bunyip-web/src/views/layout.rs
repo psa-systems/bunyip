@@ -418,6 +418,11 @@ fn admin_items() -> Vec<NavItem> {
             href: "/admin/audit-logs",
             icon: "file-text",
         },
+        NavItem {
+            title: "Error Logs",
+            href: "/admin/logs",
+            icon: "alert-triangle",
+        },
     ]
 }
 

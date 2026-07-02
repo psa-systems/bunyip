@@ -344,6 +344,35 @@ pub struct AdminAuditLog {
     pub created_at: String,
 }
 
+/// One captured ERROR event from the API's in-memory error-log ring buffer
+/// (BUNYIP-327). Mirrors `bunyip_api::error_log::ErrorLogEntry`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminErrorLog {
+    pub timestamp: String,
+    pub level: String,
+    pub target: String,
+    pub message: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub route: Option<String>,
+    #[serde(default)]
+    pub client: Option<String>,
+    /// Any remaining structured fields the call site attached.
+    #[serde(default)]
+    pub fields: std::collections::BTreeMap<String, String>,
+}
+
+/// Envelope returned by `GET /v1/admin/logs` (BUNYIP-327): the matched entries
+/// plus buffer occupancy so the view can report rotation.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ErrorLogsResponse {
+    pub entries: Vec<AdminErrorLog>,
+    pub matched: i64,
+    pub buffered: i64,
+    pub capacity: i64,
+}
+
 fn default_true() -> bool {
     true
 }

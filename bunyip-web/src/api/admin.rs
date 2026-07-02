@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeedbackDetail,
     AdminFeedbackSummary, AdminMembership, AdminStatsResponse, AdminUser, ApplicationGroup,
-    ApplicationGroupList, ArchivedFeedback, FeedbackStatus, PaginatedResponse,
+    ApplicationGroupList, ArchivedFeedback, ErrorLogsResponse, FeedbackStatus, PaginatedResponse,
     StripeConfigResponse, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
@@ -469,6 +469,22 @@ pub async fn audit_logs(
     if admin_only {
         path.push_str("&admin_only=true");
     }
+    parse(api.get(&path, cookie).await?)
+}
+
+// --- error log (BUNYIP-327) -------------------------------------------------
+
+/// Fetch the in-memory error-log ring buffer, optionally filtered to one
+/// category. Newest-first; the buffer is bounded so no pagination is needed.
+pub async fn error_logs(
+    api: &Api,
+    cookie: Option<&str>,
+    category: Option<&str>,
+) -> Result<ErrorLogsResponse, ApiError> {
+    let path = match category {
+        Some(c) if !c.is_empty() => format!("/admin/logs?category={}", urlenc(c)),
+        _ => "/admin/logs".to_string(),
+    };
     parse(api.get(&path, cookie).await?)
 }
 

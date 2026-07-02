@@ -25,6 +25,16 @@ pub(crate) async fn check_rate_limit(
     let (_count, exceeded) = RateLimitRepository::check_and_increment(pool, key, config).await?;
     if exceeded {
         let retry_after = RateLimitRepository::get_retry_after(pool, key, config).await?;
+        // BUNYIP-327: surface the trip at ERROR with the affected client so it
+        // lands in the admin error-log view and is attributable. `key` is the
+        // client identity for this action (IP or email, per the caller).
+        tracing::error!(
+            category = "rate_limit",
+            client = %key,
+            action = %config.action,
+            retry_after,
+            "rate limit exceeded"
+        );
         return Err(AppError::RateLimited { retry_after });
     }
     Ok(())
@@ -133,9 +143,9 @@ pub use webhook::stripe_webhook;
 // Admin handlers
 pub use admin::{
     admin_reset_password, create_admin_invite, create_application, create_application_group,
-    delete_application, delete_application_group, delete_user, get_dashboard_stats, get_key_health,
-    get_key_health_by_id, get_stripe_config, get_system_health, get_tier_config, get_user,
-    grant_lifetime_membership, grant_membership, impersonate_user, key_rotation_status,
+    delete_application, delete_application_group, delete_user, get_dashboard_stats, get_error_logs,
+    get_key_health, get_key_health_by_id, get_stripe_config, get_system_health, get_tier_config,
+    get_user, grant_lifetime_membership, grant_membership, impersonate_user, key_rotation_status,
     list_admin_invites, list_all_application_groups, list_all_applications, list_audit_logs,
     list_memberships, list_notifications, list_users, mark_all_notifications_read,
     mark_notification_read, reencrypt_key, replay_account_delete, reset_user_two_factor,
