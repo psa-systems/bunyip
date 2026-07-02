@@ -755,9 +755,26 @@ pub async fn refresh_token(
 
 /// POST /v1/auth/logout
 /// Logout current session
+///
+/// BUNYIP-323: uses `OptionalUser`, NOT `AuthenticatedUser`. A logout must
+/// succeed even when the caller's access_token is expired, missing, or
+/// invalid, so the browser's cookies are guaranteed to be cleared regardless
+/// of the session's state. Previously the handler required a valid
+/// `AuthenticatedUser` extractor: the extractor 401'd before the handler
+/// ran on any stale token, no clearing cookies were emitted, and the user
+/// stayed effectively signed in from the browser's perspective (David hit
+/// this trying to re-register with a corrected email).
+///
+/// With a valid user (the common case) we still revoke the refresh token in
+/// the DB and fan out OIDC op-session revocations + back-channel logout
+/// tokens, matching the pre-BUNYIP-323 semantics. Without a valid user we
+/// skip those steps but still emit the `AuthCookies::clear` set so the
+/// browser purges its cookies; the residual DB state (an expired refresh
+/// token or an unreachable op_session) is either already unusable or gets
+/// GC'd on its own schedule.
 pub async fn logout(
     req: HttpRequest,
-    user: AuthenticatedUser,
+    optional_user: OptionalUser,
     auth_service: web::Data<Arc<AuthService>>,
     config: web::Data<crate::config::Config>,
     oidc_provider: web::Data<Option<Arc<bunyip_oidc::services::oidc_provider::OidcProvider>>>,
@@ -765,21 +782,39 @@ pub async fn logout(
     let request_id = get_request_id(&req);
     let ip_address = extract_client_ip(&req);
 
-    // Get refresh token from cookie
-    if let Some(refresh_token) = req.cookie("refresh_token").map(|c| c.value().to_string()) {
-        auth_service
-            .logout(refresh_token, user.0.sub, ip_address)
-            .await?;
-    }
+    if let Some(user) = optional_user.0.as_ref() {
+        // Only try to revoke the refresh token when we know whose it is.
+        // Without a valid access_token we cannot bind the refresh_token to a
+        // user_id for the audit log; leave the row and let TTL clean it up.
+        if let Some(refresh_token) = req.cookie("refresh_token").map(|c| c.value().to_string()) {
+            // Best-effort: DB errors here must not block cookie clearing.
+            // A refresh token that fails to revoke (e.g. already-revoked, DB
+            // hiccup) is not a reason to leave the browser signed in.
+            if let Err(e) = auth_service
+                .logout(refresh_token, user.sub, ip_address)
+                .await
+            {
+                tracing::warn!(
+                    error = %e,
+                    user_id = %user.sub,
+                    "logout: refresh-token revoke failed; still clearing cookies"
+                );
+            }
+        }
 
-    // Revoke OIDC op-sessions (synchronously) and fan out back-channel logout
-    // tokens so an immediately-subsequent /oauth2/authorize finds no session.
-    revoke_op_sessions(&oidc_provider, user.0.sub).await;
+        // Revoke OIDC op-sessions (synchronously) and fan out back-channel
+        // logout tokens so an immediately-subsequent /oauth2/authorize finds
+        // no session.
+        revoke_op_sessions(&oidc_provider, user.sub).await;
+    }
 
     let secure = config.is_production();
     let cookie_domain = config.cookie_domain.as_deref();
 
-    // Clear cookies
+    // Clear cookies unconditionally. This is the whole point of the endpoint
+    // from the browser's perspective: emit clearing `Set-Cookie` headers for
+    // access_token, refresh_token, and the OP session cookie so the next
+    // request from this browser carries none of them.
     let mut response = HttpResponse::Ok().json(crate::responses::ApiResponse::<()> {
         success: true,
         data: None,
