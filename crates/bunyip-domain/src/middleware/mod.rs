@@ -14,4 +14,4 @@ pub use auth::{
     extract_client_ip, extract_device_info, AdminUser, AuthCookies, AuthenticatedUser, MemberUser,
     OptionalUser,
 };
-pub use auto_ban::{AutoBanMiddleware, AutoBanService};
+pub use auto_ban::{AutoBanMiddleware, AutoBanService, BanInfo};

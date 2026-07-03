@@ -148,9 +148,18 @@ impl SuspiciousPatterns {
 
 #[derive(Debug, Clone)]
 struct BanEntry {
-    #[allow(dead_code)] // stored for DB persistence and diagnostics
     reason: String,
     expires_at: DateTime<Utc>,
+}
+
+/// A currently-active IP ban as surfaced by [`AutoBanService::list_bans`].
+#[derive(Debug, Clone)]
+pub struct BanInfo {
+    pub ip: IpAddr,
+    pub reason: String,
+    pub strikes: u32,
+    pub banned_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -313,6 +322,88 @@ impl AutoBanService {
         info!(count = map.len(), "Loaded IP bans from database");
     }
 
+    /// Lift a ban for `ip` immediately and durably.
+    ///
+    /// Removes the IP from the in-memory `banned` map (the map the request path
+    /// actually checks in [`is_banned`](Self::is_banned)), clears any
+    /// accumulated `strikes`, and deletes the persisted `ip_bans` row so the
+    /// ban does not reappear on the next restart. All three are done in one
+    /// call, so the very next request from that IP is allowed without waiting
+    /// for expiry or a process restart.
+    ///
+    /// The in-memory removals happen before the awaited `DELETE`, so the
+    /// enforcement effect (the IP is no longer banned) holds even if the
+    /// database delete errors; the error is then propagated to the caller.
+    ///
+    /// Returns `true` if a ban was actually present (in the in-memory map or in
+    /// the `ip_bans` table), `false` if the IP was not banned.
+    pub async fn unban(&self, ip: &IpAddr) -> Result<bool, sqlx::Error> {
+        let removed_from_map = {
+            let mut banned = self.banned.write().await;
+            banned.remove(ip).is_some()
+        };
+        {
+            let mut strikes = self.strikes.write().await;
+            strikes.remove(ip);
+        }
+
+        let network = ipnetwork::IpNetwork::from(*ip);
+        let result = sqlx::query("DELETE FROM ip_bans WHERE ip_address = $1")
+            .bind(network)
+            .execute(&self.pool)
+            .await?;
+
+        let removed = removed_from_map || result.rows_affected() > 0;
+        if removed {
+            info!(ip = %ip, "IP ban lifted");
+        }
+        Ok(removed)
+    }
+
+    /// List all currently-active bans.
+    ///
+    /// Merges the persisted `ip_bans` rows (the source of `strikes` and
+    /// `banned_at` metadata) with the in-memory `banned` map (authoritative for
+    /// enforcement). Entries present only in memory - e.g. a freshly promoted
+    /// ban whose asynchronous persist has not landed yet - derive `banned_at`
+    /// from `expires_at` and report `strikes` as the configured threshold.
+    /// Expired entries are excluded.
+    pub async fn list_bans(&self) -> Result<Vec<BanInfo>, sqlx::Error> {
+        let now = Utc::now();
+        let mut by_ip: HashMap<IpAddr, BanInfo> = HashMap::new();
+
+        for row in load_active_bans(&self.pool).await? {
+            let ip = row.ip_address.ip();
+            by_ip.insert(
+                ip,
+                BanInfo {
+                    ip,
+                    reason: row.reason,
+                    strikes: row.strikes.max(0) as u32,
+                    banned_at: row.banned_at,
+                    expires_at: row.expires_at,
+                },
+            );
+        }
+
+        let ban_duration = chrono::Duration::seconds(self.config.ban_duration_secs as i64);
+        let banned = self.banned.read().await;
+        for (ip, entry) in banned.iter() {
+            if entry.expires_at <= now {
+                continue; // expired but not yet swept out of the map
+            }
+            by_ip.entry(*ip).or_insert_with(|| BanInfo {
+                ip: *ip,
+                reason: entry.reason.clone(),
+                strikes: self.config.threshold,
+                banned_at: entry.expires_at - ban_duration,
+                expires_at: entry.expires_at,
+            });
+        }
+
+        Ok(by_ip.into_values().collect())
+    }
+
     /// Whether auto-banning is enabled.
     pub fn is_enabled(&self) -> bool {
         self.config.enabled
@@ -324,6 +415,8 @@ impl AutoBanService {
 pub struct IpBanRow {
     pub ip_address: ipnetwork::IpNetwork,
     pub reason: String,
+    pub strikes: i32,
+    pub banned_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }
 
@@ -367,7 +460,7 @@ pub async fn cleanup_expired_bans(pool: &PgPool) -> Result<u64, sqlx::Error> {
 /// Load active bans from the database.
 pub async fn load_active_bans(pool: &PgPool) -> Result<Vec<IpBanRow>, sqlx::Error> {
     let rows = sqlx::query_as::<_, IpBanRow>(
-        "SELECT ip_address, reason, expires_at FROM ip_bans WHERE expires_at > NOW()",
+        "SELECT ip_address, reason, strikes, banned_at, expires_at FROM ip_bans WHERE expires_at > NOW()",
     )
     .fetch_all(pool)
     .await?;
@@ -608,6 +701,175 @@ mod tests {
             "threshold strike should return newly-banned = true"
         );
         assert!(service.is_banned(&ip).await, "IP should be banned now");
+    }
+
+    #[tokio::test]
+    async fn test_unban_lifts_in_memory_ban() {
+        // Lazy pool never connects: the DELETE inside `unban` errors, but the
+        // in-memory map/strike removals run first, which is exactly what the
+        // request path (`is_banned`) checks. We assert that enforcement effect
+        // regardless of the DB error, proving a subsequent request is not
+        // 403-ed after an unban.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/bunyip_autoban_test")
+            .expect("lazy pool construction never connects");
+        let config = AutoBanConfig {
+            enabled: true,
+            threshold: 3,
+            window_secs: 3600,
+            ban_duration_secs: 86400,
+        };
+        let service = AutoBanService::new(config, pool);
+        let ip: IpAddr = "203.0.113.20".parse().unwrap();
+
+        // Drive the IP to a ban.
+        service.record_strike(&ip, "/wp-login.php").await;
+        service.record_strike(&ip, "/phpmyadmin/").await;
+        assert!(service.record_strike(&ip, "/xmlrpc.php").await);
+        assert!(service.is_banned(&ip).await, "IP should be banned");
+
+        // The DB delete errors on the lazy pool; the in-memory removal precedes
+        // it, so the ban is lifted for the request path.
+        let _ = service.unban(&ip).await;
+        assert!(
+            !service.is_banned(&ip).await,
+            "IP must no longer be banned after unban"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unban_clears_accumulated_strikes() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/bunyip_autoban_test")
+            .expect("lazy pool construction never connects");
+        let config = AutoBanConfig {
+            enabled: true,
+            threshold: 3,
+            window_secs: 3600,
+            ban_duration_secs: 86400,
+        };
+        let service = AutoBanService::new(config, pool);
+        let ip: IpAddr = "203.0.113.21".parse().unwrap();
+
+        // Two strikes: below the threshold of 3, so no ban yet.
+        assert!(!service.record_strike(&ip, "/wp-login.php").await);
+        assert!(!service.record_strike(&ip, "/phpmyadmin/").await);
+
+        // Unban clears the strike counter (in memory; the DB delete errors on
+        // the lazy pool but runs after the strike removal).
+        let _ = service.unban(&ip).await;
+
+        // If strikes were still at 2, one more would ban immediately. Because
+        // they were cleared, a single fresh strike stays below the threshold.
+        assert!(
+            !service.record_strike(&ip, "/xmlrpc.php").await,
+            "strikes must reset after unban, so one strike does not ban"
+        );
+        assert!(!service.is_banned(&ip).await);
+    }
+
+    /// DB-backed tests. Skipped when `DATABASE_URL` is unset (matches the
+    /// convention in the repository crates).
+    async fn maybe_pool() -> Option<PgPool> {
+        let url = std::env::var("DATABASE_URL").ok()?;
+        PgPool::connect(&url).await.ok()
+    }
+
+    #[tokio::test]
+    async fn test_unban_reports_presence_and_deletes_row() {
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
+        let ip: IpAddr = "203.0.113.55".parse().unwrap();
+        let network = ipnetwork::IpNetwork::from(ip);
+        sqlx::query("DELETE FROM ip_bans WHERE ip_address = $1")
+            .bind(network)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let config = AutoBanConfig {
+            enabled: true,
+            threshold: 3,
+            window_secs: 3600,
+            ban_duration_secs: 86400,
+        };
+        let service = AutoBanService::new(config, pool.clone());
+
+        // No ban present -> unban reports false.
+        assert!(!service.unban(&ip).await.unwrap());
+
+        // Persist a ban and load it into memory, then unban.
+        persist_ban(
+            &pool,
+            &ip,
+            "test-ban",
+            3,
+            Utc::now() + chrono::Duration::hours(1),
+        )
+        .await
+        .unwrap();
+        service
+            .load_bans(load_active_bans(&pool).await.unwrap())
+            .await;
+        assert!(service.is_banned(&ip).await);
+
+        // Present ban -> unban reports true and removes the persisted row.
+        assert!(service.unban(&ip).await.unwrap());
+        assert!(!service.is_banned(&ip).await);
+        let (remaining,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM ip_bans WHERE ip_address = $1")
+                .bind(network)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining, 0, "ip_bans row must be deleted");
+    }
+
+    #[tokio::test]
+    async fn test_list_bans_includes_persisted_ban() {
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
+        let ip: IpAddr = "203.0.113.66".parse().unwrap();
+        let network = ipnetwork::IpNetwork::from(ip);
+        sqlx::query("DELETE FROM ip_bans WHERE ip_address = $1")
+            .bind(network)
+            .execute(&pool)
+            .await
+            .unwrap();
+        persist_ban(
+            &pool,
+            &ip,
+            "list-test",
+            4,
+            Utc::now() + chrono::Duration::hours(1),
+        )
+        .await
+        .unwrap();
+
+        let config = AutoBanConfig {
+            enabled: true,
+            threshold: 5,
+            window_secs: 3600,
+            ban_duration_secs: 86400,
+        };
+        let service = AutoBanService::new(config, pool.clone());
+
+        let bans = service.list_bans().await.unwrap();
+        let found = bans
+            .iter()
+            .find(|b| b.ip == ip)
+            .expect("persisted ban must be listed");
+        assert_eq!(found.reason, "list-test");
+        assert_eq!(found.strikes, 4);
+
+        // cleanup
+        sqlx::query("DELETE FROM ip_bans WHERE ip_address = $1")
+            .bind(network)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     #[test]
