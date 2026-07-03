@@ -201,12 +201,7 @@ fn normalize_tags(tags: &[String]) -> Result<Vec<String>, AppError> {
 }
 
 async fn check_feedback_rate_limit(pool: &PgPool, key: &str) -> Result<(), AppError> {
-    let config = RateLimitConfig {
-        action: "feedback_submit",
-        max_requests: 5,
-        window_seconds: 3600,
-    };
-    super::check_rate_limit(pool, key, &config).await
+    super::check_rate_limit(pool, key, &RateLimitConfig::FEEDBACK_SUBMIT).await
 }
 
 pub async fn submit_feedback(

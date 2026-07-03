@@ -42,7 +42,7 @@ pub use feedback::{
 };
 pub use membership::{AdminMembershipResponse, MembershipResponse};
 pub use oauth_client_user_tenant::{CreateUserTenantAssignment, OAuthClientUserTenant};
-pub use rate_limit::{RateLimit, RateLimitConfig};
+pub use rate_limit::{KeyKind, KeySubject, RateLimit, RateLimitConfig, TWO_FACTOR_KEY_PREFIX};
 pub use stripe::{
     StripeConfig, StripeConfigResponse, StripeInvoiceResponse, StripePriceResponse,
     StripeProductResponse, StripeSubscriptionItemResponse, StripeSubscriptionResponse,

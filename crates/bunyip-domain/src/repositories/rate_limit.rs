@@ -4,11 +4,33 @@ use chrono::{Duration, Utc};
 use sqlx::PgPool;
 
 use crate::errors::AppError;
-use crate::models::RateLimitConfig;
+use crate::models::{RateLimit, RateLimitConfig};
 
 pub struct RateLimitRepository;
 
 impl RateLimitRepository {
+    /// Candidate rows for the admin "currently rate-limited" view (BUNYIP-315):
+    /// every `rate_limits` row whose window could still be open, i.e. started
+    /// within the last hour (the longest configured window; the periodic
+    /// cleanup deletes anything older). The caller decides which of these are
+    /// *actually* active by re-checking each row against its action's preset
+    /// (`RateLimit::active_retry_after`), so the cap/window stay sourced from
+    /// `RateLimitConfig` and are never re-encoded in SQL. Newest window first.
+    pub async fn list_active(pool: &PgPool) -> Result<Vec<RateLimit>, AppError> {
+        let rows = sqlx::query_as::<_, RateLimit>(
+            r#"
+            SELECT id, key, action, count, window_start
+            FROM rate_limits
+            WHERE window_start > NOW() - INTERVAL '1 hour'
+            ORDER BY window_start DESC
+            "#,
+        )
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows)
+    }
+
     /// BUNYIP-264: convenience wrapper combining `check_and_increment`
     /// with `get_retry_after` so any handler can call a single function
     /// to enforce a rate limit. Returns `Ok(())` when under the cap and

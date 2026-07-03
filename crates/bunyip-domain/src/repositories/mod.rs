@@ -38,7 +38,7 @@ pub use oauth_client_user_tenant::OAuthClientUserTenantRepository;
 pub use rate_limit::RateLimitRepository;
 pub use stripe::StripeConfigRepository;
 pub use tier::TierConfigRepository;
-pub use token::TokenRepository;
+pub use token::{EmailResendLimiterRow, TokenRepository};
 pub use totp::TotpRepository;
 pub use trusted_device::TrustedDeviceRepository;
 pub use user::UserRepository;
