@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::errors::AppError;
 use crate::middleware::{extract_client_ip, extract_device_info, AuthCookies, AuthenticatedUser};
-use crate::models::{AuditAction, CreateAuditLog, RateLimitConfig};
+use crate::models::{AuditAction, CreateAuditLog, RateLimitConfig, TWO_FACTOR_KEY_PREFIX};
 use crate::repositories::{
     AuditLogRepository, RateLimitRepository, TrustedDeviceRepository, UserRepository,
 };
@@ -155,7 +155,7 @@ pub async fn verify_2fa(
     // cap, even a correct code is refused until the window expires, which is the
     // hard lockout: the attacker must wait and the user must retry later or
     // re-authenticate.
-    let user_rate_key = format!("2fa_verify_user:{}", user_id);
+    let user_rate_key = format!("{TWO_FACTOR_KEY_PREFIX}{user_id}");
     let (fail_count, _) = RateLimitRepository::check(
         &pool,
         &user_rate_key,

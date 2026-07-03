@@ -118,8 +118,10 @@ pub const RESEND_LIMIT_MAX: i64 = 3;
 /// request's `created_at`. The window frees up one window-length after that
 /// request, so `retry_after = oldest + window - now`. Clamped to `>= 1` so a
 /// just-expired window still reports a truthful, positive `Retry-After`
-/// (BUNYIP-313). Pure and unit-testable: no clock or DB dependency.
-fn resend_retry_after_secs(oldest: DateTime<Utc>, now: DateTime<Utc>) -> u64 {
+/// (BUNYIP-313). Pure and unit-testable: no clock or DB dependency. Also reused
+/// by the admin read path (BUNYIP-315) to report `retry_after` for the two
+/// email-resend limiters consistently with what the enforcement path returns.
+pub fn resend_retry_after_secs(oldest: DateTime<Utc>, now: DateTime<Utc>) -> u64 {
     (oldest + Duration::seconds(RESEND_LIMIT_WINDOW_SECS) - now)
         .num_seconds()
         .max(1) as u64

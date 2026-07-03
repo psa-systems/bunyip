@@ -12,6 +12,18 @@ use crate::models::{
     MagicLinkToken, PasswordResetToken, RefreshToken,
 };
 
+/// One user who is at or over an email-resend limiter's threshold within the
+/// rolling window (BUNYIP-315). Carries what the admin read path needs to
+/// synthesize a rate-limit entry: the resolved user, the in-window `count`, and
+/// the `oldest` in-window `created_at` for computing `retry_after`.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct EmailResendLimiterRow {
+    pub user_id: Uuid,
+    pub email: String,
+    pub count: i64,
+    pub oldest: DateTime<Utc>,
+}
+
 pub struct TokenRepository;
 
 impl TokenRepository {
@@ -748,6 +760,65 @@ impl TokenRepository {
         .await?;
 
         Ok(row.0)
+    }
+
+    /// Users at or over `threshold` email-verification resends within the
+    /// window since `since`, joined to their email, with the resend `count` and
+    /// the `oldest` in-window `created_at` (for an accurate `retry_after`).
+    /// Backs the admin "currently rate-limited" view (BUNYIP-315). Only
+    /// non-deleted users are returned. Highest count first.
+    pub async fn list_email_verification_over_limit(
+        pool: &PgPool,
+        since: DateTime<Utc>,
+        threshold: i64,
+    ) -> Result<Vec<EmailResendLimiterRow>, AppError> {
+        let rows = sqlx::query_as::<_, EmailResendLimiterRow>(
+            r#"
+            SELECT u.id AS user_id, u.email AS email,
+                   COUNT(t.id) AS count, MIN(t.created_at) AS oldest
+            FROM email_verification_tokens t
+            JOIN users u ON u.id = t.user_id AND u.deleted_at IS NULL
+            WHERE t.created_at > $1
+            GROUP BY u.id, u.email
+            HAVING COUNT(t.id) >= $2
+            ORDER BY COUNT(t.id) DESC
+            "#,
+        )
+        .bind(since)
+        .bind(threshold)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows)
+    }
+
+    /// Users at or over `threshold` email-change requests within the window
+    /// since `since`, joined to their email, with the request `count` and the
+    /// `oldest` in-window `created_at`. Backs the admin "currently rate-limited"
+    /// view (BUNYIP-315). Only non-deleted users are returned. Highest first.
+    pub async fn list_email_change_over_limit(
+        pool: &PgPool,
+        since: DateTime<Utc>,
+        threshold: i64,
+    ) -> Result<Vec<EmailResendLimiterRow>, AppError> {
+        let rows = sqlx::query_as::<_, EmailResendLimiterRow>(
+            r#"
+            SELECT u.id AS user_id, u.email AS email,
+                   COUNT(r.id) AS count, MIN(r.created_at) AS oldest
+            FROM email_change_requests r
+            JOIN users u ON u.id = r.user_id AND u.deleted_at IS NULL
+            WHERE r.created_at > $1
+            GROUP BY u.id, u.email
+            HAVING COUNT(r.id) >= $2
+            ORDER BY COUNT(r.id) DESC
+            "#,
+        )
+        .bind(since)
+        .bind(threshold)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows)
     }
 
     // =====================
