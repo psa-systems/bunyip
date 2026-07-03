@@ -147,6 +147,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/account-deletes/{user_id}/replay",
                 web::post().to(handlers::replay_account_delete),
             )
+            // IP auto-bans (BUNYIP-319)
+            .route("/ip-bans", web::get().to(handlers::list_ip_bans))
+            .route("/ip-bans/{ip}", web::delete().to(handlers::unban_ip))
             // Audit logs
             .route("/audit-logs", web::get().to(handlers::list_audit_logs))
             // Error log ring buffer (BUNYIP-327)

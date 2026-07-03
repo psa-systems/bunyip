@@ -714,6 +714,11 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::JsonConfig::default().limit(32_768))
             // Add database pool to app state
             .app_data(web::Data::new(pool.clone()))
+            // Share the auto-ban service with the admin IP-ban handlers so they
+            // can list/lift bans against the same in-memory map the middleware
+            // enforces (BUNYIP-319). `Data::from` reuses the existing Arc
+            // instead of double-wrapping it.
+            .app_data(web::Data::from(auto_ban_service.clone()))
             // Server start instant for uptime reporting
             .app_data(web::Data::new(server_start))
             // In-memory error-log buffer for the admin log view (BUNYIP-327).

@@ -125,6 +125,11 @@ pub enum AuditAction {
     /// (user, tenant) it pointed at is recoverable only from prior
     /// audit log rows).
     OauthUserTenantUnassigned,
+    /// Admin lifted an IP auto-ban ahead of its natural expiry
+    /// (BUNYIP-319), clearing the in-memory ban map, any accumulated
+    /// strikes, and the persisted `ip_bans` row via
+    /// `AutoBanService::unban`. Metadata carries the target `ip`.
+    AdminIpBanLifted,
 }
 
 impl AuditAction {
@@ -210,6 +215,7 @@ impl AuditAction {
             AuditAction::FeedbackArchived => "feedback_archived",
             AuditAction::OauthUserTenantAssigned => "oauth_user_tenant_assigned",
             AuditAction::OauthUserTenantUnassigned => "oauth_user_tenant_unassigned",
+            AuditAction::AdminIpBanLifted => "admin_ip_ban_lifted",
         }
     }
 
@@ -249,6 +255,7 @@ impl AuditAction {
                 | AuditAction::AdminEntitlementRevoked
                 | AuditAction::AdminApplicationRestrictionChanged
                 | AuditAction::AdminStripePriceMappingChanged
+                | AuditAction::AdminIpBanLifted
         )
     }
 }
@@ -521,6 +528,15 @@ mod tests {
         assert!(!AuditAction::UserRegistered.is_admin_action());
         assert!(!AuditAction::PasswordChanged.is_admin_action());
         assert!(!AuditAction::FeedbackSubmitted.is_admin_action());
+    }
+
+    #[test]
+    fn audit_action_admin_ip_ban_lifted() {
+        assert_eq!(
+            AuditAction::AdminIpBanLifted.as_str(),
+            "admin_ip_ban_lifted"
+        );
+        assert!(AuditAction::AdminIpBanLifted.is_admin_action());
     }
 
     // -- AuditSeverity --

@@ -133,6 +133,7 @@ mod tests {
 
 pub mod admin;
 pub mod admin_entitlements;
+pub mod admin_ip_bans;
 pub mod admin_oauth_tenants;
 pub mod admin_stripe;
 pub mod application;
@@ -195,6 +196,7 @@ pub use admin_entitlements::{
     add_price_mapping, grant_entitlement, list_user_entitlements, remove_price_mapping,
     revoke_entitlement, set_application_restricted,
 };
+pub use admin_ip_bans::{list_ip_bans, unban_ip};
 pub use admin_oauth_tenants::{assign_user_tenant, list_client_assignments, unassign_user_tenant};
 pub use admin_stripe::{
     archive_stripe_price, archive_stripe_product, create_stripe_price, create_stripe_product,
