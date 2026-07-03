@@ -64,3 +64,18 @@ export async function deleteMe(ctx: APIRequestContext, password: string): Promis
     console.warn(`[accounts] self-delete failed (will be swept later): ${String(err)}`);
   }
 }
+
+// Best-effort self-delete WITHOUT `?purge=1`, so the row is soft-deleted (the
+// production default). BUNYIP-330 uses this to prove the email reservation
+// holds against a subsequent re-registration attempt. Callers should still
+// pair this with a `deleteMe` in `finally` (with the reaper-friendly purge)
+// so a run that crashes mid-spec doesn't leave a permanently reserved email
+// behind on staging; when the spec succeeds the tombstoned row is exactly
+// what we want to leave in place for the reservation assertion.
+export async function softDeleteMe(ctx: APIRequestContext, password: string): Promise<void> {
+  try {
+    await ctx.delete(routes.userMe, { data: { password } });
+  } catch (err) {
+    console.warn(`[accounts] self-soft-delete failed (will be swept later): ${String(err)}`);
+  }
+}

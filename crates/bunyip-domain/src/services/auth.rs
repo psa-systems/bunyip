@@ -214,11 +214,15 @@ impl AuthService {
             ));
         }
 
-        // Check if email already exists
-        if UserRepository::find_by_email(&self.pool, &email)
-            .await?
-            .is_some()
-        {
+        // BUNYIP-330: block re-registration of a soft-deleted email. The
+        // reservation is permanent - a deleted user's email can't be reused
+        // by anyone else, matching the belt-and-braces posture that keeps a
+        // fresh bunyip account from reaching the previous owner's mokosh
+        // data through a shared identity. `email_reserved` drops the
+        // `deleted_at IS NULL` gate that `find_by_email` applies. The
+        // conflict copy is intentionally identical to the pre-330 message so
+        // a caller can't enumerate soft-deleted-vs-active accounts.
+        if UserRepository::email_reserved(&self.pool, &email).await? {
             return Err(AppError::conflict("Email already registered"));
         }
 
@@ -600,6 +604,15 @@ impl AuthService {
                     (user, false)
                 }
                 None => {
+                    // BUNYIP-330: a soft-deleted email is permanently
+                    // reserved. `find_by_email` above skipped past a
+                    // tombstoned row, but we must not silently create a new
+                    // account under the same address. Refuse with the same
+                    // conflict copy the /register endpoint uses so the
+                    // signup path can't be used to enumerate deleted users.
+                    if UserRepository::email_reserved(&self.pool, &magic_token.email).await? {
+                        return Err(AppError::conflict("Email already registered"));
+                    }
                     // Create new user (passwordless)
                     let user = UserRepository::create(
                         &self.pool,
@@ -995,11 +1008,10 @@ impl AuthService {
             ));
         }
 
-        // Check if new email is already taken
-        if UserRepository::find_by_email(&self.pool, &new_email)
-            .await?
-            .is_some()
-        {
+        // Check if new email is already taken. BUNYIP-330: also refuse
+        // soft-deleted emails so a renamed account can't gain access to the
+        // reserved identity of a previously-deleted user.
+        if UserRepository::email_reserved(&self.pool, &new_email).await? {
             return Err(AppError::conflict("Email already registered"));
         }
 
@@ -1083,8 +1095,10 @@ impl AuthService {
             // Lock the user row to prevent concurrent email changes
             UserRepository::lock_for_update(&mut *tx, user_id).await?;
 
-            // Re-check email availability inside the transaction
-            if UserRepository::email_exists(&mut *tx, &new_email).await? {
+            // Re-check email availability inside the transaction. BUNYIP-330:
+            // `email_reserved` also blocks soft-deleted rows so an unverified
+            // user can't rename to a reserved identity mid-transaction.
+            if UserRepository::email_reserved(&mut *tx, &new_email).await? {
                 return Err(AppError::conflict("Email already registered"));
             }
 
@@ -1143,8 +1157,10 @@ impl AuthService {
 
         let old_email = user.email.clone();
 
-        // Re-check email availability inside the transaction
-        if UserRepository::email_exists(&mut *tx, &new_email).await? {
+        // Re-check email availability inside the transaction. BUNYIP-330:
+        // `email_reserved` also blocks soft-deleted rows, closing the race
+        // where an email becomes reserved between request and confirmation.
+        if UserRepository::email_reserved(&mut *tx, &new_email).await? {
             return Err(AppError::conflict("Email already registered"));
         }
 
@@ -1554,6 +1570,15 @@ impl AuthService {
                 ))
             }
             None => {
+                // BUNYIP-330: `find_by_email` skipped past a tombstoned row.
+                // An admin invite that lands on a soft-deleted email must
+                // NOT auto-provision a fresh user under that reserved
+                // identity. Refuse with the same conflict copy the register
+                // path uses.
+                if UserRepository::email_reserved(&self.pool, &invite.email).await? {
+                    return Err(AppError::conflict("Email already registered"));
+                }
+
                 // New user — need password
                 let password = match password {
                     Some(p) => p,
