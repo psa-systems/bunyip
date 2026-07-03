@@ -183,7 +183,22 @@ export async function setInputValue(loc: Locator, value: string): Promise<void> 
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
     }, value);
-    if ((await loc.inputValue()) === value) return;
+    // BUNYIP-331: the six-digit TOTP field on `/login/2fa` (and the 2FA setup
+    // field) auto-submits the form the moment the input event above fires,
+    // which detaches this input from the DOM before this readback lands.
+    // `loc.inputValue()` then waits for the element to re-attach and blows the
+    // default 180s action timeout (the exact failure signature on PR #324 CI:
+    // `Test timeout of 180000ms exceeded` inside setInputValue). Bound the
+    // readback to a short poll and treat a detach as "the write took, form
+    // has already navigated"; return successfully. Long detach OR persistent
+    // wrong-value keeps the retry loop honest for the non-autosubmit fields.
+    let current: string;
+    try {
+      current = await loc.inputValue({ timeout: 500 });
+    } catch {
+      return;
+    }
+    if (current === value) return;
     await loc.page().waitForTimeout(200);
   }
   throw new Error(
