@@ -4,9 +4,9 @@ use serde_json::{json, Value};
 
 use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeedbackDetail,
-    AdminFeedbackSummary, AdminMembership, AdminStatsResponse, AdminUser, ApplicationGroup,
-    ApplicationGroupList, ArchivedFeedback, ErrorLogsResponse, FeedbackStatus, PaginatedResponse,
-    StripeConfigResponse, TierConfigResponse, UserEntitlement,
+    AdminFeedbackSummary, AdminIpBan, AdminMembership, AdminStatsResponse, AdminUser,
+    ApplicationGroup, ApplicationGroupList, ArchivedFeedback, ErrorLogsResponse, FeedbackStatus,
+    PaginatedResponse, StripeConfigResponse, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -486,6 +486,26 @@ pub async fn error_logs(
         _ => "/admin/logs".to_string(),
     };
     parse(api.get(&path, cookie).await?)
+}
+
+// --- IP auto-bans (BUNYIP-320) ----------------------------------------------
+
+/// List the currently-active IP auto-bans (IP, reason, strikes, banned-at,
+/// expires-at). Wraps `GET /v1/admin/ip-bans` (BUNYIP-319), whose `data` is a
+/// bare array of ban objects.
+pub async fn ip_bans(api: &Api, cookie: Option<&str>) -> Result<Vec<AdminIpBan>, ApiError> {
+    parse(api.get("/admin/ip-bans", cookie).await?)
+}
+
+/// Lift the auto-ban for `ip`, effective on the next request. Wraps
+/// `DELETE /v1/admin/ip-bans/{ip}` (BUNYIP-319); the API audits the lift and
+/// 404s when the IP was not banned. `ip` is percent-encoded into the path so an
+/// IPv6 address (with `:`) is a single safe path segment.
+pub async fn unban_ip(api: &Api, cookie: Option<&str>, ip: &str) -> Result<(), ApiError> {
+    let r = api
+        .delete(&format!("/admin/ip-bans/{}", urlenc(ip)), cookie, None)
+        .await?;
+    ok_data(&r).map(|_| ())
 }
 
 // --- feedback ---------------------------------------------------------------

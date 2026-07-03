@@ -14,8 +14,8 @@ use serde_json::json;
 
 use crate::api::admin as admin_api;
 use crate::api::types::{
-    AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, ApplicationGroup,
-    FeedbackAttachmentMeta, FeedbackStatus, User, UserEntitlement,
+    AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, AdminIpBan,
+    ApplicationGroup, FeedbackAttachmentMeta, FeedbackStatus, User, UserEntitlement,
 };
 use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
@@ -296,6 +296,101 @@ pub async fn logs(
         }
     };
     admin_response(&c, &user, "/admin/logs", "Error Logs · Bunyip", content)
+}
+
+// ===========================================================================
+// IP auto-bans (BUNYIP-320)
+// ===========================================================================
+
+/// Render one active IP auto-ban row: the banned IP, reason, strike count, when
+/// it was banned and when it expires, plus an Unban button that POSTs to the
+/// lift handler.
+fn ip_ban_row(b: &AdminIpBan) -> Markup {
+    html! {
+        div class="flex items-start justify-between py-4 border-b last:border-0" {
+            div class="flex items-start gap-4 min-w-0" {
+                div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-destructive/10" { (icon("shield-off", "h-5 w-5 text-destructive")) }
+                div class="min-w-0" {
+                    div class="flex items-center gap-2 flex-wrap" {
+                        p class="font-medium font-mono break-all" { (b.ip) }
+                        (badge("destructive", "Banned"))
+                        (badge("warning", &format!("{} strikes", b.strikes)))
+                    }
+                    p class="text-sm text-muted-foreground break-words" { (b.reason) }
+                    p class="text-xs text-muted-foreground" {
+                        "Banned " (relative_time(&b.banned_at)) " • expires " (relative_time(&b.expires_at))
+                    }
+                }
+            }
+            form method="post" action="/admin/ip-bans/unban" onsubmit=(format!("return confirm('Lift the ban on {}? It takes effect on the next request.')", b.ip)) {
+                input type="hidden" name="ip" value=(b.ip);
+                button type="submit" class=(button_class("outline", "sm", "")) { "Unban" }
+            }
+        }
+    }
+}
+
+/// Admin IP auto-ban view (BUNYIP-320): the currently-active IP bans surfaced by
+/// the subtask 7 endpoint, each liftable in place. AdminUser-guarded like the
+/// other admin pages.
+pub async fn ip_bans(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let data = admin_api::ip_bans(&st.api, c.forward.as_deref()).await;
+    let reachable = data.is_ok();
+    let bans = data.unwrap_or_default();
+
+    let content = html! {
+        div class="space-y-6" {
+            div { h1 class="text-3xl font-bold" { "IP Bans" } p class="mt-2 text-muted-foreground" { "IP addresses auto-banned for abusive request patterns. Lifting a ban takes effect on the address's next request." } }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6" {
+                    div class="flex items-center gap-3" { (icon("shield-off", "h-5 w-5 text-destructive")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Active Bans" } }
+                    @if reachable { p class="text-sm text-muted-foreground" { (bans.len()) " active." } }
+                }
+                div class="p-6 pt-0" {
+                    @if !reachable {
+                        (error_box("Could not reach the API to load IP bans."))
+                    } @else if bans.is_empty() {
+                        p class="text-center text-muted-foreground py-8" { "No active IP bans." }
+                    } @else {
+                        div class="space-y-0" { @for b in &bans { (ip_ban_row(b)) } }
+                    }
+                }
+            }
+        }
+    };
+    admin_response(&c, &user, "/admin/ip-bans", "IP Bans · Bunyip", content)
+}
+
+/// Form body for the unban action: the IP to lift, carried in a hidden field so
+/// an IPv6 address never has to sit in the URL path.
+#[derive(Deserialize)]
+pub struct UnbanForm {
+    pub ip: String,
+}
+
+/// Lift an IP auto-ban (BUNYIP-320), then redirect back to the list with a
+/// success/error toast. AdminUser-guarded.
+pub async fn ip_unban(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<UnbanForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::unban_ip(&st.api, c.forward.as_deref(), &f.ip).await {
+        Ok(()) => format!(
+            "/admin/ip-bans?toast_ok=Ban%20lifted%20for%20{}",
+            urlenc(&f.ip)
+        ),
+        Err(_) => "/admin/ip-bans?toast_err=Could%20not%20lift%20ban".to_string(),
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 // ===========================================================================
@@ -3758,5 +3853,43 @@ mod error_log_tests {
         assert!(html.contains("/v1/auth/login"), "route shown");
         assert!(html.contains("action=login"), "extra fields shown");
         assert!(html.contains("Error"), "tagged as an error");
+    }
+}
+
+#[cfg(test)]
+mod ip_ban_tests {
+    use super::ip_ban_row;
+    use crate::api::types::AdminIpBan;
+
+    fn ban() -> AdminIpBan {
+        AdminIpBan {
+            ip: "203.0.113.7".into(),
+            reason: "10 requests to suspicious paths in 60s".into(),
+            strikes: 3,
+            banned_at: "2026-07-03T11:00:00Z".into(),
+            expires_at: "2026-07-03T12:00:00Z".into(),
+        }
+    }
+
+    // BUNYIP-320 AC: a ban row shows the IP, reason and strike count, and
+    // carries an Unban button that POSTs the IP to the lift endpoint.
+    #[test]
+    fn renders_ip_reason_strikes_and_unban_action() {
+        let html = ip_ban_row(&ban()).into_string();
+        assert!(html.contains("203.0.113.7"), "IP shown");
+        assert!(
+            html.contains("10 requests to suspicious paths in 60s"),
+            "reason shown"
+        );
+        assert!(html.contains("3 strikes"), "strike count shown");
+        assert!(html.contains("Unban"), "unban button present");
+        assert!(
+            html.contains(r#"action="/admin/ip-bans/unban""#),
+            "unban form targets the lift endpoint"
+        );
+        assert!(
+            html.contains(r#"name="ip" value="203.0.113.7""#),
+            "ip carried in the form body"
+        );
     }
 }
