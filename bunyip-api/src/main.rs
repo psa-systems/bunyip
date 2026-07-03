@@ -165,6 +165,16 @@ async fn main() -> anyhow::Result<()> {
     // environment can also pin a dedicated client secret.
     upsert_lets_chat_oidc_client(&pool).await?;
 
+    // BUNYIP-336: populate `applications.webhook_url` for the mokosh row from
+    // env. The seed migration 20260603000020_seed_mokosh_hosted_application
+    // inserted the row without a webhook_url, so `fan_out_account_deleted`
+    // (bunyip-api/src/handlers/user.rs:713) skipped every dispatch to mokosh
+    // and the account_deleted event never left bunyip. Staging and prod hit
+    // different receiver hosts (`api.msp.a8n.systems` vs `api.msp.psa.systems`),
+    // so a per-env migration cannot cover both; the URL is env-driven, the
+    // same pattern the OIDC-client upserts above use for their per-env values.
+    upsert_mokosh_webhook_url(&pool).await?;
+
     // Test database connection
     sqlx::query("SELECT 1").execute(&pool).await.map_err(|e| {
         error!(error = %e, "Database health check failed");
@@ -996,6 +1006,58 @@ async fn upsert_lets_chat_oidc_client(pool: &sqlx::PgPool) -> anyhow::Result<()>
             audience = %audience,
             secret_pinned = secret_hash.is_some(),
             "lets-chat OIDC client reconciled from environment"
+        );
+    }
+
+    Ok(())
+}
+
+/// BUNYIP-336: populate `applications.webhook_url` for `slug='mokosh'` from
+/// the `MOKOSH_WEBHOOK_URL` env var, so `fan_out_account_deleted`
+/// (bunyip-api/src/handlers/user.rs:694) actually POSTs the
+/// `account_deleted` event to mokosh-server's receiver at
+/// `POST /api/v1/bunyip/webhooks/account-deleted`. The seed migration
+/// 20260603000020 inserted the mokosh row without a webhook_url, so the
+/// fan-out's `if app.webhook_url.as_deref().is_none_or(str::is_empty)`
+/// guard skipped every dispatch and the event never left bunyip. Same
+/// env-driven-upsert pattern the OIDC clients above use, so staging and
+/// production hosts (`api.msp.a8n.systems` vs `api.msp.psa.systems`) can
+/// share the code path without either being baked into a migration.
+///
+/// Skips when the env var is unset (dev boot without the compose env
+/// keeps working; there is nothing to dispatch to locally). Warns when
+/// the mokosh row is missing (probably an incomplete migration state);
+/// does not fail boot on that either, so an operator does not lose the
+/// hub on a bad seed.
+async fn upsert_mokosh_webhook_url(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    let Some(url) = secret_env("MOKOSH_WEBHOOK_URL") else {
+        info!("MOKOSH_WEBHOOK_URL unset, skipping mokosh webhook_url registration");
+        return Ok(());
+    };
+
+    let rows = sqlx::query(
+        r#"
+        UPDATE applications
+           SET webhook_url = $1
+         WHERE slug = 'mokosh'
+        "#,
+    )
+    .bind(&url)
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    if rows == 0 {
+        tracing::warn!(
+            "no applications row with slug='mokosh'; webhook_url not registered. \
+             Expected seed migration 20260603000020_seed_mokosh_hosted_application \
+             to have run first. Account-deleted dispatch to mokosh will not fire \
+             until this is fixed."
+        );
+    } else {
+        info!(
+            webhook_url = %url,
+            "mokosh applications.webhook_url reconciled from environment"
         );
     }
 
