@@ -294,6 +294,59 @@ impl EmailService {
         }
     }
 
+    /// Build an RFC 5322 message ready for the transport.
+    ///
+    /// BUNYIP-334: every message carries exactly one `Message-ID` header,
+    /// `<uuid@domain>`, with `domain` derived from `config.from_email` so it
+    /// aligns with the `From:` / DKIM `d=` domain. Gmail (and other RFC-strict
+    /// receivers) reject messages that arrive without a `Message-ID`
+    /// (`550 5.7.1 RfcMessageNonCompliant`). lettre's builder synthesizes a
+    /// `Date` but never a `Message-ID`, so we set it explicitly here rather
+    /// than at each call site, since every send routes through this method.
+    fn build_message(
+        &self,
+        to: &str,
+        subject: &str,
+        html_body: String,
+        text_body: String,
+    ) -> Result<Message, AppError> {
+        let from = format!("{} <{}>", self.config.from_name, self.config.from_email);
+
+        let domain = self
+            .config
+            .from_email
+            .rsplit('@')
+            .next()
+            .filter(|d| !d.is_empty())
+            .unwrap_or("a8n.run");
+        let message_id = format!("<{}@{}>", uuid::Uuid::new_v4(), domain);
+
+        Message::builder()
+            .from(
+                from.parse()
+                    .map_err(|e| AppError::internal(format!("Invalid from address: {}", e)))?,
+            )
+            .to(to
+                .parse()
+                .map_err(|e| AppError::internal(format!("Invalid to address: {}", e)))?)
+            .subject(subject)
+            .message_id(Some(message_id))
+            .multipart(
+                lettre::message::MultiPart::alternative()
+                    .singlepart(
+                        lettre::message::SinglePart::builder()
+                            .header(ContentType::TEXT_PLAIN)
+                            .body(text_body),
+                    )
+                    .singlepart(
+                        lettre::message::SinglePart::builder()
+                            .header(ContentType::TEXT_HTML)
+                            .body(html_body),
+                    ),
+            )
+            .map_err(|e| AppError::internal(format!("Email build error: {}", e)))
+    }
+
     /// Send an email
     async fn send_email(
         &self,
@@ -302,32 +355,8 @@ impl EmailService {
         html_body: String,
         text_body: String,
     ) -> Result<(), AppError> {
-        let from = format!("{} <{}>", self.config.from_name, self.config.from_email);
-
         if let Some(ref transport) = self.transport {
-            let email = Message::builder()
-                .from(
-                    from.parse()
-                        .map_err(|e| AppError::internal(format!("Invalid from address: {}", e)))?,
-                )
-                .to(to
-                    .parse()
-                    .map_err(|e| AppError::internal(format!("Invalid to address: {}", e)))?)
-                .subject(subject)
-                .multipart(
-                    lettre::message::MultiPart::alternative()
-                        .singlepart(
-                            lettre::message::SinglePart::builder()
-                                .header(ContentType::TEXT_PLAIN)
-                                .body(text_body),
-                        )
-                        .singlepart(
-                            lettre::message::SinglePart::builder()
-                                .header(ContentType::TEXT_HTML)
-                                .body(html_body),
-                        ),
-                )
-                .map_err(|e| AppError::internal(format!("Email build error: {}", e)))?;
+            let email = self.build_message(to, subject, html_body, text_body)?;
 
             // BUNYIP-309: log the handoff to the transport so an attempt is
             // visible even when the send below fails. Pairs with the
@@ -795,5 +824,99 @@ impl EmailService {
 impl Default for EmailService {
     fn default() -> Self {
         Self::new_dev()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn service_with_from(from_email: &str) -> EmailService {
+        let config = EmailConfig {
+            smtp_host: "localhost".to_string(),
+            smtp_port: 587,
+            smtp_tls: SmtpTls::Starttls,
+            smtp_username: String::new(),
+            smtp_password: String::new(),
+            from_email: from_email.to_string(),
+            from_name: "PSA Staging".to_string(),
+            base_url: "http://localhost:5173".to_string(),
+            enabled: false,
+            log_tokens: false,
+            app_name: "PSA Staging".to_string(),
+            admin_notification_emails: Vec::new(),
+        };
+
+        EmailService {
+            transport: None,
+            templates: Tera::default(),
+            config,
+        }
+    }
+
+    /// Extract the `Message-ID` header lines from a built message's wire form.
+    fn message_id_lines(email: &Message) -> Vec<String> {
+        let formatted = String::from_utf8(email.formatted()).expect("message is valid UTF-8");
+        formatted
+            .split("\r\n")
+            .filter(|line| line.starts_with("Message-ID:"))
+            .map(|line| line.to_string())
+            .collect()
+    }
+
+    /// BUNYIP-334: every message carries exactly one RFC 5322-compliant
+    /// `Message-ID` header whose domain matches `config.from_email`.
+    #[test]
+    fn build_message_sets_single_message_id_with_from_domain() {
+        let service = service_with_from("dmarc-reporter-staging@a8n.run");
+        let email = service
+            .build_message(
+                "recipient@gmail.com",
+                "Verify your PSA Staging email address",
+                "<p>hello</p>".to_string(),
+                "hello".to_string(),
+            )
+            .expect("message builds");
+
+        let ids = message_id_lines(&email);
+        assert_eq!(
+            ids.len(),
+            1,
+            "expected exactly one Message-ID header, got {ids:?}"
+        );
+
+        // Header value: `Message-ID: <local@domain>` per RFC 5322 msg-id.
+        let value = ids[0]
+            .strip_prefix("Message-ID:")
+            .expect("prefix present")
+            .trim();
+        assert!(
+            value.starts_with('<'),
+            "msg-id must start with '<': {value}"
+        );
+        assert!(value.ends_with('>'), "msg-id must end with '>': {value}");
+        let inner = &value[1..value.len() - 1];
+        let (local, domain) = inner.split_once('@').expect("msg-id has an '@'");
+        assert!(!local.is_empty(), "local part is non-empty: {value}");
+        assert_eq!(domain, "a8n.run", "domain aligns with from_email: {value}");
+        // UUID-based local part is globally unique.
+        uuid::Uuid::parse_str(local).expect("local part is a UUID");
+    }
+
+    /// Two sends produce distinct Message-IDs (globally unique per send).
+    #[test]
+    fn build_message_generates_unique_message_ids() {
+        let service = service_with_from("noreply@a8n.run");
+        let first = message_id_lines(
+            &service
+                .build_message("a@example.com", "s", "h".into(), "t".into())
+                .unwrap(),
+        );
+        let second = message_id_lines(
+            &service
+                .build_message("b@example.com", "s", "h".into(), "t".into())
+                .unwrap(),
+        );
+        assert_ne!(first[0], second[0], "Message-IDs must differ per send");
     }
 }
