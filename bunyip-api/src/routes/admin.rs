@@ -152,6 +152,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/ip-bans/{ip}", web::delete().to(handlers::unban_ip))
             // Active rate limits (BUNYIP-315)
             .route("/rate-limits", web::get().to(handlers::list_rate_limits))
+            // Reset an active rate limit (BUNYIP-316)
+            .route(
+                "/rate-limits/reset",
+                web::post().to(handlers::reset_rate_limit),
+            )
             // Audit logs
             .route("/audit-logs", web::get().to(handlers::list_audit_logs))
             // Error log ring buffer (BUNYIP-327)
