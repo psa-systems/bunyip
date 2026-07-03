@@ -373,6 +373,18 @@ pub struct ErrorLogsResponse {
     pub capacity: i64,
 }
 
+/// One currently-active IP auto-ban as returned by `GET /v1/admin/ip-bans`
+/// (BUNYIP-320). Mirrors `bunyip_domain::middleware::auto_ban::BanInfo`: `ip`
+/// serializes as a string, `banned_at` / `expires_at` as RFC3339 timestamps.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminIpBan {
+    pub ip: String,
+    pub reason: String,
+    pub strikes: u32,
+    pub banned_at: String,
+    pub expires_at: String,
+}
+
 fn default_true() -> bool {
     true
 }
