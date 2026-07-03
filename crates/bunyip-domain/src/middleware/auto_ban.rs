@@ -153,7 +153,11 @@ struct BanEntry {
 }
 
 /// A currently-active IP ban as surfaced by [`AutoBanService::list_bans`].
-#[derive(Debug, Clone)]
+///
+/// Serializes directly as the `GET /v1/admin/ip-bans` response element
+/// (BUNYIP-319): `ip` renders as a string, `banned_at` / `expires_at` as
+/// RFC 3339 timestamps.
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct BanInfo {
     pub ip: IpAddr,
     pub reason: String,
@@ -870,6 +874,89 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+    }
+
+    /// BUNYIP-319 integration test: a banned IP is 403-ed by the middleware,
+    /// an admin lifting the ban via `unban` takes effect on the very next
+    /// request through the same middleware, and that request is no longer 403.
+    ///
+    /// Drives the real `AutoBanMiddleware` (not just the service) so the test
+    /// exercises the enforcement path a `DELETE /v1/admin/ip-bans/{ip}` handler
+    /// relies on: the handler's only job is to call `unban`, and this proves
+    /// that call flips the middleware verdict from 403 to pass-through.
+    #[actix_rt::test]
+    async fn test_middleware_403_then_unban_allows_next_request() {
+        use actix_web::{test, web, App, HttpResponse};
+        use std::net::SocketAddr;
+
+        // Lazy pool never connects; the async persist/delete tasks error and
+        // log, but the in-memory ban map the middleware checks is authoritative
+        // for enforcement, which is what this test asserts.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/bunyip_autoban_test")
+            .expect("lazy pool construction never connects");
+        let config = AutoBanConfig {
+            enabled: true,
+            threshold: 1, // a single suspicious request bans the IP
+            window_secs: 3600,
+            ban_duration_secs: 86400,
+        };
+        let service = Arc::new(AutoBanService::new(config, pool));
+
+        let app = test::init_service(
+            App::new()
+                .wrap(AutoBanMiddleware::new(service.clone()))
+                .route(
+                    "/health",
+                    web::get().to(|| async { HttpResponse::Ok().finish() }),
+                )
+                .route(
+                    "/wp-login.php",
+                    web::get().to(|| async { HttpResponse::Ok().finish() }),
+                ),
+        )
+        .await;
+
+        let peer: SocketAddr = "203.0.113.30:5555".parse().unwrap();
+        let ip: IpAddr = "203.0.113.30".parse().unwrap();
+
+        // A suspicious request from the IP trips the auto-ban (threshold 1) and
+        // is itself 403-ed.
+        let req = test::TestRequest::get()
+            .uri("/wp-login.php")
+            .peer_addr(peer)
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 403, "suspicious request should 403");
+
+        // A benign request from the now-banned IP is still 403-ed (is_banned).
+        let req = test::TestRequest::get()
+            .uri("/health")
+            .peer_addr(peer)
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(
+            resp.status().as_u16(),
+            403,
+            "banned IP should 403 on a benign path"
+        );
+
+        // Admin lifts the ban (the DB delete errors on the lazy pool, but the
+        // in-memory removal runs first; that is the middleware's source of
+        // truth).
+        let _ = service.unban(&ip).await;
+
+        // The same IP is no longer banned: the next benign request passes.
+        let req = test::TestRequest::get()
+            .uri("/health")
+            .peer_addr(peer)
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(
+            resp.status().as_u16(),
+            200,
+            "after unban the same IP must no longer be 403-ed"
+        );
     }
 
     #[test]
