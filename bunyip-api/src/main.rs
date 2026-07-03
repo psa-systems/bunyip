@@ -187,6 +187,24 @@ async fn main() -> anyhow::Result<()> {
 
     info!("JWT service initialized");
 
+    // BUNYIP-332: dedicated HMAC-SHA256 signing secret for outbound webhook
+    // dispatches (account_deleted, maintenance_change, active_change). Before
+    // this the WebhookService reused JWT_SECRET, which forced every RP that
+    // verifies a bunyip webhook to hold bunyip's access-token signing key -
+    // a far too broad grant. Now the shared secret is scoped to webhook
+    // verification only; mokosh-server holds the matching value in its
+    // BUNYIP_WEBHOOK_SECRET (mokosh-server/src/main.rs `resolve_secret`
+    // path). Same file-or-env resolution as JWT_SECRET so a compose deploy
+    // reads BUNYIP_WEBHOOK_SIGNING_SECRET_FILE, a dev .env reads
+    // BUNYIP_WEBHOOK_SIGNING_SECRET. Production fails to boot if unset;
+    // dev/test falls back to a stable placeholder.
+    let webhook_signing_secret = secret_env("BUNYIP_WEBHOOK_SIGNING_SECRET").unwrap_or_else(|| {
+        if config.is_production() {
+            panic!("BUNYIP_WEBHOOK_SIGNING_SECRET must be set in production");
+        }
+        "development-webhook-signing-secret-change-in-production".to_string()
+    });
+
     // Initialize tier config — prefer DB overrides, fall back to env vars
     let tier_config = {
         use bunyip_api::repositories::TierConfigRepository;
@@ -379,7 +397,11 @@ async fn main() -> anyhow::Result<()> {
     info!("TOTP service initialized");
 
     // Initialize webhook service
-    let webhook_service = Arc::new(WebhookService::new(jwt_secret.clone()));
+    // BUNYIP-332: signed with the dedicated `BUNYIP_WEBHOOK_SIGNING_SECRET`
+    // loaded above, NOT with `JWT_SECRET`. Rotating JWT_SECRET no longer
+    // breaks webhook verification on the receiving RP, and a compromised
+    // webhook secret does not let an attacker mint bunyip access tokens.
+    let webhook_service = Arc::new(WebhookService::new(webhook_signing_secret));
 
     info!("Webhook service initialized");
 
