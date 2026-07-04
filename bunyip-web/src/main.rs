@@ -199,6 +199,11 @@ async fn main() {
             "/admin/ip-bans/unban",
             axum::routing::post(handlers::admin::ip_unban),
         )
+        .route("/admin/rate-limits", get(handlers::admin::rate_limits))
+        .route(
+            "/admin/rate-limits/reset",
+            axum::routing::post(handlers::admin::rate_limit_reset),
+        )
         .route("/admin/users", get(handlers::admin::users))
         .route("/admin/users/:id", get(handlers::admin::user_detail))
         .route(

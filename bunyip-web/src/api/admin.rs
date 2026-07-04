@@ -4,9 +4,9 @@ use serde_json::{json, Value};
 
 use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeedbackDetail,
-    AdminFeedbackSummary, AdminIpBan, AdminMembership, AdminStatsResponse, AdminUser,
-    ApplicationGroup, ApplicationGroupList, ArchivedFeedback, ErrorLogsResponse, FeedbackStatus,
-    PaginatedResponse, StripeConfigResponse, TierConfigResponse, UserEntitlement,
+    AdminFeedbackSummary, AdminIpBan, AdminMembership, AdminRateLimit, AdminStatsResponse,
+    AdminUser, ApplicationGroup, ApplicationGroupList, ArchivedFeedback, ErrorLogsResponse,
+    FeedbackStatus, PaginatedResponse, StripeConfigResponse, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -504,6 +504,47 @@ pub async fn ip_bans(api: &Api, cookie: Option<&str>) -> Result<Vec<AdminIpBan>,
 pub async fn unban_ip(api: &Api, cookie: Option<&str>, ip: &str) -> Result<(), ApiError> {
     let r = api
         .delete(&format!("/admin/ip-bans/{}", urlenc(ip)), cookie, None)
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+// --- rate limits (BUNYIP-317) -----------------------------------------------
+
+/// List the currently-active throttles (user/IP, action, count/cap, window
+/// start, retry-in), each resolved to a user where possible. Wraps
+/// `GET /v1/admin/rate-limits` (BUNYIP-315), which paginates the unified list;
+/// the API's page-size query param is `per_page`.
+pub async fn rate_limits(
+    api: &Api,
+    cookie: Option<&str>,
+    page: u32,
+    per_page: u32,
+) -> Result<PaginatedResponse<AdminRateLimit>, ApiError> {
+    parse(
+        api.get(
+            &format!("/admin/rate-limits?page={page}&per_page={per_page}"),
+            cookie,
+        )
+        .await?,
+    )
+}
+
+/// Clear one active throttle so the affected user/IP can act again immediately.
+/// Wraps `POST /v1/admin/rate-limits/reset` (BUNYIP-316); `action` and `key` are
+/// exactly the identifiers `rate_limits` returns for the row. The API audits the
+/// reset and 400s on an unknown action, which surfaces as a validation ApiError.
+pub async fn reset_rate_limit(
+    api: &Api,
+    cookie: Option<&str>,
+    action: &str,
+    key: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            "/admin/rate-limits/reset",
+            cookie,
+            Some(json!({ "action": action, "key": key })),
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }
