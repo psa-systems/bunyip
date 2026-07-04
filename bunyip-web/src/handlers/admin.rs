@@ -15,7 +15,8 @@ use serde_json::json;
 use crate::api::admin as admin_api;
 use crate::api::types::{
     AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, AdminIpBan,
-    ApplicationGroup, FeedbackAttachmentMeta, FeedbackStatus, User, UserEntitlement,
+    AdminRateLimit, ApplicationGroup, FeedbackAttachmentMeta, FeedbackStatus, User,
+    UserEntitlement,
 };
 use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
@@ -394,6 +395,161 @@ pub async fn ip_unban(
 }
 
 // ===========================================================================
+// Rate limits (BUNYIP-317)
+// ===========================================================================
+
+/// Format a `retry_after` second count as a compact "retry in" label
+/// (e.g. `2m 5s`, `45s`). Zero (or a window that has just elapsed) reads as
+/// "any moment", since the throttle clears on the next request.
+fn fmt_retry_secs(secs: u64) -> String {
+    if secs == 0 {
+        return "any moment".to_string();
+    }
+    let mins = secs / 60;
+    let rem = secs % 60;
+    if mins == 0 {
+        format!("{rem}s")
+    } else if rem == 0 {
+        format!("{mins}m")
+    } else {
+        format!("{mins}m {rem}s")
+    }
+}
+
+/// Render one active throttle row: the subject (resolved user email, else the
+/// source IP, else the raw key), the throttled action, the count vs cap, the
+/// window start and the computed retry-in, plus a Reset button that POSTs the
+/// `(action, key)` pair to the reset endpoint.
+///
+/// `return_user` carries the id of the user whose detail page this row is
+/// rendered on (`None` on the standalone list): the reset redirects back there
+/// so the user-detail context is preserved.
+fn rate_limit_row(rl: &AdminRateLimit, return_user: Option<&str>) -> Markup {
+    let (subject, subject_sub, icon_name) = if let Some(email) = &rl.user_email {
+        (email.clone(), rl.user_id.clone(), "user")
+    } else if let Some(ip) = &rl.ip {
+        (ip.clone(), None, "globe")
+    } else {
+        (rl.key.clone(), None, "help-circle")
+    };
+    html! {
+        div class="flex items-start justify-between py-4 border-b last:border-0" {
+            div class="flex items-start gap-4 min-w-0" {
+                div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted" { (icon(icon_name, "h-5 w-5 text-muted-foreground")) }
+                div class="min-w-0" {
+                    div class="flex items-center gap-2 flex-wrap" {
+                        p class="font-medium break-all" { (subject) }
+                        (badge("secondary", &title_case(&rl.action)))
+                        (badge("warning", &format!("{}/{}", rl.count, rl.max_requests)))
+                    }
+                    @if let Some(sub) = &subject_sub {
+                        p class="text-xs text-muted-foreground font-mono break-all" { (sub) }
+                    }
+                    p class="text-xs text-muted-foreground" {
+                        "Window started " (relative_time(&rl.window_start)) " • retry in " (fmt_retry_secs(rl.retry_after))
+                    }
+                }
+            }
+            form method="post" action="/admin/rate-limits/reset" onsubmit=(format!("return confirm('Reset the {} throttle? The affected user/IP can act again immediately.')", title_case(&rl.action))) {
+                input type="hidden" name="action" value=(rl.action);
+                input type="hidden" name="key" value=(rl.key);
+                @if let Some(uid) = return_user {
+                    input type="hidden" name="return_user" value=(uid);
+                }
+                button type="submit" class=(button_class("outline", "sm", "")) { "Reset" }
+            }
+        }
+    }
+}
+
+/// Admin rate-limit view (BUNYIP-317): the currently-active throttles surfaced
+/// by the BUNYIP-315 endpoint, each resettable in place via the BUNYIP-316
+/// endpoint. AdminUser-guarded like the other admin pages.
+pub async fn rate_limits(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<PageQuery>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let page = q.page.unwrap_or(1).max(1);
+    let data = admin_api::rate_limits(&st.api, c.forward.as_deref(), page, 20).await;
+    let reachable = data.is_ok();
+    let (items, total, total_pages) = match data {
+        Ok(p) => (p.items, p.total, p.total_pages),
+        Err(_) => (Vec::new(), 0, 1),
+    };
+
+    let content = html! {
+        div class="space-y-6" {
+            div { h1 class="text-3xl font-bold" { "Rate Limits" } p class="mt-2 text-muted-foreground" { "Entities currently throttled by a rate limit. Resetting a throttle lets the affected user or IP act again immediately." } }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6" {
+                    div class="flex items-center gap-3" { (icon("gauge", "h-5 w-5 text-primary")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Active Throttles" } }
+                    @if reachable { p class="text-sm text-muted-foreground" { (total) " active." } }
+                }
+                div class="p-6 pt-0" {
+                    @if !reachable {
+                        (error_box("Could not reach the API to load rate limits."))
+                    } @else if items.is_empty() {
+                        p class="text-center text-muted-foreground py-8" { "No active rate limits." }
+                    } @else {
+                        div class="space-y-0" { @for rl in &items { (rate_limit_row(rl, None)) } }
+                        (pager("/admin/rate-limits", page, total_pages))
+                    }
+                }
+            }
+        }
+    };
+    admin_response(
+        &c,
+        &user,
+        "/admin/rate-limits",
+        "Rate Limits · Bunyip",
+        content,
+    )
+}
+
+/// Form body for the reset action: the `(action, key)` identifying the throttle,
+/// plus an optional `return_user` carrying the user-detail page to redirect back
+/// to (empty/absent redirects to the standalone list).
+#[derive(Deserialize)]
+pub struct RateLimitResetForm {
+    pub action: String,
+    pub key: String,
+    #[serde(default)]
+    pub return_user: Option<String>,
+}
+
+/// Reset one active throttle (BUNYIP-317), then redirect back to the originating
+/// view (the user-detail page when `return_user` is set, else the list) with a
+/// success/error toast. AdminUser-guarded; the reset is audited on the API.
+pub async fn rate_limit_reset(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<RateLimitResetForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    // The return context is always a local admin path: a bare `return_user`
+    // becomes `/admin/users/{id}`, never an attacker-controlled URL.
+    let base = match f.return_user.as_deref() {
+        Some(uid) if !uid.is_empty() => format!("/admin/users/{}", urlenc(uid)),
+        _ => "/admin/rate-limits".to_string(),
+    };
+    let target =
+        match admin_api::reset_rate_limit(&st.api, c.forward.as_deref(), &f.action, &f.key).await {
+            Ok(()) => format!("{base}?toast_ok=Rate%20limit%20reset"),
+            Err(_) => format!("{base}?toast_err=Could%20not%20reset%20rate%20limit"),
+        };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+// ===========================================================================
 // Users
 // ===========================================================================
 
@@ -719,6 +875,19 @@ pub async fn user_detail(
     };
     let is_admin_target = matches!(target.role, crate::api::types::UserRole::Admin);
 
+    // This user's currently-active throttles (BUNYIP-317). The active set is
+    // small by design (the API builds it in memory), so a single page of the
+    // API max (100) covers every realistic case; filter it to this user.
+    let user_throttles: Vec<AdminRateLimit> =
+        match admin_api::rate_limits(&st.api, c.forward.as_deref(), 1, 100).await {
+            Ok(p) => p
+                .items
+                .into_iter()
+                .filter(|rl| rl.user_id.as_deref() == Some(target.id.as_str()))
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+
     let content = html! {
         div class="space-y-6" {
             div class="flex items-center justify-between" {
@@ -793,6 +962,21 @@ pub async fn user_detail(
                         } @else {
                             span class="text-xs text-muted-foreground self-center" { "Two-factor is not enabled for this user." }
                         }
+                    }
+                }
+            }
+
+            // Rate limits card (BUNYIP-317): this user's currently-active
+            // throttles, each resettable in place. Hidden when the user is not
+            // throttled to keep the page uncluttered.
+            @if !user_throttles.is_empty() {
+                div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                    div class="flex flex-col space-y-1.5 p-6 pb-2" {
+                        div class="flex items-center gap-2" { (icon("gauge", "h-4 w-4 text-muted-foreground")) h3 class="text-base font-semibold leading-none tracking-tight" { "Active rate limits" } }
+                        p class="text-xs text-muted-foreground" { "Throttles currently applied to this user. Resetting one lets them act again immediately; the reset is audited." }
+                    }
+                    div class="p-6 pt-0" {
+                        div class="space-y-0" { @for rl in &user_throttles { (rate_limit_row(rl, Some(&target.id))) } }
                     }
                 }
             }
@@ -3891,5 +4075,103 @@ mod ip_ban_tests {
             html.contains(r#"name="ip" value="203.0.113.7""#),
             "ip carried in the form body"
         );
+    }
+}
+
+#[cfg(test)]
+mod rate_limit_tests {
+    use super::{fmt_retry_secs, rate_limit_row};
+    use crate::api::types::AdminRateLimit;
+
+    fn user_throttle() -> AdminRateLimit {
+        AdminRateLimit {
+            action: "login".into(),
+            key: "user@example.com".into(),
+            user_id: Some("11111111-1111-1111-1111-111111111111".into()),
+            user_email: Some("user@example.com".into()),
+            ip: None,
+            count: 6,
+            max_requests: 5,
+            window_start: "2026-07-03T11:00:00Z".into(),
+            retry_after: 125,
+        }
+    }
+
+    fn ip_throttle() -> AdminRateLimit {
+        AdminRateLimit {
+            action: "registration".into(),
+            key: "203.0.113.9".into(),
+            user_id: None,
+            user_email: None,
+            ip: Some("203.0.113.9".into()),
+            count: 3,
+            max_requests: 3,
+            window_start: "2026-07-03T11:00:00Z".into(),
+            retry_after: 40,
+        }
+    }
+
+    // BUNYIP-317 AC: a throttle row shows the subject, action, count/cap and a
+    // Reset button that POSTs the (action, key) pair to the reset endpoint.
+    #[test]
+    fn renders_subject_action_countcap_and_reset_action() {
+        let html = rate_limit_row(&user_throttle(), None).into_string();
+        assert!(html.contains("user@example.com"), "subject email shown");
+        assert!(html.contains("Login"), "action shown title-cased");
+        assert!(html.contains("6/5"), "count vs cap shown");
+        assert!(html.contains("retry in 2m 5s"), "retry-in shown");
+        assert!(html.contains("Reset"), "reset button present");
+        assert!(
+            html.contains(r#"action="/admin/rate-limits/reset""#),
+            "reset form targets the reset endpoint"
+        );
+        assert!(
+            html.contains(r#"name="action" value="login""#),
+            "action carried in the form body"
+        );
+        assert!(
+            html.contains(r#"name="key" value="user@example.com""#),
+            "key carried in the form body"
+        );
+        // No return context on the standalone list.
+        assert!(
+            !html.contains(r#"name="return_user""#),
+            "list rows carry no return-user field"
+        );
+    }
+
+    // On the user-detail page the row carries the return-user id so the reset
+    // redirects back to that page.
+    #[test]
+    fn user_detail_row_carries_return_user() {
+        let html = rate_limit_row(
+            &user_throttle(),
+            Some("11111111-1111-1111-1111-111111111111"),
+        )
+        .into_string();
+        assert!(
+            html.contains(r#"name="return_user" value="11111111-1111-1111-1111-111111111111""#),
+            "return-user id carried so the reset redirects back to the user page"
+        );
+    }
+
+    // An IP-keyed throttle exposes the IP as the subject and never a user.
+    #[test]
+    fn ip_keyed_row_shows_ip_subject() {
+        let html = rate_limit_row(&ip_throttle(), None).into_string();
+        assert!(html.contains("203.0.113.9"), "ip subject shown");
+        assert!(html.contains("Registration"), "action shown title-cased");
+        assert!(
+            html.contains(r#"name="key" value="203.0.113.9""#),
+            "ip key carried in the form body"
+        );
+    }
+
+    #[test]
+    fn retry_secs_formats_compactly() {
+        assert_eq!(fmt_retry_secs(0), "any moment");
+        assert_eq!(fmt_retry_secs(45), "45s");
+        assert_eq!(fmt_retry_secs(60), "1m");
+        assert_eq!(fmt_retry_secs(125), "2m 5s");
     }
 }
