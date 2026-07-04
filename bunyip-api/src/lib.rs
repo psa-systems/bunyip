@@ -10,6 +10,7 @@ pub use bunyip_domain::{
     config, errors, middleware, models, repositories, responses, services, validation,
 };
 
+pub mod access_log;
 pub mod error_log;
 pub mod handlers;
 pub mod migrate_reconcile;
