@@ -84,7 +84,7 @@ test runs.
 | `E2E_OIDC_REDIRECT_URI` | yes | redirect_uri registered for that client (must match EXACTLY, or `invalid_redirect_uri`). Only the `code` is captured; the URL is never loaded |
 | `E2E_TOTP_SECRET` | yes | base32 TOTP secret for the account; the second factor is computed at runtime |
 | `E2E_STRIPE_SECRET_KEY` | no | Stripe test-mode key (`sk_test_...`). Used by teardown to cancel test-mode subscriptions AND as the gate for the billing specs - when set (the operator provisions it as `E2E_STAGING_STRIPE_SECRET_KEY` alongside staging Stripe test mode), `subscribe`/`billing-portal` run; unset, they skip (BUNYIP-151) |
-| `E2E_MAIL_SINK_URL` | no | Staging mail-sink JMAP base URL with the E2E mailbox credentials embedded (`https://nate%40a8n.run:pass@mail.a8n.run`, the Stalwart server). The email-driven specs read token links from this mailbox; unset (e.g. production) makes them skip (BUNYIP-150) |
+| `E2E_MAIL_SINK_URL` | no | Staging mail-sink JMAP base URL with the **dedicated** E2E mailbox credentials embedded (e.g. `https://e2e%40a8n.run:APP_PASSWORD@mail.a8n.run`, the Stalwart server). The email-driven specs read token links from this mailbox; unset (e.g. production) makes them skip (BUNYIP-150). See [Mail-sink secret format](#mail-sink-secret-format-bunyip-272) for the exact shape. Do NOT use a personal mailbox (BUNYIP-272) |
 
 ## Forgejo Actions secrets and variables
 
@@ -132,6 +132,44 @@ the two marked optional. Production has no mail sink, so there is deliberately n
 | `E2E_STAGING_TOTP_SECRET` | `E2E_PRODUCTION_TOTP_SECRET` | yes | base32 TOTP secret for the account (`E2E_TOTP_SECRET`) |
 | `E2E_STAGING_STRIPE_SECRET_KEY` | `E2E_PRODUCTION_STRIPE_SECRET_KEY` | no | Stripe test-mode key; gates the billing specs (`E2E_STRIPE_SECRET_KEY`, BUNYIP-151) |
 | `E2E_STAGING_MAIL_SINK_URL` | (none - staging only) | no | JMAP mail sink; gates the email-driven specs (`E2E_MAIL_SINK_URL`, BUNYIP-150). Production resolves empty, so those specs skip there |
+
+### Mail-sink secret format (BUNYIP-272)
+
+The email-driven specs (`password-reset`, `magic-link`, `change-email`) read
+token links over JMAP from a Stalwart mailbox. That mailbox must be a
+**dedicated** e2e account, not a personal one: a personal account ties CI to one
+person's password rotation and account lifecycle (BUNYIP-272; BUNYIP-150
+originally pointed it at `nate@a8n.run`).
+
+The reader takes a single URL secret with the credentials embedded:
+
+```
+https://<url-encoded-email>:<application-password>@<jmap-host>
+```
+
+- `<url-encoded-email>` - the dedicated mailbox address, URL-encoded so the `@`
+  becomes `%40` (e.g. `e2e@a8n.run` -> `e2e%40a8n.run`). Without the encoding the
+  URL parser reads the local part as the userinfo and the domain as the host.
+- `<application-password>` - an **application password** scoped to that mailbox
+  (not the account's primary password). Generated in Stalwart per-account.
+- `<jmap-host>` - the Stalwart server host, `mail.a8n.run`. The reader appends
+  the JMAP session path itself; give only the base host.
+
+Example (staging): `https://e2e%40a8n.run:xxxxxxxxxxxx@mail.a8n.run`.
+
+Set it as the plain `E2E_MAIL_SINK_URL` locally (in `e2e/.env`) or as the
+`E2E_STAGING_MAIL_SINK_URL` Forgejo Actions secret in CI. There is deliberately
+no production equivalent (production has no mail sink, so the specs skip there).
+
+Provisioning steps (the account + secret are operator-side; only this doc and
+the env plumbing live in the repo):
+
+1. Create the dedicated mailbox on `mail.a8n.run` (e.g. `e2e@a8n.run`). Account
+   creation needs a Stalwart admin.
+2. Generate an application password scoped to that mailbox.
+3. Compose the URL above and set `E2E_STAGING_MAIL_SINK_URL` (CI) /
+   `E2E_MAIL_SINK_URL` (local) to it.
+4. Re-run the email-driven specs to confirm green.
 
 ## Disposable accounts (cleanup)
 
