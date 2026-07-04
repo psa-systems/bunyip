@@ -311,6 +311,25 @@ impl User {
     }
 }
 
+/// Normalize an email address for storage (BUNYIP-325).
+///
+/// The address stored on the user row must never diverge in case from the
+/// address a lookup or an outbound verification / welcome mail resolves to. A
+/// mixed-case signup ("Nice.Guy@Example.COM") that lands verbatim creates a row
+/// that case-sensitive downstream consumers (e.g. the mokosh Next.js auth store,
+/// which lowercases) never reconcile, so the verification mail is never matched
+/// and the account stays stuck unverified. Every write to `users.email` funnels
+/// through this helper, and every lookup already compares with `LOWER(email)`,
+/// so the stored value and every comparison agree by construction.
+///
+/// Lowercasing only (no trimming): the read side (`LOWER($1)` in
+/// `find_by_email` / `email_exists` / `email_reserved`, and `.to_lowercase()`
+/// on the login rate-limit key) does not trim either, so trimming here would
+/// let a stored value stop matching its own lookup.
+pub fn normalize_email(email: &str) -> String {
+    email.to_lowercase()
+}
+
 /// Data for creating a new user
 #[derive(Debug, Clone)]
 pub struct CreateUser {
@@ -372,6 +391,26 @@ impl From<User> for UserResponse {
 mod tests {
     use super::*;
     use chrono::Utc;
+
+    /// BUNYIP-325: every email is stored lowercased so a mixed-case signup
+    /// cannot diverge from case-insensitive lookups and its verification mail.
+    #[test]
+    fn normalize_email_lowercases_mixed_case() {
+        assert_eq!(
+            normalize_email("Nice.Guy@Example.COM"),
+            "nice.guy@example.com"
+        );
+        assert_eq!(normalize_email("ALLCAPS@X.IO"), "allcaps@x.io");
+    }
+
+    /// Idempotent: normalizing an already-lowercase address is a no-op, so
+    /// re-running the backfill or re-writing a row never changes a clean value.
+    #[test]
+    fn normalize_email_is_idempotent_on_lowercase() {
+        let once = normalize_email("already@lower.com");
+        assert_eq!(once, "already@lower.com");
+        assert_eq!(normalize_email(&once), once);
+    }
 
     #[test]
     fn select_tier_fills_lifetime_then_early_adopter_then_standard() {

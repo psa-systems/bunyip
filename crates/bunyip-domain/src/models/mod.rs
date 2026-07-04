@@ -56,4 +56,6 @@ pub use token::{
     SessionInfo, TrustedDevice, TrustedDeviceInfo,
 };
 pub use totp::{RecoveryCode, UserTotp};
-pub use user::{CreateUser, MembershipStatus, SubscriptionTier, User, UserResponse, UserRole};
+pub use user::{
+    normalize_email, CreateUser, MembershipStatus, SubscriptionTier, User, UserResponse, UserRole,
+};
