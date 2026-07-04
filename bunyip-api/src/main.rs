@@ -3,7 +3,7 @@
 //! This is the entry point for the backend API server.
 
 use actix_cors::Cors;
-use actix_web::{middleware::Logger, web, App, HttpServer};
+use actix_web::{web, App, HttpServer};
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use std::time::Duration;
@@ -704,7 +704,9 @@ async fn main() -> anyhow::Result<()> {
         App::new()
             // Add middleware (order matters - executed in reverse order)
             .wrap(TracingLogger::default())
-            .wrap(Logger::default())
+            // Log the external client IP (trusted XFF behind Traefik), not the
+            // proxy's socket peer, so request lines are attributable (BUNYIP-328).
+            .wrap(bunyip_api::access_log::access_logger())
             .wrap(SecurityHeaders::with_csp(csp))
             .wrap(RequestIdMiddleware)
             .wrap(cors)
@@ -808,7 +810,11 @@ async fn main() -> anyhow::Result<()> {
         let oci = HttpServer::new(move || {
             App::new()
                 .wrap(TracingLogger::default())
-                .wrap(Logger::default())
+                // Same external-client-IP attribution as the primary app
+                // (BUNYIP-328). The OCI server registers no `Config`, so no
+                // proxy is trusted and this logs the socket peer, matching the
+                // prior `%a` behaviour until trusted proxies are wired here.
+                .wrap(bunyip_api::access_log::access_logger())
                 // OCI registry serves no OIDC flow; the locked-down default CSP
                 // (no extra allowlist origins) is correct here.
                 .wrap(SecurityHeaders::new())
