@@ -204,6 +204,18 @@ async fn check_feedback_rate_limit(pool: &PgPool, key: &str) -> Result<(), AppEr
     super::check_rate_limit(pool, key, &RateLimitConfig::FEEDBACK_SUBMIT).await
 }
 
+/// BUNYIP-270: whether a freshly submitted feedback row should raise an
+/// admin notification + email. The admin Active triage queue is backed by
+/// a list query that filters `is_spam = FALSE`, so a honeypot-flagged spam
+/// row never appears there. Notifying on spam therefore emailed admins
+/// about a submission they could not find in the Active tab. This predicate
+/// keeps the "admin was pinged" set aligned with the "row is in Active" set
+/// and is factored out so the invariant is unit-testable without a database
+/// or email service.
+fn should_notify_admins_of_feedback(is_spam: bool) -> bool {
+    !is_spam
+}
+
 pub async fn submit_feedback(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -369,42 +381,54 @@ pub async fn submit_feedback(
     )
     .await?;
 
-    NotificationRepository::create(
-        &pool,
-        CreateAdminNotification {
-            notification_type: NotificationType::NewFeedback,
-            title: "New feedback submitted".to_string(),
-            message: format!(
-                "Feedback #{} is ready for review in the admin panel.",
-                feedback.id
-            ),
-            metadata: Some(serde_json::json!({
-                "feedback_id": feedback.id,
-                "path": format!("{}/admin/feedback", config.email.base_url),
-                "status": feedback.status,
-            })),
-            user_id: None,
-        },
-    )
-    .await?;
+    // BUNYIP-270: only ping admins for submissions that actually land in
+    // the Active triage queue. Honeypot-flagged spam (is_spam = TRUE) is
+    // filtered out of the Active tab by the list query
+    // (`WHERE is_spam = FALSE ...`), so notifying/emailing on it produced
+    // the reported symptom: admins received a "new feedback" email but
+    // opened `/admin/feedback` to an empty Active queue (the row was only
+    // reachable under the Spam tab). Suppressing the admin notification +
+    // email for spam ties "admin was emailed" to "row is in Active". The
+    // row is still stored and audit-logged above, and remains visible in
+    // the Spam tab for review.
+    if should_notify_admins_of_feedback(feedback.is_spam) {
+        NotificationRepository::create(
+            &pool,
+            CreateAdminNotification {
+                notification_type: NotificationType::NewFeedback,
+                title: "New feedback submitted".to_string(),
+                message: format!(
+                    "Feedback #{} is ready for review in the admin panel.",
+                    feedback.id
+                ),
+                metadata: Some(serde_json::json!({
+                    "feedback_id": feedback.id,
+                    "path": format!("{}/admin/feedback", config.email.base_url),
+                    "status": feedback.status,
+                })),
+                user_id: None,
+            },
+        )
+        .await?;
 
-    let email_svc = email_service.get_ref().clone();
-    let feedback_id = feedback.id;
-    let admin_url = format!(
-        "{}/admin/feedback?id={}",
-        config.email.base_url, feedback_id
-    );
-    let admin_emails = UserRepository::find_admin_emails(&pool)
-        .await
-        .unwrap_or_default();
-    tokio::spawn(async move {
-        if let Err(e) = email_svc
-            .send_admin_feedback_notification(&admin_url, &admin_emails)
+        let email_svc = email_service.get_ref().clone();
+        let feedback_id = feedback.id;
+        let admin_url = format!(
+            "{}/admin/feedback?id={}",
+            config.email.base_url, feedback_id
+        );
+        let admin_emails = UserRepository::find_admin_emails(&pool)
             .await
-        {
-            tracing::error!(error = %e, feedback_id = %feedback_id, "Failed to send feedback notification email");
-        }
-    });
+            .unwrap_or_default();
+        tokio::spawn(async move {
+            if let Err(e) = email_svc
+                .send_admin_feedback_notification(&admin_url, &admin_emails)
+                .await
+            {
+                tracing::error!(error = %e, feedback_id = %feedback_id, "Failed to send feedback notification email");
+            }
+        });
+    }
 
     Ok(created(
         FeedbackSubmissionResponse {
@@ -836,4 +860,25 @@ pub async fn get_attachment(
         .content_type(meta.mime_type.clone())
         .insert_header(("Content-Disposition", disposition))
         .body(data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // BUNYIP-270: the admin feedback notification + email must fire only for
+    // rows that reach the Active triage queue. The Active tab list query
+    // filters `is_spam = FALSE`, so spam is invisible there; pinging admins
+    // about it reproduced "received the email, opened /admin/feedback, saw
+    // nothing". These guard the notify-decision against regressing back to
+    // an unconditional ping.
+    #[test]
+    fn notifies_admins_for_non_spam_feedback() {
+        assert!(should_notify_admins_of_feedback(false));
+    }
+
+    #[test]
+    fn suppresses_admin_notification_for_spam_feedback() {
+        assert!(!should_notify_admins_of_feedback(true));
+    }
 }
