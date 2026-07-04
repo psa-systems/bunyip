@@ -80,7 +80,7 @@ check-container:
         -w /work \
         -e SQLX_OFFLINE=true \
         ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie \
-        bash -c "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace --lib"
+        bash -c "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace --all-targets"
 
 # Type-check the workspace.
 [group: 'checks']
@@ -97,10 +97,11 @@ lint:
 fmt:
     cargo fmt --all
 
-# Run unit tests.
+# Run unit tests. --all-targets (not --lib) so binary-crate tests run too:
+# bunyip-web is bin-only and `--lib` skips its whole suite (BUNYIP-271).
 [group: 'checks']
 test:
-    cargo test --workspace --lib
+    cargo test --workspace --all-targets
 
 # docker compose reads HOST_UID/HOST_GID for the `user:` mapping + dev-image
 # build args on shared dev hosts (where the developer's uid is not 1000). These
