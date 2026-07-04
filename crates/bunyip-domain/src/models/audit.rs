@@ -130,6 +130,14 @@ pub enum AuditAction {
     /// strikes, and the persisted `ip_bans` row via
     /// `AutoBanService::unban`. Metadata carries the target `ip`.
     AdminIpBanLifted,
+    /// Admin cleared a currently-active rate limit ahead of its natural window
+    /// expiry (BUNYIP-316) so the affected user can act again immediately.
+    /// Covers both `rate_limits`-table throttles (cleared via
+    /// `RateLimitRepository::reset`) and the email-verify / email-change resend
+    /// limiters (cleared by dropping the user's in-window token rows). Metadata
+    /// carries the reset `action`, the raw `key`, and the resolved target
+    /// user id / email when the key maps to one.
+    AdminRateLimitReset,
 }
 
 impl AuditAction {
@@ -216,6 +224,7 @@ impl AuditAction {
             AuditAction::OauthUserTenantAssigned => "oauth_user_tenant_assigned",
             AuditAction::OauthUserTenantUnassigned => "oauth_user_tenant_unassigned",
             AuditAction::AdminIpBanLifted => "admin_ip_ban_lifted",
+            AuditAction::AdminRateLimitReset => "admin_rate_limit_reset",
         }
     }
 
@@ -256,6 +265,7 @@ impl AuditAction {
                 | AuditAction::AdminApplicationRestrictionChanged
                 | AuditAction::AdminStripePriceMappingChanged
                 | AuditAction::AdminIpBanLifted
+                | AuditAction::AdminRateLimitReset
         )
     }
 }
@@ -537,6 +547,15 @@ mod tests {
             "admin_ip_ban_lifted"
         );
         assert!(AuditAction::AdminIpBanLifted.is_admin_action());
+    }
+
+    #[test]
+    fn audit_action_admin_rate_limit_reset() {
+        assert_eq!(
+            AuditAction::AdminRateLimitReset.as_str(),
+            "admin_rate_limit_reset"
+        );
+        assert!(AuditAction::AdminRateLimitReset.is_admin_action());
     }
 
     // -- AuditSeverity --

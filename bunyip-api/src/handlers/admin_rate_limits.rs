@@ -26,11 +26,11 @@ use uuid::Uuid;
 
 use crate::errors::AppError;
 use crate::middleware::AdminUser;
-use crate::models::{KeySubject, RateLimit, RateLimitConfig};
+use crate::models::{AuditAction, CreateAuditLog, KeySubject, RateLimit, RateLimitConfig};
 use crate::repositories::{
-    EmailResendLimiterRow, RateLimitRepository, TokenRepository, UserRepository,
+    AuditLogRepository, EmailResendLimiterRow, RateLimitRepository, TokenRepository, UserRepository,
 };
-use crate::responses::{get_request_id, paginated};
+use crate::responses::{get_request_id, paginated, success_no_data};
 use crate::services::auth::{resend_retry_after_secs, RESEND_LIMIT_MAX, RESEND_LIMIT_WINDOW_SECS};
 
 /// One currently-active throttle, resolved to a user where possible.
@@ -193,6 +193,124 @@ pub async fn list_rate_limits(
     Ok(paginated(page_items, total, page, per_page, request_id))
 }
 
+/// Request body for `POST /v1/admin/rate-limits/reset` (BUNYIP-316). `action`
+/// and `key` are exactly the identifiers `list_rate_limits` returns for the
+/// throttle to clear.
+#[derive(Debug, Deserialize)]
+pub struct ResetRateLimitRequest {
+    pub action: String,
+    pub key: String,
+}
+
+/// POST /v1/admin/rate-limits/reset
+///
+/// Clear one currently-active throttle so the affected user can act again
+/// immediately (BUNYIP-316). Dispatched on `action`:
+///
+/// * the `email_verification` / `email_change` pseudo-actions are backed by row
+///   counts, not the `rate_limits` table, so `key` is the user id and the reset
+///   deletes that user's in-window token / request rows, dropping the count
+///   below the shared resend threshold so a subsequent request succeeds;
+/// * every other action is a `rate_limits` table row cleared via
+///   [`RateLimitRepository::reset`]. The action must be a known preset.
+///
+/// AdminUser-guarded. Records an [`AuditAction::AdminRateLimitReset`] carrying
+/// the acting admin, the reset action + key, and the resolved target user where
+/// the key maps to one. Returns 204.
+pub async fn reset_rate_limit(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    body: web::Json<ResetRateLimitRequest>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let action = body.action.trim();
+    let key = body.key.trim();
+
+    if action.is_empty() || key.is_empty() {
+        return Err(AppError::bad_request("action and key are required"));
+    }
+
+    // Clear the throttle and resolve the target user (for the audit record)
+    // where the key maps to one.
+    let target = apply_rate_limit_reset(pool.get_ref(), action, key).await?;
+    let (target_user_id, target_email) = match target {
+        Some((id, email)) => (Some(id), Some(email)),
+        None => (None, None),
+    };
+
+    let mut log = CreateAuditLog::new(AuditAction::AdminRateLimitReset)
+        .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+        .with_metadata(serde_json::json!({
+            "action": action,
+            "key": key,
+            "target_user_id": target_user_id,
+            "target_email": target_email,
+        }));
+    if let Some(uid) = target_user_id {
+        log = log.with_resource("user", uid);
+    }
+    AuditLogRepository::create(pool.get_ref(), log).await?;
+
+    Ok(success_no_data(request_id))
+}
+
+/// Clear a single active throttle identified by `(action, key)` and return the
+/// resolved target user `(id, email)` when the key maps to one (BUNYIP-316).
+/// Holds the whole dispatch (pseudo-action vs `rate_limits` table row) so the
+/// HTTP handler stays a thin audit wrapper and the reset behaviour is
+/// integration-testable against a real pool without constructing a request.
+async fn apply_rate_limit_reset(
+    pool: &PgPool,
+    action: &str,
+    key: &str,
+) -> Result<Option<(Uuid, String)>, AppError> {
+    match action {
+        "email_verification" | "email_change" => {
+            // The list surfaces these pseudo-actions with the user id as `key`.
+            let user_id = Uuid::parse_str(key).map_err(|_| {
+                AppError::bad_request(format!("key must be a user id for the '{action}' limiter"))
+            })?;
+            let user = UserRepository::find_by_id(pool, user_id)
+                .await?
+                .ok_or(AppError::not_found("User"))?;
+
+            let since = Utc::now() - Duration::seconds(RESEND_LIMIT_WINDOW_SECS);
+            if action == "email_verification" {
+                TokenRepository::delete_recent_email_verification_tokens(pool, user_id, since)
+                    .await?;
+            } else {
+                TokenRepository::delete_recent_email_change_requests(pool, user_id, since).await?;
+            }
+
+            Ok(Some((user.id, user.email)))
+        }
+        _ => {
+            // A `rate_limits` table action. Require a known preset so a typo'd
+            // action that no reset would ever match is a clean 400, not a
+            // silent no-op.
+            let cfg = RateLimitConfig::by_action(action).ok_or_else(|| {
+                AppError::bad_request(format!("unknown rate-limit action '{action}'"))
+            })?;
+
+            // Resolve the user for the audit record where the key maps to one.
+            let target = match cfg.subject(key) {
+                KeySubject::Email(email) => UserRepository::find_by_email(pool, &email)
+                    .await?
+                    .map(|u| (u.id, u.email)),
+                KeySubject::UserId(id) => UserRepository::find_by_id(pool, id)
+                    .await?
+                    .map(|u| (u.id, u.email)),
+                KeySubject::Ip(_) | KeySubject::Unknown(_) => None,
+            };
+
+            RateLimitRepository::reset(pool, key, action).await?;
+
+            Ok(target)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,5 +409,156 @@ mod tests {
         // retry_after = oldest + window - now = 3600 - 600 = 3000.
         assert_eq!(entry.retry_after, 3000);
         assert_eq!(entry.key, user_id.to_string());
+    }
+}
+
+/// DB-backed integration tests for the BUNYIP-316 reset path. They exercise the
+/// real `apply_rate_limit_reset` dispatch against Postgres and skip silently
+/// when `DATABASE_URL` is unset (the same pattern the other admin handler tests
+/// use), so `just test` stays green without a database.
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+
+    async fn maybe_pool() -> Option<PgPool> {
+        let url = std::env::var("DATABASE_URL").ok()?;
+        PgPool::connect(&url).await.ok()
+    }
+
+    async fn insert_user(pool: &PgPool, email: &str) -> Uuid {
+        let row: (Uuid,) = sqlx::query_as(
+            r#"
+            INSERT INTO users (email, password_hash, role, email_verified)
+            VALUES ($1, 'x', 'subscriber', false)
+            RETURNING id
+            "#,
+        )
+        .bind(email)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        row.0
+    }
+
+    async fn delete_user(pool: &PgPool, user_id: Uuid) {
+        // email_verification_tokens / email_change_requests cascade on user delete.
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    /// A `rate_limits`-backed throttle (login, email-keyed) is cleared by the
+    /// reset so the key is no longer over the cap, and the resolved target user
+    /// is returned for the audit record.
+    #[actix_rt::test]
+    async fn reset_clears_rate_limits_table_throttle() {
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
+        let email = format!("rl-reset-{}@example.com", Uuid::new_v4());
+        let user_id = insert_user(&pool, &email).await;
+
+        let cfg = RateLimitConfig::LOGIN; // cap 5 / 60s, email-keyed.
+
+        // Drive the counter over the cap so the key is throttled.
+        for _ in 0..(cfg.max_requests + 1) {
+            RateLimitRepository::check_and_increment(&pool, &email, &cfg)
+                .await
+                .unwrap();
+        }
+        let (_, exceeded) = RateLimitRepository::check(&pool, &email, &cfg)
+            .await
+            .unwrap();
+        assert!(exceeded, "user should be throttled before reset");
+
+        // Reset via the real handler dispatch.
+        let target = apply_rate_limit_reset(&pool, "login", &email)
+            .await
+            .unwrap();
+        assert_eq!(target, Some((user_id, email.clone())));
+
+        // The throttle is gone: the row was deleted, so the count is back to 0.
+        let (count, exceeded) = RateLimitRepository::check(&pool, &email, &cfg)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        assert!(!exceeded, "user should be un-throttled after reset");
+
+        delete_user(&pool, user_id).await;
+    }
+
+    /// The `email_verification` pseudo-action is cleared by dropping the user's
+    /// in-window verification tokens, taking the resend count below the shared
+    /// threshold so a subsequent request would succeed.
+    #[actix_rt::test]
+    async fn reset_clears_email_verification_limiter() {
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
+        let email = format!("ev-reset-{}@example.com", Uuid::new_v4());
+        let user_id = insert_user(&pool, &email).await;
+
+        // Insert RESEND_LIMIT_MAX in-window verification tokens so the user is
+        // at the resend threshold (the enforcement gate is `count >= MAX`).
+        for i in 0..RESEND_LIMIT_MAX {
+            sqlx::query(
+                r#"
+                INSERT INTO email_verification_tokens (user_id, token_hash, expires_at)
+                VALUES ($1, $2, NOW() + INTERVAL '1 day')
+                "#,
+            )
+            .bind(user_id)
+            .bind(format!("hash-{user_id}-{i}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let since = Utc::now() - Duration::seconds(RESEND_LIMIT_WINDOW_SECS);
+        let before = TokenRepository::count_recent_email_verification_tokens(&pool, user_id, since)
+            .await
+            .unwrap();
+        assert!(
+            before >= RESEND_LIMIT_MAX,
+            "user should be at/over the resend threshold before reset"
+        );
+
+        // Reset via the real handler dispatch (key is the user id).
+        let target = apply_rate_limit_reset(&pool, "email_verification", &user_id.to_string())
+            .await
+            .unwrap();
+        assert_eq!(target, Some((user_id, email.clone())));
+
+        // In-window rows are gone, so the count is below the threshold: a
+        // subsequent resend passes the `count >= MAX` gate.
+        let after = TokenRepository::count_recent_email_verification_tokens(&pool, user_id, since)
+            .await
+            .unwrap();
+        assert_eq!(after, 0);
+        assert!(
+            after < RESEND_LIMIT_MAX,
+            "user should be un-throttled after reset"
+        );
+
+        delete_user(&pool, user_id).await;
+    }
+
+    /// An unknown action and a non-uuid key for a pseudo-action are rejected
+    /// before any state is touched.
+    #[actix_rt::test]
+    async fn reset_rejects_bad_input() {
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
+        assert!(apply_rate_limit_reset(&pool, "not_a_real_action", "k")
+            .await
+            .is_err());
+        assert!(
+            apply_rate_limit_reset(&pool, "email_verification", "not-a-uuid")
+                .await
+                .is_err()
+        );
     }
 }

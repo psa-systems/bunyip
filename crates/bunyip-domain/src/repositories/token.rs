@@ -821,6 +821,53 @@ impl TokenRepository {
         Ok(rows)
     }
 
+    /// Delete the user's email-verification tokens created within the window
+    /// since `since` (BUNYIP-316). Backs the admin rate-limit reset for the
+    /// `email_verification` pseudo-action: dropping the in-window rows takes the
+    /// user's resend count below the shared threshold so their next
+    /// verification request succeeds immediately. Returns the rows removed.
+    pub async fn delete_recent_email_verification_tokens(
+        pool: &PgPool,
+        user_id: Uuid,
+        since: DateTime<Utc>,
+    ) -> Result<u64, AppError> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM email_verification_tokens
+            WHERE user_id = $1 AND created_at > $2
+            "#,
+        )
+        .bind(user_id)
+        .bind(since)
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Delete the user's email-change requests created within the window since
+    /// `since` (BUNYIP-316). Backs the admin rate-limit reset for the
+    /// `email_change` pseudo-action, dropping the in-window count below the
+    /// shared resend threshold. Returns the rows removed.
+    pub async fn delete_recent_email_change_requests(
+        pool: &PgPool,
+        user_id: Uuid,
+        since: DateTime<Utc>,
+    ) -> Result<u64, AppError> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM email_change_requests
+            WHERE user_id = $1 AND created_at > $2
+            "#,
+        )
+        .bind(user_id)
+        .bind(since)
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
     // =====================
     // Cleanup
     // =====================

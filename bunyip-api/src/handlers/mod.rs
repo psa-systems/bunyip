@@ -199,7 +199,7 @@ pub use admin_entitlements::{
 };
 pub use admin_ip_bans::{list_ip_bans, unban_ip};
 pub use admin_oauth_tenants::{assign_user_tenant, list_client_assignments, unassign_user_tenant};
-pub use admin_rate_limits::list_rate_limits;
+pub use admin_rate_limits::{list_rate_limits, reset_rate_limit};
 pub use admin_stripe::{
     archive_stripe_price, archive_stripe_product, create_stripe_price, create_stripe_product,
     create_stripe_webhook, delete_stripe_webhook, list_stripe_prices, list_stripe_products,
