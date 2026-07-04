@@ -651,7 +651,52 @@ pub struct RegisterForm {
     pub confirm: String,
 }
 
-fn register_card(error: Option<&str>, email: &str) -> Markup {
+/// BUNYIP-271: per-field registration errors. On a rejected submit the server
+/// re-renders the form with each failing rule attached to the specific input
+/// it governs (email / password / confirm) instead of collapsing everything
+/// into one generic banner. `general` carries an error that is not attributable
+/// to a single field (e.g. an API failure), and still renders as a top banner.
+#[derive(Default)]
+struct RegisterErrors {
+    email: Option<String>,
+    password: Option<String>,
+    confirm: Option<String>,
+    general: Option<String>,
+}
+
+impl RegisterErrors {
+    /// True when at least one error is present, i.e. this is an error
+    /// re-render. Drives the "please re-enter your password" hint, because on
+    /// any rejected submit the password fields come back blank (never echoed).
+    fn any(&self) -> bool {
+        self.email.is_some()
+            || self.password.is_some()
+            || self.confirm.is_some()
+            || self.general.is_some()
+    }
+}
+
+/// BUNYIP-271: an inline, field-level error rendered directly beneath the
+/// offending input so the user sees which specific rule failed, rather than a
+/// single generic banner at the top of the form.
+fn field_error_msg(msg: &str) -> Markup {
+    html! {
+        p class="text-sm text-destructive mt-1" role="alert" { (msg) }
+    }
+}
+
+/// BUNYIP-271: passwords are never echoed back into the HTML (see the note in
+/// `register_card`), so on a rejected submit both password fields come back
+/// blank. Tell the user why they are empty and that a re-entry is needed.
+fn password_reentry_hint() -> Markup {
+    html! {
+        p class="text-sm text-muted-foreground mt-1" {
+            "For your security your password is never stored - please re-enter your password."
+        }
+    }
+}
+
+fn register_card(errors: &RegisterErrors, email: &str) -> Markup {
     auth_card(
         "shield",
         "bg-primary/10 text-primary",
@@ -659,21 +704,38 @@ fn register_card(error: Option<&str>, email: &str) -> Markup {
         "Get access to all tools for $3/month",
         html! {
             form method="post" action="/register" class="space-y-4" {
-                @if let Some(e) = error { (error_box(e)) }
+                // BUNYIP-271: the top banner is reserved for a non-field error
+                // (e.g. an API failure). Rule-specific messages render next to
+                // their input below via `field_error_msg`.
+                @if let Some(e) = errors.general.as_deref() { (error_box(e)) }
                 // BUNYIP-240: preserve the typed email on server-side rejection
                 // so the user does not have to retype it. The password fields
                 // intentionally stay blank for re-entry (no value= for type=password
                 // - browsers refuse to render persisted password values for
                 // autofill safety, and re-rendering with a server-known password
                 // would round-trip plaintext through HTML history).
-                (field_with_value("email", "Email", "email", "you@example.com", "email", email))
+                div {
+                    (field_with_value("email", "Email", "email", "you@example.com", "email", email))
+                    // BUNYIP-271: surface an invalid-email rule next to the input.
+                    @if let Some(e) = errors.email.as_deref() { (field_error_msg(e)) }
+                }
                 // BUNYIP-282: signup uses the password_field helper so each
                 // input carries an inline eye toggle. Other auth surfaces
                 // (login, reset, change-password) deliberately stay on the
                 // plain `field` helper - reveal toggles are sign-up only.
-                (password_field("password", "Password", "new-password"))
+                div {
+                    (password_field("password", "Password", "new-password"))
+                    @if let Some(e) = errors.password.as_deref() { (field_error_msg(e)) }
+                    // BUNYIP-271: on any rejected submit the cleared password
+                    // fields need re-entry; say so explicitly.
+                    @if errors.any() { (password_reentry_hint()) }
+                }
                 (pw_reqs())
-                (password_field("confirm", "Confirm Password", "new-password"))
+                div {
+                    (password_field("confirm", "Confirm Password", "new-password"))
+                    // BUNYIP-271: surface a passwords-don't-match rule inline.
+                    @if let Some(e) = errors.confirm.as_deref() { (field_error_msg(e)) }
+                }
                 (submit_btn("Create Account"))
             }
             div class="mt-6" {
@@ -707,7 +769,7 @@ pub async fn register_get(State(st): State<AppState>, headers: HeaderMap) -> Res
         &st,
         &headers,
         "Create account · Bunyip",
-        register_card(None, ""),
+        register_card(&RegisterErrors::default(), ""),
     )
     .await
 }
@@ -717,22 +779,27 @@ pub async fn register_post(
     headers: HeaderMap,
     Form(f): Form<RegisterForm>,
 ) -> Response {
-    let err = if !f.email.contains('@') {
-        Some("Invalid email address".to_string())
-    } else if !password_ok(&f.password) {
-        Some("Password does not meet the requirements".to_string())
+    // BUNYIP-271: attribute each failing rule to the field it governs so the
+    // re-rendered form shows the message next to the offending input. All
+    // failing rules surface at once (not just the first), and the typed email
+    // is preserved; the password fields intentionally stay blank for re-entry.
+    let mut errs = RegisterErrors::default();
+    if !f.email.contains('@') {
+        errs.email = Some("Enter a valid email address.".to_string());
+    }
+    if !password_ok(&f.password) {
+        errs.password = Some("Password does not meet the requirements below.".to_string());
     } else if f.password != f.confirm {
-        Some("Passwords don't match".to_string())
-    } else {
-        None
-    };
-    if let Some(e) = err {
+        // Only meaningful once the password itself is valid; otherwise the
+        // password rule already tells the user what to fix.
+        errs.confirm = Some("Passwords don't match.".to_string());
+    }
+    if errs.any() {
         return auth_page(
             &st,
             &headers,
             "Create account · Bunyip",
-            // BUNYIP-240: preserve the typed email on rejection.
-            register_card(Some(&e), f.email.trim()),
+            register_card(&errs, f.email.trim()),
         )
         .await;
     }
@@ -742,11 +809,18 @@ pub async fn register_post(
         // other entry path; sending them straight here avoids the extra hop.
         Ok((_, cookies)) => redirect_cookies("/onboarding", &cookies),
         Err(e) => {
+            // BUNYIP-271: an API-side rejection is not reliably attributable to
+            // a single field (already-registered, rate limit, transient 5xx),
+            // so it renders as the top banner while the email stays preserved.
+            let errs = RegisterErrors {
+                general: Some(e.user_message()),
+                ..Default::default()
+            };
             auth_page(
                 &st,
                 &headers,
                 "Create account · Bunyip",
-                register_card(Some(&e.user_message()), f.email.trim()),
+                register_card(&errs, f.email.trim()),
             )
             .await
         }
@@ -1586,5 +1660,119 @@ mod logout_clear_tests {
             assert_eq!(host_only, 1, "{name}: expected 1 host-only clear");
             assert_eq!(domain_scoped, 1, "{name}: expected 1 domain-scoped clear");
         }
+    }
+}
+
+#[cfg(test)]
+mod register_card_tests {
+    //! BUNYIP-271: a rejected registration submit must re-render with the
+    //! user's non-secret inputs preserved and the failing rule shown next to
+    //! the offending field - never a wiped form with a lone generic banner.
+    //! It must also never echo a password back into the HTML.
+
+    use super::{register_card, RegisterErrors};
+
+    /// Return the full `<input ...>` tag whose `name="{name}"` attribute
+    /// matches, so a test can assert on that input's attributes in isolation.
+    fn input_tag<'a>(html: &'a str, name: &str) -> &'a str {
+        let needle = format!("name=\"{name}\"");
+        let at = html
+            .find(&needle)
+            .unwrap_or_else(|| panic!("no input named {name} in: {html}"));
+        let lt = html[..at].rfind('<').expect("input opens with <");
+        let gt = html[lt..].find('>').expect("input closes with >") + lt;
+        &html[lt..=gt]
+    }
+
+    #[test]
+    fn preserves_typed_email_on_rejection() {
+        let errs = RegisterErrors {
+            email: Some("Enter a valid email address.".into()),
+            ..Default::default()
+        };
+        let html = register_card(&errs, "user@example.com").into_string();
+        assert!(
+            input_tag(&html, "email").contains(r#"value="user@example.com""#),
+            "typed email not preserved: {html}"
+        );
+    }
+
+    #[test]
+    fn shows_email_rule_next_to_the_email_field() {
+        let errs = RegisterErrors {
+            email: Some("Enter a valid email address.".into()),
+            ..Default::default()
+        };
+        let html = register_card(&errs, "nope").into_string();
+        assert!(
+            html.contains("Enter a valid email address."),
+            "email rule not surfaced inline: {html}"
+        );
+        // The inline field error is an alert-role paragraph, not the generic
+        // top banner (`error_box` renders an alert-circle icon, no role=alert).
+        assert!(
+            html.contains(r#"role="alert""#),
+            "expected an inline field-level alert: {html}"
+        );
+    }
+
+    #[test]
+    fn shows_password_and_confirm_rules_inline() {
+        let errs = RegisterErrors {
+            password: Some("Password does not meet the requirements below.".into()),
+            confirm: Some("Passwords don't match.".into()),
+            ..Default::default()
+        };
+        let html = register_card(&errs, "user@example.com").into_string();
+        assert!(
+            html.contains("Password does not meet the requirements below."),
+            "password rule missing: {html}"
+        );
+        assert!(
+            html.contains("Passwords don't match."),
+            "confirm rule missing: {html}"
+        );
+    }
+
+    #[test]
+    fn tells_user_to_reenter_password_on_any_error() {
+        let errs = RegisterErrors {
+            confirm: Some("Passwords don't match.".into()),
+            ..Default::default()
+        };
+        let html = register_card(&errs, "user@example.com").into_string();
+        assert!(
+            html.to_lowercase().contains("re-enter your password"),
+            "missing password re-entry hint: {html}"
+        );
+    }
+
+    #[test]
+    fn never_echoes_a_password_value_into_the_html() {
+        // register_card takes no password argument, so a password can never
+        // reach the HTML. Pin it: neither password input carries a value=.
+        let html = register_card(&RegisterErrors::default(), "user@example.com").into_string();
+        for name in ["password", "confirm"] {
+            assert!(
+                !input_tag(&html, name).contains("value="),
+                "{name} input must not carry a value= attribute: {}",
+                input_tag(&html, name)
+            );
+        }
+    }
+
+    #[test]
+    fn clean_render_has_no_errors_or_reentry_hint() {
+        // The success/first-load path (register_get) renders with default
+        // errors: no inline alerts, no banner, no re-entry hint.
+        let html = register_card(&RegisterErrors::default(), "").into_string();
+        assert!(
+            !html.contains(r#"role="alert""#),
+            "clean render must have no field alerts: {html}"
+        );
+        assert!(
+            !html.to_lowercase().contains("re-enter your password"),
+            "clean render must not nag about re-entry: {html}"
+        );
     }
 }

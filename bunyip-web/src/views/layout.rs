@@ -453,6 +453,11 @@ fn admin_items() -> Vec<NavItem> {
             href: "/admin/ip-bans",
             icon: "shield-off",
         },
+        NavItem {
+            title: "Rate Limits",
+            href: "/admin/rate-limits",
+            icon: "gauge",
+        },
     ]
 }
 

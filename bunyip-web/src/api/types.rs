@@ -385,6 +385,25 @@ pub struct AdminIpBan {
     pub expires_at: String,
 }
 
+/// One currently-active throttle as returned by `GET /v1/admin/rate-limits`
+/// (BUNYIP-315). Mirrors `bunyip_api::handlers::admin_rate_limits::RateLimitEntry`:
+/// `user_id` serializes as a UUID string, `window_start` as an RFC3339 timestamp,
+/// and `ip` / user fields are mutually exclusive (IP-keyed rows never carry a
+/// user, and vice versa). `action` + `key` together identify the throttle to the
+/// reset endpoint (BUNYIP-316).
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminRateLimit {
+    pub action: String,
+    pub key: String,
+    pub user_id: Option<String>,
+    pub user_email: Option<String>,
+    pub ip: Option<String>,
+    pub count: i64,
+    pub max_requests: i32,
+    pub window_start: String,
+    pub retry_after: u64,
+}
+
 fn default_true() -> bool {
     true
 }
