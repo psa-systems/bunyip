@@ -131,6 +131,15 @@ pub fn document(title: &str, body: Markup) -> Markup {
                 meta name="theme-color" media="(prefers-color-scheme: light)" content="#2f4e2e";
                 meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161a16";
                 title { (title) }
+                // BUNYIP-339: favicon set derived from the Bunyip hero art
+                // (face crop, rounded corners). Served from /assets via ServeDir.
+                link rel="icon" href="/assets/favicon.ico" sizes="any";
+                link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16x16.png";
+                link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png";
+                link rel="icon" type="image/png" sizes="48x48" href="/assets/favicon-48x48.png";
+                link rel="icon" type="image/png" sizes="192x192" href="/assets/favicon-192x192.png";
+                link rel="icon" type="image/png" sizes="512x512" href="/assets/favicon-512x512.png";
+                link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png";
                 link rel="preconnect" href="https://fonts.googleapis.com";
                 link rel="preconnect" href="https://fonts.gstatic.com" crossorigin;
                 link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet";

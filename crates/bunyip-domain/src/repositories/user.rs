@@ -6,12 +6,18 @@ use sqlx::{PgPool, QueryBuilder};
 use uuid::Uuid;
 
 use crate::errors::AppError;
-use crate::models::{CreateUser, MembershipStatus, SubscriptionTier, User};
+use crate::models::{normalize_email, CreateUser, MembershipStatus, SubscriptionTier, User};
 
 pub struct UserRepository;
 
 impl UserRepository {
     /// Create a new user
+    ///
+    /// The email is lowercased via [`normalize_email`] before insert (BUNYIP-325)
+    /// so the stored address can never diverge in case from the
+    /// `LOWER(email)`-based lookups or the verification / welcome mail. This is
+    /// the single INSERT choke point, so every signup surface (register,
+    /// magic-link auto-create, admin setup) inherits normalization here.
     pub async fn create(pool: &PgPool, data: CreateUser) -> Result<User, AppError> {
         let user = sqlx::query_as::<_, User>(
             r#"
@@ -20,7 +26,7 @@ impl UserRepository {
             RETURNING *
             "#,
         )
-        .bind(&data.email)
+        .bind(normalize_email(&data.email))
         .bind(&data.password_hash)
         .bind(data.role.as_str())
         .fetch_one(pool)
@@ -377,6 +383,10 @@ impl UserRepository {
     }
 
     /// Update user's email address
+    ///
+    /// The new email is lowercased via [`normalize_email`] before write
+    /// (BUNYIP-325), the second and last write path to `users.email`, so an
+    /// email change can no more store a mixed-case address than a fresh signup.
     pub async fn update_email<'e, E>(
         executor: E,
         user_id: Uuid,
@@ -393,7 +403,7 @@ impl UserRepository {
             WHERE id = $3
             "#,
         )
-        .bind(new_email)
+        .bind(normalize_email(new_email))
         .bind(set_verified)
         .bind(user_id)
         .execute(executor)

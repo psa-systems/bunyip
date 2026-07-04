@@ -14,7 +14,7 @@ use std::sync::Arc;
 use axum::routing::get;
 use axum::Router;
 use tower_http::compression::CompressionLayer;
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 
 #[tokio::main]
 async fn main() {
@@ -386,6 +386,11 @@ async fn main() {
         )
         // Static + fallback
         .nest_service("/assets", ServeDir::new("assets"))
+        // BUNYIP-339: browsers probe the root /favicon.ico regardless of the
+        // <link rel="icon"> tags in <head>, so serve it at the web root too
+        // (ServeDir above only answers under /assets). Without this the apex
+        // a8n.systems logs a 404 on every page load.
+        .route_service("/favicon.ico", ServeFile::new("assets/favicon.ico"))
         .fallback(public::not_found)
         // BUNYIP-259: Origin / Referer CSRF defense on every state-
         // changing POST. Refuses cross-origin form submissions before
