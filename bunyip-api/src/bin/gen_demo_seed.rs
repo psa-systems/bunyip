@@ -85,7 +85,12 @@ fn generate() -> String {
     for i in 0..42usize {
         let role = if i < 2 { "admin" } else { "subscriber" };
         let lifetime = (2..=4).contains(&i);
-        let (status, mut tier) = if lifetime {
+        let (status, mut tier) = if role == "admin" {
+            // Staff accounts are not paying members; keep them off the member
+            // tiers (and, via the `status == "active"` gate below, out of the
+            // price-locked cohort).
+            ("none", "free")
+        } else if lifetime {
             ("active", "lifetime")
         } else if (5..=7).contains(&i) {
             ("past_due", "standard")
@@ -162,6 +167,11 @@ fn generate() -> String {
         "feedback": feedback,
     });
 
+    // Byte-stability also depends on serde_json emitting object keys in a fixed
+    // order. It does today (default feature set = sorted keys); if the workspace
+    // ever enables serde_json's `preserve_order`, the key order changes and the
+    // committed file must be regenerated. The `committed_template_is_up_to_date`
+    // test fails loudly if that ever drifts, so it can never go unnoticed.
     let mut out = serde_json::to_string_pretty(&doc).expect("serialize demo seed");
     out.push('\n');
     out

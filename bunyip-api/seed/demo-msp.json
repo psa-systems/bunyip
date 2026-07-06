@@ -186,10 +186,9 @@
       "last_name": "Lovelace",
       "membership": {
         "lifetime": false,
-        "locked_price_amount": 4900,
-        "price_locked": true,
-        "status": "active",
-        "tier": "early_adopter"
+        "price_locked": false,
+        "status": "none",
+        "tier": "free"
       },
       "role": "admin",
       "verified": true
@@ -200,10 +199,9 @@
       "last_name": "Hopper",
       "membership": {
         "lifetime": false,
-        "locked_price_amount": 4900,
-        "price_locked": true,
-        "status": "active",
-        "tier": "early_adopter"
+        "price_locked": false,
+        "status": "none",
+        "tier": "free"
       },
       "role": "admin",
       "verified": true
@@ -523,9 +521,10 @@
       "last_name": "Wilson",
       "membership": {
         "lifetime": false,
-        "price_locked": false,
+        "locked_price_amount": 4900,
+        "price_locked": true,
         "status": "active",
-        "tier": "standard"
+        "tier": "early_adopter"
       },
       "role": "subscriber",
       "verified": true
@@ -536,9 +535,10 @@
       "last_name": "Gosling",
       "membership": {
         "lifetime": false,
-        "price_locked": false,
+        "locked_price_amount": 4900,
+        "price_locked": true,
         "status": "active",
-        "tier": "standard"
+        "tier": "early_adopter"
       },
       "role": "subscriber",
       "verified": true
