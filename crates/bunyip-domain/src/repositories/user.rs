@@ -650,19 +650,21 @@ impl UserRepository {
         Ok(())
     }
 
-    /// HARD-delete every user whose email sits under the reserved seed domain
-    /// (`%@{domain}`), clearing the same non-cascade dependencies as
+    /// HARD-delete every user whose email ends with `@{domain}`, clearing the
+    /// same non-cascade dependencies as
     /// [`hard_delete_by_email`](Self::hard_delete_by_email) (PSA-50 reset /
-    /// idempotent re-import). Scoped by the domain suffix so it can only ever
-    /// touch seed accounts, never a real one. Returns the rows removed.
+    /// idempotent re-import). Uses an exact suffix comparison (not `LIKE`), so a
+    /// `_` or `%` in the domain can never widen the match on this delete path.
+    /// Returns the rows removed.
     pub async fn hard_delete_seed_users(pool: &PgPool, domain: &str) -> Result<u64, AppError> {
         let mut tx = pool.begin().await?;
-        let pattern = format!("%@{domain}");
-        let ids: Vec<Uuid> =
-            sqlx::query_scalar("SELECT id FROM users WHERE lower(email) LIKE lower($1)")
-                .bind(&pattern)
-                .fetch_all(&mut *tx)
-                .await?;
+        let suffix = format!("@{domain}");
+        let ids: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM users WHERE right(lower(email), length($1)) = lower($1)",
+        )
+        .bind(&suffix)
+        .fetch_all(&mut *tx)
+        .await?;
         let removed = Self::clear_deps_and_delete_users(&mut tx, &ids).await?;
         tx.commit().await?;
         Ok(removed)

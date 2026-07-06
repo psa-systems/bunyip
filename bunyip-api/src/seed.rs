@@ -40,6 +40,15 @@ pub const SEED_SCHEMA_VERSION: u32 = 1;
 /// change (chosen over a `seed_tag` column, PSA-50).
 pub const SEED_EMAIL_DOMAIN: &str = "demo.psa-systems.test";
 
+/// Accepted (lowercase) values for the enum-backed string fields. Validation
+/// rejects anything outside these sets so a template typo (`amdin`, `actve`)
+/// fails loudly instead of silently seeding wrong-but-valid data - the loader's
+/// string -> enum mapping otherwise falls back to a default. Kept in lock-step
+/// with `UserRole`, `MembershipStatus`, and `SubscriptionTier`.
+const VALID_ROLES: [&str; 2] = ["subscriber", "admin"];
+const VALID_STATUSES: [&str; 5] = ["none", "active", "past_due", "canceled", "grace_period"];
+const VALID_TIERS: [&str; 4] = ["free", "standard", "early_adopter", "lifetime"];
+
 /// A parsed seed file. Section order is irrelevant; the loader resolves
 /// cross-references (app -> group, entitlement -> user/app) by slug/email.
 #[derive(Debug, Clone, Deserialize)]
@@ -260,6 +269,30 @@ impl SeedFile {
             if !user_emails.insert(lower) {
                 errs.push(format!("duplicate user email '{}'", u.email));
             }
+            // Reject enum typos loudly (the loader would otherwise map an unknown
+            // value to a silent default: subscriber / none / free).
+            if !VALID_ROLES.contains(&u.role.to_ascii_lowercase().as_str()) {
+                errs.push(format!(
+                    "user '{}' has unknown role '{}' (expected one of {VALID_ROLES:?})",
+                    u.email, u.role
+                ));
+            }
+            if let Some(status) = &u.membership.status {
+                if !VALID_STATUSES.contains(&status.to_ascii_lowercase().as_str()) {
+                    errs.push(format!(
+                        "user '{}' has unknown membership status '{}' (expected one of {VALID_STATUSES:?})",
+                        u.email, status
+                    ));
+                }
+            }
+            if let Some(tier) = &u.membership.tier {
+                if !VALID_TIERS.contains(&tier.to_ascii_lowercase().as_str()) {
+                    errs.push(format!(
+                        "user '{}' has unknown subscription tier '{}' (expected one of {VALID_TIERS:?})",
+                        u.email, tier
+                    ));
+                }
+            }
         }
 
         // Entitlements must reference a user and an app declared in this file.
@@ -278,18 +311,22 @@ impl SeedFile {
             }
         }
 
-        // Feedback must carry a message, and any author email must be seed-owned
-        // so a reset reclaims it.
+        // Feedback must carry a message and a seed-owned author email. The email
+        // is REQUIRED (not just validated when present): the reset and the
+        // idempotent re-import clear seed feedback by that email, so a row with
+        // no email would leak on reset and duplicate on every re-import.
         for (i, f) in self.feedback.iter().enumerate() {
             if f.message.trim().is_empty() {
                 errs.push(format!("feedback[{i}] has an empty message"));
             }
-            if let Some(email) = &f.email {
-                if !is_seed_email(email) {
-                    errs.push(format!(
-                        "feedback[{i}] author email '{email}' is not under @{SEED_EMAIL_DOMAIN}; reset could not reclaim it"
-                    ));
-                }
+            match &f.email {
+                None => errs.push(format!(
+                    "feedback[{i}] has no author email; seed feedback must carry a seed-domain email so a reset can reclaim it"
+                )),
+                Some(email) if !is_seed_email(email) => errs.push(format!(
+                    "feedback[{i}] author email '{email}' is not under @{SEED_EMAIL_DOMAIN}; reset could not reclaim it"
+                )),
+                Some(_) => {}
             }
         }
 
@@ -641,7 +678,7 @@ mod tests {
       "users": [
         {"email": "ada@demo.psa-systems.test", "role": "admin", "verified": true,
          "first_name": "Ada", "last_name": "Lovelace",
-         "membership": {"status": "active", "tier": "annual", "lifetime": true}}
+         "membership": {"status": "active", "tier": "lifetime", "lifetime": true}}
       ],
       "entitlements": [
         {"user_email": "ada@demo.psa-systems.test", "app_slug": "vault"}
@@ -771,6 +808,47 @@ mod tests {
             Err(SeedError::Validation(errs)) => {
                 assert!(errs.iter().any(|e| e.contains("empty message")));
                 assert!(errs.iter().any(|e| e.contains("not under")));
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validation_flags_unknown_role_status_and_tier() {
+        // Typos that the loader's string -> enum mapping would otherwise
+        // swallow into subscriber / none / free.
+        let json = r#"{
+          "version": 1,
+          "default_password": "p",
+          "users": [
+            {"email": "a@demo.psa-systems.test", "role": "amdin",
+             "membership": {"status": "actve", "tier": "anual"}}
+          ]
+        }"#;
+        match parse(json) {
+            Err(SeedError::Validation(errs)) => {
+                assert!(errs.iter().any(|e| e.contains("unknown role 'amdin'")));
+                assert!(errs
+                    .iter()
+                    .any(|e| e.contains("unknown membership status 'actve'")));
+                assert!(errs
+                    .iter()
+                    .any(|e| e.contains("unknown subscription tier 'anual'")));
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validation_requires_a_feedback_author_email() {
+        // Email-less feedback would neither reset nor re-import cleanly.
+        let json = r#"{
+          "version": 1,
+          "feedback": [ {"message": "orphan"} ]
+        }"#;
+        match parse(json) {
+            Err(SeedError::Validation(errs)) => {
+                assert!(errs.iter().any(|e| e.contains("no author email")));
             }
             other => panic!("expected Validation, got {other:?}"),
         }
