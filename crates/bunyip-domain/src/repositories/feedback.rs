@@ -29,6 +29,17 @@ impl FeedbackRepository {
         Ok(res.rows_affected())
     }
 
+    /// Delete feedback with this exact author email (case-insensitive), for a
+    /// reset / idempotent-clear of an explicit-email `owns` scope (PSA-56).
+    /// Returns the rows removed.
+    pub async fn delete_by_email(pool: &PgPool, email: &str) -> Result<u64, AppError> {
+        let res = sqlx::query("DELETE FROM feedback WHERE lower(email) = lower($1)")
+            .bind(email)
+            .execute(pool)
+            .await?;
+        Ok(res.rows_affected())
+    }
+
     /// List seed feedback (author email under `@{domain}`), for PSA-52 export.
     /// Same suffix comparison as [`delete_seed_by_domain`](Self::delete_seed_by_domain).
     pub async fn list_seed_by_domain(

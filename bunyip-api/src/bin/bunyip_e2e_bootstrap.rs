@@ -1,49 +1,44 @@
-//! bunyip-e2e-bootstrap - idempotent seeding of the E2E test accounts.
+//! bunyip-e2e-bootstrap - seed the E2E accounts by loading the committed
+//! `seed/e2e.json` template through the file-driven seed loader (PSA-56;
+//! formerly a hardcoded upsert in this bin).
 //!
-//! Standalone binary (NOT a server subcommand) that the Playwright suite
-//! (BUNYIP-52) relies on. It upserts the two accounts the suite logs in as:
-//!
+//! Standalone binary the Playwright suite (BUNYIP-52) relies on. It seeds the
+//! two accounts the suite logs in as:
 //!   - `e2e-user@a8n.run`  (subscriber)
 //!   - `e2e-admin@a8n.run` (admin)
 //!
-//! Both share one Argon2-hashed password read from the environment. CI injects
-//! that value from Infisical `/bunyip/e2e/test_user_password` into
-//! `BUNYIP_E2E_TEST_USER_PASSWORD` (the `_FILE` secret convention is honoured
-//! too), so the plaintext never lives in a fixture or in this repo.
+//! The accounts, their roles, and the password source now live in the committed
+//! `seed/e2e.json`, not in this bin. Both share one Argon2 password the loader
+//! reads from `BUNYIP_E2E_TEST_USER_PASSWORD` (via the template's `password_env`;
+//! the `_FILE` secret convention is honoured), so the plaintext never lives in a
+//! fixture or the repo. CI injects it from Infisical `/bunyip/e2e/test_user_password`.
 //!
-//! Safety: the tool refuses to run unless BOTH of these hold, so it can never
-//! touch a production database:
+//! Safety: refuses to run unless BOTH of these hold, so it can never touch a
+//! production database:
 //!   1. `BUNYIP_E2E_BOOTSTRAP_ALLOW=true`
-//!   2. a non-production `ENVIRONMENT`. `Config` defaults `ENVIRONMENT` to
-//!      `production` when it is unset, so "unset" is treated as production and
-//!      blocked; `production` and `prod` are blocked explicitly.
+//!   2. a non-production `ENVIRONMENT`. `Config` defaults it to `production` when
+//!      unset, so "unset" is treated as production and blocked.
+//!
+//! The template scopes its `owns` to the two exact emails, so `--cleanup` (a
+//! seed reset) can only ever delete those two accounts.
 //!
 //! Usage:
 //!   bunyip-e2e-bootstrap            seed / refresh the accounts (idempotent)
-//!   bunyip-e2e-bootstrap --dry-run  print what would change, write nothing
-//!   bunyip-e2e-bootstrap --cleanup  delete the accounts by exact email match
+//!   bunyip-e2e-bootstrap --dry-run  validate the template, write nothing
+//!   bunyip-e2e-bootstrap --cleanup  delete the accounts (their `owns` scope)
 //!   bunyip-e2e-bootstrap --help     show this message
-//!
-//! `--cleanup` and `--dry-run` may be combined to preview a deletion.
 
 use std::time::Duration;
 
 use anyhow::{bail, Context};
 use sqlx::postgres::PgPoolOptions;
-use sqlx::PgPool;
 
 use bunyip_api::config::{secret_env, Config};
-use bunyip_api::models::UserRole;
-use bunyip_api::repositories::UserRepository;
-use bunyip_api::services::PasswordService;
+use bunyip_api::seed;
 
-/// The two accounts the suite drives. Emails are lowercase literals so the
-/// exact-match `ON CONFLICT (email)` / cleanup `WHERE email = $1` line up with
-/// what gets inserted.
-const ACCOUNTS: [(&str, UserRole); 2] = [
-    (bunyip_api::E2E_ACCOUNT_EMAILS[0], UserRole::Subscriber),
-    (bunyip_api::E2E_ACCOUNT_EMAILS[1], UserRole::Admin),
-];
+/// The committed E2E seed template: the two accounts, owning their exact emails,
+/// sourcing the shared password from `BUNYIP_E2E_TEST_USER_PASSWORD`.
+const E2E_TEMPLATE: &str = include_str!("../../seed/e2e.json");
 
 struct Options {
     cleanup: bool,
@@ -71,12 +66,12 @@ fn parse_args() -> anyhow::Result<Options> {
 
 fn print_help() {
     println!(
-        "bunyip-e2e-bootstrap - seed the BUNYIP-52 E2E test accounts\n\n\
+        "bunyip-e2e-bootstrap - seed the BUNYIP-52 E2E test accounts from seed/e2e.json\n\n\
          USAGE:\n\
          \x20   bunyip-e2e-bootstrap [--cleanup] [--dry-run] [--help]\n\n\
          FLAGS:\n\
-         \x20   --cleanup   delete the test accounts by exact email match\n\
-         \x20   --dry-run   print the actions without writing anything\n\
+         \x20   --cleanup   delete the test accounts (the template's owns scope)\n\
+         \x20   --dry-run   validate the template and print the action, write nothing\n\
          \x20   --help      show this message\n\n\
          Requires BUNYIP_E2E_BOOTSTRAP_ALLOW=true and a non-production ENVIRONMENT.\n\
          The shared password is read from BUNYIP_E2E_TEST_USER_PASSWORD."
@@ -93,6 +88,24 @@ async fn main() -> anyhow::Result<()> {
 
     enforce_guards(&config)?;
 
+    // Parse + validate the committed template up front (this is also the whole
+    // of the dry-run's work).
+    let file = seed::parse(E2E_TEMPLATE)
+        .map_err(|e| anyhow::anyhow!("e2e.json template is invalid: {e}"))?;
+
+    if opts.dry_run {
+        let owns = file.effective_owns();
+        if opts.cleanup {
+            println!("[dry-run] would delete the E2E accounts {:?}", owns.emails);
+        } else {
+            println!(
+                "[dry-run] would seed {} E2E accounts from the template",
+                file.users.len()
+            );
+        }
+        return Ok(());
+    }
+
     let pool = PgPoolOptions::new()
         .max_connections(2)
         .acquire_timeout(Duration::from_secs(5))
@@ -104,10 +117,21 @@ async fn main() -> anyhow::Result<()> {
     // not run them (avoids racing the api's migrator in CI).
 
     if opts.cleanup {
-        cleanup(&pool, opts.dry_run).await
+        let s = seed::reset(&pool, &file.effective_owns())
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        println!(
+            "cleaned up: removed {} accounts, {} feedback",
+            s.users, s.feedback
+        );
     } else {
-        seed(&pool, opts.dry_run).await
+        let s = seed::load(&pool, &file)
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        println!("seeded {} E2E accounts", s.users);
     }
+
+    Ok(())
 }
 
 /// Refuse to run against anything that could be production. Both checks live
@@ -118,9 +142,9 @@ async fn main() -> anyhow::Result<()> {
 /// while pointing `DATABASE_URL` at a production database would NOT be caught
 /// here. Validating that would mean teaching the tool which DB hosts are
 /// production, which is brittle and drifts. The blast radius is bounded: the
-/// tool only ever touches the two known `e2e-*@a8n.run` rows and `--cleanup`
-/// deletes only those exact emails, so a misfire cannot harm real user data.
-/// If that ever stops holding, add a DATABASE_URL allow-list here.
+/// template owns only the two `e2e-*@a8n.run` emails and `--cleanup` deletes
+/// exactly those (the reset guardrail forbids a whole-domain delete of a
+/// non-reserved domain), so a misfire cannot harm real user data.
 fn enforce_guards(config: &Config) -> anyhow::Result<()> {
     let allowed = secret_env("BUNYIP_E2E_BOOTSTRAP_ALLOW")
         .map(|v| v.trim() == "true")
@@ -143,102 +167,27 @@ fn enforce_guards(config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Upsert both accounts. Idempotent: a re-run resets the password, role, and
-/// verified flag and revives a previously cleaned-up row, so CI re-runs are
-/// no-ops in effect.
-async fn seed(pool: &PgPool, dry_run: bool) -> anyhow::Result<()> {
-    let raw_password = secret_env("BUNYIP_E2E_TEST_USER_PASSWORD").context(
-        "BUNYIP_E2E_TEST_USER_PASSWORD is unset (CI injects it from Infisical /bunyip/e2e/test_user_password)",
-    )?;
-    // Trim before hashing. The E2E suite logs in with the TRIMMED password
-    // (e2e/lib/env.ts `required()` returns `value.trim()`), and bunyip's login
-    // trims the email but NOT the password. If the seed value carried trailing
-    // whitespace (a newline from a secret-store fetch / file / paste is common),
-    // the stored hash would be for "P\n" while the suite sends "P", failing
-    // login with a confusing "email or password incorrect". Trimming both sides
-    // removes the mismatch; passwords carry no meaningful surrounding whitespace.
-    let password = raw_password.trim();
-    if password.is_empty() {
-        bail!("BUNYIP_E2E_TEST_USER_PASSWORD is empty");
+#[cfg(test)]
+mod tests {
+    use super::E2E_TEMPLATE;
+
+    #[test]
+    fn e2e_template_is_valid_and_email_scoped() {
+        let f = bunyip_api::seed::parse(E2E_TEMPLATE).expect("e2e.json must be a valid seed file");
+        assert_eq!(f.users.len(), 2);
+        assert!(
+            f.users
+                .iter()
+                .all(|u| u.password_env.as_deref() == Some("BUNYIP_E2E_TEST_USER_PASSWORD")),
+            "both accounts source the password from the env var, not a committed literal"
+        );
+        let owns = f.effective_owns();
+        // Scoped by the two exact emails, never a whole domain, so a reset can
+        // only ever reclaim these two accounts (the guardrail forbids a
+        // whole-domain reset of a real domain like a8n.run).
+        assert!(owns.domains.is_empty());
+        assert_eq!(owns.emails.len(), 2);
+        assert!(owns.covers("e2e-user@a8n.run"));
+        assert!(owns.covers("e2e-admin@a8n.run"));
     }
-
-    // Hash once: both accounts share the password, so one PHC string suffices.
-    let password_hash = PasswordService::new()
-        .hash(password)
-        .context("failed to hash the test password")?;
-
-    for (email, role) in ACCOUNTS {
-        if dry_run {
-            let exists = email_exists(pool, email).await?;
-            let verb = if exists { "update" } else { "create" };
-            println!("[dry-run] would {verb} {email} (role={})", role.as_str());
-            continue;
-        }
-
-        sqlx::query(
-            r#"
-            INSERT INTO users (email, password_hash, role, email_verified)
-            VALUES ($1, $2, $3, TRUE)
-            -- email uniqueness is a PARTIAL index (users_email_unique_active,
-            -- migration 20260324000029): UNIQUE (email) WHERE deleted_at IS NULL.
-            -- The conflict target must carry the same predicate, or Postgres
-            -- rejects it with "no unique or exclusion constraint matching".
-            ON CONFLICT (email) WHERE deleted_at IS NULL DO UPDATE SET
-                password_hash = EXCLUDED.password_hash,
-                role          = EXCLUDED.role,
-                email_verified = TRUE,
-                deleted_at    = NULL,
-                updated_at    = NOW()
-            "#,
-        )
-        .bind(email)
-        .bind(&password_hash)
-        .bind(role.as_str())
-        .execute(pool)
-        .await
-        .with_context(|| format!("failed to upsert {email}"))?;
-
-        println!("seeded {email} (role={})", role.as_str());
-    }
-
-    Ok(())
-}
-
-/// Hard-delete both accounts by exact email match.
-async fn cleanup(pool: &PgPool, dry_run: bool) -> anyhow::Result<()> {
-    for (email, _role) in ACCOUNTS {
-        if dry_run {
-            let exists = email_exists(pool, email).await?;
-            if exists {
-                println!("[dry-run] would delete {email}");
-            } else {
-                println!("[dry-run] {email} absent, nothing to delete");
-            }
-            continue;
-        }
-
-        // Shared hard-delete path (BUNYIP-246): also clears the non-cascade
-        // audit_logs rows that would otherwise block `DELETE FROM users`.
-        let removed = UserRepository::hard_delete_by_email(pool, email)
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to delete {email}: {e}"))?;
-
-        if removed > 0 {
-            println!("deleted {email}");
-        } else {
-            println!("{email} absent, nothing to delete");
-        }
-    }
-
-    Ok(())
-}
-
-/// Exact-email existence check used by the dry-run paths.
-async fn email_exists(pool: &PgPool, email: &str) -> anyhow::Result<bool> {
-    let found: Option<(uuid::Uuid,)> = sqlx::query_as("SELECT id FROM users WHERE email = $1")
-        .bind(email)
-        .fetch_optional(pool)
-        .await
-        .with_context(|| format!("failed to look up {email}"))?;
-    Ok(found.is_some())
 }

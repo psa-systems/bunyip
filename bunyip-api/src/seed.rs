@@ -2,14 +2,20 @@
 //!
 //! Seed data lives as a JSON file, not in code. This module is the foundation
 //! the loader and `seed` CLI build on: it defines the canonical schema, parses
-//! and validates a file (structure plus referential integrity), decides the
-//! reserved-domain reset scope, and enforces the non-production guard. The DB
-//! loader that turns a validated [`SeedFile`] into rows through the domain
-//! repositories lands on top of this.
+//! and validates a file (structure plus referential integrity), derives the
+//! reset scope from the file's declared `owns`, and enforces the non-production
+//! guard. The DB loader that turns a validated [`SeedFile`] into rows through
+//! the domain repositories lands on top of this.
 //!
 //! Two safety invariants are enforced here, before any row is written:
-//!   - Every seeded user email sits under [`SEED_EMAIL_DOMAIN`], so a reset can
-//!     scope to exactly the seed rows and never touch a real account.
+//!   - Every seeded user (and feedback-author) email is covered by the file's
+//!     declared `owns` scope - its email domains plus explicit emails,
+//!     defaulting to the reserved [`SEED_EMAIL_DOMAIN`] when a file omits it
+//!     (PSA-56). A reset reclaims exactly what the file owns, so no file can
+//!     touch another's rows. This is weaker than the pre-PSA-56 hardcoded
+//!     reserved domain: a file may own a real domain (the E2E accounts own
+//!     `@a8n.run`), so reset safety now rests on the non-production guard plus
+//!     files being trusted and scoping real domains via explicit emails.
 //!   - Import/reset refuse to run against a production (or unset) environment.
 
 use std::collections::HashSet;
@@ -59,6 +65,13 @@ pub struct SeedFile {
     /// loader via the real `PasswordService`; never stored pre-hashed.
     #[serde(default)]
     pub default_password: Option<String>,
+    /// Email domains and explicit emails this file is allowed to create and a
+    /// reset may reclaim (PSA-56). When omitted it defaults to the reserved seed
+    /// domain (back-compat). Every user and feedback-author email must be
+    /// covered by this scope, so a reset deletes exactly what the file created
+    /// and one file can never reclaim another's rows.
+    #[serde(default)]
+    pub owns: SeedOwns,
     #[serde(default)]
     pub application_groups: Vec<SeedGroup>,
     #[serde(default)]
@@ -69,6 +82,47 @@ pub struct SeedFile {
     pub entitlements: Vec<SeedEntitlement>,
     #[serde(default)]
     pub feedback: Vec<SeedFeedback>,
+}
+
+/// The reclaim scope a seed file declares (PSA-56): the email domains and the
+/// explicit emails it owns. `covers` decides whether an email belongs to the
+/// file, and a reset targets exactly this set.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeedOwns {
+    /// Owned email domains, WITHOUT the leading `@` (e.g. `demo.psa-systems.test`).
+    #[serde(default)]
+    pub domains: Vec<String>,
+    /// Owned individual emails, for files (like the E2E accounts) that seed a
+    /// fixed set of addresses rather than a whole domain.
+    #[serde(default)]
+    pub emails: Vec<String>,
+}
+
+impl SeedOwns {
+    /// The default scope when a file declares no `owns`: the reserved seed
+    /// domain, preserving pre-PSA-56 behaviour for files that omit the block.
+    pub fn reserved() -> Self {
+        SeedOwns {
+            domains: vec![SEED_EMAIL_DOMAIN.to_string()],
+            emails: Vec::new(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.domains.is_empty() && self.emails.is_empty()
+    }
+
+    /// True when `email` sits under an owned domain or matches an owned email
+    /// (both case-insensitive). Domain matching anchors on `@` so a sibling
+    /// domain (`x@evil-demo.psa-systems.test`) can never sneak in.
+    pub fn covers(&self, email: &str) -> bool {
+        let lower = email.to_ascii_lowercase();
+        self.domains
+            .iter()
+            .any(|d| lower.ends_with(&format!("@{}", d.to_ascii_lowercase())))
+            || self.emails.iter().any(|e| e.to_ascii_lowercase() == lower)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -125,6 +179,12 @@ pub struct SeedUser {
     /// Per-user override of `default_password`.
     #[serde(default)]
     pub password: Option<String>,
+    /// Name of an environment variable to read the password from at load time
+    /// (honouring the `_FILE` convention, like `secret_env`), so a secret stays
+    /// out of the committed file (PSA-56). Takes precedence over `password` /
+    /// `default_password` when set. Used by the E2E template.
+    #[serde(default)]
+    pub password_env: Option<String>,
     #[serde(default)]
     pub membership: SeedMembership,
 }
@@ -161,7 +221,8 @@ pub struct SeedEntitlement {
 pub struct SeedFeedback {
     #[serde(default)]
     pub name: Option<String>,
-    /// If set, must be under [`SEED_EMAIL_DOMAIN`] so a reset can reclaim it.
+    /// Required by validation and must be covered by the file's `owns` scope,
+    /// so a reset can reclaim it (an email-less row would leak).
     #[serde(default)]
     pub email: Option<String>,
     #[serde(default)]
@@ -185,7 +246,9 @@ fn default_role() -> String {
 }
 
 /// True when `email` sits under the reserved seed domain (case-insensitive).
-/// The reset scope and the seed-only invariant both key on this.
+/// This is the reserved-domain default only; validation and reset key on the
+/// file's declared `owns` scope ([`SeedOwns::covers`]) since PSA-56, so this is
+/// retained for the default / back-compat path.
 pub fn is_seed_email(email: &str) -> bool {
     email
         .to_ascii_lowercase()
@@ -230,6 +293,17 @@ pub fn parse(json: &str) -> Result<SeedFile, SeedError> {
 }
 
 impl SeedFile {
+    /// The file's declared reclaim scope, or the reserved-domain default when
+    /// it declares none (PSA-56 back-compat). Validation, the loader's
+    /// feedback-clear, and reset all key on this.
+    pub fn effective_owns(&self) -> SeedOwns {
+        if self.owns.is_empty() {
+            SeedOwns::reserved()
+        } else {
+            self.owns.clone()
+        }
+    }
+
     /// Structural + referential integrity. Collects every problem so the
     /// operator sees them all at once, not one per run.
     pub fn validate(&self) -> Result<(), SeedError> {
@@ -257,17 +331,35 @@ impl SeedFile {
             }
         }
 
+        let owns = self.effective_owns();
+        // `owns.domains` may only name the reserved domain: a whole-domain reset
+        // is refused for any other (real) domain, so a real domain must be
+        // scoped via `owns.emails`. Enforce it here so a file fails at parse
+        // rather than validating and then failing at load (PSA-56 review).
+        for d in &owns.domains {
+            if !domain_reset_allowed(d) {
+                errs.push(format!(
+                    "owns.domains may only contain the reserved domain '{SEED_EMAIL_DOMAIN}'; scope a real domain like '{d}' via owns.emails so a reset cannot reclaim every account under it"
+                ));
+            }
+        }
         let mut user_emails: HashSet<String> = HashSet::new();
         for u in &self.users {
             let lower = u.email.to_ascii_lowercase();
-            if !is_seed_email(&u.email) {
+            if !owns.covers(&u.email) {
                 errs.push(format!(
-                    "user '{}' is not under the reserved seed domain @{SEED_EMAIL_DOMAIN}; reset could not reclaim it",
-                    u.email
+                    "user '{}' is not covered by the file's `owns` scope (domains {:?}, emails {:?}); a reset could not reclaim it",
+                    u.email, owns.domains, owns.emails
                 ));
             }
             if !user_emails.insert(lower) {
                 errs.push(format!("duplicate user email '{}'", u.email));
+            }
+            // A `password_env` reference, when present, must name a variable.
+            if let Some(var) = &u.password_env {
+                if var.trim().is_empty() {
+                    errs.push(format!("user '{}' has an empty password_env", u.email));
+                }
             }
             // Reject enum typos loudly (the loader would otherwise map an unknown
             // value to a silent default: subscriber / none / free).
@@ -321,10 +413,10 @@ impl SeedFile {
             }
             match &f.email {
                 None => errs.push(format!(
-                    "feedback[{i}] has no author email; seed feedback must carry a seed-domain email so a reset can reclaim it"
+                    "feedback[{i}] has no author email; seed feedback must carry an owned email so a reset can reclaim it"
                 )),
-                Some(email) if !is_seed_email(email) => errs.push(format!(
-                    "feedback[{i}] author email '{email}' is not under @{SEED_EMAIL_DOMAIN}; reset could not reclaim it"
+                Some(email) if !owns.covers(email) => errs.push(format!(
+                    "feedback[{i}] author email '{email}' is not covered by the file's `owns` scope; a reset could not reclaim it"
                 )),
                 Some(_) => {}
             }
@@ -407,6 +499,16 @@ pub enum LoadError {
         value: String,
         source: String,
     },
+    /// A reset targeted a whole non-reserved domain, which the guardrail refuses
+    /// (real domains must be reset via explicit `owns.emails`, PSA-56).
+    UnsafeReset(String),
+    /// A user's `password_env` names an environment variable that is unset.
+    PasswordEnvUnset {
+        email: String,
+        var: String,
+    },
+    /// A user's resolved password was empty (would seed a broken account).
+    EmptyPassword(String),
     Db(AppError),
 }
 
@@ -427,6 +529,14 @@ impl fmt::Display for LoadError {
             LoadError::Reference(m) => write!(f, "unresolved reference: {m}"),
             LoadError::BadTimestamp { value, source } => {
                 write!(f, "invalid RFC3339 timestamp '{value}' ({source})")
+            }
+            LoadError::UnsafeReset(m) => write!(f, "{m}"),
+            LoadError::PasswordEnvUnset { email, var } => write!(
+                f,
+                "user '{email}' sources its password from env var '{var}', which is unset"
+            ),
+            LoadError::EmptyPassword(email) => {
+                write!(f, "user '{email}' resolved an empty password")
             }
             LoadError::Db(e) => write!(f, "database error: {e}"),
         }
@@ -467,6 +577,29 @@ fn parse_ts(value: &Option<String>, source: &str) -> Result<Option<DateTime<Utc>
                 source: source.to_string(),
             }),
     }
+}
+
+/// Resolve a seed user's password: an env-var reference (a secret, `_FILE`-aware
+/// via `secret_env`) wins, then a literal per-user password, then the file
+/// default. Rejects an unset env var and an empty resolved value so a
+/// misconfigured secret fails loud instead of seeding a broken, empty-password
+/// account (PSA-56 review). Trimming happens at the hash call site.
+fn resolve_password(user: &SeedUser, default_password: Option<&str>) -> Result<String, LoadError> {
+    let raw = match &user.password_env {
+        Some(var) => crate::config::secret_env(var).ok_or_else(|| LoadError::PasswordEnvUnset {
+            email: user.email.clone(),
+            var: var.clone(),
+        })?,
+        None => user
+            .password
+            .clone()
+            .or_else(|| default_password.map(str::to_string))
+            .ok_or_else(|| LoadError::MissingPassword(user.email.clone()))?,
+    };
+    if raw.trim().is_empty() {
+        return Err(LoadError::EmptyPassword(user.email.clone()));
+    }
+    Ok(raw)
 }
 
 /// Load a validated [`SeedFile`] into the database through the domain
@@ -553,11 +686,11 @@ pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadErr
 
     // 3. Users (upsert by email), then apply verified/profile/membership state.
     for u in &file.users {
-        let raw_password = u
-            .password
-            .as_deref()
-            .or(file.default_password.as_deref())
-            .ok_or_else(|| LoadError::MissingPassword(u.email.clone()))?;
+        // Resolve the password: an env-var reference (a secret, `_FILE`-aware
+        // via secret_env) wins, then a literal per-user password, then the file
+        // default. Trimmed before hashing so a newline from a secret store does
+        // not diverge from what the login path sends (PSA-56).
+        let raw_password = resolve_password(u, file.default_password.as_deref())?;
         let hash = hasher
             .hash(raw_password.trim())
             .map_err(|e| LoadError::Hash(e.to_string()))?;
@@ -628,9 +761,9 @@ pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadErr
         summary.entitlements += 1;
     }
 
-    // 5. Feedback: clear prior seed feedback (by domain), then insert fresh, so
-    //    re-import stays idempotent (feedback has no natural key).
-    FeedbackRepository::delete_seed_by_domain(pool, SEED_EMAIL_DOMAIN).await?;
+    // 5. Feedback: clear prior owned feedback, then insert fresh, so re-import
+    //    stays idempotent (feedback has no natural key).
+    delete_owned_feedback(pool, &file.effective_owns()).await?;
     for fb in &file.feedback {
         FeedbackRepository::create(
             pool,
@@ -651,13 +784,61 @@ pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadErr
     Ok(summary)
 }
 
-/// Remove all seed data reclaimable by the reserved domain: seed users (with
-/// their cascaded dependencies) and seed feedback. Catalog groups/applications
-/// are shared config and are left intact - deleting a catalog app could orphan
-/// a real user's entitlement.
-pub async fn reset(pool: &PgPool) -> Result<ResetSummary, LoadError> {
-    let users = UserRepository::hard_delete_seed_users(pool, SEED_EMAIL_DOMAIN).await?;
-    let feedback = FeedbackRepository::delete_seed_by_domain(pool, SEED_EMAIL_DOMAIN).await?;
+/// Whether a domain may be reset by a whole-domain delete. Only the reserved
+/// seed domain qualifies; any other (potentially real) domain must be reset via
+/// explicit `owns.emails`, so a file can never delete every account under a real
+/// domain like `a8n.run` (PSA-56). The E2E template owns its two accounts as
+/// explicit emails precisely for this reason.
+fn domain_reset_allowed(domain: &str) -> bool {
+    domain.eq_ignore_ascii_case(SEED_EMAIL_DOMAIN)
+}
+
+/// Delete the users an `owns` scope covers (guardrailed): whole-domain delete
+/// for the reserved domain, exact-email delete for explicit emails. A
+/// non-reserved domain is refused. Returns the rows removed.
+async fn delete_owned_users(pool: &PgPool, owns: &SeedOwns) -> Result<u64, LoadError> {
+    let mut removed = 0u64;
+    for domain in &owns.domains {
+        if !domain_reset_allowed(domain) {
+            return Err(LoadError::UnsafeReset(format!(
+                "refusing to reset the whole domain '{domain}': only '{SEED_EMAIL_DOMAIN}' may be reset by domain; scope real domains via explicit owns.emails"
+            )));
+        }
+        removed += UserRepository::hard_delete_seed_users(pool, domain).await?;
+    }
+    for email in &owns.emails {
+        removed += UserRepository::hard_delete_by_email(pool, email).await?;
+    }
+    Ok(removed)
+}
+
+/// Delete the feedback an `owns` scope covers, with the same guardrail as
+/// [`delete_owned_users`]. Used by both reset and the loader's idempotent
+/// feedback-clear.
+async fn delete_owned_feedback(pool: &PgPool, owns: &SeedOwns) -> Result<u64, LoadError> {
+    let mut removed = 0u64;
+    for domain in &owns.domains {
+        if !domain_reset_allowed(domain) {
+            return Err(LoadError::UnsafeReset(format!(
+                "refusing to clear feedback for the whole domain '{domain}': only '{SEED_EMAIL_DOMAIN}' may be cleared by domain; scope real domains via explicit owns.emails"
+            )));
+        }
+        removed += FeedbackRepository::delete_seed_by_domain(pool, domain).await?;
+    }
+    for email in &owns.emails {
+        removed += FeedbackRepository::delete_by_email(pool, email).await?;
+    }
+    Ok(removed)
+}
+
+/// Remove all seed data an `owns` scope reclaims: the seed users (with their
+/// cascaded dependencies) and their feedback. Catalog groups/applications are
+/// shared config and are left intact - deleting a catalog app could orphan a
+/// real user's entitlement. Guardrailed: a whole-domain reset is only allowed
+/// for the reserved domain (PSA-56).
+pub async fn reset(pool: &PgPool, owns: &SeedOwns) -> Result<ResetSummary, LoadError> {
+    let feedback = delete_owned_feedback(pool, owns).await?;
+    let users = delete_owned_users(pool, owns).await?;
     Ok(ResetSummary { users, feedback })
 }
 
@@ -718,6 +899,7 @@ pub async fn export(pool: &PgPool, domain: &str) -> Result<SeedFile, LoadError> 
             // Hashes are never exportable; a re-import falls back to the file's
             // default_password.
             password: None,
+            password_env: None,
             membership: SeedMembership {
                 status: Some(u.membership_status.clone()),
                 tier: Some(u.subscription_tier.clone()),
@@ -753,6 +935,12 @@ pub async fn export(pool: &PgPool, domain: &str) -> Result<SeedFile, LoadError> 
     Ok(SeedFile {
         version: SEED_SCHEMA_VERSION,
         default_password: Some("change-me-after-import".to_string()),
+        // The export owns exactly the domain it was scoped to, so a re-import
+        // validates and a later reset reclaims the same set (PSA-56).
+        owns: SeedOwns {
+            domains: vec![domain.to_string()],
+            emails: Vec::new(),
+        },
         application_groups,
         applications,
         users: seed_users,
@@ -863,7 +1051,7 @@ mod tests {
         let json = SAMPLE.replace("ada@demo.psa-systems.test", "ada@real-company.com");
         match parse(&json) {
             Err(SeedError::Validation(errs)) => {
-                assert!(errs.iter().any(|e| e.contains("reserved seed domain")));
+                assert!(errs.iter().any(|e| e.contains("owns")));
             }
             other => panic!("expected Validation, got {other:?}"),
         }
@@ -918,7 +1106,7 @@ mod tests {
         match parse(json) {
             Err(SeedError::Validation(errs)) => {
                 assert!(errs.iter().any(|e| e.contains("empty message")));
-                assert!(errs.iter().any(|e| e.contains("not under")));
+                assert!(errs.iter().any(|e| e.contains("owns")));
             }
             other => panic!("expected Validation, got {other:?}"),
         }
@@ -960,6 +1148,141 @@ mod tests {
         match parse(json) {
             Err(SeedError::Validation(errs)) => {
                 assert!(errs.iter().any(|e| e.contains("no author email")));
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn owns_covers_domains_and_explicit_emails() {
+        let owns = SeedOwns {
+            domains: vec!["demo.psa-systems.test".into()],
+            emails: vec!["e2e-user@a8n.run".into()],
+        };
+        assert!(owns.covers("x@demo.psa-systems.test"));
+        assert!(owns.covers("X@DEMO.PSA-SYSTEMS.TEST"));
+        assert!(owns.covers("E2E-User@A8N.run")); // explicit email, case-insensitive
+        assert!(!owns.covers("someone@a8n.run")); // a8n.run domain not owned, only the one email
+        assert!(!owns.covers("x@evil-demo.psa-systems.test")); // sibling domain, no `@` anchor match
+    }
+
+    #[test]
+    fn validation_accepts_owned_explicit_emails() {
+        // The E2E-style file: owns two explicit @a8n.run emails and seeds exactly
+        // them. They are not under the reserved demo domain but ARE owned.
+        let json = r#"{
+          "version": 1,
+          "owns": { "emails": ["e2e-user@a8n.run", "e2e-admin@a8n.run"] },
+          "users": [
+            {"email": "e2e-user@a8n.run", "role": "subscriber", "password_env": "BUNYIP_E2E_TEST_USER_PASSWORD"},
+            {"email": "e2e-admin@a8n.run", "role": "admin", "password_env": "BUNYIP_E2E_TEST_USER_PASSWORD"}
+          ]
+        }"#;
+        let f = parse(json).expect("owned explicit emails must validate");
+        assert_eq!(f.users.len(), 2);
+        assert_eq!(
+            f.users[0].password_env.as_deref(),
+            Some("BUNYIP_E2E_TEST_USER_PASSWORD")
+        );
+    }
+
+    #[test]
+    fn validation_rejects_email_outside_owns() {
+        // owns only the demo domain, but a user is @a8n.run -> not reclaimable.
+        let json = r#"{
+          "version": 1,
+          "owns": { "domains": ["demo.psa-systems.test"] },
+          "default_password": "p",
+          "users": [ {"email": "stray@a8n.run", "role": "subscriber"} ]
+        }"#;
+        match parse(json) {
+            Err(SeedError::Validation(errs)) => {
+                assert!(errs.iter().any(|e| e.contains("owns")));
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validation_rejects_empty_password_env() {
+        let json = r#"{
+          "version": 1,
+          "owns": { "emails": ["u@x.test"] },
+          "users": [ {"email": "u@x.test", "role": "subscriber", "password_env": "  "} ]
+        }"#;
+        match parse(json) {
+            Err(SeedError::Validation(errs)) => {
+                assert!(errs.iter().any(|e| e.contains("empty password_env")));
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn domain_reset_allowed_only_for_reserved() {
+        // The guardrail: only the reserved domain may be reset by whole domain;
+        // a real domain must be reset via explicit emails (PSA-56).
+        assert!(domain_reset_allowed("demo.psa-systems.test"));
+        assert!(domain_reset_allowed("DEMO.PSA-SYSTEMS.TEST"));
+        assert!(!domain_reset_allowed("a8n.run"));
+        assert!(!domain_reset_allowed("gmail.com"));
+    }
+
+    #[test]
+    fn resolve_password_rejects_empty_and_unset_env() {
+        // Pull a SeedUser out of a one-user file with the given extra fields.
+        let mk = |extra: &str| -> SeedUser {
+            let json = format!(
+                r#"{{"version":1,"owns":{{"emails":["u@x.test"]}},"users":[{{"email":"u@x.test","role":"subscriber"{extra}}}]}}"#
+            );
+            parse(&json)
+                .expect("valid one-user file")
+                .users
+                .into_iter()
+                .next()
+                .unwrap()
+        };
+
+        assert_eq!(
+            resolve_password(&mk(r#","password":"secret""#), None).unwrap(),
+            "secret"
+        );
+        assert_eq!(resolve_password(&mk(""), Some("dflt")).unwrap(), "dflt");
+        // An empty literal password would seed a broken account -> rejected.
+        assert!(matches!(
+            resolve_password(&mk(r#","password":"  ""#), None),
+            Err(LoadError::EmptyPassword(_))
+        ));
+        // No password anywhere.
+        assert!(matches!(
+            resolve_password(&mk(""), None),
+            Err(LoadError::MissingPassword(_))
+        ));
+        // password_env pointing at an unset var fails loud and specifically.
+        assert!(matches!(
+            resolve_password(
+                &mk(r#","password_env":"BUNYIP_SEED_DEFINITELY_UNSET_VAR_zzz""#),
+                None
+            ),
+            Err(LoadError::PasswordEnvUnset { .. })
+        ));
+    }
+
+    #[test]
+    fn validation_rejects_nonreserved_owns_domain() {
+        // A real domain must be scoped via owns.emails, not owns.domains, so a
+        // reset can never reclaim every account under it (PSA-56 guardrail).
+        let json = r#"{
+          "version": 1,
+          "owns": { "domains": ["a8n.run"] },
+          "default_password": "p",
+          "users": [ {"email": "x@a8n.run", "role": "subscriber"} ]
+        }"#;
+        match parse(json) {
+            Err(SeedError::Validation(errs)) => {
+                assert!(errs
+                    .iter()
+                    .any(|e| e.contains("owns.domains may only contain the reserved domain")));
             }
             other => panic!("expected Validation, got {other:?}"),
         }
