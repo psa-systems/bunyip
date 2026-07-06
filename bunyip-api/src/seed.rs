@@ -2,14 +2,20 @@
 //!
 //! Seed data lives as a JSON file, not in code. This module is the foundation
 //! the loader and `seed` CLI build on: it defines the canonical schema, parses
-//! and validates a file (structure plus referential integrity), decides the
-//! reserved-domain reset scope, and enforces the non-production guard. The DB
-//! loader that turns a validated [`SeedFile`] into rows through the domain
-//! repositories lands on top of this.
+//! and validates a file (structure plus referential integrity), derives the
+//! reset scope from the file's declared `owns`, and enforces the non-production
+//! guard. The DB loader that turns a validated [`SeedFile`] into rows through
+//! the domain repositories lands on top of this.
 //!
 //! Two safety invariants are enforced here, before any row is written:
-//!   - Every seeded user email sits under [`SEED_EMAIL_DOMAIN`], so a reset can
-//!     scope to exactly the seed rows and never touch a real account.
+//!   - Every seeded user (and feedback-author) email is covered by the file's
+//!     declared `owns` scope - its email domains plus explicit emails,
+//!     defaulting to the reserved [`SEED_EMAIL_DOMAIN`] when a file omits it
+//!     (PSA-56). A reset reclaims exactly what the file owns, so no file can
+//!     touch another's rows. This is weaker than the pre-PSA-56 hardcoded
+//!     reserved domain: a file may own a real domain (the E2E accounts own
+//!     `@a8n.run`), so reset safety now rests on the non-production guard plus
+//!     files being trusted and scoping real domains via explicit emails.
 //!   - Import/reset refuse to run against a production (or unset) environment.
 
 use std::collections::HashSet;
@@ -215,7 +221,8 @@ pub struct SeedEntitlement {
 pub struct SeedFeedback {
     #[serde(default)]
     pub name: Option<String>,
-    /// If set, must be under [`SEED_EMAIL_DOMAIN`] so a reset can reclaim it.
+    /// Required by validation and must be covered by the file's `owns` scope,
+    /// so a reset can reclaim it (an email-less row would leak).
     #[serde(default)]
     pub email: Option<String>,
     #[serde(default)]
@@ -239,7 +246,9 @@ fn default_role() -> String {
 }
 
 /// True when `email` sits under the reserved seed domain (case-insensitive).
-/// The reset scope and the seed-only invariant both key on this.
+/// This is the reserved-domain default only; validation and reset key on the
+/// file's declared `owns` scope ([`SeedOwns::covers`]) since PSA-56, so this is
+/// retained for the default / back-compat path.
 pub fn is_seed_email(email: &str) -> bool {
     email
         .to_ascii_lowercase()
