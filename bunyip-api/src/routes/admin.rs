@@ -161,7 +161,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/audit-logs", web::get().to(handlers::list_audit_logs))
             // Error log ring buffer (BUNYIP-327)
             .route("/logs", web::get().to(handlers::get_error_logs))
-            // Seed data import / export (PSA-52)
+            // Seed data import / export (PSA-52) + template library (PSA-57)
+            .route(
+                "/seed/templates",
+                web::get().to(handlers::list_seed_templates),
+            )
             .route("/seed/export", web::get().to(handlers::export_seed_data))
             // The import body is a whole seed file. Raise the payload cap well
             // above actix's 256 KiB `String`-extractor default - and above the

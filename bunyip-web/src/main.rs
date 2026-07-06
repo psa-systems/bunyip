@@ -200,6 +200,10 @@ async fn main() {
             "/admin/seed/import",
             axum::routing::post(handlers::admin::seed_import),
         )
+        .route(
+            "/admin/seed/template",
+            axum::routing::post(handlers::admin::seed_load_template),
+        )
         .route("/admin/ip-bans", get(handlers::admin::ip_bans))
         .route(
             "/admin/ip-bans/unban",

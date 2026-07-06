@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "default_password": "demo-access-2026",
+  "owns": { "domains": ["demo.psa-systems.test"] },
+  "application_groups": [
+    { "slug": "core", "name": "core", "display_name": "Core", "sort_order": 0 },
+    { "slug": "add-ons", "name": "add-ons", "display_name": "Add-ons", "sort_order": 1 }
+  ],
+  "applications": [
+    { "slug": "mokosh", "name": "mokosh", "display_name": "Mokosh", "container_name": "mokosh", "group_slug": "core", "description": "Mokosh for your MSP" },
+    { "slug": "bunyip", "name": "bunyip", "display_name": "Bunyip", "container_name": "bunyip", "group_slug": "core", "description": "Bunyip for your MSP" },
+    { "slug": "vault", "name": "vault", "display_name": "Vault", "container_name": "vault", "group_slug": "add-ons", "description": "Vault for your MSP" }
+  ],
+  "users": [
+    { "email": "admin@demo.psa-systems.test", "role": "admin", "verified": true, "first_name": "Demo", "last_name": "Admin", "membership": { "status": "none", "tier": "free" } },
+    { "email": "member@demo.psa-systems.test", "role": "subscriber", "verified": true, "first_name": "Demo", "last_name": "Member", "membership": { "status": "active", "tier": "standard" } },
+    { "email": "trial@demo.psa-systems.test", "role": "subscriber", "verified": false, "first_name": "Trial", "last_name": "User", "membership": { "status": "none", "tier": "free" } }
+  ]
+}

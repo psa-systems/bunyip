@@ -6,8 +6,8 @@ use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeedbackDetail,
     AdminFeedbackSummary, AdminIpBan, AdminMembership, AdminRateLimit, AdminStatsResponse,
     AdminUser, ApplicationGroup, ApplicationGroupList, ArchivedFeedback, ErrorLogsResponse,
-    FeedbackStatus, ImportSummary, PaginatedResponse, StripeConfigResponse, TierConfigResponse,
-    UserEntitlement,
+    FeedbackStatus, ImportSummary, PaginatedResponse, SeedTemplateInfo, StripeConfigResponse,
+    TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -500,6 +500,26 @@ pub async fn import_seed(
     file: Value,
 ) -> Result<ImportSummary, ApiError> {
     parse(api.post("/admin/seed/import", cookie, Some(file)).await?)
+}
+
+/// List the embedded seed templates (PSA-57) for the first-run setup picker.
+/// Wraps `GET /v1/admin/seed/templates`, whose `data` is a bare array.
+pub async fn seed_templates(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Vec<SeedTemplateInfo>, ApiError> {
+    parse(api.get("/admin/seed/templates", cookie).await?)
+}
+
+/// Load a named embedded template through the API loader (PSA-57). Sends the
+/// name as the `?template=` query with no body; the API 400s an unknown name.
+pub async fn import_seed_template(
+    api: &Api,
+    cookie: Option<&str>,
+    name: &str,
+) -> Result<ImportSummary, ApiError> {
+    let path = format!("/admin/seed/import?template={}", urlenc(name));
+    parse(api.post(&path, cookie, None).await?)
 }
 
 // --- IP auto-bans (BUNYIP-320) ----------------------------------------------

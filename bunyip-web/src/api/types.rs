@@ -383,6 +383,19 @@ pub struct ImportSummary {
     pub feedback: i64,
 }
 
+/// One embedded seed template as returned by `GET /v1/admin/seed/templates`
+/// (PSA-57): its name, description, and per-section counts, for the setup picker.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SeedTemplateInfo {
+    pub name: String,
+    pub description: String,
+    pub groups: i64,
+    pub applications: i64,
+    pub users: i64,
+    pub entitlements: i64,
+    pub feedback: i64,
+}
+
 /// One currently-active IP auto-ban as returned by `GET /v1/admin/ip-bans`
 /// (BUNYIP-320). Mirrors `bunyip_domain::middleware::auto_ban::BanInfo`: `ip`
 /// serializes as a string, `banned_at` / `expires_at` as RFC3339 timestamps.
