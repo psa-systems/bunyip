@@ -332,6 +332,17 @@ impl SeedFile {
         }
 
         let owns = self.effective_owns();
+        // `owns.domains` may only name the reserved domain: a whole-domain reset
+        // is refused for any other (real) domain, so a real domain must be
+        // scoped via `owns.emails`. Enforce it here so a file fails at parse
+        // rather than validating and then failing at load (PSA-56 review).
+        for d in &owns.domains {
+            if !domain_reset_allowed(d) {
+                errs.push(format!(
+                    "owns.domains may only contain the reserved domain '{SEED_EMAIL_DOMAIN}'; scope a real domain like '{d}' via owns.emails so a reset cannot reclaim every account under it"
+                ));
+            }
+        }
         let mut user_emails: HashSet<String> = HashSet::new();
         for u in &self.users {
             let lower = u.email.to_ascii_lowercase();
@@ -491,6 +502,13 @@ pub enum LoadError {
     /// A reset targeted a whole non-reserved domain, which the guardrail refuses
     /// (real domains must be reset via explicit `owns.emails`, PSA-56).
     UnsafeReset(String),
+    /// A user's `password_env` names an environment variable that is unset.
+    PasswordEnvUnset {
+        email: String,
+        var: String,
+    },
+    /// A user's resolved password was empty (would seed a broken account).
+    EmptyPassword(String),
     Db(AppError),
 }
 
@@ -513,6 +531,13 @@ impl fmt::Display for LoadError {
                 write!(f, "invalid RFC3339 timestamp '{value}' ({source})")
             }
             LoadError::UnsafeReset(m) => write!(f, "{m}"),
+            LoadError::PasswordEnvUnset { email, var } => write!(
+                f,
+                "user '{email}' sources its password from env var '{var}', which is unset"
+            ),
+            LoadError::EmptyPassword(email) => {
+                write!(f, "user '{email}' resolved an empty password")
+            }
             LoadError::Db(e) => write!(f, "database error: {e}"),
         }
     }
@@ -552,6 +577,29 @@ fn parse_ts(value: &Option<String>, source: &str) -> Result<Option<DateTime<Utc>
                 source: source.to_string(),
             }),
     }
+}
+
+/// Resolve a seed user's password: an env-var reference (a secret, `_FILE`-aware
+/// via `secret_env`) wins, then a literal per-user password, then the file
+/// default. Rejects an unset env var and an empty resolved value so a
+/// misconfigured secret fails loud instead of seeding a broken, empty-password
+/// account (PSA-56 review). Trimming happens at the hash call site.
+fn resolve_password(user: &SeedUser, default_password: Option<&str>) -> Result<String, LoadError> {
+    let raw = match &user.password_env {
+        Some(var) => crate::config::secret_env(var).ok_or_else(|| LoadError::PasswordEnvUnset {
+            email: user.email.clone(),
+            var: var.clone(),
+        })?,
+        None => user
+            .password
+            .clone()
+            .or_else(|| default_password.map(str::to_string))
+            .ok_or_else(|| LoadError::MissingPassword(user.email.clone()))?,
+    };
+    if raw.trim().is_empty() {
+        return Err(LoadError::EmptyPassword(user.email.clone()));
+    }
+    Ok(raw)
 }
 
 /// Load a validated [`SeedFile`] into the database through the domain
@@ -642,15 +690,7 @@ pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadErr
         // via secret_env) wins, then a literal per-user password, then the file
         // default. Trimmed before hashing so a newline from a secret store does
         // not diverge from what the login path sends (PSA-56).
-        let raw_password: String = match &u.password_env {
-            Some(var) => crate::config::secret_env(var)
-                .ok_or_else(|| LoadError::MissingPassword(u.email.clone()))?,
-            None => u
-                .password
-                .clone()
-                .or_else(|| file.default_password.clone())
-                .ok_or_else(|| LoadError::MissingPassword(u.email.clone()))?,
-        };
+        let raw_password = resolve_password(u, file.default_password.as_deref())?;
         let hash = hasher
             .hash(raw_password.trim())
             .map_err(|e| LoadError::Hash(e.to_string()))?;
@@ -1186,5 +1226,65 @@ mod tests {
         assert!(domain_reset_allowed("DEMO.PSA-SYSTEMS.TEST"));
         assert!(!domain_reset_allowed("a8n.run"));
         assert!(!domain_reset_allowed("gmail.com"));
+    }
+
+    #[test]
+    fn resolve_password_rejects_empty_and_unset_env() {
+        // Pull a SeedUser out of a one-user file with the given extra fields.
+        let mk = |extra: &str| -> SeedUser {
+            let json = format!(
+                r#"{{"version":1,"owns":{{"emails":["u@x.test"]}},"users":[{{"email":"u@x.test","role":"subscriber"{extra}}}]}}"#
+            );
+            parse(&json)
+                .expect("valid one-user file")
+                .users
+                .into_iter()
+                .next()
+                .unwrap()
+        };
+
+        assert_eq!(
+            resolve_password(&mk(r#","password":"secret""#), None).unwrap(),
+            "secret"
+        );
+        assert_eq!(resolve_password(&mk(""), Some("dflt")).unwrap(), "dflt");
+        // An empty literal password would seed a broken account -> rejected.
+        assert!(matches!(
+            resolve_password(&mk(r#","password":"  ""#), None),
+            Err(LoadError::EmptyPassword(_))
+        ));
+        // No password anywhere.
+        assert!(matches!(
+            resolve_password(&mk(""), None),
+            Err(LoadError::MissingPassword(_))
+        ));
+        // password_env pointing at an unset var fails loud and specifically.
+        assert!(matches!(
+            resolve_password(
+                &mk(r#","password_env":"BUNYIP_SEED_DEFINITELY_UNSET_VAR_zzz""#),
+                None
+            ),
+            Err(LoadError::PasswordEnvUnset { .. })
+        ));
+    }
+
+    #[test]
+    fn validation_rejects_nonreserved_owns_domain() {
+        // A real domain must be scoped via owns.emails, not owns.domains, so a
+        // reset can never reclaim every account under it (PSA-56 guardrail).
+        let json = r#"{
+          "version": 1,
+          "owns": { "domains": ["a8n.run"] },
+          "default_password": "p",
+          "users": [ {"email": "x@a8n.run", "role": "subscriber"} ]
+        }"#;
+        match parse(json) {
+            Err(SeedError::Validation(errs)) => {
+                assert!(errs
+                    .iter()
+                    .any(|e| e.contains("owns.domains may only contain the reserved domain")));
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
     }
 }
