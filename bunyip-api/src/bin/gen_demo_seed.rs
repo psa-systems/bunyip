@@ -160,6 +160,7 @@ fn generate() -> String {
     let doc = json!({
         "version": 1,
         "default_password": DEFAULT_PASSWORD,
+        "owns": { "domains": ["demo.psa-systems.test"] },
         "application_groups": groups,
         "applications": applications,
         "users": users,
