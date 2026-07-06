@@ -31,6 +31,12 @@ path = "src/bin/bunyip_e2e_bootstrap.rs"
 name = "seed"
 path = "src/bin/seed.rs"
 
+# Deterministic generator for the demo-msp seed template (PSA-51). Emits JSON
+# only; never touches a database.
+[[bin]]
+name = "gen-demo-seed"
+path = "src/bin/gen_demo_seed.rs"
+
 # bunyip owns the domain (bunyip-domain) and the verticals (bunyip-oci,
 # bunyip-oidc). The generic kernel comes from dunite-core, which bunyip-domain
 # pulls from the dunite framework repo on Forgejo.
