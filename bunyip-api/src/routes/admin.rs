@@ -161,6 +161,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/audit-logs", web::get().to(handlers::list_audit_logs))
             // Error log ring buffer (BUNYIP-327)
             .route("/logs", web::get().to(handlers::get_error_logs))
+            // Seed data import / export (PSA-52)
+            .route("/seed/export", web::get().to(handlers::export_seed_data))
+            .route("/seed/import", web::post().to(handlers::import_seed_data))
             // Feedback
             .route("/feedback", web::get().to(handlers::list_feedback))
             .route("/feedback/export", web::get().to(handlers::export_feedback))

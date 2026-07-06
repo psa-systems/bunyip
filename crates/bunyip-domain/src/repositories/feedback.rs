@@ -29,6 +29,23 @@ impl FeedbackRepository {
         Ok(res.rows_affected())
     }
 
+    /// List seed feedback (author email under `@{domain}`), for PSA-52 export.
+    /// Same suffix comparison as [`delete_seed_by_domain`](Self::delete_seed_by_domain).
+    pub async fn list_seed_by_domain(
+        pool: &PgPool,
+        domain: &str,
+    ) -> Result<Vec<Feedback>, AppError> {
+        let suffix = format!("@{domain}");
+        let rows = sqlx::query_as::<_, Feedback>(
+            "SELECT * FROM feedback \
+             WHERE right(lower(email), length($1)) = lower($1) ORDER BY created_at",
+        )
+        .bind(&suffix)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
     pub async fn create(pool: &PgPool, data: CreateFeedback) -> Result<Feedback, AppError> {
         let feedback = sqlx::query_as::<_, Feedback>(
             r#"
