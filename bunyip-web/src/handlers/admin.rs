@@ -66,6 +66,12 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
         .await
         .map(|p| p.items)
         .unwrap_or_default();
+    // Only prompt when we positively know the catalog is empty (stats fetched
+    // and zero apps), not when the stats call failed (PSA-57).
+    let catalog_empty = stats
+        .as_ref()
+        .map(|s| s.total_applications == 0)
+        .unwrap_or(false);
 
     let stat = |label: &str, value: String, sub: &str, ic: &str| {
         html! {
@@ -81,6 +87,18 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
     let content = html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Admin Dashboard" } p class="mt-2 text-muted-foreground" { "Overview of your platform." } }
+            @if catalog_empty {
+                div class="rounded-lg border border-primary/30 bg-primary/5 p-6" {
+                    div class="flex items-start gap-3" {
+                        (icon("layers", "h-5 w-5 text-primary mt-0.5"))
+                        div class="flex-1" {
+                            h3 class="text-lg font-semibold" { "This environment has no applications yet" }
+                            p class="text-sm text-muted-foreground mt-1" { "Load a starter template or import your own data to populate the catalog." }
+                            a href="/admin/seed" class=(button_class("default", "sm", "mt-3")) { (icon("layers", "mr-2 h-4 w-4")) "Set up seed data" }
+                        }
+                    }
+                }
+            }
             div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4" {
                 (stat("Total Users", stats.as_ref().map(|s| s.total_users.to_string()).unwrap_or_else(|| "0".into()), "Registered accounts", "users"))
                 (stat("Active Memberships", stats.as_ref().map(|s| s.active_members.to_string()).unwrap_or_else(|| "0".into()), "Paying customers", "credit-card"))
@@ -315,6 +333,12 @@ pub struct SeedImportForm {
     pub seed_json: String,
 }
 
+#[derive(Deserialize)]
+pub struct SeedTemplateForm {
+    #[serde(default)]
+    pub template: String,
+}
+
 /// Admin data import/export page (PSA-52): download the current seed-owned data
 /// as a canonical file, or paste one to load it. Import is enforced
 /// non-production by the API; the note here sets that expectation.
@@ -327,11 +351,38 @@ pub async fn seed_data(
         Ok(v) => v,
         Err(r) => return r,
     };
+    let templates = admin_api::seed_templates(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
     let content = html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Seed Data" } p class="mt-2 text-muted-foreground" { "Export the current demo data as a canonical file, or import one to populate this environment. Import is disabled in production." } }
             @if let Some(ok) = &q.ok { (success_box(ok)) }
             @if let Some(e) = &q.error { (error_box(e)) }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6" {
+                    div class="flex items-center gap-3" { (icon("layers", "h-5 w-5 text-primary")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Set up this environment" } }
+                }
+                div class="p-6 pt-0 space-y-4" {
+                    p class="text-sm text-muted-foreground" { "Start empty and add your own data, or load a starter template below. Loading is idempotent and scoped to the reserved demo domain, so it only ever adds or refreshes demo rows." }
+                    @if templates.is_empty() {
+                        p class="text-sm text-muted-foreground" { "No starter templates are available." }
+                    } @else {
+                        div class="grid gap-4 md:grid-cols-2" {
+                            @for t in &templates {
+                                div class="rounded-md border p-4 flex flex-col gap-2" {
+                                    div { h4 class="font-semibold" { (t.name) } p class="text-sm text-muted-foreground" { (t.description) } }
+                                    p class="text-xs text-muted-foreground" { (format!("{} users · {} apps · {} groups · {} feedback", t.users, t.applications, t.groups, t.feedback)) }
+                                    form method="post" action="/admin/seed/template" class="mt-auto" {
+                                        input type="hidden" name="template" value=(t.name);
+                                        button type="submit" class=(button_class("default", "sm", "")) { (icon("download", "mr-2 h-4 w-4")) "Load " (t.name) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" {
                     div class="flex items-center gap-3" { (icon("download", "h-5 w-5 text-primary")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Export" } }
@@ -424,6 +475,42 @@ pub async fn seed_import(
                 "/admin/seed?ok={}",
                 urlenc(&format!(
                     "Imported {} users, {} apps, {} groups, {} entitlements, {} feedback.",
+                    s.users, s.applications, s.groups, s.entitlements, s.feedback
+                ))
+            ),
+            &c.set_cookies,
+        ),
+        Err(e) => redirect_cookies(
+            &format!("/admin/seed?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
+    }
+}
+
+/// Load a named starter template (PSA-57): forward the selected name to the API
+/// loader and report the section counts (or the error) back on the page.
+pub async fn seed_load_template(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<SeedTemplateForm>,
+) -> Response {
+    let (_user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let name = f.template.trim();
+    if name.is_empty() {
+        return redirect_cookies(
+            &format!("/admin/seed?error={}", urlenc("No template selected.")),
+            &c.set_cookies,
+        );
+    }
+    match admin_api::import_seed_template(&st.api, c.forward.as_deref(), name).await {
+        Ok(s) => redirect_cookies(
+            &format!(
+                "/admin/seed?ok={}",
+                urlenc(&format!(
+                    "Loaded template '{name}': {} users, {} apps, {} groups, {} entitlements, {} feedback.",
                     s.users, s.applications, s.groups, s.entitlements, s.feedback
                 ))
             ),
