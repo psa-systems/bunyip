@@ -163,7 +163,15 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/logs", web::get().to(handlers::get_error_logs))
             // Seed data import / export (PSA-52)
             .route("/seed/export", web::get().to(handlers::export_seed_data))
-            .route("/seed/import", web::post().to(handlers::import_seed_data))
+            // The import body is a whole seed file. Raise the payload cap well
+            // above actix's 256 KiB `String`-extractor default - and above the
+            // web BFF's 2 MiB form limit - so a large template is never
+            // truncated at the API before the loader ever sees it.
+            .service(
+                web::resource("/seed/import")
+                    .app_data(web::PayloadConfig::new(4 * 1024 * 1024))
+                    .route(web::post().to(handlers::import_seed_data)),
+            )
             // Feedback
             .route("/feedback", web::get().to(handlers::list_feedback))
             .route("/feedback/export", web::get().to(handlers::export_feedback))
