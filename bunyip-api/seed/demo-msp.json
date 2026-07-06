@@ -179,6 +179,11 @@
       "tags": []
     }
   ],
+  "owns": {
+    "domains": [
+      "demo.psa-systems.test"
+    ]
+  },
   "users": [
     {
       "email": "ada.lovelace@demo.psa-systems.test",
