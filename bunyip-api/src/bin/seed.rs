@@ -79,15 +79,27 @@ async fn main() -> anyhow::Result<()> {
             );
         }
         Some("reset") => {
+            // Optional file arg: reset that file's declared `owns` scope. With no
+            // file, reset the reserved seed domain (the default scope).
+            let owns = match positional.get(1) {
+                Some(path) => {
+                    let json = std::fs::read_to_string(path)
+                        .with_context(|| format!("failed to read {path}"))?;
+                    seed::parse(&json)
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))?
+                        .effective_owns()
+                }
+                None => seed::SeedOwns::reserved(),
+            };
             if dry_run {
                 println!(
-                    "[dry-run] reset would remove all users and feedback under @{}",
-                    seed::SEED_EMAIL_DOMAIN
+                    "[dry-run] reset would remove all users and feedback owned by domains {:?}, emails {:?}",
+                    owns.domains, owns.emails
                 );
                 return Ok(());
             }
             let pool = connect(&config).await?;
-            let s = seed::reset(&pool)
+            let s = seed::reset(&pool, &owns)
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             println!("reset: removed {} users, {} feedback", s.users, s.feedback);
@@ -115,7 +127,7 @@ fn print_help() {
         "seed - load or reset file-driven seed data (PSA-50)\n\n\
          USAGE:\n\
          \x20   seed import <file> [--dry-run]   load a seed file (idempotent)\n\
-         \x20   seed reset [--dry-run]           remove all seed data\n\
+         \x20   seed reset [file] [--dry-run]    remove seed data (a file's owns scope, or the reserved domain)\n\
          \x20   seed --help                      show this message\n\n\
          Requires BUNYIP_SEED_ALLOW=true and a non-production ENVIRONMENT."
     );

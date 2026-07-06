@@ -488,6 +488,9 @@ pub enum LoadError {
         value: String,
         source: String,
     },
+    /// A reset targeted a whole non-reserved domain, which the guardrail refuses
+    /// (real domains must be reset via explicit `owns.emails`, PSA-56).
+    UnsafeReset(String),
     Db(AppError),
 }
 
@@ -509,6 +512,7 @@ impl fmt::Display for LoadError {
             LoadError::BadTimestamp { value, source } => {
                 write!(f, "invalid RFC3339 timestamp '{value}' ({source})")
             }
+            LoadError::UnsafeReset(m) => write!(f, "{m}"),
             LoadError::Db(e) => write!(f, "database error: {e}"),
         }
     }
@@ -717,9 +721,9 @@ pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadErr
         summary.entitlements += 1;
     }
 
-    // 5. Feedback: clear prior seed feedback (by domain), then insert fresh, so
-    //    re-import stays idempotent (feedback has no natural key).
-    FeedbackRepository::delete_seed_by_domain(pool, SEED_EMAIL_DOMAIN).await?;
+    // 5. Feedback: clear prior owned feedback, then insert fresh, so re-import
+    //    stays idempotent (feedback has no natural key).
+    delete_owned_feedback(pool, &file.effective_owns()).await?;
     for fb in &file.feedback {
         FeedbackRepository::create(
             pool,
@@ -740,13 +744,61 @@ pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadErr
     Ok(summary)
 }
 
-/// Remove all seed data reclaimable by the reserved domain: seed users (with
-/// their cascaded dependencies) and seed feedback. Catalog groups/applications
-/// are shared config and are left intact - deleting a catalog app could orphan
-/// a real user's entitlement.
-pub async fn reset(pool: &PgPool) -> Result<ResetSummary, LoadError> {
-    let users = UserRepository::hard_delete_seed_users(pool, SEED_EMAIL_DOMAIN).await?;
-    let feedback = FeedbackRepository::delete_seed_by_domain(pool, SEED_EMAIL_DOMAIN).await?;
+/// Whether a domain may be reset by a whole-domain delete. Only the reserved
+/// seed domain qualifies; any other (potentially real) domain must be reset via
+/// explicit `owns.emails`, so a file can never delete every account under a real
+/// domain like `a8n.run` (PSA-56). The E2E template owns its two accounts as
+/// explicit emails precisely for this reason.
+fn domain_reset_allowed(domain: &str) -> bool {
+    domain.eq_ignore_ascii_case(SEED_EMAIL_DOMAIN)
+}
+
+/// Delete the users an `owns` scope covers (guardrailed): whole-domain delete
+/// for the reserved domain, exact-email delete for explicit emails. A
+/// non-reserved domain is refused. Returns the rows removed.
+async fn delete_owned_users(pool: &PgPool, owns: &SeedOwns) -> Result<u64, LoadError> {
+    let mut removed = 0u64;
+    for domain in &owns.domains {
+        if !domain_reset_allowed(domain) {
+            return Err(LoadError::UnsafeReset(format!(
+                "refusing to reset the whole domain '{domain}': only '{SEED_EMAIL_DOMAIN}' may be reset by domain; scope real domains via explicit owns.emails"
+            )));
+        }
+        removed += UserRepository::hard_delete_seed_users(pool, domain).await?;
+    }
+    for email in &owns.emails {
+        removed += UserRepository::hard_delete_by_email(pool, email).await?;
+    }
+    Ok(removed)
+}
+
+/// Delete the feedback an `owns` scope covers, with the same guardrail as
+/// [`delete_owned_users`]. Used by both reset and the loader's idempotent
+/// feedback-clear.
+async fn delete_owned_feedback(pool: &PgPool, owns: &SeedOwns) -> Result<u64, LoadError> {
+    let mut removed = 0u64;
+    for domain in &owns.domains {
+        if !domain_reset_allowed(domain) {
+            return Err(LoadError::UnsafeReset(format!(
+                "refusing to clear feedback for the whole domain '{domain}': only '{SEED_EMAIL_DOMAIN}' may be cleared by domain; scope real domains via explicit owns.emails"
+            )));
+        }
+        removed += FeedbackRepository::delete_seed_by_domain(pool, domain).await?;
+    }
+    for email in &owns.emails {
+        removed += FeedbackRepository::delete_by_email(pool, email).await?;
+    }
+    Ok(removed)
+}
+
+/// Remove all seed data an `owns` scope reclaims: the seed users (with their
+/// cascaded dependencies) and their feedback. Catalog groups/applications are
+/// shared config and are left intact - deleting a catalog app could orphan a
+/// real user's entitlement. Guardrailed: a whole-domain reset is only allowed
+/// for the reserved domain (PSA-56).
+pub async fn reset(pool: &PgPool, owns: &SeedOwns) -> Result<ResetSummary, LoadError> {
+    let feedback = delete_owned_feedback(pool, owns).await?;
+    let users = delete_owned_users(pool, owns).await?;
     Ok(ResetSummary { users, feedback })
 }
 
@@ -1124,5 +1176,15 @@ mod tests {
             }
             other => panic!("expected Validation, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn domain_reset_allowed_only_for_reserved() {
+        // The guardrail: only the reserved domain may be reset by whole domain;
+        // a real domain must be reset via explicit emails (PSA-56).
+        assert!(domain_reset_allowed("demo.psa-systems.test"));
+        assert!(domain_reset_allowed("DEMO.PSA-SYSTEMS.TEST"));
+        assert!(!domain_reset_allowed("a8n.run"));
+        assert!(!domain_reset_allowed("gmail.com"));
     }
 }

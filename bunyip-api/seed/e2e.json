@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "owns": {
+    "emails": ["e2e-user@a8n.run", "e2e-admin@a8n.run"]
+  },
+  "users": [
+    {
+      "email": "e2e-user@a8n.run",
+      "role": "subscriber",
+      "verified": true,
+      "password_env": "BUNYIP_E2E_TEST_USER_PASSWORD"
+    },
+    {
+      "email": "e2e-admin@a8n.run",
+      "role": "admin",
+      "verified": true,
+      "password_env": "BUNYIP_E2E_TEST_USER_PASSWORD"
+    }
+  ]
+}
