@@ -15,6 +15,7 @@ pub mod error_log;
 pub mod handlers;
 pub mod migrate_reconcile;
 pub mod routes;
+pub mod seed;
 pub mod version;
 
 // Re-export commonly used types
