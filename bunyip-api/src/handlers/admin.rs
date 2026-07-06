@@ -1305,6 +1305,61 @@ pub async fn get_error_logs(
 }
 
 // =============================================================================
+// Seed data import / export (PSA-52)
+// =============================================================================
+
+/// GET /v1/admin/seed/export
+/// Serialize the current seed-owned data to the canonical seed format and
+/// return it as a downloadable JSON file. Read-only; admin-gated.
+pub async fn export_seed_data(
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+) -> Result<HttpResponse, AppError> {
+    let file = crate::seed::export(pool.get_ref(), crate::seed::SEED_EMAIL_DOMAIN)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let body =
+        serde_json::to_string_pretty(&file).map_err(|e| AppError::internal(e.to_string()))?;
+    Ok(HttpResponse::Ok()
+        .content_type("application/json")
+        .insert_header((
+            "content-disposition",
+            "attachment; filename=\"seed-export.json\"",
+        ))
+        .body(body))
+}
+
+/// POST /v1/admin/seed/import
+/// Load a canonical seed file (request body) through the shared loader. Blocked
+/// on production/unset environments so demo data can never land in prod, even
+/// though only an admin can reach this. Idempotent per the loader.
+pub async fn import_seed_data(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    body: String,
+) -> Result<HttpResponse, AppError> {
+    crate::seed::seed_guard(&config.environment, true)
+        .map_err(|e| AppError::bad_request(e.to_string()))?;
+    let file = crate::seed::parse(&body).map_err(|e| AppError::bad_request(e.to_string()))?;
+    let summary = crate::seed::load(pool.get_ref(), &file)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let request_id = get_request_id(&req);
+    Ok(success(
+        serde_json::json!({
+            "groups": summary.groups,
+            "applications": summary.applications,
+            "users": summary.users,
+            "entitlements": summary.entitlements,
+            "feedback": summary.feedback,
+        }),
+        request_id,
+    ))
+}
+
+// =============================================================================
 // Dashboard Stats
 // =============================================================================
 

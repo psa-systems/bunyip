@@ -670,6 +670,23 @@ impl UserRepository {
         Ok(removed)
     }
 
+    /// List the live users whose email ends with `@{domain}` (the reserved seed
+    /// scope), for PSA-52 export. Same suffix comparison as
+    /// [`hard_delete_seed_users`](Self::hard_delete_seed_users), so export and
+    /// reset operate on exactly the same set.
+    pub async fn list_seed_users(pool: &PgPool, domain: &str) -> Result<Vec<User>, AppError> {
+        let suffix = format!("@{domain}");
+        let users = sqlx::query_as::<_, User>(
+            "SELECT * FROM users \
+             WHERE right(lower(email), length($1)) = lower($1) AND deleted_at IS NULL \
+             ORDER BY email",
+        )
+        .bind(&suffix)
+        .fetch_all(pool)
+        .await?;
+        Ok(users)
+    }
+
     /// HARD-delete e2e disposable accounts older than `max_age_secs` whose email
     /// matches `pattern` (a SQL `LIKE` pattern, e.g. `%+e2e-%` for the disposable
     /// subaddress marker) (BUNYIP-246). The reaper safety net for crashed e2e

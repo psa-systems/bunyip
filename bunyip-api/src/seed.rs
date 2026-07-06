@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use crate::errors::AppError;
@@ -51,7 +51,7 @@ const VALID_TIERS: [&str; 4] = ["free", "standard", "early_adopter", "lifetime"]
 
 /// A parsed seed file. Section order is irrelevant; the loader resolves
 /// cross-references (app -> group, entitlement -> user/app) by slug/email.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SeedFile {
     pub version: u32,
@@ -71,7 +71,7 @@ pub struct SeedFile {
     pub feedback: Vec<SeedFeedback>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SeedGroup {
     pub slug: String,
@@ -85,7 +85,7 @@ pub struct SeedGroup {
     pub sort_order: Option<i32>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SeedApp {
     pub slug: String,
@@ -108,7 +108,7 @@ pub struct SeedApp {
     pub is_hosted: Option<bool>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SeedUser {
     pub email: String,
@@ -132,7 +132,7 @@ pub struct SeedUser {
 /// Membership state applied to a seeded user as DB state (no Stripe objects).
 /// Strings here are validated into the domain enums by the loader, so the
 /// schema stays decoupled from the enum variants.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SeedMembership {
     #[serde(default)]
@@ -149,14 +149,14 @@ pub struct SeedMembership {
     pub trial_ends_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SeedEntitlement {
     pub user_email: String,
     pub app_slug: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SeedFeedback {
     #[serde(default)]
@@ -661,6 +661,106 @@ pub async fn reset(pool: &PgPool) -> Result<ResetSummary, LoadError> {
     Ok(ResetSummary { users, feedback })
 }
 
+/// Serialize the current seed-owned data back into a [`SeedFile`] (PSA-52
+/// export): users and feedback under the reserved domain, plus the full catalog
+/// of groups/applications (catalog is shared config, not email-scoped).
+///
+/// Password hashes are NEVER emitted - the schema has no field for them - so a
+/// re-import assigns `default_password`; the export sets a placeholder and
+/// callers should treat exported accounts as needing a password reset. This is
+/// the export half of the round-trippable canonical format the admin UI uses.
+pub async fn export(pool: &PgPool, domain: &str) -> Result<SeedFile, LoadError> {
+    let groups = ApplicationGroupRepository::list(pool).await?;
+    let apps = ApplicationRepository::list_all(pool).await?;
+    let users = UserRepository::list_seed_users(pool, domain).await?;
+    let feedback_rows = FeedbackRepository::list_seed_by_domain(pool, domain).await?;
+
+    let group_slug_by_id: std::collections::HashMap<uuid::Uuid, String> =
+        groups.iter().map(|g| (g.id, g.slug.clone())).collect();
+
+    let application_groups = groups
+        .iter()
+        .map(|g| SeedGroup {
+            slug: g.slug.clone(),
+            name: g.name.clone(),
+            display_name: g.display_name.clone(),
+            description: g.description.clone(),
+            icon_url: g.icon_url.clone(),
+            sort_order: Some(g.sort_order),
+        })
+        .collect();
+
+    let applications = apps
+        .iter()
+        .map(|a| SeedApp {
+            slug: a.slug.clone(),
+            name: a.name.clone(),
+            display_name: a.display_name.clone(),
+            description: a.description.clone(),
+            icon_url: a.icon_url.clone(),
+            container_name: Some(a.container_name.clone()),
+            group_slug: a.group_id.and_then(|id| group_slug_by_id.get(&id).cloned()),
+            restricted: a.requires_entitlement,
+            is_hosted: Some(a.is_hosted),
+        })
+        .collect();
+
+    let mut seed_users = Vec::with_capacity(users.len());
+    let mut entitlements = Vec::new();
+    for u in &users {
+        seed_users.push(SeedUser {
+            email: u.email.clone(),
+            role: u.role.clone(),
+            verified: u.email_verified,
+            first_name: u.first_name.clone(),
+            last_name: u.last_name.clone(),
+            phone: u.phone.clone(),
+            // Hashes are never exportable; a re-import falls back to the file's
+            // default_password.
+            password: None,
+            membership: SeedMembership {
+                status: Some(u.membership_status.clone()),
+                tier: Some(u.subscription_tier.clone()),
+                lifetime: u.lifetime_member,
+                price_locked: u.price_locked,
+                locked_price_amount: u.locked_price_amount,
+                trial_ends_at: u.trial_ends_at.map(|t| t.to_rfc3339()),
+            },
+        });
+        for row in EntitlementRepository::list_for_user(pool, u.id).await? {
+            entitlements.push(SeedEntitlement {
+                user_email: u.email.clone(),
+                app_slug: row.slug,
+            });
+        }
+    }
+
+    let feedback = feedback_rows
+        .iter()
+        .map(|f| SeedFeedback {
+            name: f.name.clone(),
+            email: f.email.clone(),
+            subject: f.subject.clone(),
+            message: f.message.clone(),
+            tags: f.tags.clone(),
+            is_spam: f.is_spam,
+            page_path: f.page_path.clone(),
+            response: f.admin_response.clone(),
+            status: Some(f.status.clone()),
+        })
+        .collect();
+
+    Ok(SeedFile {
+        version: SEED_SCHEMA_VERSION,
+        default_password: Some("change-me-after-import".to_string()),
+        application_groups,
+        applications,
+        users: seed_users,
+        entitlements,
+        feedback,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -696,6 +796,17 @@ mod tests {
         assert_eq!(f.applications.len(), 2);
         assert!(f.applications.iter().any(|a| a.restricted));
         assert_eq!(f.default_password.as_deref(), Some("demo-pass-123"));
+    }
+
+    #[test]
+    fn canonical_format_round_trips() {
+        // Serialize -> parse must reproduce the SeedFile. This is the format
+        // guarantee behind PSA-52's "export then import reproduces state": the
+        // export serializes a SeedFile, the import parses it back.
+        let a = parse(SAMPLE).expect("valid sample");
+        let json = serde_json::to_string(&a).expect("serialize");
+        let b = parse(&json).expect("re-parse serialized output");
+        assert_eq!(a, b);
     }
 
     #[test]

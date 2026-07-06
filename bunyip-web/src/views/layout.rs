@@ -449,6 +449,11 @@ fn admin_items() -> Vec<NavItem> {
             icon: "alert-triangle",
         },
         NavItem {
+            title: "Seed Data",
+            href: "/admin/seed",
+            icon: "layers",
+        },
+        NavItem {
             title: "IP Bans",
             href: "/admin/ip-bans",
             icon: "shield-off",

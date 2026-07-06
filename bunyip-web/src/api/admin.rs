@@ -6,7 +6,8 @@ use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeedbackDetail,
     AdminFeedbackSummary, AdminIpBan, AdminMembership, AdminRateLimit, AdminStatsResponse,
     AdminUser, ApplicationGroup, ApplicationGroupList, ArchivedFeedback, ErrorLogsResponse,
-    FeedbackStatus, PaginatedResponse, StripeConfigResponse, TierConfigResponse, UserEntitlement,
+    FeedbackStatus, ImportSummary, PaginatedResponse, StripeConfigResponse, TierConfigResponse,
+    UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -486,6 +487,19 @@ pub async fn error_logs(
         _ => "/admin/logs".to_string(),
     };
     parse(api.get(&path, cookie).await?)
+}
+
+// --- seed data import (PSA-52) ----------------------------------------------
+
+/// Load a canonical seed file through the API's shared loader. The file is a
+/// pre-parsed JSON value (the web handler validates it is JSON first). Export
+/// is a direct download via `Api::get_stream`, so it needs no client method.
+pub async fn import_seed(
+    api: &Api,
+    cookie: Option<&str>,
+    file: Value,
+) -> Result<ImportSummary, ApiError> {
+    parse(api.post("/admin/seed/import", cookie, Some(file)).await?)
 }
 
 // --- IP auto-bans (BUNYIP-320) ----------------------------------------------

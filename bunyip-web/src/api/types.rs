@@ -373,6 +373,16 @@ pub struct ErrorLogsResponse {
     pub capacity: i64,
 }
 
+/// Per-section counts returned by `POST /v1/admin/seed/import` (PSA-52).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImportSummary {
+    pub groups: i64,
+    pub applications: i64,
+    pub users: i64,
+    pub entitlements: i64,
+    pub feedback: i64,
+}
+
 /// One currently-active IP auto-ban as returned by `GET /v1/admin/ip-bans`
 /// (BUNYIP-320). Mirrors `bunyip_domain::middleware::auto_ban::BanInfo`: `ip`
 /// serializes as a string, `banned_at` / `expires_at` as RFC3339 timestamps.
