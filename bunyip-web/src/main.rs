@@ -194,6 +194,12 @@ async fn main() {
         .route("/admin", get(handlers::admin::dashboard))
         .route("/admin/audit-logs", get(handlers::admin::audit_logs))
         .route("/admin/logs", get(handlers::admin::logs))
+        .route("/admin/seed", get(handlers::admin::seed_data))
+        .route("/admin/seed/export", get(handlers::admin::seed_export))
+        .route(
+            "/admin/seed/import",
+            axum::routing::post(handlers::admin::seed_import),
+        )
         .route("/admin/ip-bans", get(handlers::admin::ip_bans))
         .route(
             "/admin/ip-bans/unban",
