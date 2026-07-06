@@ -12,6 +12,20 @@ use crate::models::{
 pub struct FeedbackRepository;
 
 impl FeedbackRepository {
+    /// Delete seed feedback: rows whose author email sits under the reserved
+    /// seed domain (`%@{domain}`). Used by the PSA-50 reset and to keep import
+    /// idempotent (feedback has no natural key, so re-import clears the prior
+    /// seed feedback before re-inserting). Scoped by the domain suffix so it
+    /// only ever removes seed rows. Returns the rows removed.
+    pub async fn delete_seed_by_domain(pool: &PgPool, domain: &str) -> Result<u64, AppError> {
+        let pattern = format!("%@{domain}");
+        let res = sqlx::query("DELETE FROM feedback WHERE lower(email) LIKE lower($1)")
+            .bind(&pattern)
+            .execute(pool)
+            .await?;
+        Ok(res.rows_affected())
+    }
+
     pub async fn create(pool: &PgPool, data: CreateFeedback) -> Result<Feedback, AppError> {
         let feedback = sqlx::query_as::<_, Feedback>(
             r#"

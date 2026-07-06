@@ -15,7 +15,20 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use sqlx::PgPool;
+
+use crate::errors::AppError;
+use crate::models::{
+    CreateApplication, CreateApplicationGroup, CreateFeedback, CreateUser, MembershipStatus,
+    SubscriptionTier, UserRole,
+};
+use crate::repositories::{
+    ApplicationGroupRepository, ApplicationRepository, EntitlementRepository, FeedbackRepository,
+    UserRepository,
+};
+use crate::services::PasswordService;
 
 /// Canonical schema version this build understands. A file declaring any other
 /// version is rejected rather than silently mis-read.
@@ -318,6 +331,298 @@ impl fmt::Display for SeedError {
 }
 
 impl std::error::Error for SeedError {}
+
+// ===========================================================================
+// Loader (PSA-50): map a validated SeedFile to rows via the domain
+// repositories. All writes go through the repository layer, so seeding shares
+// the same validation/hashing path a future customer-data import will use.
+// ===========================================================================
+
+/// Per-section counts from a load, for the CLI to report.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LoadSummary {
+    pub groups: usize,
+    pub applications: usize,
+    pub users: usize,
+    pub entitlements: usize,
+    pub feedback: usize,
+}
+
+/// Rows removed by a reset.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ResetSummary {
+    pub users: u64,
+    pub feedback: u64,
+}
+
+/// Failures while loading a validated file into the database.
+#[derive(Debug)]
+pub enum LoadError {
+    /// A user carries no password and the file sets no `default_password`.
+    MissingPassword(String),
+    /// Password hashing failed.
+    Hash(String),
+    /// A cross-reference did not resolve against the live DB (validation catches
+    /// intra-file references; this guards against races/partial state).
+    Reference(String),
+    /// A membership trial timestamp was not valid RFC3339.
+    BadTimestamp {
+        value: String,
+        source: String,
+    },
+    Db(AppError),
+}
+
+impl From<AppError> for LoadError {
+    fn from(e: AppError) -> Self {
+        LoadError::Db(e)
+    }
+}
+
+impl fmt::Display for LoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LoadError::MissingPassword(email) => write!(
+                f,
+                "user '{email}' has no password and the file sets no default_password"
+            ),
+            LoadError::Hash(e) => write!(f, "failed to hash a seed password: {e}"),
+            LoadError::Reference(m) => write!(f, "unresolved reference: {m}"),
+            LoadError::BadTimestamp { value, source } => {
+                write!(f, "invalid RFC3339 timestamp '{value}' ({source})")
+            }
+            LoadError::Db(e) => write!(f, "database error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for LoadError {}
+
+fn parse_role(role: &str) -> UserRole {
+    if role.eq_ignore_ascii_case("admin") {
+        UserRole::Admin
+    } else {
+        UserRole::Subscriber
+    }
+}
+
+/// Map a template tier string to a [`SubscriptionTier`]. `lifetime = true`
+/// forces `Lifetime`; an unknown/absent tier falls back to `Free`.
+fn parse_tier(tier: Option<&str>, lifetime: bool) -> SubscriptionTier {
+    if lifetime {
+        return SubscriptionTier::Lifetime;
+    }
+    match tier.map(str::to_ascii_lowercase).as_deref() {
+        Some("lifetime") => SubscriptionTier::Lifetime,
+        Some("early_adopter") => SubscriptionTier::EarlyAdopter,
+        Some("standard") => SubscriptionTier::Standard,
+        _ => SubscriptionTier::Free,
+    }
+}
+
+fn parse_ts(value: &Option<String>, source: &str) -> Result<Option<DateTime<Utc>>, LoadError> {
+    match value {
+        None => Ok(None),
+        Some(s) => DateTime::parse_from_rfc3339(s)
+            .map(|dt| Some(dt.with_timezone(&Utc)))
+            .map_err(|_| LoadError::BadTimestamp {
+                value: s.clone(),
+                source: source.to_string(),
+            }),
+    }
+}
+
+/// Load a validated [`SeedFile`] into the database through the domain
+/// repositories. Idempotent: users are upserted by email, groups and
+/// applications are created-if-absent, entitlement grants are upserts, and seed
+/// feedback is cleared (by the reserved domain) before re-insert. Catalog
+/// groups/applications are shared config and are never removed by a reset.
+pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadError> {
+    let mut summary = LoadSummary::default();
+    let hasher = PasswordService::new();
+
+    // 1. Application groups (create-if-absent).
+    for g in &file.application_groups {
+        if ApplicationGroupRepository::find_by_slug(pool, &g.slug)
+            .await?
+            .is_none()
+        {
+            ApplicationGroupRepository::create(
+                pool,
+                &CreateApplicationGroup {
+                    name: g.name.clone(),
+                    slug: g.slug.clone(),
+                    display_name: g.display_name.clone(),
+                    description: g.description.clone(),
+                    icon_url: g.icon_url.clone(),
+                    sort_order: g.sort_order,
+                },
+            )
+            .await?;
+        }
+        summary.groups += 1;
+    }
+
+    // 2. Applications (create-if-absent), then link each to its group.
+    for a in &file.applications {
+        let app_id = match ApplicationRepository::find_by_slug(pool, &a.slug).await? {
+            Some(app) => app.id,
+            None => {
+                ApplicationRepository::create(
+                    pool,
+                    &CreateApplication {
+                        name: a.name.clone(),
+                        slug: a.slug.clone(),
+                        display_name: a.display_name.clone(),
+                        description: a.description.clone(),
+                        icon_url: a.icon_url.clone(),
+                        container_name: a.container_name.clone().unwrap_or_else(|| a.slug.clone()),
+                        health_check_url: None,
+                        subdomain: None,
+                        webhook_url: None,
+                        version: None,
+                        source_code_url: None,
+                        is_hosted: a.is_hosted,
+                        forgejo_owner: None,
+                        forgejo_repo: None,
+                        forgejo_package: None,
+                        pinned_release_tag: None,
+                        artifact_source: None,
+                        oci_image_owner: None,
+                        oci_image_name: None,
+                        pinned_image_tag: None,
+                    },
+                )
+                .await?
+                .id
+            }
+        };
+        if let Some(group_slug) = &a.group_slug {
+            let group = ApplicationGroupRepository::find_by_slug(pool, group_slug)
+                .await?
+                .ok_or_else(|| {
+                    LoadError::Reference(format!(
+                        "group_slug '{group_slug}' not found for app '{}'",
+                        a.slug
+                    ))
+                })?;
+            ApplicationRepository::set_group(pool, app_id, Some(group.id)).await?;
+        }
+        // The `restricted` flag is not applied here yet (its setter is a
+        // handler-level concern); entitlement grants below still make a
+        // restricted app visible to its granted users.
+        summary.applications += 1;
+    }
+
+    // 3. Users (upsert by email), then apply verified/profile/membership state.
+    for u in &file.users {
+        let raw_password = u
+            .password
+            .as_deref()
+            .or(file.default_password.as_deref())
+            .ok_or_else(|| LoadError::MissingPassword(u.email.clone()))?;
+        let hash = hasher
+            .hash(raw_password.trim())
+            .map_err(|e| LoadError::Hash(e.to_string()))?;
+        let role = parse_role(&u.role);
+
+        let user = match UserRepository::find_by_email(pool, &u.email).await? {
+            Some(existing) => {
+                UserRepository::update_password(pool, existing.id, &hash).await?;
+                UserRepository::update_role(pool, existing.id, role.as_str()).await?;
+                existing
+            }
+            None => {
+                UserRepository::create(
+                    pool,
+                    CreateUser {
+                        email: u.email.clone(),
+                        password_hash: Some(hash),
+                        role,
+                    },
+                )
+                .await?
+            }
+        };
+
+        if u.verified {
+            UserRepository::set_email_verified(pool, user.id).await?;
+        }
+        if u.first_name.is_some() || u.last_name.is_some() || u.phone.is_some() {
+            UserRepository::update_profile(
+                pool,
+                user.id,
+                u.first_name.as_deref(),
+                u.last_name.as_deref(),
+                u.phone.as_deref(),
+            )
+            .await?;
+        }
+        let status = MembershipStatus::from(u.membership.status.as_deref().unwrap_or("none"));
+        let tier = parse_tier(u.membership.tier.as_deref(), u.membership.lifetime);
+        let trial = parse_ts(&u.membership.trial_ends_at, "membership.trial_ends_at")?;
+        UserRepository::apply_seed_membership(
+            pool,
+            user.id,
+            status,
+            &tier,
+            u.membership.lifetime,
+            u.membership.price_locked,
+            u.membership.locked_price_amount,
+            trial,
+        )
+        .await?;
+        summary.users += 1;
+    }
+
+    // 4. Entitlements (upsert grants).
+    for e in &file.entitlements {
+        let user = UserRepository::find_by_email(pool, &e.user_email)
+            .await?
+            .ok_or_else(|| {
+                LoadError::Reference(format!("entitlement user '{}' not found", e.user_email))
+            })?;
+        let app = ApplicationRepository::find_by_slug(pool, &e.app_slug)
+            .await?
+            .ok_or_else(|| {
+                LoadError::Reference(format!("entitlement app '{}' not found", e.app_slug))
+            })?;
+        EntitlementRepository::grant(pool, user.id, app.id, None, "seed").await?;
+        summary.entitlements += 1;
+    }
+
+    // 5. Feedback: clear prior seed feedback (by domain), then insert fresh, so
+    //    re-import stays idempotent (feedback has no natural key).
+    FeedbackRepository::delete_seed_by_domain(pool, SEED_EMAIL_DOMAIN).await?;
+    for fb in &file.feedback {
+        FeedbackRepository::create(
+            pool,
+            CreateFeedback {
+                name: fb.name.clone(),
+                email: fb.email.clone(),
+                subject: fb.subject.clone(),
+                tags: fb.tags.clone(),
+                message: fb.message.clone(),
+                page_path: fb.page_path.clone(),
+                is_spam: fb.is_spam,
+            },
+        )
+        .await?;
+        summary.feedback += 1;
+    }
+
+    Ok(summary)
+}
+
+/// Remove all seed data reclaimable by the reserved domain: seed users (with
+/// their cascaded dependencies) and seed feedback. Catalog groups/applications
+/// are shared config and are left intact - deleting a catalog app could orphan
+/// a real user's entitlement.
+pub async fn reset(pool: &PgPool) -> Result<ResetSummary, LoadError> {
+    let users = UserRepository::hard_delete_seed_users(pool, SEED_EMAIL_DOMAIN).await?;
+    let feedback = FeedbackRepository::delete_seed_by_domain(pool, SEED_EMAIL_DOMAIN).await?;
+    Ok(ResetSummary { users, feedback })
+}
 
 #[cfg(test)]
 mod tests {
