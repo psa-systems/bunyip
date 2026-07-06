@@ -49,6 +49,34 @@ const VALID_ROLES: [&str; 2] = ["subscriber", "admin"];
 const VALID_STATUSES: [&str; 5] = ["none", "active", "past_due", "canceled", "grace_period"];
 const VALID_TIERS: [&str; 4] = ["free", "standard", "early_adopter", "lifetime"];
 
+/// A named seed template compiled into the binary (PSA-57), so the admin
+/// first-run setup can offer it by name without a filesystem path.
+pub struct SeedTemplate {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub json: &'static str,
+}
+
+/// The template library. Each `json` is a committed file under `seed/`, embedded
+/// via `include_str!`; a test asserts every one parses + validates.
+pub const SEED_TEMPLATES: &[SeedTemplate] = &[
+    SeedTemplate {
+        name: "demo-msp",
+        description: "Full MSP demo: ~42 users across tiers, the app catalog with groups, and a support inbox.",
+        json: include_str!("../seed/demo-msp.json"),
+    },
+    SeedTemplate {
+        name: "minimal",
+        description: "Minimal baseline: the app catalog plus a few users, no bulk volume.",
+        json: include_str!("../seed/minimal.json"),
+    },
+];
+
+/// Look up a template by name.
+pub fn find_template(name: &str) -> Option<&'static SeedTemplate> {
+    SEED_TEMPLATES.iter().find(|t| t.name == name)
+}
+
 /// A parsed seed file. Section order is irrelevant; the loader resolves
 /// cross-references (app -> group, entitlement -> user/app) by slug/email.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -963,5 +991,31 @@ mod tests {
             }
             other => panic!("expected Validation, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn every_embedded_template_parses_and_validates() {
+        assert!(!SEED_TEMPLATES.is_empty());
+        for t in SEED_TEMPLATES {
+            parse(t.json).unwrap_or_else(|e| panic!("template '{}' is invalid: {e}", t.name));
+        }
+    }
+
+    #[test]
+    fn find_template_by_name() {
+        assert!(find_template("demo-msp").is_some());
+        assert!(find_template("minimal").is_some());
+        assert!(find_template("nope").is_none());
+    }
+
+    #[test]
+    fn minimal_template_is_a_small_baseline() {
+        let f = parse(find_template("minimal").expect("minimal exists").json).expect("valid");
+        assert_eq!(f.users.len(), 3);
+        assert_eq!(f.application_groups.len(), 2);
+        assert_eq!(f.applications.len(), 3);
+        assert!(f.feedback.is_empty());
+        assert!(f.entitlements.is_empty());
+        assert_eq!(f.users.iter().filter(|u| u.role == "admin").count(), 1);
     }
 }

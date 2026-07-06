@@ -1329,20 +1329,73 @@ pub async fn export_seed_data(
         .body(body))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ImportQuery {
+    /// Load a named embedded template (PSA-57) instead of the request body.
+    pub template: Option<String>,
+}
+
+/// One embedded template plus its section counts, for the setup picker.
+#[derive(Debug, Serialize)]
+pub struct SeedTemplateInfo {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub groups: usize,
+    pub applications: usize,
+    pub users: usize,
+    pub entitlements: usize,
+    pub feedback: usize,
+}
+
+/// GET /v1/admin/seed/templates
+/// List the embedded seed templates (name, description, section counts) for the
+/// first-run setup picker (PSA-57). Admin-gated.
+pub async fn list_seed_templates(
+    req: HttpRequest,
+    _admin: AdminUser,
+) -> Result<HttpResponse, AppError> {
+    let templates: Vec<SeedTemplateInfo> = crate::seed::SEED_TEMPLATES
+        .iter()
+        // A malformed embedded template is skipped rather than 500-ing the list
+        // (a test asserts every one parses, so this never drops one in practice).
+        .filter_map(|t| crate::seed::parse(t.json).ok().map(|f| (t, f)))
+        .map(|(t, f)| SeedTemplateInfo {
+            name: t.name,
+            description: t.description,
+            groups: f.application_groups.len(),
+            applications: f.applications.len(),
+            users: f.users.len(),
+            entitlements: f.entitlements.len(),
+            feedback: f.feedback.len(),
+        })
+        .collect();
+    Ok(success(templates, get_request_id(&req)))
+}
+
 /// POST /v1/admin/seed/import
-/// Load a canonical seed file (request body) through the shared loader. Blocked
-/// on production/unset environments so demo data can never land in prod, even
-/// though only an admin can reach this. Idempotent per the loader.
+/// Load a canonical seed file through the shared loader. The data comes from a
+/// named embedded template (`?template=<name>`, PSA-57) when given, otherwise
+/// the request body. Blocked on production/unset environments so demo data can
+/// never land in prod, even though only an admin can reach this. Idempotent.
 pub async fn import_seed_data(
     req: HttpRequest,
     _admin: AdminUser,
     pool: web::Data<PgPool>,
     config: web::Data<Config>,
+    query: web::Query<ImportQuery>,
     body: String,
 ) -> Result<HttpResponse, AppError> {
     crate::seed::seed_guard(&config.environment, true)
         .map_err(|e| AppError::bad_request(e.to_string()))?;
-    let file = crate::seed::parse(&body).map_err(|e| AppError::bad_request(e.to_string()))?;
+    let json: &str = match &query.template {
+        Some(name) => {
+            crate::seed::find_template(name)
+                .ok_or_else(|| AppError::bad_request(format!("unknown seed template '{name}'")))?
+                .json
+        }
+        None => &body,
+    };
+    let file = crate::seed::parse(json).map_err(|e| AppError::bad_request(e.to_string()))?;
     let summary = crate::seed::load(pool.get_ref(), &file)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
