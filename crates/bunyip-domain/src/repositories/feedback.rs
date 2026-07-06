@@ -12,6 +12,23 @@ use crate::models::{
 pub struct FeedbackRepository;
 
 impl FeedbackRepository {
+    /// Delete seed feedback: rows whose author email ends with `@{domain}`.
+    /// Used by the PSA-50 reset and to keep import idempotent (feedback has no
+    /// natural key, so re-import clears the prior seed feedback before
+    /// re-inserting). Uses an exact suffix comparison (not `LIKE`), so a `_` or
+    /// `%` in the domain can never widen the match on this delete path. Rows
+    /// with a NULL email never match (seed feedback is required to carry a
+    /// seed-domain email, enforced by seed validation). Returns the rows removed.
+    pub async fn delete_seed_by_domain(pool: &PgPool, domain: &str) -> Result<u64, AppError> {
+        let suffix = format!("@{domain}");
+        let res =
+            sqlx::query("DELETE FROM feedback WHERE right(lower(email), length($1)) = lower($1)")
+                .bind(&suffix)
+                .execute(pool)
+                .await?;
+        Ok(res.rows_affected())
+    }
+
     pub async fn create(pool: &PgPool, data: CreateFeedback) -> Result<Feedback, AppError> {
         let feedback = sqlx::query_as::<_, Feedback>(
             r#"

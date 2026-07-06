@@ -606,6 +606,70 @@ impl UserRepository {
         Ok(removed)
     }
 
+    /// Apply a seed-time membership snapshot in one write (PSA-50). Seeding sets
+    /// these fields as plain DB state (no Stripe objects): status, tier,
+    /// lifetime, price-lock, and trial end. This is NOT a production membership
+    /// path - real changes go through the dedicated setters
+    /// ([`update_membership_status`](Self::update_membership_status),
+    /// [`assign_subscription_tier`](Self::assign_subscription_tier),
+    /// [`grant_lifetime_membership`](Self::grant_lifetime_membership),
+    /// [`lock_price`](Self::lock_price)); this single-statement shortcut lets a
+    /// seed template express an arbitrary membership snapshot for demo data.
+    pub async fn apply_seed_membership(
+        pool: &PgPool,
+        user_id: Uuid,
+        status: MembershipStatus,
+        tier: &SubscriptionTier,
+        lifetime: bool,
+        price_locked: bool,
+        locked_price_amount: Option<i32>,
+        trial_ends_at: Option<DateTime<Utc>>,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            UPDATE users SET
+                subscription_status = $2,
+                subscription_tier   = $3,
+                lifetime_member     = $4,
+                price_locked        = $5,
+                locked_price_amount = $6,
+                trial_ends_at       = $7,
+                updated_at          = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(user_id)
+        .bind(status.as_str())
+        .bind(tier.as_str())
+        .bind(lifetime)
+        .bind(price_locked)
+        .bind(locked_price_amount)
+        .bind(trial_ends_at)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// HARD-delete every user whose email ends with `@{domain}`, clearing the
+    /// same non-cascade dependencies as
+    /// [`hard_delete_by_email`](Self::hard_delete_by_email) (PSA-50 reset /
+    /// idempotent re-import). Uses an exact suffix comparison (not `LIKE`), so a
+    /// `_` or `%` in the domain can never widen the match on this delete path.
+    /// Returns the rows removed.
+    pub async fn hard_delete_seed_users(pool: &PgPool, domain: &str) -> Result<u64, AppError> {
+        let mut tx = pool.begin().await?;
+        let suffix = format!("@{domain}");
+        let ids: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM users WHERE right(lower(email), length($1)) = lower($1)",
+        )
+        .bind(&suffix)
+        .fetch_all(&mut *tx)
+        .await?;
+        let removed = Self::clear_deps_and_delete_users(&mut tx, &ids).await?;
+        tx.commit().await?;
+        Ok(removed)
+    }
+
     /// HARD-delete e2e disposable accounts older than `max_age_secs` whose email
     /// matches `pattern` (a SQL `LIKE` pattern, e.g. `%+e2e-%` for the disposable
     /// subaddress marker) (BUNYIP-246). The reaper safety net for crashed e2e

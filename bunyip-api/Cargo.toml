@@ -25,6 +25,12 @@ path = "src/main.rs"
 name = "bunyip-e2e-bootstrap"
 path = "src/bin/bunyip_e2e_bootstrap.rs"
 
+# File-driven seed loader (PSA-50). Loads/resets a canonical seed JSON through
+# the domain repositories; reuses the bunyip-api lib.
+[[bin]]
+name = "seed"
+path = "src/bin/seed.rs"
+
 # bunyip owns the domain (bunyip-domain) and the verticals (bunyip-oci,
 # bunyip-oidc). The generic kernel comes from dunite-core, which bunyip-domain
 # pulls from the dunite framework repo on Forgejo.
