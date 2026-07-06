@@ -1,0 +1,743 @@
+{
+  "application_groups": [
+    {
+      "display_name": "Core",
+      "name": "core",
+      "slug": "core",
+      "sort_order": 0
+    },
+    {
+      "display_name": "Add-ons",
+      "name": "add-ons",
+      "slug": "add-ons",
+      "sort_order": 1
+    },
+    {
+      "display_name": "Beta",
+      "name": "beta",
+      "slug": "beta",
+      "sort_order": 2
+    }
+  ],
+  "applications": [
+    {
+      "container_name": "mokosh",
+      "description": "Mokosh for your MSP",
+      "display_name": "Mokosh",
+      "group_slug": "core",
+      "name": "mokosh",
+      "restricted": false,
+      "slug": "mokosh"
+    },
+    {
+      "container_name": "bunyip",
+      "description": "Bunyip for your MSP",
+      "display_name": "Bunyip",
+      "group_slug": "core",
+      "name": "bunyip",
+      "restricted": false,
+      "slug": "bunyip"
+    },
+    {
+      "container_name": "lets-chat",
+      "description": "Let's Chat for your MSP",
+      "display_name": "Let's Chat",
+      "group_slug": "core",
+      "name": "lets-chat",
+      "restricted": false,
+      "slug": "lets-chat"
+    },
+    {
+      "container_name": "vault",
+      "description": "Vault for your MSP",
+      "display_name": "Vault",
+      "group_slug": "add-ons",
+      "name": "vault",
+      "restricted": true,
+      "slug": "vault"
+    },
+    {
+      "container_name": "backup",
+      "description": "Backup for your MSP",
+      "display_name": "Backup",
+      "group_slug": "add-ons",
+      "name": "backup",
+      "restricted": false,
+      "slug": "backup"
+    },
+    {
+      "container_name": "monitor",
+      "description": "Monitor for your MSP",
+      "display_name": "Monitor",
+      "group_slug": "add-ons",
+      "name": "monitor",
+      "restricted": false,
+      "slug": "monitor"
+    },
+    {
+      "container_name": "labs",
+      "description": "Labs for your MSP",
+      "display_name": "Labs",
+      "group_slug": "beta",
+      "name": "labs",
+      "restricted": true,
+      "slug": "labs"
+    },
+    {
+      "container_name": "insights",
+      "description": "Insights for your MSP",
+      "display_name": "Insights",
+      "group_slug": "beta",
+      "name": "insights",
+      "restricted": false,
+      "slug": "insights"
+    }
+  ],
+  "default_password": "demo-access-2026",
+  "entitlements": [
+    {
+      "app_slug": "vault",
+      "user_email": "ada.lovelace@demo.psa-systems.test"
+    },
+    {
+      "app_slug": "vault",
+      "user_email": "alan.turing@demo.psa-systems.test"
+    },
+    {
+      "app_slug": "vault",
+      "user_email": "anita.borg@demo.psa-systems.test"
+    },
+    {
+      "app_slug": "labs",
+      "user_email": "linus.torvalds@demo.psa-systems.test"
+    },
+    {
+      "app_slug": "labs",
+      "user_email": "guido.vanrossum@demo.psa-systems.test"
+    },
+    {
+      "app_slug": "labs",
+      "user_email": "adele.goldstine@demo.psa-systems.test"
+    }
+  ],
+  "feedback": [
+    {
+      "email": "katherine.johnson@demo.psa-systems.test",
+      "message": "The launcher is so much faster now. Great work.",
+      "subject": "Love the new dashboard",
+      "tags": [
+        "praise"
+      ]
+    },
+    {
+      "email": "dennis.ritchie@demo.psa-systems.test",
+      "message": "How do I update the card on my account?",
+      "subject": "Question about billing",
+      "tags": [
+        "billing",
+        "question"
+      ]
+    },
+    {
+      "email": "margaret.hamilton@demo.psa-systems.test",
+      "message": "A few admin pages still flash white. Could they follow the theme?",
+      "subject": "Feature request: dark mode everywhere",
+      "tags": [
+        "feature"
+      ]
+    },
+    {
+      "email": "ken.thompson@demo.psa-systems.test",
+      "message": "The downloads list overflows sideways on my phone.",
+      "subject": "Small bug on mobile",
+      "tags": [
+        "bug"
+      ]
+    },
+    {
+      "email": "radia.perlman@demo.psa-systems.test",
+      "message": "The lifetime plan sold me. Locked my price and never looked back.",
+      "subject": "Thank you",
+      "tags": [
+        "praise"
+      ]
+    },
+    {
+      "email": "tim.bernerslee@demo.psa-systems.test",
+      "message": "Would love an SSO hook into our internal wiki.",
+      "subject": "Integration idea",
+      "tags": [
+        "feature",
+        "integration"
+      ]
+    },
+    {
+      "email": "shafi.goldwasser@demo.psa-systems.test",
+      "is_spam": true,
+      "message": "Click here to claim your reward!!!",
+      "subject": "WIN A FREE PRIZE NOW",
+      "tags": []
+    }
+  ],
+  "users": [
+    {
+      "email": "ada.lovelace@demo.psa-systems.test",
+      "first_name": "Ada",
+      "last_name": "Lovelace",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "none",
+        "tier": "free"
+      },
+      "role": "admin",
+      "verified": true
+    },
+    {
+      "email": "grace.hopper@demo.psa-systems.test",
+      "first_name": "Grace",
+      "last_name": "Hopper",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "none",
+        "tier": "free"
+      },
+      "role": "admin",
+      "verified": true
+    },
+    {
+      "email": "alan.turing@demo.psa-systems.test",
+      "first_name": "Alan",
+      "last_name": "Turing",
+      "membership": {
+        "lifetime": true,
+        "price_locked": false,
+        "status": "active",
+        "tier": "lifetime"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "linus.torvalds@demo.psa-systems.test",
+      "first_name": "Linus",
+      "last_name": "Torvalds",
+      "membership": {
+        "lifetime": true,
+        "price_locked": false,
+        "status": "active",
+        "tier": "lifetime"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "barbara.liskov@demo.psa-systems.test",
+      "first_name": "Barbara",
+      "last_name": "Liskov",
+      "membership": {
+        "lifetime": true,
+        "price_locked": false,
+        "status": "active",
+        "tier": "lifetime"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "katherine.johnson@demo.psa-systems.test",
+      "first_name": "Katherine",
+      "last_name": "Johnson",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "past_due",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "dennis.ritchie@demo.psa-systems.test",
+      "first_name": "Dennis",
+      "last_name": "Ritchie",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "past_due",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "margaret.hamilton@demo.psa-systems.test",
+      "first_name": "Margaret",
+      "last_name": "Hamilton",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "past_due",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "ken.thompson@demo.psa-systems.test",
+      "first_name": "Ken",
+      "last_name": "Thompson",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "grace_period",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "radia.perlman@demo.psa-systems.test",
+      "first_name": "Radia",
+      "last_name": "Perlman",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "grace_period",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "tim.bernerslee@demo.psa-systems.test",
+      "first_name": "Tim",
+      "last_name": "Bernerslee",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "canceled",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "shafi.goldwasser@demo.psa-systems.test",
+      "first_name": "Shafi",
+      "last_name": "Goldwasser",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "canceled",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "leslie.lamport@demo.psa-systems.test",
+      "first_name": "Leslie",
+      "last_name": "Lamport",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "none",
+        "tier": "free"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "frances.allen@demo.psa-systems.test",
+      "first_name": "Frances",
+      "last_name": "Allen",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "none",
+        "tier": "free"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "john.mccarthy@demo.psa-systems.test",
+      "first_name": "John",
+      "last_name": "McCarthy",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "none",
+        "tier": "free"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "anita.borg@demo.psa-systems.test",
+      "first_name": "Anita",
+      "last_name": "Borg",
+      "membership": {
+        "lifetime": false,
+        "locked_price_amount": 4900,
+        "price_locked": true,
+        "status": "active",
+        "tier": "early_adopter"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "guido.vanrossum@demo.psa-systems.test",
+      "first_name": "Guido",
+      "last_name": "Vanrossum",
+      "membership": {
+        "lifetime": false,
+        "locked_price_amount": 4900,
+        "price_locked": true,
+        "status": "active",
+        "tier": "early_adopter"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "adele.goldstine@demo.psa-systems.test",
+      "first_name": "Adele",
+      "last_name": "Goldstine",
+      "membership": {
+        "lifetime": false,
+        "locked_price_amount": 4900,
+        "price_locked": true,
+        "status": "active",
+        "tier": "early_adopter"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "bjarne.stroustrup@demo.psa-systems.test",
+      "first_name": "Bjarne",
+      "last_name": "Stroustrup",
+      "membership": {
+        "lifetime": false,
+        "locked_price_amount": 4900,
+        "price_locked": true,
+        "status": "active",
+        "tier": "early_adopter"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "hedy.lamarr@demo.psa-systems.test",
+      "first_name": "Hedy",
+      "last_name": "Lamarr",
+      "membership": {
+        "lifetime": false,
+        "locked_price_amount": 4900,
+        "price_locked": true,
+        "status": "active",
+        "tier": "early_adopter"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "donald.knuth@demo.psa-systems.test",
+      "first_name": "Donald",
+      "last_name": "Knuth",
+      "membership": {
+        "lifetime": false,
+        "locked_price_amount": 4900,
+        "price_locked": true,
+        "status": "active",
+        "tier": "early_adopter"
+      },
+      "role": "subscriber",
+      "verified": false
+    },
+    {
+      "email": "joan.clarke@demo.psa-systems.test",
+      "first_name": "Joan",
+      "last_name": "Clarke",
+      "membership": {
+        "lifetime": false,
+        "locked_price_amount": 4900,
+        "price_locked": true,
+        "status": "active",
+        "tier": "early_adopter"
+      },
+      "role": "subscriber",
+      "verified": false
+    },
+    {
+      "email": "vint.cerf@demo.psa-systems.test",
+      "first_name": "Vint",
+      "last_name": "Cerf",
+      "membership": {
+        "lifetime": false,
+        "locked_price_amount": 4900,
+        "price_locked": true,
+        "status": "active",
+        "tier": "early_adopter"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "karen.sparck@demo.psa-systems.test",
+      "first_name": "Karen",
+      "last_name": "Sparck",
+      "membership": {
+        "lifetime": false,
+        "locked_price_amount": 4900,
+        "price_locked": true,
+        "status": "active",
+        "tier": "early_adopter"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "brian.kernighan@demo.psa-systems.test",
+      "first_name": "Brian",
+      "last_name": "Kernighan",
+      "membership": {
+        "lifetime": false,
+        "locked_price_amount": 4900,
+        "price_locked": true,
+        "status": "active",
+        "tier": "early_adopter"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "sophie.wilson@demo.psa-systems.test",
+      "first_name": "Sophie",
+      "last_name": "Wilson",
+      "membership": {
+        "lifetime": false,
+        "locked_price_amount": 4900,
+        "price_locked": true,
+        "status": "active",
+        "tier": "early_adopter"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "james.gosling@demo.psa-systems.test",
+      "first_name": "James",
+      "last_name": "Gosling",
+      "membership": {
+        "lifetime": false,
+        "locked_price_amount": 4900,
+        "price_locked": true,
+        "status": "active",
+        "tier": "early_adopter"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "evelyn.boyd@demo.psa-systems.test",
+      "first_name": "Evelyn",
+      "last_name": "Boyd",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "active",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "rob.pike@demo.psa-systems.test",
+      "first_name": "Rob",
+      "last_name": "Pike",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "active",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "carla.meyer@demo.psa-systems.test",
+      "first_name": "Carla",
+      "last_name": "Meyer",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "active",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "doug.engelbart@demo.psa-systems.test",
+      "first_name": "Doug",
+      "last_name": "Engelbart",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "active",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "mary.keller@demo.psa-systems.test",
+      "first_name": "Mary",
+      "last_name": "Keller",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "active",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "niklaus.wirth@demo.psa-systems.test",
+      "first_name": "Niklaus",
+      "last_name": "Wirth",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "active",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "erna.schneider@demo.psa-systems.test",
+      "first_name": "Erna",
+      "last_name": "Schneider",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "active",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "edsger.dijkstra@demo.psa-systems.test",
+      "first_name": "Edsger",
+      "last_name": "Dijkstra",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "active",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "ruth.teitelbaum@demo.psa-systems.test",
+      "first_name": "Ruth",
+      "last_name": "Teitelbaum",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "active",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "bill.gates@demo.psa-systems.test",
+      "first_name": "Bill",
+      "last_name": "Gates",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "active",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "annie.easley@demo.psa-systems.test",
+      "first_name": "Annie",
+      "last_name": "Easley",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "active",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "steve.wozniak@demo.psa-systems.test",
+      "first_name": "Steve",
+      "last_name": "Wozniak",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "active",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "lynn.conway@demo.psa-systems.test",
+      "first_name": "Lynn",
+      "last_name": "Conway",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "active",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "dan.bricklin@demo.psa-systems.test",
+      "first_name": "Dan",
+      "last_name": "Bricklin",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "active",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    },
+    {
+      "email": "jean.sammet@demo.psa-systems.test",
+      "first_name": "Jean",
+      "last_name": "Sammet",
+      "membership": {
+        "lifetime": false,
+        "price_locked": false,
+        "status": "active",
+        "tier": "standard"
+      },
+      "role": "subscriber",
+      "verified": true
+    }
+  ],
+  "version": 1
+}
