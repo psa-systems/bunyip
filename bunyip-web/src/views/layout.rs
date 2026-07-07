@@ -495,6 +495,12 @@ fn sidebar(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup
                       class={ "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-all " (if active == item.href { NAV_ACTIVE } else { NAV_INACTIVE }) } {
                         (icon(item.icon, "h-4 w-4"))
                         (item.title)
+                        // BUNYIP-341: flag the external Community launch with a
+                        // trailing external-link glyph (opens in a new tab), so
+                        // the row reads as "leaves Bunyip" before it is clicked.
+                        @if external {
+                            (icon("external-link", "ml-auto h-3.5 w-3.5 opacity-60"))
+                        }
                     }
                 }
                 @if !admin && is_admin {
