@@ -11,46 +11,85 @@ use crate::config::{EmailConfig, SmtpTls};
 use crate::errors::AppError;
 use crate::models::Feedback;
 
-/// Email service for sending transactional emails
-pub struct EmailService {
-    /// SMTP transport for sending emails
+/// Reloadable SMTP transport + config, swapped on admin update (BUNYIP-351).
+struct EmailRuntime {
     transport: Option<AsyncSmtpTransport<Tokio1Executor>>,
-    /// Template engine
-    templates: Tera,
-    /// Email configuration
     config: EmailConfig,
 }
 
+/// Email service for sending transactional emails
+pub struct EmailService {
+    /// Reloadable SMTP transport + config, swapped on admin update (BUNYIP-351).
+    runtime: std::sync::RwLock<EmailRuntime>,
+    /// Template engine (immutable; unaffected by config reloads).
+    templates: Tera,
+}
+
 impl EmailService {
+    /// Build the SMTP transport from config, or `None` when email is disabled.
+    ///
+    /// Host/port/tls/credentials are baked into the transport at build time, so
+    /// this is reused by both `new()` and `reload()` to (re)construct it.
+    fn build_transport(
+        config: &EmailConfig,
+    ) -> Result<Option<AsyncSmtpTransport<Tokio1Executor>>, AppError> {
+        if !config.enabled {
+            return Ok(None);
+        }
+
+        let creds = Credentials::new(config.smtp_username.clone(), config.smtp_password.clone());
+
+        let transport = match config.smtp_tls {
+            SmtpTls::Implicit => AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp_host)
+                .map_err(|e| AppError::internal(format!("SMTP connection error: {}", e)))?
+                .port(config.smtp_port)
+                .credentials(creds)
+                .tls(lettre::transport::smtp::client::Tls::Wrapper(
+                    lettre::transport::smtp::client::TlsParameters::new(config.smtp_host.clone())
+                        .map_err(|e| AppError::internal(format!("TLS error: {}", e)))?,
+                ))
+                .build(),
+            SmtpTls::Starttls => AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp_host)
+                .map_err(|e| AppError::internal(format!("SMTP connection error: {}", e)))?
+                .port(config.smtp_port)
+                .credentials(creds)
+                .build(),
+        };
+
+        Ok(Some(transport))
+    }
+
+    /// Snapshot the current config (cheap clone under a short read lock; never held across .await).
+    fn config(&self) -> EmailConfig {
+        self.runtime
+            .read()
+            .expect("EmailService lock poisoned")
+            .config
+            .clone()
+    }
+
+    /// Snapshot the current transport (lettre transports are Clone = cheap Arc bump).
+    fn transport(&self) -> Option<AsyncSmtpTransport<Tokio1Executor>> {
+        self.runtime
+            .read()
+            .expect("EmailService lock poisoned")
+            .transport
+            .clone()
+    }
+
+    /// Hot-reload the SMTP transport + config (e.g. after an admin update). Rebuilds
+    /// the transport because host/port/tls/credentials are baked into it at build time.
+    pub fn reload(&self, config: EmailConfig) -> Result<(), AppError> {
+        let transport = Self::build_transport(&config)?;
+        let mut rt = self.runtime.write().expect("EmailService lock poisoned");
+        rt.transport = transport;
+        rt.config = config;
+        Ok(())
+    }
+
     /// Create a new email service
     pub fn new(config: EmailConfig) -> Result<Self, AppError> {
-        let transport = if config.enabled {
-            let creds =
-                Credentials::new(config.smtp_username.clone(), config.smtp_password.clone());
-
-            let transport = match config.smtp_tls {
-                SmtpTls::Implicit => AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp_host)
-                    .map_err(|e| AppError::internal(format!("SMTP connection error: {}", e)))?
-                    .port(config.smtp_port)
-                    .credentials(creds)
-                    .tls(lettre::transport::smtp::client::Tls::Wrapper(
-                        lettre::transport::smtp::client::TlsParameters::new(
-                            config.smtp_host.clone(),
-                        )
-                        .map_err(|e| AppError::internal(format!("TLS error: {}", e)))?,
-                    ))
-                    .build(),
-                SmtpTls::Starttls => AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp_host)
-                    .map_err(|e| AppError::internal(format!("SMTP connection error: {}", e)))?
-                    .port(config.smtp_port)
-                    .credentials(creds)
-                    .build(),
-            };
-
-            Some(transport)
-        } else {
-            None
-        };
+        let transport = Self::build_transport(&config)?;
 
         // Initialize Tera templates with inline templates
         let mut templates = Tera::default();
@@ -261,9 +300,8 @@ impl EmailService {
             .map_err(|e| AppError::internal(format!("Template error: {}", e)))?;
 
         Ok(Self {
-            transport,
+            runtime: std::sync::RwLock::new(EmailRuntime { transport, config }),
             templates,
-            config,
         })
     }
 
@@ -288,9 +326,11 @@ impl EmailService {
         let templates = Tera::default();
 
         Self {
-            transport: None,
+            runtime: std::sync::RwLock::new(EmailRuntime {
+                transport: None,
+                config,
+            }),
             templates,
-            config,
         }
     }
 
@@ -305,15 +345,15 @@ impl EmailService {
     /// than at each call site, since every send routes through this method.
     fn build_message(
         &self,
+        config: &EmailConfig,
         to: &str,
         subject: &str,
         html_body: String,
         text_body: String,
     ) -> Result<Message, AppError> {
-        let from = format!("{} <{}>", self.config.from_name, self.config.from_email);
+        let from = format!("{} <{}>", config.from_name, config.from_email);
 
-        let domain = self
-            .config
+        let domain = config
             .from_email
             .rsplit('@')
             .next()
@@ -350,13 +390,15 @@ impl EmailService {
     /// Send an email
     async fn send_email(
         &self,
+        config: &EmailConfig,
         to: &str,
         subject: &str,
         html_body: String,
         text_body: String,
     ) -> Result<(), AppError> {
-        if let Some(ref transport) = self.transport {
-            let email = self.build_message(to, subject, html_body, text_body)?;
+        let transport = self.transport();
+        if let Some(transport) = transport {
+            let email = self.build_message(config, to, subject, html_body, text_body)?;
 
             // BUNYIP-309: log the handoff to the transport so an attempt is
             // visible even when the send below fails. Pairs with the
@@ -394,36 +436,38 @@ impl EmailService {
     }
 
     /// Get base context with common variables
-    fn base_context(&self) -> Context {
+    fn base_context(&self, config: &EmailConfig) -> Context {
         let mut context = Context::new();
-        context.insert("base_url", &self.config.base_url);
-        context.insert("app_name", &self.config.app_name);
+        context.insert("base_url", &config.base_url);
+        context.insert("app_name", &config.app_name);
         context.insert("year", &Utc::now().year());
         context
     }
 
     /// Send magic link email
     pub async fn send_magic_link(&self, email: &str, token: &str) -> Result<(), AppError> {
-        let magic_link_url = format!("{}/magic-link?token={}", self.config.base_url, token);
+        let config = self.config();
+        let magic_link_url = format!("{}/magic-link?token={}", config.base_url, token);
 
-        if !self.config.enabled {
+        if !config.enabled {
             // Never log the token (or any URL containing it) at INFO: the
             // single-use token is a bearer credential and this path also runs
             // in production deployments without SMTP (BUNYIP-204).
             tracing::info!(email = %email, "Magic link (dev mode) - token suppressed");
-            if self.config.log_tokens {
+            if config.log_tokens {
                 tracing::debug!(email = %email, link = %magic_link_url, "Magic link URL (EMAIL_LOG_TOKENS)");
             }
             return Ok(());
         }
 
-        let mut context = self.base_context();
+        let mut context = self.base_context(&config);
         context.insert("magic_link_url", &magic_link_url);
 
         let (html, text) = self.render_template("magic_link", &context)?;
         self.send_email(
+            &config,
             email,
-            &format!("Sign in to {}", self.config.app_name),
+            &format!("Sign in to {}", config.app_name),
             html,
             text,
         )
@@ -432,26 +476,25 @@ impl EmailService {
 
     /// Send password reset email
     pub async fn send_password_reset(&self, email: &str, token: &str) -> Result<(), AppError> {
-        let reset_url = format!(
-            "{}/password-reset/confirm?token={}",
-            self.config.base_url, token
-        );
+        let config = self.config();
+        let reset_url = format!("{}/password-reset/confirm?token={}", config.base_url, token);
 
-        if !self.config.enabled {
+        if !config.enabled {
             tracing::info!(email = %email, "Password reset link (dev mode) - token suppressed");
-            if self.config.log_tokens {
+            if config.log_tokens {
                 tracing::debug!(email = %email, link = %reset_url, "Password reset URL (EMAIL_LOG_TOKENS)");
             }
             return Ok(());
         }
 
-        let mut context = self.base_context();
+        let mut context = self.base_context(&config);
         context.insert("reset_url", &reset_url);
 
         let (html, text) = self.render_template("password_reset", &context)?;
         self.send_email(
+            &config,
             email,
-            &format!("Reset your {} password", self.config.app_name),
+            &format!("Reset your {} password", config.app_name),
             html,
             text,
         )
@@ -460,21 +503,20 @@ impl EmailService {
 
     /// Send account creation email
     pub async fn send_account_created(&self, email: &str) -> Result<(), AppError> {
-        if !self.config.enabled {
+        let config = self.config();
+        if !config.enabled {
             tracing::info!(email = %email, "Account created email (dev mode - not sending)");
             return Ok(());
         }
 
-        let mut context = self.base_context();
-        context.insert(
-            "dashboard_url",
-            &format!("{}/dashboard", self.config.base_url),
-        );
+        let mut context = self.base_context(&config);
+        context.insert("dashboard_url", &format!("{}/dashboard", config.base_url));
 
         let (html, text) = self.render_template("account_created", &context)?;
         self.send_email(
+            &config,
             email,
-            &format!("Welcome to {}!", self.config.app_name),
+            &format!("Welcome to {}!", config.app_name),
             html,
             text,
         )
@@ -483,21 +525,20 @@ impl EmailService {
 
     /// Send password changed notification email
     pub async fn send_password_changed(&self, email: &str) -> Result<(), AppError> {
-        if !self.config.enabled {
+        let config = self.config();
+        if !config.enabled {
             tracing::info!(email = %email, "Password changed email (dev mode - not sending)");
             return Ok(());
         }
 
-        let mut context = self.base_context();
-        context.insert(
-            "dashboard_url",
-            &format!("{}/dashboard", self.config.base_url),
-        );
+        let mut context = self.base_context(&config);
+        context.insert("dashboard_url", &format!("{}/dashboard", config.base_url));
 
         let (html, text) = self.render_template("password_changed", &context)?;
         self.send_email(
+            &config,
             email,
-            &format!("Your {} password was changed", self.config.app_name),
+            &format!("Your {} password was changed", config.app_name),
             html,
             text,
         )
@@ -506,22 +547,21 @@ impl EmailService {
 
     /// Send welcome email after membership activation
     pub async fn send_welcome(&self, email: &str, price_cents: i32) -> Result<(), AppError> {
-        if !self.config.enabled {
+        let config = self.config();
+        if !config.enabled {
             tracing::info!(email = %email, price = price_cents, "Welcome email (dev mode)");
             return Ok(());
         }
 
-        let mut context = self.base_context();
-        context.insert(
-            "dashboard_url",
-            &format!("{}/dashboard", self.config.base_url),
-        );
+        let mut context = self.base_context(&config);
+        context.insert("dashboard_url", &format!("{}/dashboard", config.base_url));
         context.insert("price", &format!("{:.2}", price_cents as f64 / 100.0));
 
         let (html, text) = self.render_template("welcome", &context)?;
         self.send_email(
+            &config,
             email,
-            &format!("Welcome to {}!", self.config.app_name),
+            &format!("Welcome to {}!", config.app_name),
             html,
             text,
         )
@@ -534,7 +574,8 @@ impl EmailService {
         email: &str,
         days_remaining: i32,
     ) -> Result<(), AppError> {
-        if !self.config.enabled {
+        let config = self.config();
+        if !config.enabled {
             tracing::info!(
                 email = %email,
                 days = days_remaining,
@@ -543,16 +584,22 @@ impl EmailService {
             return Ok(());
         }
 
-        let mut context = self.base_context();
+        let mut context = self.base_context(&config);
         context.insert(
             "billing_url",
-            &format!("{}/dashboard/membership", self.config.base_url),
+            &format!("{}/dashboard/membership", config.base_url),
         );
         context.insert("days_remaining", &days_remaining);
 
         let (html, text) = self.render_template("payment_failed", &context)?;
-        self.send_email(email, "Action required: Payment failed", html, text)
-            .await
+        self.send_email(
+            &config,
+            email,
+            "Action required: Payment failed",
+            html,
+            text,
+        )
+        .await
     }
 
     /// Send grace period reminder email
@@ -561,7 +608,8 @@ impl EmailService {
         email: &str,
         days_remaining: i32,
     ) -> Result<(), AppError> {
-        if !self.config.enabled {
+        let config = self.config();
+        if !config.enabled {
             tracing::info!(
                 email = %email,
                 days = days_remaining,
@@ -570,15 +618,16 @@ impl EmailService {
             return Ok(());
         }
 
-        let mut context = self.base_context();
+        let mut context = self.base_context(&config);
         context.insert(
             "billing_url",
-            &format!("{}/dashboard/membership", self.config.base_url),
+            &format!("{}/dashboard/membership", config.base_url),
         );
         context.insert("days_remaining", &days_remaining);
 
         let (html, text) = self.render_template("grace_period_reminder", &context)?;
         self.send_email(
+            &config,
             email,
             &format!("Only {} days left to update payment", days_remaining),
             html,
@@ -593,22 +642,21 @@ impl EmailService {
         email: &str,
         end_date: DateTime<Utc>,
     ) -> Result<(), AppError> {
-        if !self.config.enabled {
+        let config = self.config();
+        if !config.enabled {
             tracing::info!(email = %email, end_date = %end_date, "Membership canceled email (dev mode)");
             return Ok(());
         }
 
-        let mut context = self.base_context();
+        let mut context = self.base_context(&config);
         context.insert("end_date", &end_date.format("%B %d, %Y").to_string());
-        context.insert(
-            "resubscribe_url",
-            &format!("{}/pricing", self.config.base_url),
-        );
+        context.insert("resubscribe_url", &format!("{}/pricing", config.base_url));
 
         let (html, text) = self.render_template("membership_canceled", &context)?;
         self.send_email(
+            &config,
             email,
-            &format!("Your {} membership has been canceled", self.config.app_name),
+            &format!("Your {} membership has been canceled", config.app_name),
             html,
             text,
         )
@@ -617,26 +665,25 @@ impl EmailService {
 
     /// Send email change verification email (to new address)
     pub async fn send_email_change_verify(&self, email: &str, token: &str) -> Result<(), AppError> {
-        let verify_url = format!(
-            "{}/settings/confirm-email?token={}",
-            self.config.base_url, token
-        );
+        let config = self.config();
+        let verify_url = format!("{}/settings/confirm-email?token={}", config.base_url, token);
 
-        if !self.config.enabled {
+        if !config.enabled {
             tracing::info!(email = %email, "Email change verify link (dev mode) - token suppressed");
-            if self.config.log_tokens {
+            if config.log_tokens {
                 tracing::debug!(email = %email, link = %verify_url, "Email change verify URL (EMAIL_LOG_TOKENS)");
             }
             return Ok(());
         }
 
-        let mut context = self.base_context();
+        let mut context = self.base_context(&config);
         context.insert("verify_url", &verify_url);
 
         let (html, text) = self.render_template("email_change_verify", &context)?;
         self.send_email(
+            &config,
             email,
-            &format!("Verify your new {} email address", self.config.app_name),
+            &format!("Verify your new {} email address", config.app_name),
             html,
             text,
         )
@@ -649,22 +696,21 @@ impl EmailService {
         old_email: &str,
         new_email: &str,
     ) -> Result<(), AppError> {
-        if !self.config.enabled {
+        let config = self.config();
+        if !config.enabled {
             tracing::info!(old_email = %old_email, new_email = %new_email, "Email change notification (dev mode - not sending)");
             return Ok(());
         }
 
-        let mut context = self.base_context();
+        let mut context = self.base_context(&config);
         context.insert("new_email", new_email);
-        context.insert(
-            "dashboard_url",
-            &format!("{}/dashboard", self.config.base_url),
-        );
+        context.insert("dashboard_url", &format!("{}/dashboard", config.base_url));
 
         let (html, text) = self.render_template("email_change_notification", &context)?;
         self.send_email(
+            &config,
             old_email,
-            &format!("Your {} email address was changed", self.config.app_name),
+            &format!("Your {} email address was changed", config.app_name),
             html,
             text,
         )
@@ -673,12 +719,10 @@ impl EmailService {
 
     /// Send email verification link
     pub async fn send_email_verify(&self, email: &str, token: &str) -> Result<(), AppError> {
-        let verify_url = format!(
-            "{}/settings/verify-email?token={}",
-            self.config.base_url, token
-        );
+        let config = self.config();
+        let verify_url = format!("{}/settings/verify-email?token={}", config.base_url, token);
 
-        if !self.config.enabled {
+        if !config.enabled {
             tracing::info!(
                 email = %email,
                 link = %verify_url,
@@ -687,13 +731,14 @@ impl EmailService {
             return Ok(());
         }
 
-        let mut context = self.base_context();
+        let mut context = self.base_context(&config);
         context.insert("verify_url", &verify_url);
 
         let (html, text) = self.render_template("email_verify", &context)?;
         self.send_email(
+            &config,
             email,
-            &format!("Verify your {} email address", self.config.app_name),
+            &format!("Verify your {} email address", config.app_name),
             html,
             text,
         )
@@ -706,22 +751,21 @@ impl EmailService {
         email: &str,
         amount_cents: i32,
     ) -> Result<(), AppError> {
-        if !self.config.enabled {
+        let config = self.config();
+        if !config.enabled {
             tracing::info!(email = %email, amount = amount_cents, "Payment succeeded email (dev mode)");
             return Ok(());
         }
 
-        let mut context = self.base_context();
+        let mut context = self.base_context(&config);
         context.insert("amount", &format!("{:.2}", amount_cents as f64 / 100.0));
-        context.insert(
-            "dashboard_url",
-            &format!("{}/dashboard", self.config.base_url),
-        );
+        context.insert("dashboard_url", &format!("{}/dashboard", config.base_url));
 
         let (html, text) = self.render_template("payment_succeeded", &context)?;
         self.send_email(
+            &config,
             email,
-            &format!("Payment received - {}", self.config.app_name),
+            &format!("Payment received - {}", config.app_name),
             html,
             text,
         )
@@ -734,7 +778,8 @@ impl EmailService {
         admin_url: &str,
         recipients: &[String],
     ) -> Result<(), AppError> {
-        if !self.config.enabled || recipients.is_empty() {
+        let config = self.config();
+        if !config.enabled || recipients.is_empty() {
             tracing::info!(
                 recipients = recipients.len(),
                 "Feedback notification email skipped"
@@ -742,14 +787,15 @@ impl EmailService {
             return Ok(());
         }
 
-        let mut context = self.base_context();
+        let mut context = self.base_context(&config);
         context.insert("admin_url", admin_url);
 
         let (html, text) = self.render_template("admin_feedback_notification", &context)?;
         for recipient in recipients {
             self.send_email(
+                &config,
                 recipient,
-                &format!("New feedback received - {}", self.config.app_name),
+                &format!("New feedback received - {}", config.app_name),
                 html.clone(),
                 text.clone(),
             )
@@ -765,12 +811,13 @@ impl EmailService {
         email: &str,
         feedback: &Feedback,
     ) -> Result<(), AppError> {
-        if !self.config.enabled {
+        let config = self.config();
+        if !config.enabled {
             tracing::info!(feedback_id = %feedback.id, email = %email, "Feedback response email skipped");
             return Ok(());
         }
 
-        let mut context = self.base_context();
+        let mut context = self.base_context(&config);
         context.insert(
             "subject_line",
             &feedback.subject.as_deref().unwrap_or("Your feedback"),
@@ -783,8 +830,9 @@ impl EmailService {
 
         let (html, text) = self.render_template("feedback_response", &context)?;
         self.send_email(
+            &config,
             email,
-            &format!("Response to your feedback - {}", self.config.app_name),
+            &format!("Response to your feedback - {}", config.app_name),
             html,
             text,
         )
@@ -793,9 +841,10 @@ impl EmailService {
 
     /// Send admin invite email
     pub async fn send_admin_invite(&self, email: &str, token: &str) -> Result<(), AppError> {
-        let invite_url = format!("{}/invite/accept?token={}", self.config.base_url, token);
+        let config = self.config();
+        let invite_url = format!("{}/invite/accept?token={}", config.base_url, token);
 
-        if !self.config.enabled {
+        if !config.enabled {
             tracing::info!(
                 email = %email,
                 link = %invite_url,
@@ -804,15 +853,16 @@ impl EmailService {
             return Ok(());
         }
 
-        let mut context = self.base_context();
+        let mut context = self.base_context(&config);
         context.insert("invite_url", &invite_url);
 
         let (html, text) = self.render_template("admin_invite", &context)?;
         self.send_email(
+            &config,
             email,
             &format!(
                 "You've been invited to join {} as an admin",
-                self.config.app_name
+                config.app_name
             ),
             html,
             text,
@@ -848,9 +898,11 @@ mod tests {
         };
 
         EmailService {
-            transport: None,
+            runtime: std::sync::RwLock::new(EmailRuntime {
+                transport: None,
+                config,
+            }),
             templates: Tera::default(),
-            config,
         }
     }
 
@@ -869,8 +921,10 @@ mod tests {
     #[test]
     fn build_message_sets_single_message_id_with_from_domain() {
         let service = service_with_from("dmarc-reporter-staging@a8n.run");
+        let config = service.config();
         let email = service
             .build_message(
+                &config,
                 "recipient@gmail.com",
                 "Verify your PSA Staging email address",
                 "<p>hello</p>".to_string(),
@@ -907,14 +961,15 @@ mod tests {
     #[test]
     fn build_message_generates_unique_message_ids() {
         let service = service_with_from("noreply@a8n.run");
+        let config = service.config();
         let first = message_id_lines(
             &service
-                .build_message("a@example.com", "s", "h".into(), "t".into())
+                .build_message(&config, "a@example.com", "s", "h".into(), "t".into())
                 .unwrap(),
         );
         let second = message_id_lines(
             &service
-                .build_message("b@example.com", "s", "h".into(), "t".into())
+                .build_message(&config, "b@example.com", "s", "h".into(), "t".into())
                 .unwrap(),
         );
         assert_ne!(first[0], second[0], "Message-IDs must differ per send");

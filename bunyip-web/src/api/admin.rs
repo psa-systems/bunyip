@@ -6,8 +6,8 @@ use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeedbackDetail,
     AdminFeedbackSummary, AdminIpBan, AdminMembership, AdminRateLimit, AdminStatsResponse,
     AdminUser, ApplicationGroup, ApplicationGroupList, ArchivedFeedback, AutoBanConfigResponse,
-    ErrorLogsResponse, FeedbackStatus, ImportSummary, PaginatedResponse, SeedTemplateInfo,
-    StripeConfigResponse, TierConfigResponse, UserEntitlement,
+    EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary, PaginatedResponse,
+    SeedTemplateInfo, StripeConfigResponse, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -735,6 +735,22 @@ pub async fn update_stripe_config(
     body: Value,
 ) -> Result<(), ApiError> {
     let r = api.put("/admin/stripe", cookie, Some(body)).await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn email_config(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<EmailConfigResponse, ApiError> {
+    parse(api.get("/admin/email", cookie).await?)
+}
+
+pub async fn update_email_config(
+    api: &Api,
+    cookie: Option<&str>,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api.put("/admin/email", cookie, Some(body)).await?;
     ok_data(&r).map(|_| ())
 }
 

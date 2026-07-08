@@ -2138,6 +2138,199 @@ pub async fn revoke_lifetime_membership(
 }
 
 // =============================================================================
+// Email Configuration (BUNYIP-351)
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateEmailConfigRequest {
+    pub enabled: Option<bool>,
+    pub smtp_host: Option<String>,
+    pub smtp_port: Option<i32>,
+    pub smtp_tls: Option<String>,
+    pub smtp_username: Option<String>,
+    pub smtp_password: Option<String>,
+    pub from_email: Option<String>,
+    pub from_name: Option<String>,
+    pub admin_notification_emails: Option<String>,
+}
+
+/// Render an [`SmtpTls`](crate::config::SmtpTls) as its wire string.
+fn smtp_tls_str(tls: &crate::config::SmtpTls) -> String {
+    match tls {
+        crate::config::SmtpTls::Implicit => "implicit".to_string(),
+        crate::config::SmtpTls::Starttls => "starttls".to_string(),
+    }
+}
+
+/// Build the API response from a resolved [`EmailConfig`], masking the password.
+fn email_config_response(
+    resolved: crate::config::EmailConfig,
+    source: &'static str,
+    updated_at: chrono::DateTime<chrono::Utc>,
+    updated_by: Option<uuid::Uuid>,
+) -> crate::models::email::EmailConfigResponse {
+    use crate::models::stripe::mask_secret;
+    let has_smtp_password = !resolved.smtp_password.is_empty();
+    let smtp_password_masked = has_smtp_password.then(|| mask_secret(&resolved.smtp_password));
+    crate::models::email::EmailConfigResponse {
+        enabled: resolved.enabled,
+        smtp_host: resolved.smtp_host,
+        smtp_port: resolved.smtp_port as i32,
+        smtp_tls: smtp_tls_str(&resolved.smtp_tls),
+        smtp_username: resolved.smtp_username,
+        has_smtp_password,
+        smtp_password_masked,
+        from_email: resolved.from_email,
+        from_name: resolved.from_name,
+        admin_notification_emails: resolved.admin_notification_emails,
+        source,
+        updated_at: Some(updated_at),
+        updated_by,
+    }
+}
+
+/// GET /v1/admin/email
+pub async fn get_email_config(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    stripe_key_set: web::Data<EncryptionKeySet>,
+) -> Result<HttpResponse, AppError> {
+    use crate::config::EmailConfig;
+    use crate::repositories::EmailConfigRepository;
+
+    let request_id = get_request_id(&req);
+
+    let row = EmailConfigRepository::get(&pool).await?;
+    let source = if EmailConfig::has_db_overrides(&row) {
+        "database"
+    } else {
+        "environment"
+    };
+    let resolved = EmailConfig::from_db_row(&row, &stripe_key_set, config.is_production());
+
+    Ok(success(
+        email_config_response(resolved, source, row.updated_at, row.updated_by),
+        request_id,
+    ))
+}
+
+/// PUT /v1/admin/email
+pub async fn update_email_config(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    stripe_key_set: web::Data<EncryptionKeySet>,
+    email_service: web::Data<Arc<EmailService>>,
+    body: web::Json<UpdateEmailConfigRequest>,
+) -> Result<HttpResponse, AppError> {
+    use crate::config::EmailConfig;
+    use crate::models::stripe::encrypt_secret;
+    use crate::repositories::EmailConfigRepository;
+
+    let request_id = get_request_id(&req);
+
+    // Validate the enumerated / bounded fields when provided.
+    if let Some(tls) = body.smtp_tls.as_deref().filter(|s| !s.is_empty()) {
+        if tls != "implicit" && tls != "starttls" {
+            return Err(AppError::validation(
+                "smtp_tls",
+                "Must be 'implicit' or 'starttls'",
+            ));
+        }
+    }
+    if let Some(port) = body.smtp_port {
+        if !(1..=65535).contains(&port) {
+            return Err(AppError::validation(
+                "smtp_port",
+                "Must be between 1 and 65535",
+            ));
+        }
+    }
+
+    // Empty string == "no change" (COALESCE), matching the Stripe/tier handlers.
+    let nonempty = |v: &Option<String>| {
+        v.as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let smtp_host = nonempty(&body.smtp_host);
+    let smtp_tls = nonempty(&body.smtp_tls);
+    let smtp_username = nonempty(&body.smtp_username);
+    let from_email = nonempty(&body.from_email);
+    let from_name = nonempty(&body.from_name);
+    let admin_notification_emails = nonempty(&body.admin_notification_emails);
+
+    // Encrypt the SMTP password before storing (never persisted in plaintext).
+    let smtp_password_plain = body.smtp_password.as_deref().filter(|s| !s.is_empty());
+    let (pw_enc, pw_nonce, key_version) = match smtp_password_plain {
+        Some(pw) => {
+            let (ct, nonce, ver) = encrypt_secret(&stripe_key_set, pw)?;
+            (Some(ct), Some(nonce), ver)
+        }
+        None => (None, None, stripe_key_set.current_version),
+    };
+
+    let updated = EmailConfigRepository::update(
+        &pool,
+        body.enabled,
+        smtp_host,
+        body.smtp_port,
+        smtp_tls,
+        smtp_username,
+        pw_enc,
+        pw_nonce,
+        key_version,
+        from_email,
+        from_name,
+        admin_notification_emails,
+        admin.0.sub,
+    )
+    .await?;
+
+    let resolved = EmailConfig::from_db_row(&updated, &stripe_key_set, config.is_production());
+
+    // BUNYIP-204/351: refuse to disable email in production, even via the DB.
+    if config.is_production() && !resolved.enabled {
+        return Err(AppError::validation(
+            "enabled",
+            "Email cannot be disabled in a production deployment",
+        ));
+    }
+
+    // Hot-reload the live EmailService so subsequent sends use the new transport.
+    email_service.reload(resolved.clone())?;
+    tracing::info!("Email config updated and hot-reloaded");
+
+    AuditLogRepository::create(
+        &pool,
+        CreateAuditLog::new(AuditAction::AdminEmailConfigUpdated)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+            .with_metadata(serde_json::json!({
+                "setting": "email_config",
+                "enabled": body.enabled,
+                "smtp_host": body.smtp_host,
+                "smtp_port": body.smtp_port,
+                "smtp_tls": body.smtp_tls,
+                "smtp_username": body.smtp_username,
+                // Never log the password itself; record only that it changed.
+                "password_changed": smtp_password_plain.is_some(),
+                "from_email": body.from_email,
+                "from_name": body.from_name,
+            })),
+    )
+    .await?;
+
+    Ok(success(
+        email_config_response(resolved, "database", updated.updated_at, updated.updated_by),
+        request_id,
+    ))
+}
+
+// =============================================================================
 // Tier Configuration
 // =============================================================================
 
