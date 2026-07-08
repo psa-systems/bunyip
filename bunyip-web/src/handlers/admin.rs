@@ -3966,6 +3966,160 @@ pub async fn tier_settings_save(
 }
 
 // ===========================================================================
+// Email / SMTP config (BUNYIP-351)
+// ===========================================================================
+
+fn email_settings_content(cfg: Option<&crate::api::types::EmailConfigResponse>) -> Markup {
+    html! {
+        div class="space-y-6" {
+            div { h1 class="text-3xl font-bold" { "Email" } p class="mt-2 text-muted-foreground" { "Configure the SMTP relay for transactional email. Changes apply immediately without a restart." } }
+            @match cfg {
+                None => p class="text-muted-foreground" { "Could not load email config." },
+                Some(e) => div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                    div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "SMTP Configuration" } p class="text-sm text-muted-foreground" { "Source: " (e.source) ". Leave a field blank to keep the existing value." } }
+                    div class="p-6 pt-0" {
+                        form method="post" action="/admin/email" class="space-y-4 max-w-md" {
+                            div class="space-y-2" {
+                                label class="text-sm font-medium" { "Sending" }
+                                select name="enabled" class=(dashboard_input()) {
+                                    option value="true" selected[e.enabled] { "Enabled" }
+                                    option value="false" selected[!e.enabled] { "Disabled" }
+                                }
+                            }
+                            div class="space-y-2" { label class="text-sm font-medium" { "SMTP host" } input name="smtp_host" value=(e.smtp_host) placeholder="smtp.example.com" class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "SMTP port" } input name="smtp_port" type="number" min="1" max="65535" value=(e.smtp_port) class=(dashboard_input()); }
+                            div class="space-y-2" {
+                                label class="text-sm font-medium" { "TLS mode" }
+                                select name="smtp_tls" class=(dashboard_input()) {
+                                    option value="implicit" selected[e.smtp_tls == "implicit"] { "Implicit (port 465)" }
+                                    option value="starttls" selected[e.smtp_tls == "starttls"] { "STARTTLS (port 587)" }
+                                }
+                            }
+                            div class="space-y-2" { label class="text-sm font-medium" { "SMTP username" } input name="smtp_username" value=(e.smtp_username) autocomplete="off" class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "SMTP password" } input name="smtp_password" type="password" autocomplete="new-password" placeholder=(e.smtp_password_masked.clone().unwrap_or_else(|| "(unchanged)".into())) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Stored encrypted. Leave blank to keep the current password." } }
+                            div class="space-y-2" { label class="text-sm font-medium" { "From email" } input name="from_email" type="email" value=(e.from_email) placeholder="noreply@example.com" class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "From name" } input name="from_name" value=(e.from_name) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Admin notification emails" } input name="admin_notification_emails" value=(e.admin_notification_emails.join(", ")) placeholder="ops@example.com, alerts@example.com" class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Comma-separated recipients for operational notices." } }
+                            button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
+                        }
+                    }
+                },
+            }
+        }
+    }
+}
+
+pub async fn email(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let cfg = admin_api::email_config(&st.api, c.forward.as_deref())
+        .await
+        .ok();
+    let content = email_settings_content(cfg.as_ref());
+    admin_response(&c, &user, "/admin/email", "Email · Bunyip", content)
+}
+
+#[derive(Deserialize)]
+pub struct EmailSettingsForm {
+    #[serde(default)]
+    pub enabled: String,
+    #[serde(default)]
+    pub smtp_host: String,
+    #[serde(default)]
+    pub smtp_port: String,
+    #[serde(default)]
+    pub smtp_tls: String,
+    #[serde(default)]
+    pub smtp_username: String,
+    #[serde(default)]
+    pub smtp_password: String,
+    #[serde(default)]
+    pub from_email: String,
+    #[serde(default)]
+    pub from_name: String,
+    #[serde(default)]
+    pub admin_notification_emails: String,
+}
+
+/// Build the PUT body from the submitted form. `enabled` and `smtp_tls` (both
+/// from `<select>`s) are always sent; the SMTP port is validated when present;
+/// every other field is sent only when non-blank so an untouched field leaves
+/// the persisted value unchanged. Pure so it can be unit-tested.
+fn email_update_body(f: &EmailSettingsForm) -> Result<serde_json::Value, String> {
+    let mut body = serde_json::Map::new();
+    body.insert("enabled".into(), json!(f.enabled.trim() == "true"));
+
+    let port = f.smtp_port.trim();
+    if !port.is_empty() {
+        let n: i32 = port
+            .parse()
+            .map_err(|_| "SMTP port must be a whole number.".to_string())?;
+        if !(1..=65535).contains(&n) {
+            return Err("SMTP port must be between 1 and 65535.".to_string());
+        }
+        body.insert("smtp_port".into(), json!(n));
+    }
+
+    let tls = f.smtp_tls.trim();
+    if tls == "implicit" || tls == "starttls" {
+        body.insert("smtp_tls".into(), json!(tls));
+    }
+
+    let from_email = f.from_email.trim();
+    if !from_email.is_empty() && !from_email.contains('@') {
+        return Err("From email must be a valid address.".to_string());
+    }
+
+    for (key, raw) in [
+        ("smtp_host", &f.smtp_host),
+        ("smtp_username", &f.smtp_username),
+        ("smtp_password", &f.smtp_password),
+        ("from_email", &f.from_email),
+        ("from_name", &f.from_name),
+        ("admin_notification_emails", &f.admin_notification_emails),
+    ] {
+        let t = raw.trim();
+        if !t.is_empty() {
+            body.insert(key.into(), json!(t));
+        }
+    }
+
+    Ok(serde_json::Value::Object(body))
+}
+
+pub async fn email_save(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<EmailSettingsForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+
+    let error = match email_update_body(&f) {
+        Ok(body) => match admin_api::update_email_config(&st.api, c.forward.as_deref(), body).await
+        {
+            Ok(()) => return redirect_cookies("/admin/email", &c.set_cookies),
+            Err(e) => e.user_message(),
+        },
+        Err(msg) => msg,
+    };
+
+    // Re-render with the persisted values plus the inline error.
+    let cfg = admin_api::email_config(&st.api, c.forward.as_deref())
+        .await
+        .ok();
+    let content = html! {
+        (error_box(&error))
+        (email_settings_content(cfg.as_ref()))
+    };
+    admin_response(&c, &user, "/admin/email", "Email · Bunyip", content)
+}
+
+// ===========================================================================
 // Stripe config (condensed: keys + app tag)
 // ===========================================================================
 
@@ -4082,6 +4236,53 @@ fn stripe_error_page(c: &AuthCtx, user: &User, err: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn blank_email_form() -> EmailSettingsForm {
+        EmailSettingsForm {
+            enabled: "false".into(),
+            smtp_host: String::new(),
+            smtp_port: String::new(),
+            smtp_tls: "implicit".into(),
+            smtp_username: String::new(),
+            smtp_password: String::new(),
+            from_email: String::new(),
+            from_name: String::new(),
+            admin_notification_emails: String::new(),
+        }
+    }
+
+    #[test]
+    fn email_body_always_sends_enabled_and_omits_blanks() {
+        let mut f = blank_email_form();
+        f.enabled = "true".into();
+        f.smtp_host = "  smtp.example.com  ".into();
+        f.smtp_port = "587".into();
+        f.smtp_tls = "starttls".into();
+        let body = email_update_body(&f).expect("valid");
+        assert_eq!(body["enabled"], json!(true));
+        assert_eq!(body["smtp_host"], json!("smtp.example.com")); // trimmed
+        assert_eq!(body["smtp_port"], json!(587));
+        assert_eq!(body["smtp_tls"], json!("starttls"));
+        // Blank optional fields are omitted so the API keeps the existing value.
+        assert!(body.get("smtp_username").is_none());
+        assert!(body.get("smtp_password").is_none());
+        assert!(body.get("from_email").is_none());
+    }
+
+    #[test]
+    fn email_body_rejects_bad_port_and_email() {
+        let mut f = blank_email_form();
+        f.smtp_port = "70000".into();
+        assert!(email_update_body(&f).is_err());
+
+        let mut f = blank_email_form();
+        f.from_email = "notanemail".into();
+        assert!(email_update_body(&f).is_err());
+
+        // enabled=false is still sent explicitly (the toggle works both ways).
+        let body = email_update_body(&blank_email_form()).expect("valid");
+        assert_eq!(body["enabled"], json!(false));
+    }
 
     #[test]
     fn update_body_omits_empty_but_always_sends_forgejo_package() {

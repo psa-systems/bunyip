@@ -244,6 +244,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             // Tier config
             .route("/tier-config", web::get().to(handlers::get_tier_config))
             .route("/tier-config", web::put().to(handlers::update_tier_config))
+            // Email config (BUNYIP-351)
+            .route("/email", web::get().to(handlers::get_email_config))
+            .route("/email", web::put().to(handlers::update_email_config))
             // Stripe config
             .route("/stripe", web::get().to(handlers::get_stripe_config))
             .route("/stripe", web::put().to(handlers::update_stripe_config))

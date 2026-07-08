@@ -74,6 +74,7 @@ pub enum AuditAction {
     AdminInviteRevoked,
     AdminStripeConfigUpdated,
     AdminTierConfigUpdated,
+    AdminEmailConfigUpdated,
     AdminKeyRotation,
     UserAccountDeleted,
     /// BUNYIP-211: outcome of fanning the `account_deleted` webhook out to one
@@ -194,6 +195,7 @@ impl AuditAction {
             AuditAction::AdminInviteRevoked => "admin_invite_revoked",
             AuditAction::AdminStripeConfigUpdated => "admin_stripe_config_updated",
             AuditAction::AdminTierConfigUpdated => "admin_tier_config_updated",
+            AuditAction::AdminEmailConfigUpdated => "admin_email_config_updated",
             AuditAction::AdminKeyRotation => "admin_key_rotation",
             AuditAction::UserAccountDeleted => "user_account_deleted",
             AuditAction::AccountDeleteWebhookDispatched => "account_delete_webhook_dispatched",
@@ -259,6 +261,7 @@ impl AuditAction {
                 | AuditAction::AdminInviteRevoked
                 | AuditAction::AdminStripeConfigUpdated
                 | AuditAction::AdminTierConfigUpdated
+                | AuditAction::AdminEmailConfigUpdated
                 | AuditAction::AdminKeyRotation
                 | AuditAction::AdminEntitlementGranted
                 | AuditAction::AdminEntitlementRevoked

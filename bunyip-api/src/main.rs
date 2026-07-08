@@ -12,7 +12,7 @@ use tracing_actix_web::TracingLogger;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use bunyip_api::{
-    config::{secret_env, Config, TierConfig},
+    config::{secret_env, Config, EmailConfig, TierConfig},
     middleware::{
         auto_ban::{self, AutoBanService},
         request_id::RequestIdMiddleware,
@@ -241,14 +241,6 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Auth service initialized");
 
-    // Initialize Email service
-    let email_service = Arc::new(EmailService::new(config.email.clone()).unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "Failed to initialize email service, using dev mode");
-        EmailService::new_dev()
-    }));
-
-    info!(enabled = config.email.enabled, "Email service initialized");
-
     // Build encryption key sets for key rotation support
     let totp_key_set = EncryptionKeySet {
         current: config.totp_encryption_key,
@@ -260,6 +252,39 @@ async fn main() -> anyhow::Result<()> {
         current_version: config.stripe_key_version,
         previous: config.stripe_encryption_key_prev,
     };
+
+    // Initialize Email service — prefer DB config (admin UI), fall back to env
+    // vars (BUNYIP-351). The SMTP password is decrypted with the same key set
+    // as the Stripe secrets, so this must run after `stripe_key_set` is built.
+    let email_config = {
+        use bunyip_api::repositories::EmailConfigRepository;
+        match EmailConfigRepository::get(&pool).await {
+            Ok(row) if EmailConfig::has_db_overrides(&row) => {
+                info!("Email config initialized from database");
+                EmailConfig::from_db_row(&row, &stripe_key_set, config.is_production())
+            }
+            _ => {
+                info!("Email config initialized from environment variables");
+                config.email.clone()
+            }
+        }
+    };
+    // BUNYIP-204/351: a production deployment must not run with email disabled,
+    // even when the effective config is resolved from the DB. The disabled path
+    // suppresses transactional mail (magic links, resets), breaking auth flows.
+    if config.is_production() && !email_config.enabled {
+        panic!(
+            "Email is disabled in a production deployment (resolved from DB + env). Refusing to \
+             start: configure SMTP via the admin UI or SMTP_HOST/EMAIL_ENABLED (BUNYIP-204)."
+        );
+    }
+    let email_enabled = email_config.enabled;
+    let email_service = Arc::new(EmailService::new(email_config).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "Failed to initialize email service, using dev mode");
+        EmailService::new_dev()
+    }));
+
+    info!(enabled = email_enabled, "Email service initialized");
 
     // Initialize Stripe service — prefer DB config (set via admin UI), fall back to env vars
     let stripe_config = {

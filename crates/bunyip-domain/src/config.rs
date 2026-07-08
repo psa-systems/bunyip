@@ -191,6 +191,105 @@ impl EmailConfig {
                 .collect(),
         }
     }
+
+    /// Build an `EmailConfig` from the DB row, falling back to env defaults for
+    /// any NULL column (BUNYIP-351). Mirrors [`TierConfig::from_db_row`]. The
+    /// SMTP password is decrypted with the shared `EncryptionKeySet` (the same
+    /// one guarding Stripe secrets); a decryption failure (e.g. a rotated key)
+    /// falls back to the env password rather than aborting startup.
+    ///
+    /// System-level fields (`base_url`, `app_name`) and the dev-only
+    /// `log_tokens` gate stay env-derived: they are branding / bootstrap
+    /// concerns, not SMTP tuning. `enabled` is recomputed from the resolved
+    /// host so the BUNYIP-204 production semantics still hold against DB config.
+    pub fn from_db_row(
+        row: &crate::models::email::EmailConfigRow,
+        key_set: &crate::services::encryption::EncryptionKeySet,
+        is_production: bool,
+    ) -> Self {
+        let env = Self::from_env(is_production);
+
+        let smtp_host = row
+            .smtp_host
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(env.smtp_host);
+        let smtp_port = row
+            .smtp_port
+            .and_then(|p| u16::try_from(p).ok())
+            .unwrap_or(env.smtp_port);
+        let smtp_tls = match row.smtp_tls.as_deref() {
+            Some("starttls") => SmtpTls::Starttls,
+            Some("implicit") => SmtpTls::Implicit,
+            _ => env.smtp_tls,
+        };
+        let smtp_username = row.smtp_username.clone().unwrap_or(env.smtp_username);
+        let smtp_password = match (&row.smtp_password, &row.smtp_password_nonce) {
+            (Some(ct), Some(nonce)) => {
+                crate::models::stripe::decrypt_secret(key_set, ct, nonce, row.key_version)
+                    .unwrap_or(env.smtp_password)
+            }
+            _ => env.smtp_password,
+        };
+        let from_email = row
+            .from_email
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(env.from_email);
+        let from_name = row
+            .from_name
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(env.from_name);
+        let admin_notification_emails = match &row.admin_notification_emails {
+            Some(raw) => raw
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect(),
+            None => env.admin_notification_emails,
+        };
+
+        // Recompute `enabled` from the resolved host so a DB-supplied SMTP host
+        // flips sending on exactly like the env path does. An explicit
+        // `enabled` column still wins when set.
+        let has_smtp = !smtp_host.is_empty() && smtp_host != "localhost";
+        let force_enabled = env::var("EMAIL_ENABLED")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+        let enabled = row
+            .enabled
+            .unwrap_or((is_production && has_smtp) || force_enabled);
+
+        Self {
+            smtp_host,
+            smtp_port,
+            smtp_tls,
+            smtp_username,
+            smtp_password,
+            from_email,
+            from_name,
+            base_url: env.base_url,
+            enabled,
+            log_tokens: env.log_tokens,
+            app_name: env.app_name,
+            admin_notification_emails,
+        }
+    }
+
+    /// Returns `true` if the DB row has at least one non-NULL override.
+    pub fn has_db_overrides(row: &crate::models::email::EmailConfigRow) -> bool {
+        row.enabled.is_some()
+            || row.smtp_host.is_some()
+            || row.smtp_port.is_some()
+            || row.smtp_tls.is_some()
+            || row.smtp_username.is_some()
+            || row.smtp_password.is_some()
+            || row.from_email.is_some()
+            || row.from_name.is_some()
+            || row.admin_notification_emails.is_some()
+    }
 }
 
 /// Parse email address from SMTP_FROM.
@@ -1233,6 +1332,130 @@ mod tests {
         assert!(oci_cfg("svc", Some("https:///auth/token"))
             .validate()
             .is_ok());
+    }
+
+    // ---- Email config DB-overrides-env merge (BUNYIP-351) ----
+
+    fn test_key_set() -> crate::services::encryption::EncryptionKeySet {
+        crate::services::encryption::EncryptionKeySet {
+            current: [7u8; 32],
+            current_version: 1,
+            previous: None,
+        }
+    }
+
+    fn email_row() -> crate::models::email::EmailConfigRow {
+        crate::models::email::EmailConfigRow {
+            id: 1,
+            enabled: None,
+            smtp_host: None,
+            smtp_port: None,
+            smtp_tls: None,
+            smtp_username: None,
+            smtp_password: None,
+            smtp_password_nonce: None,
+            key_version: 1,
+            from_email: None,
+            from_name: None,
+            admin_notification_emails: None,
+            updated_at: chrono::Utc::now(),
+            updated_by: None,
+        }
+    }
+
+    fn clear_email_env() {
+        for var in [
+            "SMTP_HOST",
+            "SMTP_PORT",
+            "SMTP_TLS",
+            "SMTP_USERNAME",
+            "SMTP_PASSWORD",
+            "SMTP_FROM",
+            "EMAIL_ENABLED",
+            "ADMIN_NOTIFICATION_EMAILS",
+        ] {
+            env::remove_var(var);
+        }
+    }
+
+    #[test]
+    fn email_from_db_row_falls_back_to_env_when_all_null() {
+        let _env = env_lock();
+        clear_email_env();
+
+        let row = email_row();
+        assert!(!EmailConfig::has_db_overrides(&row));
+
+        // dev (is_production=false) with no SMTP env => the env defaults.
+        let cfg = EmailConfig::from_db_row(&row, &test_key_set(), false);
+        assert_eq!(cfg.smtp_host, "localhost");
+        assert!(!cfg.enabled);
+        assert!(cfg.admin_notification_emails.is_empty());
+    }
+
+    #[test]
+    fn email_from_db_row_applies_overrides() {
+        let _env = env_lock();
+        clear_email_env();
+
+        let mut row = email_row();
+        row.enabled = Some(true);
+        row.smtp_host = Some("smtp.example.com".to_string());
+        row.smtp_port = Some(587);
+        row.smtp_tls = Some("starttls".to_string());
+        row.smtp_username = Some("relay-user".to_string());
+        row.from_email = Some("noreply@example.com".to_string());
+        row.from_name = Some("Example".to_string());
+        row.admin_notification_emails = Some("ops@example.com, alerts@example.com".to_string());
+        assert!(EmailConfig::has_db_overrides(&row));
+
+        let cfg = EmailConfig::from_db_row(&row, &test_key_set(), false);
+        assert!(cfg.enabled);
+        assert_eq!(cfg.smtp_host, "smtp.example.com");
+        assert_eq!(cfg.smtp_port, 587);
+        assert_eq!(cfg.smtp_tls, SmtpTls::Starttls);
+        assert_eq!(cfg.smtp_username, "relay-user");
+        assert_eq!(cfg.from_email, "noreply@example.com");
+        assert_eq!(cfg.from_name, "Example");
+        assert_eq!(
+            cfg.admin_notification_emails,
+            vec![
+                "ops@example.com".to_string(),
+                "alerts@example.com".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn email_from_db_row_decrypts_stored_password() {
+        let _env = env_lock();
+        clear_email_env();
+
+        let key_set = test_key_set();
+        let (ct, nonce, ver) =
+            crate::models::stripe::encrypt_secret(&key_set, "s3cr3t-relay-pass").unwrap();
+
+        let mut row = email_row();
+        row.smtp_password = Some(ct);
+        row.smtp_password_nonce = Some(nonce);
+        row.key_version = ver;
+
+        let cfg = EmailConfig::from_db_row(&row, &key_set, false);
+        assert_eq!(cfg.smtp_password, "s3cr3t-relay-pass");
+        assert!(EmailConfig::has_db_overrides(&row));
+    }
+
+    #[test]
+    fn email_from_db_row_ignores_out_of_range_port() {
+        let _env = env_lock();
+        clear_email_env();
+
+        // A negative or >u16 port cannot narrow to u16, so the env default port
+        // (465 for the default implicit TLS) is kept rather than wrapping.
+        let mut row = email_row();
+        row.smtp_port = Some(-1);
+        let cfg = EmailConfig::from_db_row(&row, &test_key_set(), false);
+        assert_eq!(cfg.smtp_port, 465);
     }
 
     #[test]
