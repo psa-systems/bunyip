@@ -65,6 +65,42 @@ fn first_origin(raw: &str) -> Option<&str> {
     raw.split(',').map(str::trim).find(|s| !s.is_empty())
 }
 
+/// The single frontend origin used to derive the default checkout URLs: the
+/// first non-empty entry of `CORS_ORIGIN` (which is a comma-list on multi-RP
+/// deployments), trailing slash trimmed (BUNYIP-188).
+fn checkout_base_from_env() -> String {
+    let frontend_origin =
+        std::env::var("CORS_ORIGIN").unwrap_or_else(|_| "http://localhost:5173".to_string());
+    first_origin(&frontend_origin)
+        .unwrap_or("http://localhost:5173")
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// BUNYIP-351: env default for the Stripe Checkout success URL. `STRIPE_SUCCESS_URL`
+/// when set, else derived from the first `CORS_ORIGIN`. Shared by the runtime
+/// config and the admin read model so the DB NULL fallback can never diverge.
+pub fn success_url_from_env() -> String {
+    std::env::var("STRIPE_SUCCESS_URL")
+        .unwrap_or_else(|_| format!("{}/checkout/success", checkout_base_from_env()))
+}
+
+/// BUNYIP-351: env default for the Stripe Checkout cancel URL.
+pub fn cancel_url_from_env() -> String {
+    std::env::var("STRIPE_CANCEL_URL")
+        .unwrap_or_else(|_| format!("{}/pricing?checkout=canceled", checkout_base_from_env()))
+}
+
+/// BUNYIP-351: env default for the signup free-trial length (days). A blank or
+/// unparseable `BUNYIP_BILLING_TRIAL_PERIOD_DAYS` falls back to the 30-day
+/// default rather than disabling the trial.
+pub fn trial_period_days_from_env() -> u32 {
+    std::env::var("BUNYIP_BILLING_TRIAL_PERIOD_DAYS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(DEFAULT_TRIAL_PERIOD_DAYS)
+}
+
 /// Stripe configuration
 #[derive(Clone, Debug)]
 pub struct StripeConfig {
@@ -84,22 +120,12 @@ pub struct StripeConfig {
 
 impl StripeConfig {
     pub fn from_env() -> Result<Self, AppError> {
-        let frontend_origin =
-            std::env::var("CORS_ORIGIN").unwrap_or_else(|_| "http://localhost:5173".to_string());
-        // BUNYIP-188: `CORS_ORIGIN` is a comma-separated list of allowed
-        // origins everywhere else in the codebase, but the Stripe Checkout
-        // `success_url` / `cancel_url` fallback expects a single origin. On
-        // dev-sso `CORS_ORIGIN` is e.g.
-        // `"https://x-bunyip.a8n.run,https://x-mokosh.a8n.run"`; interpolating
-        // the whole list produced
-        // `"https://x-bunyip.a8n.run,https://x-mokosh.a8n.run/checkout/success"`
-        // which Stripe rejected. Split on `,`, pick the first non-empty origin.
-        // Explicit `STRIPE_SUCCESS_URL` / `STRIPE_CANCEL_URL` env vars still
-        // take precedence below (BUNYIP-175 PR #208 behaviour preserved).
-        let base = first_origin(&frontend_origin)
-            .unwrap_or("http://localhost:5173")
-            .trim_end_matches('/');
-
+        // BUNYIP-188: the checkout success/cancel URLs derive from a SINGLE
+        // origin (the first non-empty `CORS_ORIGIN` entry), not the whole
+        // comma-list; explicit `STRIPE_SUCCESS_URL` / `STRIPE_CANCEL_URL` still
+        // win. That logic lives in `checkout_base_from_env` +
+        // `success_url_from_env` / `cancel_url_from_env` so the runtime config
+        // and the admin read model share one source (BUNYIP-351).
         Ok(Self {
             // secret_env supports the {NAME}_FILE compose-secret convention,
             // falling back to the plain env var.
@@ -107,23 +133,16 @@ impl StripeConfig {
                 .unwrap_or_else(|| SECRET_KEY_PLACEHOLDER.to_string()),
             webhook_secret: crate::config::secret_env("STRIPE_WEBHOOK_SECRET")
                 .unwrap_or_else(|| WEBHOOK_SECRET_PLACEHOLDER.to_string()),
-            success_url: std::env::var("STRIPE_SUCCESS_URL")
-                .unwrap_or_else(|_| format!("{base}/checkout/success")),
-            cancel_url: std::env::var("STRIPE_CANCEL_URL")
-                .unwrap_or_else(|_| format!("{base}/pricing?checkout=canceled")),
+            success_url: success_url_from_env(),
+            cancel_url: cancel_url_from_env(),
             // Single source shared with `TierConfig` so the two cannot diverge.
             free_price_id: crate::config::free_price_id_from_env(),
             app_tag: std::env::var("STRIPE_APP_TAG")
                 .ok()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "bunyip".to_string()),
-            // BUNYIP-209: signup trial length, env-overridable. A blank or
-            // unparseable value falls back to the 30-day default rather than
-            // disabling the trial.
-            trial_period_days: std::env::var("BUNYIP_BILLING_TRIAL_PERIOD_DAYS")
-                .ok()
-                .and_then(|s| s.trim().parse::<u32>().ok())
-                .unwrap_or(DEFAULT_TRIAL_PERIOD_DAYS),
+            // BUNYIP-209: signup trial length, env-overridable.
+            trial_period_days: trial_period_days_from_env(),
         })
     }
 
@@ -146,14 +165,23 @@ impl StripeConfig {
 
         let app_tag = db.app_tag.clone().unwrap_or(env_config.app_tag);
 
+        // BUNYIP-351: checkout knobs now live in the DB row too; NULL falls back
+        // to the env value already resolved in `env_config`.
+        let success_url = db.success_url.clone().unwrap_or(env_config.success_url);
+        let cancel_url = db.cancel_url.clone().unwrap_or(env_config.cancel_url);
+        let trial_period_days = db
+            .trial_period_days
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(env_config.trial_period_days);
+
         Ok(Self {
             secret_key,
             webhook_secret,
-            success_url: env_config.success_url,
-            cancel_url: env_config.cancel_url,
+            success_url,
+            cancel_url,
             free_price_id: env_config.free_price_id,
             app_tag,
-            trial_period_days: env_config.trial_period_days,
+            trial_period_days,
         })
     }
 }
@@ -1433,6 +1461,47 @@ mod tests {
 
     fn test_service() -> StripeService {
         StripeService::new(test_config())
+    }
+
+    // -- BUNYIP-351: checkout knobs resolve DB-over-env --
+
+    #[test]
+    fn from_db_model_prefers_db_checkout_knobs_then_env() {
+        let _env = crate::test_support::env_lock();
+        std::env::set_var("STRIPE_SUCCESS_URL", "https://env.example/ok");
+        std::env::set_var("STRIPE_CANCEL_URL", "https://env.example/no");
+        std::env::set_var("BUNYIP_BILLING_TRIAL_PERIOD_DAYS", "14");
+
+        let ks = EncryptionKeySet {
+            current: [0u8; 32],
+            current_version: 1,
+            previous: None,
+        };
+
+        // success_url + trial overridden in DB; cancel_url NULL -> env fallback.
+        let db = crate::models::stripe::StripeConfig {
+            id: 1,
+            secret_key: None,
+            secret_key_nonce: None,
+            webhook_secret: None,
+            webhook_secret_nonce: None,
+            key_version: 1,
+            updated_at: chrono::Utc::now(),
+            updated_by: None,
+            app_tag: None,
+            success_url: Some("https://db.example/ok".to_string()),
+            cancel_url: None,
+            trial_period_days: Some(7),
+        };
+
+        let cfg = StripeConfig::from_db_model(&db, &ks).unwrap();
+        assert_eq!(cfg.success_url, "https://db.example/ok");
+        assert_eq!(cfg.cancel_url, "https://env.example/no");
+        assert_eq!(cfg.trial_period_days, 7);
+
+        std::env::remove_var("STRIPE_SUCCESS_URL");
+        std::env::remove_var("STRIPE_CANCEL_URL");
+        std::env::remove_var("BUNYIP_BILLING_TRIAL_PERIOD_DAYS");
     }
 
     // -- BUNYIP-188: first_origin helper --

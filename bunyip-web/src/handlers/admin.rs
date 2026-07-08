@@ -4342,6 +4342,10 @@ pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response 
                             div class="space-y-2" { label class="text-sm font-medium" { "Secret key" } input name="secret_key" type="password" placeholder=(s.secret_key_masked.clone().unwrap_or_else(|| "sk_live_…".into())) class=(dashboard_input()); }
                             div class="space-y-2" { label class="text-sm font-medium" { "Webhook secret" } input name="webhook_secret" type="password" placeholder=(s.webhook_secret_masked.clone().unwrap_or_else(|| "whsec_…".into())) class=(dashboard_input()); }
                             div class="space-y-2" { label class="text-sm font-medium" { "App tag" } input name="app_tag" value=(s.app_tag) class=(dashboard_input()); }
+                            div class="mt-2 pt-4 border-t border-border space-y-1" { p class="text-sm font-semibold" { "Checkout" } }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Success URL" } input name="success_url" type="url" value=(s.success_url) placeholder="https://example.com/checkout/success" class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Cancel URL" } input name="cancel_url" type="url" value=(s.cancel_url) placeholder="https://example.com/pricing?checkout=canceled" class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Trial period (days)" } input name="trial_period_days" type="number" min="0" max="365" value=(s.trial_period_days) class=(dashboard_input()); }
                             button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
                         }
                     }
@@ -4359,6 +4363,12 @@ pub struct StripeForm {
     #[serde(default)]
     pub webhook_secret: String,
     pub app_tag: String,
+    #[serde(default)]
+    pub success_url: String,
+    #[serde(default)]
+    pub cancel_url: String,
+    #[serde(default)]
+    pub trial_period_days: String,
 }
 pub async fn stripe_save(
     State(st): State<AppState>,
@@ -4401,12 +4411,37 @@ pub async fn stripe_save(
             return render_error("Webhook secret must be 255 characters or fewer");
         }
     }
+    // BUNYIP-351: checkout knobs. URLs are sent only when non-blank (blank =
+    // keep existing); the trial length is validated to [0, 365] when present.
+    let success_url = f.success_url.trim();
+    let cancel_url = f.cancel_url.trim();
+    let trial_days = match f.trial_period_days.trim() {
+        "" => None,
+        raw => match raw.parse::<i64>() {
+            Ok(n) if (0..=365).contains(&n) => Some(n),
+            _ => {
+                return render_error(
+                    "Trial period must be a whole number of days between 0 and 365",
+                )
+            }
+        },
+    };
+
     let mut body = json!({ "app_tag": app_tag });
     if !secret_key.is_empty() {
         body["secret_key"] = json!(secret_key);
     }
     if !webhook_secret.is_empty() {
         body["webhook_secret"] = json!(webhook_secret);
+    }
+    if !success_url.is_empty() {
+        body["success_url"] = json!(success_url);
+    }
+    if !cancel_url.is_empty() {
+        body["cancel_url"] = json!(cancel_url);
+    }
+    if let Some(days) = trial_days {
+        body["trial_period_days"] = json!(days);
     }
     match admin_api::update_stripe_config(&st.api, c.forward.as_deref(), body).await {
         Ok(()) => redirect_cookies("/admin/stripe", &c.set_cookies),

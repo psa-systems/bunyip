@@ -608,6 +608,13 @@ pub struct StripeConfigResponse {
     pub has_secret_key: bool,
     pub has_webhook_secret: bool,
     pub app_tag: String,
+    // BUNYIP-351: resolved checkout knobs, editable from the Stripe page.
+    #[serde(default)]
+    pub success_url: String,
+    #[serde(default)]
+    pub cancel_url: String,
+    #[serde(default)]
+    pub trial_period_days: u32,
     pub updated_at: Option<String>,
     pub source: String,
 }

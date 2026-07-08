@@ -216,6 +216,9 @@ pub async fn create_stripe_webhook(
             admin.0.sub,
             key_version,
             None, // app_tag unchanged
+            None, // success_url unchanged
+            None, // cancel_url unchanged
+            None, // trial_period_days unchanged
         )
         .await?;
 

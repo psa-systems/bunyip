@@ -1891,6 +1891,10 @@ pub struct UpdateStripeConfigRequest {
     pub secret_key: Option<String>,
     pub webhook_secret: Option<String>,
     pub app_tag: Option<String>,
+    // BUNYIP-351: non-secret checkout knobs. Empty string == "no change".
+    pub success_url: Option<String>,
+    pub cancel_url: Option<String>,
+    pub trial_period_days: Option<i32>,
 }
 
 /// GET /v1/admin/stripe
@@ -1946,6 +1950,27 @@ pub async fn update_stripe_config(
         .as_deref()
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
+    // BUNYIP-351: checkout knobs. Empty string == "no change" (COALESCE).
+    let success_url = body
+        .success_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let cancel_url = body
+        .cancel_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if let Some(days) = body.trial_period_days {
+        if !(0..=365).contains(&days) {
+            return Err(AppError::validation(
+                "trial_period_days",
+                "Must be between 0 and 365",
+            ));
+        }
+    }
 
     // Encrypt secrets before storing
     let (secret_key_enc, secret_key_nonce, key_version) = match secret_key_plain {
@@ -1972,6 +1997,9 @@ pub async fn update_stripe_config(
         admin.0.sub,
         key_version,
         app_tag.clone(),
+        success_url,
+        cancel_url,
+        body.trial_period_days,
     )
     .await?;
 
@@ -2956,6 +2984,10 @@ pub async fn reencrypt_key(
                 new_wh.as_ref().map(|(_, n)| n.clone()),
                 admin.0.sub,
                 current_version,
+                None,
+                // Key rotation only re-encrypts secrets; checkout knobs unchanged.
+                None,
+                None,
                 None,
             )
             .await?;
