@@ -106,7 +106,6 @@ async fn main() {
             "/invite/accept",
             get(ap::invite_accept_get).post(ap::invite_accept_post),
         )
-        .route("/setup", get(ap::setup_get).post(ap::setup_post))
         .route("/settings/confirm-email", get(ap::confirm_email))
         .route("/settings/verify-email", get(ap::verify_email))
         // BUNYIP-206: forced post-registration onboarding (name + verified email).

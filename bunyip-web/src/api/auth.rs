@@ -216,23 +216,6 @@ pub async fn register(
     Ok((auth.user, cookies))
 }
 
-pub async fn setup(
-    api: &Api,
-    email: &str,
-    password: &str,
-) -> Result<(User, Vec<String>), ApiError> {
-    let r = api
-        .post(
-            "/auth/setup",
-            None,
-            Some(json!({ "email": email, "password": password })),
-        )
-        .await?;
-    let cookies = r.set_cookies.clone();
-    let auth: AuthResponse = parse(r)?;
-    Ok((auth.user, cookies))
-}
-
 /// Returns `(maybe needs-password email, user, cookies)`. `Ok((Some(email), None, _))`
 /// means the invite needs a password; `Ok((None, Some(user), cookies))` is a full sign-in.
 pub async fn accept_invite(

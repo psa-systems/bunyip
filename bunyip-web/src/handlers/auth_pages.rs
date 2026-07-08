@@ -1317,70 +1317,10 @@ pub async fn invite_accept_post(
     }
 }
 
-// ===========================================================================
-// First-run setup
-// ===========================================================================
-
-#[derive(Deserialize)]
-pub struct SetupForm {
-    pub email: String,
-    pub password: String,
-    pub confirm: String,
-}
-
-fn setup_card(error: Option<&str>) -> Markup {
-    auth_card(
-        "shield",
-        "bg-primary/10 text-primary",
-        "Initial Setup",
-        "Create the first admin account to get started",
-        html! {
-            form method="post" action="/setup" class="space-y-4" {
-                @if let Some(e) = error { (error_box(e)) }
-                (field("email", "Admin Email", "email", "admin@example.com", "email"))
-                (field("password", "Password", "password", "", "new-password"))
-                (pw_reqs())
-                (field("confirm", "Confirm Password", "password", "", "new-password"))
-                (submit_btn("Create Admin Account"))
-            }
-        },
-    )
-}
-
-pub async fn setup_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    auth_page(&st, &headers, "Setup · Bunyip", setup_card(None)).await
-}
-
-pub async fn setup_post(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-    Form(f): Form<SetupForm>,
-) -> Response {
-    let err = if !f.email.contains('@') {
-        Some("Invalid email address".to_string())
-    } else if !password_ok(&f.password) {
-        Some("Password does not meet the requirements".to_string())
-    } else if f.password != f.confirm {
-        Some("Passwords don't match".to_string())
-    } else {
-        None
-    };
-    if let Some(e) = err {
-        return auth_page(&st, &headers, "Setup · Bunyip", setup_card(Some(&e))).await;
-    }
-    match auth_api::setup(&st.api, f.email.trim(), &f.password).await {
-        Ok((_, cookies)) => redirect_cookies("/dashboard", &cookies),
-        Err(e) => {
-            auth_page(
-                &st,
-                &headers,
-                "Setup · Bunyip",
-                setup_card(Some(&e.user_message())),
-            )
-            .await
-        }
-    }
-}
+// BUNYIP-290: the first-run setup wizard (`SetupForm`, `setup_card`,
+// `setup_get`, `setup_post`) is gone. The first admin is now bootstrapped from
+// the BOOTSTRAP_ADMIN_EMAIL env var when that user signs up or signs in; there
+// is no `/setup` page.
 
 // ===========================================================================
 // Email change confirm / email verification (token links)

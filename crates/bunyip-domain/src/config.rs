@@ -73,6 +73,13 @@ pub struct Config {
     pub oci: OciConfig,
     /// OIDC / OpenID Provider configuration.
     pub oidc: OidcConfig,
+    /// BUNYIP-290: email of the bootstrap admin. When set (via
+    /// `BOOTSTRAP_ADMIN_EMAIL`, trimmed + lowercased) and no admin yet exists,
+    /// the user who authenticates with this email is promoted to `admin` on
+    /// sign-up or sign-in. Inert once any admin exists; further admin changes
+    /// go through the admin-invite and role-management flows. `None` when
+    /// unset/empty: the site still comes up, just without an auto-created admin.
+    pub bootstrap_admin_email: Option<String>,
 }
 
 /// SMTP TLS mode
@@ -740,6 +747,14 @@ impl Config {
         let oci = OciConfig::from_env();
         let oidc = OidcConfig::from_env();
 
+        // BUNYIP-290: the bootstrap admin email. Trimmed + lowercased so it
+        // compares equal to stored emails (which `normalize_email` lowercases)
+        // and to the rows returned by `find_admin_emails`. Empty = None.
+        let bootstrap_admin_email = env::var("BOOTSTRAP_ADMIN_EMAIL")
+            .ok()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty());
+
         let config = Self {
             database_url,
             host,
@@ -764,12 +779,14 @@ impl Config {
             download,
             oci,
             oidc,
+            bootstrap_admin_email,
         };
 
         info!(
             host = %config.host,
             port = %config.port,
             environment = %config.environment,
+            bootstrap_admin_configured = config.bootstrap_admin_email.is_some(),
             "Configuration loaded"
         );
 
