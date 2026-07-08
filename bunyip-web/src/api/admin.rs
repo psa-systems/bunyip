@@ -5,9 +5,9 @@ use serde_json::{json, Value};
 use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeedbackDetail,
     AdminFeedbackSummary, AdminIpBan, AdminMembership, AdminRateLimit, AdminStatsResponse,
-    AdminUser, ApplicationGroup, ApplicationGroupList, ArchivedFeedback, ErrorLogsResponse,
-    FeedbackStatus, ImportSummary, PaginatedResponse, SeedTemplateInfo, StripeConfigResponse,
-    TierConfigResponse, UserEntitlement,
+    AdminUser, ApplicationGroup, ApplicationGroupList, ArchivedFeedback, AutoBanConfigResponse,
+    ErrorLogsResponse, FeedbackStatus, ImportSummary, PaginatedResponse, SeedTemplateInfo,
+    StripeConfigResponse, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -748,5 +748,23 @@ pub async fn update_tier_config(
     body: Value,
 ) -> Result<(), ApiError> {
     let r = api.put("/admin/tier-config", cookie, Some(body)).await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn auto_ban_config(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<AutoBanConfigResponse, ApiError> {
+    parse(api.get("/admin/auto-ban-config", cookie).await?)
+}
+
+pub async fn update_auto_ban_config(
+    api: &Api,
+    cookie: Option<&str>,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api
+        .put("/admin/auto-ban-config", cookie, Some(body))
+        .await?;
     ok_data(&r).map(|_| ())
 }

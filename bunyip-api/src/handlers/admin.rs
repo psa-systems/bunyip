@@ -2315,6 +2315,131 @@ pub async fn update_tier_config(
 }
 
 // =============================================================================
+// Auto-ban Configuration (BUNYIP-351)
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateAutoBanConfigRequest {
+    pub enabled: Option<bool>,
+    pub threshold: Option<i64>,
+    pub window_secs: Option<i64>,
+    pub ban_duration_secs: Option<i64>,
+}
+
+/// GET /v1/admin/auto-ban-config
+pub async fn get_auto_ban_config(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+) -> Result<HttpResponse, AppError> {
+    use crate::config::AutoBanConfig;
+    use crate::models::auto_ban::AutoBanConfigResponse;
+    use crate::repositories::AutoBanConfigRepository;
+
+    let request_id = get_request_id(&req);
+
+    let row = AutoBanConfigRepository::get(&pool).await?;
+    let resolved = AutoBanConfig::from_db_row(&row);
+    let source = if AutoBanConfig::has_db_overrides(&row) {
+        "database"
+    } else {
+        "environment"
+    };
+
+    Ok(success(
+        AutoBanConfigResponse {
+            enabled: resolved.enabled,
+            threshold: resolved.threshold as i64,
+            window_secs: resolved.window_secs as i64,
+            ban_duration_secs: resolved.ban_duration_secs as i64,
+            source,
+            updated_at: row.updated_at,
+            updated_by: row.updated_by,
+        },
+        request_id,
+    ))
+}
+
+/// PUT /v1/admin/auto-ban-config
+pub async fn update_auto_ban_config(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    auto_ban: web::Data<crate::middleware::AutoBanService>,
+    body: web::Json<UpdateAutoBanConfigRequest>,
+) -> Result<HttpResponse, AppError> {
+    use crate::config::AutoBanConfig;
+    use crate::models::auto_ban::AutoBanConfigResponse;
+    use crate::repositories::AutoBanConfigRepository;
+
+    let request_id = get_request_id(&req);
+
+    // Validate: provided numeric values must be at least 1. A zero threshold /
+    // window / duration would either ban on the first request or never expire,
+    // both almost certainly operator error.
+    if let Some(v) = body.threshold {
+        if v < 1 {
+            return Err(AppError::validation("threshold", "Must be at least 1"));
+        }
+    }
+    if let Some(v) = body.window_secs {
+        if v < 1 {
+            return Err(AppError::validation("window_secs", "Must be at least 1"));
+        }
+    }
+    if let Some(v) = body.ban_duration_secs {
+        if v < 1 {
+            return Err(AppError::validation(
+                "ban_duration_secs",
+                "Must be at least 1",
+            ));
+        }
+    }
+
+    let row = AutoBanConfigRepository::update(
+        &pool,
+        body.enabled,
+        body.threshold,
+        body.window_secs,
+        body.ban_duration_secs,
+        admin.0.sub,
+    )
+    .await?;
+
+    // Hot-reload the running AutoBanService so changes apply without a restart.
+    let resolved = AutoBanConfig::from_db_row(&row);
+    auto_ban.reload(resolved);
+    tracing::info!(?resolved, "Auto-ban config updated and hot-reloaded");
+
+    AuditLogRepository::create(
+        &pool,
+        CreateAuditLog::new(AuditAction::AdminAutoBanConfigUpdated)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+            .with_metadata(serde_json::json!({
+                "setting": "auto_ban_config",
+                "enabled": body.enabled,
+                "threshold": body.threshold,
+                "window_secs": body.window_secs,
+                "ban_duration_secs": body.ban_duration_secs,
+            })),
+    )
+    .await?;
+
+    Ok(success(
+        AutoBanConfigResponse {
+            enabled: resolved.enabled,
+            threshold: resolved.threshold as i64,
+            window_secs: resolved.window_secs as i64,
+            ban_duration_secs: resolved.ban_duration_secs as i64,
+            source: "database",
+            updated_at: row.updated_at,
+            updated_by: row.updated_by,
+        },
+        request_id,
+    ))
+}
+
+// =============================================================================
 // Key Health Checks
 // =============================================================================
 

@@ -235,7 +235,11 @@ fn parse_trusted_proxies(raw: &str) -> Vec<ipnetwork::IpNetwork> {
 }
 
 /// Auto-ban configuration
-#[derive(Debug, Clone)]
+///
+/// `Copy` so the [`AutoBanService`](crate::middleware::auto_ban::AutoBanService)
+/// can cheaply snapshot it out from behind its `RwLock` on the hot request path
+/// without cloning (BUNYIP-351).
+#[derive(Debug, Clone, Copy)]
 pub struct AutoBanConfig {
     /// Whether auto-banning is enabled
     pub enabled: bool,
@@ -267,6 +271,38 @@ impl AutoBanConfig {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(86400),
         }
+    }
+
+    /// Build an `AutoBanConfig` from the DB row, falling back to env defaults
+    /// for any column that is NULL (BUNYIP-351). Mirrors
+    /// [`TierConfig::from_db_row`]. The `BIGINT` columns are stored as `i64`
+    /// and narrowed back to the in-memory `u32`/`u64` widths; a stored negative
+    /// or over-wide value is clamped to the env default rather than wrapping.
+    pub fn from_db_row(row: &crate::models::auto_ban::AutoBanConfigRow) -> Self {
+        let env = Self::from_env();
+        Self {
+            enabled: row.enabled.unwrap_or(env.enabled),
+            threshold: row
+                .threshold
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(env.threshold),
+            window_secs: row
+                .window_secs
+                .and_then(|v| u64::try_from(v).ok())
+                .unwrap_or(env.window_secs),
+            ban_duration_secs: row
+                .ban_duration_secs
+                .and_then(|v| u64::try_from(v).ok())
+                .unwrap_or(env.ban_duration_secs),
+        }
+    }
+
+    /// Returns `true` if the DB row has at least one non-NULL override.
+    pub fn has_db_overrides(row: &crate::models::auto_ban::AutoBanConfigRow) -> bool {
+        row.enabled.is_some()
+            || row.threshold.is_some()
+            || row.window_secs.is_some()
+            || row.ban_duration_secs.is_some()
     }
 }
 
@@ -1233,6 +1269,83 @@ mod tests {
         assert!(oci_cfg("svc", Some("https:///auth/token"))
             .validate()
             .is_ok());
+    }
+
+    // ---- Auto-ban config DB-overrides-env merge (BUNYIP-351) ----
+
+    /// Build an `AutoBanConfigRow` with the given nullable overrides. `id`,
+    /// `updated_at`, `updated_by` are fixed since the merge ignores them.
+    fn auto_ban_row(
+        enabled: Option<bool>,
+        threshold: Option<i64>,
+        window_secs: Option<i64>,
+        ban_duration_secs: Option<i64>,
+    ) -> crate::models::auto_ban::AutoBanConfigRow {
+        crate::models::auto_ban::AutoBanConfigRow {
+            id: 1,
+            enabled,
+            threshold,
+            window_secs,
+            ban_duration_secs,
+            updated_at: chrono::Utc::now(),
+            updated_by: None,
+        }
+    }
+
+    /// Clear the `AUTO_BAN_*` env so `from_env` yields the documented defaults.
+    fn clear_auto_ban_env() {
+        env::remove_var("AUTO_BAN_ENABLED");
+        env::remove_var("AUTO_BAN_THRESHOLD");
+        env::remove_var("AUTO_BAN_WINDOW_SECS");
+        env::remove_var("AUTO_BAN_DURATION_SECS");
+    }
+
+    #[test]
+    fn auto_ban_from_db_row_falls_back_to_env_when_all_null() {
+        let _env = env_lock();
+        clear_auto_ban_env();
+
+        let row = auto_ban_row(None, None, None, None);
+        assert!(!AutoBanConfig::has_db_overrides(&row));
+
+        let cfg = AutoBanConfig::from_db_row(&row);
+        // Documented env defaults.
+        assert!(cfg.enabled);
+        assert_eq!(cfg.threshold, 5);
+        assert_eq!(cfg.window_secs, 3600);
+        assert_eq!(cfg.ban_duration_secs, 86400);
+    }
+
+    #[test]
+    fn auto_ban_from_db_row_applies_overrides() {
+        let _env = env_lock();
+        clear_auto_ban_env();
+
+        let row = auto_ban_row(Some(false), Some(10), Some(120), Some(600));
+        assert!(AutoBanConfig::has_db_overrides(&row));
+
+        let cfg = AutoBanConfig::from_db_row(&row);
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.threshold, 10);
+        assert_eq!(cfg.window_secs, 120);
+        assert_eq!(cfg.ban_duration_secs, 600);
+    }
+
+    #[test]
+    fn auto_ban_from_db_row_ignores_out_of_range_values() {
+        let _env = env_lock();
+        clear_auto_ban_env();
+
+        // A negative BIGINT cannot narrow to the unsigned in-memory widths, so
+        // the env default is kept rather than wrapping to a huge value.
+        let row = auto_ban_row(None, Some(-1), Some(-5), Some(-9));
+        // Non-NULL columns still count as overrides even if out of range.
+        assert!(AutoBanConfig::has_db_overrides(&row));
+
+        let cfg = AutoBanConfig::from_db_row(&row);
+        assert_eq!(cfg.threshold, 5);
+        assert_eq!(cfg.window_secs, 3600);
+        assert_eq!(cfg.ban_duration_secs, 86400);
     }
 
     #[test]
