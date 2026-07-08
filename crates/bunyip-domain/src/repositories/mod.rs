@@ -6,6 +6,7 @@ pub mod account_delete_dispatch_failure;
 pub mod application;
 pub mod application_group;
 pub mod audit;
+pub mod auto_ban;
 pub mod download_cache;
 pub mod download_daily_count;
 pub mod entitlement;
@@ -28,6 +29,7 @@ pub use account_delete_dispatch_failure::{
 pub use application::ApplicationRepository;
 pub use application_group::ApplicationGroupRepository;
 pub use audit::AuditLogRepository;
+pub use auto_ban::AutoBanConfigRepository;
 pub use download_cache::DownloadCacheRepository;
 pub use download_daily_count::DownloadDailyCountRepository;
 pub use entitlement::EntitlementRepository;

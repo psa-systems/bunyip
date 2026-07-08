@@ -61,6 +61,9 @@ fn inner(name: &str) -> &'static str {
         "shield-off" => {
             r#"<path d="M19.7 14a6.9 6.9 0 0 0 .3-2V5l-8-3-3.2 1.2"/><path d="m4.3 4.3 .9 .9 A8 8 0 0 0 4 5v7c0 6 8 10 8 10a20.3 20.3 0 0 0 5.6-4.5"/><line x1="2" x2="22" y1="2" y2="22"/>"#
         }
+        "shield-alert" => {
+            r#"<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4"/><path d="M12 16h.01"/>"#
+        }
         "message-square-quote" => {
             r#"<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 12a2 2 0 0 0 2-2V8H8"/><path d="M14 12a2 2 0 0 0 2-2V8h-2"/>"#
         }
