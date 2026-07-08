@@ -15,7 +15,8 @@ services:
   # PostgreSQL database (used by the api). The api runs migrations against it on
   # startup (sqlx::migrate!).
   postgres:
-    image: postgres:16-alpine
+    # Postgres 18, matching compose.yml + the deployed template (BUNYIP-350).
+    image: postgres:18.2-alpine3.23
     container_name: dev-bunyip-postgres-${USER}
     restart: unless-stopped
     environment:
@@ -25,7 +26,12 @@ services:
     expose:
       - "5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      # Whole tree, not .../data: Postgres >= 18 defaults PGDATA to
+      # /var/lib/postgresql/<MAJOR>/docker (BUNYIP-350). On an existing PG16 dev
+      # volume, PG18 just initializes fresh under the new subpath (the old
+      # .../data tree is ignored, not migrated); run `just dev-clean` to drop the
+      # stale volume for a clean start. Dev data is disposable.
+      - postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready --username ${POSTGRES_USER:-bunyip} --dbname ${POSTGRES_DB:-bunyip}"]
       interval: 5s
