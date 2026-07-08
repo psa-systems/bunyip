@@ -45,8 +45,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 web::post().to(handlers::accept_admin_invite),
             )
             .route("/redirect", web::get().to(handlers::auth_redirect))
+            // BUNYIP-290: `/setup/status` survives as a feature-flags probe
+            // (email_enabled / stripe_enabled); the interactive first-admin
+            // wizard (`POST /setup`) is gone - the first admin is now bootstrapped
+            // from the BOOTSTRAP_ADMIN_EMAIL env var on sign-up / sign-in.
             .route("/setup/status", web::get().to(handlers::setup_status))
-            .route("/setup", web::post().to(handlers::setup_admin))
             // Synthetic single-tenant membership stub for the mokosh
             // SPA's tenant switcher. See the handler docstring for the
             // multi-tenant story (deferred to phase-04).

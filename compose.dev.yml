@@ -76,6 +76,9 @@ services:
       STRIPE_SUCCESS_URL: ${STRIPE_SUCCESS_URL:-}
       STRIPE_CANCEL_URL: ${STRIPE_CANCEL_URL:-}
       SETUP_DEFAULT_ADMIN: ${SETUP_DEFAULT_ADMIN:-}
+      # BUNYIP-290: bootstrap the first admin from an email (no password in env).
+      # Promotes on sign-up / sign-in while zero admins exist; inert afterwards.
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
       EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
       # Bunyip IS the OIDC issuer; Ed25519 keys mounted from ./secrets/oidc (volumes).
       OIDC_ISSUER: ${OIDC_ISSUER:-http://localhost:4401}

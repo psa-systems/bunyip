@@ -95,9 +95,11 @@ pub struct AuthResponse {
     pub user: User,
 }
 
+/// Feature-flags probe response (`GET /auth/setup/status`): which optional
+/// integrations are wired. BUNYIP-290 removed the `setup_required` flag along
+/// with the first-admin setup wizard.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetupStatus {
-    pub setup_required: bool,
     pub email_enabled: bool,
     pub stripe_enabled: bool,
 }

@@ -236,6 +236,7 @@ async fn main() -> anyhow::Result<()> {
         pool.clone(),
         (*jwt_service).clone(),
         tier_config.clone(),
+        config.bootstrap_admin_email.clone(),
     ));
 
     info!("Auth service initialized");

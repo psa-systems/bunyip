@@ -123,6 +123,10 @@ services:
       APP_PORT: "4401"
       ENVIRONMENT: ${ENVIRONMENT:-production}
       APP_NAME: ${APP_NAME:-PSA Systems}
+      # BUNYIP-290: bootstrap the first admin from an email (no password in env).
+      # Whoever signs up / signs in with this email is promoted to admin while
+      # zero admins exist; inert once an admin exists. Unset = no auto admin.
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
       # Set to the public bunyip-web origin for any real deployment.
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4400}
       COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}

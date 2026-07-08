@@ -141,6 +141,29 @@ fn trusted_device_allows_skip(role: &str, has_valid_device: bool) -> bool {
     has_valid_device && role == UserRole::Subscriber.as_str()
 }
 
+/// BUNYIP-290: the first-admin bootstrap predicate, pulled out as a pure,
+/// DB-free function so every branch is unit-testable. Returns true only when
+/// ALL hold: a bootstrap email is configured; it equals `user_email`
+/// (case-insensitive - `bootstrap_admin_email` is already normalized to
+/// lowercase in `Config`); the user is not already an admin; and no admin
+/// currently exists (`any_admin_exists == false`). The zero-admin gate is what
+/// scopes the env var to the FIRST admin only - once any admin exists it is
+/// inert - and what makes it self-healing if every admin is later removed.
+fn bootstrap_promotion_needed(
+    bootstrap_admin_email: Option<&str>,
+    user_email: &str,
+    user_role: &str,
+    any_admin_exists: bool,
+) -> bool {
+    matches!(
+        bootstrap_admin_email,
+        Some(bootstrap)
+            if !any_admin_exists
+                && user_role != UserRole::Admin.as_str()
+                && user_email.to_lowercase() == bootstrap
+    )
+}
+
 /// BUNYIP-221: which side of the dual gate (email-verify vs name-save)
 /// triggered the initial-tier grant. Emitted as the `trigger` field on the
 /// `InitialTierGranted` audit row so the timeline shows which event was the
@@ -166,15 +189,25 @@ pub struct AuthService {
     jwt: JwtService,
     password: PasswordService,
     tier_config: Arc<RwLock<TierConfig>>,
+    /// BUNYIP-290: the trimmed + lowercased bootstrap admin email, if
+    /// configured. Drives the zero-admin first-admin promotion on sign-up /
+    /// sign-in (see `ensure_bootstrap_admin`).
+    bootstrap_admin_email: Option<String>,
 }
 
 impl AuthService {
-    pub fn new(pool: PgPool, jwt: JwtService, tier_config: Arc<RwLock<TierConfig>>) -> Self {
+    pub fn new(
+        pool: PgPool,
+        jwt: JwtService,
+        tier_config: Arc<RwLock<TierConfig>>,
+        bootstrap_admin_email: Option<String>,
+    ) -> Self {
         Self {
             pool,
             jwt,
             password: PasswordService::new(),
             tier_config,
+            bootstrap_admin_email,
         }
     }
 
@@ -190,6 +223,50 @@ impl AuthService {
     pub fn reload_tier_config(&self, config: TierConfig) {
         let mut tc = self.tier_config.write().expect("TierConfig lock poisoned");
         *tc = config;
+    }
+
+    /// BUNYIP-290: promote `user` to `admin` when it is the configured
+    /// bootstrap admin and no admin currently exists. Called from the auth
+    /// paths (sign-up and sign-in) BEFORE any session / JWT is minted, and
+    /// mutates `user` in place on promotion so the freshly-issued token carries
+    /// `role = "admin"` with no second login required.
+    ///
+    /// The gate is "zero admins exist", so the bootstrap email only ever seeds
+    /// the FIRST admin: once any admin exists this is inert, and every further
+    /// admin change goes through the admin-invite and role-management flows. It
+    /// is also self-healing - if every admin is later removed, the bootstrap
+    /// email can re-establish the first admin on its next authentication.
+    ///
+    /// Concurrency: two simultaneous bootstrap authentications could both
+    /// observe zero admins, but `update_role` to "admin" is idempotent so the
+    /// outcome is still a single admin; no extra locking is required (the
+    /// removed `setup_admin` had the same accepted race). Returns true when a
+    /// promotion happened.
+    async fn ensure_bootstrap_admin(&self, user: &mut User) -> Result<bool, AppError> {
+        let bootstrap = self.bootstrap_admin_email.as_deref();
+        // Cheap pre-filter so the admin-count query runs only for the bootstrap
+        // email while it is not yet an admin - the actual bootstrap window. Any
+        // other user (or a repeat auth of the already-promoted admin) returns
+        // here with no DB round-trip. Mirrors the final predicate minus the
+        // zero-admin gate, which is the only part that needs a query.
+        if bootstrap.is_none()
+            || user.role == UserRole::Admin.as_str()
+            || Some(user.email.to_lowercase().as_str()) != bootstrap
+        {
+            return Ok(false);
+        }
+        let any_admin_exists = !UserRepository::find_admin_emails(&self.pool)
+            .await?
+            .is_empty();
+        if !bootstrap_promotion_needed(bootstrap, &user.email, &user.role, any_admin_exists) {
+            return Ok(false);
+        }
+        // BUNYIP-265: user_id only, raw email is PII.
+        let updated =
+            UserRepository::update_role(&self.pool, user.id, UserRole::Admin.as_str()).await?;
+        tracing::info!(user_id = %user.id, "BUNYIP-290: bootstrap admin promoted to admin");
+        *user = updated;
+        Ok(true)
     }
 
     /// Register a new user
@@ -231,8 +308,10 @@ impl AuthService {
         // Hash password
         let password_hash = self.password.hash(&password)?;
 
-        // Create user
-        let user = UserRepository::create(
+        // Create user. Everyone registers as a subscriber; the bootstrap-admin
+        // promotion below (BUNYIP-290) is the sole path that upgrades the first
+        // admin, and it is gated on zero admins so it fires at most once.
+        let mut user = UserRepository::create(
             &self.pool,
             CreateUser {
                 email: email.clone(),
@@ -241,6 +320,12 @@ impl AuthService {
             },
         )
         .await?;
+
+        // BUNYIP-290: if this is the bootstrap admin and no admin exists yet,
+        // promote before the audit log records the actor role. The subsequent
+        // login the handler performs will observe an admin already present and
+        // no-op, so the issued session already carries `role = "admin"`.
+        self.ensure_bootstrap_admin(&mut user).await?;
 
         // Create audit log
         let ip = ip_address.map(IpNetwork::from);
@@ -266,7 +351,7 @@ impl AuthService {
         trusted_device_token: Option<String>,
     ) -> Result<LoginResult, AppError> {
         // Find user
-        let user = UserRepository::find_by_email(&self.pool, &email)
+        let mut user = UserRepository::find_by_email(&self.pool, &email)
             .await?
             .ok_or(AppError::InvalidCredentials)?;
 
@@ -284,6 +369,13 @@ impl AuthService {
         if !self.password.verify(&password, password_hash)? {
             return Err(AppError::InvalidCredentials);
         }
+
+        // BUNYIP-290: promote the bootstrap admin now - after the password is
+        // verified, before any 2FA branch or token mint - so every downstream
+        // path (trusted-device skip, 2FA challenge, normal login) reflects the
+        // updated role and the issued JWT carries `role = "admin"`. No-op once
+        // an admin exists or for any non-bootstrap email.
+        self.ensure_bootstrap_admin(&mut user).await?;
 
         // Check if 2FA is enabled AND actually configured
         if user.two_factor_enabled {
@@ -1753,6 +1845,89 @@ mod tests {
         // 10 minutes idle is still within the window.
         let fresh = now - Duration::minutes(10);
         assert!(!session_idle_expired("admin", fresh, now));
+    }
+
+    // ── BUNYIP-290: first-admin bootstrap predicate ────────────────────────
+    // Covers the five promotion scenarios from the issue. The predicate is the
+    // pure core of `ensure_bootstrap_admin`; the DB side (find_admin_emails /
+    // update_role) is the caller's `any_admin_exists` argument and the actual
+    // role write, both idempotent.
+
+    const BOOTSTRAP: &str = "admin@bunyip.local";
+
+    #[test]
+    fn bootstrap_promotes_matching_email_when_no_admin_exists() {
+        // Sign-up OR sign-in: bootstrap email, subscriber role, zero admins.
+        assert!(bootstrap_promotion_needed(
+            Some(BOOTSTRAP),
+            "admin@bunyip.local",
+            "subscriber",
+            false,
+        ));
+    }
+
+    #[test]
+    fn bootstrap_matches_email_case_insensitively() {
+        // Config lowercases the env value; the stored email is normalized too,
+        // but compare case-insensitively so a mixed-case DB row still matches.
+        assert!(bootstrap_promotion_needed(
+            Some(BOOTSTRAP),
+            "Admin@Bunyip.Local",
+            "subscriber",
+            false,
+        ));
+    }
+
+    #[test]
+    fn bootstrap_does_not_promote_a_non_bootstrap_email() {
+        // A different user signing up/in stays a subscriber.
+        assert!(!bootstrap_promotion_needed(
+            Some(BOOTSTRAP),
+            "someone-else@bunyip.local",
+            "subscriber",
+            false,
+        ));
+    }
+
+    #[test]
+    fn bootstrap_is_inert_once_an_admin_exists() {
+        // The bootstrap email itself cannot mint a SECOND admin once one exists.
+        assert!(!bootstrap_promotion_needed(
+            Some(BOOTSTRAP),
+            "admin@bunyip.local",
+            "subscriber",
+            true,
+        ));
+        // ...and a non-bootstrap user certainly cannot become admin this way.
+        assert!(!bootstrap_promotion_needed(
+            Some(BOOTSTRAP),
+            "someone-else@bunyip.local",
+            "subscriber",
+            true,
+        ));
+    }
+
+    #[test]
+    fn bootstrap_does_not_re_promote_an_existing_admin() {
+        // Repeat auth of the already-promoted bootstrap admin is a no-op even
+        // with zero OTHER admins counted, so it never churns the role.
+        assert!(!bootstrap_promotion_needed(
+            Some(BOOTSTRAP),
+            "admin@bunyip.local",
+            "admin",
+            false,
+        ));
+    }
+
+    #[test]
+    fn bootstrap_unset_never_promotes() {
+        // No BOOTSTRAP_ADMIN_EMAIL: the site comes up admin-less and functional.
+        assert!(!bootstrap_promotion_needed(
+            None,
+            "admin@bunyip.local",
+            "subscriber",
+            false
+        ));
     }
 
     #[test]
