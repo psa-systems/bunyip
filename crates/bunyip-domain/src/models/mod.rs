@@ -7,6 +7,7 @@ pub mod application_group;
 pub mod audit;
 pub mod auto_ban;
 pub mod download;
+pub mod email;
 pub mod entitlement;
 pub mod feedback;
 pub mod membership;
@@ -36,6 +37,7 @@ pub use download::{
     AppDownloadGroup, AppDownloadsResponse, AppOciImage, DownloadAsset, DownloadCacheRow,
     ReleaseAsset, ReleaseMetadata,
 };
+pub use email::{EmailConfigResponse, EmailConfigRow};
 pub use entitlement::{ApplicationEntitlement, UserEntitlementRow};
 pub use feedback::{
     AdminFeedbackDetail, AdminFeedbackSummary, ArchivedFeedbackItem, CreateFeedback, Feedback,

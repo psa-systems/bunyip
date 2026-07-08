@@ -619,6 +619,27 @@ pub struct StripeConfigResponse {
     pub source: String,
 }
 
+/// BUNYIP-351: email / SMTP configuration surfaced to the admin settings form.
+/// Mirrors `bunyip-api`'s `EmailConfigResponse`; the SMTP password is never
+/// returned in plaintext (only a masked hint + `has_smtp_password`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EmailConfigResponse {
+    pub enabled: bool,
+    pub smtp_host: String,
+    pub smtp_port: i32,
+    pub smtp_tls: String,
+    pub smtp_username: String,
+    pub has_smtp_password: bool,
+    pub smtp_password_masked: Option<String>,
+    pub from_email: String,
+    pub from_name: String,
+    pub admin_notification_emails: Vec<String>,
+    pub source: String,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    pub updated_by: Option<String>,
+}
+
 /// BUNYIP-351: auto-ban configuration surfaced to the admin settings form.
 /// Mirrors `bunyip-api`'s `AutoBanConfigResponse`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

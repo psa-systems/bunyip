@@ -424,6 +424,11 @@ fn admin_items() -> Vec<NavItem> {
             icon: "key",
         },
         NavItem {
+            title: "Email",
+            href: "/admin/email",
+            icon: "mail",
+        },
+        NavItem {
             title: "Stripe",
             href: "/admin/stripe",
             icon: "banknote",

@@ -390,6 +390,10 @@ async fn main() {
             get(handlers::admin::tier_settings).post(handlers::admin::tier_settings_save),
         )
         .route(
+            "/admin/email",
+            get(handlers::admin::email).post(handlers::admin::email_save),
+        )
+        .route(
             "/admin/auto-ban-settings",
             get(handlers::admin::auto_ban_settings).post(handlers::admin::auto_ban_settings_save),
         )
