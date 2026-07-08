@@ -66,7 +66,9 @@ services:
 
   # PostgreSQL database. The api runs migrations against it on startup.
   postgres:
-    image: postgres:16-alpine
+    # Postgres 18, matching the deployed infra template
+    # (template/bunyip-api/compose.yml pins postgres:18.2-alpine3.23). BUNYIP-350.
+    image: postgres:18.2-alpine3.23
     container_name: bunyip-postgres
     restart: unless-stopped
     environment:
@@ -80,7 +82,11 @@ services:
     expose:
       - "5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      # Mount the whole tree (not .../data): Postgres >= 18 defaults PGDATA to
+      # /var/lib/postgresql/<MAJOR>/docker, so the volume must cover the parent
+      # to persist across the 16 -> 18 layout change (BUNYIP-350). Mirrors the
+      # deployed template.
+      - postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready --username ${POSTGRES_USER:-bunyip} --dbname ${POSTGRES_DB:-bunyip}"]
       interval: 10s
