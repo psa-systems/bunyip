@@ -39,6 +39,7 @@ impl StripeConfigRepository {
     /// Also covers key rotation (formerly a separate `update_encryption`): pass
     /// the re-encrypted secrets plus the rotating admin's id and the new
     /// `key_version`, and `app_tag: None` to leave the tag untouched.
+    #[allow(clippy::too_many_arguments)]
     pub async fn update(
         pool: &PgPool,
         secret_key: Option<Vec<u8>>,
@@ -48,6 +49,9 @@ impl StripeConfigRepository {
         updated_by: Uuid,
         key_version: i16,
         app_tag: Option<String>,
+        success_url: Option<String>,
+        cancel_url: Option<String>,
+        trial_period_days: Option<i32>,
     ) -> Result<StripeConfig, AppError> {
         let config = sqlx::query_as::<_, StripeConfig>(
             r#"
@@ -59,6 +63,9 @@ impl StripeConfigRepository {
                 webhook_secret_nonce  = CASE WHEN $3::BYTEA IS NOT NULL THEN $4 ELSE webhook_secret_nonce END,
                 key_version           = CASE WHEN $1::BYTEA IS NOT NULL OR $3::BYTEA IS NOT NULL THEN $6 ELSE key_version END,
                 app_tag               = COALESCE($7, app_tag),
+                success_url           = COALESCE($8, success_url),
+                cancel_url            = COALESCE($9, cancel_url),
+                trial_period_days     = COALESCE($10, trial_period_days),
                 updated_at            = NOW(),
                 updated_by            = $5
             WHERE id = 1
@@ -72,6 +79,9 @@ impl StripeConfigRepository {
         .bind(updated_by)
         .bind(key_version)
         .bind(app_tag)
+        .bind(success_url)
+        .bind(cancel_url)
+        .bind(trial_period_days)
         .fetch_one(pool)
         .await?;
 

@@ -19,6 +19,12 @@ pub struct StripeConfig {
     pub updated_by: Option<Uuid>,
     /// Application tag used to filter products/prices in shared Stripe accounts.
     pub app_tag: Option<String>,
+    /// BUNYIP-351: checkout redirect URLs + trial length. NULL falls back to the
+    /// env defaults (`STRIPE_SUCCESS_URL` / `STRIPE_CANCEL_URL` /
+    /// `BUNYIP_BILLING_TRIAL_PERIOD_DAYS`) in `StripeConfig::from_db_model`.
+    pub success_url: Option<String>,
+    pub cancel_url: Option<String>,
+    pub trial_period_days: Option<i32>,
 }
 
 // --- Stripe API response structs ---
@@ -140,6 +146,11 @@ pub struct StripeConfigResponse {
     pub has_secret_key: bool,
     pub has_webhook_secret: bool,
     pub app_tag: String,
+    /// BUNYIP-351: resolved (DB-over-env) checkout knobs, surfaced so the admin
+    /// Stripe page can render + edit them.
+    pub success_url: String,
+    pub cancel_url: String,
+    pub trial_period_days: u32,
     pub updated_at: Option<DateTime<Utc>>,
     /// "database" or "environment" — indicates where the config came from
     pub source: String,
@@ -168,6 +179,19 @@ impl StripeConfigResponse {
             has_secret_key: config.secret_key.is_some(),
             has_webhook_secret: config.webhook_secret.is_some(),
             app_tag,
+            // BUNYIP-351: resolved (DB-over-env) checkout knobs.
+            success_url: config
+                .success_url
+                .clone()
+                .unwrap_or_else(crate::services::stripe::success_url_from_env),
+            cancel_url: config
+                .cancel_url
+                .clone()
+                .unwrap_or_else(crate::services::stripe::cancel_url_from_env),
+            trial_period_days: config
+                .trial_period_days
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or_else(crate::services::stripe::trial_period_days_from_env),
             updated_at: Some(config.updated_at),
             source: "database".to_string(),
         })
@@ -187,6 +211,9 @@ impl StripeConfigResponse {
             has_secret_key: secret_key.is_some(),
             has_webhook_secret: webhook_secret.is_some(),
             app_tag: Self::default_app_tag(),
+            success_url: crate::services::stripe::success_url_from_env(),
+            cancel_url: crate::services::stripe::cancel_url_from_env(),
+            trial_period_days: crate::services::stripe::trial_period_days_from_env(),
             updated_at: None,
             source: "environment".to_string(),
         }
@@ -299,6 +326,9 @@ mod tests {
             updated_at: Utc::now(),
             updated_by: None,
             app_tag: None,
+            success_url: None,
+            cancel_url: None,
+            trial_period_days: None,
         };
 
         let resp = StripeConfigResponse::from_db(&config, &ks).unwrap();
@@ -322,6 +352,9 @@ mod tests {
             updated_at: Utc::now(),
             updated_by: None,
             app_tag: None,
+            success_url: None,
+            cancel_url: None,
+            trial_period_days: None,
         };
 
         let resp = StripeConfigResponse::from_db(&config, &ks).unwrap();
@@ -393,6 +426,9 @@ mod tests {
             updated_at: Utc::now(),
             updated_by: None,
             app_tag: None,
+            success_url: None,
+            cancel_url: None,
+            trial_period_days: None,
         };
 
         // Decrypt with v2 key set (v1 as previous)
@@ -422,6 +458,9 @@ mod tests {
             updated_at: Utc::now(),
             updated_by: None,
             app_tag: None,
+            success_url: None,
+            cancel_url: None,
+            trial_period_days: None,
         };
 
         // v2 key only, no previous — cannot decrypt v1 data
