@@ -175,11 +175,16 @@ struct StrikeEntry {
 // ── AutoBanService ──────────────────────────────────────────────────────────
 
 /// Shared auto-ban state: in-memory maps protected by `RwLock` + async DB persistence.
+///
+/// `config` sits behind a `std::sync::RwLock` so the admin UI can hot-reload the
+/// thresholds without a restart (BUNYIP-351). It is a synchronous lock (not the
+/// tokio one guarding the maps) because every read is a cheap `Copy`-out with no
+/// `.await` held across the guard.
 pub struct AutoBanService {
     banned: RwLock<HashMap<IpAddr, BanEntry>>,
     strikes: RwLock<HashMap<IpAddr, StrikeEntry>>,
     patterns: SuspiciousPatterns,
-    config: AutoBanConfig,
+    config: std::sync::RwLock<AutoBanConfig>,
     pool: PgPool,
 }
 
@@ -190,9 +195,23 @@ impl AutoBanService {
             banned: RwLock::new(HashMap::new()),
             strikes: RwLock::new(HashMap::new()),
             patterns: SuspiciousPatterns::default_patterns(),
-            config,
+            config: std::sync::RwLock::new(config),
             pool,
         }
+    }
+
+    /// Snapshot the current auto-ban config. Cheap `Copy` under a short-lived
+    /// read lock; never held across an `.await`.
+    fn config(&self) -> AutoBanConfig {
+        *self.config.read().expect("AutoBanConfig lock poisoned")
+    }
+
+    /// Hot-reload the auto-ban configuration (e.g. after an admin update).
+    /// Takes effect on the next request/strike; already-active bans are
+    /// unaffected until they expire.
+    pub fn reload(&self, config: AutoBanConfig) {
+        let mut c = self.config.write().expect("AutoBanConfig lock poisoned");
+        *c = config;
     }
 
     /// Returns `true` if the given IP is currently banned.
@@ -232,7 +251,8 @@ impl AutoBanService {
     /// Record a strike for the IP. Returns `true` if the IP was **newly** banned.
     pub async fn record_strike(&self, ip: &IpAddr, path: &str) -> bool {
         let now = Utc::now();
-        let window = chrono::Duration::seconds(self.config.window_secs as i64);
+        let cfg = self.config();
+        let window = chrono::Duration::seconds(cfg.window_secs as i64);
 
         let mut strikes = self.strikes.write().await;
         let entry = strikes.entry(*ip).or_insert(StrikeEntry {
@@ -248,12 +268,12 @@ impl AutoBanService {
 
         entry.count += 1;
 
-        if entry.count >= self.config.threshold {
+        if entry.count >= cfg.threshold {
             let reason = format!(
                 "Auto-banned after {} suspicious requests (last: {})",
                 entry.count, path
             );
-            let expires_at = now + chrono::Duration::seconds(self.config.ban_duration_secs as i64);
+            let expires_at = now + chrono::Duration::seconds(cfg.ban_duration_secs as i64);
 
             // Remove strikes — no longer needed
             strikes.remove(ip);
@@ -276,7 +296,7 @@ impl AutoBanService {
             let pool = self.pool.clone();
             let ip_owned = *ip;
             let reason_owned = reason.clone();
-            let count = self.config.threshold;
+            let count = cfg.threshold;
             tokio::spawn(async move {
                 if let Err(e) =
                     persist_ban(&pool, &ip_owned, &reason_owned, count, expires_at).await
@@ -304,7 +324,7 @@ impl AutoBanService {
 
         // Clean stale strikes
         {
-            let window = chrono::Duration::seconds(self.config.window_secs as i64);
+            let window = chrono::Duration::seconds(self.config().window_secs as i64);
             let mut strikes = self.strikes.write().await;
             strikes.retain(|_, entry| now - entry.first_seen <= window);
         }
@@ -390,7 +410,8 @@ impl AutoBanService {
             );
         }
 
-        let ban_duration = chrono::Duration::seconds(self.config.ban_duration_secs as i64);
+        let cfg = self.config();
+        let ban_duration = chrono::Duration::seconds(cfg.ban_duration_secs as i64);
         let banned = self.banned.read().await;
         for (ip, entry) in banned.iter() {
             if entry.expires_at <= now {
@@ -399,7 +420,7 @@ impl AutoBanService {
             by_ip.entry(*ip).or_insert_with(|| BanInfo {
                 ip: *ip,
                 reason: entry.reason.clone(),
-                strikes: self.config.threshold,
+                strikes: cfg.threshold,
                 banned_at: entry.expires_at - ban_duration,
                 expires_at: entry.expires_at,
             });
@@ -410,7 +431,7 @@ impl AutoBanService {
 
     /// Whether auto-banning is enabled.
     pub fn is_enabled(&self) -> bool {
-        self.config.enabled
+        self.config().enabled
     }
 }
 

@@ -394,6 +394,10 @@ async fn main() {
             get(handlers::admin::email).post(handlers::admin::email_save),
         )
         .route(
+            "/admin/auto-ban-settings",
+            get(handlers::admin::auto_ban_settings).post(handlers::admin::auto_ban_settings_save),
+        )
+        .route(
             "/admin/stripe",
             get(handlers::admin::stripe).post(handlers::admin::stripe_save),
         )

@@ -247,6 +247,15 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             // Email config (BUNYIP-351)
             .route("/email", web::get().to(handlers::get_email_config))
             .route("/email", web::put().to(handlers::update_email_config))
+            // Auto-ban config (BUNYIP-351)
+            .route(
+                "/auto-ban-config",
+                web::get().to(handlers::get_auto_ban_config),
+            )
+            .route(
+                "/auto-ban-config",
+                web::put().to(handlers::update_auto_ban_config),
+            )
             // Stripe config
             .route("/stripe", web::get().to(handlers::get_stripe_config))
             .route("/stripe", web::put().to(handlers::update_stripe_config))

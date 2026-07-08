@@ -5,6 +5,7 @@
 pub mod application;
 pub mod application_group;
 pub mod audit;
+pub mod auto_ban;
 pub mod download;
 pub mod email;
 pub mod entitlement;
@@ -31,6 +32,7 @@ pub use audit::{
     AdminNotification, AuditAction, AuditLog, AuditSeverity, CreateAdminNotification,
     CreateAuditLog, NotificationType,
 };
+pub use auto_ban::{AutoBanConfigResponse, AutoBanConfigRow};
 pub use download::{
     AppDownloadGroup, AppDownloadsResponse, AppOciImage, DownloadAsset, DownloadCacheRow,
     ReleaseAsset, ReleaseMetadata,

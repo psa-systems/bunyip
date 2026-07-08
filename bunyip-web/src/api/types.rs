@@ -633,6 +633,20 @@ pub struct EmailConfigResponse {
     pub updated_by: Option<String>,
 }
 
+/// BUNYIP-351: auto-ban configuration surfaced to the admin settings form.
+/// Mirrors `bunyip-api`'s `AutoBanConfigResponse`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutoBanConfigResponse {
+    pub enabled: bool,
+    pub threshold: i64,
+    pub window_secs: i64,
+    pub ban_duration_secs: i64,
+    pub source: String,
+    #[serde(default)]
+    pub updated_at: String,
+    pub updated_by: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TierConfigResponse {
     pub lifetime_slots: i64,

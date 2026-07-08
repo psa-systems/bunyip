@@ -12,7 +12,7 @@ use tracing_actix_web::TracingLogger;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use bunyip_api::{
-    config::{secret_env, Config, EmailConfig, TierConfig},
+    config::{secret_env, AutoBanConfig, Config, EmailConfig, TierConfig},
     middleware::{
         auto_ban::{self, AutoBanService},
         request_id::RequestIdMiddleware,
@@ -508,8 +508,24 @@ async fn main() -> anyhow::Result<()> {
             .as_ref()
             .map(|p| Arc::clone(p) as Arc<dyn bunyip_domain::middleware::auth::AtJwtVerifier>);
 
+    // Initialize auto-ban config — prefer DB overrides, fall back to env vars
+    // (BUNYIP-351). Mirrors the tier/stripe DB-overrides-env pattern.
+    let auto_ban_config = {
+        use bunyip_api::repositories::AutoBanConfigRepository;
+        match AutoBanConfigRepository::get(&pool).await {
+            Ok(row) if AutoBanConfig::has_db_overrides(&row) => {
+                info!("Auto-ban config initialized from database");
+                AutoBanConfig::from_db_row(&row)
+            }
+            _ => {
+                info!("Auto-ban config initialized from environment variables");
+                config.auto_ban
+            }
+        }
+    };
+
     // Initialize auto-ban service
-    let auto_ban_service = Arc::new(AutoBanService::new(config.auto_ban.clone(), pool.clone()));
+    let auto_ban_service = Arc::new(AutoBanService::new(auto_ban_config, pool.clone()));
 
     // Load existing bans from DB
     match auto_ban::load_active_bans(&pool).await {
@@ -522,8 +538,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     info!(
-        enabled = config.auto_ban.enabled,
-        threshold = config.auto_ban.threshold,
+        enabled = auto_ban_config.enabled,
+        threshold = auto_ban_config.threshold,
         "Auto-ban service initialized"
     );
 
