@@ -2,6 +2,7 @@
 //!
 //! This module organizes all API routes and their handlers.
 
+pub mod account;
 pub mod admin;
 pub mod application;
 pub mod auth;
@@ -25,6 +26,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .configure(health::configure)
             .configure(auth::configure)
             .configure(user::configure)
+            .configure(account::configure)
             .configure(download::configure)
             .configure(events::configure)
             .configure(application::configure)

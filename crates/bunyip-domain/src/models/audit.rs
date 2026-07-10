@@ -81,6 +81,13 @@ pub enum AuditAction {
     AdminEmailConfigUpdated,
     AdminAutoBanConfigUpdated,
     AdminKeyRotation,
+    /// BUNYIP-353: an account admin downloaded an account backup bundle.
+    /// Metadata carries `user_id` and the entitled-app count (never PII).
+    AccountBackupCreated,
+    /// BUNYIP-353: an account admin restored an account backup bundle.
+    /// Metadata carries `user_id`, granted entitlement count, and per-app
+    /// restore outcomes (never PII).
+    AccountRestored,
     UserAccountDeleted,
     /// BUNYIP-211: outcome of fanning the `account_deleted` webhook out to one
     /// downstream app after a user deleted their account. One row per app per
@@ -204,6 +211,8 @@ impl AuditAction {
             AuditAction::AdminTierConfigUpdated => "admin_tier_config_updated",
             AuditAction::AdminEmailConfigUpdated => "admin_email_config_updated",
             AuditAction::AdminAutoBanConfigUpdated => "admin_auto_ban_config_updated",
+            AuditAction::AccountBackupCreated => "account_backup_created",
+            AuditAction::AccountRestored => "account_restored",
             AuditAction::AdminKeyRotation => "admin_key_rotation",
             AuditAction::UserAccountDeleted => "user_account_deleted",
             AuditAction::AccountDeleteWebhookDispatched => "account_delete_webhook_dispatched",
@@ -271,6 +280,8 @@ impl AuditAction {
                 | AuditAction::AdminTierConfigUpdated
                 | AuditAction::AdminEmailConfigUpdated
                 | AuditAction::AdminAutoBanConfigUpdated
+                | AuditAction::AccountBackupCreated
+                | AuditAction::AccountRestored
                 | AuditAction::AdminKeyRotation
                 | AuditAction::AdminEntitlementGranted
                 | AuditAction::AdminEntitlementRevoked

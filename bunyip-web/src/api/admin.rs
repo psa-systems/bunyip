@@ -7,7 +7,7 @@ use super::types::{
     AdminFeedbackSummary, AdminIpBan, AdminMembership, AdminRateLimit, AdminStatsResponse,
     AdminUser, ApplicationGroup, ApplicationGroupList, ArchivedFeedback, AutoBanConfigResponse,
     EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary, PaginatedResponse,
-    SeedTemplateInfo, StripeConfigResponse, TierConfigResponse, UserEntitlement,
+    RestoreReport, SeedTemplateInfo, StripeConfigResponse, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -752,6 +752,17 @@ pub async fn update_email_config(
 ) -> Result<(), ApiError> {
     let r = api.put("/admin/email", cookie, Some(body)).await?;
     ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-353: POST an uploaded account backup bundle to the restore endpoint
+/// and return the resulting report. `bundle` is the parsed JSON of the file the
+/// admin uploaded.
+pub async fn restore_account(
+    api: &Api,
+    cookie: Option<&str>,
+    bundle: Value,
+) -> Result<RestoreReport, ApiError> {
+    parse(api.post("/account/restore", cookie, Some(bundle)).await?)
 }
 
 pub async fn tier_config(api: &Api, cookie: Option<&str>) -> Result<TierConfigResponse, ApiError> {

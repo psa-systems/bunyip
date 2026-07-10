@@ -25,9 +25,9 @@ use bunyip_api::{
     },
     routes,
     services::{
-        AppDownloadCache, AuthService, DownloadLimiter, EmailService, EncryptionKeySet,
-        ForgejoAssetClient, JwtConfig, JwtService, PasswordService, ReleaseCache, StripeConfig,
-        StripeService, TotpService, WebhookService,
+        AppDownloadCache, AuthService, BackupService, DownloadLimiter, EmailService,
+        EncryptionKeySet, ForgejoAssetClient, JwtConfig, JwtService, MokoshBackupAdapter,
+        PasswordService, ReleaseCache, StripeConfig, StripeService, TotpService, WebhookService,
     },
     version::UpdateChecker,
 };
@@ -524,6 +524,11 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Initialize account backup/restore service (BUNYIP-353). One adapter per
+    // entitled app; Mokosh is a pending stub until its backup API ships. New
+    // adapters register here without touching the orchestration.
+    let backup_service = BackupService::new(vec![Arc::new(MokoshBackupAdapter) as Arc<_>]);
+
     // Initialize auto-ban service
     let auto_ban_service = Arc::new(AutoBanService::new(auto_ban_config, pool.clone()));
 
@@ -785,6 +790,7 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::Data::new(stripe_service.clone()))
             .app_data(web::Data::new(totp_service.clone()))
             .app_data(web::Data::new(webhook_service.clone()))
+            .app_data(web::Data::new(backup_service.clone()))
             .app_data(web::Data::new(event_bus.clone()))
             .app_data(web::Data::new(stripe_key_set.clone()))
             .app_data(web::Data::new(config_data.clone()))

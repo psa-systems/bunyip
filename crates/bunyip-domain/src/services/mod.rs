@@ -7,6 +7,7 @@
 //! are re-exported below.
 
 pub mod auth;
+pub mod backup;
 pub mod email;
 pub mod event_bus;
 pub mod jwt;
@@ -41,6 +42,12 @@ pub type AppDownloadCache = DownloadCache<crate::repositories::DownloadCacheRepo
 // Domain service types.
 pub use auth::{
     AcceptInviteResult, AuthService, AuthTokens, LoginResult, MagicLinkResult, TierGrantTrigger,
+};
+pub use backup::{
+    AccountBackup, AccountBackupStore, AccountProfile, AccountSection, AppBackupAdapter,
+    AppBackupContext, AppBackupOutcome, AppBackupSection, AppBackupStatus, AppRestoreOutcome,
+    AppRestoreStatus, BackupService, MokoshBackupAdapter, PgAccountBackupStore, RestoreReport,
+    StoredProfile, BACKUP_FORMAT_VERSION,
 };
 pub use email::EmailService;
 pub use event_bus::{BunyipEvent, EventBus};
