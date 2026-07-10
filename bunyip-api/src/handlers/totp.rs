@@ -497,9 +497,23 @@ pub async fn confirm_rekey(
     let request_id = get_request_id(&req);
     let ip_address = extract_client_ip(&req);
 
+    // Confirm verifies a TOTP without a password gate, so cap attempts per
+    // account like the login 2FA verify (BUNYIP-355 review, defense-in-depth).
+    check_rate_limit(
+        &pool,
+        &format!("2fa_rekey_confirm:{}", user.0.sub),
+        &RateLimitConfig::TWO_FACTOR_VERIFY_FAILURES,
+    )
+    .await?;
+
     let codes = totp_service
         .confirm_rekey(user.0.sub, body.code.trim())
         .await?;
+
+    // A re-key changes the second factor; drop the old trusted-device context so
+    // a lost or compromised device's 2FA bypass cannot linger (mirrors
+    // disable_2fa) (BUNYIP-355 review).
+    TrustedDeviceRepository::revoke_all_for_user(&pool, user.0.sub).await?;
 
     let ip = ip_address.map(ipnetwork::IpNetwork::from);
     AuditLogRepository::create(
