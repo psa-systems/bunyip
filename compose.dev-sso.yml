@@ -76,6 +76,11 @@ services:
       # Credentialed CORS allow-list for the relying parties that POST to the
       # token/userinfo endpoints: the hub and the mokosh SPA (comma-list).
       CORS_ORIGIN: https://${USER}-bunyip.a8n.run,https://${USER}-mokosh.a8n.run
+      # BUNYIP-356: enable account backup by pointing bunyip-api at mokosh-server's
+      # reachable base URL (same target as MOKOSH_WEBHOOK_URL). Unset -> the Backup
+      # add-on records Mokosh as "unavailable". Set MOKOSH_BACKUP_API_URL in .env
+      # to https://${USER}-mokosh-api.a8n.run to turn it on (see .env.example).
+      MOKOSH_BACKUP_API_URL: ${MOKOSH_BACKUP_API_URL:-}
     networks:
       - private
       - traefik-public

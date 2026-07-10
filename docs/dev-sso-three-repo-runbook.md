@@ -166,6 +166,17 @@ Optionally, to also serve the distribution proxy (member downloads + the OCI
 registry on `<user>-bunyip-registry.a8n.run`), add the Forgejo service
 credentials; see section 9.
 
+Optionally, to enable **account backup/restore** (BUNYIP-356 - the Backup add-on
+under Integrations captures the account's Mokosh tenant data), set
+`MOKOSH_BACKUP_API_URL=https://<user>-mokosh-api.a8n.run` in bunyip's `.env`
+(same mokosh host as `MOKOSH_WEBHOOK_URL`) and re-up bunyip-api. Left unset,
+bunyip mints nothing and the Backup add-on records Mokosh as "unavailable" - so
+this is opt-in per box. bunyip mints a short-lived Mokosh-audience `at+jwt` for
+the acting admin and calls Mokosh `/api/v1/data/{export,import}`. Backup/export
+works immediately; **restore is gated on mokosh-server PMS-648** (its tenant
+data import is still WIP), so a restore round-trip is not reliable until that
+lands.
+
 On your **Mac** (one time), point the dev hostnames at desktop-02's Nebula IP:
 ```bash
 # remove any stale 127.0.0.1 mapping for these first (it wins; see 6.5)
