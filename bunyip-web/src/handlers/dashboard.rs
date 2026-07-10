@@ -1321,6 +1321,13 @@ pub async fn settings(
                                 button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("shield-off", "mr-2 h-4 w-4")) "Disable 2FA" }
                             }
                         } @else { p class="text-xs text-muted-foreground" { "Admin accounts cannot disable two-factor authentication." } }
+                        // BUNYIP-355: recovery-code regeneration is available to
+                        // every 2FA user, admins included - they cannot disable,
+                        // so keeping working backup codes matters most for them.
+                        div class="pt-2 border-t" {
+                            p class="text-xs text-muted-foreground mb-2" { "Lost your recovery codes, or used some up? Generate a fresh set (this invalidates the old codes)." }
+                            a href="/settings/2fa/recovery-codes" class=(button_class("outline", "sm", "")) { (icon("key", "mr-2 h-4 w-4")) "Regenerate recovery codes" }
+                        }
                     }
                 } @else {
                     div class="space-y-4" {
@@ -1921,6 +1928,85 @@ pub async fn twofa_setup_post(
     dashboard_response(&c, &user, "/settings", "Two-factor setup · Bunyip", content)
 }
 
+/// Password-confirm form for regenerating recovery codes (BUNYIP-355). Mirrors
+/// the API's password gate on `POST /auth/2fa/recovery-codes`.
+fn twofa_recovery_form(err: Option<&str>) -> Markup {
+    html! {
+        div class="mx-auto max-w-lg space-y-6" {
+            div { h1 class="text-3xl font-bold" { "Regenerate recovery codes" } p class="mt-2 text-muted-foreground" { "This invalidates your existing recovery codes and issues a fresh set. Confirm your password to continue." } }
+            @if let Some(e) = err { (error_box(e)) }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="p-6" {
+                    form method="post" action="/settings/2fa/recovery-codes" class="space-y-4 max-w-md" {
+                        div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" autocomplete="current-password" required class=(crate::handlers::dashboard_input()); }
+                        div class="flex gap-2" {
+                            button type="submit" class=(button_class("default", "default", "")) { (icon("key", "mr-2 h-4 w-4")) "Regenerate codes" }
+                            a href="/settings" class=(button_class("outline", "default", "")) { "Cancel" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Show the freshly-generated recovery codes exactly once, matching the setup
+/// flow's codes panel (BUNYIP-355).
+fn twofa_recovery_result(codes: &[String]) -> Markup {
+    html! {
+        div class="mx-auto max-w-lg space-y-6" {
+            div { h1 class="text-3xl font-bold" { "New recovery codes" } p class="mt-2 text-muted-foreground" { "Save these in a safe place. Your old recovery codes no longer work." } }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
+                div class="p-6 space-y-4" {
+                    div class="rounded-lg border p-3 text-sm flex items-start gap-3" { (icon("alert-circle", "h-4 w-4 mt-0.5")) p class="text-sm" { "Save these codes now. You won't be able to see them again." } }
+                    div class="grid grid-cols-2 gap-2 rounded-lg bg-muted p-4" { @for code in codes { code class="text-center font-mono text-sm py-1" { (code) } } }
+                    a href="/settings" class=(button_class("default", "default", "w-full")) { "Done" }
+                }
+            }
+        }
+    }
+}
+
+/// GET /settings/2fa/recovery-codes - render the password-confirm form.
+pub async fn twofa_recovery_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match guard(&st, &headers, "/settings/2fa/recovery-codes").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    dashboard_response(
+        &c,
+        &user,
+        "/settings",
+        "Recovery codes · Bunyip",
+        twofa_recovery_form(None),
+    )
+}
+
+#[derive(Deserialize)]
+pub struct TwoFactorRecoveryForm {
+    pub password: String,
+}
+
+/// POST /settings/2fa/recovery-codes - confirm the password, regenerate via the
+/// API, and show the new codes once (or re-render the form on error).
+pub async fn twofa_recovery_post(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<TwoFactorRecoveryForm>,
+) -> Response {
+    let (user, c) = match guard(&st, &headers, "/settings/2fa/recovery-codes").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let content =
+        match auth_api::regenerate_recovery_codes(&st.api, c.forward.as_deref(), &f.password).await
+        {
+            Ok(codes) => twofa_recovery_result(&codes.codes),
+            Err(e) => twofa_recovery_form(Some(&e.user_message())),
+        };
+    dashboard_response(&c, &user, "/settings", "Recovery codes · Bunyip", content)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1996,5 +2082,25 @@ mod tests {
         let markup =
             membership_badge(&user(UserRole::Subscriber, MembershipStatus::Active)).into_string();
         assert!(markup.contains("Active"));
+    }
+
+    #[test]
+    fn recovery_result_renders_every_code() {
+        let codes = vec!["AAAA-1111".to_string(), "BBBB-2222".to_string()];
+        let html = super::twofa_recovery_result(&codes).into_string();
+        assert!(html.contains("AAAA-1111"));
+        assert!(html.contains("BBBB-2222"));
+        // The one-time / invalidation warning is present.
+        assert!(html.contains("no longer work"));
+    }
+
+    #[test]
+    fn recovery_form_surfaces_error_only_when_present() {
+        assert!(super::twofa_recovery_form(Some("Invalid password"))
+            .into_string()
+            .contains("Invalid password"));
+        assert!(!super::twofa_recovery_form(None)
+            .into_string()
+            .contains("Invalid password"));
     }
 }
