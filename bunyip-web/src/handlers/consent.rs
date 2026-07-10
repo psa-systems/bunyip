@@ -25,6 +25,11 @@ pub struct ConsentQuery {
     pub client_id: String,
     /// Space-separated scope strings.
     pub missing: String,
+    /// Human-readable name of the requesting client (BUNYIP-342), passed by the
+    /// authorize handler so the screen can name the app. Absent on a
+    /// hand-crafted URL or an older backend.
+    #[serde(default)]
+    pub client_name: Option<String>,
     /// Absolute URL the authorize handler wants us to send the user back to
     /// after Allow. Already URL-encoded by the caller.
     #[serde(default, rename = "continue")]
@@ -51,6 +56,22 @@ fn scope_label(scope: &str) -> &'static str {
         // not reach this screen, but a future RP requesting a non-baseline
         // scope without an entry here gets a safe-but-vague fallback.
         _ => "Additional account details",
+    }
+}
+
+/// The consent card's lead sentence. Names the requesting application when the
+/// authorize handler passed a client name (BUNYIP-342); falls back to the
+/// generic wording for a hand-crafted URL or an older backend that sends none.
+/// Rendered as escaped text by Maud, so a spoofed name cannot inject markup.
+fn consent_description(client_name: Option<&str>) -> String {
+    match client_name.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(name) => {
+            format!("{name} is requesting access to your information. Approve below to continue.")
+        }
+        None => {
+            "An application is requesting access to your information. Approve below to continue."
+                .to_string()
+        }
     }
 }
 
@@ -95,7 +116,7 @@ pub async fn consent_get(
         "shield",
         "bg-primary/10 text-primary",
         "Approve access",
-        "An application is requesting access to your information. Approve below to continue.",
+        &consent_description(q.client_name.as_deref()),
         body,
     );
 
@@ -123,11 +144,21 @@ pub async fn consent_post(
     };
 
     if f.action != "allow" {
-        // Deny path: drop back to dashboard with a flash. A future iteration
-        // can parse `continue_url` for the RP's redirect_uri + state and
-        // 302 there with error=access_denied per the OIDC spec, but for
-        // first-cut UX this is fine.
-        return redirect_cookies("/dashboard?error=Authorization+declined.", &c.set_cookies);
+        // BUNYIP-342 Deny: bounce back through the authorize handler with
+        // consent=denied. bunyip-api validated redirect_uri on its side, so it
+        // returns the spec `access_denied` error to the RP (RFC 6749 4.1.2.1)
+        // instead of leaving the RP hanging. We never redirect to a
+        // redirect_uri ourselves (that would be an open redirect); the
+        // round-trip through the validated authorize handler keeps it safe.
+        // Fall back to the dashboard if we somehow have no continue URL.
+        let dest = if f.continue_url.is_empty() {
+            "/dashboard?error=Authorization+declined.".to_string()
+        } else if f.continue_url.contains('?') {
+            format!("{}&consent=denied", f.continue_url)
+        } else {
+            format!("{}?consent=denied", f.continue_url)
+        };
+        return redirect_cookies(&dest, &c.set_cookies);
     }
 
     // bunyip-api parses + validates the client_id UUID on its side; pass
@@ -181,4 +212,24 @@ pub async fn consent_post(
 #[allow(dead_code)]
 fn _keep_error_box_import(msg: &str) -> Markup {
     error_box(msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{consent_description, scope_label};
+
+    #[test]
+    fn consent_description_names_the_client_or_falls_back() {
+        assert!(consent_description(Some("Mokosh")).starts_with("Mokosh is requesting access"));
+        assert!(consent_description(None).starts_with("An application is requesting access"));
+        // A blank / whitespace-only name falls back to the generic wording.
+        assert!(consent_description(Some("   ")).starts_with("An application is requesting access"));
+    }
+
+    #[test]
+    fn scope_label_covers_known_and_unknown_scopes() {
+        assert_eq!(scope_label("profile"), "Your first and last name");
+        assert_eq!(scope_label("phone"), "Your phone number");
+        assert_eq!(scope_label("something_new"), "Additional account details");
+    }
 }

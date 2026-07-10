@@ -247,6 +247,12 @@ pub struct AuthorizeQuery {
     /// Validated against the user's assignments before use.
     #[serde(default)]
     pub selected_tenant_id: Option<Uuid>,
+    /// BUNYIP-342: set to "denied" when the user clicked Deny on the consent
+    /// screen. bunyip-web sends the user back here with this flag; the handler,
+    /// having already validated `redirect_uri`, returns the OIDC `access_denied`
+    /// error to the RP (RFC 6749 4.1.2.1) instead of re-showing consent.
+    #[serde(default)]
+    pub consent: Option<String>,
 }
 
 /// GET /oauth2/authorize
@@ -433,6 +439,22 @@ pub async fn authorize(
         .any(|u| redirect_uri_matches(u, &q.redirect_uri))
     {
         return Ok(oidc_error("invalid_request", "redirect_uri not registered"));
+    }
+
+    // BUNYIP-342: the user clicked Deny on the consent screen, which bounced
+    // them back here with consent=denied. redirect_uri is validated above, so
+    // return the OIDC access_denied error to the RP per RFC 6749 4.1.2.1
+    // (echoing state), rather than re-rendering the consent gate.
+    if q.consent.as_deref() == Some("denied") {
+        let deny_url = format!(
+            "{}?error=access_denied&error_description={}&state={}",
+            q.redirect_uri,
+            urlencoding::encode("The user declined to authorize the request"),
+            urlencoding::encode(&q.state),
+        );
+        return Ok(HttpResponse::Found()
+            .insert_header(("Location", deny_url))
+            .finish());
     }
 
     // Validate scopes
