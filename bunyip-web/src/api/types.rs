@@ -654,6 +654,31 @@ pub struct AutoBanConfigResponse {
     pub updated_by: Option<String>,
 }
 
+/// BUNYIP-353: result of restoring an account backup, surfaced back to the
+/// admin. Mirrors `bunyip-domain`'s `RestoreReport`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RestoreReport {
+    pub profile_restored: bool,
+    pub entitlements_granted: Vec<String>,
+    pub apps: Vec<AppRestoreOutcome>,
+}
+
+/// One app's restore outcome inside a [`RestoreReport`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct AppRestoreOutcome {
+    pub slug: String,
+    pub status: AppRestoreStatus,
+}
+
+/// Restore-time outcome for one app. Mirrors `bunyip-domain`'s
+/// `AppRestoreStatus` (internally tagged on `state`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum AppRestoreStatus {
+    Restored,
+    Skipped { reason: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TierConfigResponse {
     pub lifetime_slots: i64,

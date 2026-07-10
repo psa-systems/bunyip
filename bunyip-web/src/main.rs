@@ -11,7 +11,7 @@ mod web;
 
 use std::sync::Arc;
 
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use tower_http::compression::CompressionLayer;
 use tower_http::services::{ServeDir, ServeFile};
@@ -412,6 +412,25 @@ async fn main() {
         .route(
             "/admin/stripe",
             get(handlers::admin::stripe).post(handlers::admin::stripe_save),
+        )
+        // BUNYIP-353: account backup & restore, reached from the Backup add-on
+        // tile on /applications.
+        .route(
+            "/integrations/backup",
+            get(handlers::admin::backup_settings),
+        )
+        .route(
+            "/integrations/backup/download",
+            get(handlers::admin::backup_download),
+        )
+        .route(
+            "/integrations/backup/restore",
+            post(handlers::admin::backup_restore).layer(
+                // Raise the default axum 2 MB body limit for the restore upload;
+                // the bundle embeds each entitled app's backup. Matches the
+                // API's 8 MiB restore ceiling plus multipart overhead.
+                axum::extract::DefaultBodyLimit::max(9 * 1024 * 1024),
+            ),
         )
         // Static + fallback
         .nest_service("/assets", ServeDir::new("assets"))

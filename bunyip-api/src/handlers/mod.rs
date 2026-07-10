@@ -131,6 +131,7 @@ mod tests {
     }
 }
 
+pub mod account_backup;
 pub mod admin;
 pub mod admin_entitlements;
 pub mod admin_ip_bans;

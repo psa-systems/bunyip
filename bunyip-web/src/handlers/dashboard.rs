@@ -298,6 +298,13 @@ fn app_card(
                     }
                 }
                 @if let Some(g) = downloads { (download_affordance(g, is_member)) }
+                // BUNYIP-353: the Backup add-on is configured in-app rather than
+                // launched to an external subdomain.
+                @if app.slug == "backup" {
+                    a href="/integrations/backup" {
+                        span class=(button_class("outline", "default", "w-full")) { "Backup & Restore" (icon("settings", "ml-2 h-4 w-4")) }
+                    }
+                }
             }
         }
     }
