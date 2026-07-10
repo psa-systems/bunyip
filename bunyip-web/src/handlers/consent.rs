@@ -75,6 +75,17 @@ fn consent_description(client_name: Option<&str>) -> String {
     }
 }
 
+/// Whether a consent `continue_url` is safe to 302 back to: it must be an
+/// absolute URL under the OP issuer origin (the `/oauth2/authorize` round-trip),
+/// not an attacker-supplied absolute URL. The trailing-slash boundary stops a
+/// look-alike host (`https://issuer.evil.com/...`) from passing the prefix
+/// check. Closes an open redirect on both the Allow and Deny paths (BUNYIP-342).
+fn continue_under_issuer(continue_url: &str, oidc_issuer: &str) -> bool {
+    let u = continue_url.trim();
+    let origin = oidc_issuer.trim_end_matches('/');
+    !origin.is_empty() && (u == origin || u.starts_with(&format!("{origin}/")))
+}
+
 /// GET /oauth2/consent
 pub async fn consent_get(
     State(st): State<AppState>,
@@ -147,11 +158,11 @@ pub async fn consent_post(
         // BUNYIP-342 Deny: bounce back through the authorize handler with
         // consent=denied. bunyip-api validated redirect_uri on its side, so it
         // returns the spec `access_denied` error to the RP (RFC 6749 4.1.2.1)
-        // instead of leaving the RP hanging. We never redirect to a
-        // redirect_uri ourselves (that would be an open redirect); the
-        // round-trip through the validated authorize handler keeps it safe.
-        // Fall back to the dashboard if we somehow have no continue URL.
-        let dest = if f.continue_url.is_empty() {
+        // instead of leaving the RP hanging. Only follow a continue_url under
+        // the OP issuer origin - an attacker-supplied absolute continue_url is
+        // refused to the dashboard, closing an open redirect. We never redirect
+        // to a redirect_uri ourselves; the validated authorize round-trip does.
+        let dest = if !continue_under_issuer(&f.continue_url, &st.cfg.oidc_issuer) {
             "/dashboard?error=Authorization+declined.".to_string()
         } else if f.continue_url.contains('?') {
             format!("{}&consent=denied", f.continue_url)
@@ -187,10 +198,13 @@ pub async fn consent_post(
     // absolute URL the authorize handler bounced us off of; redirecting back
     // there lets it re-evaluate the granted scope set (now widened by our
     // POST) and mint the auth code.
-    let dest = if f.continue_url.is_empty() {
-        "/dashboard".to_string()
-    } else {
+    // Only resume to a continue_url under the OP issuer origin; an
+    // attacker-supplied absolute URL is refused to the dashboard (BUNYIP-342
+    // open-redirect fix, same guard as the Deny path).
+    let dest = if continue_under_issuer(&f.continue_url, &st.cfg.oidc_issuer) {
         f.continue_url.clone()
+    } else {
+        "/dashboard".to_string()
     };
     // BUNYIP-234: log the redirect target + scopes so the consent-loop
     // investigation can confirm the user is actually being sent back to
@@ -231,5 +245,32 @@ mod tests {
         assert_eq!(scope_label("profile"), "Your first and last name");
         assert_eq!(scope_label("phone"), "Your phone number");
         assert_eq!(scope_label("something_new"), "Additional account details");
+    }
+
+    #[test]
+    fn continue_under_issuer_requires_origin_boundary() {
+        let iss = "https://api.psa.systems";
+        assert!(super::continue_under_issuer(
+            "https://api.psa.systems/oauth2/authorize?client_id=x",
+            iss
+        ));
+        assert!(super::continue_under_issuer(
+            "https://api.psa.systems/",
+            iss
+        ));
+        // Look-alike host must not pass the prefix check (open-redirect guard).
+        assert!(!super::continue_under_issuer(
+            "https://api.psa.systems.evil.com/x",
+            iss
+        ));
+        assert!(!super::continue_under_issuer("https://evil.com", iss));
+        assert!(!super::continue_under_issuer("", iss));
+        // A relative path is not under the absolute issuer origin.
+        assert!(!super::continue_under_issuer("/dashboard", iss));
+        // Trailing slash on the configured issuer is tolerated.
+        assert!(super::continue_under_issuer(
+            "https://api.psa.systems/oauth2/authorize?a=1",
+            "https://api.psa.systems/"
+        ));
     }
 }

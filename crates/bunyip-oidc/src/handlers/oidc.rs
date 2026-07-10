@@ -530,10 +530,12 @@ pub async fn authorize(
     if !missing.is_empty() {
         if client.first_party {
             // BUNYIP-342: first-party apps (e.g. Mokosh under Bunyip) skip the
-            // consent screen. Silently grant the missing scopes so the grant is
-            // recorded and stays revocable via /settings, then fall through to
-            // issue the code with no prompt - mirrors Google not re-prompting
-            // consent for its own core apps.
+            // consent screen. Record the grant (for /settings visibility), then
+            // fall through to issue the code with no prompt - mirrors Google not
+            // re-prompting consent for its own core apps. Note: because the skip
+            // is unconditional, revoking a first-party grant from /settings does
+            // NOT block access - the next authorize re-grants and proceeds. That
+            // is intended: a first-party core app cannot be meaningfully revoked.
             let missing_owned: Vec<String> = missing.iter().map(|s| s.to_string()).collect();
             provider
                 .add_scopes_to_grant(session.user_id, client_id, &missing_owned)
