@@ -139,6 +139,78 @@ impl TotpService {
         self.generate_and_store_recovery_codes(user_id).await
     }
 
+    /// BUNYIP-355: begin an authenticator re-key. Generates a fresh secret and
+    /// stages it in the pending columns WITHOUT disabling the active secret, so
+    /// the old authenticator keeps working until `confirm_rekey`. The caller
+    /// (handler) enforces the step-up gate (password + a live code).
+    pub async fn begin_rekey(&self, user_id: Uuid, email: &str) -> Result<TotpSetupInfo, AppError> {
+        let existing = TotpRepository::find_by_user_id(&self.pool, user_id)
+            .await?
+            .ok_or(AppError::not_found("TOTP configuration"))?;
+        if !existing.verified {
+            return Err(AppError::validation("2fa", "2FA is not enabled"));
+        }
+
+        let secret = Secret::generate_secret();
+        let secret_bytes = secret
+            .to_bytes()
+            .map_err(|e| AppError::internal(format!("Failed to generate TOTP secret: {}", e)))?;
+        let totp = self.build_totp(&secret_bytes, email)?;
+        let otpauth_uri = totp.get_url();
+        let secret_base32 = data_encoding::BASE32_NOPAD.encode(&secret_bytes);
+
+        let (encrypted, nonce, key_version) = self.key_set.encrypt(&secret_bytes)?;
+        TotpRepository::stage_pending_secret(&self.pool, user_id, &encrypted, &nonce, key_version)
+            .await?;
+
+        Ok(TotpSetupInfo {
+            otpauth_uri,
+            secret: secret_base32,
+        })
+    }
+
+    /// BUNYIP-355: confirm an authenticator re-key by verifying a code against
+    /// the staged pending secret, then promote it to active and regenerate
+    /// recovery codes. Fails (leaving the active secret untouched) if no re-key
+    /// is in progress or the code is wrong.
+    pub async fn confirm_rekey(&self, user_id: Uuid, code: &str) -> Result<Vec<String>, AppError> {
+        let record = TotpRepository::find_by_user_id(&self.pool, user_id)
+            .await?
+            .ok_or(AppError::not_found("TOTP configuration"))?;
+
+        let (penc, pnonce, pkv) = match (
+            record.pending_encrypted_secret.as_ref(),
+            record.pending_nonce.as_ref(),
+            record.pending_key_version,
+        ) {
+            (Some(e), Some(n), Some(k)) => (e, n, k),
+            _ => {
+                return Err(AppError::validation(
+                    "2fa",
+                    "No authenticator reset is in progress",
+                ))
+            }
+        };
+
+        let secret = self.key_set.decrypt(penc, pnonce, pkv)?;
+        if !self.check_code(&secret, code)? {
+            return Err(AppError::validation("code", "Invalid verification code"));
+        }
+
+        // Promote pending -> active; the guarded UPDATE only touches a row that
+        // still has a complete pending secret, so a concurrent confirm cannot
+        // double-promote or null out the active secret.
+        if TotpRepository::promote_pending_secret(&self.pool, user_id).await? == 0 {
+            return Err(AppError::validation(
+                "2fa",
+                "No authenticator reset is in progress",
+            ));
+        }
+
+        let codes = self.generate_and_store_recovery_codes(user_id).await?;
+        Ok(codes)
+    }
+
     /// Disable 2FA for a user
     pub async fn disable(&self, user_id: Uuid) -> Result<(), AppError> {
         TotpRepository::delete_by_user_id(&self.pool, user_id).await?;

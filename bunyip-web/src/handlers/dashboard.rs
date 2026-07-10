@@ -1321,6 +1321,20 @@ pub async fn settings(
                                 button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("shield-off", "mr-2 h-4 w-4")) "Disable 2FA" }
                             }
                         } @else { p class="text-xs text-muted-foreground" { "Admin accounts cannot disable two-factor authentication." } }
+                        // BUNYIP-355: recovery-code regeneration is available to
+                        // every 2FA user, admins included - they cannot disable,
+                        // so keeping working backup codes matters most for them.
+                        div class="pt-2 border-t" {
+                            p class="text-xs text-muted-foreground mb-2" { "Lost your recovery codes, or used some up? Generate a fresh set (this invalidates the old codes)." }
+                            a href="/settings/2fa/recovery-codes" class=(button_class("outline", "sm", "")) { (icon("key", "mr-2 h-4 w-4")) "Regenerate recovery codes" }
+                        }
+                        // BUNYIP-355: re-key to a new authenticator (e.g. new
+                        // phone). Available to admins too; the old authenticator
+                        // keeps working until the new one is confirmed.
+                        div class="pt-2 border-t" {
+                            p class="text-xs text-muted-foreground mb-2" { "Switching to a new phone or authenticator app? Set up a new one - your current authenticator keeps working until you finish." }
+                            a href="/settings/2fa/rekey" class=(button_class("outline", "sm", "")) { (icon("shield-check", "mr-2 h-4 w-4")) "Reset authenticator app" }
+                        }
                     }
                 } @else {
                     div class="space-y-4" {
@@ -1828,10 +1842,19 @@ fn qr_svg(uri: &str) -> String {
 /// Caller passes `setup` (the bunyip-api `/v1/auth/2fa/setup` response, which
 /// the upstream handler MUST return the SAME in-progress secret for during
 /// enrollment - see `docs/bunyip-upgrade/04-2fa-error-state-preserves-form.md`).
-fn twofa_setup_view(setup: &TwoFactorSetupResponse, error: Option<&str>) -> Markup {
+/// QR + manual-key + verify-code page, shared by initial setup and the BUNYIP-355
+/// re-key (which points the confirm form at a different action and relabels it).
+fn twofa_qr_view(
+    setup: &TwoFactorSetupResponse,
+    error: Option<&str>,
+    heading: &str,
+    subtitle: &str,
+    action: &str,
+    button: &str,
+) -> Markup {
     html! {
         div class="mx-auto max-w-lg space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Set Up Two-Factor Authentication" } p class="mt-2 text-muted-foreground" { "Scan the QR code, then enter a code to confirm." } }
+            div { h1 class="text-3xl font-bold" { (heading) } p class="mt-2 text-muted-foreground" { (subtitle) } }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
                 div class="p-6 space-y-6" {
                     div class="flex justify-center rounded-lg bg-white p-4" { div class="[&_svg]:h-[200px] [&_svg]:w-[200px]" { (PreEscaped(qr_svg(&setup.otpauth_uri))) } }
@@ -1842,14 +1865,14 @@ fn twofa_setup_view(setup: &TwoFactorSetupResponse, error: Option<&str>) -> Mark
                     @if let Some(msg) = error {
                         (error_box(msg))
                     }
-                    form method="post" action="/settings/2fa/setup" class="space-y-4" {
+                    form method="post" action=(action) class="space-y-4" {
                         // BUNYIP-117: bound the TOTP edge before submit
                         // (maxlength + pattern). Authoritative check is
                         // still domain-side via `services::totp::verify_code`.
                         // BUNYIP-331: data-otp-autosubmit submits this
                         // single-field form once the six-digit code is complete.
                         div class="space-y-2" { label class="text-sm font-medium" { "Verification Code" } input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000000" autocomplete="one-time-code" data-otp-autosubmit class=(crate::handlers::dashboard_input()); }
-                        button type="submit" class=(button_class("default", "default", "w-full")) { "Verify & Enable" }
+                        button type="submit" class=(button_class("default", "default", "w-full")) { (button) }
                     }
                 }
             }
@@ -1864,7 +1887,14 @@ pub async fn twofa_setup_get(State(st): State<AppState>, headers: HeaderMap) -> 
     };
     let fwd = c.forward.as_deref();
     let content = match auth_api::setup_2fa(&st.api, fwd).await {
-        Ok(setup) => twofa_setup_view(&setup, None),
+        Ok(setup) => twofa_qr_view(
+            &setup,
+            None,
+            "Set Up Two-Factor Authentication",
+            "Scan the QR code, then enter a code to confirm.",
+            "/settings/2fa/setup",
+            "Verify & Enable",
+        ),
         Err(e) => html! { div class="mx-auto max-w-lg" { (error_box(&e.user_message())) } },
     };
     dashboard_response(&c, &user, "/settings", "Two-factor setup · Bunyip", content)
@@ -1908,7 +1938,14 @@ pub async fn twofa_setup_post(
             // restart enrollment manually.
             let err_msg = e.user_message();
             match auth_api::setup_2fa(&st.api, fwd).await {
-                Ok(setup) => twofa_setup_view(&setup, Some(&err_msg)),
+                Ok(setup) => twofa_qr_view(
+                    &setup,
+                    Some(&err_msg),
+                    "Set Up Two-Factor Authentication",
+                    "Scan the QR code, then enter a code to confirm.",
+                    "/settings/2fa/setup",
+                    "Verify & Enable",
+                ),
                 Err(_) => html! {
                     div class="mx-auto max-w-lg space-y-4" {
                         (error_box(&err_msg))
@@ -1919,6 +1956,212 @@ pub async fn twofa_setup_post(
         }
     };
     dashboard_response(&c, &user, "/settings", "Two-factor setup · Bunyip", content)
+}
+
+/// Password-confirm form for regenerating recovery codes (BUNYIP-355). Mirrors
+/// the API's password gate on `POST /auth/2fa/recovery-codes`.
+fn twofa_recovery_form(err: Option<&str>) -> Markup {
+    html! {
+        div class="mx-auto max-w-lg space-y-6" {
+            div { h1 class="text-3xl font-bold" { "Regenerate recovery codes" } p class="mt-2 text-muted-foreground" { "This invalidates your existing recovery codes and issues a fresh set. Confirm your password to continue." } }
+            @if let Some(e) = err { (error_box(e)) }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="p-6" {
+                    form method="post" action="/settings/2fa/recovery-codes" class="space-y-4 max-w-md" {
+                        div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" autocomplete="current-password" required class=(crate::handlers::dashboard_input()); }
+                        div class="flex gap-2" {
+                            button type="submit" class=(button_class("default", "default", "")) { (icon("key", "mr-2 h-4 w-4")) "Regenerate codes" }
+                            a href="/settings" class=(button_class("outline", "default", "")) { "Cancel" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Show the freshly-generated recovery codes exactly once, matching the setup
+/// flow's codes panel (BUNYIP-355).
+fn twofa_recovery_result(codes: &[String]) -> Markup {
+    html! {
+        div class="mx-auto max-w-lg space-y-6" {
+            div { h1 class="text-3xl font-bold" { "New recovery codes" } p class="mt-2 text-muted-foreground" { "Save these in a safe place. Your old recovery codes no longer work." } }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
+                div class="p-6 space-y-4" {
+                    div class="rounded-lg border p-3 text-sm flex items-start gap-3" { (icon("alert-circle", "h-4 w-4 mt-0.5")) p class="text-sm" { "Save these codes now. You won't be able to see them again." } }
+                    div class="grid grid-cols-2 gap-2 rounded-lg bg-muted p-4" { @for code in codes { code class="text-center font-mono text-sm py-1" { (code) } } }
+                    a href="/settings" class=(button_class("default", "default", "w-full")) { "Done" }
+                }
+            }
+        }
+    }
+}
+
+/// GET /settings/2fa/recovery-codes - render the password-confirm form.
+pub async fn twofa_recovery_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match guard(&st, &headers, "/settings/2fa/recovery-codes").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    dashboard_response(
+        &c,
+        &user,
+        "/settings",
+        "Recovery codes · Bunyip",
+        twofa_recovery_form(None),
+    )
+}
+
+#[derive(Deserialize)]
+pub struct TwoFactorRecoveryForm {
+    pub password: String,
+}
+
+/// POST /settings/2fa/recovery-codes - confirm the password, regenerate via the
+/// API, and show the new codes once (or re-render the form on error).
+pub async fn twofa_recovery_post(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<TwoFactorRecoveryForm>,
+) -> Response {
+    let (user, c) = match guard(&st, &headers, "/settings/2fa/recovery-codes").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let content =
+        match auth_api::regenerate_recovery_codes(&st.api, c.forward.as_deref(), &f.password).await
+        {
+            Ok(codes) => twofa_recovery_result(&codes.codes),
+            Err(e) => twofa_recovery_form(Some(&e.user_message())),
+        };
+    dashboard_response(&c, &user, "/settings", "Recovery codes · Bunyip", content)
+}
+
+/// Step-up form that starts an authenticator re-key (BUNYIP-355): password + a
+/// current code, matching the API gate on `POST /auth/2fa/rekey`.
+fn twofa_rekey_stepup_form(err: Option<&str>) -> Markup {
+    html! {
+        div class="mx-auto max-w-lg space-y-6" {
+            div { h1 class="text-3xl font-bold" { "Reset authenticator app" } p class="mt-2 text-muted-foreground" { "Set up a new authenticator (for example on a new phone). Confirm your password and a current code first; your existing authenticator keeps working until you finish." } }
+            @if let Some(e) = err { (error_box(e)) }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="p-6" {
+                    form method="post" action="/settings/2fa/rekey" class="space-y-4 max-w-md" {
+                        div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" autocomplete="current-password" required class=(crate::handlers::dashboard_input()); }
+                        div class="space-y-2" { label class="text-sm font-medium" { "Current two-factor code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit or recovery code" class=(crate::handlers::dashboard_input()); }
+                        div class="flex gap-2" {
+                            button type="submit" class=(button_class("default", "default", "")) { (icon("shield", "mr-2 h-4 w-4")) "Continue" }
+                            a href="/settings" class=(button_class("outline", "default", "")) { "Cancel" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Bare code-entry form for finishing a re-key after the QR was already shown
+/// (the pending secret is still staged, so no need to re-scan) (BUNYIP-355).
+fn twofa_rekey_code_form(err: Option<&str>) -> Markup {
+    html! {
+        div class="mx-auto max-w-lg space-y-6" {
+            div { h1 class="text-3xl font-bold" { "Reset authenticator app" } p class="mt-2 text-muted-foreground" { "Enter a fresh code from your new authenticator to finish." } }
+            @if let Some(e) = err { (error_box(e)) }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
+                div class="p-6 space-y-4" {
+                    form method="post" action="/settings/2fa/rekey/confirm" class="space-y-4" {
+                        div class="space-y-2" { label class="text-sm font-medium" { "Verification Code" } input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000000" autocomplete="one-time-code" data-otp-autosubmit class=(crate::handlers::dashboard_input()); }
+                        button type="submit" class=(button_class("default", "default", "w-full")) { "Confirm new authenticator" }
+                    }
+                    p class="text-xs text-muted-foreground" { "Need the QR code again? " a href="/settings/2fa/rekey" class="underline" { "Restart the reset" } "." }
+                }
+            }
+        }
+    }
+}
+
+/// GET /settings/2fa/rekey - the re-key step-up form.
+pub async fn twofa_rekey_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match guard(&st, &headers, "/settings/2fa/rekey").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    dashboard_response(
+        &c,
+        &user,
+        "/settings",
+        "Reset authenticator · Bunyip",
+        twofa_rekey_stepup_form(None),
+    )
+}
+
+#[derive(Deserialize)]
+pub struct TwoFactorRekeyForm {
+    pub password: String,
+    #[serde(default)]
+    pub totp_code: String,
+}
+
+/// POST /settings/2fa/rekey - step-up, then stage the new secret and show its QR.
+pub async fn twofa_rekey_post(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<TwoFactorRekeyForm>,
+) -> Response {
+    let (user, c) = match guard(&st, &headers, "/settings/2fa/rekey").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let content = match auth_api::begin_rekey(
+        &st.api,
+        c.forward.as_deref(),
+        &f.password,
+        f.totp_code.trim(),
+    )
+    .await
+    {
+        Ok(setup) => twofa_qr_view(
+            &setup,
+            None,
+            "Reset authenticator app",
+            "Scan this new QR code with your authenticator, then enter a code from it. Your old authenticator still works until you confirm.",
+            "/settings/2fa/rekey/confirm",
+            "Confirm new authenticator",
+        ),
+        Err(e) => twofa_rekey_stepup_form(Some(&e.user_message())),
+    };
+    dashboard_response(
+        &c,
+        &user,
+        "/settings",
+        "Reset authenticator · Bunyip",
+        content,
+    )
+}
+
+/// POST /settings/2fa/rekey/confirm - verify a code from the new authenticator,
+/// promote it, and show the fresh recovery codes.
+pub async fn twofa_rekey_confirm_post(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<TwoFactorSetupForm>,
+) -> Response {
+    let (user, c) = match guard(&st, &headers, "/settings/2fa/rekey").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let content = match auth_api::confirm_rekey(&st.api, c.forward.as_deref(), f.code.trim()).await
+    {
+        Ok(codes) => twofa_recovery_result(&codes.codes),
+        Err(e) => twofa_rekey_code_form(Some(&e.user_message())),
+    };
+    dashboard_response(
+        &c,
+        &user,
+        "/settings",
+        "Reset authenticator · Bunyip",
+        content,
+    )
 }
 
 #[cfg(test)]
@@ -1996,5 +2239,62 @@ mod tests {
         let markup =
             membership_badge(&user(UserRole::Subscriber, MembershipStatus::Active)).into_string();
         assert!(markup.contains("Active"));
+    }
+
+    #[test]
+    fn recovery_result_renders_every_code() {
+        let codes = vec!["AAAA-1111".to_string(), "BBBB-2222".to_string()];
+        let html = super::twofa_recovery_result(&codes).into_string();
+        assert!(html.contains("AAAA-1111"));
+        assert!(html.contains("BBBB-2222"));
+        // The one-time / invalidation warning is present.
+        assert!(html.contains("no longer work"));
+    }
+
+    #[test]
+    fn recovery_form_surfaces_error_only_when_present() {
+        assert!(super::twofa_recovery_form(Some("Invalid password"))
+            .into_string()
+            .contains("Invalid password"));
+        assert!(!super::twofa_recovery_form(None)
+            .into_string()
+            .contains("Invalid password"));
+    }
+
+    #[test]
+    fn rekey_stepup_form_requires_password_and_current_code() {
+        let html = super::twofa_rekey_stepup_form(None).into_string();
+        assert!(html.contains("Reset authenticator app"));
+        assert!(html.contains(r#"name="password""#));
+        assert!(html.contains(r#"name="totp_code""#));
+        assert!(html.contains(r#"action="/settings/2fa/rekey""#));
+    }
+
+    #[test]
+    fn rekey_qr_view_points_confirm_at_the_rekey_route() {
+        let setup = crate::api::types::TwoFactorSetupResponse {
+            otpauth_uri: "otpauth://totp/Bunyip:u@x?secret=ABCD".into(),
+            secret: "ABCDABCDABCD".into(),
+        };
+        let html = super::twofa_qr_view(
+            &setup,
+            None,
+            "Reset authenticator app",
+            "sub",
+            "/settings/2fa/rekey/confirm",
+            "Confirm new authenticator",
+        )
+        .into_string();
+        assert!(html.contains(r#"action="/settings/2fa/rekey/confirm""#));
+        assert!(html.contains("Confirm new authenticator"));
+        assert!(html.contains("ABCDABCDABCD")); // manual key rendered
+    }
+
+    #[test]
+    fn rekey_code_form_offers_restart_and_surfaces_error() {
+        let html = super::twofa_rekey_code_form(Some("Invalid verification code")).into_string();
+        assert!(html.contains("Invalid verification code"));
+        assert!(html.contains(r#"action="/settings/2fa/rekey/confirm""#));
+        assert!(html.contains(r#"href="/settings/2fa/rekey""#)); // restart link
     }
 }

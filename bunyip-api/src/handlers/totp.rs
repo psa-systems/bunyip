@@ -413,6 +413,120 @@ pub async fn regenerate_recovery_codes(
     Ok(success(RecoveryCodesResponse { codes }, request_id))
 }
 
+/// POST /v1/auth/2fa/rekey
+/// Begin an authenticator re-key (BUNYIP-355). Step-up gated exactly like
+/// `disable_2fa` (password + a fresh TOTP/recovery code) so a hijacked or
+/// trusted-device session cannot silently reset the second factor. Stages a new
+/// secret WITHOUT disabling the active one and returns the new otpauth URI +
+/// secret for the QR; the old authenticator keeps working until confirm.
+pub async fn begin_rekey(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    user: AuthenticatedUser,
+    totp_service: web::Data<Arc<TotpService>>,
+    body: web::Json<PasswordConfirmRequest>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let ip_address = extract_client_ip(&req);
+
+    // Verify password.
+    let db_user = UserRepository::find_by_id(&pool, user.0.sub)
+        .await?
+        .ok_or(AppError::not_found("User"))?;
+    let password_hash = db_user.password_hash.as_ref().ok_or(AppError::validation(
+        "password",
+        "No password set for this account",
+    ))?;
+    let password_service = PasswordService::new();
+    if !password_service.verify(&body.password, password_hash)? {
+        return Err(AppError::validation("password", "Invalid password"));
+    }
+
+    // Require a fresh TOTP/recovery code alongside the password (BUNYIP-138).
+    let code = body
+        .totp_code
+        .as_deref()
+        .map(|c| c.trim().replace(' ', ""))
+        .filter(|c| !c.is_empty())
+        .ok_or_else(|| AppError::validation("totp_code", "Two-factor code required"))?;
+    let code_ok = if code.contains('-') || code.len() > 6 {
+        totp_service.verify_recovery_code(user.0.sub, &code).await?
+    } else {
+        totp_service.verify_code(user.0.sub, &code).await?
+    };
+    if !code_ok {
+        return Err(AppError::validation(
+            "totp_code",
+            "Invalid verification code",
+        ));
+    }
+
+    let info = totp_service.begin_rekey(user.0.sub, &user.0.email).await?;
+
+    let ip = ip_address.map(ipnetwork::IpNetwork::from);
+    AuditLogRepository::create(
+        &pool,
+        CreateAuditLog::new(AuditAction::TwoFactorRekeyStarted)
+            .with_actor(user.0.sub, &user.0.email, &user.0.role)
+            .with_ip(ip),
+    )
+    .await?;
+
+    Ok(success(
+        SetupResponse {
+            otpauth_uri: info.otpauth_uri,
+            secret: info.secret,
+        },
+        request_id,
+    ))
+}
+
+/// POST /v1/auth/2fa/rekey/confirm
+/// Confirm an authenticator re-key (BUNYIP-355): verify a code from the NEW
+/// authenticator against the staged pending secret, promote it to active, and
+/// return fresh recovery codes. No step-up here - possession of the new device
+/// (the code) plus the earlier begin gate is the proof. Fails without touching
+/// the active secret if no re-key is in progress or the code is wrong.
+pub async fn confirm_rekey(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    user: AuthenticatedUser,
+    totp_service: web::Data<Arc<TotpService>>,
+    body: web::Json<ConfirmSetupRequest>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let ip_address = extract_client_ip(&req);
+
+    // Confirm verifies a TOTP without a password gate, so cap attempts per
+    // account like the login 2FA verify (BUNYIP-355 review, defense-in-depth).
+    check_rate_limit(
+        &pool,
+        &format!("2fa_rekey_confirm:{}", user.0.sub),
+        &RateLimitConfig::TWO_FACTOR_VERIFY_FAILURES,
+    )
+    .await?;
+
+    let codes = totp_service
+        .confirm_rekey(user.0.sub, body.code.trim())
+        .await?;
+
+    // A re-key changes the second factor; drop the old trusted-device context so
+    // a lost or compromised device's 2FA bypass cannot linger (mirrors
+    // disable_2fa) (BUNYIP-355 review).
+    TrustedDeviceRepository::revoke_all_for_user(&pool, user.0.sub).await?;
+
+    let ip = ip_address.map(ipnetwork::IpNetwork::from);
+    AuditLogRepository::create(
+        &pool,
+        CreateAuditLog::new(AuditAction::TwoFactorRekeyed)
+            .with_actor(user.0.sub, &user.0.email, &user.0.role)
+            .with_ip(ip),
+    )
+    .await?;
+
+    Ok(success(RecoveryCodesResponse { codes }, request_id))
+}
+
 /// GET /v1/auth/2fa/status
 /// Get 2FA status (authenticated)
 pub async fn get_2fa_status(

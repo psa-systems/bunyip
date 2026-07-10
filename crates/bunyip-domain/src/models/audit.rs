@@ -40,6 +40,10 @@ pub enum AuditAction {
     TwoFactorVerified,
     TwoFactorRecoveryCodeUsed,
     TwoFactorRecoveryCodesRegenerated,
+    /// BUNYIP-355: a user began re-keying their authenticator (a new secret was
+    /// staged) and completed it (the new secret became active).
+    TwoFactorRekeyStarted,
+    TwoFactorRekeyed,
     EmailVerificationRequested,
     EmailVerified,
     /// BUNYIP-221: the initial subscription tier was assigned (one of Lifetime
@@ -176,6 +180,8 @@ impl AuditAction {
             AuditAction::TwoFactorRecoveryCodesRegenerated => {
                 "two_factor_recovery_codes_regenerated"
             }
+            AuditAction::TwoFactorRekeyStarted => "two_factor_rekey_started",
+            AuditAction::TwoFactorRekeyed => "two_factor_rekeyed",
             AuditAction::EmailVerificationRequested => "email_verification_requested",
             AuditAction::EmailVerified => "email_verified",
             AuditAction::InitialTierGranted => "initial_tier_granted",

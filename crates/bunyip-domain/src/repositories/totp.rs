@@ -60,6 +60,65 @@ impl TotpRepository {
         Ok(())
     }
 
+    /// BUNYIP-355: stage a re-keyed secret in the `pending_*` columns without
+    /// touching the active secret or `verified`, so the current authenticator
+    /// keeps working until the user confirms the new one. Overwrites any prior
+    /// in-flight pending secret.
+    pub async fn stage_pending_secret(
+        pool: &PgPool,
+        user_id: Uuid,
+        encrypted_secret: &[u8],
+        nonce: &[u8],
+        key_version: i16,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            UPDATE user_totp
+            SET pending_encrypted_secret = $2,
+                pending_nonce = $3,
+                pending_key_version = $4,
+                pending_created_at = NOW(),
+                updated_at = NOW()
+            WHERE user_id = $1
+            "#,
+        )
+        .bind(user_id)
+        .bind(encrypted_secret)
+        .bind(nonce)
+        .bind(key_version)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// BUNYIP-355: promote a staged pending secret into the active columns and
+    /// clear the pending state, keeping `verified` intact. Only runs when a
+    /// complete pending secret is present, so it can never null out the active
+    /// secret. Returns the number of rows updated (0 = no pending re-key).
+    pub async fn promote_pending_secret(pool: &PgPool, user_id: Uuid) -> Result<u64, AppError> {
+        let res = sqlx::query(
+            r#"
+            UPDATE user_totp
+            SET encrypted_secret = pending_encrypted_secret,
+                nonce = pending_nonce,
+                key_version = pending_key_version,
+                pending_encrypted_secret = NULL,
+                pending_nonce = NULL,
+                pending_key_version = NULL,
+                pending_created_at = NULL,
+                updated_at = NOW()
+            WHERE user_id = $1
+              AND pending_encrypted_secret IS NOT NULL
+              AND pending_nonce IS NOT NULL
+              AND pending_key_version IS NOT NULL
+            "#,
+        )
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// Find TOTP configuration by user ID
     pub async fn find_by_user_id(
         pool: &PgPool,

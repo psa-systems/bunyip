@@ -189,6 +189,18 @@ async fn main() {
             "/settings/2fa/setup",
             get(dash::twofa_setup_get).post(dash::twofa_setup_post),
         )
+        .route(
+            "/settings/2fa/recovery-codes",
+            get(dash::twofa_recovery_get).post(dash::twofa_recovery_post),
+        )
+        .route(
+            "/settings/2fa/rekey",
+            get(dash::twofa_rekey_get).post(dash::twofa_rekey_post),
+        )
+        .route(
+            "/settings/2fa/rekey/confirm",
+            axum::routing::post(dash::twofa_rekey_confirm_post),
+        )
         // Admin
         .route("/admin", get(handlers::admin::dashboard))
         .route("/admin/audit-logs", get(handlers::admin::audit_logs))

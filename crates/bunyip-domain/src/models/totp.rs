@@ -16,6 +16,14 @@ pub struct UserTotp {
     pub key_version: i16,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// BUNYIP-355: a re-keyed secret staged by `begin_rekey`, left NULL until an
+    /// authenticator reset is in progress. `confirm_rekey` verifies a code
+    /// against it and promotes it into `encrypted_secret`/`nonce`/`key_version`,
+    /// so the active secret above keeps working until then.
+    pub pending_encrypted_secret: Option<Vec<u8>>,
+    pub pending_nonce: Option<Vec<u8>>,
+    pub pending_key_version: Option<i16>,
+    pub pending_created_at: Option<DateTime<Utc>>,
 }
 
 /// Recovery code for 2FA backup
