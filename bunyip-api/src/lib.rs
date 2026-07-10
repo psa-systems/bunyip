@@ -14,6 +14,7 @@ pub mod access_log;
 pub mod error_log;
 pub mod handlers;
 pub mod migrate_reconcile;
+pub mod mokosh_backup;
 pub mod routes;
 pub mod seed;
 pub mod version;

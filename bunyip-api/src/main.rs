@@ -19,15 +19,17 @@ use bunyip_api::{
         AutoBanMiddleware, CspConfig, SecurityHeaders,
     },
     models::{CreateUser, UserRole},
+    mokosh_backup::MokoshHttpBackupAdapter,
     repositories::{
         DownloadCacheRepository, DownloadDailyCountRepository, FeedbackRepository,
         RateLimitRepository, UserRepository,
     },
     routes,
     services::{
-        AppDownloadCache, AuthService, BackupService, DownloadLimiter, EmailService,
-        EncryptionKeySet, ForgejoAssetClient, JwtConfig, JwtService, MokoshBackupAdapter,
-        PasswordService, ReleaseCache, StripeConfig, StripeService, TotpService, WebhookService,
+        AppBackupAdapter, AppDownloadCache, AuthService, BackupService, DownloadLimiter,
+        EmailService, EncryptionKeySet, ForgejoAssetClient, JwtConfig, JwtService,
+        MokoshBackupAdapter, PasswordService, ReleaseCache, StripeConfig, StripeService,
+        TotpService, WebhookService,
     },
     version::UpdateChecker,
 };
@@ -524,10 +526,47 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // Initialize account backup/restore service (BUNYIP-353). One adapter per
-    // entitled app; Mokosh is a pending stub until its backup API ships. New
-    // adapters register here without touching the orchestration.
-    let backup_service = BackupService::new(vec![Arc::new(MokoshBackupAdapter) as Arc<_>]);
+    // Initialize account backup/restore service (BUNYIP-353 / BUNYIP-356). One
+    // adapter per entitled app. When Mokosh is configured (MOKOSH_BACKUP_API_URL
+    // + the OIDC provider + the Mokosh OAuth client all present) the real HTTP
+    // adapter calls Mokosh's tenant data export/import; otherwise the domain's
+    // pending stub is used. New adapters register here without touching the
+    // orchestration.
+    let mokosh_adapter: Arc<dyn AppBackupAdapter> = {
+        let url = std::env::var("MOKOSH_BACKUP_API_URL")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+        match (oidc_provider.as_ref(), url) {
+            (Some(provider), Some(url)) => {
+                // The mokosh-apps OAuth client (seeded in this same startup)
+                // sources the minted token's audience + TTL.
+                let mokosh_client_id =
+                    uuid::Uuid::parse_str("b0000000-0000-4000-8000-000000000002")
+                        .expect("static mokosh-apps client id");
+                match provider.load_client(mokosh_client_id).await? {
+                    Some(client) => {
+                        info!("Mokosh backup adapter enabled (BUNYIP-356)");
+                        Arc::new(MokoshHttpBackupAdapter::new(
+                            reqwest::Client::new(),
+                            url,
+                            provider.clone(),
+                            client,
+                            pool.clone(),
+                        )) as Arc<dyn AppBackupAdapter>
+                    }
+                    None => {
+                        error!(
+                            "MOKOSH_BACKUP_API_URL is set but the mokosh-apps OAuth client is \
+                             missing; account backup falls back to the pending stub"
+                        );
+                        Arc::new(MokoshBackupAdapter)
+                    }
+                }
+            }
+            _ => Arc::new(MokoshBackupAdapter),
+        }
+    };
+    let backup_service = BackupService::new(vec![mokosh_adapter]);
 
     // Initialize auto-ban service
     let auto_ban_service = Arc::new(AutoBanService::new(auto_ban_config, pool.clone()));

@@ -45,6 +45,10 @@ bunyip-domain = { path = "../crates/bunyip-domain" }
 bunyip-oci = { path = "../crates/bunyip-oci" }
 bunyip-oidc = { path = "../crates/bunyip-oidc" }
 
+# BUNYIP-356: the Mokosh backup adapter implements the async AppBackupAdapter
+# trait (defined in bunyip-domain with #[async_trait]).
+async-trait = "0.1"
+
 # Web framework.
 actix-web = "4"
 actix-cors = "0.7"
