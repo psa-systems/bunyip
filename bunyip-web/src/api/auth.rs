@@ -401,6 +401,39 @@ pub async fn status_2fa(
     parse(api.get("/auth/2fa/status", cookie).await?)
 }
 
+/// BUNYIP-355: begin an authenticator re-key (step-up: password + a current
+/// code). Stages a new secret and returns its QR/secret; the old authenticator
+/// keeps working until `confirm_rekey`.
+pub async fn begin_rekey(
+    api: &Api,
+    cookie: Option<&str>,
+    password: &str,
+    totp_code: &str,
+) -> Result<TwoFactorSetupResponse, ApiError> {
+    let mut body = json!({ "password": password });
+    if !totp_code.is_empty() {
+        body["totp_code"] = json!(totp_code);
+    }
+    parse(api.post("/auth/2fa/rekey", cookie, Some(body)).await?)
+}
+
+/// BUNYIP-355: confirm the re-key with a code from the new authenticator; swaps
+/// the pending secret in and returns fresh recovery codes.
+pub async fn confirm_rekey(
+    api: &Api,
+    cookie: Option<&str>,
+    code: &str,
+) -> Result<RecoveryCodesResponse, ApiError> {
+    parse(
+        api.post(
+            "/auth/2fa/rekey/confirm",
+            cookie,
+            Some(json!({ "code": code })),
+        )
+        .await?,
+    )
+}
+
 pub async fn disable_2fa(
     api: &Api,
     cookie: Option<&str>,

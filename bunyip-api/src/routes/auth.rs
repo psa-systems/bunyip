@@ -39,6 +39,13 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/2fa/recovery-codes",
                 web::post().to(handlers::regenerate_recovery_codes),
             )
+            // Authenticator re-key (BUNYIP-355): begin (step-up gated) stages a
+            // new secret; confirm verifies a code from the new device and swaps.
+            .route("/2fa/rekey", web::post().to(handlers::begin_rekey))
+            .route(
+                "/2fa/rekey/confirm",
+                web::post().to(handlers::confirm_rekey),
+            )
             .route("/2fa/status", web::get().to(handlers::get_2fa_status))
             .route(
                 "/invite/accept",
