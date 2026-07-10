@@ -390,6 +390,7 @@ impl OidcProvider {
                 access_token_ttl_seconds, refresh_token_ttl_seconds,
                 refresh_idle_ttl_seconds, audience,
                 created_at, disabled_at,
+                first_party,
                 tenant_claim_name,
                 allowed_grant_types, token_endpoint_auth_method
             FROM oauth_clients
@@ -1366,6 +1367,11 @@ pub struct OAuthClient {
     pub audience: String,
     pub created_at: DateTime<Utc>,
     pub disabled_at: Option<DateTime<Utc>>,
+    /// BUNYIP-342: first-party apps under the Bunyip platform (e.g. Mokosh).
+    /// `/oauth2/authorize` skips the consent screen for these and silently
+    /// grants the requested scopes; third-party clients (`false`) still get a
+    /// named consent screen. Mirrors Google not re-prompting for its core apps.
+    pub first_party: bool,
     /// BUNYIP-61: when non-null, /authorize gates on
     /// `oauth_client_user_tenants` for this client and /token emits
     /// the selected tenant_id on the at+jwt and id_token under this
@@ -1730,6 +1736,7 @@ mod tests {
             audience: "https://api.example.com".to_string(),
             created_at: Utc::now(),
             disabled_at: None,
+            first_party: false,
             tenant_claim_name: None,
             allowed_grant_types: vec![
                 "authorization_code".to_string(),

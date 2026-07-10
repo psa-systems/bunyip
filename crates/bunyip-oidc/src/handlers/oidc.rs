@@ -247,6 +247,12 @@ pub struct AuthorizeQuery {
     /// Validated against the user's assignments before use.
     #[serde(default)]
     pub selected_tenant_id: Option<Uuid>,
+    /// BUNYIP-342: set to "denied" when the user clicked Deny on the consent
+    /// screen. bunyip-web sends the user back here with this flag; the handler,
+    /// having already validated `redirect_uri`, returns the OIDC `access_denied`
+    /// error to the RP (RFC 6749 4.1.2.1) instead of re-showing consent.
+    #[serde(default)]
+    pub consent: Option<String>,
 }
 
 /// GET /oauth2/authorize
@@ -435,6 +441,22 @@ pub async fn authorize(
         return Ok(oidc_error("invalid_request", "redirect_uri not registered"));
     }
 
+    // BUNYIP-342: the user clicked Deny on the consent screen, which bounced
+    // them back here with consent=denied. redirect_uri is validated above, so
+    // return the OIDC access_denied error to the RP per RFC 6749 4.1.2.1
+    // (echoing state), rather than re-rendering the consent gate.
+    if q.consent.as_deref() == Some("denied") {
+        let deny_url = format!(
+            "{}?error=access_denied&error_description={}&state={}",
+            q.redirect_uri,
+            urlencoding::encode("The user declined to authorize the request"),
+            urlencoding::encode(&q.state),
+        );
+        return Ok(HttpResponse::Found()
+            .insert_header(("Location", deny_url))
+            .finish());
+    }
+
     // Validate scopes
     let requested_scopes: Vec<String> = q
         .scope
@@ -506,23 +528,47 @@ pub async fn authorize(
         "BUNYIP-234: authorize consent-gate evaluation"
     );
     if !missing.is_empty() {
-        // Hand control to bunyip-web. The consent page reads every authorize
-        // parameter back from the URL so a successful Allow can issue a
-        // fresh /oauth2/authorize redirect with the same state / nonce /
-        // code_challenge.
-        let consent_url = format!(
-            "{}/oauth2/consent?client_id={}&missing={}&continue={}",
-            config.web_origin.trim_end_matches('/'),
-            urlencoding::encode(&q.client_id),
-            urlencoding::encode(&missing.join(" ")),
-            urlencoding::encode(&format!("{}{}", provider.issuer(), req.uri())),
-        );
-        let mut response = HttpResponse::Found();
-        response.insert_header(("Location", consent_url));
-        for c in &silent_cookies {
-            response.cookie(c.clone());
+        if client.first_party {
+            // BUNYIP-342: first-party apps (e.g. Mokosh under Bunyip) skip the
+            // consent screen. Record the grant (for /settings visibility), then
+            // fall through to issue the code with no prompt - mirrors Google not
+            // re-prompting consent for its own core apps. Note: because the skip
+            // is unconditional, revoking a first-party grant from /settings does
+            // NOT block access - the next authorize re-grants and proceeds. That
+            // is intended: a first-party core app cannot be meaningfully revoked.
+            let missing_owned: Vec<String> = missing.iter().map(|s| s.to_string()).collect();
+            provider
+                .add_scopes_to_grant(session.user_id, client_id, &missing_owned)
+                .await?;
+            tracing::info!(
+                target: "consent_gate",
+                user_id = %session.user_id,
+                client_id = %client_id,
+                granted_scopes = ?missing_owned,
+                "BUNYIP-342: first-party client, consent skipped and scopes auto-granted"
+            );
+        } else {
+            // Third-party client: hand control to bunyip-web's consent page,
+            // now carrying the client's display name so the screen can name the
+            // requesting application (BUNYIP-342). The page reads every authorize
+            // parameter back from the URL so a successful Allow can issue a fresh
+            // /oauth2/authorize redirect with the same state / nonce /
+            // code_challenge.
+            let consent_url = format!(
+                "{}/oauth2/consent?client_id={}&client_name={}&missing={}&continue={}",
+                config.web_origin.trim_end_matches('/'),
+                urlencoding::encode(&q.client_id),
+                urlencoding::encode(&client.name),
+                urlencoding::encode(&missing.join(" ")),
+                urlencoding::encode(&format!("{}{}", provider.issuer(), req.uri())),
+            );
+            let mut response = HttpResponse::Found();
+            response.insert_header(("Location", consent_url));
+            for c in &silent_cookies {
+                response.cookie(c.clone());
+            }
+            return Ok(response.finish());
         }
-        return Ok(response.finish());
     }
 
     // BUNYIP-62: per-RP tenant gating. When the client has a non-null
