@@ -57,3 +57,26 @@ bunyip-web resolves and forwards an IP ONLY when its peer is a trusted proxy; a
 direct (untrusted) peer forging `X-Forwarded-For` is not honoured and nothing
 is forwarded, so bunyip-api never records a fabricated address. This mirrors
 bunyip-api's own spoofing defence (BUNYIP-328).
+
+## Access logs and tracing spans (BUNYIP-310)
+
+The same `TRUSTED_PROXY_CIDR`-governed resolution feeds bunyip-api's request
+observability, so a single trust decision drives every place a client IP is
+recorded:
+
+- The access-log line's leading IP (`bunyip-api/src/access_log.rs`) is
+  `extract_client_ip`, not the actix `%a` socket peer. The rest of the line
+  (method, path, HTTP version, status, size, referer, user-agent, elapsed) is
+  unchanged, so existing log parsing is unaffected.
+- The tracing root span's `http.client_ip`
+  (`bunyip-api/src/root_span.rs`, `ClientIpRootSpanBuilder`) is
+  `extract_client_ip` rather than actix `realip_remote_addr()`, which would
+  otherwise trust `X-Forwarded-For` from any peer.
+
+Both honour a forwarded header ONLY when the socket peer is inside
+`TRUSTED_PROXY_CIDR`; with the CIDR unset (the dev default) both record the
+socket peer, identical to the pre-BUNYIP-310 behaviour, so no config change is
+needed to deploy. For access lines and spans to carry the external client IP,
+`TRUSTED_PROXY_CIDR` must include the reverse-proxy address range that fronts
+the direct-to-API paths (SSE `/v1/events`, `/oauth2/*`, `/.well-known/*`), the
+same range the SSR chain above already requires.

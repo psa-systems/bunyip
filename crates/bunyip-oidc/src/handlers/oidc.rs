@@ -894,7 +894,7 @@ pub async fn token(
         ));
     }
 
-    let ip = extract_ip(&req);
+    let ip = crate::middleware::extract_client_ip(&req);
     let user_agent = req
         .headers()
         .get("User-Agent")
@@ -1583,16 +1583,6 @@ fn extract_bearer_token(req: &HttpRequest) -> Option<String> {
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer ").map(|t| t.to_string()))
-}
-
-/// Extract the client IP from the request (X-Forwarded-For or peer addr).
-fn extract_ip(req: &HttpRequest) -> Option<std::net::IpAddr> {
-    req.headers()
-        .get("X-Forwarded-For")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .and_then(|s| s.trim().parse().ok())
-        .or_else(|| req.peer_addr().map(|addr| addr.ip()))
 }
 
 /// Does a request `redirect_uri` match a single registered redirect?

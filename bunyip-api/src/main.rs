@@ -789,7 +789,11 @@ async fn main() -> anyhow::Result<()> {
 
         App::new()
             // Add middleware (order matters - executed in reverse order)
-            .wrap(TracingLogger::default())
+            // Root span records the trusted external client IP in
+            // `http.client_ip` (BUNYIP-310), not the spoofable actix realip.
+            .wrap(TracingLogger::<
+                bunyip_api::root_span::ClientIpRootSpanBuilder,
+            >::new())
             // Log the external client IP (trusted XFF behind Traefik), not the
             // proxy's socket peer, so request lines are attributable (BUNYIP-328).
             .wrap(bunyip_api::access_log::access_logger())
@@ -896,7 +900,11 @@ async fn main() -> anyhow::Result<()> {
 
         let oci = HttpServer::new(move || {
             App::new()
-                .wrap(TracingLogger::default())
+                // Same external-client-IP attribution in the root span as the
+                // primary app (BUNYIP-310).
+                .wrap(TracingLogger::<
+                    bunyip_api::root_span::ClientIpRootSpanBuilder,
+                >::new())
                 // Same external-client-IP attribution as the primary app
                 // (BUNYIP-328). The OCI server registers no `Config`, so no
                 // proxy is trusted and this logs the socket peer, matching the
