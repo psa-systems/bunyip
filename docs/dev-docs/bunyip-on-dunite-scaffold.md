@@ -54,7 +54,7 @@ Resolve this once dunite finishes steps 3/4 and menkent commits `menkent-core`.
   `cargo check -p bunyip-domain -p bunyip-oci -p bunyip-oidc` is green.
 - `bunyip-api/migrations/` - the 53 SQL migrations vendored from
   `menkent/api/migrations` (dunite no longer ships migrations). Unpruned.
-- `compose.dev.yml` - added an idle `postgres:16-alpine` service
+- `compose.dev.yml` - added an idle `postgres:18.2-alpine3.23` service
   (`dev-bunyip-postgres-${USER}`), ready for the actix backend.
 
 The existing axum mock (`bunyip-api`, `crates/bunyip-mocks`, `seeds/`),
