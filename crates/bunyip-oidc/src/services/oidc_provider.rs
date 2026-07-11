@@ -14,7 +14,7 @@ use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{Algorithm, Header};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 use sqlx::PgPool;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -672,11 +672,7 @@ impl OidcProvider {
         let now = Utc::now();
         let exp = now + Duration::seconds(client.access_token_ttl_seconds as i64);
 
-        // at_hash: left half of SHA-256 of ASCII(access_token), base64url-encoded.
-        let mut h = Sha256::new();
-        h.update(access_token.as_bytes());
-        let full_hash = h.finalize();
-        let at_hash = URL_SAFE_NO_PAD.encode(&full_hash[..16]);
+        let at_hash = at_hash_eddsa(access_token);
 
         let mut header = Header::new(Algorithm::EdDSA);
         header.kid = Some(self.keys.active_kid.clone());
@@ -1505,6 +1501,22 @@ pub(crate) fn sha256_bytes(input: &[u8]) -> Vec<u8> {
     h.finalize().to_vec()
 }
 
+/// Compute the ID-token `at_hash` claim for an EdDSA (Ed25519) signature.
+///
+/// OIDC Core defines `at_hash` as base64url of the left half of the hash whose
+/// size matches the signing algorithm's internal digest. For Ed25519 that
+/// internal hash is SHA-512, so the value is base64url(left 32 bytes of
+/// SHA-512(ASCII(access_token))). Bunyip signs ID tokens with EdDSA only, so a
+/// conformant EdDSA relying party expects this construction; the earlier
+/// SHA-256-left-16 value (correct for RS256/ES256) would be rejected on
+/// mismatch. Kept identical to menkent's OP (BUNYIP-352 / MKT-60).
+pub(crate) fn at_hash_eddsa(access_token: &str) -> String {
+    let mut h = Sha512::new();
+    h.update(access_token.as_bytes());
+    let full_hash = h.finalize();
+    URL_SAFE_NO_PAD.encode(&full_hash[..32])
+}
+
 // ── at+jwt verification (BUNYIP-55) ──────────────────────────────────────────
 
 impl OidcProvider {
@@ -1859,6 +1871,34 @@ mod tests {
     fn id_token_bunyip_role_serializes_under_expected_key() {
         let json = serde_json::to_value(build_id_claims_for("admin", &[])).unwrap();
         assert_eq!(json["bunyip_role"], "admin");
+    }
+
+    // BUNYIP-352: `at_hash` for EdDSA ID tokens is base64url(left 32 bytes of
+    // SHA-512(access_token)), matching menkent (MKT-60). The old RS256/ES256
+    // construction (SHA-256 left 16) would be rejected by a conformant EdDSA RP.
+    #[test]
+    fn at_hash_eddsa_is_sha512_left_32() {
+        let access_token = "test-access-token";
+
+        // Independently recompute the expected value.
+        let mut h = Sha512::new();
+        h.update(access_token.as_bytes());
+        let digest = h.finalize();
+        assert_eq!(digest.len(), 64);
+        let expected = URL_SAFE_NO_PAD.encode(&digest[..32]);
+
+        let got = at_hash_eddsa(access_token);
+        assert_eq!(got, expected);
+
+        // 32 raw bytes → 43 base64url chars, no padding.
+        assert_eq!(got.len(), 43);
+        assert!(!got.contains('='));
+
+        // Distinct from the former SHA-256-left-16 value.
+        let mut old = Sha256::new();
+        old.update(access_token.as_bytes());
+        let old_hash = URL_SAFE_NO_PAD.encode(&old.finalize()[..16]);
+        assert_ne!(got, old_hash);
     }
 
     // Backward compatibility: an ID token without the claim still deserializes
