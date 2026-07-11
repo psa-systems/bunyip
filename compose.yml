@@ -136,6 +136,14 @@ services:
       # Set to the public bunyip-web origin for any real deployment.
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4400}
       COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+      # BUNYIP-311: trusted-proxy CIDRs for the SECOND hop of the client-IP
+      # trust chain (Traefik -> bunyip-web -> bunyip-api). bunyip-api honours a
+      # forwarded X-Forwarded-For only from a peer inside these ranges, so this
+      # MUST include bunyip-web's address on the `bunyip-private` network (so
+      # SSR-proxied /v1 calls surface the end-user IP) plus the edge proxy's
+      # address (so direct-to-API paths - SSE, OIDC, external RPs - resolve it
+      # too). Empty = trust no forwarding headers. See docs/client-ip-forwarding.md.
+      TRUSTED_PROXY_CIDR: ${TRUSTED_PROXY_CIDR:-}
       RUST_LOG: ${RUST_LOG:-info}
       # ── Email (SMTP). Password comes from the smtp_password secret above. ──
       EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
@@ -237,6 +245,13 @@ services:
       BUNYIP_APP_DOMAIN: ${BUNYIP_APP_DOMAIN:-}
       BUNYIP_SHOW_BUSINESS_PRICING: ${BUNYIP_SHOW_BUSINESS_PRICING:-false}
       BUNYIP_COMMUNITY_URL: ${BUNYIP_COMMUNITY_URL:-}
+      # BUNYIP-311: trusted-proxy CIDRs for the FIRST hop of the client-IP
+      # trust chain (Traefik -> bunyip-web). bunyip-web reads the end-user IP
+      # from the inbound X-Forwarded-For (set by Traefik) ONLY when its own
+      # socket peer is inside these ranges, then forwards that IP to bunyip-api.
+      # Set this to the edge proxy's address; empty = the BFF forwards no IP
+      # (dev default, unchanged behaviour). See docs/client-ip-forwarding.md.
+      TRUSTED_PROXY_CIDR: ${WEB_TRUSTED_PROXY_CIDR:-}
       RUST_LOG: ${RUST_LOG:-info}
     expose:
       - "4400"

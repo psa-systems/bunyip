@@ -1,5 +1,6 @@
 mod api;
 mod auth;
+mod client_ip;
 mod config;
 mod csrf;
 mod handlers;
@@ -9,6 +10,7 @@ mod util;
 mod views;
 mod web;
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::routing::{get, post};
@@ -447,6 +449,15 @@ async fn main() {
         // state + nonce + client_secret per spec). The full
         // synchronizer-token middleware on top of this is a follow-up.
         .layer(axum::middleware::from_fn(csrf::enforce_origin))
+        // BUNYIP-311: resolve the end-user IP once per request (honouring
+        // bunyip-web's own trusted proxy) and scope it into a task-local so
+        // every outbound /v1 call forwards it to bunyip-api as X-Forwarded-For.
+        // Needs the socket peer, so `serve` below uses
+        // `into_make_service_with_connect_info` to surface `ConnectInfo`.
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&cfg),
+            client_ip::forward_client_ip,
+        ))
         // BUNYIP-232: stamp a Content-Security-Policy onto every response (the
         // remaining security header the edge proxy does not set for bunyip-web).
         .layer(security::csp_layer(&cfg))
@@ -467,5 +478,14 @@ async fn main() {
     println!();
 
     tracing::info!("bunyip-web listening on {bind_addr}");
-    axum::serve(listener, app).await.expect("serve");
+    // BUNYIP-311: `into_make_service_with_connect_info` surfaces the socket
+    // peer as `ConnectInfo<SocketAddr>` so `client_ip::forward_client_ip` can
+    // check whether the inbound peer is a trusted proxy before honouring its
+    // forwarding headers.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("serve");
 }

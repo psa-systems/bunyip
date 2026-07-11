@@ -118,6 +118,7 @@ mod tests {
             app_domain: String::new(),
             show_business_pricing: false,
             community_url: String::new(),
+            trusted_proxies: Vec::new(),
         }
     }
 

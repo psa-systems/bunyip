@@ -39,6 +39,13 @@ base64 = "0.21"
 # Percent-encode the OIDC return URL when shuttling it through the 2FA hop.
 urlencoding = "2"
 
+# BUNYIP-311: parse TRUSTED_PROXY_CIDR into networks so the BFF can decide
+# whether its inbound socket peer (Traefik) is a trusted proxy before it
+# forwards the resolved end-user IP to bunyip-api as X-Forwarded-For. Same
+# crate + version bunyip-api uses (crates/bunyip-domain) so the CIDR parsing
+# matches on both hops of the trust chain.
+ipnetwork = "0.20"
+
 # BUNYIP-112: parse + validate URL fields at the web edge (icon_url,
 # source_code_url, health_check_url, webhook_url) so malformed values never
 # reach the API or render as broken `href`s. Already in tree transitively via

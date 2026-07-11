@@ -131,6 +131,7 @@ impl Api {
         if let Some(c) = cookie {
             rb = rb.header(COOKIE, c);
         }
+        rb = forward_client_ip(rb);
         if let Some(b) = body {
             rb = rb.json(&b);
         }
@@ -205,6 +206,7 @@ impl Api {
         if let Some(c) = cookie {
             rb = rb.header(COOKIE, c);
         }
+        rb = forward_client_ip(rb);
         match rb.send().await {
             Ok(resp) => {
                 // BUNYIP-243: classify the streaming-proxy response too.
@@ -234,6 +236,7 @@ impl Api {
         if let Some(c) = cookie {
             rb = rb.header(COOKIE, c);
         }
+        rb = forward_client_ip(rb);
         let resp = rb.send().await.map_err(|e| {
             // BUNYIP-243: a transport failure means bunyip-api is unreachable.
             crate::server_status::note_transport_error();
@@ -257,6 +260,21 @@ impl Api {
             set_cookies,
             retry_after_header,
         })
+    }
+}
+
+/// BUNYIP-311: attach the end-user's client IP as `X-Forwarded-For` on an
+/// outbound API request when the per-request middleware resolved one (i.e. the
+/// browser reached the BFF through a trusted proxy). When there is no resolved
+/// IP - dev, an untrusted direct peer, or a non-request context like the
+/// background health poll - the request is left unchanged, so bunyip-api keeps
+/// attributing it to bunyip-web rather than to a fabricated address. bunyip-api
+/// reads this as the external client because bunyip-web is in its own
+/// `TRUSTED_PROXY_CIDR`.
+fn forward_client_ip(rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    match crate::client_ip::current() {
+        Some(ip) => rb.header("X-Forwarded-For", ip.to_string()),
+        None => rb,
     }
 }
 

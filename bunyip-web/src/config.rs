@@ -46,6 +46,35 @@ pub struct Config {
     /// path (e.g. `https://chat.a8n.systems/auth/bunyip`) so the OIDC flow
     /// fires immediately rather than landing on Let's Chat's own login page.
     pub community_url: String,
+    /// BUNYIP-311: CIDR ranges of the reverse proxies that front bunyip-web
+    /// (typically Traefik). The inbound `X-Forwarded-For` / `X-Real-IP` is
+    /// honoured (to resolve the end-user IP the BFF forwards to bunyip-api)
+    /// ONLY when the immediate socket peer sits inside one of these ranges;
+    /// for every other peer the BFF forwards nothing, so a direct client
+    /// cannot spoof its IP into bunyip-api's logs. Parsed from
+    /// `TRUSTED_PROXY_CIDR` (comma-separated), analogous to bunyip-api's own
+    /// `TRUSTED_PROXY_CIDR`. Empty = trust no forwarding headers.
+    pub trusted_proxies: Vec<ipnetwork::IpNetwork>,
+}
+
+/// BUNYIP-311: parse a comma-separated list of CIDR ranges into trusted-proxy
+/// networks. Invalid entries are logged and skipped rather than aborting
+/// startup, so a single typo cannot take the BFF down; an empty or all-invalid
+/// list means no proxy is trusted and inbound forwarding headers are ignored.
+/// Mirrors bunyip-api's `parse_trusted_proxies` so both hops of the trust
+/// chain parse the CIDR the same way.
+fn parse_trusted_proxies(raw: &str) -> Vec<ipnetwork::IpNetwork> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter_map(|entry| match entry.parse::<ipnetwork::IpNetwork>() {
+            Ok(net) => Some(net),
+            Err(e) => {
+                tracing::warn!(entry, error = %e, "ignoring invalid TRUSTED_PROXY_CIDR entry");
+                None
+            }
+        })
+        .collect()
 }
 
 impl Config {
@@ -70,6 +99,10 @@ impl Config {
                 .map(|v| v == "true")
                 .unwrap_or(false),
             community_url: var("BUNYIP_COMMUNITY_URL").unwrap_or_default(),
+            // BUNYIP-311: the reverse proxies (Traefik) allowed to set the
+            // inbound X-Forwarded-For the BFF trusts when resolving the
+            // end-user IP. Same comma-separated CIDR form bunyip-api parses.
+            trusted_proxies: parse_trusted_proxies(&var("TRUSTED_PROXY_CIDR").unwrap_or_default()),
         }
     }
 
