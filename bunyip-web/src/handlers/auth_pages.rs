@@ -1527,6 +1527,7 @@ mod logout_clear_tests {
             app_domain: app_domain.into(),
             show_business_pricing: false,
             community_url: String::new(),
+            trusted_proxies: Vec::new(),
         }
     }
 

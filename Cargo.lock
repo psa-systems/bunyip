@@ -782,6 +782,7 @@ dependencies = [
  "axum",
  "base64 0.21.7",
  "chrono",
+ "ipnetwork",
  "maud",
  "qrcode",
  "reqwest 0.12.28",
