@@ -189,8 +189,13 @@ impl EntitlementRepository {
 
     /// Raw active entitlement rows for a user (no join), for callers that only
     /// need the application ids.
+    ///
+    /// Takes any `PgExecutor` (not just `&PgPool`) so the self-service download
+    /// gate can run it inside a `begin_with_user` transaction under per-user RLS
+    /// (BUNYIP-344). A `&PgPool` still satisfies the bound, so existing callers
+    /// are unaffected.
     pub async fn active_application_ids(
-        pool: &PgPool,
+        executor: impl sqlx::PgExecutor<'_>,
         user_id: Uuid,
     ) -> Result<Vec<Uuid>, AppError> {
         let ids = sqlx::query_scalar::<_, Uuid>(
@@ -200,7 +205,7 @@ impl EntitlementRepository {
             "#,
         )
         .bind(user_id)
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?;
         Ok(ids)
     }
