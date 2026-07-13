@@ -32,6 +32,10 @@ pub struct Application {
     pub webhook_url: Option<String>,
     pub version: Option<String>,
     pub source_code_url: Option<String>,
+    /// Admin-editable link to this application's release notes (BUNYIP-343),
+    /// surfaced per app in the applications view. Typically the Forgejo releases
+    /// page of the app's repo; `None` = no link shown.
+    pub release_notes_url: Option<String>,
     pub forgejo_owner: Option<String>,
     pub forgejo_repo: Option<String>,
     pub pinned_release_tag: Option<String>,
@@ -62,6 +66,9 @@ pub struct ApplicationResponse {
     pub icon_url: Option<String>,
     pub version: Option<String>,
     pub source_code_url: Option<String>,
+    /// Release-notes URL (BUNYIP-343): the admin-set link to this app's release
+    /// notes. `None` when unset; the web layer omits the link then.
+    pub release_notes_url: Option<String>,
     pub subdomain: Option<String>,
     pub is_accessible: bool,
     pub maintenance_mode: bool,
@@ -82,6 +89,7 @@ impl ApplicationResponse {
             icon_url: app.icon_url,
             version: app.version,
             source_code_url: app.source_code_url,
+            release_notes_url: app.release_notes_url,
             subdomain: app.subdomain,
             is_accessible: has_access && app.is_active && !app.maintenance_mode,
             maintenance_mode: app.maintenance_mode,
@@ -331,6 +339,7 @@ pub struct CreateApplication {
     pub webhook_url: Option<String>,
     pub version: Option<String>,
     pub source_code_url: Option<String>,
+    pub release_notes_url: Option<String>,
     /// Whether this is a hosted app (hub launch tile) or a catalog-only
     /// distribution product. Defaults to hosted (the DB column default).
     pub is_hosted: Option<bool>,
@@ -386,6 +395,7 @@ pub struct UpdateApplication {
     pub description: Option<String>,
     pub icon_url: Option<String>,
     pub source_code_url: Option<String>,
+    pub release_notes_url: Option<String>,
     pub version: Option<String>,
     pub subdomain: Option<String>,
     pub container_name: Option<String>,
@@ -479,6 +489,7 @@ mod tests {
             webhook_url: None,
             version: Some("1.0.0".to_string()),
             source_code_url: None,
+            release_notes_url: None,
             forgejo_owner: None,
             forgejo_repo: None,
             pinned_release_tag: None,
@@ -534,6 +545,26 @@ mod tests {
         app.is_active = false;
         let response = ApplicationResponse::from_application(app, true);
         assert!(!response.is_accessible);
+    }
+
+    #[test]
+    fn from_application_carries_release_notes_url() {
+        // BUNYIP-343: the stored release_notes_url column flows through to the
+        // API response verbatim (the web layer renders the link from it).
+        let mut app = test_app();
+        app.release_notes_url =
+            Some("https://dev.a8n.run/psa-systems/mokosh-server/releases".to_string());
+        let response = ApplicationResponse::from_application(app, true);
+        assert_eq!(
+            response.release_notes_url.as_deref(),
+            Some("https://dev.a8n.run/psa-systems/mokosh-server/releases")
+        );
+    }
+
+    #[test]
+    fn from_application_release_notes_url_none_when_unset() {
+        let response = ApplicationResponse::from_application(test_app(), true);
+        assert_eq!(response.release_notes_url, None);
     }
 
     #[test]

@@ -113,6 +113,10 @@ pub struct Application {
     pub icon_url: Option<String>,
     pub version: Option<String>,
     pub source_code_url: Option<String>,
+    /// Release-notes URL (BUNYIP-343): the admin-set link to this app's release
+    /// notes. `None` when unset; the card omits the link then.
+    #[serde(default)]
+    pub release_notes_url: Option<String>,
     pub subdomain: Option<String>,
     pub is_accessible: bool,
     pub maintenance_mode: bool,
@@ -448,6 +452,8 @@ pub struct AdminApplication {
     pub container_name: String,
     pub version: Option<String>,
     pub source_code_url: Option<String>,
+    #[serde(default)]
+    pub release_notes_url: Option<String>,
     pub sort_order: i64,
     pub created_at: String,
     #[serde(default)]

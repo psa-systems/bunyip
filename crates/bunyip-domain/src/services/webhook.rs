@@ -267,6 +267,7 @@ mod tests {
             webhook_url,
             version: None,
             source_code_url: None,
+            release_notes_url: None,
             forgejo_owner: None,
             forgejo_repo: None,
             pinned_release_tag: None,

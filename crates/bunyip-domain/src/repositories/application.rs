@@ -246,6 +246,9 @@ impl ApplicationRepository {
                 oci_image_owner     = COALESCE($19, oci_image_owner),
                 oci_image_name      = COALESCE($20, oci_image_name),
                 pinned_image_tag    = COALESCE($21, pinned_image_tag),
+                -- $23 (bound after the WHERE id param) so the existing $1..$22
+                -- numbering is untouched (BUNYIP-343).
+                release_notes_url   = COALESCE($23, release_notes_url),
                 updated_at          = NOW()
             WHERE id = $22
             RETURNING *
@@ -273,6 +276,7 @@ impl ApplicationRepository {
         .bind(data.oci_image_name.as_deref())
         .bind(data.pinned_image_tag.as_deref())
         .bind(app_id)
+        .bind(data.release_notes_url.as_deref())
         .fetch_one(pool)
         .await?;
 
@@ -290,11 +294,11 @@ impl ApplicationRepository {
                 container_name, health_check_url, subdomain, webhook_url, version, source_code_url,
                 is_hosted,
                 forgejo_owner, forgejo_repo, forgejo_package, pinned_release_tag, artifact_source,
-                oci_image_owner, oci_image_name, pinned_image_tag)
+                oci_image_owner, oci_image_name, pinned_image_tag, release_notes_url)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                 COALESCE($12, TRUE),
                 $13, $14, $15, $16, COALESCE($17, 'release'),
-                $18, $19, $20)
+                $18, $19, $20, $21)
             RETURNING *
             "#,
         )
@@ -318,6 +322,7 @@ impl ApplicationRepository {
         .bind(data.oci_image_owner.as_deref())
         .bind(data.oci_image_name.as_deref())
         .bind(data.pinned_image_tag.as_deref())
+        .bind(data.release_notes_url.as_deref())
         .fetch_one(pool)
         .await?;
 
@@ -422,6 +427,7 @@ mod tests {
             description: None,
             icon_url: None,
             source_code_url: None,
+            release_notes_url: None,
             version: None,
             subdomain: None,
             container_name: None,
