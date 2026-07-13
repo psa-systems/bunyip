@@ -74,8 +74,13 @@ impl TrustedDeviceRepository {
     }
 
     /// A page of a user's active trusted devices, newest first (BUNYIP-177).
+    ///
+    /// Takes any `PgExecutor` (not just `&PgPool`) so a self-service handler can
+    /// run it inside a `begin_with_user` transaction and have the per-user RLS
+    /// GUC apply (BUNYIP-344). A `&PgPool` still satisfies the bound, so existing
+    /// callers are unaffected.
     pub async fn find_user_devices_paginated(
-        pool: &PgPool,
+        executor: impl sqlx::PgExecutor<'_>,
         user_id: Uuid,
         per_page: i32,
         offset: i64,
@@ -91,14 +96,20 @@ impl TrustedDeviceRepository {
         .bind(user_id)
         .bind(per_page)
         .bind(offset)
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?;
 
         Ok(devices)
     }
 
     /// Count of a user's active trusted devices, for pagination totals (BUNYIP-177).
-    pub async fn count_user_devices(pool: &PgPool, user_id: Uuid) -> Result<i64, AppError> {
+    ///
+    /// Takes any `PgExecutor` so it can share a `begin_with_user` transaction
+    /// with [`Self::find_user_devices_paginated`] under per-user RLS (BUNYIP-344).
+    pub async fn count_user_devices(
+        executor: impl sqlx::PgExecutor<'_>,
+        user_id: Uuid,
+    ) -> Result<i64, AppError> {
         let row: (i64,) = sqlx::query_as(
             r#"
             SELECT COUNT(*) FROM trusted_devices
@@ -106,7 +117,7 @@ impl TrustedDeviceRepository {
             "#,
         )
         .bind(user_id)
-        .fetch_one(pool)
+        .fetch_one(executor)
         .await?;
 
         Ok(row.0)

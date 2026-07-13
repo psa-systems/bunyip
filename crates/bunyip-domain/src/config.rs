@@ -11,6 +11,13 @@ pub use dunite_core::services::secret_env;
 pub struct Config {
     /// Database connection URL
     pub database_url: String,
+    /// Optional connection URL for the unprivileged, NOBYPASSRLS `bunyip_app`
+    /// role used to serve self-service reads under per-user row level security
+    /// (BUNYIP-344). When unset, self-service handlers fall back to the primary
+    /// `database_url` pool, so RLS is a runtime no-op (the primary role bypasses
+    /// RLS). Point this at a NOBYPASSRLS role to activate DB-level per-user
+    /// isolation. Supports the `_FILE` secret convention like `database_url`.
+    pub app_database_url: Option<String>,
     /// Server host address
     pub host: String,
     /// Server port
@@ -789,6 +796,10 @@ impl Config {
         let database_url = secret_env("DATABASE_URL")
             .ok_or_else(|| ConfigError::MissingEnv("DATABASE_URL".to_string()))?;
 
+        // Optional NOBYPASSRLS pool for per-user RLS (BUNYIP-344). Absent on
+        // deployments that have not provisioned the `bunyip_app` role yet.
+        let app_database_url = secret_env("APP_DATABASE_URL");
+
         let host = env::var("HOST_IP").unwrap_or_else(|_| "0.0.0.0".to_string());
 
         let port = env::var("APP_PORT")
@@ -892,6 +903,7 @@ impl Config {
 
         let config = Self {
             database_url,
+            app_database_url,
             host,
             port,
             log_level,

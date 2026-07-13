@@ -947,7 +947,7 @@ pub async fn delete_account(
 pub async fn list_trusted_devices(
     req: HttpRequest,
     user: AuthenticatedUser,
-    pool: web::Data<PgPool>,
+    app_pool: web::Data<crate::db::AppPool>,
     query: web::Query<PageQuery>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -957,10 +957,19 @@ pub async fn list_trusted_devices(
     // OFFSET would 500). per_page is already clamped to 1..=100 (BUNYIP-177).
     let offset = (page as i64 - 1) * per_page as i64;
 
-    let devices =
-        TrustedDeviceRepository::find_user_devices_paginated(&pool, user.0.sub, per_page, offset)
-            .await?;
-    let total = TrustedDeviceRepository::count_user_devices(&pool, user.0.sub).await?;
+    // BUNYIP-344: read the caller's own devices under per-user RLS. Both queries
+    // share one `begin_with_user` transaction so the `app.current_user_id` GUC
+    // (which the `user_isolation` policy on trusted_devices keys off) is set for
+    // both. The `WHERE user_id = $1` filters below are kept as defence in depth;
+    // on the NOBYPASSRLS `bunyip_app` role the policy alone would already scope
+    // the rows.
+    let mut tx = crate::db::begin_with_user(app_pool.pool(), user.0.sub).await?;
+    let devices = TrustedDeviceRepository::find_user_devices_paginated(
+        &mut *tx, user.0.sub, per_page, offset,
+    )
+    .await?;
+    let total = TrustedDeviceRepository::count_user_devices(&mut *tx, user.0.sub).await?;
+    tx.commit().await?;
     let out: Vec<TrustedDeviceInfo> = devices.into_iter().map(Into::into).collect();
     Ok(paginated(out, total, page, per_page, request_id))
 }

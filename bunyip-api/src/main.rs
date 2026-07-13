@@ -79,6 +79,34 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Database connection pool established");
 
+    // BUNYIP-344: the self-service pool for per-user row level security. When
+    // APP_DATABASE_URL is set it connects as the unprivileged NOBYPASSRLS
+    // `bunyip_app` role so the `user_isolation` policy actually constrains
+    // self-service reads; when unset it reuses the primary pool (RLS is then a
+    // runtime no-op, because the primary role bypasses it). Either way the
+    // rerouted handlers open transactions via `db::begin_with_user`, so the
+    // fallback is safe.
+    let app_pool = match config.app_database_url.as_deref() {
+        Some(url) => {
+            let p = PgPoolOptions::new()
+                .max_connections(10)
+                .acquire_timeout(Duration::from_secs(5))
+                .connect(url)
+                .await
+                .map_err(|e| {
+                    error!(error = %e, "Failed to connect to the bunyip_app (RLS) database pool");
+                    e
+                })?;
+            info!("Self-service RLS pool established (APP_DATABASE_URL, NOBYPASSRLS role)");
+            p
+        }
+        None => {
+            info!("APP_DATABASE_URL unset; self-service RLS pool falls back to the primary pool (RLS no-op)");
+            pool.clone()
+        }
+    };
+    let app_pool = bunyip_api::db::AppPool(app_pool);
+
     // BUNYIP-79: heal the in-place-edited migration checksums before the
     // migrator's immutability check would abort on databases that applied the
     // pre-edit bodies. No-op on fresh and already-healed databases.
@@ -806,6 +834,8 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::JsonConfig::default().limit(32_768))
             // Add database pool to app state
             .app_data(web::Data::new(pool.clone()))
+            // Self-service NOBYPASSRLS pool for per-user RLS reads (BUNYIP-344).
+            .app_data(web::Data::new(app_pool.clone()))
             // Share the auto-ban service with the admin IP-ban handlers so they
             // can list/lift bans against the same in-memory map the middleware
             // enforces (BUNYIP-319). `Data::from` reuses the existing Arc
