@@ -59,6 +59,13 @@ services:
       # Resolve bunyip-oidc's compile-time query! macros offline.
       SQLX_OFFLINE: "true"
       DATABASE_URL: ${DATABASE_URL:-postgres://bunyip:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/bunyip}
+      # BUNYIP-360: activate per-user RLS. The api provisions the unprivileged
+      # NOBYPASSRLS `bunyip_app` role at startup using BUNYIP_APP_PASSWORD (over
+      # the primary superuser pool above), then serves self-service reads on
+      # APP_DATABASE_URL as that role. Both default off POSTGRES_PASSWORD so a
+      # fresh `just dev` activates RLS with no extra config; they must agree.
+      BUNYIP_APP_PASSWORD: ${BUNYIP_APP_PASSWORD:-${POSTGRES_PASSWORD:-devpassword}}
+      APP_DATABASE_URL: ${APP_DATABASE_URL:-postgres://bunyip_app:${BUNYIP_APP_PASSWORD:-${POSTGRES_PASSWORD:-devpassword}}@postgres:5432/bunyip}
       HOST_IP: 0.0.0.0
       APP_PORT: "4401"
       ENVIRONMENT: ${ENVIRONMENT:-development}

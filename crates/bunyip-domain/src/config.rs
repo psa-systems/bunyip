@@ -18,6 +18,13 @@ pub struct Config {
     /// RLS). Point this at a NOBYPASSRLS role to activate DB-level per-user
     /// isolation. Supports the `_FILE` secret convention like `database_url`.
     pub app_database_url: Option<String>,
+    /// Password for the unprivileged `bunyip_app` RLS role (BUNYIP-360). When
+    /// set, bunyip-api idempotently provisions the role (NOSUPERUSER
+    /// NOBYPASSRLS) at startup over the primary superuser pool and sets this
+    /// password on it; the value must match the password embedded in
+    /// `app_database_url`. When unset, the role is not managed here. Supports
+    /// the `_FILE` secret convention.
+    pub app_password: Option<String>,
     /// Server host address
     pub host: String,
     /// Server port
@@ -800,6 +807,9 @@ impl Config {
         // deployments that have not provisioned the `bunyip_app` role yet.
         let app_database_url = secret_env("APP_DATABASE_URL");
 
+        // Password used to self-provision the `bunyip_app` RLS role (BUNYIP-360).
+        let app_password = secret_env("BUNYIP_APP_PASSWORD");
+
         let host = env::var("HOST_IP").unwrap_or_else(|_| "0.0.0.0".to_string());
 
         let port = env::var("APP_PORT")
@@ -904,6 +914,7 @@ impl Config {
         let config = Self {
             database_url,
             app_database_url,
+            app_password,
             host,
             port,
             log_level,

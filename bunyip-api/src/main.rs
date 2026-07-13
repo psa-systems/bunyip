@@ -79,34 +79,6 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Database connection pool established");
 
-    // BUNYIP-344: the self-service pool for per-user row level security. When
-    // APP_DATABASE_URL is set it connects as the unprivileged NOBYPASSRLS
-    // `bunyip_app` role so the `user_isolation` policy actually constrains
-    // self-service reads; when unset it reuses the primary pool (RLS is then a
-    // runtime no-op, because the primary role bypasses it). Either way the
-    // rerouted handlers open transactions via `db::begin_with_user`, so the
-    // fallback is safe.
-    let app_pool = match config.app_database_url.as_deref() {
-        Some(url) => {
-            let p = PgPoolOptions::new()
-                .max_connections(10)
-                .acquire_timeout(Duration::from_secs(5))
-                .connect(url)
-                .await
-                .map_err(|e| {
-                    error!(error = %e, "Failed to connect to the bunyip_app (RLS) database pool");
-                    e
-                })?;
-            info!("Self-service RLS pool established (APP_DATABASE_URL, NOBYPASSRLS role)");
-            p
-        }
-        None => {
-            info!("APP_DATABASE_URL unset; self-service RLS pool falls back to the primary pool (RLS no-op)");
-            pool.clone()
-        }
-    };
-    let app_pool = bunyip_api::db::AppPool(app_pool);
-
     // BUNYIP-79: heal the in-place-edited migration checksums before the
     // migrator's immutability check would abort on databases that applied the
     // pre-edit bodies. No-op on fresh and already-healed databases.
@@ -128,6 +100,54 @@ async fn main() -> anyhow::Result<()> {
         })?;
 
     info!("Database migrations completed successfully");
+
+    // BUNYIP-360: provision the unprivileged `bunyip_app` (NOSUPERUSER
+    // NOBYPASSRLS) role that activates the per-user RLS policies (BUNYIP-344).
+    // Runs AFTER migrations so the GRANT-on-all-tables covers every table the
+    // migrations just created; idempotent, so it is safe to run every boot. The
+    // primary `pool` connects as the DB owner/superuser (`bunyip`), which can
+    // CREATE ROLE, so no separate admin connection is needed. Gated on
+    // BUNYIP_APP_PASSWORD: unset means the role is not managed here and the app
+    // pool below falls back to the primary pool (RLS no-op).
+    if let Some(app_password) = config.app_password.as_deref() {
+        bunyip_api::db::provision_app_role(&pool, app_password)
+            .await
+            .map_err(|e| {
+                error!(error = %e, "Failed to provision the bunyip_app RLS role");
+                e
+            })?;
+    } else {
+        info!("BUNYIP_APP_PASSWORD unset; skipping bunyip_app role provisioning");
+    }
+
+    // BUNYIP-344: the self-service pool for per-user row level security. When
+    // APP_DATABASE_URL is set it connects as the unprivileged NOBYPASSRLS
+    // `bunyip_app` role so the `user_isolation` policy actually constrains
+    // self-service reads; when unset it reuses the primary pool (RLS is then a
+    // runtime no-op, because the primary role bypasses it). Either way the
+    // rerouted handlers open transactions via `db::begin_with_user`, so the
+    // fallback is safe. Built AFTER provisioning so the role exists before the
+    // pool connects as it.
+    let app_pool = match config.app_database_url.as_deref() {
+        Some(url) => {
+            let p = PgPoolOptions::new()
+                .max_connections(10)
+                .acquire_timeout(Duration::from_secs(5))
+                .connect(url)
+                .await
+                .map_err(|e| {
+                    error!(error = %e, "Failed to connect to the bunyip_app (RLS) database pool");
+                    e
+                })?;
+            info!("Self-service RLS pool established (APP_DATABASE_URL, NOBYPASSRLS role)");
+            p
+        }
+        None => {
+            info!("APP_DATABASE_URL unset; self-service RLS pool falls back to the primary pool (RLS no-op)");
+            pool.clone()
+        }
+    };
+    let app_pool = bunyip_api::db::AppPool(app_pool);
 
     // Seed default admin if SETUP_DEFAULT_ADMIN is set and no admin exists.
     // secret_env supports both the plain env var (dev) and the
