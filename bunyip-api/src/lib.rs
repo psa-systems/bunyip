@@ -11,6 +11,7 @@ pub use bunyip_domain::{
 };
 
 pub mod access_log;
+pub mod db;
 pub mod error_log;
 pub mod handlers;
 pub mod migrate_reconcile;
