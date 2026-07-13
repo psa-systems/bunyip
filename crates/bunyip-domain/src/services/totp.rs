@@ -90,6 +90,37 @@ impl TotpService {
         Ok(codes)
     }
 
+    /// Enroll a PRESET base32 TOTP secret and mark it verified immediately,
+    /// skipping the interactive `begin_setup` -> `confirm_setup` (live-code)
+    /// flow. For trusted NON-INTERACTIVE provisioning only (the E2E bootstrap,
+    /// BUNYIP-359): a re-seeded test account keeps a STABLE, known TOTP secret,
+    /// so the shared E2E TOTP secret need not be rotated on every re-seed. Uses
+    /// the SAME AES-256-GCM key set and repository writes as `begin_setup` +
+    /// `confirm_setup`, so the stored secret verifies through the normal login
+    /// path. NEVER call this from a request handler: it enables 2FA with no
+    /// possession proof.
+    pub async fn enroll_preset(&self, user_id: Uuid, base32_secret: &str) -> Result<(), AppError> {
+        // Normalize to the encoding `begin_setup` emits (upper-case, unpadded).
+        let normalized: String = base32_secret
+            .chars()
+            .filter(|c| !c.is_whitespace() && *c != '=')
+            .collect::<String>()
+            .to_uppercase();
+        let secret_bytes = data_encoding::BASE32_NOPAD
+            .decode(normalized.as_bytes())
+            .map_err(|_| {
+                AppError::validation("totp_secret", "preset TOTP secret is not valid base32")
+            })?;
+        // Reject a secret too short/malformed to build a usable TOTP before we
+        // persist it (`build_totp` applies totp_rs's length checks).
+        self.build_totp(&secret_bytes, "e2e")?;
+
+        let (encrypted, nonce, key_version) = self.key_set.encrypt(&secret_bytes)?;
+        TotpRepository::upsert_totp(&self.pool, user_id, &encrypted, &nonce, key_version).await?;
+        TotpRepository::mark_verified(&self.pool, user_id).await?;
+        Ok(())
+    }
+
     /// Verify a TOTP code for login
     pub async fn verify_code(&self, user_id: Uuid, code: &str) -> Result<bool, AppError> {
         let totp_record = TotpRepository::find_by_user_id(&self.pool, user_id)
