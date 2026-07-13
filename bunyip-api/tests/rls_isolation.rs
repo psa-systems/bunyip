@@ -17,8 +17,9 @@
 //!   cargo test -p bunyip-api --test rls_isolation -- --nocapture
 //! ```
 
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{PgPool, Row};
+use std::str::FromStr;
 use uuid::Uuid;
 
 const TEST_ROLE: &str = "bunyip_rls_test_role";
@@ -198,6 +199,55 @@ async fn user_isolation_policy_blocks_cross_user_access() {
         .collect();
     assert_eq!(b_ids, vec![user_b], "user B sees only their own row");
     tx_b.rollback().await.expect("rollback b");
+
+    // BUNYIP-360: exercise the real provisioning + app-pool path, not just a
+    // hand-rolled SET ROLE. Provision the actual `bunyip_app` role, connect a
+    // pool AS it (a genuine NOBYPASSRLS login), and prove the policy binds it:
+    // fail-closed with no GUC, correctly scoped through `begin_with_user`.
+    const APP_PW: &str = "rls_provision_test_pw";
+    bunyip_api::db::provision_app_role(&owner, APP_PW)
+        .await
+        .expect("provision bunyip_app role");
+
+    let app_opts = PgConnectOptions::from_str(&admin_url)
+        .expect("parse admin url")
+        .username("bunyip_app")
+        .password(APP_PW);
+    let app_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(app_opts)
+        .await
+        .expect("connect as the provisioned bunyip_app role");
+
+    // No GUC set on a fresh connection -> the fail-closed policy hides every row.
+    let unscoped: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM trusted_devices")
+        .fetch_one(&app_pool)
+        .await
+        .expect("count with no GUC");
+    assert_eq!(
+        unscoped, 0,
+        "bunyip_app with no app.current_user_id must see zero rows (fail-closed) - \
+         proving the provisioned role really is NOBYPASSRLS"
+    );
+
+    // begin_with_user sets the GUC transaction-locally; user A sees only their row.
+    let mut app_tx = bunyip_api::db::begin_with_user(&app_pool, user_a)
+        .await
+        .expect("begin_with_user on the app pool");
+    let scoped: Vec<Uuid> = sqlx::query("SELECT user_id FROM trusted_devices")
+        .fetch_all(&mut *app_tx)
+        .await
+        .expect("scoped select on app pool")
+        .into_iter()
+        .map(|r| r.get::<Uuid, _>("user_id"))
+        .collect();
+    assert_eq!(
+        scoped,
+        vec![user_a],
+        "through begin_with_user on the real bunyip_app pool, user A sees only their own row"
+    );
+    app_tx.rollback().await.expect("rollback app tx");
+    app_pool.close().await;
 
     // Cleanup seeded rows (role is left for re-use; DROP OWNED at the top of the
     // next run reclaims it).

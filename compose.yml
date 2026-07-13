@@ -43,6 +43,14 @@ secrets:
     file: ./secrets/postgres_password
   database_url:
     file: ./secrets/database_url
+  # BUNYIP-360: the unprivileged NOBYPASSRLS `bunyip_app` role that activates
+  # per-user RLS. bunyip_app_password is set on the role at startup; the
+  # password embedded in app_database_url must match it. Omit both to keep RLS
+  # inactive (the app pool falls back to the primary pool).
+  bunyip_app_password:
+    file: ./secrets/bunyip_app_password
+  app_database_url:
+    file: ./secrets/app_database_url
   jwt_secret:
     file: ./secrets/jwt_secret
   totp_encryption_key:
@@ -116,6 +124,12 @@ services:
       # mounted under /run/secrets. The api's config layer reads the file and
       # treats an empty file as "not configured" (BUNYIP-38).
       DATABASE_URL_FILE: /run/secrets/database_url
+      # BUNYIP-360: per-user RLS. BUNYIP_APP_PASSWORD provisions the bunyip_app
+      # role at startup; APP_DATABASE_URL connects the self-service pool as it.
+      # An empty secret file = "not configured", so RLS stays inactive until
+      # both files are populated (see the secrets: block header).
+      BUNYIP_APP_PASSWORD_FILE: /run/secrets/bunyip_app_password
+      APP_DATABASE_URL_FILE: /run/secrets/app_database_url
       JWT_SECRET_FILE: /run/secrets/jwt_secret
       TOTP_ENCRYPTION_KEY_FILE: /run/secrets/totp_encryption_key
       STRIPE_ENCRYPTION_KEY_FILE: /run/secrets/stripe_encryption_key
@@ -203,6 +217,8 @@ services:
       - "${HOST_IP:-127.0.0.1}:${BUNYIP_OCI_PORT:-18081}:18081"
     secrets:
       - database_url
+      - bunyip_app_password
+      - app_database_url
       - jwt_secret
       - totp_encryption_key
       - stripe_encryption_key

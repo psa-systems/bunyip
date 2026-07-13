@@ -55,3 +55,93 @@ pub async fn begin_with_user(
         .await?;
     Ok(tx)
 }
+
+/// Idempotently provision the unprivileged `bunyip_app` role that activates the
+/// per-user RLS policies (BUNYIP-360).
+///
+/// Mirrors the Mokosh role posture (`mokosh-server/src/db/provision.rs`), scoped
+/// to bunyip's single extra role. `pool` is the primary connection, which runs
+/// as the DB owner/superuser (`bunyip`) and can therefore `CREATE ROLE` without
+/// a separate admin connection. Run this AFTER migrations so the
+/// `GRANT ... ON ALL TABLES` covers every table they created; every statement is
+/// idempotent, so it is safe to run on each boot.
+///
+/// The role is `NOSUPERUSER NOBYPASSRLS`, so the `user_isolation` policies bind
+/// it. It owns nothing; the primary role keeps owning the schema and running
+/// migrations, and (as a superuser) keeps bypassing RLS. `ALTER DEFAULT
+/// PRIVILEGES` (no `FOR ROLE`, so it applies to objects created by the current
+/// role - the same role that runs migrations) auto-grants future tables.
+///
+/// The role name is a fixed identifier (no injection surface); the password and
+/// database name cannot be bind parameters in these utility statements, so they
+/// are quoted as an SQL literal / identifier with embedded quotes doubled.
+pub async fn provision_app_role(pool: &PgPool, password: &str) -> Result<(), AppError> {
+    let db_name: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(pool)
+        .await?;
+
+    let pw = sql_quote(password);
+    let db = quote_ident(&db_name);
+
+    // CREATE ROLE is not idempotent, so guard it with a DO block; the ALTER ROLE
+    // afterwards reconciles the password + attributes on an already-existing
+    // role (e.g. a rotated password).
+    let statements: Vec<String> = vec![
+        format!(
+            "DO $do$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'bunyip_app') \
+             THEN CREATE ROLE bunyip_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD {pw}; END IF; END $do$"
+        ),
+        format!("ALTER ROLE bunyip_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD {pw}"),
+        format!("GRANT CONNECT ON DATABASE {db} TO bunyip_app"),
+        "GRANT USAGE ON SCHEMA public TO bunyip_app".to_string(),
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO bunyip_app"
+            .to_string(),
+        "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO bunyip_app".to_string(),
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA public \
+         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO bunyip_app"
+            .to_string(),
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA public \
+         GRANT USAGE, SELECT ON SEQUENCES TO bunyip_app"
+            .to_string(),
+    ];
+
+    for stmt in &statements {
+        sqlx::query(stmt).execute(pool).await.map_err(|e| {
+            AppError::internal(format!("bunyip_app provisioning step failed ({e}): {stmt}"))
+        })?;
+    }
+
+    tracing::info!(
+        database = %db_name,
+        "bunyip_app RLS role provisioned (NOSUPERUSER NOBYPASSRLS)"
+    );
+    Ok(())
+}
+
+/// Quote a string as a single-quoted SQL literal, doubling embedded quotes.
+fn sql_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// Quote an SQL identifier, doubling embedded double-quotes.
+fn quote_ident(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{quote_ident, sql_quote};
+
+    #[test]
+    fn sql_quote_doubles_embedded_single_quotes() {
+        assert_eq!(sql_quote("plain"), "'plain'");
+        assert_eq!(sql_quote("o'brien"), "'o''brien'");
+        assert_eq!(sql_quote("'; DROP ROLE --"), "'''; DROP ROLE --'");
+    }
+
+    #[test]
+    fn quote_ident_doubles_embedded_double_quotes() {
+        assert_eq!(quote_ident("bunyip"), "\"bunyip\"");
+        assert_eq!(quote_ident("we\"ird"), "\"we\"\"ird\"");
+    }
+}
