@@ -108,6 +108,7 @@ pub async fn list_all_downloads(
     req: HttpRequest,
     user: MemberUser,
     pool: web::Data<PgPool>,
+    app_pool: web::Data<crate::db::AppPool>,
     release_cache: web::Data<Option<Arc<ReleaseCache>>>,
     oci_config: web::Data<OciConfig>,
 ) -> Result<HttpResponse, AppError> {
@@ -127,10 +128,11 @@ pub async fn list_all_downloads(
     let entitled: std::collections::HashSet<uuid::Uuid> = if is_admin {
         std::collections::HashSet::new()
     } else {
-        EntitlementRepository::active_application_ids(&pool, user.0.sub)
-            .await?
-            .into_iter()
-            .collect()
+        // BUNYIP-344: read the caller's own entitlements under per-user RLS.
+        let mut tx = crate::db::begin_with_user(app_pool.pool(), user.0.sub).await?;
+        let ids = EntitlementRepository::active_application_ids(&mut *tx, user.0.sub).await?;
+        tx.commit().await?;
+        ids.into_iter().collect()
     };
 
     // Build every group concurrently: each app may need a Forgejo round-trip

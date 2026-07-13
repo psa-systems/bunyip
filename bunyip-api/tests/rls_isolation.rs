@@ -26,7 +26,7 @@ const TEST_ROLE: &str = "bunyip_rls_test_role";
 /// Insert a user (only `email` is NOT NULL without a default) and one
 /// trusted-device row owned by them. Runs as the superuser owner, so RLS is
 /// bypassed for setup.
-async fn seed_user_with_device(pool: &PgPool) -> Uuid {
+async fn seed_user_with_rows(pool: &PgPool, app_id: Uuid) -> Uuid {
     let user_id = Uuid::new_v4();
     let email = format!("rls-{}@example.test", user_id.simple());
     sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2)")
@@ -44,6 +44,15 @@ async fn seed_user_with_device(pool: &PgPool) -> Uuid {
     .execute(pool)
     .await
     .expect("seed trusted_device");
+    sqlx::query(
+        "INSERT INTO application_entitlements (user_id, application_id, source)
+         VALUES ($1, $2, 'admin')",
+    )
+    .bind(user_id)
+    .bind(app_id)
+    .execute(pool)
+    .await
+    .expect("seed entitlement");
     user_id
 }
 
@@ -87,8 +96,15 @@ async fn user_isolation_policy_blocks_cross_user_access() {
     .await
     .expect("provision NOBYPASSRLS test role");
 
-    let user_a = seed_user_with_device(&owner).await;
-    let user_b = seed_user_with_device(&owner).await;
+    // A real application to hang an entitlement off (FK). Seed migrations create
+    // hosted apps, so one always exists.
+    let app_id: Uuid = sqlx::query_scalar("SELECT id FROM applications LIMIT 1")
+        .fetch_one(&owner)
+        .await
+        .expect("an application exists to seed an entitlement");
+
+    let user_a = seed_user_with_rows(&owner, app_id).await;
+    let user_b = seed_user_with_rows(&owner, app_id).await;
 
     // One transaction acting as the NOBYPASSRLS role with the per-user GUC set to
     // user A. `SET LOCAL` keeps both scoped to this transaction.
@@ -128,7 +144,25 @@ async fn user_isolation_policy_blocks_cross_user_access() {
         "user B's row must be invisible to user A"
     );
 
-    // Write guard: inserting a row for user B is rejected by WITH CHECK.
+    // A second isolated table, reached the same way the rerouted download gate
+    // reads it: a crafted no-WHERE select on application_entitlements must still
+    // scope to user A's single row. Read BEFORE the write-guard below, whose
+    // rejected INSERT aborts the transaction.
+    let ent_owners: Vec<Uuid> = sqlx::query("SELECT user_id FROM application_entitlements")
+        .fetch_all(&mut *tx)
+        .await
+        .expect("crafted entitlement select")
+        .into_iter()
+        .map(|r| r.get::<Uuid, _>("user_id"))
+        .collect();
+    assert_eq!(
+        ent_owners,
+        vec![user_a],
+        "user A must see only their own entitlement, not user B's"
+    );
+
+    // Write guard: inserting a row for user B is rejected by WITH CHECK. This
+    // aborts the transaction, so it must come last.
     let cross_insert = sqlx::query(
         "INSERT INTO trusted_devices (user_id, token_hash, expires_at)
          VALUES ($1, 'evil', NOW() + INTERVAL '1 day')",

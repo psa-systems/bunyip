@@ -125,14 +125,23 @@ impl TrustedDeviceRepository {
 
     /// Find a trusted device by id (any state), for the ownership check on
     /// revoke.
-    pub async fn find_by_id(pool: &PgPool, id: Uuid) -> Result<Option<TrustedDevice>, AppError> {
+    ///
+    /// Takes any `PgExecutor` so the self-service revoke handler can run it (and
+    /// the follow-up [`Self::revoke`]) inside one `begin_with_user` transaction
+    /// under per-user RLS (BUNYIP-344): a device belonging to another user is
+    /// then invisible (returns `None`) rather than merely failing the in-Rust
+    /// ownership check. A `&PgPool` still satisfies the bound.
+    pub async fn find_by_id(
+        executor: impl sqlx::PgExecutor<'_>,
+        id: Uuid,
+    ) -> Result<Option<TrustedDevice>, AppError> {
         let device = sqlx::query_as::<_, TrustedDevice>(
             r#"
             SELECT * FROM trusted_devices WHERE id = $1
             "#,
         )
         .bind(id)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await?;
 
         Ok(device)
@@ -153,14 +162,18 @@ impl TrustedDeviceRepository {
     }
 
     /// Revoke a single trusted device.
-    pub async fn revoke(pool: &PgPool, id: Uuid) -> Result<(), AppError> {
+    ///
+    /// Takes any `PgExecutor` so it can share the revoke handler's
+    /// `begin_with_user` transaction under per-user RLS (BUNYIP-344). A `&PgPool`
+    /// still satisfies the bound.
+    pub async fn revoke(executor: impl sqlx::PgExecutor<'_>, id: Uuid) -> Result<(), AppError> {
         sqlx::query(
             r#"
             UPDATE trusted_devices SET revoked_at = NOW() WHERE id = $1
             "#,
         )
         .bind(id)
-        .execute(pool)
+        .execute(executor)
         .await?;
 
         Ok(())

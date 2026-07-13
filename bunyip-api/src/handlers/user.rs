@@ -981,12 +981,18 @@ pub async fn revoke_trusted_device(
     req: HttpRequest,
     user: AuthenticatedUser,
     path: web::Path<uuid::Uuid>,
-    pool: web::Data<PgPool>,
+    app_pool: web::Data<crate::db::AppPool>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let id = path.into_inner();
 
-    let device = TrustedDeviceRepository::find_by_id(&pool, id)
+    // BUNYIP-344: look up and revoke under per-user RLS. Both queries share one
+    // `begin_with_user` transaction, so on the NOBYPASSRLS role a device owned
+    // by another user is invisible (lookup returns None -> 404) and the revoke
+    // UPDATE can only touch the caller's own row. The in-Rust ownership check
+    // below is kept as defence in depth.
+    let mut tx = crate::db::begin_with_user(app_pool.pool(), user.0.sub).await?;
+    let device = TrustedDeviceRepository::find_by_id(&mut *tx, id)
         .await?
         .ok_or_else(|| AppError::not_found("Trusted device"))?;
 
@@ -996,6 +1002,7 @@ pub async fn revoke_trusted_device(
         return Err(AppError::not_found("Trusted device"));
     }
 
-    TrustedDeviceRepository::revoke(&pool, id).await?;
+    TrustedDeviceRepository::revoke(&mut *tx, id).await?;
+    tx.commit().await?;
     Ok(success_no_data(request_id))
 }
