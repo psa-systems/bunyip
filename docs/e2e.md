@@ -94,9 +94,14 @@ secret; a manual dispatch lets the operator pick.
   api container against the staging database; requires
   `BUNYIP_E2E_BOOTSTRAP_ALLOW=true` and `BUNYIP_E2E_TEST_USER_PASSWORD` in the
   container env). It seeds the dedicated E2E account(s) + tenant. Pass-through
-  flags exist (`--dry-run`, `--cleanup`). Record the resulting `E2E_EMAIL`,
-  `E2E_PASSWORD`, `E2E_TENANT_ID`. Enable 2FA on the account and save the base32
-  secret as `E2E_TOTP_SECRET`.
+  flags exist (`--dry-run`, `--cleanup`, `--enable-2fa`). Record the resulting
+  `E2E_EMAIL`, `E2E_PASSWORD`, `E2E_TENANT_ID`. For 2FA, prefer `--enable-2fa`
+  (BUNYIP-359): choose a base32 secret, export it as `BUNYIP_E2E_TOTP_SECRET` in
+  the api-container env, and run `just e2e-bootstrap --enable-2fa`; the bootstrap
+  enrolls that PRESET secret and enables 2FA on the seeded accounts, so the
+  matching `E2E_TOTP_SECRET` stays STABLE across re-seeds (no rotation on every
+  wipe). The alternative is manual UI enrollment (below), which mints a fresh
+  secret you must then re-capture.
 - **Production:** provisioned manually (the bootstrap binary is gated to
   non-production by design). Create the account + tenant by hand, enable 2FA,
   and record the same vars under the `E2E_PRODUCTION_*` secret names.
@@ -240,10 +245,16 @@ first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODU
 
    Record the **tenant UUID**, the **email**, and the **password**.
 
-3. **Enroll 2FA on `e2e-user@a8n.run`** (BUNYIP-152). Log into the staging hub
-   as the E2E user, go to `/settings/2fa/setup`, capture the **base32 TOTP
-   secret** shown during enrollment, and verify a code. The suite logs in with
-   2FA on, so this is required, not optional.
+3. **Enroll 2FA on the E2E account(s)** (BUNYIP-152). The suite logs in with 2FA
+   on, so this is required, not optional. Preferred (BUNYIP-359): let the
+   bootstrap enroll a PRESET secret so it survives re-seeds without rotating the
+   Forgejo secret. Choose a base32 secret, then in the api container run
+   `BUNYIP_E2E_TOTP_SECRET=<base32> just e2e-bootstrap --enable-2fa` (needs the
+   same `TOTP_ENCRYPTION_KEY` the API uses, which the container already has); set
+   `E2E_STAGING_TOTP_SECRET` to that same base32. Manual alternative: log into the
+   staging hub as the E2E user, go to `/settings/2fa/setup`, capture the base32
+   secret shown at enrollment, verify a code, and record it - but this mints a NEW
+   secret each time, so you must re-capture it after every account re-seed.
 
 4. **Pick a public PKCE OIDC client.** There is NO `bunyip-web` OIDC client to
    reuse: bunyip-web is the OP's own hub UI (it sets `bunyip_op_session`
