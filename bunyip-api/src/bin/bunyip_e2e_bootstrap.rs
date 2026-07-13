@@ -160,6 +160,17 @@ async fn main() -> anyhow::Result<()> {
 /// the API decrypts with; run this in the API container so that env is present.
 /// Idempotent: re-running re-enrolls the same secret and re-enables 2FA.
 async fn enroll_2fa(pool: &sqlx::PgPool, config: &Config) -> anyhow::Result<()> {
+    // Guard the silent footgun: with TOTP_ENCRYPTION_KEY unset, Config falls back
+    // to the all-zero DEV key in a non-production env (which the bootstrap
+    // requires). Encrypting the E2E secret under that while the API uses a real
+    // key yields a secret the API cannot decrypt, so 2FA login would break with
+    // no error surfaced here. Refuse instead of enrolling an unusable secret.
+    if config.totp_encryption_key == [0u8; 32] {
+        bail!(
+            "--enable-2fa needs TOTP_ENCRYPTION_KEY set to the API's key (run in the API \
+             container); refusing to enroll under the all-zero dev key"
+        );
+    }
     let secret = secret_env("BUNYIP_E2E_TOTP_SECRET")
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
