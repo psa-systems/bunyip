@@ -680,6 +680,7 @@ pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadErr
                         webhook_url: None,
                         version: None,
                         source_code_url: None,
+                        release_notes_url: None,
                         is_hosted: a.is_hosted,
                         forgejo_owner: None,
                         forgejo_repo: None,

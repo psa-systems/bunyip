@@ -298,6 +298,14 @@ fn app_card(
                     }
                 }
                 @if let Some(g) = downloads { (download_affordance(g, is_member)) }
+                // BUNYIP-343: link to the app's release notes (its Forgejo
+                // releases page) when the repo association is configured, so
+                // users can see what changed. Opens in a new tab like Launch.
+                @if let Some(notes) = app.release_notes_url.as_deref().filter(|s| !s.is_empty()) {
+                    a href=(notes) target="_blank" rel="noopener noreferrer" {
+                        span class=(button_class("outline", "default", "w-full mt-2")) { "Release notes" (icon("file-text", "ml-2 h-4 w-4")) }
+                    }
+                }
                 // BUNYIP-353: the Backup add-on is configured in-app rather than
                 // launched to an external subdomain.
                 @if app.slug == "backup" {
@@ -2199,6 +2207,53 @@ mod tests {
             last_name: None,
             phone: None,
         }
+    }
+
+    fn app_with_release_notes(release_notes_url: Option<&str>) -> crate::api::types::Application {
+        crate::api::types::Application {
+            id: "a1".into(),
+            slug: "mokosh".into(),
+            display_name: "Mokosh".into(),
+            description: Some("PSA".into()),
+            icon_url: None,
+            version: None,
+            source_code_url: None,
+            release_notes_url: release_notes_url.map(str::to_string),
+            subdomain: Some("mokosh".into()),
+            is_accessible: true,
+            maintenance_mode: false,
+            maintenance_message: None,
+            group_id: None,
+        }
+    }
+
+    #[test]
+    fn app_card_links_release_notes_when_present() {
+        // BUNYIP-343: the card links to the app's Forgejo releases page.
+        let notes = "https://dev.a8n.run/psa-systems/mokosh-server/releases";
+        let html = app_card(
+            0,
+            &app_with_release_notes(Some(notes)),
+            "a8n.run",
+            true,
+            None,
+        )
+        .into_string();
+        assert!(html.contains(notes), "release-notes URL must be linked");
+        assert!(
+            html.contains("Release notes"),
+            "the link must carry the 'Release notes' label"
+        );
+    }
+
+    #[test]
+    fn app_card_omits_release_notes_when_absent() {
+        // No repo association -> no link (not an empty/dead affordance).
+        let html = app_card(0, &app_with_release_notes(None), "a8n.run", true, None).into_string();
+        assert!(
+            !html.contains("Release notes"),
+            "no release-notes link when the URL is unset"
+        );
     }
 
     #[test]

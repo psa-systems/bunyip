@@ -3144,6 +3144,7 @@ mod tests {
             description: None,
             icon_url: None,
             source_code_url: None,
+            release_notes_url: None,
             version: None,
             subdomain: None,
             container_name: None,

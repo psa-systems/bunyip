@@ -2438,6 +2438,7 @@ struct DetailsView<'a> {
     subdomain: &'a str,
     version: &'a str,
     source_code_url: &'a str,
+    release_notes_url: &'a str,
     maintenance_message: &'a str,
 }
 
@@ -2456,6 +2457,7 @@ fn details_fields(v: &DetailsView) -> Markup {
         div class="space-y-2" { label class="text-sm font-medium" { "Subdomain" } input name="subdomain" value=(v.subdomain) class=(dashboard_input()); }
         div class="space-y-2" { label class="text-sm font-medium" { "Version" } input name="version" value=(v.version) class=(dashboard_input()); }
         div class="space-y-2" { label class="text-sm font-medium" { "Source code URL" } input name="source_code_url" value=(v.source_code_url) class=(dashboard_input()); }
+        div class="space-y-2" { label class="text-sm font-medium" { "Release notes URL" } p class="text-xs text-muted-foreground" { "Linked from the applications view so users can see what changed (e.g. the Forgejo releases page)." } input name="release_notes_url" value=(v.release_notes_url) class=(dashboard_input()); }
         div class="space-y-2" { label class="text-sm font-medium" { "Maintenance message" } p class="text-xs text-muted-foreground" { "Shown to users while maintenance mode is on." } input name="maintenance_message" value=(v.maintenance_message) class=(dashboard_input()); }
     }
 }
@@ -2620,6 +2622,7 @@ fn details_view_from_dist_form(f: &DistributionForm) -> DetailsView<'_> {
         subdomain: &f.subdomain,
         version: &f.version,
         source_code_url: &f.source_code_url,
+        release_notes_url: &f.release_notes_url,
         maintenance_message: &f.maintenance_message,
     }
 }
@@ -2635,6 +2638,7 @@ fn insert_detail_fields(
     subdomain: &str,
     version: &str,
     source_code_url: &str,
+    release_notes_url: &str,
     maintenance_message: &str,
 ) {
     for (k, val) in [
@@ -2643,6 +2647,7 @@ fn insert_detail_fields(
         ("subdomain", subdomain),
         ("version", version),
         ("source_code_url", source_code_url),
+        ("release_notes_url", release_notes_url),
         ("maintenance_message", maintenance_message),
     ] {
         if !val.trim().is_empty() {
@@ -2690,6 +2695,7 @@ fn distribution_update_body(f: &DistributionForm) -> serde_json::Value {
         &f.subdomain,
         &f.version,
         &f.source_code_url,
+        &f.release_notes_url,
         &f.maintenance_message,
     );
     serde_json::Value::Object(m)
@@ -2707,6 +2713,8 @@ pub struct DistributionForm {
     pub version: String,
     #[serde(default)]
     pub source_code_url: String,
+    #[serde(default)]
+    pub release_notes_url: String,
     #[serde(default)]
     pub maintenance_message: String,
     #[serde(default)]
@@ -2793,6 +2801,7 @@ pub async fn application_edit(
                 subdomain: app.subdomain.as_deref().unwrap_or_default(),
                 version: app.version.as_deref().unwrap_or_default(),
                 source_code_url: app.source_code_url.as_deref().unwrap_or_default(),
+                release_notes_url: app.release_notes_url.as_deref().unwrap_or_default(),
                 maintenance_message: app.maintenance_message.as_deref().unwrap_or_default(),
             };
             let surfaces = SurfaceVisibility::of(app);
@@ -2973,6 +2982,8 @@ pub struct CreateAppForm {
     #[serde(default)]
     pub source_code_url: String,
     #[serde(default)]
+    pub release_notes_url: String,
+    #[serde(default)]
     pub maintenance_message: String,
     #[serde(default)]
     pub artifact_source: String,
@@ -3023,6 +3034,7 @@ fn create_app_body(f: &CreateAppForm) -> Result<serde_json::Value, String> {
         &f.subdomain,
         &f.version,
         &f.source_code_url,
+        &f.release_notes_url,
         &f.maintenance_message,
     );
     if !f.artifact_source.trim().is_empty() {
@@ -3065,6 +3077,7 @@ pub async fn application_new(State(st): State<AppState>, headers: HeaderMap) -> 
         subdomain: "",
         version: "",
         source_code_url: "",
+        release_notes_url: "",
         maintenance_message: "",
     };
     let v = DistView {
@@ -3132,6 +3145,7 @@ pub async fn application_create(
             subdomain: &f.subdomain,
             version: &f.version,
             source_code_url: &f.source_code_url,
+            release_notes_url: &f.release_notes_url,
             maintenance_message: &f.maintenance_message,
         };
         let content = application_form(
@@ -4857,12 +4871,18 @@ mod tests {
         let f = DistributionForm {
             description: "  A great app  ".into(),
             icon_url: "https://example.com/icon.png".into(),
+            release_notes_url: "  https://dev.a8n.run/psa-systems/mokosh-server/releases  ".into(),
             maintenance_message: "Back at 5pm".into(),
             ..Default::default()
         };
         let body = distribution_update_body(&f);
         assert_eq!(body["description"], json!("A great app"));
         assert_eq!(body["icon_url"], json!("https://example.com/icon.png"));
+        // BUNYIP-343: the release-notes URL is editable and sent trimmed.
+        assert_eq!(
+            body["release_notes_url"],
+            json!("https://dev.a8n.run/psa-systems/mokosh-server/releases")
+        );
         assert_eq!(body["maintenance_message"], json!("Back at 5pm"));
         assert!(body.get("subdomain").is_none());
         assert!(body.get("version").is_none());
