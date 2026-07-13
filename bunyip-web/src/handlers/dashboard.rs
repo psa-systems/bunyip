@@ -13,7 +13,7 @@ use serde::Deserialize;
 use crate::api::auth as auth_api;
 use crate::api::calls;
 use crate::api::types::{
-    AppDownloadGroup, Application, Membership, MembershipStatus, SubscriptionTier,
+    AppDownloadGroup, Application, Membership, MembershipStatus, OciImage, SubscriptionTier,
     TwoFactorSetupResponse, User,
 };
 use crate::handlers::{dashboard_response, guard, needs_onboarding, password_ok, rotating_index};
@@ -494,72 +494,83 @@ pub async fn download_asset(
     }
 }
 
-/// A single download option for a product, kept as a typed enum so the dialog
-/// is data-driven: adding a new distribution channel is one new variant plus
-/// one render arm in `download_option_row`, nothing else. BUNYIP-100.
-enum DownloadOption {
-    /// A binary asset fetchable in one click via the BFF proxy.
-    DirectLink {
-        name: String,
-        size: String,
-        href: String,
-    },
-    /// A copy-pasteable shell command (e.g. `docker login` / `docker pull`).
-    CopyBlock { command: String },
+/// A numbered instruction step: a bold "N. Title" line above its body (a copy
+/// block, a download button, or plain text). BUNYIP-358.
+fn instruction_step(n: u32, title: &str, body: Markup) -> Markup {
+    html! {
+        li class="space-y-1" {
+            div class="text-sm font-medium" { (n) ". " (title) }
+            (body)
+        }
+    }
 }
 
-/// Map a product's downloads to the ordered option list shown in its dialog:
-/// every binary asset becomes a click-to-download link (via the BFF proxy on
-/// this origin, not the API's `download_url` which the browser cannot reach);
-/// an OCI image becomes the `docker login` + `docker pull` copy blocks.
-fn download_options(g: &AppDownloadGroup) -> Vec<DownloadOption> {
-    let mut opts = Vec::new();
-    for a in &g.assets {
-        opts.push(DownloadOption::DirectLink {
-            name: a.asset_name.clone(),
-            size: format_size(a.size_bytes),
-            href: format!(
+/// Docker pull-and-run instructions for a product's OCI image: a prerequisite
+/// line plus numbered steps (sign in if the registry is private, pull, run).
+/// Docker only, per the BUNYIP-358 decision. No digest-verify step: `reference`
+/// is tag-pinned and the API exposes no separate digest to check against.
+fn container_instructions(oci: &OciImage) -> Markup {
+    html! {
+        section class="space-y-3" {
+            div class="flex items-center gap-2" {
+                (icon("package", "h-4 w-4 text-muted-foreground"))
+                h4 class="font-semibold" { "Container image" }
+            }
+            p class="text-sm text-muted-foreground" {
+                "Requires Docker installed. Pulls " code class="font-mono" { (oci.reference) } "."
+            }
+            ol class="space-y-3" {
+                (instruction_step(1, "Sign in to the registry (only if it is private)", command_block(&format!("docker login {}", oci.registry))))
+                (instruction_step(2, "Pull the image", command_block(&format!("docker pull {}", oci.reference))))
+                (instruction_step(3, "Run it (a starting point; add the ports, env, and volumes the app needs)", command_block(&format!("docker run --rm {}", oci.reference))))
+            }
+        }
+    }
+}
+
+/// Download-and-run instructions for each binary asset. The download uses the
+/// same-origin BFF proxy (`/downloads/...`); the API's `download_url` is not
+/// browser-reachable. No checksum-verify step: the download API exposes no
+/// per-asset checksum yet (a BUNYIP-358 follow-up would add one here).
+fn binary_instructions(g: &AppDownloadGroup) -> Markup {
+    html! {
+        @for a in &g.assets {
+            @let href = format!(
                 "/downloads/{}/{}",
                 urlencoding::encode(&g.app_slug),
                 urlencoding::encode(&a.asset_name)
-            ),
-        });
-    }
-    if let Some(oci) = &g.oci {
-        opts.push(DownloadOption::CopyBlock {
-            command: format!("docker login {}", oci.registry),
-        });
-        opts.push(DownloadOption::CopyBlock {
-            command: format!("docker pull {}", oci.reference),
-        });
-    }
-    opts
-}
-
-/// Render one option inside the download dialog.
-fn download_option_row(opt: &DownloadOption) -> Markup {
-    match opt {
-        // No `download` attribute: the proxy's Content-Disposition drives the
-        // save, and an error response navigates rather than being saved as the
-        // file (BUNYIP-64).
-        DownloadOption::DirectLink { name, size, href } => html! {
-            li class="flex items-center justify-between gap-3" {
-                div { div class="font-mono text-sm break-all" { (name) } div class="text-xs text-muted-foreground" { (size) } }
-                a href=(href) class="px-3 py-1 rounded bg-primary text-primary-foreground text-sm shrink-0" { "Download" }
+            );
+            section class="space-y-3" {
+                div class="flex flex-wrap items-center gap-2" {
+                    (icon("download", "h-4 w-4 text-muted-foreground"))
+                    h4 class="font-semibold" { "Binary" }
+                    span class="font-mono text-xs text-muted-foreground break-all" { (a.asset_name) " (" (format_size(a.size_bytes)) ")" }
+                }
+                ol class="space-y-3" {
+                    // No `download` attribute: the proxy's Content-Disposition drives
+                    // the save, and an error response navigates rather than saving an
+                    // error body as the file (BUNYIP-64).
+                    (instruction_step(1, "Download the file", html! {
+                        a href=(href) class=(button_class("default", "default", "")) {
+                            (icon("download", "mr-2 h-4 w-4")) "Download " (a.asset_name)
+                        }
+                    }))
+                    (instruction_step(2, "Make it executable and run", command_block(&format!("chmod +x {name} && ./{name} --help", name = a.asset_name))))
+                }
             }
-        },
-        DownloadOption::CopyBlock { command } => html! { li { (command_block(command)) } },
+        }
     }
 }
 
-/// The Download affordance for an application card. With exactly one binary and
-/// nothing else it is a one-click link; otherwise it is a button that opens a
-/// `<dialog>` listing every option (binary links plus OCI copy blocks). Members
-/// only; non-members get an upgrade prompt. Renders nothing when the product
-/// has no downloads. BUNYIP-100.
+/// The Download affordance for an application card: a button that opens a
+/// `<dialog>` of step-by-step download/pull instructions - a Docker section when
+/// the product ships an OCI image, and a section per binary asset. Members only;
+/// non-members get an upgrade prompt. Renders nothing when the product has no
+/// downloads. BUNYIP-100 / BUNYIP-358.
 fn download_affordance(g: &AppDownloadGroup, is_member: bool) -> Markup {
-    let opts = download_options(g);
-    if opts.is_empty() {
+    let has_binary = !g.assets.is_empty();
+    let has_oci = g.oci.is_some();
+    if !has_binary && !has_oci {
         return html! {};
     }
     if !is_member {
@@ -568,21 +579,14 @@ fn download_affordance(g: &AppDownloadGroup, is_member: bool) -> Markup {
     // Label the affordance by the distribution surfaces this product offers:
     // binary assets only ("Download"), an OCI image only ("OCI"), or both
     // ("Download/OCI"). BUNYIP-289.
-    let label = match (!g.assets.is_empty(), g.oci.is_some()) {
+    let label = match (has_binary, has_oci) {
         (true, true) => "Download/OCI",
         (false, true) => "OCI",
         _ => "Download",
     };
-    // One binary and nothing else: a direct download link, no dialog.
-    if opts.len() == 1 {
-        if let DownloadOption::DirectLink { href, .. } = &opts[0] {
-            return html! {
-                a href=(href) class=(button_class("outline", "default", "w-full mt-2")) { (icon("download", "mr-2 h-4 w-4")) (label) }
-            };
-        }
-    }
     // The slug is validated lowercase/digits/hyphens, so it is a safe element id
-    // and a safe literal inside the inline open handler.
+    // and a safe literal inside the inline open handler. BUNYIP-358 always opens
+    // the dialog (even for a lone binary) so the instructions are always shown.
     let dialog_id = format!("dl-{}", g.app_slug);
     html! {
         button type="button" class=(button_class("outline", "default", "w-full mt-2"))
@@ -594,14 +598,13 @@ fn download_affordance(g: &AppDownloadGroup, is_member: bool) -> Markup {
         // `dialog:modal { margin:auto }` no longer applies and the dialog pins
         // to the top-left). BUNYIP-289.
         dialog id=(dialog_id) class="m-auto rounded-lg border bg-card text-card-foreground p-0 w-full max-w-lg backdrop:bg-black/50" {
-            div class="p-6 space-y-4" {
+            div class="p-6 space-y-6 max-h-[80vh] overflow-y-auto" {
                 div class="flex items-center justify-between gap-4" {
                     h3 class="text-lg font-semibold" { (g.app_display_name) " downloads" }
                     button type="button" aria-label="Close" class=(button_class("outline", "sm", "shrink-0")) onclick="this.closest('dialog').close()" { (icon("x", "h-4 w-4")) }
                 }
-                ul class="space-y-3" {
-                    @for opt in &opts { (download_option_row(opt)) }
-                }
+                @if let Some(oci) = &g.oci { (container_instructions(oci)) }
+                @if has_binary { (binary_instructions(g)) }
             }
         }
     }
