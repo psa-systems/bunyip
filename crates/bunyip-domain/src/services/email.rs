@@ -225,6 +225,19 @@ impl EmailService {
 
         templates
             .add_raw_template(
+                "new_login_location.html",
+                include_str!("../../templates/emails/new_login_location.html"),
+            )
+            .map_err(|e| AppError::internal(format!("Template error: {}", e)))?;
+        templates
+            .add_raw_template(
+                "new_login_location.txt",
+                include_str!("../../templates/emails/new_login_location.txt"),
+            )
+            .map_err(|e| AppError::internal(format!("Template error: {}", e)))?;
+
+        templates
+            .add_raw_template(
                 "email_change_verify.html",
                 include_str!("../../templates/emails/email_change_verify.html"),
             )
@@ -539,6 +552,41 @@ impl EmailService {
             &config,
             email,
             &format!("Your {} password was changed", config.app_name),
+            html,
+            text,
+        )
+        .await
+    }
+
+    /// BUNYIP-366: alert the user that a sign-in came from a country they have
+    /// not signed in from before. Best-effort at the call site (login must never
+    /// fail if this does not send).
+    pub async fn send_new_login_location(
+        &self,
+        email: &str,
+        country: &str,
+        ip: &str,
+        when: &str,
+        user_agent: &str,
+    ) -> Result<(), AppError> {
+        let config = self.config();
+        if !config.enabled {
+            tracing::info!(email = %email, country = %country, "New-login-location email (dev mode - not sending)");
+            return Ok(());
+        }
+
+        let mut context = self.base_context(&config);
+        context.insert("country", &country);
+        context.insert("ip", &ip);
+        context.insert("when", &when);
+        context.insert("user_agent", &user_agent);
+        context.insert("dashboard_url", &format!("{}/dashboard", config.base_url));
+
+        let (html, text) = self.render_template("new_login_location", &context)?;
+        self.send_email(
+            &config,
+            email,
+            &format!("New sign-in to your {} account", config.app_name),
             html,
             text,
         )

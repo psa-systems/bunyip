@@ -1,0 +1,17 @@
+{% extends "base.txt" %}
+{% block content %}
+New sign-in from a new location
+
+We noticed a sign-in to your {{ app_name }} account from a country we have not seen you sign in from before.
+
+Country: {{ country }}
+IP address: {{ ip }}
+When: {{ when }}
+Device: {{ user_agent }}
+
+If this was you, no action is needed.
+
+If you do not recognize this sign-in, secure your account now: change your password and review your active sessions.
+
+Go to Dashboard: {{ dashboard_url }}
+{% endblock %}
