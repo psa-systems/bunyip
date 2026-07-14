@@ -510,6 +510,23 @@ impl UserRepository {
         Ok(())
     }
 
+    /// BUNYIP-366: set the per-user opt-out for the new-login-location email
+    /// alert. `true` (the column default) keeps alerts on; `false` disables them.
+    pub async fn set_login_location_alerts(
+        pool: &PgPool,
+        user_id: Uuid,
+        enabled: bool,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            "UPDATE users SET login_location_alerts = $2, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .bind(enabled)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     /// Soft delete user
     pub async fn soft_delete(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {
         sqlx::query(

@@ -249,9 +249,11 @@ impl AuthService {
             return;
         };
 
-        match user.last_login_country.as_deref() {
+        match login_location_decision(user.last_login_country.as_deref(), &country) {
+            // Same country as last time: nothing to do.
+            LoginLocationDecision::Unchanged => {}
             // First login we can attribute to a country: record it, no alert.
-            None => {
+            LoginLocationDecision::Record => {
                 if let Err(e) =
                     UserRepository::set_last_login_country(&self.pool, user.id, Some(&country))
                         .await
@@ -259,10 +261,9 @@ impl AuthService {
                     tracing::warn!(user_id = %user.id, error = %e, "Failed to record initial login country");
                 }
             }
-            // Same country as last time: nothing to do.
-            Some(prev) if prev == country => {}
             // Country changed: alert (unless opted out), then persist the new one.
-            Some(prev) => {
+            LoginLocationDecision::Alert => {
+                let previous = user.last_login_country.as_deref().unwrap_or("?");
                 if user.login_location_alerts {
                     let when = Utc::now().format("%Y-%m-%d %H:%M UTC").to_string();
                     let ua = device_info.unwrap_or("unknown");
@@ -274,7 +275,7 @@ impl AuthService {
                         tracing::warn!(user_id = %user.id, error = %e, "Failed to send new-login-location email");
                     }
                 }
-                tracing::info!(user_id = %user.id, from = %prev, to = %country, "Login country changed");
+                tracing::info!(user_id = %user.id, from = %previous, to = %country, "Login country changed");
                 if let Err(e) =
                     UserRepository::set_last_login_country(&self.pool, user.id, Some(&country))
                         .await
@@ -1926,6 +1927,28 @@ pub(crate) fn generate_secure_token(length: usize) -> String {
     base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &bytes)
 }
 
+/// BUNYIP-366: the action to take for a resolved login country, given the
+/// country recorded at the user's previous login. Kept pure (no DB, no mailer)
+/// so the branch logic is unit-testable in isolation.
+#[derive(Debug, PartialEq, Eq)]
+enum LoginLocationDecision {
+    /// No prior country on record: store this one silently, no alert.
+    Record,
+    /// Same country as last time: do nothing.
+    Unchanged,
+    /// Country differs from last time: alert the user, then store the new one.
+    Alert,
+}
+
+/// Decide what to do for the `current` login country given the `previous` one.
+fn login_location_decision(previous: Option<&str>, current: &str) -> LoginLocationDecision {
+    match previous {
+        None => LoginLocationDecision::Record,
+        Some(prev) if prev == current => LoginLocationDecision::Unchanged,
+        Some(_) => LoginLocationDecision::Alert,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2154,5 +2177,23 @@ mod tests {
                 "{ip} should be treated as public"
             );
         }
+    }
+
+    // BUNYIP-366: the None -> Record / same -> Unchanged / differ -> Alert
+    // decision that drives whether a login sends the new-location email.
+    #[test]
+    fn login_location_decision_branches() {
+        assert_eq!(
+            login_location_decision(None, "US"),
+            LoginLocationDecision::Record
+        );
+        assert_eq!(
+            login_location_decision(Some("US"), "US"),
+            LoginLocationDecision::Unchanged
+        );
+        assert_eq!(
+            login_location_decision(Some("US"), "GB"),
+            LoginLocationDecision::Alert
+        );
     }
 }
