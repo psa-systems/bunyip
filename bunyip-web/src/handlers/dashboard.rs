@@ -514,10 +514,18 @@ fn instruction_step(n: u32, title: &str, body: Markup) -> Markup {
 }
 
 /// Docker pull-and-run instructions for a product's OCI image: a prerequisite
-/// line plus numbered steps (sign in if the registry is private, pull, run).
+/// line plus numbered steps (sign in if the registry is private, pull, then
+/// either a one-shot `docker run` or a copy-pasteable Docker Compose skeleton).
 /// Docker only, per the BUNYIP-358 decision. No digest-verify step: `reference`
-/// is tag-pinned and the API exposes no separate digest to check against.
+/// is tag-pinned and the API exposes no separate digest to check against. The
+/// compose skeleton stays app-agnostic (image interpolated, ports/env/volumes
+/// left as operator-filled placeholders), since this helper is shared across
+/// every OCI-shipping app.
 fn container_instructions(oci: &OciImage) -> Markup {
+    let compose = format!(
+        "services:\n  app:\n    image: {}\n    restart: unless-stopped\n    # Add the ports, environment, and volumes this app needs, e.g.:\n    # ports:\n    #   - \"8080:8080\"\n",
+        oci.reference
+    );
     html! {
         section class="space-y-3" {
             div class="flex items-center gap-2" {
@@ -531,6 +539,12 @@ fn container_instructions(oci: &OciImage) -> Markup {
                 (instruction_step(1, "Sign in to the registry (only if it is private)", command_block(&format!("docker login {}", oci.registry))))
                 (instruction_step(2, "Pull the image", command_block(&format!("docker pull {}", oci.reference))))
                 (instruction_step(3, "Run it (a starting point; add the ports, env, and volumes the app needs)", command_block(&format!("docker run --rm {}", oci.reference))))
+                (instruction_step(4, "Or deploy with Docker Compose (save as compose.yml)", html! {
+                    div class="space-y-2" {
+                        (compose_block(&compose))
+                        (command_block("docker compose up -d"))
+                    }
+                }))
             }
         }
     }
@@ -683,6 +697,25 @@ fn command_block(cmd: &str) -> Markup {
         div class="flex items-center gap-2" {
             code class="flex-1 rounded bg-muted px-3 py-2 font-mono text-sm overflow-x-auto whitespace-nowrap" { (cmd) }
             button type="button" aria-label="Copy command" data-copy=(cmd) class=(button_class("outline", "sm", "shrink-0 w-28")) onclick=(COPY_CMD_JS) {
+                "Copy"
+            }
+        }
+    }
+}
+
+/// A copy-pasteable multi-line snippet (e.g. a `compose.yml`) with a copy
+/// button. Like [`command_block`] but preserves newlines instead of forcing a
+/// single line, for block content. Same trust model: the snippet is passive,
+/// Maud-escaped `<code>` text plus the button's `data-copy` attribute; the
+/// click handler is the static `COPY_CMD_JS` constant and never has API data
+/// interpolated into executable JS.
+fn compose_block(snippet: &str) -> Markup {
+    html! {
+        div class="flex items-start gap-2" {
+            pre class="flex-1 rounded bg-muted px-3 py-2 font-mono text-sm overflow-x-auto" {
+                code class="whitespace-pre" { (snippet) }
+            }
+            button type="button" aria-label="Copy compose file" data-copy=(snippet) class=(button_class("outline", "sm", "shrink-0 w-28")) onclick=(COPY_CMD_JS) {
                 "Copy"
             }
         }
