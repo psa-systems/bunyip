@@ -1087,6 +1087,8 @@ mod tests {
             updated_at: chrono::Utc::now(),
             two_factor_enabled: false,
             last_login_at: None,
+            last_login_country: None,
+            login_location_alerts: true,
             deleted_at: None,
             subscription_tier: "lifetime".to_string(),
             trial_ends_at: None,

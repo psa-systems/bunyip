@@ -116,6 +116,11 @@ pub struct UpdateProfileRequest {
     pub last_name: Option<String>,
     #[serde(default)]
     pub phone: Option<String>,
+    /// BUNYIP-366: opt-out toggle for the new-login-location email alert. Absent
+    /// leaves it unchanged; `true`/`false` sets it. Unlike the text fields there
+    /// is no "clear" state (the column is NOT NULL).
+    #[serde(default)]
+    pub login_location_alerts: Option<bool>,
 }
 
 const PROFILE_FIELD_MAX_LEN: usize = 64;
@@ -266,6 +271,13 @@ pub async fn update_current_user_profile(
     let next_first = first_name.unwrap_or(current.first_name.clone());
     let next_last = last_name.unwrap_or(current.last_name.clone());
     let next_phone = phone.unwrap_or(current.phone.clone());
+
+    // BUNYIP-366: apply the login-location-alert opt-out first, and only when the
+    // client actually sent it, so the profile UPDATE below returns the row with
+    // the new value.
+    if let Some(enabled) = body.login_location_alerts {
+        UserRepository::set_login_location_alerts(&pool, user.0.sub, enabled).await?;
+    }
 
     let updated = UserRepository::update_profile(
         &pool,

@@ -27,7 +27,7 @@ use bunyip_api::{
     routes,
     services::{
         AppBackupAdapter, AppDownloadCache, AuthService, BackupService, DownloadLimiter,
-        EmailService, EncryptionKeySet, ForgejoAssetClient, JwtConfig, JwtService,
+        EmailService, EncryptionKeySet, ForgejoAssetClient, GeoIpService, JwtConfig, JwtService,
         MokoshBackupAdapter, PasswordService, ReleaseCache, StripeConfig, StripeService,
         TotpService, WebhookService,
     },
@@ -281,16 +281,6 @@ async fn main() -> anyhow::Result<()> {
     };
     let tier_config = Arc::new(std::sync::RwLock::new(tier_config));
 
-    // Initialize Auth service
-    let auth_service = Arc::new(AuthService::new(
-        pool.clone(),
-        (*jwt_service).clone(),
-        tier_config.clone(),
-        config.bootstrap_admin_email.clone(),
-    ));
-
-    info!("Auth service initialized");
-
     // Build encryption key sets for key rotation support
     let totp_key_set = EncryptionKeySet {
         current: config.totp_encryption_key,
@@ -306,6 +296,8 @@ async fn main() -> anyhow::Result<()> {
     // Initialize Email service — prefer DB config (admin UI), fall back to env
     // vars (BUNYIP-351). The SMTP password is decrypted with the same key set
     // as the Stripe secrets, so this must run after `stripe_key_set` is built.
+    // The auth service (built below) also holds the email service for BUNYIP-366
+    // login-location alerts, so email is now wired ahead of auth.
     let email_config = {
         use bunyip_api::repositories::EmailConfigRepository;
         match EmailConfigRepository::get(&pool).await {
@@ -335,6 +327,38 @@ async fn main() -> anyhow::Result<()> {
     }));
 
     info!(enabled = email_enabled, "Email service initialized");
+
+    // BUNYIP-366: IP -> country resolver for login-location alerts. Optional:
+    // when IP2LOCATION_DB_PATH is unset or the .BIN fails to load, geoip stays
+    // None and the alerts silently disable. Login is never blocked either way.
+    let geoip = match config.ip2location_db_path.as_deref() {
+        Some(path) => match GeoIpService::new(path) {
+            Ok(svc) => {
+                info!(path = %path, "GeoIP (IP2Location) service initialized");
+                Some(Arc::new(svc))
+            }
+            Err(e) => {
+                tracing::warn!(path = %path, error = %e, "Failed to load IP2Location DB; login-location alerts disabled");
+                None
+            }
+        },
+        None => {
+            info!("IP2LOCATION_DB_PATH unset; login-location alerts disabled");
+            None
+        }
+    };
+
+    // Initialize Auth service
+    let auth_service = Arc::new(AuthService::new(
+        pool.clone(),
+        (*jwt_service).clone(),
+        tier_config.clone(),
+        config.bootstrap_admin_email.clone(),
+        email_service.clone(),
+        geoip,
+    ));
+
+    info!("Auth service initialized");
 
     // Initialize Stripe service — prefer DB config (set via admin UI), fall back to env vars
     let stripe_config = {

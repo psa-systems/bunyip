@@ -94,6 +94,10 @@ pub struct Config {
     /// go through the admin-invite and role-management flows. `None` when
     /// unset/empty: the site still comes up, just without an auto-created admin.
     pub bootstrap_admin_email: Option<String>,
+    /// Path to the IP2Location LITE `.BIN` database used to resolve a login's
+    /// client IP to a country for login-location alerts (BUNYIP-366). `None`
+    /// when unset: the login-location-alert feature is disabled.
+    pub ip2location_db_path: Option<String>,
 }
 
 /// SMTP TLS mode
@@ -911,6 +915,12 @@ impl Config {
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty());
 
+        // BUNYIP-366: IP2Location DB path for login-location alerts (optional).
+        let ip2location_db_path = env::var("IP2LOCATION_DB_PATH")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
         let config = Self {
             database_url,
             app_database_url,
@@ -938,6 +948,7 @@ impl Config {
             oci,
             oidc,
             bootstrap_admin_email,
+            ip2location_db_path,
         };
 
         info!(

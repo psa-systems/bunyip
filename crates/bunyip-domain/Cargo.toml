@@ -50,6 +50,9 @@ sha2 = "0.10"
 sha1 = "0.10"
 base64 = "0.21"
 ipnetwork = "0.20"
+# IP -> country lookup for login-location alerts (BUNYIP-366); reads the same
+# IP2Location LITE .BIN the ecosystem already deploys (see dmarc-reporter).
+ip2location = "0.6"
 hmac = "0.12"
 hex = "0.4"
 data-encoding = "2"

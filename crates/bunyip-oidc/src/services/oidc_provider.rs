@@ -1718,6 +1718,8 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             last_login_at: None,
+            last_login_country: None,
+            login_location_alerts: true,
             deleted_at: None,
             subscription_tier: "standard".to_string(),
             trial_ends_at: None,

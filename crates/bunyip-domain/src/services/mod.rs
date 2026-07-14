@@ -10,6 +10,7 @@ pub mod auth;
 pub mod backup;
 pub mod email;
 pub mod event_bus;
+pub mod geoip;
 pub mod jwt;
 pub mod password_breach;
 pub mod stripe;
@@ -51,6 +52,7 @@ pub use backup::{
 };
 pub use email::EmailService;
 pub use event_bus::{BunyipEvent, EventBus};
+pub use geoip::GeoIpService;
 pub use jwt::{AccessTokenClaims, JwtService, RefreshTokenClaims, TwoFactorChallengeClaims};
 pub use stripe::{StripeConfig, StripeService};
 pub use totp::TotpService;

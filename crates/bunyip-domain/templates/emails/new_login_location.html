@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}New sign-in location{% endblock %}
+{% block content %}
+<h1>New sign-in from a new location</h1>
+<p>We noticed a sign-in to your {{ app_name }} account from a country we have not seen you sign in from before.</p>
+
+<ul>
+  <li><strong>Country:</strong> {{ country }}</li>
+  <li><strong>IP address:</strong> {{ ip }}</li>
+  <li><strong>When:</strong> {{ when }}</li>
+  <li><strong>Device:</strong> {{ user_agent }}</li>
+</ul>
+
+<hr class="divider">
+
+<p><strong>If you do not recognize this sign-in,</strong> secure your account now: change your password and review your active sessions.</p>
+
+<div class="button-container">
+  <a href="{{ dashboard_url }}" class="button">Go to Dashboard</a>
+</div>
+
+<p class="muted">If this was you, no further action is needed.</p>
+{% endblock %}

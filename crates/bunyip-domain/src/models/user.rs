@@ -221,6 +221,13 @@ pub struct User {
     pub updated_at: DateTime<Utc>,
     pub two_factor_enabled: bool,
     pub last_login_at: Option<DateTime<Utc>>,
+    /// BUNYIP-366: ISO 3166-1 alpha-2 country of the user's last geolocatable
+    /// login, or `None` until the first one. Compared against the current login's
+    /// country to detect a significant location change.
+    pub last_login_country: Option<String>,
+    /// BUNYIP-366: per-user opt-out for the new-login-location email alert
+    /// (default TRUE).
+    pub login_location_alerts: bool,
     pub deleted_at: Option<DateTime<Utc>>,
     /// Tier assigned at email verification: 'lifetime', 'early_adopter', 'standard'
     pub subscription_tier: String,
@@ -514,6 +521,8 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             last_login_at: None,
+            last_login_country: None,
+            login_location_alerts: true,
             deleted_at: None,
             subscription_tier: "standard".to_string(),
             trial_ends_at: None,

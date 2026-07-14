@@ -495,6 +495,38 @@ impl UserRepository {
         Ok(())
     }
 
+    /// BUNYIP-366: record the ISO 3166-1 alpha-2 country of the user's most
+    /// recent geolocatable login, for the next login's change comparison.
+    pub async fn set_last_login_country(
+        pool: &PgPool,
+        user_id: Uuid,
+        country: Option<&str>,
+    ) -> Result<(), AppError> {
+        sqlx::query("UPDATE users SET last_login_country = $2, updated_at = NOW() WHERE id = $1")
+            .bind(user_id)
+            .bind(country)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    /// BUNYIP-366: set the per-user opt-out for the new-login-location email
+    /// alert. `true` (the column default) keeps alerts on; `false` disables them.
+    pub async fn set_login_location_alerts(
+        pool: &PgPool,
+        user_id: Uuid,
+        enabled: bool,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            "UPDATE users SET login_location_alerts = $2, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .bind(enabled)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     /// Soft delete user
     pub async fn soft_delete(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {
         sqlx::query(
