@@ -228,6 +228,55 @@ impl JwtService {
         Ok(token_data.claims)
     }
 
+    /// BUNYIP-373: create a login-approval challenge token (15 min expiry),
+    /// bound to a pending suspicious login. Mirrors the 2FA challenge token but
+    /// with a distinct purpose so the two flows can never be crossed.
+    pub fn create_login_approval_challenge_token(&self, user_id: Uuid) -> Result<String, AppError> {
+        let now = Utc::now();
+        let exp = now + Duration::minutes(15);
+
+        let claims = TwoFactorChallengeClaims {
+            sub: user_id,
+            purpose: "login_approval".to_string(),
+            exp: exp.timestamp(),
+            iat: now.timestamp(),
+            jti: format!("appr_{}", Uuid::new_v4().as_simple()),
+            iss: self.config.issuer.clone(),
+        };
+
+        let header = Header::new(Algorithm::HS256);
+        encode(&header, &claims, &self.config.encoding_key).map_err(|e| {
+            AppError::internal(format!(
+                "Failed to create login-approval challenge token: {}",
+                e
+            ))
+        })
+    }
+
+    /// BUNYIP-373: verify a login-approval challenge token.
+    pub fn verify_login_approval_challenge_token(
+        &self,
+        token: &str,
+    ) -> Result<TwoFactorChallengeClaims, AppError> {
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.set_required_spec_claims(&["sub", "exp"]);
+        validation.set_issuer(&[&self.config.issuer]);
+        validation.validate_exp = true;
+
+        let token_data =
+            decode::<TwoFactorChallengeClaims>(token, &self.config.decoding_key, &validation)
+                .map_err(|e| match e.kind() {
+                    jsonwebtoken::errors::ErrorKind::ExpiredSignature => AppError::TokenExpired,
+                    _ => AppError::InvalidCredentials,
+                })?;
+
+        if token_data.claims.purpose != "login_approval" {
+            return Err(AppError::InvalidCredentials);
+        }
+
+        Ok(token_data.claims)
+    }
+
     /// Hash a token for database storage
     pub fn hash_token(&self, token: &str) -> String {
         let mut hasher = Sha256::new();

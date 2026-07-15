@@ -98,6 +98,10 @@ pub struct Config {
     /// client IP to a country for login-location alerts (BUNYIP-366). `None`
     /// when unset: the login-location-alert feature is disabled.
     pub ip2location_db_path: Option<String>,
+    /// BUNYIP-373: opt-in switch for the suspicious-login notify-and-approve
+    /// gate (`LOGIN_APPROVAL_ENABLED`). Off by default: the gate can withhold a
+    /// login, so it is enabled per deployment for a staged rollout.
+    pub login_approval_enabled: bool,
 }
 
 /// SMTP TLS mode
@@ -921,6 +925,12 @@ impl Config {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
+        // BUNYIP-373: opt-in switch for the suspicious-login approval gate.
+        // Default false (the gate can withhold a login; enable per deployment).
+        let login_approval_enabled = env::var("LOGIN_APPROVAL_ENABLED")
+            .map(|v| v.trim().eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
         let config = Self {
             database_url,
             app_database_url,
@@ -949,6 +959,7 @@ impl Config {
             oidc,
             bootstrap_admin_email,
             ip2location_db_path,
+            login_approval_enabled,
         };
 
         info!(

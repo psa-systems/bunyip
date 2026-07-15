@@ -356,6 +356,7 @@ async fn main() -> anyhow::Result<()> {
         config.bootstrap_admin_email.clone(),
         email_service.clone(),
         geoip,
+        config.login_approval_enabled,
     ));
 
     info!("Auth service initialized");

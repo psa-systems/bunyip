@@ -198,9 +198,14 @@ pub struct AuthService {
     /// BUNYIP-366: IP -> country resolver; `None` when `IP2LOCATION_DB_PATH` is
     /// unset (login-location alerts disabled).
     geoip: Option<Arc<GeoIpService>>,
+    /// BUNYIP-373: master switch for the suspicious-login notify-and-approve
+    /// gate. Off by default (from `Config::login_approval_enabled`); when off,
+    /// login behaves exactly as before (BUNYIP-366 alert only).
+    login_approval_enabled: bool,
 }
 
 impl AuthService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool: PgPool,
         jwt: JwtService,
@@ -208,6 +213,7 @@ impl AuthService {
         bootstrap_admin_email: Option<String>,
         email_service: Arc<EmailService>,
         geoip: Option<Arc<GeoIpService>>,
+        login_approval_enabled: bool,
     ) -> Self {
         Self {
             pool,
@@ -217,6 +223,7 @@ impl AuthService {
             bootstrap_admin_email,
             email_service,
             geoip,
+            login_approval_enabled,
         }
     }
 
