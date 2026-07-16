@@ -150,6 +150,74 @@ pub struct CreatePasswordResetToken {
     pub ip_address: Option<IpNetwork>,
 }
 
+/// BUNYIP-373: a pending suspicious-login approval challenge. One row per
+/// flagged login attempt (new country and/or new device). The login mints no
+/// tokens; instead a 6-digit code is emailed and this row records only its
+/// SHA-256 hash, bound to the pending login by a short-lived challenge JWT. The
+/// resolved `country` / `device_hash` are carried so the completion step can
+/// persist them as the new baseline without re-deriving them.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct LoginApprovalCode {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    #[serde(skip_serializing)]
+    pub code_hash: String,
+    pub country: Option<String>,
+    pub ip_address: Option<IpNetwork>,
+    pub device_hash: Option<String>,
+    pub device_info: Option<String>,
+    pub attempts: i32,
+    pub expires_at: DateTime<Utc>,
+    pub used_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl LoginApprovalCode {
+    /// Check if the challenge is expired
+    pub fn is_expired(&self) -> bool {
+        self.expires_at < Utc::now()
+    }
+
+    /// Check if the challenge has already been consumed
+    pub fn is_used(&self) -> bool {
+        self.used_at.is_some()
+    }
+
+    /// Check if the challenge is valid (not expired and not used)
+    pub fn is_valid(&self) -> bool {
+        !self.is_expired() && !self.is_used()
+    }
+}
+
+/// Data for creating a new login approval challenge (BUNYIP-373).
+#[derive(Debug, Clone)]
+pub struct CreateLoginApprovalCode {
+    pub user_id: Uuid,
+    pub code_hash: String,
+    pub country: Option<String>,
+    pub ip_address: Option<IpNetwork>,
+    pub device_hash: Option<String>,
+    pub device_info: Option<String>,
+    pub expires_at: DateTime<Utc>,
+}
+
+/// BUNYIP-373: a known login device for a user. Identified by the SHA-256 hash
+/// of a client-supplied stable device id; the raw id is never stored. A login
+/// from a `device_hash` absent here is the "new device" signal, but only once
+/// the user already has at least one device on record (the first device is a
+/// silent baseline, mirroring the first-login country being recorded rather
+/// than alerted).
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct LoginDevice {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    #[serde(skip_serializing)]
+    pub device_hash: String,
+    pub user_agent: Option<String>,
+    pub first_seen_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+}
+
 /// Email change request database model
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct EmailChangeRequest {

@@ -1,0 +1,16 @@
+{% extends "base.txt" %}
+{% block content %}
+Approve your sign-in
+
+We noticed a sign-in to your {{ app_name }} account from {{ location }} that we want to confirm is really you.
+
+Enter this code to finish signing in:
+
+    {{ code }}
+
+This code expires in {{ ttl_minutes }} minutes. If it expires, just sign in again to get a new one.
+
+If this wasn't you, do not share this code with anyone. Someone may have your password: change it now and review your active sessions.
+
+Go to Dashboard: {{ dashboard_url }}
+{% endblock %}

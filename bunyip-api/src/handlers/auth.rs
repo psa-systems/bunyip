@@ -162,6 +162,11 @@ pub struct LoginRequest {
     pub password: String,
     #[serde(default)]
     pub remember: bool,
+    /// BUNYIP-373: opaque, client-generated stable device identifier. Feeds the
+    /// suspicious-login gate's "new device" signal. Optional: absent = the gate
+    /// falls back to the country signal only.
+    #[serde(default)]
+    pub device_id: Option<String>,
 }
 
 /// Request body for magic link request
@@ -174,6 +179,18 @@ pub struct MagicLinkRequest {
 #[derive(Debug, Deserialize)]
 pub struct VerifyMagicLinkRequest {
     pub token: String,
+    /// BUNYIP-373: same client-generated device id as the login path.
+    #[serde(default)]
+    pub device_id: Option<String>,
+}
+
+/// BUNYIP-373: request body to complete a login withheld pending email
+/// approval. The challenge token was returned by `/login` or `/magic-link/verify`
+/// as `challenge_token`; `code` is the 6-digit value from the approval email.
+#[derive(Debug, Deserialize)]
+pub struct VerifyLoginApprovalRequest {
+    pub challenge_token: String,
+    pub code: String,
 }
 
 /// Request body for password reset request
@@ -253,6 +270,7 @@ pub async fn register(
             device_info,
             ip_address,
             None,
+            None,
         )
         .await?;
 
@@ -262,6 +280,13 @@ pub async fn register(
             // Should never happen for a brand-new registration
             return Err(AppError::internal(
                 "Unexpected 2FA challenge during registration",
+            ));
+        }
+        LoginResult::ApprovalRequired { .. } => {
+            // BUNYIP-373: a brand-new account has no baseline country/device to
+            // deviate from, so the suspicious-login gate never fires here.
+            return Err(AppError::internal(
+                "Unexpected login-approval challenge during registration",
             ));
         }
     };
@@ -387,12 +412,20 @@ pub async fn login(
             device_info,
             ip_address,
             trusted_device_token,
+            body.device_id.clone(),
         )
         .await?;
 
     match result {
         LoginResult::TwoFactorRequired { challenge_token } => Ok(success(
             serde_json::json!({ "requires_2fa": true, "challenge_token": challenge_token }),
+            request_id,
+        )),
+        // BUNYIP-373: suspicious login - an approval code was emailed. Same
+        // challenge-token handshake as 2FA; the client re-submits with the code
+        // to POST /auth/login-approval/verify.
+        LoginResult::ApprovalRequired { challenge_token } => Ok(success(
+            serde_json::json!({ "requires_approval": true, "challenge_token": challenge_token }),
             request_id,
         )),
         LoginResult::Success(tokens, user) => {
@@ -511,7 +544,12 @@ pub async fn verify_magic_link(
     check_rate_limit(&pool, &ip_key, &RateLimitConfig::LOGIN).await?;
 
     let result = auth_service
-        .verify_magic_link(body.token.clone(), device_info, ip_address)
+        .verify_magic_link(
+            body.token.clone(),
+            device_info,
+            ip_address,
+            body.device_id.clone(),
+        )
         .await?;
 
     match result {
@@ -531,6 +569,12 @@ pub async fn verify_magic_link(
                 request_id,
             ))
         }
+        // BUNYIP-373: suspicious magic-link login - approval code emailed. Same
+        // handshake as the password path.
+        crate::services::MagicLinkResult::ApprovalRequired { challenge_token } => Ok(success(
+            serde_json::json!({ "requires_approval": true, "challenge_token": challenge_token }),
+            request_id,
+        )),
         crate::services::MagicLinkResult::Success(tokens, user, is_new_user) => {
             // BUNYIP-296: welcome email for a magic-link-created account is
             // awaited inline to match the register path. Magic-link signup
@@ -589,6 +633,86 @@ pub async fn verify_magic_link(
             }))
         }
     }
+}
+
+/// POST /v1/auth/login-approval/verify
+/// BUNYIP-373: complete a login that was withheld pending email approval (NO
+/// auth required - it is gated by the challenge token). Verifies the emailed
+/// code and, on success, sets the same session cookies a normal login would.
+pub async fn verify_login_approval(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    auth_service: web::Data<Arc<AuthService>>,
+    body: web::Json<VerifyLoginApprovalRequest>,
+    config: web::Data<crate::config::Config>,
+    oidc_provider: OidcProviderData,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let ip_address = extract_client_ip(&req);
+    let device_info = extract_device_info(&req);
+
+    // Rate limit by IP. The per-challenge attempt counter (bounded, single-use,
+    // 15-minute TTL) is the primary brute-force guard on the 6-digit code; this
+    // is defense-in-depth against a spray across many challenge tokens from one
+    // source IP.
+    let ip_key = ip_address.map(|ip| ip.to_string()).unwrap_or_default();
+    check_rate_limit(
+        &pool,
+        &format!("login_approval_verify:{ip_key}"),
+        &RateLimitConfig::LOGIN,
+    )
+    .await?;
+
+    let (tokens, user) = auth_service
+        .complete_login_approval(&body.challenge_token, &body.code, device_info, ip_address)
+        .await?;
+
+    let secure = config.is_production();
+    let cookie_domain = config.cookie_domain.as_deref();
+
+    // The approval proves control of the account's email on top of the primary
+    // factor. v1 gates password + magic-link; report the password ACR as the
+    // common single-factor assurance (a follow-up can thread the exact origin
+    // through the challenge if the distinction ever matters).
+    let op_cookie = establish_op_session(
+        &oidc_provider,
+        &req,
+        user.id,
+        secure,
+        config.op_session_cookie_domain(),
+        ACR_PASSWORD,
+        &["pwd".to_string()],
+    )
+    .await;
+
+    let response = AuthResponse {
+        user,
+        expires_in: tokens.expires_in,
+    };
+
+    let mut resp = HttpResponse::Ok();
+    for cookie in AuthCookies::clear_stale(secure) {
+        resp.cookie(cookie);
+    }
+    resp.cookie(AuthCookies::access_token(
+        &tokens.access_token,
+        secure,
+        cookie_domain,
+    ))
+    .cookie(AuthCookies::refresh_token(
+        &tokens.refresh_token,
+        secure,
+        true,
+        cookie_domain,
+    ));
+    if let Some(op) = op_cookie {
+        resp.cookie(op);
+    }
+    Ok(resp.json(crate::responses::ApiResponse {
+        success: true,
+        data: Some(response),
+        meta: crate::responses::ResponseMeta::new(request_id),
+    }))
 }
 
 /// Request body for accepting an admin invite

@@ -19,6 +19,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/magic-link/verify",
                 web::post().to(handlers::verify_magic_link),
             )
+            // BUNYIP-373: complete a login withheld by the suspicious-login gate.
+            .route(
+                "/login-approval/verify",
+                web::post().to(handlers::verify_login_approval),
+            )
             .route(
                 "/password-reset",
                 web::post().to(handlers::request_password_reset),

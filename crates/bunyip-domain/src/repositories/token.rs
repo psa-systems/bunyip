@@ -7,9 +7,10 @@ use uuid::Uuid;
 
 use crate::errors::AppError;
 use crate::models::{
-    CreateEmailChangeRequest, CreateEmailVerificationToken, CreateMagicLinkToken,
-    CreatePasswordResetToken, CreateRefreshToken, EmailChangeRequest, EmailVerificationToken,
-    MagicLinkToken, PasswordResetToken, RefreshToken,
+    CreateEmailChangeRequest, CreateEmailVerificationToken, CreateLoginApprovalCode,
+    CreateMagicLinkToken, CreatePasswordResetToken, CreateRefreshToken, EmailChangeRequest,
+    EmailVerificationToken, LoginApprovalCode, LoginDevice, MagicLinkToken, PasswordResetToken,
+    RefreshToken,
 };
 
 /// One user who is at or over an email-resend limiter's threshold within the
@@ -529,6 +530,138 @@ impl TokenRepository {
         .await?;
 
         Ok(count.0)
+    }
+
+    // =========================
+    // Login Approval (BUNYIP-373)
+    // =========================
+
+    /// Store a new login-approval challenge (a flagged login's pending code).
+    pub async fn create_login_approval_code(
+        pool: &PgPool,
+        data: CreateLoginApprovalCode,
+    ) -> Result<LoginApprovalCode, AppError> {
+        let row = sqlx::query_as::<_, LoginApprovalCode>(
+            r#"
+            INSERT INTO login_approval_codes
+                (user_id, code_hash, country, ip_address, device_hash, device_info, expires_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING *
+            "#,
+        )
+        .bind(data.user_id)
+        .bind(&data.code_hash)
+        .bind(&data.country)
+        .bind(data.ip_address)
+        .bind(&data.device_hash)
+        .bind(&data.device_info)
+        .bind(data.expires_at)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(row)
+    }
+
+    /// The most recent still-valid (unused, unexpired) approval challenge for
+    /// the user. The completion path matches the emailed code against this.
+    pub async fn find_latest_valid_login_approval_code(
+        pool: &PgPool,
+        user_id: Uuid,
+    ) -> Result<Option<LoginApprovalCode>, AppError> {
+        let row = sqlx::query_as::<_, LoginApprovalCode>(
+            r#"
+            SELECT * FROM login_approval_codes
+            WHERE user_id = $1 AND used_at IS NULL AND expires_at > NOW()
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(row)
+    }
+
+    /// Record a wrong-code attempt against a challenge (brute-force bound).
+    pub async fn increment_login_approval_attempts(
+        pool: &PgPool,
+        id: Uuid,
+    ) -> Result<(), AppError> {
+        sqlx::query(r#"UPDATE login_approval_codes SET attempts = attempts + 1 WHERE id = $1"#)
+            .bind(id)
+            .execute(pool)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Consume an approval challenge once its code has been verified.
+    pub async fn mark_login_approval_code_used(pool: &PgPool, id: Uuid) -> Result<(), AppError> {
+        sqlx::query(r#"UPDATE login_approval_codes SET used_at = NOW() WHERE id = $1"#)
+            .bind(id)
+            .execute(pool)
+            .await?;
+
+        Ok(())
+    }
+
+    // =========================
+    // Login Devices (BUNYIP-373)
+    // =========================
+
+    /// How many devices this user is already known to sign in from. Zero means
+    /// the next device is a silent baseline, not a "new device" signal.
+    pub async fn count_login_devices(pool: &PgPool, user_id: Uuid) -> Result<i64, AppError> {
+        let count: (i64,) =
+            sqlx::query_as(r#"SELECT COUNT(*) FROM login_devices WHERE user_id = $1"#)
+                .bind(user_id)
+                .fetch_one(pool)
+                .await?;
+
+        Ok(count.0)
+    }
+
+    /// Look up one known device by its hash for this user.
+    pub async fn find_login_device(
+        pool: &PgPool,
+        user_id: Uuid,
+        device_hash: &str,
+    ) -> Result<Option<LoginDevice>, AppError> {
+        let row = sqlx::query_as::<_, LoginDevice>(
+            r#"SELECT * FROM login_devices WHERE user_id = $1 AND device_hash = $2"#,
+        )
+        .bind(user_id)
+        .bind(device_hash)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(row)
+    }
+
+    /// Remember a device the user just logged in from, refreshing `last_seen_at`
+    /// on a repeat login (idempotent on the `(user_id, device_hash)` unique key).
+    pub async fn record_login_device(
+        pool: &PgPool,
+        user_id: Uuid,
+        device_hash: &str,
+        user_agent: Option<&str>,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            INSERT INTO login_devices (user_id, device_hash, user_agent)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (user_id, device_hash)
+            DO UPDATE SET last_seen_at = NOW()
+            "#,
+        )
+        .bind(user_id)
+        .bind(device_hash)
+        .bind(user_agent)
+        .execute(pool)
+        .await?;
+
+        Ok(())
     }
 
     // =====================

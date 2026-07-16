@@ -238,6 +238,19 @@ impl EmailService {
 
         templates
             .add_raw_template(
+                "login_approval.html",
+                include_str!("../../templates/emails/login_approval.html"),
+            )
+            .map_err(|e| AppError::internal(format!("Template error: {}", e)))?;
+        templates
+            .add_raw_template(
+                "login_approval.txt",
+                include_str!("../../templates/emails/login_approval.txt"),
+            )
+            .map_err(|e| AppError::internal(format!("Template error: {}", e)))?;
+
+        templates
+            .add_raw_template(
                 "email_change_verify.html",
                 include_str!("../../templates/emails/email_change_verify.html"),
             )
@@ -587,6 +600,43 @@ impl EmailService {
             &config,
             email,
             &format!("New sign-in to your {} account", config.app_name),
+            html,
+            text,
+        )
+        .await
+    }
+
+    /// BUNYIP-373: email a one-time code to approve a suspicious sign-in. The
+    /// code is a bearer credential, so like the magic link it is never logged at
+    /// INFO and is emitted at DEBUG only under EMAIL_LOG_TOKENS. Best-effort at
+    /// the call site (login must never fail if this does not send).
+    pub async fn send_login_approval_code(
+        &self,
+        email: &str,
+        code: &str,
+        location: &str,
+    ) -> Result<(), AppError> {
+        let config = self.config();
+        if !config.enabled {
+            tracing::info!(email = %email, "Login approval code (dev mode) - code suppressed");
+            if config.log_tokens {
+                tracing::debug!(email = %email, code = %code, "Login approval code (EMAIL_LOG_TOKENS)");
+            }
+            return Ok(());
+        }
+
+        let mut context = self.base_context(&config);
+        context.insert("code", &code);
+        context.insert("location", &location);
+        // Cosmetic: keep in sync with LOGIN_APPROVAL_TTL_MINUTES in auth.rs.
+        context.insert("ttl_minutes", &15);
+        context.insert("dashboard_url", &format!("{}/dashboard", config.base_url));
+
+        let (html, text) = self.render_template("login_approval", &context)?;
+        self.send_email(
+            &config,
+            email,
+            &format!("Approve your sign-in to {}", config.app_name),
             html,
             text,
         )
