@@ -162,6 +162,9 @@ pub struct LoginApprovalCode {
     pub user_id: Uuid,
     #[serde(skip_serializing)]
     pub code_hash: String,
+    /// BUNYIP-375: the `jti` of the challenge JWT this row was minted for, so
+    /// completion resolves this exact row from the presented challenge token.
+    pub challenge_jti: Option<String>,
     pub country: Option<String>,
     pub ip_address: Option<IpNetwork>,
     pub device_hash: Option<String>,
@@ -194,6 +197,8 @@ impl LoginApprovalCode {
 pub struct CreateLoginApprovalCode {
     pub user_id: Uuid,
     pub code_hash: String,
+    /// BUNYIP-375: jti of the challenge JWT bound to this pending login.
+    pub challenge_jti: String,
     pub country: Option<String>,
     pub ip_address: Option<IpNetwork>,
     pub device_hash: Option<String>,

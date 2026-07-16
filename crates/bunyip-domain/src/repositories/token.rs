@@ -544,13 +544,15 @@ impl TokenRepository {
         let row = sqlx::query_as::<_, LoginApprovalCode>(
             r#"
             INSERT INTO login_approval_codes
-                (user_id, code_hash, country, ip_address, device_hash, device_info, expires_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                (user_id, code_hash, challenge_jti, country, ip_address, device_hash,
+                 device_info, expires_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
             "#,
         )
         .bind(data.user_id)
         .bind(&data.code_hash)
+        .bind(&data.challenge_jti)
         .bind(&data.country)
         .bind(data.ip_address)
         .bind(&data.device_hash)
@@ -562,21 +564,25 @@ impl TokenRepository {
         Ok(row)
     }
 
-    /// The most recent still-valid (unused, unexpired) approval challenge for
-    /// the user. The completion path matches the emailed code against this.
-    pub async fn find_latest_valid_login_approval_code(
+    /// The still-valid (unused, unexpired) approval challenge matching this
+    /// user + challenge jti. BUNYIP-375: bound by jti so a presented challenge
+    /// token resolves its OWN row, not merely the user's newest pending code -
+    /// with two concurrent gated logins, each emitted code completes only its
+    /// own challenge.
+    pub async fn find_valid_login_approval_code_by_jti(
         pool: &PgPool,
         user_id: Uuid,
+        challenge_jti: &str,
     ) -> Result<Option<LoginApprovalCode>, AppError> {
         let row = sqlx::query_as::<_, LoginApprovalCode>(
             r#"
             SELECT * FROM login_approval_codes
-            WHERE user_id = $1 AND used_at IS NULL AND expires_at > NOW()
-            ORDER BY created_at DESC
+            WHERE user_id = $1 AND challenge_jti = $2 AND used_at IS NULL AND expires_at > NOW()
             LIMIT 1
             "#,
         )
         .bind(user_id)
+        .bind(challenge_jti)
         .fetch_optional(pool)
         .await?;
 
@@ -1084,6 +1090,19 @@ impl TokenRepository {
         let result = sqlx::query(
             r#"
             DELETE FROM email_verification_tokens WHERE expires_at < NOW()
+            "#,
+        )
+        .execute(pool)
+        .await?;
+        total += result.rows_affected();
+
+        // BUNYIP-375: delete spent login-approval challenges (expired OR already
+        // consumed). login_devices is intentionally left intact: it is the
+        // persistent known-device baseline, and pruning it would re-gate
+        // returning users.
+        let result = sqlx::query(
+            r#"
+            DELETE FROM login_approval_codes WHERE expires_at < NOW() OR used_at IS NOT NULL
             "#,
         )
         .execute(pool)
