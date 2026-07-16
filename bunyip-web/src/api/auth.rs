@@ -203,17 +203,39 @@ pub async fn register(
     api: &Api,
     email: &str,
     password: &str,
+    honeypot: &str,
+    signup_token: &str,
 ) -> Result<(User, Vec<String>), ApiError> {
     let r = api
         .post(
             "/auth/register",
             None,
-            Some(json!({ "email": email, "password": password })),
+            // BUNYIP-377: forward the honeypot + signup timing token so bunyip-api
+            // can run its bot guard (when SIGNUP_BOT_GUARD_ENABLED is on).
+            Some(json!({
+                "email": email,
+                "password": password,
+                "contact_channel": honeypot,
+                "signup_token": signup_token,
+            })),
         )
         .await?;
     let cookies = r.set_cookies.clone();
     let auth: AuthResponse = parse(r)?;
     Ok((auth.user, cookies))
+}
+
+/// BUNYIP-377: fetch a signup timing-challenge token to embed in the register
+/// form. Best-effort - on any failure returns `None` and the form embeds an
+/// empty token (harmless while the bot guard is off; when on, the user just
+/// reloads for a fresh one).
+pub async fn register_challenge(api: &Api) -> Option<String> {
+    let r = api.get("/auth/register-challenge", None).await.ok()?;
+    ok_data(&r)
+        .ok()?
+        .get("token")
+        .and_then(|t| t.as_str())
+        .map(str::to_string)
 }
 
 /// Returns `(maybe needs-password email, user, cookies)`. `Ok((Some(email), None, _))`
