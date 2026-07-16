@@ -180,6 +180,31 @@ struct LoginRisk {
     device_hash: Option<String>,
 }
 
+// --- signup anti-bot policy (BUNYIP-377) ------------------------------------
+
+/// How long a signup timing-challenge token stays valid; the register form must
+/// be submitted within this window of being rendered.
+const SIGNUP_CHALLENGE_MAX_AGE_MINUTES: i64 = 30;
+
+/// Minimum seconds a human plausibly takes to fill the register form. A submit
+/// faster than this is treated as automated.
+const SIGNUP_MIN_FILL_SECONDS: i64 = 2;
+
+/// BUNYIP-377: true when a register submit arrived sooner than a human could
+/// plausibly have filled the form (a bot signal). Pure for unit testing.
+fn signup_submitted_too_fast(issued_at: i64, now: i64) -> bool {
+    now - issued_at < SIGNUP_MIN_FILL_SECONDS
+}
+
+/// BUNYIP-377: the single, uniform rejection for every signup bot-guard failure
+/// (a filled honeypot, or a missing / forged / expired / too-fast timing token)
+/// so none of the checks becomes an oracle a bot could tune against.
+fn signup_rejected() -> AppError {
+    AppError::bad_request(
+        "We couldn't complete your registration. Please reload the page and try again.",
+    )
+}
+
 /// BUNYIP-290: the first-admin bootstrap predicate, pulled out as a pure,
 /// DB-free function so every branch is unit-testable. Returns true only when
 /// ALL hold: a bootstrap email is configured; it equals `user_email`
@@ -663,6 +688,38 @@ impl AuthService {
         tracing::info!(user_id = %user.id, "BUNYIP-290: bootstrap admin promoted to admin");
         *user = updated;
         Ok(true)
+    }
+
+    /// BUNYIP-377: mint a signup timing-challenge token for a freshly-rendered
+    /// register form (served by `GET /v1/auth/register-challenge`).
+    pub fn create_signup_challenge(&self) -> Result<String, AppError> {
+        self.jwt
+            .create_signup_challenge_token(Duration::minutes(SIGNUP_CHALLENGE_MAX_AGE_MINUTES))
+    }
+
+    /// BUNYIP-377: reject a registration that looks automated. `honeypot` is a
+    /// hidden form field a human leaves empty; `token` is the timing challenge
+    /// the form was rendered with. Fails uniformly (via `signup_rejected`) when
+    /// the honeypot is filled, or the token is missing / forged / expired, or the
+    /// form was submitted faster than a human could fill it. Gated by the caller
+    /// on `Config::signup_bot_guard_enabled`.
+    pub fn verify_signup_not_bot(
+        &self,
+        honeypot: Option<&str>,
+        token: Option<&str>,
+    ) -> Result<(), AppError> {
+        if honeypot.map(|h| !h.trim().is_empty()).unwrap_or(false) {
+            return Err(signup_rejected());
+        }
+        let token = token.ok_or_else(signup_rejected)?;
+        let claims = self
+            .jwt
+            .verify_signup_challenge_token(token)
+            .map_err(|_| signup_rejected())?;
+        if signup_submitted_too_fast(claims.iat, Utc::now().timestamp()) {
+            return Err(signup_rejected());
+        }
+        Ok(())
     }
 
     /// Register a new user
@@ -2318,6 +2375,25 @@ mod tests {
     fn only_admins_have_an_idle_window() {
         assert_eq!(refresh_idle_ttl("admin"), Some(Duration::minutes(30)));
         assert_eq!(refresh_idle_ttl("subscriber"), None);
+    }
+
+    // ── BUNYIP-377: signup submit-timing guard ─────────────────────────────
+    #[test]
+    fn signup_rejects_submits_faster_than_min_fill() {
+        let now = Utc::now().timestamp();
+        // A submit at the same instant the form was issued is a bot.
+        assert!(signup_submitted_too_fast(now, now));
+        // Just under the minimum fill time: still too fast.
+        assert!(signup_submitted_too_fast(
+            now - (SIGNUP_MIN_FILL_SECONDS - 1),
+            now
+        ));
+        // At or past the minimum fill time: a plausible human, allowed.
+        assert!(!signup_submitted_too_fast(
+            now - SIGNUP_MIN_FILL_SECONDS,
+            now
+        ));
+        assert!(!signup_submitted_too_fast(now - 30, now));
     }
 
     #[test]

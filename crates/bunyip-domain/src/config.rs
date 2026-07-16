@@ -102,6 +102,12 @@ pub struct Config {
     /// gate (`LOGIN_APPROVAL_ENABLED`). Off by default: the gate can withhold a
     /// login, so it is enabled per deployment for a staged rollout.
     pub login_approval_enabled: bool,
+    /// BUNYIP-377: opt-in switch for the signup bot guard (honeypot + submit
+    /// timing) at `/register` (`SIGNUP_BOT_GUARD_ENABLED`). Off by default: it
+    /// rejects registrations, so it stays off until every register form (bunyip-
+    /// web and the mokosh-apps SPA) carries the hidden honeypot + timing token,
+    /// then is flipped on per deployment.
+    pub signup_bot_guard_enabled: bool,
 }
 
 /// SMTP TLS mode
@@ -931,6 +937,13 @@ impl Config {
             .map(|v| v.trim().eq_ignore_ascii_case("true"))
             .unwrap_or(false);
 
+        // BUNYIP-377: opt-in switch for the signup bot guard. Default false;
+        // enable only once every register form carries the honeypot + timing
+        // token, or real signups without those fields are rejected.
+        let signup_bot_guard_enabled = env::var("SIGNUP_BOT_GUARD_ENABLED")
+            .map(|v| v.trim().eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
         let config = Self {
             database_url,
             app_database_url,
@@ -960,6 +973,7 @@ impl Config {
             bootstrap_admin_email,
             ip2location_db_path,
             login_approval_enabled,
+            signup_bot_guard_enabled,
         };
 
         info!(

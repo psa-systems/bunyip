@@ -649,6 +649,12 @@ pub struct RegisterForm {
     pub email: String,
     pub password: String,
     pub confirm: String,
+    /// BUNYIP-377: honeypot - a hidden field a human leaves empty.
+    #[serde(default)]
+    pub contact_channel: String,
+    /// BUNYIP-377: the signup timing-challenge token the form was rendered with.
+    #[serde(default)]
+    pub signup_token: String,
 }
 
 /// BUNYIP-271: per-field registration errors. On a rejected submit the server
@@ -696,7 +702,7 @@ fn password_reentry_hint() -> Markup {
     }
 }
 
-fn register_card(errors: &RegisterErrors, email: &str) -> Markup {
+fn register_card(errors: &RegisterErrors, email: &str, signup_token: &str) -> Markup {
     auth_card(
         "shield",
         "bg-primary/10 text-primary",
@@ -708,6 +714,15 @@ fn register_card(errors: &RegisterErrors, email: &str) -> Markup {
                 // (e.g. an API failure). Rule-specific messages render next to
                 // their input below via `field_error_msg`.
                 @if let Some(e) = errors.general.as_deref() { (error_box(e)) }
+                // BUNYIP-377: honeypot - off-screen, aria-hidden, not tabbable,
+                // autocomplete off, so it is invisible to humans; a bot that
+                // fills every field trips the server-side guard. Inline style is
+                // permitted by bunyip-web's CSP (style-src 'unsafe-inline').
+                input type="text" name="contact_channel" value="" tabindex="-1"
+                    autocomplete="off" aria-hidden="true"
+                    style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;";
+                // BUNYIP-377: signed submit-timing token issued at form render.
+                input type="hidden" name="signup_token" value=(signup_token);
                 // BUNYIP-240: preserve the typed email on server-side rejection
                 // so the user does not have to retype it. The password fields
                 // intentionally stay blank for re-entry (no value= for type=password
@@ -765,11 +780,15 @@ pub async fn register_get(State(st): State<AppState>, headers: HeaderMap) -> Res
         // Relay any refreshed session cookie on the already-signed-in bounce.
         return redirect_cookies("/dashboard", &c.set_cookies);
     }
+    // BUNYIP-377: mint a fresh submit-timing token to embed in the form.
+    let signup_token = auth_api::register_challenge(&st.api)
+        .await
+        .unwrap_or_default();
     auth_page(
         &st,
         &headers,
         "Create account · Bunyip",
-        register_card(&RegisterErrors::default(), ""),
+        register_card(&RegisterErrors::default(), "", &signup_token),
     )
     .await
 }
@@ -799,11 +818,19 @@ pub async fn register_post(
             &st,
             &headers,
             "Create account · Bunyip",
-            register_card(&errs, f.email.trim()),
+            register_card(&errs, f.email.trim(), &f.signup_token),
         )
         .await;
     }
-    match auth_api::register(&st.api, f.email.trim(), &f.password).await {
+    match auth_api::register(
+        &st.api,
+        f.email.trim(),
+        &f.password,
+        &f.contact_channel,
+        &f.signup_token,
+    )
+    .await
+    {
         // BUNYIP-206: a new user lands on /onboarding (name + email verification)
         // before any app surface. The `guard()` gate enforces this for every
         // other entry path; sending them straight here avoids the extra hop.
@@ -820,7 +847,7 @@ pub async fn register_post(
                 &st,
                 &headers,
                 "Create account · Bunyip",
-                register_card(&errs, f.email.trim()),
+                register_card(&errs, f.email.trim(), &f.signup_token),
             )
             .await
         }
@@ -1631,7 +1658,7 @@ mod register_card_tests {
             email: Some("Enter a valid email address.".into()),
             ..Default::default()
         };
-        let html = register_card(&errs, "user@example.com").into_string();
+        let html = register_card(&errs, "user@example.com", "").into_string();
         assert!(
             input_tag(&html, "email").contains(r#"value="user@example.com""#),
             "typed email not preserved: {html}"
@@ -1644,7 +1671,7 @@ mod register_card_tests {
             email: Some("Enter a valid email address.".into()),
             ..Default::default()
         };
-        let html = register_card(&errs, "nope").into_string();
+        let html = register_card(&errs, "nope", "").into_string();
         assert!(
             html.contains("Enter a valid email address."),
             "email rule not surfaced inline: {html}"
@@ -1664,7 +1691,7 @@ mod register_card_tests {
             confirm: Some("Passwords don't match.".into()),
             ..Default::default()
         };
-        let html = register_card(&errs, "user@example.com").into_string();
+        let html = register_card(&errs, "user@example.com", "").into_string();
         assert!(
             html.contains("Password does not meet the requirements below."),
             "password rule missing: {html}"
@@ -1681,7 +1708,7 @@ mod register_card_tests {
             confirm: Some("Passwords don't match.".into()),
             ..Default::default()
         };
-        let html = register_card(&errs, "user@example.com").into_string();
+        let html = register_card(&errs, "user@example.com", "").into_string();
         assert!(
             html.to_lowercase().contains("re-enter your password"),
             "missing password re-entry hint: {html}"
@@ -1692,7 +1719,7 @@ mod register_card_tests {
     fn never_echoes_a_password_value_into_the_html() {
         // register_card takes no password argument, so a password can never
         // reach the HTML. Pin it: neither password input carries a value=.
-        let html = register_card(&RegisterErrors::default(), "user@example.com").into_string();
+        let html = register_card(&RegisterErrors::default(), "user@example.com", "").into_string();
         for name in ["password", "confirm"] {
             assert!(
                 !input_tag(&html, name).contains("value="),
@@ -1706,7 +1733,7 @@ mod register_card_tests {
     fn clean_render_has_no_errors_or_reentry_hint() {
         // The success/first-load path (register_get) renders with default
         // errors: no inline alerts, no banner, no re-entry hint.
-        let html = register_card(&RegisterErrors::default(), "").into_string();
+        let html = register_card(&RegisterErrors::default(), "", "").into_string();
         assert!(
             !html.contains(r#"role="alert""#),
             "clean render must have no field alerts: {html}"

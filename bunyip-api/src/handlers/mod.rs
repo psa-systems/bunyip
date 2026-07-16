@@ -153,7 +153,7 @@ pub mod webhook;
 pub use application::{get_application, list_application_groups, list_applications};
 pub use auth::{
     accept_admin_invite, auth_redirect, confirm_password_reset, get_memberships, login, logout,
-    logout_all, logout_redirect, refresh_token, register, request_magic_link,
+    logout_all, logout_redirect, refresh_token, register, register_challenge, request_magic_link,
     request_password_reset, setup_status, verify_login_approval, verify_magic_link,
     verify_password_reset_token,
 };
