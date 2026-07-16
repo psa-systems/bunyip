@@ -27,10 +27,6 @@ pub struct ConfirmSetupRequest {
 pub struct Verify2FARequest {
     pub challenge_token: String,
     pub code: String,
-    /// Opt-in to remember this device and skip TOTP for 30 days (BUNYIP-138).
-    /// Honored only for subscribers; ignored for admins.
-    #[serde(default)]
-    pub trust_device: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -240,15 +236,11 @@ pub async fn verify_2fa(
         .await?;
     }
 
-    // Complete login. `trusted_token` is Some only when the user opted in AND
-    // is a subscriber (BUNYIP-138).
+    // Complete login. BUNYIP-382: device-trust is now driven by the sign-in's
+    // "remember me" (carried in the challenge), so `trusted_token` is Some only
+    // when the user chose remember-me AND is a subscriber (BUNYIP-138).
     let (tokens, user_response, trusted_token) = auth_service
-        .complete_2fa_login(
-            &body.challenge_token,
-            device_info,
-            ip_address,
-            body.trust_device,
-        )
+        .complete_2fa_login(&body.challenge_token, device_info, ip_address)
         .await?;
 
     let secure = config.is_production();

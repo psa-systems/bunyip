@@ -433,9 +433,13 @@ impl AuthService {
         risk: &LoginRisk,
         ip_address: Option<IpAddr>,
         device_info: Option<&str>,
+        remember: bool,
     ) -> Result<String, AppError> {
-        let (challenge_token, challenge_jti) =
-            self.jwt.create_login_approval_challenge_token(user.id)?;
+        // BUNYIP-382: carry the sign-in's "remember me" into the approval
+        // challenge so completion mints a 30-day session, not the 1-day default.
+        let (challenge_token, challenge_jti) = self
+            .jwt
+            .create_login_approval_challenge_token(user.id, remember)?;
         let code = format!("{:06}", rand::thread_rng().gen_range(0..1_000_000));
         let code_hash = self.jwt.hash_token(&code);
         let expires_at = Utc::now() + Duration::minutes(LOGIN_APPROVAL_TTL_MINUTES);
@@ -576,8 +580,15 @@ impl AuthService {
             .await?
             .ok_or(AppError::InvalidCredentials)?;
 
+        // BUNYIP-382: honour the sign-in's "remember me" (carried in the
+        // approval challenge) for the session length.
         let tokens = self
-            .create_tokens(&user, device_info.clone(), ip_address, None)
+            .create_tokens(
+                &user,
+                device_info.clone(),
+                ip_address,
+                Some(Utc::now() + refresh_absolute_ttl(claims.remember)),
+            )
             .await?;
         UserRepository::update_last_login(&self.pool, user.id).await?;
 
@@ -864,7 +875,7 @@ impl AuthService {
                     }
                 }
 
-                let challenge_token = self.jwt.create_2fa_challenge_token(user.id)?;
+                let challenge_token = self.jwt.create_2fa_challenge_token(user.id, remember)?;
                 return Ok(LoginResult::TwoFactorRequired { challenge_token });
             }
 
@@ -884,7 +895,13 @@ impl AuthService {
                 .await;
             if risk.flagged {
                 let challenge_token = self
-                    .begin_login_approval(&user, &risk, ip_address, device_info.as_deref())
+                    .begin_login_approval(
+                        &user,
+                        &risk,
+                        ip_address,
+                        device_info.as_deref(),
+                        remember,
+                    )
                     .await?;
                 return Ok(LoginResult::ApprovalRequired { challenge_token });
             }
@@ -1195,7 +1212,8 @@ impl AuthService {
             let has_verified_totp = totp_record.map(|r| r.verified).unwrap_or(false);
 
             if has_verified_totp {
-                let challenge_token = self.jwt.create_2fa_challenge_token(user.id)?;
+                // Magic-link has no "remember me"; a magic-link 2FA session is 1 day.
+                let challenge_token = self.jwt.create_2fa_challenge_token(user.id, false)?;
                 return Ok(MagicLinkResult::TwoFactorRequired {
                     challenge_token,
                     is_new_user,
@@ -1216,8 +1234,9 @@ impl AuthService {
                 .assess_login(&user, ip_address, device_id.as_deref())
                 .await;
             if risk.flagged {
+                // Magic-link has no "remember me"; a gated magic-link is 1 day.
                 let challenge_token = self
-                    .begin_login_approval(&user, &risk, ip_address, device_info.as_deref())
+                    .begin_login_approval(&user, &risk, ip_address, device_info.as_deref(), false)
                     .await?;
                 return Ok(MagicLinkResult::ApprovalRequired { challenge_token });
             }
@@ -1260,16 +1279,17 @@ impl AuthService {
 
     /// Complete 2FA login after challenge token + TOTP/recovery code verification
     ///
-    /// When `trust_device` is set and the account is a subscriber, a trusted
-    /// device is created and its opaque secret is returned as the third tuple
-    /// element so the handler can set the `bunyip_trusted_device` cookie. It is
-    /// `None` for admins (who never skip 2FA) and when the flag is unset.
+    /// BUNYIP-382: when the paused sign-in chose "remember me" (carried in the
+    /// challenge) and the account is a subscriber, a trusted device is created
+    /// and its opaque secret is returned as the third tuple element so the
+    /// handler can set the `bunyip_trusted_device` cookie. It is `None` for
+    /// admins (who never skip 2FA) and when "remember me" was not chosen. The
+    /// same `remember` also selects the 30-day vs 1-day session length.
     pub async fn complete_2fa_login(
         &self,
         challenge_token: &str,
         device_info: Option<String>,
         ip_address: Option<IpAddr>,
-        trust_device: bool,
     ) -> Result<(AuthTokens, UserResponse, Option<String>), AppError> {
         // Verify challenge token
         let claims = self.jwt.verify_2fa_challenge_token(challenge_token)?;
@@ -1284,13 +1304,23 @@ impl AuthService {
             return Err(AppError::InvalidCredentials);
         }
 
-        // Create tokens
+        // BUNYIP-382: the sign-in's "remember me" (carried in the challenge)
+        // drives both the session length and whether this device is trusted.
+        let remember = claims.remember;
+
+        // Create tokens (30-day session when "remember me" was chosen, else 1 day).
         let tokens = self
-            .create_tokens(&user, device_info.clone(), ip_address, None)
+            .create_tokens(
+                &user,
+                device_info.clone(),
+                ip_address,
+                Some(Utc::now() + refresh_absolute_ttl(remember)),
+            )
             .await?;
 
-        // Issue a trusted device only for subscribers who opted in (BUNYIP-138).
-        let trusted_token = if trust_device && trusted_device_allows_skip(&user.role, true) {
+        // Trust this device only for subscribers who chose "remember me" (admins
+        // always complete 2FA - BUNYIP-138).
+        let trusted_token = if remember && trusted_device_allows_skip(&user.role, true) {
             Some(
                 self.issue_trusted_device(user.id, device_info.clone(), ip_address)
                     .await?,

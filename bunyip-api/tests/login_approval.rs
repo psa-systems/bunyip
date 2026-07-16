@@ -286,7 +286,7 @@ async fn complete_login_approval_mints_tokens_and_records_baseline() {
     // stored hash matches what the service computes from the submitted code.
     let jwt = JwtService::new(JwtConfig::from_secret(JWT_SECRET, "bunyip-test"));
     let (challenge, challenge_jti) = jwt
-        .create_login_approval_challenge_token(user_id)
+        .create_login_approval_challenge_token(user_id, false)
         .expect("mint challenge");
     let code = "654321";
     let device_hash = jwt.hash_token("device-new");
@@ -372,10 +372,10 @@ async fn each_challenge_binds_to_its_own_code() {
 
     // Two overlapping gated logins => two challenges, two distinct codes.
     let (challenge1, jti1) = jwt
-        .create_login_approval_challenge_token(user_id)
+        .create_login_approval_challenge_token(user_id, false)
         .expect("mint challenge 1");
     let (challenge2, jti2) = jwt
-        .create_login_approval_challenge_token(user_id)
+        .create_login_approval_challenge_token(user_id, false)
         .expect("mint challenge 2");
     for (jti, code) in [(&jti1, "111111"), (&jti2, "222222")] {
         sqlx::query(
