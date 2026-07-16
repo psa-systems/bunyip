@@ -179,6 +179,31 @@ async fn new_device_triggers_approval_gate() {
         "a known device is never gated"
     );
 
+    // A blank device_id carries no device signal: it must not be gated and must
+    // not register an "empty" device (so a device count stays at 1).
+    let r4 = auth
+        .login(
+            email.clone(),
+            password.clone(),
+            Some("ua".into()),
+            None,
+            None,
+            Some("   ".into()),
+        )
+        .await
+        .expect("login blank device");
+    assert!(
+        matches!(r4, LoginResult::Success(..)),
+        "a blank device_id is treated as no device signal, not gated"
+    );
+    assert_eq!(
+        TokenRepository::count_login_devices(&pool, user_id)
+            .await
+            .unwrap(),
+        1,
+        "a blank device_id records no device"
+    );
+
     cleanup(&pool, user_id).await;
 }
 

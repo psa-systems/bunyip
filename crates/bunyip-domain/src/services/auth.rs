@@ -385,7 +385,13 @@ impl AuthService {
         // baseline device already exists. The first device is recorded silently
         // (mirrors the first-country behavior), so a user's very first login
         // after the feature is enabled is never gated on the device signal.
-        let device_hash = device_id.map(|d| self.jwt.hash_token(d));
+        // A blank device id carries no signal - a client that sends "" must not
+        // register an "empty" device that every such client would then share -
+        // so it degrades to None (country-only), same as an absent id.
+        let device_hash = device_id
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(|d| self.jwt.hash_token(d));
         let device_is_new = match device_hash.as_deref() {
             Some(hash) => match TokenRepository::find_login_device(&self.pool, user.id, hash).await
             {
@@ -499,22 +505,41 @@ impl AuthService {
             .await?
             .ok_or(AppError::InvalidCredentials)?;
 
-        // A challenge that has burned through its attempt budget is dead; the
-        // user must restart login. Checked before the compare so a spent
-        // challenge cannot be probed further.
+        // Fast reject for a challenge already at its attempt budget. This is a
+        // non-authoritative pre-check; the atomic ops below are what actually
+        // enforce the cap and single-use under concurrent verify requests.
         if approval.attempts >= LOGIN_APPROVAL_MAX_ATTEMPTS {
             return Err(AppError::InvalidCredentials);
         }
 
         let code = code.trim().replace(' ', "");
         if self.jwt.hash_token(&code) != approval.code_hash {
-            TokenRepository::increment_login_approval_attempts(&self.pool, approval.id).await?;
+            // Atomic capped increment: concurrent wrong guesses cannot push the
+            // counter past the cap (the `attempts < max` guard runs inside one
+            // serialized UPDATE, not a read-modify-write here).
+            TokenRepository::increment_login_approval_attempts(
+                &self.pool,
+                approval.id,
+                LOGIN_APPROVAL_MAX_ATTEMPTS,
+            )
+            .await?;
             return Err(AppError::validation("code", "Invalid approval code"));
         }
 
-        // Single-use: consume before minting so a replay of the same code finds
-        // no valid challenge.
-        TokenRepository::mark_login_approval_code_used(&self.pool, approval.id).await?;
+        // Correct code: atomically claim the challenge (single-use + re-assert
+        // the cap in one statement). A lost claim - a concurrent success, an
+        // already-used or expired row, or one that just hit the cap - rejects
+        // without minting, so exactly one login can complete from a challenge
+        // even if the same code is submitted twice at once.
+        if !TokenRepository::claim_login_approval_code(
+            &self.pool,
+            approval.id,
+            LOGIN_APPROVAL_MAX_ATTEMPTS,
+        )
+        .await?
+        {
+            return Err(AppError::InvalidCredentials);
+        }
 
         let user = UserRepository::find_by_id(&self.pool, user_id)
             .await?

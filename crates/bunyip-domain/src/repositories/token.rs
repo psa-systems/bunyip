@@ -583,27 +583,58 @@ impl TokenRepository {
         Ok(row)
     }
 
-    /// Record a wrong-code attempt against a challenge (brute-force bound).
+    /// Atomically record a wrong-code attempt, capped at `max`. Returns the new
+    /// attempt count when one was recorded, or `None` when the challenge was
+    /// already at the cap (or used). The `attempts < $2` guard is what makes the
+    /// cap hold under concurrency: Postgres serializes the row updates, so
+    /// concurrent wrong guesses can never push the counter past `max` the way a
+    /// read-check-then-increment in the service could (BUNYIP-373).
     pub async fn increment_login_approval_attempts(
         pool: &PgPool,
         id: Uuid,
-    ) -> Result<(), AppError> {
-        sqlx::query(r#"UPDATE login_approval_codes SET attempts = attempts + 1 WHERE id = $1"#)
-            .bind(id)
-            .execute(pool)
-            .await?;
+        max: i32,
+    ) -> Result<Option<i32>, AppError> {
+        let row: Option<(i32,)> = sqlx::query_as(
+            r#"
+            UPDATE login_approval_codes
+            SET attempts = attempts + 1
+            WHERE id = $1 AND attempts < $2 AND used_at IS NULL
+            RETURNING attempts
+            "#,
+        )
+        .bind(id)
+        .bind(max)
+        .fetch_optional(pool)
+        .await?;
 
-        Ok(())
+        Ok(row.map(|r| r.0))
     }
 
-    /// Consume an approval challenge once its code has been verified.
-    pub async fn mark_login_approval_code_used(pool: &PgPool, id: Uuid) -> Result<(), AppError> {
-        sqlx::query(r#"UPDATE login_approval_codes SET used_at = NOW() WHERE id = $1"#)
-            .bind(id)
-            .execute(pool)
-            .await?;
+    /// Atomically claim an approval challenge as used, enforcing single-use AND
+    /// the attempt cap in one statement. Returns `true` only for the caller that
+    /// wins the claim; a concurrent success, an already-used row, an expired row,
+    /// or one at the attempt cap all return `false`. This is what guarantees
+    /// exactly one login can complete from a given challenge, and that a correct
+    /// code arriving after the cap is still refused (BUNYIP-373).
+    pub async fn claim_login_approval_code(
+        pool: &PgPool,
+        id: Uuid,
+        max: i32,
+    ) -> Result<bool, AppError> {
+        let claimed: Option<(Uuid,)> = sqlx::query_as(
+            r#"
+            UPDATE login_approval_codes
+            SET used_at = NOW()
+            WHERE id = $1 AND used_at IS NULL AND attempts < $2 AND expires_at > NOW()
+            RETURNING id
+            "#,
+        )
+        .bind(id)
+        .bind(max)
+        .fetch_optional(pool)
+        .await?;
 
-        Ok(())
+        Ok(claimed.is_some())
     }
 
     // =========================
