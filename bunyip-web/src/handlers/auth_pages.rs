@@ -1111,10 +1111,6 @@ pub async fn password_reset_confirm_post(
 pub struct TwoFactorForm {
     pub code: String,
     pub redirect: Option<String>,
-    /// "Trust this device" checkbox. Present (Some) only when checked
-    /// (BUNYIP-138).
-    #[serde(default)]
-    pub trust_device: Option<String>,
 }
 
 fn twofa_card(error: Option<&str>, redirect: Option<&str>) -> Markup {
@@ -1130,15 +1126,9 @@ fn twofa_card(error: Option<&str>, redirect: Option<&str>) -> Markup {
                     input type="hidden" name="redirect" value=(redirect);
                 }
                 @if let Some(e) = error { (error_box(e)) }
-                // Trusted device opt-in (BUNYIP-138). Honored only for
-                // subscribers; the API ignores it for admins. Ordered BEFORE
-                // the code input (BUNYIP-331) so the choice stays reachable:
-                // a complete code auto-submits the form, so a checkbox below it
-                // would be skipped past on autofill / fast entry.
-                label class="flex items-center gap-2 text-sm text-muted-foreground" {
-                    input type="checkbox" name="trust_device" value="on" class="h-4 w-4";
-                    "Trust this device for 30 days (skip codes here)"
-                }
+                // BUNYIP-382: the "trust this device for 30 days" opt-in was
+                // removed here and merged into the sign-in "Remember me" choice,
+                // which now drives both session length and device trust.
                 div class="space-y-2" {
                     label for="code" class="text-sm font-medium leading-none" { "Authentication Code" }
                     // BUNYIP-117: maxlength + pattern so the browser bounds
@@ -1194,16 +1184,7 @@ pub async fn twofa_verify_post(
     };
     let cookie = cookie_of(&headers);
     let target = safe_redirect(f.redirect.as_deref(), &st.cfg.oidc_issuer);
-    let trust_device = f.trust_device.is_some();
-    match auth_api::verify_2fa(
-        &st.api,
-        cookie.as_deref(),
-        &challenge,
-        f.code.trim(),
-        trust_device,
-    )
-    .await
-    {
+    match auth_api::verify_2fa(&st.api, cookie.as_deref(), &challenge, f.code.trim()).await {
         Ok((_, mut cookies)) => {
             cookies.push(bunyip_2fa_cookie_clear(&st.cfg));
             redirect_cookies(&target, &cookies)

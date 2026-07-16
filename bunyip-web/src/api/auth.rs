@@ -124,7 +124,6 @@ pub async fn verify_2fa(
     cookie: Option<&str>,
     challenge_token: &str,
     code: &str,
-    trust_device: bool,
 ) -> Result<(User, Vec<String>), ApiError> {
     let r = api
         .post(
@@ -133,7 +132,6 @@ pub async fn verify_2fa(
             Some(json!({
                 "challenge_token": challenge_token,
                 "code": code,
-                "trust_device": trust_device,
             })),
         )
         .await?;

@@ -78,6 +78,12 @@ pub struct TwoFactorChallengeClaims {
     pub iat: i64,
     pub jti: String,
     pub iss: String,
+    /// BUNYIP-382: whether the paused sign-in chose "remember me". Carried
+    /// through the 2FA / approval challenge so completion mints a 30-day session
+    /// (and, on the 2FA path, trusts the device) rather than defaulting to 1 day.
+    /// `#[serde(default)]` keeps tokens minted before this field readable (false).
+    #[serde(default)]
+    pub remember: bool,
 }
 
 /// BUNYIP-377: signup anti-bot timing-challenge claims. A short-lived token
@@ -199,8 +205,13 @@ impl JwtService {
         Ok(token_data.claims)
     }
 
-    /// Create a 2FA challenge token (5 min expiry)
-    pub fn create_2fa_challenge_token(&self, user_id: Uuid) -> Result<String, AppError> {
+    /// Create a 2FA challenge token (5 min expiry). BUNYIP-382: `remember`
+    /// carries the paused sign-in's "remember me" choice into completion.
+    pub fn create_2fa_challenge_token(
+        &self,
+        user_id: Uuid,
+        remember: bool,
+    ) -> Result<String, AppError> {
         let now = Utc::now();
         let exp = now + Duration::minutes(5);
 
@@ -211,6 +222,7 @@ impl JwtService {
             iat: now.timestamp(),
             jti: format!("2fa_{}", Uuid::new_v4().as_simple()),
             iss: self.config.issuer.clone(),
+            remember,
         };
 
         let header = Header::new(Algorithm::HS256);
@@ -296,6 +308,7 @@ impl JwtService {
     pub fn create_login_approval_challenge_token(
         &self,
         user_id: Uuid,
+        remember: bool,
     ) -> Result<(String, String), AppError> {
         let now = Utc::now();
         let exp = now + Duration::minutes(15);
@@ -308,6 +321,7 @@ impl JwtService {
             iat: now.timestamp(),
             jti: jti.clone(),
             iss: self.config.issuer.clone(),
+            remember,
         };
 
         let header = Header::new(Algorithm::HS256);
