@@ -45,6 +45,9 @@ password-hash = "0.5"
 aes-gcm = "0.10"
 rand = "0.8"
 sha2 = "0.10"
+# Constant-time comparison of secret-derived material (BUNYIP-375 login-approval
+# code check). Same crate bunyip-oidc uses for PKCE verification.
+subtle = "2"
 # BUNYIP-253: HIBP k-anonymity uses SHA-1 (it's the documented hash for
 # the Pwned Passwords range query). Not used for any other purpose.
 sha1 = "0.10"

@@ -716,6 +716,7 @@ dependencies = [
  "sha1 0.10.6",
  "sha2",
  "sqlx",
+ "subtle",
  "tera",
  "thiserror 1.0.69",
  "tokio",

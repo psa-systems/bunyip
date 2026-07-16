@@ -147,13 +147,15 @@ async fn new_device_triggers_approval_gate() {
 
     // A pending approval challenge exists, and the new device was NOT recorded
     // (tokens were withheld, so device B is not yet trusted).
-    assert!(
-        TokenRepository::find_latest_valid_login_approval_code(&pool, user_id)
-            .await
-            .unwrap()
-            .is_some(),
-        "a pending approval code row was created"
-    );
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM login_approval_codes \
+         WHERE user_id = $1 AND used_at IS NULL AND expires_at > NOW()",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(pending >= 1, "a pending approval code row was created");
     assert_eq!(
         TokenRepository::count_login_devices(&pool, user_id)
             .await
@@ -249,11 +251,14 @@ async fn gate_disabled_never_withholds() {
         0,
         "gate off: no device tracking happens at all"
     );
-    assert!(
-        TokenRepository::find_latest_valid_login_approval_code(&pool, user_id)
+    let pending: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM login_approval_codes WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_one(&pool)
             .await
-            .unwrap()
-            .is_none(),
+            .unwrap();
+    assert_eq!(
+        pending, 0,
         "gate off: no approval challenge is ever created"
     );
 
@@ -274,18 +279,19 @@ async fn complete_login_approval_mints_tokens_and_records_baseline() {
     // challenge the service accepts, and `hash_token` is plain SHA-256 so the
     // stored hash matches what the service computes from the submitted code.
     let jwt = JwtService::new(JwtConfig::from_secret(JWT_SECRET, "bunyip-test"));
-    let challenge = jwt
+    let (challenge, challenge_jti) = jwt
         .create_login_approval_challenge_token(user_id)
         .expect("mint challenge");
     let code = "654321";
     let device_hash = jwt.hash_token("device-new");
     sqlx::query(
         "INSERT INTO login_approval_codes
-            (user_id, code_hash, country, device_hash, device_info, expires_at)
-         VALUES ($1, $2, 'US', $3, 'crafted-ua', NOW() + INTERVAL '15 minutes')",
+            (user_id, code_hash, challenge_jti, country, device_hash, device_info, expires_at)
+         VALUES ($1, $2, $3, 'US', $4, 'crafted-ua', NOW() + INTERVAL '15 minutes')",
     )
     .bind(user_id)
     .bind(jwt.hash_token(code))
+    .bind(&challenge_jti)
     .bind(&device_hash)
     .execute(&pool)
     .await
@@ -299,7 +305,7 @@ async fn complete_login_approval_mints_tokens_and_records_baseline() {
         "a wrong code is rejected"
     );
     assert_eq!(
-        TokenRepository::find_latest_valid_login_approval_code(&pool, user_id)
+        TokenRepository::find_valid_login_approval_code_by_jti(&pool, user_id, &challenge_jti)
             .await
             .unwrap()
             .expect("challenge still pending after a wrong guess")
@@ -340,6 +346,60 @@ async fn complete_login_approval_mints_tokens_and_records_baseline() {
             .await
             .is_err(),
         "a consumed approval challenge cannot be replayed"
+    );
+
+    cleanup(&pool, user_id).await;
+}
+
+/// BUNYIP-375: each challenge token resolves its OWN approval row (by jti), so
+/// with two concurrent gated logins one login's code cannot complete the other's
+/// challenge - the bug the old "newest valid row wins" lookup had.
+#[tokio::test]
+async fn each_challenge_binds_to_its_own_code() {
+    let Some(pool) = connect_and_migrate().await else {
+        eprintln!("RLS_TEST_DATABASE_URL unset; skipping BUNYIP-375 jti-binding test");
+        return;
+    };
+    let auth = build_auth_service(pool.clone(), true);
+    let (user_id, _email, _password) = seed_user(&pool).await;
+    let jwt = JwtService::new(JwtConfig::from_secret(JWT_SECRET, "bunyip-test"));
+
+    // Two overlapping gated logins => two challenges, two distinct codes.
+    let (challenge1, jti1) = jwt
+        .create_login_approval_challenge_token(user_id)
+        .expect("mint challenge 1");
+    let (challenge2, jti2) = jwt
+        .create_login_approval_challenge_token(user_id)
+        .expect("mint challenge 2");
+    for (jti, code) in [(&jti1, "111111"), (&jti2, "222222")] {
+        sqlx::query(
+            "INSERT INTO login_approval_codes (user_id, code_hash, challenge_jti, expires_at)
+             VALUES ($1, $2, $3, NOW() + INTERVAL '15 minutes')",
+        )
+        .bind(user_id)
+        .bind(jwt.hash_token(code))
+        .bind(jti)
+        .execute(&pool)
+        .await
+        .expect("insert crafted challenge");
+    }
+
+    // challenge2 + code1 must FAIL: code 1 belongs to challenge 1's row, and the
+    // lookup is bound to challenge 2's jti (the newer row). Under the old
+    // newest-wins logic this would have matched and succeeded.
+    assert!(
+        auth.complete_login_approval(&challenge2, "111111", None, None)
+            .await
+            .is_err(),
+        "a code must not complete a different challenge, even the newest one"
+    );
+
+    // challenge1 + code1 succeeds against its own bound row.
+    assert!(
+        auth.complete_login_approval(&challenge1, "111111", None, None)
+            .await
+            .is_ok(),
+        "each challenge completes with its own code"
     );
 
     cleanup(&pool, user_id).await;

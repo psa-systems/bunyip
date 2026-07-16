@@ -231,26 +231,35 @@ impl JwtService {
     /// BUNYIP-373: create a login-approval challenge token (15 min expiry),
     /// bound to a pending suspicious login. Mirrors the 2FA challenge token but
     /// with a distinct purpose so the two flows can never be crossed.
-    pub fn create_login_approval_challenge_token(&self, user_id: Uuid) -> Result<String, AppError> {
+    ///
+    /// BUNYIP-375: returns `(token, jti)` so the caller can persist the jti on
+    /// the approval-code row and later resolve that exact row from a presented
+    /// challenge token, instead of guessing the user's newest pending code.
+    pub fn create_login_approval_challenge_token(
+        &self,
+        user_id: Uuid,
+    ) -> Result<(String, String), AppError> {
         let now = Utc::now();
         let exp = now + Duration::minutes(15);
+        let jti = format!("appr_{}", Uuid::new_v4().as_simple());
 
         let claims = TwoFactorChallengeClaims {
             sub: user_id,
             purpose: "login_approval".to_string(),
             exp: exp.timestamp(),
             iat: now.timestamp(),
-            jti: format!("appr_{}", Uuid::new_v4().as_simple()),
+            jti: jti.clone(),
             iss: self.config.issuer.clone(),
         };
 
         let header = Header::new(Algorithm::HS256);
-        encode(&header, &claims, &self.config.encoding_key).map_err(|e| {
+        let token = encode(&header, &claims, &self.config.encoding_key).map_err(|e| {
             AppError::internal(format!(
                 "Failed to create login-approval challenge token: {}",
                 e
             ))
-        })
+        })?;
+        Ok((token, jti))
     }
 
     /// BUNYIP-373: verify a login-approval challenge token.

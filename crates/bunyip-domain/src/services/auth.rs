@@ -5,6 +5,7 @@ use ipnetwork::IpNetwork;
 use rand::{Rng, RngCore};
 use sqlx::PgPool;
 use std::net::IpAddr;
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 use std::sync::{Arc, RwLock};
@@ -429,7 +430,8 @@ impl AuthService {
         ip_address: Option<IpAddr>,
         device_info: Option<&str>,
     ) -> Result<String, AppError> {
-        let challenge_token = self.jwt.create_login_approval_challenge_token(user.id)?;
+        let (challenge_token, challenge_jti) =
+            self.jwt.create_login_approval_challenge_token(user.id)?;
         let code = format!("{:06}", rand::thread_rng().gen_range(0..1_000_000));
         let code_hash = self.jwt.hash_token(&code);
         let expires_at = Utc::now() + Duration::minutes(LOGIN_APPROVAL_TTL_MINUTES);
@@ -439,6 +441,7 @@ impl AuthService {
             CreateLoginApprovalCode {
                 user_id: user.id,
                 code_hash,
+                challenge_jti,
                 country: risk.country.clone(),
                 ip_address: ip_address.map(IpNetwork::from),
                 device_hash: risk.device_hash.clone(),
@@ -452,12 +455,20 @@ impl AuthService {
             .country
             .as_deref()
             .unwrap_or("an unrecognized location");
+        // BUNYIP-375: fail closed on a send failure. Returning the challenge
+        // anyway would leave the client waiting for a code that never arrives
+        // (stuck until the TTL); instead surface a retryable error so the UI can
+        // prompt a fresh attempt. The abandoned challenge row expires via TTL and
+        // is swept by cleanup_expired_tokens.
         if let Err(e) = self
             .email_service
             .send_login_approval_code(&user.email, &code, location)
             .await
         {
             tracing::warn!(user_id = %user.id, error = %e, "Failed to send login approval code");
+            return Err(AppError::upstream(
+                "Could not send your sign-in approval code. Please try again.",
+            ));
         }
         tracing::info!(user_id = %user.id, "Login withheld pending email approval (BUNYIP-373)");
 
@@ -501,9 +512,15 @@ impl AuthService {
             .verify_login_approval_challenge_token(challenge_token)?;
         let user_id = claims.sub;
 
-        let approval = TokenRepository::find_latest_valid_login_approval_code(&self.pool, user_id)
-            .await?
-            .ok_or(AppError::InvalidCredentials)?;
+        // BUNYIP-375: resolve the exact row this challenge token was minted for
+        // (by jti), not merely the user's newest pending code.
+        let approval = TokenRepository::find_valid_login_approval_code_by_jti(
+            &self.pool,
+            user_id,
+            &claims.jti,
+        )
+        .await?
+        .ok_or(AppError::InvalidCredentials)?;
 
         // Fast reject for a challenge already at its attempt budget. This is a
         // non-authoritative pre-check; the atomic ops below are what actually
@@ -513,7 +530,17 @@ impl AuthService {
         }
 
         let code = code.trim().replace(' ', "");
-        if self.jwt.hash_token(&code) != approval.code_hash {
+        // BUNYIP-375: constant-time comparison. Defense-in-depth only - both
+        // sides are already SHA-256 hashes, so a timing leak would expose a hash
+        // prefix that still needs a preimage to yield the code - but comparing
+        // secret-derived material in constant time is cheap hygiene.
+        let submitted = self.jwt.hash_token(&code);
+        if submitted
+            .as_bytes()
+            .ct_eq(approval.code_hash.as_bytes())
+            .unwrap_u8()
+            != 1
+        {
             // Atomic capped increment: concurrent wrong guesses cannot push the
             // counter past the cap (the `attempts < max` guard runs inside one
             // serialized UPDATE, not a read-modify-write here).
