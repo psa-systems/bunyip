@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use ipnetwork::IpNetwork;
-use rand::RngCore;
+use rand::{Rng, RngCore};
 use sqlx::PgPool;
 use std::net::IpAddr;
 use uuid::Uuid;
@@ -13,9 +13,9 @@ use crate::config::TierConfig;
 use crate::errors::AppError;
 use crate::models::{
     AuditAction, CreateAdminInvite, CreateAuditLog, CreateEmailChangeRequest,
-    CreateEmailVerificationToken, CreateMagicLinkToken, CreatePasswordResetToken,
-    CreateRefreshToken, CreateTrustedDevice, CreateUser, SubscriptionTier, User, UserResponse,
-    UserRole,
+    CreateEmailVerificationToken, CreateLoginApprovalCode, CreateMagicLinkToken,
+    CreatePasswordResetToken, CreateRefreshToken, CreateTrustedDevice, CreateUser,
+    SubscriptionTier, User, UserResponse, UserRole,
 };
 use crate::repositories::{
     AuditLogRepository, InviteRepository, TokenRepository, TotpRepository, TrustedDeviceRepository,
@@ -37,11 +37,21 @@ pub struct AuthTokens {
 // collection, so the size imbalance costs nothing (and boxing would add a
 // pointless per-login heap allocation).
 
-/// Result of a login attempt: either full success or 2FA challenge.
+/// Result of a login attempt: full success, a 2FA challenge, or (BUNYIP-373) a
+/// suspicious-login approval challenge that withholds tokens until the user
+/// confirms an emailed code.
 #[allow(clippy::large_enum_variant)]
 pub enum LoginResult {
     Success(AuthTokens, UserResponse),
-    TwoFactorRequired { challenge_token: String },
+    TwoFactorRequired {
+        challenge_token: String,
+    },
+    /// BUNYIP-373: login looked suspicious (new country or new device); an
+    /// approval code was emailed. The client re-submits it with this challenge
+    /// token to `complete_login_approval`.
+    ApprovalRequired {
+        challenge_token: String,
+    },
 }
 
 /// Result of magic link verification
@@ -51,6 +61,12 @@ pub enum MagicLinkResult {
     TwoFactorRequired {
         challenge_token: String,
         is_new_user: bool,
+    },
+    /// BUNYIP-373: same suspicious-login gate as the password path. A gated
+    /// magic-link login is always an existing user (new users have no baseline
+    /// to deviate from), so no `is_new_user` is carried here.
+    ApprovalRequired {
+        challenge_token: String,
     },
 }
 
@@ -141,6 +157,28 @@ fn trusted_device_allows_skip(role: &str, has_valid_device: bool) -> bool {
     has_valid_device && role == UserRole::Subscriber.as_str()
 }
 
+// --- suspicious-login approval policy (BUNYIP-373) --------------------------
+
+/// How long an emailed login-approval code stays valid before the user must
+/// restart login to get a fresh one.
+const LOGIN_APPROVAL_TTL_MINUTES: i64 = 15;
+
+/// Wrong-code attempts tolerated against a single approval challenge before it
+/// is dead. Bounds brute force on the 6-digit (1e6-space) code; combined with
+/// the 15-minute TTL and single-use rows the guessing budget is negligible.
+const LOGIN_APPROVAL_MAX_ATTEMPTS: i32 = 5;
+
+/// BUNYIP-373: outcome of assessing a login for suspicious signals. `flagged`
+/// is the gate decision (withhold tokens, email a code); `country` and
+/// `device_hash` are the resolved context, carried so a clean login can record
+/// the device and a gated login can persist both as the new baseline on
+/// completion, all without re-deriving them.
+struct LoginRisk {
+    flagged: bool,
+    country: Option<String>,
+    device_hash: Option<String>,
+}
+
 /// BUNYIP-290: the first-admin bootstrap predicate, pulled out as a pure,
 /// DB-free function so every branch is unit-testable. Returns true only when
 /// ALL hold: a bootstrap email is configured; it equals `user_email`
@@ -198,9 +236,14 @@ pub struct AuthService {
     /// BUNYIP-366: IP -> country resolver; `None` when `IP2LOCATION_DB_PATH` is
     /// unset (login-location alerts disabled).
     geoip: Option<Arc<GeoIpService>>,
+    /// BUNYIP-373: master switch for the suspicious-login notify-and-approve
+    /// gate. Off by default (from `Config::login_approval_enabled`); when off,
+    /// login behaves exactly as before (BUNYIP-366 alert only).
+    login_approval_enabled: bool,
 }
 
 impl AuthService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool: PgPool,
         jwt: JwtService,
@@ -208,6 +251,7 @@ impl AuthService {
         bootstrap_admin_email: Option<String>,
         email_service: Arc<EmailService>,
         geoip: Option<Arc<GeoIpService>>,
+        login_approval_enabled: bool,
     ) -> Self {
         Self {
             pool,
@@ -217,6 +261,7 @@ impl AuthService {
             bootstrap_admin_email,
             email_service,
             geoip,
+            login_approval_enabled,
         }
     }
 
@@ -306,6 +351,233 @@ impl AuthService {
                     || v6.is_unicast_link_local()
             }
         }
+    }
+
+    /// BUNYIP-373: decide whether a login is suspicious enough to withhold
+    /// tokens pending email approval. Suspicious = a new sign-in country (the
+    /// same signal the BUNYIP-366 alert uses) OR a device not seen for this user
+    /// before (only once the user already has a baseline device on record).
+    /// Resolves the country and device hash once and returns them so the caller
+    /// can persist them without re-deriving. Never errors: any lookup failure
+    /// degrades to "not flagged" so the gate can only fail open, never lock a
+    /// user out on infrastructure trouble. Callers gate on this only when
+    /// `login_approval_enabled` is set.
+    async fn assess_login(
+        &self,
+        user: &User,
+        ip_address: Option<IpAddr>,
+        device_id: Option<&str>,
+    ) -> LoginRisk {
+        // Resolve the country (best-effort). Mirror check_login_location's
+        // filters: no geoip DB, no IP, or a non-public IP all yield None.
+        let country = match (self.geoip.as_ref(), ip_address) {
+            (Some(geoip), Some(ip)) if !Self::is_non_public_ip(&ip) => geoip.country_code(ip),
+            _ => None,
+        };
+        let country_is_new = matches!(
+            country
+                .as_deref()
+                .map(|c| login_location_decision(user.last_login_country.as_deref(), c)),
+            Some(LoginLocationDecision::Alert)
+        );
+
+        // Device signal: a hash we have not seen for this user, but only once a
+        // baseline device already exists. The first device is recorded silently
+        // (mirrors the first-country behavior), so a user's very first login
+        // after the feature is enabled is never gated on the device signal.
+        // A blank device id carries no signal - a client that sends "" must not
+        // register an "empty" device that every such client would then share -
+        // so it degrades to None (country-only), same as an absent id.
+        let device_hash = device_id
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(|d| self.jwt.hash_token(d));
+        let device_is_new = match device_hash.as_deref() {
+            Some(hash) => match TokenRepository::find_login_device(&self.pool, user.id, hash).await
+            {
+                Ok(Some(_)) => false, // already a known device
+                Ok(None) => TokenRepository::count_login_devices(&self.pool, user.id)
+                    .await
+                    .map(|n| n > 0)
+                    .unwrap_or(false),
+                Err(e) => {
+                    tracing::warn!(user_id = %user.id, error = %e, "Login device lookup failed; not flagging on device");
+                    false
+                }
+            },
+            None => false,
+        };
+
+        LoginRisk {
+            flagged: country_is_new || device_is_new,
+            country,
+            device_hash,
+        }
+    }
+
+    /// BUNYIP-373: a flagged login mints no tokens. Instead generate a 6-digit
+    /// code, store its hash bound to a short-lived challenge (with the resolved
+    /// country/device so completion can persist them), email the code, and
+    /// return the challenge token the client re-submits with the code. The
+    /// email is best-effort like the location alert: a mail failure is logged
+    /// but never turns the login into a 500 (the user can retry login for a
+    /// fresh code).
+    async fn begin_login_approval(
+        &self,
+        user: &User,
+        risk: &LoginRisk,
+        ip_address: Option<IpAddr>,
+        device_info: Option<&str>,
+    ) -> Result<String, AppError> {
+        let challenge_token = self.jwt.create_login_approval_challenge_token(user.id)?;
+        let code = format!("{:06}", rand::thread_rng().gen_range(0..1_000_000));
+        let code_hash = self.jwt.hash_token(&code);
+        let expires_at = Utc::now() + Duration::minutes(LOGIN_APPROVAL_TTL_MINUTES);
+
+        TokenRepository::create_login_approval_code(
+            &self.pool,
+            CreateLoginApprovalCode {
+                user_id: user.id,
+                code_hash,
+                country: risk.country.clone(),
+                ip_address: ip_address.map(IpNetwork::from),
+                device_hash: risk.device_hash.clone(),
+                device_info: device_info.map(|s| s.to_string()),
+                expires_at,
+            },
+        )
+        .await?;
+
+        let location = risk
+            .country
+            .as_deref()
+            .unwrap_or("an unrecognized location");
+        if let Err(e) = self
+            .email_service
+            .send_login_approval_code(&user.email, &code, location)
+            .await
+        {
+            tracing::warn!(user_id = %user.id, error = %e, "Failed to send login approval code");
+        }
+        tracing::info!(user_id = %user.id, "Login withheld pending email approval (BUNYIP-373)");
+
+        Ok(challenge_token)
+    }
+
+    /// BUNYIP-373: remember the device that just completed a login so a later
+    /// login from it is not treated as new. No-ops when the client sent no
+    /// device id. Best-effort: a write failure is logged but must not fail the
+    /// login that already succeeded.
+    async fn record_login_device(
+        &self,
+        user: &User,
+        device_hash: Option<&str>,
+        device_info: Option<&str>,
+    ) {
+        let Some(hash) = device_hash else {
+            return;
+        };
+        if let Err(e) =
+            TokenRepository::record_login_device(&self.pool, user.id, hash, device_info).await
+        {
+            tracing::warn!(user_id = %user.id, error = %e, "Failed to record login device");
+        }
+    }
+
+    /// BUNYIP-373: finish a login that was withheld pending email approval.
+    /// Verify the challenge token and the emailed code, then mint tokens exactly
+    /// as a normal login would and persist the approved country/device as the
+    /// new baseline so the next login from here is not flagged again. Mirrors
+    /// `complete_2fa_login`'s shape (challenge token in, tokens out).
+    pub async fn complete_login_approval(
+        &self,
+        challenge_token: &str,
+        code: &str,
+        device_info: Option<String>,
+        ip_address: Option<IpAddr>,
+    ) -> Result<(AuthTokens, UserResponse), AppError> {
+        let claims = self
+            .jwt
+            .verify_login_approval_challenge_token(challenge_token)?;
+        let user_id = claims.sub;
+
+        let approval = TokenRepository::find_latest_valid_login_approval_code(&self.pool, user_id)
+            .await?
+            .ok_or(AppError::InvalidCredentials)?;
+
+        // Fast reject for a challenge already at its attempt budget. This is a
+        // non-authoritative pre-check; the atomic ops below are what actually
+        // enforce the cap and single-use under concurrent verify requests.
+        if approval.attempts >= LOGIN_APPROVAL_MAX_ATTEMPTS {
+            return Err(AppError::InvalidCredentials);
+        }
+
+        let code = code.trim().replace(' ', "");
+        if self.jwt.hash_token(&code) != approval.code_hash {
+            // Atomic capped increment: concurrent wrong guesses cannot push the
+            // counter past the cap (the `attempts < max` guard runs inside one
+            // serialized UPDATE, not a read-modify-write here).
+            TokenRepository::increment_login_approval_attempts(
+                &self.pool,
+                approval.id,
+                LOGIN_APPROVAL_MAX_ATTEMPTS,
+            )
+            .await?;
+            return Err(AppError::validation("code", "Invalid approval code"));
+        }
+
+        // Correct code: atomically claim the challenge (single-use + re-assert
+        // the cap in one statement). A lost claim - a concurrent success, an
+        // already-used or expired row, or one that just hit the cap - rejects
+        // without minting, so exactly one login can complete from a challenge
+        // even if the same code is submitted twice at once.
+        if !TokenRepository::claim_login_approval_code(
+            &self.pool,
+            approval.id,
+            LOGIN_APPROVAL_MAX_ATTEMPTS,
+        )
+        .await?
+        {
+            return Err(AppError::InvalidCredentials);
+        }
+
+        let user = UserRepository::find_by_id(&self.pool, user_id)
+            .await?
+            .ok_or(AppError::InvalidCredentials)?;
+
+        let tokens = self
+            .create_tokens(&user, device_info.clone(), ip_address, None)
+            .await?;
+        UserRepository::update_last_login(&self.pool, user.id).await?;
+
+        // Persist the approved context as the new baseline. Both best-effort:
+        // the login has succeeded, so a bookkeeping write failure must not fail
+        // it (it would only mean the next login is flagged again).
+        if let Some(country) = approval.country.as_deref() {
+            if let Err(e) =
+                UserRepository::set_last_login_country(&self.pool, user.id, Some(country)).await
+            {
+                tracing::warn!(user_id = %user.id, error = %e, "Failed to record approved login country");
+            }
+        }
+        self.record_login_device(
+            &user,
+            approval.device_hash.as_deref(),
+            approval.device_info.as_deref(),
+        )
+        .await;
+
+        let ip = ip_address.map(IpNetwork::from);
+        AuditLogRepository::create(
+            &self.pool,
+            CreateAuditLog::new(AuditAction::UserLogin)
+                .with_actor(user.id, &user.email, &user.role)
+                .with_ip(ip)
+                .with_metadata(serde_json::json!({ "method": "login_approval" })),
+        )
+        .await?;
+
+        Ok((tokens, UserResponse::from(user)))
     }
 
     /// Hash a raw refresh token the same way it is stored, so callers (e.g.
@@ -439,6 +711,7 @@ impl AuthService {
     }
 
     /// Login with email and password
+    #[allow(clippy::too_many_arguments)]
     pub async fn login(
         &self,
         email: String,
@@ -446,6 +719,7 @@ impl AuthService {
         device_info: Option<String>,
         ip_address: Option<IpAddr>,
         trusted_device_token: Option<String>,
+        device_id: Option<String>,
     ) -> Result<LoginResult, AppError> {
         // Find user
         let mut user = UserRepository::find_by_email(&self.pool, &email)
@@ -525,6 +799,26 @@ impl AuthService {
             UserRepository::set_two_factor_enabled(&self.pool, user.id, false).await?;
         }
 
+        // BUNYIP-373: suspicious-login notify-and-approve gate. Only non-2FA
+        // logins reach here (2FA accounts returned above), and those are already
+        // second-factor protected. When enabled and this login looks suspicious
+        // (new country or new device), withhold tokens and email a one-time
+        // approval code instead of completing the login.
+        let device_risk = if self.login_approval_enabled {
+            let risk = self
+                .assess_login(&user, ip_address, device_id.as_deref())
+                .await;
+            if risk.flagged {
+                let challenge_token = self
+                    .begin_login_approval(&user, &risk, ip_address, device_info.as_deref())
+                    .await?;
+                return Ok(LoginResult::ApprovalRequired { challenge_token });
+            }
+            Some(risk)
+        } else {
+            None
+        };
+
         // Create tokens
         let tokens = self
             .create_tokens(&user, device_info.clone(), ip_address, None)
@@ -534,6 +828,12 @@ impl AuthService {
         UserRepository::update_last_login(&self.pool, user.id).await?;
         self.check_login_location(&user, ip_address, device_info.as_deref())
             .await;
+        // BUNYIP-373: remember this device on a clean login so it is a known
+        // device (not a "new device" signal) next time.
+        if let Some(risk) = &device_risk {
+            self.record_login_device(&user, risk.device_hash.as_deref(), device_info.as_deref())
+                .await;
+        }
 
         // Create audit log
         let ip = ip_address.map(IpNetwork::from);
@@ -772,6 +1072,7 @@ impl AuthService {
         token: String,
         device_info: Option<String>,
         ip_address: Option<IpAddr>,
+        device_id: Option<String>,
     ) -> Result<MagicLinkResult, AppError> {
         let token_hash = self.jwt.hash_token(&token);
 
@@ -844,6 +1145,26 @@ impl AuthService {
             UserRepository::set_two_factor_enabled(&self.pool, user.id, false).await?;
         }
 
+        // BUNYIP-373: same suspicious-login gate as the password path. Reaches
+        // here only for non-2FA accounts (2FA magic-link logins returned above).
+        // A gated attempt is always an existing user - a brand-new magic-link
+        // account has no baseline country/device to deviate from, so assess_login
+        // never flags it.
+        let device_risk = if self.login_approval_enabled {
+            let risk = self
+                .assess_login(&user, ip_address, device_id.as_deref())
+                .await;
+            if risk.flagged {
+                let challenge_token = self
+                    .begin_login_approval(&user, &risk, ip_address, device_info.as_deref())
+                    .await?;
+                return Ok(MagicLinkResult::ApprovalRequired { challenge_token });
+            }
+            Some(risk)
+        } else {
+            None
+        };
+
         // Create tokens
         let tokens = self
             .create_tokens(&user, device_info.clone(), ip_address, None)
@@ -853,6 +1174,11 @@ impl AuthService {
         UserRepository::update_last_login(&self.pool, user.id).await?;
         self.check_login_location(&user, ip_address, device_info.as_deref())
             .await;
+        // BUNYIP-373: remember this device on a clean login.
+        if let Some(risk) = &device_risk {
+            self.record_login_device(&user, risk.device_hash.as_deref(), device_info.as_deref())
+                .await;
+        }
 
         // Audit log
         let ip = ip_address.map(IpNetwork::from);

@@ -154,7 +154,8 @@ pub use application::{get_application, list_application_groups, list_application
 pub use auth::{
     accept_admin_invite, auth_redirect, confirm_password_reset, get_memberships, login, logout,
     logout_all, logout_redirect, refresh_token, register, request_magic_link,
-    request_password_reset, setup_status, verify_magic_link, verify_password_reset_token,
+    request_password_reset, setup_status, verify_login_approval, verify_magic_link,
+    verify_password_reset_token,
 };
 pub use billing::{create_setup_intent, download_invoice, list_invoices};
 pub use download::{admin_refresh_release, download_asset, list_all_downloads, list_app_downloads};

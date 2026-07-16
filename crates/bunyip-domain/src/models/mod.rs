@@ -55,9 +55,10 @@ pub use stripe::{
 pub use tier::{TierConfigResponse, TierConfigRow};
 pub use token::{
     AdminInvite, CreateAdminInvite, CreateEmailChangeRequest, CreateEmailVerificationToken,
-    CreateMagicLinkToken, CreatePasswordResetToken, CreateRefreshToken, CreateTrustedDevice,
-    EmailChangeRequest, EmailVerificationToken, MagicLinkToken, PasswordResetToken, RefreshToken,
-    SessionInfo, TrustedDevice, TrustedDeviceInfo,
+    CreateLoginApprovalCode, CreateMagicLinkToken, CreatePasswordResetToken, CreateRefreshToken,
+    CreateTrustedDevice, EmailChangeRequest, EmailVerificationToken, LoginApprovalCode,
+    LoginDevice, MagicLinkToken, PasswordResetToken, RefreshToken, SessionInfo, TrustedDevice,
+    TrustedDeviceInfo,
 };
 pub use totp::{RecoveryCode, UserTotp};
 pub use user::{

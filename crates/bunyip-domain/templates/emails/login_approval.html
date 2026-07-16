@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Approve your sign-in{% endblock %}
+{% block content %}
+<h1>Approve your sign-in</h1>
+<p>We noticed a sign-in to your {{ app_name }} account from {{ location }} that we want to confirm is really you.</p>
+
+<p>Enter this code to finish signing in:</p>
+
+<div class="button-container">
+  <p style="font-size: 28px; letter-spacing: 6px; font-weight: bold; margin: 0;">{{ code }}</p>
+</div>
+
+<p class="muted">This code expires in {{ ttl_minutes }} minutes. If it expires, just sign in again to get a new one.</p>
+
+<hr class="divider">
+
+<p><strong>If this wasn't you,</strong> do not share this code with anyone. Someone may have your password: change it now and review your active sessions.</p>
+
+<div class="button-container">
+  <a href="{{ dashboard_url }}" class="button">Go to Dashboard</a>
+</div>
+{% endblock %}
