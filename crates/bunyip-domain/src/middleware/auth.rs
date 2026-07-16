@@ -323,7 +323,8 @@ impl AuthCookies {
             .http_only(true)
             .secure(secure)
             .same_site(SameSite::Lax)
-            .max_age(actix_web::cookie::time::Duration::minutes(15));
+            // BUNYIP-381: access token lives 30 minutes.
+            .max_age(actix_web::cookie::time::Duration::minutes(30));
 
         if let Some(domain) = cookie_domain {
             builder = builder.domain(domain.to_owned());
@@ -339,10 +340,11 @@ impl AuthCookies {
         remember: bool,
         cookie_domain: Option<&str>,
     ) -> Cookie<'static> {
+        // BUNYIP-381: refresh cookie lives 30 days with "remember me", else 1 day.
         let max_age = if remember {
             actix_web::cookie::time::Duration::days(30)
         } else {
-            actix_web::cookie::time::Duration::days(7)
+            actix_web::cookie::time::Duration::days(1)
         };
 
         let mut builder = Cookie::build("refresh_token", token.to_owned())
@@ -868,7 +870,7 @@ mod tests {
         assert!(cookie.secure().unwrap_or(false));
         assert_eq!(
             cookie.max_age(),
-            Some(actix_web::cookie::time::Duration::minutes(15))
+            Some(actix_web::cookie::time::Duration::minutes(30))
         );
         assert!(cookie.domain().is_none());
     }
@@ -899,7 +901,7 @@ mod tests {
         let cookie = AuthCookies::refresh_token("ref123", true, false, None);
         assert_eq!(
             cookie.max_age(),
-            Some(actix_web::cookie::time::Duration::days(7))
+            Some(actix_web::cookie::time::Duration::days(1))
         );
     }
 

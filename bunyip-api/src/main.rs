@@ -242,7 +242,13 @@ async fn main() -> anyhow::Result<()> {
         }
         "development-secret-key-min-32-chars-long!".to_string()
     });
-    let jwt_config = JwtConfig::from_secret(&jwt_secret, &config.app_name);
+    let mut jwt_config = JwtConfig::from_secret(&jwt_secret, &config.app_name);
+    // BUNYIP-381: cookie-session token lifetimes. Access token 30 min. The
+    // refresh JWT exp is set to the longest cap (30 days) so it never expires
+    // before the DB/cookie deadline, which is what enforces the real 1-day /
+    // 30-day-"remember me" lifetime (see AuthService::refresh_absolute_ttl).
+    jwt_config.access_token_expiry = chrono::Duration::minutes(30);
+    jwt_config.refresh_token_expiry = chrono::Duration::days(30);
     let jwt_service = Arc::new(JwtService::new(jwt_config.clone()));
 
     info!("JWT service initialized");

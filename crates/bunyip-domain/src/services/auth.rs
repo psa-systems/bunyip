@@ -78,44 +78,23 @@ pub enum AcceptInviteResult {
     PasswordRequired { email: String },
 }
 
-// --- session-lifetime policy (BUNYIP-137) -----------------------------------
+// --- session-lifetime policy (BUNYIP-381) -----------------------------------
 //
-// Admin sessions get a much shorter leash than subscriber sessions so an
-// unattended privileged session does not stay usable for weeks. These are the
-// single source of truth for the windows (no inline literals elsewhere). The
-// values are assumptions to revise from real usage, not hard requirements.
+// Uniform across roles: a refresh token lasts 1 day, or 30 days when the user
+// selected "remember me" at login. The deadline is set at login and carried
+// verbatim across refresh rotation (see `create_tokens`), so it is a true
+// absolute ceiling on session age. BUNYIP-381 removed the BUNYIP-137 admin-only
+// short leash (30-min idle / 12h absolute) and the idle cap entirely; see that
+// issue for the accepted privileged-session tradeoff.
 
-/// Absolute refresh-token lifetime by role. Admins: 12 hours. Everyone else:
-/// 30 days (the historical default). For admins this deadline is preserved
-/// across refresh rotation (see `create_tokens`), so it is a true ceiling on
-/// session age, not a rolling window.
-fn refresh_absolute_ttl(role: &str) -> Duration {
-    if role == UserRole::Admin.as_str() {
-        Duration::hours(12)
-    } else {
+/// Absolute refresh-token lifetime: 30 days with "remember me", else 1 day.
+/// Applied at login; `create_tokens` carries the resulting deadline across
+/// rotation rather than recomputing it, so the ceiling does not roll forward.
+fn refresh_absolute_ttl(remember: bool) -> Duration {
+    if remember {
         Duration::days(30)
-    }
-}
-
-/// Idle window by role. A refresh is rejected (and the session revoked) once
-/// the session has been inactive longer than this. `None` means no idle limit
-/// (subscriber behavior is unchanged). Admins: 30 minutes.
-fn refresh_idle_ttl(role: &str) -> Option<Duration> {
-    if role == UserRole::Admin.as_str() {
-        Some(Duration::minutes(30))
     } else {
-        None
-    }
-}
-
-/// Whether a session must be rejected for idle timeout, given its role and the
-/// time it was last active. Pure decision function (BUNYIP-137) so the policy
-/// is unit-testable without a database. Roles with no idle window never expire
-/// on idle.
-fn session_idle_expired(role: &str, last_active: DateTime<Utc>, now: DateTime<Utc>) -> bool {
-    match refresh_idle_ttl(role) {
-        Some(idle) => now - last_active > idle,
-        None => false,
+        Duration::days(1)
     }
 }
 
@@ -804,7 +783,13 @@ impl AuthService {
         ip_address: Option<IpAddr>,
         trusted_device_token: Option<String>,
         device_id: Option<String>,
+        remember: bool,
     ) -> Result<LoginResult, AppError> {
+        // BUNYIP-381: absolute refresh-session deadline chosen here from
+        // `remember` (1 day, or 30 days), then carried across rotation by
+        // `create_tokens`. Both mint paths below (trusted-device skip and the
+        // normal 2FA-cleared path) use it.
+        let refresh_deadline = Some(Utc::now() + refresh_absolute_ttl(remember));
         // Find user
         let mut user = UserRepository::find_by_email(&self.pool, &email)
             .await?
@@ -852,7 +837,12 @@ impl AuthService {
                         {
                             TrustedDeviceRepository::touch_last_used(&self.pool, device.id).await?;
                             let tokens = self
-                                .create_tokens(&user, device_info.clone(), ip_address, None)
+                                .create_tokens(
+                                    &user,
+                                    device_info.clone(),
+                                    ip_address,
+                                    refresh_deadline,
+                                )
                                 .await?;
                             UserRepository::update_last_login(&self.pool, user.id).await?;
                             self.check_login_location(&user, ip_address, device_info.as_deref())
@@ -905,7 +895,7 @@ impl AuthService {
 
         // Create tokens
         let tokens = self
-            .create_tokens(&user, device_info.clone(), ip_address, None)
+            .create_tokens(&user, device_info.clone(), ip_address, refresh_deadline)
             .await?;
 
         // Update last login
@@ -1011,28 +1001,15 @@ impl AuthService {
             .await?
             .ok_or(AppError::InvalidCredentials)?;
 
-        // Idle-timeout enforcement (BUNYIP-137). For roles with an idle window
-        // (admins), reject and revoke a session that has been inactive too
-        // long. Activity is measured from `last_used_at`, falling back to
-        // `created_at`; because refresh rotates the row (a new row with
-        // `created_at = NOW()` replaces the old one), this is effectively the
-        // time since the session was last refreshed.
-        let last_active = stored_token.last_used_at.unwrap_or(stored_token.created_at);
-        if session_idle_expired(&user.role, last_active, Utc::now()) {
-            TokenRepository::revoke_refresh_token(&self.pool, stored_token.id).await?;
-            tracing::info!(
-                user_id = %user.id,
-                token_id = %claims.jti,
-                "token_refresh: session idle-timeout exceeded, revoked"
-            );
-            return Err(AppError::TokenExpired);
-        }
+        // BUNYIP-381: no idle-timeout revocation. A refresh token lives for its
+        // absolute deadline (1 day, or 30 days for "remember me"), carried across
+        // rotation below rather than rolling forward.
 
         // Revoke old token
         TokenRepository::revoke_refresh_token(&self.pool, stored_token.id).await?;
 
-        // Create new tokens. Carry the rotated-out token's absolute deadline so
-        // an admin session's 12h ceiling is not reset on every refresh.
+        // Create new tokens, carrying the rotated-out token's absolute deadline
+        // so the session ceiling (set at login) does not reset on every refresh.
         let tokens = self
             .create_tokens(
                 &user,
@@ -2301,13 +2278,11 @@ impl AuthService {
         let (refresh_token, token_hash) = self.jwt.create_refresh_token(user.id)?;
 
         let ip = ip_address.map(IpNetwork::from);
-        let fresh_deadline = Utc::now() + refresh_absolute_ttl(&user.role);
-        let expires_at = match refresh_expires_at {
-            // Admins: clamp to the stricter of the carried deadline and a fresh
-            // admin window, so the cap can only tighten across rotation.
-            Some(existing) if user.role == UserRole::Admin.as_str() => existing.min(fresh_deadline),
-            _ => fresh_deadline,
-        };
+        // BUNYIP-381: the absolute refresh deadline is chosen at login (from
+        // `remember`, via `refresh_absolute_ttl`) and carried verbatim across
+        // rotation. A mint with no carried deadline (magic-link, 2FA / approval
+        // completion, invite acceptance) defaults to the 1-day non-remember cap.
+        let expires_at = refresh_expires_at.unwrap_or_else(|| Utc::now() + Duration::days(1));
 
         // Store refresh token
         TokenRepository::create_refresh_token(
@@ -2364,17 +2339,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn admin_gets_shorter_absolute_ttl_than_subscriber() {
-        assert_eq!(refresh_absolute_ttl("admin"), Duration::hours(12));
-        assert_eq!(refresh_absolute_ttl("subscriber"), Duration::days(30));
-        // Unknown roles are treated as non-admin (the safe, unchanged default).
-        assert_eq!(refresh_absolute_ttl("whatever"), Duration::days(30));
-    }
-
-    #[test]
-    fn only_admins_have_an_idle_window() {
-        assert_eq!(refresh_idle_ttl("admin"), Some(Duration::minutes(30)));
-        assert_eq!(refresh_idle_ttl("subscriber"), None);
+    fn refresh_absolute_ttl_is_remember_based() {
+        // BUNYIP-381: uniform across roles - 30 days with "remember me", else 1 day.
+        assert_eq!(refresh_absolute_ttl(true), Duration::days(30));
+        assert_eq!(refresh_absolute_ttl(false), Duration::days(1));
     }
 
     // ── BUNYIP-377: signup submit-timing guard ─────────────────────────────
@@ -2394,17 +2362,6 @@ mod tests {
             now
         ));
         assert!(!signup_submitted_too_fast(now - 30, now));
-    }
-
-    #[test]
-    fn admin_session_expires_after_idle_window() {
-        let now = Utc::now();
-        // 31 minutes idle exceeds the 30-minute admin window.
-        let stale = now - Duration::minutes(31);
-        assert!(session_idle_expired("admin", stale, now));
-        // 10 minutes idle is still within the window.
-        let fresh = now - Duration::minutes(10);
-        assert!(!session_idle_expired("admin", fresh, now));
     }
 
     // ── BUNYIP-290: first-admin bootstrap predicate ────────────────────────
@@ -2498,15 +2455,6 @@ mod tests {
         assert!(!trusted_device_allows_skip("admin", true));
         assert!(!trusted_device_allows_skip("subscriber", false));
         assert!(!trusted_device_allows_skip("admin", false));
-    }
-
-    #[test]
-    fn subscriber_session_never_idle_expires() {
-        let now = Utc::now();
-        // Even a 60-day-idle subscriber session is not idle-expired (only the
-        // absolute TTL bounds it, unchanged behavior).
-        let very_stale = now - Duration::days(60);
-        assert!(!session_idle_expired("subscriber", very_stale, now));
     }
 
     #[test]
