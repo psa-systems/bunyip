@@ -153,6 +153,15 @@ pub struct RegisterRequest {
     pub stripe_customer_id: Option<String>,
     /// Payment method ID returned by stripe.confirmSetup() on the frontend.
     pub payment_method_id: Option<String>,
+    /// BUNYIP-377: honeypot. A hidden field a human leaves empty; a non-empty
+    /// value marks an automated submit. Named innocuously so browser autofill
+    /// ignores it.
+    #[serde(default)]
+    pub contact_channel: Option<String>,
+    /// BUNYIP-377: the signup timing-challenge token the form was rendered with
+    /// (from `GET /v1/auth/register-challenge`).
+    #[serde(default)]
+    pub signup_token: Option<String>,
 }
 
 /// Request body for login
@@ -252,6 +261,16 @@ pub async fn register(
     if config.is_production() {
         let ip_key = ip_address.map(|ip| ip.to_string()).unwrap_or_default();
         check_rate_limit(&pool, &ip_key, &RateLimitConfig::REGISTRATION).await?;
+    }
+
+    // BUNYIP-377: bot guard (honeypot + submit timing). Opt-in via
+    // SIGNUP_BOT_GUARD_ENABLED, off until every register form carries the hidden
+    // fields. Rejects uniformly so no individual check is an oracle for bots.
+    if config.signup_bot_guard_enabled {
+        auth_service.verify_signup_not_bot(
+            body.contact_channel.as_deref(),
+            body.signup_token.as_deref(),
+        )?;
     }
 
     // Validate email format
@@ -356,6 +375,20 @@ pub async fn register(
         data: Some(response),
         meta: crate::responses::ResponseMeta::new(request_id),
     }))
+}
+
+/// GET /v1/auth/register-challenge
+/// BUNYIP-377: issue a short-lived signup timing-challenge token for a freshly
+/// rendered register form. Unauthenticated; the token is just a signed
+/// timestamp, so minting one is harmless and needs no rate limit. The register
+/// handler verifies it (when SIGNUP_BOT_GUARD_ENABLED is on).
+pub async fn register_challenge(
+    req: HttpRequest,
+    auth_service: web::Data<Arc<AuthService>>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let token = auth_service.create_signup_challenge()?;
+    Ok(success(serde_json::json!({ "token": token }), request_id))
 }
 
 /// POST /v1/auth/login

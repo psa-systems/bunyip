@@ -80,6 +80,20 @@ pub struct TwoFactorChallengeClaims {
     pub iss: String,
 }
 
+/// BUNYIP-377: signup anti-bot timing-challenge claims. A short-lived token
+/// embedded in the register form at render; the register handler checks it is
+/// valid (unforged, unexpired, right issuer) and that `now - iat` is at least
+/// the minimum plausible fill time, so a form submitted implausibly fast (a bot)
+/// or with a forged/stale token is rejected. Carries no user (unauthenticated
+/// pre-signup) - just the signed issue time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignupChallengeClaims {
+    pub purpose: String,
+    pub exp: i64,
+    pub iat: i64,
+    pub iss: String,
+}
+
 /// Refresh token claims
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RefreshTokenClaims {
@@ -222,6 +236,50 @@ impl JwtService {
                 })?;
 
         if token_data.claims.purpose != "2fa_challenge" {
+            return Err(AppError::InvalidCredentials);
+        }
+
+        Ok(token_data.claims)
+    }
+
+    /// BUNYIP-377: mint a signup timing-challenge token (signed issue time),
+    /// valid for `max_age`. Embedded in a freshly-rendered register form and
+    /// verified at `/register`.
+    pub fn create_signup_challenge_token(&self, max_age: Duration) -> Result<String, AppError> {
+        let now = Utc::now();
+        let claims = SignupChallengeClaims {
+            purpose: "signup_challenge".to_string(),
+            exp: (now + max_age).timestamp(),
+            iat: now.timestamp(),
+            iss: self.config.issuer.clone(),
+        };
+
+        let header = Header::new(Algorithm::HS256);
+        encode(&header, &claims, &self.config.encoding_key).map_err(|e| {
+            AppError::internal(format!("Failed to create signup challenge token: {}", e))
+        })
+    }
+
+    /// BUNYIP-377: verify a signup timing-challenge token (signature, issuer,
+    /// not-expired, purpose). Returns the claims so the caller can apply the
+    /// minimum-fill-time check against `iat`.
+    pub fn verify_signup_challenge_token(
+        &self,
+        token: &str,
+    ) -> Result<SignupChallengeClaims, AppError> {
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.set_required_spec_claims(&["exp"]);
+        validation.set_issuer(&[&self.config.issuer]);
+        validation.validate_exp = true;
+
+        let token_data =
+            decode::<SignupChallengeClaims>(token, &self.config.decoding_key, &validation)
+                .map_err(|e| match e.kind() {
+                    jsonwebtoken::errors::ErrorKind::ExpiredSignature => AppError::TokenExpired,
+                    _ => AppError::InvalidCredentials,
+                })?;
+
+        if token_data.claims.purpose != "signup_challenge" {
             return Err(AppError::InvalidCredentials);
         }
 

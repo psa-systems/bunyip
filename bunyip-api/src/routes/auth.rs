@@ -9,6 +9,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/auth")
             .route("/register", web::post().to(handlers::register))
+            // BUNYIP-377: signup timing-challenge token for the register form.
+            .route(
+                "/register-challenge",
+                web::get().to(handlers::register_challenge),
+            )
             .route("/login", web::post().to(handlers::login))
             .route("/logout", web::post().to(handlers::logout))
             .route("/logout", web::get().to(handlers::logout_redirect))
