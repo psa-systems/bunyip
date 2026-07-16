@@ -290,6 +290,8 @@ pub async fn register(
             ip_address,
             None,
             None,
+            // BUNYIP-381: a fresh registration is not "remember me" (1-day refresh).
+            false,
         )
         .await?;
 
@@ -446,6 +448,7 @@ pub async fn login(
             ip_address,
             trusted_device_token,
             body.device_id.clone(),
+            body.remember,
         )
         .await?;
 

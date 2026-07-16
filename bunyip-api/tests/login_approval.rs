@@ -112,6 +112,7 @@ async fn new_device_triggers_approval_gate() {
             None,
             None,
             Some("device-A".into()),
+            false,
         )
         .await
         .expect("login A");
@@ -137,6 +138,7 @@ async fn new_device_triggers_approval_gate() {
             None,
             None,
             Some("device-B".into()),
+            false,
         )
         .await
         .expect("login B");
@@ -173,6 +175,7 @@ async fn new_device_triggers_approval_gate() {
             None,
             None,
             Some("device-A".into()),
+            false,
         )
         .await
         .expect("login A again");
@@ -191,6 +194,7 @@ async fn new_device_triggers_approval_gate() {
             None,
             None,
             Some("   ".into()),
+            false,
         )
         .await
         .expect("login blank device");
@@ -226,6 +230,7 @@ async fn gate_disabled_never_withholds() {
         None,
         None,
         Some("dev-A".into()),
+        false,
     )
     .await
     .expect("login A");
@@ -237,6 +242,7 @@ async fn gate_disabled_never_withholds() {
             None,
             None,
             Some("dev-B".into()),
+            false,
         )
         .await
         .expect("login B");
