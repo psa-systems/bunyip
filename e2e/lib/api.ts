@@ -28,6 +28,9 @@ export const routes = {
   // Account lifecycle + email-driven flows (BUNYIP-150). Used by the disposable
   // account helpers (lib/accounts.ts) and the mail-sink specs.
   authRegister: `${API_V1}/auth/register`,
+  // BUNYIP-377 signup bot guard: the timing-challenge token the register form is
+  // rendered with; registerDisposable (lib/accounts.ts) fetches it before POSTing.
+  registerChallenge: `${API_V1}/auth/register-challenge`,
   authLogin: `${API_V1}/auth/login`,
   authMagicLink: `${API_V1}/auth/magic-link`,
   authMagicLinkVerify: `${API_V1}/auth/magic-link/verify`,

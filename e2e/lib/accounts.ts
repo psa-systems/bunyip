@@ -37,8 +37,23 @@ export function disposableEmail(): string {
 // authenticated calls and for the eventual self-delete.
 export async function registerDisposable(ctx: APIRequestContext): Promise<DisposableAccount> {
   const account: DisposableAccount = { email: disposableEmail(), password: DISPOSABLE_PASSWORD };
+  // BUNYIP-384: satisfy the BUNYIP-377 signup bot guard the same way the real
+  // register form does, so the guard can stay enabled and validated on staging.
+  // Fetch the timing-challenge token, leave the honeypot (contact_channel) empty,
+  // and submit only after the 2s minimum fill time (SIGNUP_MIN_FILL_SECONDS) so
+  // the request is not flagged as submitted-too-fast. When the guard is off
+  // (dev / prod) the extra signup_token is simply ignored server-side.
+  const challenge = await ctx.get(routes.registerChallenge);
+  if (!challenge.ok()) {
+    throw new Error(`register-challenge failed: ${challenge.status()} ${await challenge.text()}`);
+  }
+  const signupToken = ((await challenge.json()) as { data?: { token?: string } }).data?.token;
+  if (!signupToken) {
+    throw new Error('register-challenge returned no token in the response envelope');
+  }
+  await new Promise((resolve) => setTimeout(resolve, 2_100));
   const res = await ctx.post(routes.authRegister, {
-    data: { email: account.email, password: account.password },
+    data: { email: account.email, password: account.password, signup_token: signupToken },
   });
   if (!res.ok()) {
     throw new Error(`register disposable account failed: ${res.status()} ${await res.text()}`);
