@@ -111,10 +111,16 @@ const OTP_AUTOSUBMIT_JS: &str = r#"(function(){var OTP=/^[0-9]{6}$/;document.add
 /// Browser auto-reconnect handles transient drops; on `resync` from a
 /// `Lagged` broadcast we also reload.
 ///
+/// BUNYIP-380: bunyip-web is server-rendered, so every in-app navigation is a
+/// full page load. A `pagehide` listener closes the stream cleanly before the
+/// document unloads, so the browser no longer logs "connection ... was
+/// interrupted while the page was loading" on each navigation. `es.close()` is
+/// idempotent, so closing an already-errored stream is harmless.
+///
 /// The template carries a placeholder origin literal (`__BUNYIP_API_ORIGIN__`)
 /// that `sse_subscriber_script` replaces with the value installed via
 /// `install_sse_api_origin`.
-const SSE_SUBSCRIBER: &str = r#"(function(){try{var origin='__BUNYIP_API_ORIGIN__';if(!origin||!window.EventSource)return;var es=new EventSource(origin+'/v1/events',{withCredentials:true});var reload=function(){window.location.reload();};es.addEventListener('claims_changed',reload);es.addEventListener('profile_changed',reload);es.addEventListener('applications_changed',reload);es.addEventListener('resync',reload);es.addEventListener('session_revoked',function(){window.location.href='/login?toast_err=Session%20ended%20by%20an%20administrator.';});}catch(e){}})();"#;
+const SSE_SUBSCRIBER: &str = r#"(function(){try{var origin='__BUNYIP_API_ORIGIN__';if(!origin||!window.EventSource)return;var es=new EventSource(origin+'/v1/events',{withCredentials:true});window.addEventListener('pagehide',function(){try{es.close();}catch(e){}});var reload=function(){window.location.reload();};es.addEventListener('claims_changed',reload);es.addEventListener('profile_changed',reload);es.addEventListener('applications_changed',reload);es.addEventListener('resync',reload);es.addEventListener('session_revoked',function(){window.location.href='/login?toast_err=Session%20ended%20by%20an%20administrator.';});}catch(e){}})();"#;
 
 fn sse_subscriber_script() -> String {
     SSE_SUBSCRIBER.replace("__BUNYIP_API_ORIGIN__", sse_api_origin())
