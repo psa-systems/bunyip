@@ -687,14 +687,22 @@ const DOCS_CSS: &str = "\
 ";
 
 fn render_markdown(md: &str) -> String {
-    use pulldown_cmark::{html, Options, Parser};
+    use pulldown_cmark::{html, Event, Options, Parser};
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_TABLES);
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_FOOTNOTES);
     opts.insert(Options::ENABLE_TASKLISTS);
+    // Defense-in-depth (BUNYIP-385 review): pulldown-cmark passes raw HTML in the
+    // markdown through verbatim, and we splice the result with PreEscaped, so a
+    // doc could otherwise inject live HTML into this public page. Drop the raw
+    // Html / InlineHtml events; only markdown-derived HTML (which push_html
+    // escapes correctly) is emitted. The embedded docs contain no raw HTML, so
+    // this is lossless today.
+    let events =
+        Parser::new_ext(md, opts).filter(|ev| !matches!(ev, Event::Html(_) | Event::InlineHtml(_)));
     let mut out = String::new();
-    html::push_html(&mut out, Parser::new_ext(md, opts));
+    html::push_html(&mut out, events);
     out
 }
 
@@ -775,5 +783,16 @@ mod docs_tests {
         let html = render_markdown("# Title\n\nSome **bold** text.\n");
         assert!(html.contains("<h1>"), "heading not rendered");
         assert!(html.contains("<strong>bold</strong>"), "bold not rendered");
+    }
+
+    #[test]
+    fn render_markdown_strips_raw_html() {
+        // Block-level and inline raw HTML must be dropped, not emitted live.
+        let html = render_markdown(
+            "<script>alert(1)</script>\n\nHi <img src=x onerror=alert(1)> there.\n",
+        );
+        assert!(!html.contains("<script>"), "block raw HTML leaked");
+        assert!(!html.contains("<img"), "inline raw HTML leaked");
+        assert!(html.contains("Hi"), "surrounding text should survive");
     }
 }
