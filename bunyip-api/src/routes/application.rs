@@ -17,6 +17,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route(
                 "/{slug}/downloads/{asset_name}",
                 web::get().to(handlers::download_asset),
+            )
+            // BUNYIP-386: serve a specific recorded historical release, not just the pin.
+            .route(
+                "/{slug}/downloads/{version}/{asset_name}",
+                web::get().to(handlers::download_asset_versioned),
             ),
     );
     // Application groups (BUNYIP-100): display metadata for grouping the apps.

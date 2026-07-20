@@ -143,8 +143,17 @@ impl Application {
     /// `pinned_release_tag`; `"generic_package"` sources need `forgejo_owner`
     /// + (`forgejo_package` or `forgejo_repo`) + `pinned_release_tag`.
     pub fn download_source(&self) -> Option<ArtifactSource> {
+        self.download_source_for(self.pinned_release_tag.as_deref()?)
+    }
+
+    /// Like [`download_source`](Self::download_source) but resolves an explicit version
+    /// tag instead of the current `pinned_release_tag`, so the download proxy can serve a
+    /// recorded historical version (BUNYIP-386). Callers MUST gate `version` against the
+    /// version-history allow-list (`ApplicationRepository::is_pullable_version`) before
+    /// serving it; this method does no allow-list check of its own.
+    pub fn download_source_for(&self, version: &str) -> Option<ArtifactSource> {
         let owner = self.forgejo_owner.clone()?;
-        let version = self.pinned_release_tag.clone()?;
+        let version = version.to_string();
         match self.artifact_source.as_str() {
             ARTIFACT_SOURCE_GENERIC_PACKAGE => Some(ArtifactSource::GenericPackage {
                 owner,
@@ -599,6 +608,30 @@ mod tests {
 
         app.pinned_release_tag = None;
         assert!(!app.is_downloadable());
+    }
+
+    #[test]
+    fn download_source_for_serves_an_explicit_version() {
+        // BUNYIP-386: the versioned download path resolves an arbitrary historical tag,
+        // not just the current pin, so an old binary stays reachable after a bump.
+        let mut app = test_app();
+        app.forgejo_owner = Some("a8n".to_string());
+        app.forgejo_repo = Some("rus".to_string());
+        app.pinned_release_tag = Some("v2.0.0".to_string());
+
+        assert_eq!(
+            app.download_source_for("v0.7.0"),
+            Some(ArtifactSource::Release {
+                owner: "a8n".into(),
+                repo: "rus".into(),
+                tag: "v0.7.0".into(),
+            })
+        );
+        // The default resolver still tracks the current pin.
+        assert_eq!(
+            app.download_source().map(|s| s.version().to_string()),
+            Some("v2.0.0".to_string())
+        );
     }
 
     #[test]

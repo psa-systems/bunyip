@@ -385,6 +385,59 @@ impl ApplicationRepository {
 
         Ok(apps)
     }
+
+    /// BUNYIP-386: record a published version tag (OCI image tag or binary
+    /// release/package tag) in the app's version history so a later pin bump does not
+    /// lose it. `artifact_digest` is the OCI content digest for image versions and NULL
+    /// for binary versions. Idempotent on (application_id, version_tag); a later call
+    /// fills a previously-NULL digest but never overwrites a recorded one.
+    pub async fn record_version(
+        pool: &PgPool,
+        application_id: Uuid,
+        version_tag: &str,
+        artifact_digest: Option<&str>,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            INSERT INTO application_versions (application_id, version_tag, artifact_digest)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (application_id, version_tag)
+            DO UPDATE SET artifact_digest =
+                COALESCE(application_versions.artifact_digest, EXCLUDED.artifact_digest)
+            "#,
+        )
+        .bind(application_id)
+        .bind(version_tag)
+        .bind(artifact_digest)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// BUNYIP-386: true when `version_tag` is a recorded, non-yanked version of the
+    /// application. Both proxies (OCI registry and binary download) use this as their
+    /// tag allow-list so historical tags stay servable after the pin is bumped.
+    pub async fn is_pullable_version(
+        pool: &PgPool,
+        application_id: Uuid,
+        version_tag: &str,
+    ) -> Result<bool, AppError> {
+        let ok: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM application_versions
+                WHERE application_id = $1 AND version_tag = $2 AND NOT yanked
+            )
+            "#,
+        )
+        .bind(application_id)
+        .bind(version_tag)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(ok)
+    }
 }
 
 #[cfg(test)]
@@ -461,6 +514,95 @@ mod tests {
 
         sqlx::query("DELETE FROM applications WHERE id = $1")
             .bind(row.0)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    // BUNYIP-386: version history record/pull/yank behaviour.
+    #[actix_rt::test]
+    async fn version_history_roundtrip_and_yank() {
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
+        let slug = format!("test-oci-versions-{}", uuid::Uuid::new_v4());
+        sqlx::query(
+            r#"INSERT INTO applications (name, slug, display_name, container_name)
+               VALUES ($1, $1, $1, $1)"#,
+        )
+        .bind(&slug)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (app_id,): (uuid::Uuid,) =
+            sqlx::query_as("SELECT id FROM applications WHERE slug = $1")
+                .bind(&slug)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        // Record two versions; the repeated v0.7.0 call is idempotent.
+        ApplicationRepository::record_version(&pool, app_id, "v0.7.0", None)
+            .await
+            .unwrap();
+        ApplicationRepository::record_version(&pool, app_id, "v0.8.0", None)
+            .await
+            .unwrap();
+        ApplicationRepository::record_version(&pool, app_id, "v0.7.0", None)
+            .await
+            .unwrap();
+
+        // Both recorded tags are pullable; an unrecorded one is not.
+        assert!(
+            ApplicationRepository::is_pullable_version(&pool, app_id, "v0.7.0")
+                .await
+                .unwrap()
+        );
+        assert!(
+            ApplicationRepository::is_pullable_version(&pool, app_id, "v0.8.0")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !ApplicationRepository::is_pullable_version(&pool, app_id, "v9.9.9")
+                .await
+                .unwrap()
+        );
+
+        // A yanked version stops being pullable; others are unaffected.
+        sqlx::query(
+            "UPDATE application_versions SET yanked = true WHERE application_id = $1 AND version_tag = $2",
+        )
+        .bind(app_id)
+        .bind("v0.7.0")
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            !ApplicationRepository::is_pullable_version(&pool, app_id, "v0.7.0")
+                .await
+                .unwrap()
+        );
+        assert!(
+            ApplicationRepository::is_pullable_version(&pool, app_id, "v0.8.0")
+                .await
+                .unwrap()
+        );
+
+        // Idempotent record: exactly one v0.7.0 row.
+        let (n,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM application_versions WHERE application_id = $1 AND version_tag = $2",
+        )
+        .bind(app_id)
+        .bind("v0.7.0")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(n, 1);
+
+        // application_versions rows cascade-delete with the app.
+        sqlx::query("DELETE FROM applications WHERE id = $1")
+            .bind(app_id)
             .execute(&pool)
             .await
             .unwrap();

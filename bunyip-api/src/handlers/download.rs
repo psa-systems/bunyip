@@ -212,8 +212,12 @@ async fn build_download_group(
     })
 }
 
-/// GET /v1/applications/{slug}/downloads/{asset_name}
-pub async fn download_asset(
+// Core of both download handlers. `requested_version` is None for the default route
+// (serve the current pinned release) and Some(tag) for the versioned route (serve a
+// specific historical release). Kept as one function so the entitlement, rate-limit,
+// cache and streaming logic below cannot drift between the two entrypoints.
+#[allow(clippy::too_many_arguments)]
+async fn download_asset_core(
     req: HttpRequest,
     user: MemberUser,
     pool: web::Data<PgPool>,
@@ -221,7 +225,9 @@ pub async fn download_asset(
     download_cache: web::Data<Option<Arc<AppDownloadCache>>>,
     limiter: web::Data<Arc<DownloadLimiter>>,
     download_counter: web::Data<Arc<DownloadDailyCountRepository>>,
-    path: web::Path<(String, String)>,
+    slug: String,
+    asset_name: String,
+    requested_version: Option<String>,
 ) -> Result<HttpResponse, AppError> {
     let release_cache = release_cache
         .get_ref()
@@ -231,13 +237,45 @@ pub async fn download_asset(
         .get_ref()
         .as_ref()
         .ok_or_else(|| AppError::not_found("Downloads"))?;
-    let (slug, asset_name) = path.into_inner();
     let ip = extract_client_ip(&req).map(ipnetwork::IpNetwork::from);
 
     let app = ApplicationRepository::find_active_by_slug(&pool, &slug)
         .await?
         .ok_or(AppError::not_found("Application"))?;
-    let Some(source) = app.download_source() else {
+    // Resolve which release version to serve (BUNYIP-386).
+    let source = match requested_version.as_deref() {
+        // Versioned route: serve-relax allow-list, mirroring the OCI proxy. The current
+        // pin is always servable; any other tag must be a recorded, non-yanked version.
+        // A 404 (not 403) matches the unknown-asset paths so a restricted product's tag
+        // set does not leak by status code.
+        Some(version) => {
+            let allowed = app.pinned_release_tag.as_deref() == Some(version)
+                || ApplicationRepository::is_pullable_version(&pool, app.id, version).await?;
+            if !allowed {
+                return Err(AppError::not_found("Asset"));
+            }
+            app.download_source_for(version)
+        }
+        // Default route: serve the pin, and best-effort self-heal it into the version
+        // history so a pin set before the bump-append (or missed by backfill) stays
+        // servable through the versioned route. Never fails the download.
+        None => {
+            if let Some(tag) = app.pinned_release_tag.as_deref() {
+                if let Err(e) =
+                    ApplicationRepository::record_version(&pool, app.id, tag, None).await
+                {
+                    tracing::warn!(
+                        error = %e,
+                        app_id = %app.id,
+                        tag,
+                        "application_versions self-heal (download) failed"
+                    );
+                }
+            }
+            app.download_source()
+        }
+    };
+    let Some(source) = source else {
         return Err(AppError::not_found("Asset"));
     };
 
@@ -490,6 +528,63 @@ pub async fn download_asset(
             ))
         }
     }
+}
+
+/// `GET /applications/{slug}/downloads/{asset_name}` - serve an asset from the app's
+/// current pinned release.
+pub async fn download_asset(
+    req: HttpRequest,
+    user: MemberUser,
+    pool: web::Data<PgPool>,
+    release_cache: web::Data<Option<Arc<ReleaseCache>>>,
+    download_cache: web::Data<Option<Arc<AppDownloadCache>>>,
+    limiter: web::Data<Arc<DownloadLimiter>>,
+    download_counter: web::Data<Arc<DownloadDailyCountRepository>>,
+    path: web::Path<(String, String)>,
+) -> Result<HttpResponse, AppError> {
+    let (slug, asset_name) = path.into_inner();
+    download_asset_core(
+        req,
+        user,
+        pool,
+        release_cache,
+        download_cache,
+        limiter,
+        download_counter,
+        slug,
+        asset_name,
+        None,
+    )
+    .await
+}
+
+/// `GET /applications/{slug}/downloads/{version}/{asset_name}` - serve an asset from a
+/// specific recorded historical release (BUNYIP-386), so a pin bump no longer makes the
+/// old binary version unreachable through Bunyip.
+pub async fn download_asset_versioned(
+    req: HttpRequest,
+    user: MemberUser,
+    pool: web::Data<PgPool>,
+    release_cache: web::Data<Option<Arc<ReleaseCache>>>,
+    download_cache: web::Data<Option<Arc<AppDownloadCache>>>,
+    limiter: web::Data<Arc<DownloadLimiter>>,
+    download_counter: web::Data<Arc<DownloadDailyCountRepository>>,
+    path: web::Path<(String, String, String)>,
+) -> Result<HttpResponse, AppError> {
+    let (slug, version, asset_name) = path.into_inner();
+    download_asset_core(
+        req,
+        user,
+        pool,
+        release_cache,
+        download_cache,
+        limiter,
+        download_counter,
+        slug,
+        asset_name,
+        Some(version),
+    )
+    .await
 }
 
 async fn fetch_release_or_502(
