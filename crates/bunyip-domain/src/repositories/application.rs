@@ -398,7 +398,9 @@ impl ApplicationRepository {
             r#"
             INSERT INTO application_versions (application_id, image_tag, image_digest)
             VALUES ($1, $2, $3)
-            ON CONFLICT (application_id, image_tag) DO NOTHING
+            ON CONFLICT (application_id, image_tag)
+            DO UPDATE SET image_digest =
+                COALESCE(application_versions.image_digest, EXCLUDED.image_digest)
             "#,
         )
         .bind(application_id)

@@ -220,6 +220,25 @@ pub async fn get_manifest(
             .await
     };
 
+    // BUNYIP-386 (option b): self-heal the version history on the serve path. A
+    // tag that reached here is already allowed (the pinned tag or a recorded
+    // non-yanked version), so recording it guarantees the pinned tag is always
+    // in the history even if the admin-bump append missed it, and it fills the
+    // resolved digest. Best-effort: a history write never fails a pull. Digest
+    // references are not versions, so skip them.
+    if !is_digest {
+        if let Err(e) = ApplicationRepository::record_version(
+            pool.get_ref(),
+            app.id,
+            &reference,
+            Some(&manifest.digest),
+        )
+        .await
+        {
+            tracing::warn!(error = %e, app_id = %app.id, tag = %reference, "application_versions self-heal record failed");
+        }
+    }
+
     audit_completed(
         pool.get_ref(),
         &req,
