@@ -386,50 +386,53 @@ impl ApplicationRepository {
         Ok(apps)
     }
 
-    /// BUNYIP-386: record a published image tag in the app's version history so a
-    /// later pin bump does not lose it. Idempotent on (application_id, image_tag).
+    /// BUNYIP-386: record a published version tag (OCI image tag or binary
+    /// release/package tag) in the app's version history so a later pin bump does not
+    /// lose it. `artifact_digest` is the OCI content digest for image versions and NULL
+    /// for binary versions. Idempotent on (application_id, version_tag); a later call
+    /// fills a previously-NULL digest but never overwrites a recorded one.
     pub async fn record_version(
         pool: &PgPool,
         application_id: Uuid,
-        image_tag: &str,
-        image_digest: Option<&str>,
+        version_tag: &str,
+        artifact_digest: Option<&str>,
     ) -> Result<(), AppError> {
         sqlx::query(
             r#"
-            INSERT INTO application_versions (application_id, image_tag, image_digest)
+            INSERT INTO application_versions (application_id, version_tag, artifact_digest)
             VALUES ($1, $2, $3)
-            ON CONFLICT (application_id, image_tag)
-            DO UPDATE SET image_digest =
-                COALESCE(application_versions.image_digest, EXCLUDED.image_digest)
+            ON CONFLICT (application_id, version_tag)
+            DO UPDATE SET artifact_digest =
+                COALESCE(application_versions.artifact_digest, EXCLUDED.artifact_digest)
             "#,
         )
         .bind(application_id)
-        .bind(image_tag)
-        .bind(image_digest)
+        .bind(version_tag)
+        .bind(artifact_digest)
         .execute(pool)
         .await?;
 
         Ok(())
     }
 
-    /// BUNYIP-386: true when `image_tag` is a recorded, non-yanked version of the
-    /// application. The OCI proxy uses this as its tag allow-list so historical
-    /// tags stay pullable after the pinned tag is bumped.
+    /// BUNYIP-386: true when `version_tag` is a recorded, non-yanked version of the
+    /// application. Both proxies (OCI registry and binary download) use this as their
+    /// tag allow-list so historical tags stay servable after the pin is bumped.
     pub async fn is_pullable_version(
         pool: &PgPool,
         application_id: Uuid,
-        image_tag: &str,
+        version_tag: &str,
     ) -> Result<bool, AppError> {
         let ok: bool = sqlx::query_scalar(
             r#"
             SELECT EXISTS(
                 SELECT 1 FROM application_versions
-                WHERE application_id = $1 AND image_tag = $2 AND NOT yanked
+                WHERE application_id = $1 AND version_tag = $2 AND NOT yanked
             )
             "#,
         )
         .bind(application_id)
-        .bind(image_tag)
+        .bind(version_tag)
         .fetch_one(pool)
         .await?;
 
@@ -568,7 +571,7 @@ mod tests {
 
         // A yanked version stops being pullable; others are unaffected.
         sqlx::query(
-            "UPDATE application_versions SET yanked = true WHERE application_id = $1 AND image_tag = $2",
+            "UPDATE application_versions SET yanked = true WHERE application_id = $1 AND version_tag = $2",
         )
         .bind(app_id)
         .bind("v0.7.0")
@@ -588,7 +591,7 @@ mod tests {
 
         // Idempotent record: exactly one v0.7.0 row.
         let (n,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM application_versions WHERE application_id = $1 AND image_tag = $2",
+            "SELECT COUNT(*) FROM application_versions WHERE application_id = $1 AND version_tag = $2",
         )
         .bind(app_id)
         .bind("v0.7.0")

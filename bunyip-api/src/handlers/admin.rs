@@ -810,10 +810,18 @@ pub async fn update_application(
 
     let app = ApplicationRepository::update(&pool, app_id, &body).await?;
 
-    // BUNYIP-386: retain the current pinned tag in the version history so a later
-    // bump adds a version rather than losing this one. Idempotent; best-effort so a
-    // history-write hiccup never fails the update.
-    if let Some(tag) = app.pinned_image_tag.as_deref() {
+    // BUNYIP-386: retain the current pin(s) in the version history so a later bump adds a
+    // version rather than losing this one. Covers both distribution paths - the OCI image
+    // tag and the binary release/package tag - so binaries are retained the same way
+    // images are; an app sets one of the two. Idempotent; best-effort so a history-write
+    // hiccup never fails the update.
+    for tag in [
+        app.pinned_image_tag.as_deref(),
+        app.pinned_release_tag.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
         if let Err(e) = ApplicationRepository::record_version(&pool, app.id, tag, None).await {
             tracing::warn!(error = %e, app_id = %app.id, tag, "application_versions record failed");
         }
