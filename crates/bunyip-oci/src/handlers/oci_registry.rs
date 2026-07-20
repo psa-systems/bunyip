@@ -92,8 +92,16 @@ pub async fn get_manifest(
     // Reference must be the pinned tag or a sha256 digest. Child manifests
     // (multi-arch) are fetched via digest references and hash-verified by
     // upstream; we allow them through.
+    // BUNYIP-386: allow the pinned tag, any sha256 digest, OR any recorded
+    // non-yanked historical version (application_versions), so a pin bump no
+    // longer makes older tags unpullable through the proxy.
     let is_digest = reference.starts_with("sha256:");
-    if !is_digest && reference != pinned {
+    if !is_digest
+        && reference != pinned
+        && !ApplicationRepository::is_pullable_version(pool.get_ref(), app.id, &reference)
+            .await
+            .map_err(|_| OciError::Internal)?
+    {
         return Err(OciError::ManifestUnknown);
     }
 
