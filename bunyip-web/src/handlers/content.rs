@@ -1,9 +1,9 @@
 //! Content + marketing pages: pricing, our story, terms, privacy, feedback.
 
-use axum::extract::{Multipart, Query, State};
+use axum::extract::{Multipart, Path, Query, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
-use maud::{html, Markup};
+use maud::{html, Markup, PreEscaped};
 use serde::Deserialize;
 
 use crate::api::auth as auth_api;
@@ -623,4 +623,157 @@ pub async fn feedback_post(
         false,
         feedback_form(submitted, error.as_deref(), render_path.as_deref()),
     )
+}
+
+// --- docs (BUNYIP-385) ------------------------------------------------------
+//
+// Temporary public home for the top-level repo docs under /docs, until the
+// dedicated docs app matures (then repoint /docs there, or 301). The markdown is
+// embedded from `bunyip-web/src/docs/*.md`, which are crate-local COPIES of the
+// top-level `docs/*.md` (the `docs/dev-docs/` internal notes are intentionally
+// excluded). Canonical source is the repo `docs/`; re-sync the copies when those
+// change. This whole module retires with the docs-app cutover.
+
+/// (slug, title, markdown) for each doc surfaced under /docs.
+const DOCS: &[(&str, &str, &str)] = &[
+    (
+        "getting-started",
+        "Getting Started",
+        include_str!("../docs/getting-started.md"),
+    ),
+    (
+        "stripe-test-mode",
+        "Stripe Test Mode",
+        include_str!("../docs/stripe-test-mode.md"),
+    ),
+    (
+        "client-ip-forwarding",
+        "Client IP Forwarding",
+        include_str!("../docs/client-ip-forwarding.md"),
+    ),
+    (
+        "oci-registry-verification",
+        "OCI Registry Verification",
+        include_str!("../docs/oci-registry-verification.md"),
+    ),
+    (
+        "reconcile-sqlx-checksums",
+        "Reconcile SQLx Checksums",
+        include_str!("../docs/reconcile-sqlx-checksums.md"),
+    ),
+    (
+        "dev-sso-three-repo-runbook",
+        "Dev SSO Three-Repo Runbook",
+        include_str!("../docs/dev-sso-three-repo-runbook.md"),
+    ),
+    ("e2e", "End-to-End Tests", include_str!("../docs/e2e.md")),
+];
+
+/// Minimal styling for the rendered markdown (bunyip-web has no Tailwind
+/// typography plugin), scoped to `.docs-article`.
+const DOCS_CSS: &str = "\
+.docs-article{line-height:1.65;}\
+.docs-article h1,.docs-article h2,.docs-article h3{font-weight:600;line-height:1.25;margin:1.6em 0 .6em;}\
+.docs-article h1{font-size:1.9rem;}.docs-article h2{font-size:1.45rem;}.docs-article h3{font-size:1.2rem;}\
+.docs-article p,.docs-article ul,.docs-article ol{margin:.75em 0;}\
+.docs-article ul,.docs-article ol{padding-left:1.5em;}.docs-article li{margin:.25em 0;}\
+.docs-article a{color:hsl(var(--primary));text-decoration:underline;}\
+.docs-article code{background:hsl(var(--muted));padding:.15em .35em;border-radius:.25rem;font-size:.9em;}\
+.docs-article pre{background:hsl(var(--muted));padding:1em;border-radius:.5rem;overflow-x:auto;}\
+.docs-article pre code{background:none;padding:0;}\
+.docs-article table{border-collapse:collapse;margin:1em 0;display:block;overflow-x:auto;}\
+.docs-article th,.docs-article td{border:1px solid hsl(var(--border));padding:.5em .75em;text-align:left;}\
+.docs-article blockquote{border-left:3px solid hsl(var(--border));padding-left:1em;color:hsl(var(--muted-foreground));margin:1em 0;}\
+";
+
+fn render_markdown(md: &str) -> String {
+    use pulldown_cmark::{html, Options, Parser};
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_TABLES);
+    opts.insert(Options::ENABLE_STRIKETHROUGH);
+    opts.insert(Options::ENABLE_FOOTNOTES);
+    opts.insert(Options::ENABLE_TASKLISTS);
+    let mut out = String::new();
+    html::push_html(&mut out, Parser::new_ext(md, opts));
+    out
+}
+
+/// `GET /docs` - index of the embedded docs. Public (BUNYIP-385).
+pub async fn docs_index(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (c, apps) = public_ctx(&st, &headers).await;
+    let content = html! {
+        div class="container max-w-4xl py-12" {
+            h1 class="text-4xl font-bold mb-4" { "Documentation" }
+            p class="text-muted-foreground mb-8" { "Guides and runbooks for Mokosh and Bunyip. Temporary home while the dedicated docs app is built out." }
+            ul class="space-y-3" {
+                @for &(slug, title, _) in DOCS.iter() {
+                    li {
+                        a class="text-lg text-primary hover:underline" href=(format!("/docs/{slug}")) { (title) }
+                    }
+                }
+            }
+        }
+    };
+    public_response(&st, &c, &apps, "Docs · Bunyip", true, content)
+}
+
+/// `GET /docs/{slug}` - render one embedded doc. Public (BUNYIP-385).
+pub async fn docs_page(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+) -> Response {
+    let (c, apps) = public_ctx(&st, &headers).await;
+    let Some(&(_, title, md)) = DOCS.iter().find(|&&(s, _, _)| s == slug.as_str()) else {
+        let content = html! {
+            div class="container max-w-4xl py-12" {
+                h1 class="text-4xl font-bold mb-4" { "Document not found" }
+                p class="text-muted-foreground" {
+                    "No such doc. " a class="text-primary hover:underline" href="/docs" { "Back to documentation" } "."
+                }
+            }
+        };
+        let mut resp = public_response(&st, &c, &apps, "Docs · Bunyip", true, content);
+        *resp.status_mut() = axum::http::StatusCode::NOT_FOUND;
+        return resp;
+    };
+    let content = html! {
+        style { (PreEscaped(DOCS_CSS)) }
+        div class="container max-w-4xl py-12" {
+            div class="mb-6" { a class="text-sm text-muted-foreground hover:underline" href="/docs" { "← Documentation" } }
+            article class="docs-article" { (PreEscaped(render_markdown(md))) }
+        }
+    };
+    public_response(
+        &st,
+        &c,
+        &apps,
+        &format!("{title} · Docs · Bunyip"),
+        true,
+        content,
+    )
+}
+
+#[cfg(test)]
+mod docs_tests {
+    use super::{render_markdown, DOCS};
+    use std::collections::HashSet;
+
+    #[test]
+    fn docs_registry_is_sound() {
+        assert!(!DOCS.is_empty());
+        let mut seen = HashSet::new();
+        for (slug, title, md) in DOCS {
+            assert!(seen.insert(*slug), "duplicate doc slug: {slug}");
+            assert!(!slug.is_empty() && !title.is_empty());
+            assert!(md.len() > 20, "embedded doc {slug} looks empty");
+        }
+    }
+
+    #[test]
+    fn render_markdown_emits_html() {
+        let html = render_markdown("# Title\n\nSome **bold** text.\n");
+        assert!(html.contains("<h1>"), "heading not rendered");
+        assert!(html.contains("<strong>bold</strong>"), "bold not rendered");
+    }
 }

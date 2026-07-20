@@ -72,6 +72,10 @@ async fn main() {
         .route("/roadmap", get(content::roadmap))
         .route("/terms", get(content::terms))
         .route("/privacy", get(content::privacy))
+        // BUNYIP-385: public docs under /docs (docs subdomain), a temporary home
+        // until the dedicated docs app matures.
+        .route("/docs", get(content::docs_index))
+        .route("/docs/{slug}", get(content::docs_page))
         .route(
             "/feedback",
             get(content::feedback_get)
