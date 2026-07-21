@@ -2806,6 +2806,9 @@ pub async fn application_edit(
             };
             let surfaces = SurfaceVisibility::of(app);
             html! {
+                div class="mb-4" {
+                    a class=(button_class("outline", "sm", "")) href=(format!("/admin/applications/{id}/docs")) { "Manage documentation" }
+                }
                 (application_form(
                     &format!("/admin/applications/{id}/distribution"),
                     &format!("Edit {}", app.display_name),
@@ -5081,4 +5084,164 @@ mod rate_limit_tests {
         assert_eq!(fmt_retry_secs(60), "1m");
         assert_eq!(fmt_retry_secs(125), "2m 5s");
     }
+}
+
+// --- application documentation (BUNYIP-388) ---------------------------------
+
+/// Add/edit form fields for one documentation page.
+#[derive(Debug, Deserialize)]
+pub struct DocForm {
+    pub slug: String,
+    pub title: String,
+    pub body: String,
+    #[serde(default)]
+    pub sort_order: i32,
+}
+
+/// GET /admin/applications/{id}/docs - manage an app's documentation pages.
+pub async fn application_docs(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let app_name = match admin_api::applications(&st.api, c.forward.as_deref()).await {
+        Ok(apps) => apps
+            .iter()
+            .find(|a| a.id == id)
+            .map(|a| a.display_name.clone())
+            .unwrap_or_else(|| id.clone()),
+        Err(e) => {
+            let content = html! {
+                div class="space-y-6" {
+                    h1 class="text-3xl font-bold" { "Manage documentation" }
+                    (error_box(&e.user_message()))
+                }
+            };
+            return admin_response(
+                &c,
+                &user,
+                "/admin/applications",
+                "Manage documentation · Bunyip",
+                content,
+            );
+        }
+    };
+    let docs = admin_api::app_docs(&st.api, c.forward.as_deref(), &id)
+        .await
+        .unwrap_or_default();
+    let content = html! {
+        div class="space-y-8" {
+            div {
+                a class="text-sm text-muted-foreground hover:underline" href="/admin/applications" { "← Applications" }
+                h1 class="text-3xl font-bold mt-2" { "Documentation: " (app_name) }
+                p class="text-muted-foreground" { "Public pages, rendered as markdown (raw HTML is stripped). Lower sort order shows first." }
+            }
+            div class="space-y-6" {
+                @if docs.is_empty() {
+                    p class="text-muted-foreground" { "No pages yet. Add one below." }
+                }
+                @for d in &docs {
+                    div class="rounded-lg border p-4 space-y-3" {
+                        form method="post" action=(format!("/admin/applications/{id}/docs/{}", d.id)) class="space-y-3" {
+                            div class="grid gap-3 md:grid-cols-3" {
+                                label class="text-sm block" { "Title" input class="mt-1 w-full rounded border px-2 py-1" name="title" value=(d.title) required; }
+                                label class="text-sm block" { "Slug" input class="mt-1 w-full rounded border px-2 py-1" name="slug" value=(d.slug) required; }
+                                label class="text-sm block" { "Sort order" input type="number" class="mt-1 w-full rounded border px-2 py-1" name="sort_order" value=(d.sort_order); }
+                            }
+                            label class="text-sm block" { "Body (markdown)" textarea class="mt-1 w-full rounded border px-2 py-1 font-mono text-sm" name="body" rows="10" { (d.body) } }
+                            button type="submit" class=(button_class("default", "sm", "")) { "Save" }
+                        }
+                        form method="post" action=(format!("/admin/applications/{id}/docs/{}/delete", d.id)) {
+                            button type="submit" class=(button_class("destructive", "sm", "")) { "Delete" }
+                        }
+                    }
+                }
+            }
+            div class="rounded-lg border p-4 space-y-3" {
+                h2 class="text-xl font-semibold" { "Add a page" }
+                form method="post" action=(format!("/admin/applications/{id}/docs")) class="space-y-3" {
+                    div class="grid gap-3 md:grid-cols-3" {
+                        label class="text-sm block" { "Title" input class="mt-1 w-full rounded border px-2 py-1" name="title" required; }
+                        label class="text-sm block" { "Slug" input class="mt-1 w-full rounded border px-2 py-1" name="slug" placeholder="getting-started" required; }
+                        label class="text-sm block" { "Sort order" input type="number" class="mt-1 w-full rounded border px-2 py-1" name="sort_order" value="0"; }
+                    }
+                    label class="text-sm block" { "Body (markdown)" textarea class="mt-1 w-full rounded border px-2 py-1 font-mono text-sm" name="body" rows="10" {} }
+                    button type="submit" class=(button_class("default", "sm", "")) { "Add page" }
+                }
+            }
+        }
+    };
+    admin_response(
+        &c,
+        &user,
+        "/admin/applications",
+        "Manage documentation · Bunyip",
+        content,
+    )
+}
+
+/// POST /admin/applications/{id}/docs - create a page, then back to the manager.
+pub async fn application_doc_create(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<DocForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::create_app_doc(
+        &st.api,
+        c.forward.as_deref(),
+        &id,
+        &f.slug,
+        &f.title,
+        &f.body,
+        f.sort_order,
+    )
+    .await;
+    redirect_cookies(&format!("/admin/applications/{id}/docs"), &c.set_cookies)
+}
+
+/// POST /admin/applications/{id}/docs/{doc_id} - update a page.
+pub async fn application_doc_update(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path((id, doc_id)): Path<(String, String)>,
+    Form(f): Form<DocForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::update_app_doc(
+        &st.api,
+        c.forward.as_deref(),
+        &doc_id,
+        &f.slug,
+        &f.title,
+        &f.body,
+        f.sort_order,
+    )
+    .await;
+    redirect_cookies(&format!("/admin/applications/{id}/docs"), &c.set_cookies)
+}
+
+/// POST /admin/applications/{id}/docs/{doc_id}/delete - delete a page.
+pub async fn application_doc_delete(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path((id, doc_id)): Path<(String, String)>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let _ = admin_api::delete_app_doc(&st.api, c.forward.as_deref(), &doc_id).await;
+    redirect_cookies(&format!("/admin/applications/{id}/docs"), &c.set_cookies)
 }

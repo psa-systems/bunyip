@@ -762,6 +762,95 @@ pub async fn docs_page(
     )
 }
 
+/// `GET /apps/{slug}/docs` - an application's public documentation index
+/// (BUNYIP-388). Pages come from the API; an app with none shows an empty state.
+pub async fn app_docs_index(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+) -> Response {
+    let (c, apps) = public_ctx(&st, &headers).await;
+    let app_name = apps
+        .iter()
+        .find(|a| a.slug == slug)
+        .map(|a| a.display_name.clone())
+        .unwrap_or_else(|| slug.clone());
+    let docs = calls::app_docs(&st.api, &slug).await.unwrap_or_default();
+    let content = html! {
+        div class="container max-w-4xl py-12" {
+            h1 class="text-4xl font-bold mb-4" { (app_name) " documentation" }
+            @if docs.is_empty() {
+                p class="text-muted-foreground" { "No documentation is available for this app yet." }
+            } @else {
+                ul class="space-y-3" {
+                    @for d in &docs {
+                        li {
+                            a class="text-lg text-primary hover:underline" href=(format!("/apps/{slug}/docs/{}", d.slug)) { (d.title) }
+                        }
+                    }
+                }
+            }
+        }
+    };
+    public_response(
+        &st,
+        &c,
+        &apps,
+        &format!("{app_name} docs · Bunyip"),
+        true,
+        content,
+    )
+}
+
+/// `GET /apps/{slug}/docs/{doc_slug}` - render one app doc page. Public (BUNYIP-388).
+pub async fn app_docs_page(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path((slug, doc_slug)): Path<(String, String)>,
+) -> Response {
+    let (c, apps) = public_ctx(&st, &headers).await;
+    let app_name = apps
+        .iter()
+        .find(|a| a.slug == slug)
+        .map(|a| a.display_name.clone())
+        .unwrap_or_else(|| slug.clone());
+    let doc = match calls::app_doc(&st.api, &slug, &doc_slug).await {
+        Ok(d) => d,
+        Err(_) => {
+            let content = html! {
+                div class="container max-w-4xl py-12" {
+                    h1 class="text-4xl font-bold mb-4" { "Document not found" }
+                    p class="text-muted-foreground" {
+                        "No such page. "
+                        a class="text-primary hover:underline" href=(format!("/apps/{slug}/docs")) { "Back to " (app_name) " docs" }
+                        "."
+                    }
+                }
+            };
+            let mut resp = public_response(&st, &c, &apps, "Docs · Bunyip", true, content);
+            *resp.status_mut() = axum::http::StatusCode::NOT_FOUND;
+            return resp;
+        }
+    };
+    let content = html! {
+        style { (PreEscaped(DOCS_CSS)) }
+        div class="container max-w-4xl py-12" {
+            div class="mb-6" {
+                a class="text-sm text-muted-foreground hover:underline" href=(format!("/apps/{slug}/docs")) { "← " (app_name) " documentation" }
+            }
+            article class="docs-article" { (PreEscaped(render_markdown(&doc.body))) }
+        }
+    };
+    public_response(
+        &st,
+        &c,
+        &apps,
+        &format!("{} · {app_name} docs · Bunyip", doc.title),
+        true,
+        content,
+    )
+}
+
 #[cfg(test)]
 mod docs_tests {
     use super::{render_markdown, DOCS};

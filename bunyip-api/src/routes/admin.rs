@@ -113,6 +113,23 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/applications/{app_id}",
                 web::delete().to(handlers::delete_application),
             )
+            // BUNYIP-388: per-application documentation (admin authoring).
+            .route(
+                "/applications/{app_id}/docs",
+                web::get().to(handlers::list_app_docs_admin),
+            )
+            .route(
+                "/applications/{app_id}/docs",
+                web::post().to(handlers::create_app_doc),
+            )
+            .route(
+                "/application-docs/{doc_id}",
+                web::put().to(handlers::update_app_doc),
+            )
+            .route(
+                "/application-docs/{doc_id}",
+                web::delete().to(handlers::delete_app_doc),
+            )
             .route(
                 "/applications/{app_id}/group",
                 web::put().to(handlers::set_application_group),

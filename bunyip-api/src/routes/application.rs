@@ -22,6 +22,12 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route(
                 "/{slug}/downloads/{version}/{asset_name}",
                 web::get().to(handlers::download_asset_versioned),
+            )
+            // BUNYIP-388: public per-application documentation.
+            .route("/{slug}/docs", web::get().to(handlers::list_app_docs))
+            .route(
+                "/{slug}/docs/{doc_slug}",
+                web::get().to(handlers::get_app_doc),
             ),
     );
     // Application groups (BUNYIP-100): display metadata for grouping the apps.

@@ -3,9 +3,9 @@
 use serde_json::{json, Value};
 
 use super::types::{
-    AppDownloadGroup, Application, ApplicationGroup, ApplicationGroupList, ApplicationList,
-    CheckoutSessionResponse, DownloadGroups, Membership, PaginatedResponse, SessionInfo,
-    StripeInvoice, StripePaymentResponse,
+    AppDoc, AppDocSummary, AppDownloadGroup, Application, ApplicationGroup, ApplicationGroupList,
+    ApplicationList, CheckoutSessionResponse, DownloadGroups, Membership, PaginatedResponse,
+    SessionInfo, StripeInvoice, StripePaymentResponse,
 };
 use super::{ok_data, parse, Api, ApiError};
 
@@ -213,4 +213,32 @@ pub async fn submit_feedback(
     let r = api.post_form("/feedback", cookie, form).await?;
     let _: &Value = ok_data(&r)?;
     Ok(())
+}
+
+// --- application docs (BUNYIP-388, public read) -----------------------------
+
+/// Public: an application's documentation index (page metadata, ordered).
+pub async fn app_docs(api: &Api, app_slug: &str) -> Result<Vec<AppDocSummary>, ApiError> {
+    parse(
+        api.get(
+            &format!("/applications/{}/docs", urlencoding::encode(app_slug)),
+            None,
+        )
+        .await?,
+    )
+}
+
+/// Public: one documentation page by app slug + doc slug.
+pub async fn app_doc(api: &Api, app_slug: &str, doc_slug: &str) -> Result<AppDoc, ApiError> {
+    parse(
+        api.get(
+            &format!(
+                "/applications/{}/docs/{}",
+                urlencoding::encode(app_slug),
+                urlencoding::encode(doc_slug)
+            ),
+            None,
+        )
+        .await?,
+    )
 }
