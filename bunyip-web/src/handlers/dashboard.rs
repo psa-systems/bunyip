@@ -514,7 +514,8 @@ fn instruction_step(n: u32, title: &str, body: Markup) -> Markup {
 }
 
 /// Docker pull-and-run instructions for a product's OCI image: a prerequisite
-/// line plus numbered steps (sign in if the registry is private, pull, then
+/// line plus numbered steps (sign in - the registry is a private proxy, so this
+/// is always required - pull, then
 /// either a one-shot `docker run` or a copy-pasteable Docker Compose skeleton).
 /// Docker only, per the BUNYIP-358 decision. No digest-verify step: `reference`
 /// is tag-pinned and the API exposes no separate digest to check against. The
@@ -536,7 +537,7 @@ fn container_instructions(oci: &OciImage) -> Markup {
                 "Requires Docker installed. Pulls " code class="font-mono" { (oci.reference) } "."
             }
             ol class="space-y-3" {
-                (instruction_step(1, "Sign in to the registry (only if it is private)", command_block(&format!("docker login {}", oci.registry))))
+                (instruction_step(1, "Sign in to the registry", command_block(&format!("docker login {}", oci.registry))))
                 (instruction_step(2, "Pull the image", command_block(&format!("docker pull {}", oci.reference))))
                 (instruction_step(3, "Run it (a starting point; add the ports, env, and volumes the app needs)", command_block(&format!("docker run --rm {}", oci.reference))))
                 (instruction_step(4, "Or deploy with Docker Compose (save as compose.yml)", html! {
