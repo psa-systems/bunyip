@@ -625,14 +625,16 @@ pub async fn feedback_post(
     )
 }
 
-// --- docs (BUNYIP-385) ------------------------------------------------------
+// --- docs (BUNYIP-385, curated for users in BUNYIP-387) ---------------------
 //
-// Temporary public home for the top-level repo docs under /docs, until the
-// dedicated docs app matures (then repoint /docs there, or 301). The markdown is
-// embedded from `bunyip-web/src/docs/*.md`, which are crate-local COPIES of the
-// top-level `docs/*.md` (the `docs/dev-docs/` internal notes are intentionally
-// excluded). Canonical source is the repo `docs/`; re-sync the copies when those
-// change. This whole module retires with the docs-app cutover.
+// Public PRODUCT docs under /docs, for people using Bunyip to access and
+// download apps (e.g. Mokosh). This set is user-facing by design: internal
+// developer runbooks (e2e, sqlx checksums, dev-sso, client-IP forwarding,
+// Stripe test mode, the OCI verification runbook) live under the repo `docs/`
+// and `docs/dev-docs/`, NOT here - do not surface them at /docs. The markdown
+// is embedded from `bunyip-web/src/docs/*.md`. Temporary home until the
+// dedicated docs app matures (then repoint /docs there, or 301); this whole
+// module retires with that cutover.
 
 /// (slug, title, markdown) for each doc surfaced under /docs.
 const DOCS: &[(&str, &str, &str)] = &[
@@ -642,31 +644,15 @@ const DOCS: &[(&str, &str, &str)] = &[
         include_str!("../docs/getting-started.md"),
     ),
     (
-        "stripe-test-mode",
-        "Stripe Test Mode",
-        include_str!("../docs/stripe-test-mode.md"),
+        "downloading-apps",
+        "Downloading Apps",
+        include_str!("../docs/downloading-apps.md"),
     ),
     (
-        "client-ip-forwarding",
-        "Client IP Forwarding",
-        include_str!("../docs/client-ip-forwarding.md"),
+        "membership",
+        "Membership & Access",
+        include_str!("../docs/membership.md"),
     ),
-    (
-        "oci-registry-verification",
-        "OCI Registry Verification",
-        include_str!("../docs/oci-registry-verification.md"),
-    ),
-    (
-        "reconcile-sqlx-checksums",
-        "Reconcile SQLx Checksums",
-        include_str!("../docs/reconcile-sqlx-checksums.md"),
-    ),
-    (
-        "dev-sso-three-repo-runbook",
-        "Dev SSO Three-Repo Runbook",
-        include_str!("../docs/dev-sso-three-repo-runbook.md"),
-    ),
-    ("e2e", "End-to-End Tests", include_str!("../docs/e2e.md")),
 ];
 
 /// Minimal styling for the rendered markdown (bunyip-web has no Tailwind
