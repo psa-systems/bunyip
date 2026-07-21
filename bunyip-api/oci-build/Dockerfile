@@ -20,10 +20,33 @@
 # The binary embeds the SQL migrations (sqlx::migrate!) and email templates
 # (include_str!) at compile time, so the runtime image is just the static binary.
 
-# ---- Stage 1: build ---------------------------------------------------------
-FROM ghcr.io/niceguyit/rust-builder-musl:v1.0.0-rust1.94-alpine AS builder
+# ---- Stage 1: build (cargo-chef) --------------------------------------------
+# Dependency caching via cargo-chef (BUNYIP-389): deterministic, with no source
+# stubbing, no artifact-deleting globs, no mtime touching, and no stub-leak
+# guard. `chef` carries the toolchain + cargo-chef; `planner` distils the
+# dependency recipe; `builder` cooks the deps (cached unless the recipe changes)
+# then compiles the real workspace.
+#
+# musl-dev, pkgconfig, openssl-dev/-static, git and lld already ship in
+# rust-builder-musl. Use lld for faster linking. Fetch the dunite git dep with
+# the git CLI so the optional injected token is honoured. bunyip-oidc uses
+# compile-time sqlx::query! macros; resolve them against the committed .sqlx
+# offline cache instead of a live database.
+FROM ghcr.io/niceguyit/rust-builder-musl:v1.0.0-rust1.94-alpine AS chef
 WORKDIR /build
+ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
+    CARGO_NET_GIT_FETCH_WITH_CLI=true \
+    SQLX_OFFLINE=true
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    cargo install cargo-chef --locked
 
+# ---- Planner: distil the dependency recipe from the manifests ----
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# ---- Builder: cook dependencies, then build the workspace ----
+FROM chef AS builder
 # Build metadata (passed from CI; build.rs reads these env vars instead of git).
 ARG GIT_COMMIT=unknown
 ARG GIT_TAG=unknown
@@ -36,84 +59,35 @@ ENV GIT_COMMIT=${GIT_COMMIT} \
 ARG CARGO_BUILD_JOBS=2
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
-# musl-dev, pkgconfig, openssl-dev/-static, git and lld already ship in
-# rust-builder-musl. Use lld for faster linking. Fetch the dunite git dep with
-# the git CLI so the optional injected token is honoured. bunyip-oidc uses
-# compile-time sqlx::query! macros; resolve them against the committed .sqlx
-# offline cache instead of a live database.
-ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
-    CARGO_NET_GIT_FETCH_WITH_CLI=true \
-    SQLX_OFFLINE=true
-
-# ---- Dependency cache layer ----
-# Copy every workspace manifest and stub their sources so the full dependency
-# graph compiles and caches before the real sources are copied. Editing
-# application code then reuses this layer. The dunite git config (from the
-# optional secret) has to be set in the SAME RUN that touches the network.
-COPY Cargo.toml Cargo.lock ./
-COPY .sqlx .sqlx
-COPY bunyip-api/Cargo.toml bunyip-api/build.rs bunyip-api/
-COPY bunyip-web/Cargo.toml bunyip-web/
-COPY crates/bunyip-domain/Cargo.toml crates/bunyip-domain/
-COPY crates/bunyip-oci/Cargo.toml crates/bunyip-oci/
-COPY crates/bunyip-oidc/Cargo.toml crates/bunyip-oidc/
-# bunyip-domain include_str!'s its email templates at compile time.
-COPY crates/bunyip-domain/templates crates/bunyip-domain/templates
-RUN mkdir -p \
-        bunyip-api/src bunyip-web/src \
-        crates/bunyip-domain/src crates/bunyip-oci/src crates/bunyip-oidc/src \
-    && echo "fn main() {}" > bunyip-api/src/main.rs \
-    && echo "fn main() {}" > bunyip-web/src/main.rs \
-    && : > crates/bunyip-domain/src/lib.rs \
-    && : > crates/bunyip-oci/src/lib.rs \
-    && : > crates/bunyip-oidc/src/lib.rs
-
-# Build the api binary's dependency graph only (cached unless a manifest changes).
-#
-# After the stub build, every workspace-crate artifact AND its cargo
-# fingerprint must be removed. Removing only the deps/ files is not enough:
-# `COPY . .` preserves host mtimes (older than the stub build), so cargo would
-# consider the stub-built empty libs fresh and link the real bunyip-api against
-# them, failing with unresolved imports.
+# Cook dependencies only, from the recipe. This layer is cached unless the
+# dependency graph changes, regardless of application-code edits. Scoped to the
+# two api binaries so it builds exactly the dependency set the final build below
+# needs - not the whole workspace (bunyip-web's deps, and resolver-2 duplicate
+# feature builds of shared crates), which would roughly double the cook. The
+# dunite git dep is anonymously readable; the optional `dunite_token` secret
+# configures an authed mirror when present, in the SAME RUN that touches the
+# network.
+COPY --from=planner /build/recipe.json recipe.json
 RUN --mount=type=secret,id=dunite_token \
     --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     sh -c 'if [ -s /run/secrets/dunite_token ]; then \
               git config --global url."https://oauth2:$(cat /run/secrets/dunite_token)@dev.a8n.run/".insteadOf "https://dev.a8n.run/"; \
            fi' \
-    && cargo build --locked --release --bin bunyip-api \
-    && rm -rf bunyip-api/src bunyip-web/src \
-        crates/bunyip-domain/src crates/bunyip-oci/src crates/bunyip-oidc/src \
-        target/release/deps/*bunyip* \
-        target/release/.fingerprint/bunyip-* \
-        target/release/bunyip-api*
+    && cargo chef cook --release --recipe-path recipe.json \
+        --bin bunyip-api --bin bunyip-e2e-bootstrap
 
-# ---- Real sources ----
+# Real sources + real build. cargo-chef already compiled every dependency above,
+# so this only builds the workspace crates and links the binaries. No stub can
+# leak, so no size guard is needed.
 COPY . .
-
-# `COPY . .` restores host mtimes that are OLDER than the stub-built artifacts
-# above, so cargo can judge the workspace up-to-date and ship the stub instead
-# of the real binary (this is exactly how v0.2.0 shipped a 557 KB `fn main() {}`
-# stub - BUNYIP-58). Touch every source so it is newer than any cached artifact,
-# forcing a real recompile regardless of host mtimes.
 RUN --mount=type=secret,id=dunite_token \
     --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     sh -c 'if [ -s /run/secrets/dunite_token ]; then \
               git config --global url."https://oauth2:$(cat /run/secrets/dunite_token)@dev.a8n.run/".insteadOf "https://dev.a8n.run/"; \
            fi' \
-    && find . -name '*.rs' -exec touch {} + \
     && cargo build --locked --release --bin bunyip-api --bin bunyip-e2e-bootstrap
-
-# Belt-and-suspenders: a stub bunyip-api is ~0.5 MB, the real server is tens of
-# MB. Fail the build loudly here rather than let a stub reach the registry and
-# silently restart-loop in production (BUNYIP-58).
-RUN sz="$(stat -c%s target/release/bunyip-api)"; \
-    echo "bunyip-api release binary: $sz bytes"; \
-    if [ "$sz" -lt 5000000 ]; then \
-        echo "FATAL: bunyip-api binary is $sz bytes (< 5 MB) - stub build leaked; aborting." >&2; \
-        exit 1; \
-    fi
 
 # ---- Export stage -----------------------------------------------------------
 # `docker buildx build --target export --output type=local,dest=<dir>` extracts
