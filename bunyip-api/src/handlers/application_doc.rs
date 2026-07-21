@@ -1,57 +1,41 @@
 //! Per-application documentation handlers (BUNYIP-388).
 //!
-//! Public reads apply the same active + entitlement gate as `get_application`, so
-//! a restricted or inactive product's docs never leak. Admin writes (AdminUser)
-//! power the docs manager and are audit-logged.
+//! Public reads are open: docs are public content, readable for any ACTIVE
+//! application regardless of whether the app requires an entitlement to download
+//! or launch. Admin writes (AdminUser) power the docs manager and are
+//! audit-logged.
 
 use actix_web::{web, HttpRequest, HttpResponse};
 use sqlx::PgPool;
 
 use crate::errors::AppError;
-use crate::middleware::{AdminUser, OptionalUser};
-use crate::models::{
-    Application, AuditAction, CreateApplicationDoc, CreateAuditLog, UpdateApplicationDoc,
-};
-use crate::repositories::{
-    ApplicationDocRepository, ApplicationRepository, AuditLogRepository, EntitlementRepository,
-};
+use crate::middleware::AdminUser;
+use crate::models::{AuditAction, CreateApplicationDoc, CreateAuditLog, UpdateApplicationDoc};
+use crate::repositories::{ApplicationDocRepository, ApplicationRepository, AuditLogRepository};
 use crate::responses::{get_request_id, success};
 
-/// Resolve an app for a PUBLIC docs read with the same visibility gate as
-/// `get_application`: the app must be active, and a restricted product is hidden
-/// (404) from anyone who is not an admin or actively entitled. Anonymous callers
-/// are allowed only for non-restricted products, so a restricted app's docs (and
-/// its existence) never leak through this path.
-async fn gate_public_app(
-    pool: &PgPool,
-    user: &OptionalUser,
-    slug: &str,
-) -> Result<Application, AppError> {
-    let app = ApplicationRepository::find_active_by_slug(pool, slug)
+/// 404 unless `slug` names an ACTIVE application. Docs are public content
+/// (BUNYIP-388): readable for any active app regardless of whether the app
+/// itself requires an entitlement to download or launch, so a user can read how
+/// to use or pull a product before (or without) having access to it. Only the
+/// app being active gates visibility here - not membership or entitlement.
+async fn require_active_app(pool: &PgPool, slug: &str) -> Result<(), AppError> {
+    ApplicationRepository::find_active_by_slug(pool, slug)
         .await?
         .ok_or(AppError::not_found("Application"))?;
-    let (user_id, is_admin) = user
-        .0
-        .as_ref()
-        .map(|c| (c.sub, c.role == "admin"))
-        .unwrap_or((uuid::Uuid::nil(), false));
-    if !EntitlementRepository::is_allowed(pool, user_id, is_admin, &app).await? {
-        return Err(AppError::not_found("Application"));
-    }
-    Ok(app)
+    Ok(())
 }
 
 /// Public: `GET /v1/applications/{slug}/docs` - the app's doc-page index
 /// (metadata only, ordered). Empty list when the app has no docs.
 pub async fn list_app_docs(
     req: HttpRequest,
-    user: OptionalUser,
     path: web::Path<String>,
     pool: web::Data<PgPool>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let app_slug = path.into_inner();
-    gate_public_app(&pool, &user, &app_slug).await?;
+    require_active_app(&pool, &app_slug).await?;
     let docs = ApplicationDocRepository::list_by_app_slug(&pool, &app_slug).await?;
     Ok(success(docs, request_id))
 }
@@ -59,13 +43,12 @@ pub async fn list_app_docs(
 /// Public: `GET /v1/applications/{slug}/docs/{doc_slug}` - one doc page.
 pub async fn get_app_doc(
     req: HttpRequest,
-    user: OptionalUser,
     path: web::Path<(String, String)>,
     pool: web::Data<PgPool>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let (app_slug, doc_slug) = path.into_inner();
-    gate_public_app(&pool, &user, &app_slug).await?;
+    require_active_app(&pool, &app_slug).await?;
     let doc = ApplicationDocRepository::get_by_app_and_slug(&pool, &app_slug, &doc_slug)
         .await?
         .ok_or(AppError::not_found("Documentation page"))?;
