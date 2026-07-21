@@ -367,6 +367,19 @@ async fn main() {
             "/admin/applications/:id/swap-order",
             axum::routing::post(handlers::admin::application_swap_order),
         )
+        // BUNYIP-388: per-application documentation manager (admin authoring).
+        .route(
+            "/admin/applications/:id/docs",
+            get(handlers::admin::application_docs).post(handlers::admin::application_doc_create),
+        )
+        .route(
+            "/admin/applications/:id/docs/:doc_id",
+            axum::routing::post(handlers::admin::application_doc_update),
+        )
+        .route(
+            "/admin/applications/:id/docs/:doc_id/delete",
+            axum::routing::post(handlers::admin::application_doc_delete),
+        )
         // Application groups (BUNYIP-100)
         .route(
             "/admin/application-groups",
