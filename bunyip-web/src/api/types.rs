@@ -287,6 +287,13 @@ pub struct AppDownloadGroup {
     /// back-compat with an API that predates the field.
     #[serde(default)]
     pub has_docs: bool,
+    /// True when the caller may download/pull this product. False for a
+    /// restricted product the caller is not entitled to - the card then shows a
+    /// locked "Requires access" state instead of the download affordance
+    /// (BUNYIP-395). Defaults to true for back-compat with an API that predates
+    /// the field (so an older response still renders the download surface).
+    #[serde(default = "default_true")]
+    pub has_access: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

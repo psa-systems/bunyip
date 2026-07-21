@@ -161,9 +161,11 @@ pub async fn list_all_downloads(
     Ok(success(serde_json::json!({ "groups": groups }), request_id))
 }
 
-/// Build the `/v1/downloads` group for one application, or `None` when it has
-/// nothing to distribute (no downloadable assets AND no pullable image) or the
-/// caller is not entitled to a restricted product.
+/// Build the `/v1/downloads` group for one application, or `None` when there is
+/// nothing to show. A restricted product the caller can't access is `None`
+/// UNLESS it has docs, in which case it yields a docs-only locked group
+/// (`has_access = false`, no `oci`, no `assets`); an accessible app with no
+/// distributable surface and no docs is also `None`.
 async fn build_download_group(
     app: &Application,
     release_cache: Option<&Arc<ReleaseCache>>,
@@ -172,44 +174,53 @@ async fn build_download_group(
     entitled: &std::collections::HashSet<uuid::Uuid>,
     docs_apps: &std::collections::HashSet<uuid::Uuid>,
 ) -> Option<AppDownloadGroup> {
-    // Hide restricted products the caller can't access (shared decision; the
-    // entitlement set was fetched once by the caller).
-    if !app.entitlement_satisfied(is_admin, entitled.contains(&app.id)) {
+    let has_access = app.entitlement_satisfied(is_admin, entitled.contains(&app.id));
+    let has_docs = docs_apps.contains(&app.id);
+
+    // A restricted product the caller can't access is hidden - UNLESS it has
+    // public docs to show (BUNYIP-395). Then it is emitted as a docs-only
+    // "locked" card so a user can read about it. The download surface below is
+    // computed only for a caller WITH access, so a locked group's response
+    // carries no pull reference and no assets.
+    if !has_access && !has_docs {
         return None;
     }
 
-    let oci = if oci_config.enabled {
-        app.oci_pull_image(&oci_config.service)
+    let (oci, release_tag, assets) = if has_access {
+        let oci = if oci_config.enabled {
+            app.oci_pull_image(&oci_config.service)
+        } else {
+            None
+        };
+        // Binary assets, when the download proxy is enabled and this app has a
+        // complete download config. Best-effort: a failed Forgejo call degrades
+        // to an empty asset list so one bad config doesn't break the whole page
+        // (the OCI block, if any, still renders).
+        let (release_tag, assets) = match (release_cache, app.download_source()) {
+            (Some(cache), Some(source)) => match cache.get(app.id, &source).await {
+                Ok(release) => (
+                    release.version.clone(),
+                    release
+                        .assets
+                        .iter()
+                        .map(|a| to_public_asset(a, &app.slug))
+                        .collect(),
+                ),
+                Err(e) => {
+                    tracing::warn!(app = %app.slug, error = %e, "release fetch failed");
+                    (String::new(), Vec::new())
+                }
+            },
+            _ => (String::new(), Vec::new()),
+        };
+        (oci, release_tag, assets)
     } else {
-        None
+        (None, String::new(), Vec::new())
     };
 
-    // Binary assets, when the download proxy is enabled and this app has a
-    // complete download config. Best-effort: a failed Forgejo call degrades
-    // to an empty asset list so one bad config doesn't break the whole page
-    // (the OCI block, if any, still renders).
-    let (release_tag, assets) = match (release_cache, app.download_source()) {
-        (Some(cache), Some(source)) => match cache.get(app.id, &source).await {
-            Ok(release) => (
-                release.version.clone(),
-                release
-                    .assets
-                    .iter()
-                    .map(|a| to_public_asset(a, &app.slug))
-                    .collect(),
-            ),
-            Err(e) => {
-                tracing::warn!(app = %app.slug, error = %e, "release fetch failed");
-                (String::new(), Vec::new())
-            }
-        },
-        _ => (String::new(), Vec::new()),
-    };
-
-    // Nothing actionable for this app: no assets to download (a release tag
-    // with zero uploaded assets is not actionable either) and no image to
-    // pull. Skip it rather than render a dead entry.
-    if assets.is_empty() && oci.is_none() {
+    // An accessible app with nothing to distribute (no assets, no image) and no
+    // docs is a dead entry - skip it. A docs-only card (locked or open) stays.
+    if has_access && assets.is_empty() && oci.is_none() && !has_docs {
         return None;
     }
 
@@ -220,7 +231,8 @@ async fn build_download_group(
         release_tag,
         assets,
         oci,
-        has_docs: docs_apps.contains(&app.id),
+        has_docs,
+        has_access,
     })
 }
 

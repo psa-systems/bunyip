@@ -69,4 +69,10 @@ pub struct AppDownloadGroup {
     /// True when the application has at least one published documentation page
     /// (BUNYIP-388 follow-up), so the catalog can gate the Documentation link.
     pub has_docs: bool,
+    /// True when the caller may download/pull this product. False for a
+    /// restricted product the caller is not entitled to: such a group is only
+    /// emitted when it has docs (BUNYIP-395), and then it carries NO `oci` and
+    /// NO `assets` - a docs-only "locked" card - so the download coordinates
+    /// never leak to a caller without access.
+    pub has_access: bool,
 }

@@ -646,7 +646,13 @@ fn download_only_card(g: &AppDownloadGroup, is_member: bool) -> Markup {
                 h3 class="text-2xl font-semibold leading-none tracking-tight mt-4" { (g.app_display_name) }
             }
             div class="p-6 pt-0" {
-                (download_affordance(g, is_member))
+                @if g.has_access {
+                    (download_affordance(g, is_member))
+                } @else {
+                    // BUNYIP-395: a restricted product the user can't access.
+                    // Docs stay public, but the download/pull surface is locked.
+                    button type="button" disabled class=(button_class("default", "default", "w-full")) { "Requires access" }
+                }
                 // BUNYIP-388: docs link, only when the app actually has pages.
                 @if g.has_docs {
                     a href=(format!("/apps/{}/docs", g.app_slug)) {
