@@ -140,4 +140,17 @@ impl ApplicationDocRepository {
             .await?;
         Ok(res.rows_affected() > 0)
     }
+
+    /// The set of application ids that have at least one documentation page.
+    /// One query for the whole catalog, so the downloads endpoint can flag
+    /// `has_docs` per app without an EXISTS round-trip each.
+    pub async fn app_ids_with_docs(
+        pool: &PgPool,
+    ) -> Result<std::collections::HashSet<Uuid>, AppError> {
+        let rows: Vec<(Uuid,)> =
+            sqlx::query_as("SELECT DISTINCT application_id FROM application_docs")
+                .fetch_all(pool)
+                .await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
 }
