@@ -715,3 +715,25 @@ pub struct TierConfigResponse {
     pub updated_at: String,
     pub updated_by: Option<String>,
 }
+
+/// A per-application documentation page (BUNYIP-388). `body` is markdown.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AppDoc {
+    #[serde(default)]
+    pub id: String,
+    pub slug: String,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub sort_order: i32,
+}
+
+/// Doc-page metadata for an app's docs index (no body).
+#[derive(Debug, Clone, Deserialize)]
+pub struct AppDocSummary {
+    pub slug: String,
+    pub title: String,
+    #[serde(default)]
+    pub sort_order: i32,
+}

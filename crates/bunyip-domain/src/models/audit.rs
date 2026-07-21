@@ -73,6 +73,10 @@ pub enum AuditAction {
     /// can re-enrol. Distinct from the user-initiated `TwoFactorDisabled`.
     AdminUserTwoFactorReset,
     ApplicationUpdated,
+    // Per-application documentation authoring (BUNYIP-388).
+    ApplicationDocCreated,
+    ApplicationDocUpdated,
+    ApplicationDocDeleted,
     AdminInviteCreated,
     AdminInviteAccepted,
     AdminInviteRevoked,
@@ -204,6 +208,9 @@ impl AuditAction {
             AuditAction::AdminUserEmailVerified => "admin_user_email_verified",
             AuditAction::AdminUserTwoFactorReset => "admin_user_two_factor_reset",
             AuditAction::ApplicationUpdated => "application_updated",
+            AuditAction::ApplicationDocCreated => "application_doc_created",
+            AuditAction::ApplicationDocUpdated => "application_doc_updated",
+            AuditAction::ApplicationDocDeleted => "application_doc_deleted",
             AuditAction::AdminInviteCreated => "admin_invite_created",
             AuditAction::AdminInviteAccepted => "admin_invite_accepted",
             AuditAction::AdminInviteRevoked => "admin_invite_revoked",

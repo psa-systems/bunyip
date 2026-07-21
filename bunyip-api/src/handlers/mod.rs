@@ -139,6 +139,7 @@ pub mod admin_oauth_tenants;
 pub mod admin_rate_limits;
 pub mod admin_stripe;
 pub mod application;
+pub mod application_doc;
 pub mod auth;
 pub mod billing;
 pub mod download;
@@ -151,6 +152,9 @@ pub mod webhook;
 
 // Re-export handler functions for convenience
 pub use application::{get_application, list_application_groups, list_applications};
+pub use application_doc::{
+    create_app_doc, delete_app_doc, get_app_doc, list_app_docs, list_app_docs_admin, update_app_doc,
+};
 pub use auth::{
     accept_admin_invite, auth_redirect, confirm_password_reset, get_memberships, login, logout,
     logout_all, logout_redirect, refresh_token, register, register_challenge, request_magic_link,

@@ -76,6 +76,9 @@ async fn main() {
         // until the dedicated docs app matures.
         .route("/docs", get(content::docs_index))
         .route("/docs/:slug", get(content::docs_page))
+        // BUNYIP-388: public per-application documentation.
+        .route("/apps/:slug/docs", get(content::app_docs_index))
+        .route("/apps/:slug/docs/:doc_slug", get(content::app_docs_page))
         .route(
             "/feedback",
             get(content::feedback_get)

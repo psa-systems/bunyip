@@ -5,9 +5,10 @@ use serde_json::{json, Value};
 use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeedbackDetail,
     AdminFeedbackSummary, AdminIpBan, AdminMembership, AdminRateLimit, AdminStatsResponse,
-    AdminUser, ApplicationGroup, ApplicationGroupList, ArchivedFeedback, AutoBanConfigResponse,
-    EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary, PaginatedResponse,
-    RestoreReport, SeedTemplateInfo, StripeConfigResponse, TierConfigResponse, UserEntitlement,
+    AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList, ArchivedFeedback,
+    AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary,
+    PaginatedResponse, RestoreReport, SeedTemplateInfo, StripeConfigResponse, TierConfigResponse,
+    UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -792,6 +793,68 @@ pub async fn update_auto_ban_config(
 ) -> Result<(), ApiError> {
     let r = api
         .put("/admin/auto-ban-config", cookie, Some(body))
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+// --- application docs (BUNYIP-388, admin authoring) -------------------------
+
+/// Admin: all documentation pages for an app (full rows, ordered).
+pub async fn app_docs(
+    api: &Api,
+    cookie: Option<&str>,
+    app_id: &str,
+) -> Result<Vec<AppDoc>, ApiError> {
+    parse(
+        api.get(&format!("/admin/applications/{app_id}/docs"), cookie)
+            .await?,
+    )
+}
+
+/// Admin: create a documentation page for an app.
+pub async fn create_app_doc(
+    api: &Api,
+    cookie: Option<&str>,
+    app_id: &str,
+    slug: &str,
+    title: &str,
+    body: &str,
+    sort_order: i32,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            &format!("/admin/applications/{app_id}/docs"),
+            cookie,
+            Some(json!({ "slug": slug, "title": title, "body": body, "sort_order": sort_order })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// Admin: update a documentation page.
+pub async fn update_app_doc(
+    api: &Api,
+    cookie: Option<&str>,
+    doc_id: &str,
+    slug: &str,
+    title: &str,
+    body: &str,
+    sort_order: i32,
+) -> Result<(), ApiError> {
+    let r = api
+        .put(
+            &format!("/admin/application-docs/{doc_id}"),
+            cookie,
+            Some(json!({ "slug": slug, "title": title, "body": body, "sort_order": sort_order })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// Admin: delete a documentation page.
+pub async fn delete_app_doc(api: &Api, cookie: Option<&str>, doc_id: &str) -> Result<(), ApiError> {
+    let r = api
+        .delete(&format!("/admin/application-docs/{doc_id}"), cookie, None)
         .await?;
     ok_data(&r).map(|_| ())
 }
