@@ -4,7 +4,7 @@ Bunyip is where you find, access, and download the apps we publish, like Mokosh.
 
 ## Create an account and sign in
 
-1. Open Bunyip and choose **Sign up**, or **Sign in** if you already have an account.
+1. Open Bunyip and create an account, or sign in if you already have one.
 2. Complete the single sign-on prompt. Bunyip uses one login across every app it hosts, so the same account works everywhere.
 3. After signing in you land on your dashboard.
 
