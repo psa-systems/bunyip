@@ -19,7 +19,8 @@ use crate::models::download::{
 };
 use crate::models::{Application, AuditAction, CreateAuditLog};
 use crate::repositories::{
-    ApplicationRepository, AuditLogRepository, DownloadDailyCountRepository, EntitlementRepository,
+    ApplicationDocRepository, ApplicationRepository, AuditLogRepository,
+    DownloadDailyCountRepository, EntitlementRepository,
 };
 use crate::responses::{get_request_id, success};
 use crate::services::{AppDownloadCache, DownloadLimiter, ErrorClass, LimitDenial, ReleaseCache};
@@ -119,6 +120,9 @@ pub async fn list_all_downloads(
     }
     let request_id = get_request_id(&req);
     let apps = ApplicationRepository::list_active(&pool).await?;
+    // BUNYIP-388: which apps have documentation, so the catalog can gate the
+    // Documentation link. One query for the whole set.
+    let docs_apps = ApplicationDocRepository::app_ids_with_docs(&pool).await?;
 
     let is_admin = user.0.role == "admin";
 
@@ -139,10 +143,16 @@ pub async fn list_all_downloads(
     // (cold release cache), so driving them with join_all turns N sequential
     // round-trips into one wall-clock round-trip. join_all preserves input
     // order, so the sort_order from list_active carries through.
-    let groups: Vec<AppDownloadGroup> = futures_util::future::join_all(
-        apps.iter()
-            .map(|app| build_download_group(app, release_cache, &oci_config, is_admin, &entitled)),
-    )
+    let groups: Vec<AppDownloadGroup> = futures_util::future::join_all(apps.iter().map(|app| {
+        build_download_group(
+            app,
+            release_cache,
+            &oci_config,
+            is_admin,
+            &entitled,
+            &docs_apps,
+        )
+    }))
     .await
     .into_iter()
     .flatten()
@@ -160,6 +170,7 @@ async fn build_download_group(
     oci_config: &OciConfig,
     is_admin: bool,
     entitled: &std::collections::HashSet<uuid::Uuid>,
+    docs_apps: &std::collections::HashSet<uuid::Uuid>,
 ) -> Option<AppDownloadGroup> {
     // Hide restricted products the caller can't access (shared decision; the
     // entitlement set was fetched once by the caller).
@@ -209,6 +220,7 @@ async fn build_download_group(
         release_tag,
         assets,
         oci,
+        has_docs: docs_apps.contains(&app.id),
     })
 }
 

@@ -282,6 +282,11 @@ pub struct AppDownloadGroup {
     /// that does not send the field.
     #[serde(default)]
     pub oci: Option<OciImage>,
+    /// True when the app has documentation pages (BUNYIP-388 follow-up). The
+    /// catalog card shows the Documentation link only when set. `default` for
+    /// back-compat with an API that predates the field.
+    #[serde(default)]
+    pub has_docs: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

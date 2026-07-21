@@ -66,4 +66,7 @@ pub struct AppDownloadGroup {
     /// OCI pull info, when the registry is enabled and the product has a
     /// pullable image.
     pub oci: Option<AppOciImage>,
+    /// True when the application has at least one published documentation page
+    /// (BUNYIP-388 follow-up), so the catalog can gate the Documentation link.
+    pub has_docs: bool,
 }

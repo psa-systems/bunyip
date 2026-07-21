@@ -306,10 +306,6 @@ fn app_card(
                         span class=(button_class("outline", "default", "w-full mt-2")) { "Release notes" (icon("file-text", "ml-2 h-4 w-4")) }
                     }
                 }
-                // BUNYIP-388: public per-application documentation.
-                a href=(format!("/apps/{}/docs", app.slug)) {
-                    span class=(button_class("outline", "default", "w-full mt-2")) { "Documentation" (icon("file-text", "ml-2 h-4 w-4")) }
-                }
                 // BUNYIP-353: the Backup add-on is configured in-app rather than
                 // launched to an external subdomain.
                 @if app.slug == "backup" {
@@ -651,6 +647,12 @@ fn download_only_card(g: &AppDownloadGroup, is_member: bool) -> Markup {
             }
             div class="p-6 pt-0" {
                 (download_affordance(g, is_member))
+                // BUNYIP-388: docs link, only when the app actually has pages.
+                @if g.has_docs {
+                    a href=(format!("/apps/{}/docs", g.app_slug)) {
+                        span class=(button_class("outline", "default", "w-full mt-2")) { "Documentation" (icon("file-text", "ml-2 h-4 w-4")) }
+                    }
+                }
             }
         }
     }
