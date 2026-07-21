@@ -5094,8 +5094,10 @@ pub struct DocForm {
     pub slug: String,
     pub title: String,
     pub body: String,
+    // Parsed with `validate::parse_i32` (empty -> 0, non-numeric -> handled),
+    // not deserialized as i32, so a cleared number input does not 400 the form.
     #[serde(default)]
-    pub sort_order: i32,
+    pub sort_order: String,
 }
 
 /// GET /admin/applications/{id}/docs - manage an app's documentation pages.
@@ -5195,6 +5197,7 @@ pub async fn application_doc_create(
         Ok(v) => v,
         Err(r) => return r,
     };
+    let sort_order = crate::handlers::validate::parse_i32(&f.sort_order, "Sort order").unwrap_or(0);
     let _ = admin_api::create_app_doc(
         &st.api,
         c.forward.as_deref(),
@@ -5202,7 +5205,7 @@ pub async fn application_doc_create(
         &f.slug,
         &f.title,
         &f.body,
-        f.sort_order,
+        sort_order,
     )
     .await;
     redirect_cookies(&format!("/admin/applications/{id}/docs"), &c.set_cookies)
@@ -5219,6 +5222,7 @@ pub async fn application_doc_update(
         Ok(v) => v,
         Err(r) => return r,
     };
+    let sort_order = crate::handlers::validate::parse_i32(&f.sort_order, "Sort order").unwrap_or(0);
     let _ = admin_api::update_app_doc(
         &st.api,
         c.forward.as_deref(),
@@ -5226,7 +5230,7 @@ pub async fn application_doc_update(
         &f.slug,
         &f.title,
         &f.body,
-        f.sort_order,
+        sort_order,
     )
     .await;
     redirect_cookies(&format!("/admin/applications/{id}/docs"), &c.set_cookies)
