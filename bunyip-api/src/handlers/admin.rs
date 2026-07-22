@@ -1548,9 +1548,10 @@ pub async fn admin_reset_password(
     )
     .await?;
 
-    // Send password reset email
+    // Send password reset email. Admin-initiated, so there is no requester IP
+    // and no location to show (BUNYIP-397).
     email_service
-        .send_password_reset(&user.email, &raw_token)
+        .send_password_reset(&user.email, &raw_token, None)
         .await?;
 
     // Log admin action

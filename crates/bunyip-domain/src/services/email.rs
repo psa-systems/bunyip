@@ -500,8 +500,16 @@ impl EmailService {
         .await
     }
 
-    /// Send password reset email
-    pub async fn send_password_reset(&self, email: &str, token: &str) -> Result<(), AppError> {
+    /// Send password reset email. `country` is the full name of the country the
+    /// request came from (BUNYIP-397), or `None` when it could not be resolved
+    /// (admin-initiated reset, a local IP, or no GeoIP DB); the template shows
+    /// the "(from ...)" clause only when it is present.
+    pub async fn send_password_reset(
+        &self,
+        email: &str,
+        token: &str,
+        country: Option<&str>,
+    ) -> Result<(), AppError> {
         let config = self.config();
         let reset_url = format!("{}/password-reset/confirm?token={}", config.base_url, token);
 
@@ -515,6 +523,8 @@ impl EmailService {
 
         let mut context = self.base_context(&config);
         context.insert("reset_url", &reset_url);
+        // Empty string when absent so the Tera `{% if country %}` guard is false.
+        context.insert("country", &country.unwrap_or(""));
 
         let (html, text) = self.render_template("password_reset", &context)?;
         self.send_email(
@@ -1071,5 +1081,55 @@ mod tests {
                 .unwrap(),
         );
         assert_ne!(first[0], second[0], "Message-IDs must differ per send");
+    }
+
+    /// BUNYIP-397: the reset email drops the alarming "Someone asked" wording and
+    /// shows the request country only when one is provided. Building the service
+    /// through `EmailService::new` also proves the reworded templates parse (Tera
+    /// compiles every template there).
+    #[test]
+    fn password_reset_email_wording_and_country_clause() {
+        let service = EmailService::new(EmailConfig {
+            smtp_host: "localhost".to_string(),
+            smtp_port: 587,
+            smtp_tls: SmtpTls::Starttls,
+            smtp_username: String::new(),
+            smtp_password: String::new(),
+            from_email: "reset@a8n.run".to_string(),
+            from_name: "PSA Staging".to_string(),
+            base_url: "http://localhost:5173".to_string(),
+            enabled: false,
+            log_tokens: false,
+            app_name: "PSA Staging".to_string(),
+            admin_notification_emails: Vec::new(),
+        })
+        .expect("email service builds and all templates parse");
+        let config = service.config();
+
+        // With a resolved country: the "(from <country>)" clause appears.
+        let mut ctx = service.base_context(&config);
+        ctx.insert("reset_url", &"http://localhost/reset?token=abc");
+        ctx.insert("country", &"United States");
+        let (html, text) = service
+            .render_template("password_reset", &ctx)
+            .expect("renders with country");
+        for body in [&html, &text] {
+            assert!(body.contains("A password reset was requested"));
+            assert!(!body.contains("Someone asked"));
+            assert!(body.contains("United States"));
+        }
+
+        // Without a country (empty string): no location clause, still reworded.
+        let mut ctx = service.base_context(&config);
+        ctx.insert("reset_url", &"http://localhost/reset?token=abc");
+        ctx.insert("country", &"");
+        let (html, text) = service
+            .render_template("password_reset", &ctx)
+            .expect("renders without country");
+        for body in [&html, &text] {
+            assert!(body.contains("A password reset was requested"));
+            assert!(!body.contains("Someone asked"));
+            assert!(!body.contains("(from"));
+        }
     }
 }

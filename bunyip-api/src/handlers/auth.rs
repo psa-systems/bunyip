@@ -1128,11 +1128,17 @@ pub async fn request_password_reset(
         .request_password_reset(body.email.clone(), ip_address)
         .await?
     {
+        // BUNYIP-397: the reset email names the country the request came from
+        // when the IP resolves (best-effort; None for local IPs or no GeoIP DB).
+        let country = auth_service.country_name_for_ip(ip_address);
         // Send email
         let email = body.email.clone();
         let email_svc = email_service.get_ref().clone();
         tokio::spawn(async move {
-            if let Err(e) = email_svc.send_password_reset(&email, &token).await {
+            if let Err(e) = email_svc
+                .send_password_reset(&email, &token, country.as_deref())
+                .await
+            {
                 // BUNYIP-265: drop raw email (PII + enumeration).
                 tracing::error!(error = %e, "Failed to send password reset email");
             }
