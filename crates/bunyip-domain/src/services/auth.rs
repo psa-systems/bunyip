@@ -358,6 +358,19 @@ impl AuthService {
         }
     }
 
+    /// BUNYIP-397: resolve the full country name for a request IP, for the
+    /// password-reset email. Best-effort and privacy-preserving in the same way
+    /// as the login-location signal (`assess_login` above): yields `None` when
+    /// there is no GeoIP DB, no IP, or a non-public IP. Uses the long country
+    /// name (e.g. "United States") rather than the terser code the login alert
+    /// shows.
+    pub fn country_name_for_ip(&self, ip_address: Option<IpAddr>) -> Option<String> {
+        match (self.geoip.as_ref(), ip_address) {
+            (Some(geoip), Some(ip)) if !Self::is_non_public_ip(&ip) => geoip.country_name(ip),
+            _ => None,
+        }
+    }
+
     /// BUNYIP-373: decide whether a login is suspicious enough to withhold
     /// tokens pending email approval. Suspicious = a new sign-in country (the
     /// same signal the BUNYIP-366 alert uses) OR a device not seen for this user

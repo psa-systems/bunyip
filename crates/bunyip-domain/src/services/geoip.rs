@@ -37,6 +37,19 @@ impl GeoIpService {
         }?;
         normalize_country_code(&raw)
     }
+
+    /// The full country name for `ip` (e.g. "United States"), or `None` when the
+    /// IP is not resolvable. The IP2Location LITE DB stores the long name
+    /// alongside the code, so this needs no extra dependency. Used for the
+    /// human-facing password-reset email (BUNYIP-397); the login-location alert
+    /// keeps the terser code.
+    pub fn country_name(&self, ip: IpAddr) -> Option<String> {
+        let raw = match self.db.ip_lookup(ip).ok()? {
+            Record::LocationDb(rec) => rec.country.map(|c| c.long_name),
+            Record::ProxyDb(_) => None,
+        }?;
+        normalize_country_name(&raw)
+    }
 }
 
 /// Normalize an IP2Location country field into a usable ISO 3166-1 alpha-2 code,
@@ -52,9 +65,21 @@ fn normalize_country_code(raw: &str) -> Option<String> {
     }
 }
 
+/// Normalize an IP2Location country long name into a display string, or `None`.
+/// Like the code field, unknown / reserved ranges store `"-"` (or a blank),
+/// which are not real countries and must not appear in the reset email.
+fn normalize_country_name(raw: &str) -> Option<String> {
+    let name = raw.trim();
+    if name.is_empty() || name == "-" {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::normalize_country_code;
+    use super::{normalize_country_code, normalize_country_name};
 
     #[test]
     fn rejects_placeholder_and_blank() {
@@ -67,5 +92,24 @@ mod tests {
     fn keeps_and_trims_iso2() {
         assert_eq!(normalize_country_code("US"), Some("US".to_string()));
         assert_eq!(normalize_country_code(" GB "), Some("GB".to_string()));
+    }
+
+    #[test]
+    fn name_rejects_placeholder_and_blank() {
+        assert_eq!(normalize_country_name("-"), None);
+        assert_eq!(normalize_country_name(""), None);
+        assert_eq!(normalize_country_name("   "), None);
+    }
+
+    #[test]
+    fn name_keeps_and_trims_long_name() {
+        assert_eq!(
+            normalize_country_name("United States of America"),
+            Some("United States of America".to_string())
+        );
+        assert_eq!(
+            normalize_country_name(" United Kingdom "),
+            Some("United Kingdom".to_string())
+        );
     }
 }
