@@ -67,7 +67,6 @@ Once cutover lands at psa.systems (see [PSA-7](https://niceguyit.myjetbrains.com
 | `https://psa.systems/api/*` | bunyip-api | mock backend (M1) |
 | `https://msp.psa.systems` | mokosh-clients | actual PSA application |
 | `https://msp-api.psa.systems` | mokosh-server | real backend + OIDC issuer |
-| `https://help.psa.systems` | help dashboard | break/fix agent delivery |
 
 Staging mirrors this layout on `a8n.systems`. The wildcard certs (`*.a8n.systems`, `*.psa.systems`) are already in Cloudflare.
 
