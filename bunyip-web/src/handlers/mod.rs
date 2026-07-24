@@ -127,20 +127,50 @@ fn onboarding_allowed(path: &str) -> bool {
 /// their email is unverified. Email verification is treated as not-required when
 /// delivery is disabled (local dev / no-SMTP deploys, `email.enabled` reported
 /// via `setup_status.email_enabled`), so the gate can never permanently trap a
-/// user who could never receive the verification link. `setup_status` is only
-/// queried for the rare name-present-but-unverified case; the common
-/// already-onboarded path returns without any API call.
+/// user who could never receive the verification link. An admin is likewise
+/// never held on the email-verification arm: an admin must always be able to
+/// reach `/admin/email` to configure or repair the SMTP relay, and a relay that
+/// is enabled-but-not-delivering (bad credentials, DMARC/SPF reject, wrong
+/// `SMTP_FROM`) would otherwise pin the only admin to `/onboarding` with no way
+/// for the verification mail to ever arrive - the chicken-and-egg this closes.
+/// A name is still required (it is self-service and needs no email). The
+/// dashboard keeps showing the "unverified" badge + resend control, so an admin
+/// can still verify once mail works. `setup_status` is only queried for the
+/// rare non-admin, name-present-but-unverified case; the common already-
+/// onboarded path returns without any API call.
 pub async fn needs_onboarding(st: &AppState, user: &User) -> bool {
-    if !names_present(user) {
-        return true;
+    let is_admin = user.role == UserRole::Admin;
+    // Only a named, unverified, NON-admin user actually consults email delivery
+    // status; short-circuit every other case (including the common already-
+    // onboarded path) without the API round-trip.
+    if !names_present(user) || user.email_verified || is_admin {
+        return onboarding_needed(names_present(user), user.email_verified, is_admin, false);
     }
-    if user.email_verified {
-        return false;
-    }
-    crate::api::auth::setup_status(&st.api)
+    let email_enabled = crate::api::auth::setup_status(&st.api)
         .await
         .map(|s| s.email_enabled)
-        .unwrap_or(false)
+        .unwrap_or(false);
+    onboarding_needed(true, false, false, email_enabled)
+}
+
+/// Pure onboarding-gate policy, split out of [`needs_onboarding`] so the
+/// name / verified / admin / email-delivery matrix is unit-testable without an
+/// [`AppState`]. A user still needs onboarding while they lack a name; once
+/// named, a verified email (or the admin role, or email delivery being off)
+/// clears the gate, and only a named, unverified, non-admin user on an
+/// email-enabled deployment is held.
+fn onboarding_needed(names_present: bool, email_verified: bool, is_admin: bool, email_enabled: bool) -> bool {
+    if !names_present {
+        return true;
+    }
+    if email_verified {
+        return false;
+    }
+    // BUNYIP: never trap an admin on unverified email (see `needs_onboarding`).
+    if is_admin {
+        return false;
+    }
+    email_enabled
 }
 
 /// Authenticate a protected page. `Err` is a ready redirect (to /login when
@@ -272,6 +302,31 @@ mod onboarding_gate_tests {
     fn whitespace_only_names_count_as_empty() {
         assert!(!names_present(&user(Some("   "), Some("Lovelace"))));
         assert!(!names_present(&user(Some("Ada"), Some("\t"))));
+    }
+
+    #[test]
+    fn onboarding_gate_matrix() {
+        use super::onboarding_needed;
+        // A missing name always gates, regardless of anything else.
+        assert!(onboarding_needed(false, false, false, false));
+        assert!(onboarding_needed(false, true, true, true));
+        // Named + verified never gates.
+        assert!(!onboarding_needed(true, true, false, true));
+        // Named, unverified, NON-admin: gated only when email delivery is on.
+        assert!(onboarding_needed(true, false, false, true));
+        assert!(!onboarding_needed(true, false, false, false));
+    }
+
+    #[test]
+    fn admin_is_never_trapped_on_unverified_email() {
+        use super::onboarding_needed;
+        // BUNYIP: a named admin with an unverified email is NOT gated even when
+        // email delivery is enabled - otherwise a broken relay could pin the
+        // only admin to /onboarding with no way to reach /admin/email.
+        assert!(!onboarding_needed(true, false, true, true));
+        assert!(!onboarding_needed(true, false, true, false));
+        // But an admin still needs a name (self-service, no email required).
+        assert!(onboarding_needed(false, false, true, true));
     }
 
     #[test]
