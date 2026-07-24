@@ -159,7 +159,12 @@ pub async fn needs_onboarding(st: &AppState, user: &User) -> bool {
 /// named, a verified email (or the admin role, or email delivery being off)
 /// clears the gate, and only a named, unverified, non-admin user on an
 /// email-enabled deployment is held.
-fn onboarding_needed(names_present: bool, email_verified: bool, is_admin: bool, email_enabled: bool) -> bool {
+fn onboarding_needed(
+    names_present: bool,
+    email_verified: bool,
+    is_admin: bool,
+    email_enabled: bool,
+) -> bool {
     if !names_present {
         return true;
     }
