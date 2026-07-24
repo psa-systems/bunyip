@@ -357,9 +357,23 @@ async fn handle_checkout_completed(
 
     let amount = match price {
         Some(p) => {
-            let amount = p.amount as i32;
-            UserRepository::lock_price(pool, user_id, &p.price_id, amount).await?;
-            amount
+            // BUNYIP-400: range-check before narrowing i64 cents to the i32 the
+            // price columns use; never silently wrap a real price above ~$21.47M.
+            match i32::try_from(p.amount) {
+                Ok(amount) => {
+                    UserRepository::lock_price(pool, user_id, &p.price_id, amount).await?;
+                    amount
+                }
+                Err(_) => {
+                    tracing::error!(
+                        user_id = %user_id,
+                        price_id = %p.price_id,
+                        amount_cents = p.amount,
+                        "Stripe checkout price amount exceeds i32 cents range; skipping price lock to avoid truncation"
+                    );
+                    0
+                }
+            }
         }
         None => {
             // Should not happen for a genuinely completed checkout. Do NOT lock
@@ -370,7 +384,18 @@ async fn handle_checkout_completed(
                 session_id = %session_id,
                 "Checkout session had no resolvable line-item price; skipping price lock"
             );
-            session["amount_total"].as_i64().unwrap_or(0) as i32
+            // BUNYIP-400: range-check the fallback total too; use 0 rather than a
+            // silently-wrapped amount if it somehow exceeds i32 cents.
+            let amount_total_cents = session["amount_total"].as_i64().unwrap_or(0);
+            i32::try_from(amount_total_cents).unwrap_or_else(|_| {
+                tracing::error!(
+                    user_id = %user_id,
+                    session_id = %session_id,
+                    amount_cents = amount_total_cents,
+                    "Checkout session amount_total exceeds i32 cents range; using 0 for welcome email"
+                );
+                0
+            })
         }
     };
 
@@ -698,7 +723,17 @@ async fn handle_payment_succeeded(
         }
     };
 
-    let amount = invoice["amount_paid"].as_i64().unwrap_or(0) as i32;
+    // BUNYIP-400: range-check before narrowing i64 cents to i32 rather than
+    // silently wrapping above ~$21.47M.
+    let amount_paid_cents = invoice["amount_paid"].as_i64().unwrap_or(0);
+    let amount = i32::try_from(amount_paid_cents).unwrap_or_else(|_| {
+        tracing::error!(
+            user_id = %user.id,
+            amount_cents = amount_paid_cents,
+            "Stripe amount_paid exceeds i32 cents range; recording 0 to avoid truncation"
+        );
+        0
+    });
 
     // Clear any grace period if exists
     let had_grace_period = user.grace_period_start.is_some();
@@ -766,7 +801,17 @@ async fn handle_payment_failed(
         }
     };
 
-    let amount = invoice["amount_due"].as_i64().unwrap_or(0) as i32;
+    // BUNYIP-400: range-check before narrowing i64 cents to i32 rather than
+    // silently wrapping above ~$21.47M.
+    let amount_due_cents = invoice["amount_due"].as_i64().unwrap_or(0);
+    let amount = i32::try_from(amount_due_cents).unwrap_or_else(|_| {
+        tracing::error!(
+            user_id = %user.id,
+            amount_cents = amount_due_cents,
+            "Stripe amount_due exceeds i32 cents range; recording 0 to avoid truncation"
+        );
+        0
+    });
 
     // Audit log for payment failure
     let audit_log = CreateAuditLog::new(AuditAction::PaymentFailed)

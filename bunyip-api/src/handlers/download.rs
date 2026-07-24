@@ -465,7 +465,7 @@ async fn download_asset_core(
                         Some(Err(e)) => {
                             if !a.emitted {
                                 a.emitted = true;
-                                let _ = AuditLogRepository::create(
+                                if let Err(audit_err) = AuditLogRepository::create(
                                     &a.pool,
                                     CreateAuditLog::new(AuditAction::DownloadFailedUpstream)
                                         .with_actor(a.user_id, &a.email, &a.role)
@@ -477,14 +477,17 @@ async fn download_asset_core(
                                             "error": e.to_string(),
                                         })),
                                 )
-                                .await;
+                                .await
+                                {
+                                    tracing::warn!(error = ?audit_err, "download audit log write failed (upstream error path)");
+                                }
                             }
                             Some((Err(e), (s, g, a)))
                         }
                         None => {
                             if !a.emitted {
                                 a.emitted = true;
-                                let _ = AuditLogRepository::create(
+                                if let Err(audit_err) = AuditLogRepository::create(
                                     &a.pool,
                                     CreateAuditLog::new(AuditAction::DownloadCompleted)
                                         .with_actor(a.user_id, &a.email, &a.role)
@@ -496,7 +499,10 @@ async fn download_asset_core(
                                             "size_bytes": a.size_bytes,
                                         })),
                                 )
-                                .await;
+                                .await
+                                {
+                                    tracing::warn!(error = ?audit_err, "download audit log write failed (completed path)");
+                                }
                             }
                             drop(g);
                             None
