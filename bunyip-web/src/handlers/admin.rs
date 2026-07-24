@@ -915,8 +915,18 @@ pub async fn user_role(
     if !matches!(f.role.as_str(), "admin" | "subscriber") {
         return redirect_cookies("/admin/users", &c.set_cookies);
     }
-    let _ = admin_api::update_user_role(&st.api, c.forward.as_deref(), &id, &f.role).await;
-    redirect_cookies("/admin/users", &c.set_cookies)
+    let target =
+        match admin_api::update_user_role(&st.api, c.forward.as_deref(), &id, &f.role).await {
+            Ok(_) => "/admin/users".to_string(),
+            Err(e) => {
+                tracing::warn!(user_id = %id, error = ?e, "admin update user role failed");
+                format!(
+                    "/admin/users?toast_err={}",
+                    urlenc("Could not update user role")
+                )
+            }
+        };
+    redirect_cookies(&target, &c.set_cookies)
 }
 pub async fn user_delete(
     State(st): State<AppState>,
@@ -927,8 +937,14 @@ pub async fn user_delete(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let _ = admin_api::delete_user(&st.api, c.forward.as_deref(), &id).await;
-    redirect_cookies("/admin/users", &c.set_cookies)
+    let target = match admin_api::delete_user(&st.api, c.forward.as_deref(), &id).await {
+        Ok(_) => "/admin/users".to_string(),
+        Err(e) => {
+            tracing::warn!(user_id = %id, error = ?e, "admin delete user failed");
+            format!("/admin/users?toast_err={}", urlenc("Could not delete user"))
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 pub async fn user_suspend(
@@ -940,8 +956,17 @@ pub async fn user_suspend(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let _ = admin_api::suspend_user(&st.api, c.forward.as_deref(), &id).await;
-    redirect_cookies("/admin/users", &c.set_cookies)
+    let target = match admin_api::suspend_user(&st.api, c.forward.as_deref(), &id).await {
+        Ok(_) => "/admin/users".to_string(),
+        Err(e) => {
+            tracing::warn!(user_id = %id, error = ?e, "admin suspend user failed");
+            format!(
+                "/admin/users?toast_err={}",
+                urlenc("Could not suspend user")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 /// Reactivate a suspended user, then return to the suspended list so the admin
@@ -1066,8 +1091,17 @@ pub async fn user_revoke_lifetime(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let _ = admin_api::revoke_lifetime(&st.api, c.forward.as_deref(), &id).await;
-    redirect_cookies(&format!("/admin/users/{id}"), &c.set_cookies)
+    let target = match admin_api::revoke_lifetime(&st.api, c.forward.as_deref(), &id).await {
+        Ok(_) => format!("/admin/users/{id}"),
+        Err(e) => {
+            tracing::warn!(user_id = %id, error = ?e, "admin revoke lifetime membership failed");
+            format!(
+                "/admin/users/{id}?toast_err={}",
+                urlenc("Could not revoke lifetime membership")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 /// GET /admin/users/{id} - single-user detail page with all admin actions in one place.
@@ -1398,8 +1432,17 @@ pub async fn membership_revoke(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let _ = admin_api::revoke_membership(&st.api, c.forward.as_deref(), &user_id).await;
-    redirect_cookies("/admin/memberships", &c.set_cookies)
+    let target = match admin_api::revoke_membership(&st.api, c.forward.as_deref(), &user_id).await {
+        Ok(_) => "/admin/memberships".to_string(),
+        Err(e) => {
+            tracing::warn!(user_id = %user_id, error = ?e, "admin revoke membership failed");
+            format!(
+                "/admin/memberships?toast_err={}",
+                urlenc("Could not revoke membership")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 // ===========================================================================
@@ -2400,8 +2443,18 @@ pub async fn application_field(
     let mut map = serde_json::Map::new();
     map.insert(f.field.clone(), json!(val));
     let body = serde_json::Value::Object(map);
-    let _ = admin_api::update_application(&st.api, c.forward.as_deref(), &id, body).await;
-    redirect_cookies("/admin/applications", &c.set_cookies)
+    let target = match admin_api::update_application(&st.api, c.forward.as_deref(), &id, body).await
+    {
+        Ok(_) => "/admin/applications".to_string(),
+        Err(e) => {
+            tracing::warn!(app_id = %id, field = %f.field, error = ?e, "admin update application failed");
+            format!(
+                "/admin/applications?toast_err={}",
+                urlenc("Could not update application")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 // --- application distribution edit / create --------------------------------
@@ -3483,8 +3536,18 @@ pub async fn application_group_delete(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let _ = admin_api::delete_application_group(&st.api, c.forward.as_deref(), &id).await;
-    redirect_cookies("/admin/application-groups", &c.set_cookies)
+    let target = match admin_api::delete_application_group(&st.api, c.forward.as_deref(), &id).await
+    {
+        Ok(_) => "/admin/application-groups".to_string(),
+        Err(e) => {
+            tracing::warn!(group_id = %id, error = ?e, "admin delete application group failed");
+            format!(
+                "/admin/application-groups?toast_err={}",
+                urlenc("Could not delete application group")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 #[derive(Deserialize)]
@@ -5198,7 +5261,7 @@ pub async fn application_doc_create(
         Err(r) => return r,
     };
     let sort_order = crate::handlers::validate::parse_i32(&f.sort_order, "Sort order").unwrap_or(0);
-    let _ = admin_api::create_app_doc(
+    let target = match admin_api::create_app_doc(
         &st.api,
         c.forward.as_deref(),
         &id,
@@ -5207,8 +5270,18 @@ pub async fn application_doc_create(
         &f.body,
         sort_order,
     )
-    .await;
-    redirect_cookies(&format!("/admin/applications/{id}/docs"), &c.set_cookies)
+    .await
+    {
+        Ok(_) => format!("/admin/applications/{id}/docs"),
+        Err(e) => {
+            tracing::warn!(app_id = %id, slug = %f.slug, error = ?e, "admin create app doc failed");
+            format!(
+                "/admin/applications/{id}/docs?toast_err={}",
+                urlenc("Could not create documentation page")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 /// POST /admin/applications/{id}/docs/{doc_id} - update a page.
@@ -5223,7 +5296,7 @@ pub async fn application_doc_update(
         Err(r) => return r,
     };
     let sort_order = crate::handlers::validate::parse_i32(&f.sort_order, "Sort order").unwrap_or(0);
-    let _ = admin_api::update_app_doc(
+    let target = match admin_api::update_app_doc(
         &st.api,
         c.forward.as_deref(),
         &doc_id,
@@ -5232,8 +5305,18 @@ pub async fn application_doc_update(
         &f.body,
         sort_order,
     )
-    .await;
-    redirect_cookies(&format!("/admin/applications/{id}/docs"), &c.set_cookies)
+    .await
+    {
+        Ok(_) => format!("/admin/applications/{id}/docs"),
+        Err(e) => {
+            tracing::warn!(app_id = %id, doc_id = %doc_id, error = ?e, "admin update app doc failed");
+            format!(
+                "/admin/applications/{id}/docs?toast_err={}",
+                urlenc("Could not update documentation page")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 /// POST /admin/applications/{id}/docs/{doc_id}/delete - delete a page.
@@ -5246,6 +5329,15 @@ pub async fn application_doc_delete(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let _ = admin_api::delete_app_doc(&st.api, c.forward.as_deref(), &doc_id).await;
-    redirect_cookies(&format!("/admin/applications/{id}/docs"), &c.set_cookies)
+    let target = match admin_api::delete_app_doc(&st.api, c.forward.as_deref(), &doc_id).await {
+        Ok(_) => format!("/admin/applications/{id}/docs"),
+        Err(e) => {
+            tracing::warn!(app_id = %id, doc_id = %doc_id, error = ?e, "admin delete app doc failed");
+            format!(
+                "/admin/applications/{id}/docs?toast_err={}",
+                urlenc("Could not delete documentation page")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
