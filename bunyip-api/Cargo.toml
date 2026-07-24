@@ -92,7 +92,7 @@ tokio-util = { version = "0.7", features = ["codec"] }
 parking_lot = "0.12"
 
 # Database.
-sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "uuid", "chrono", "ipnetwork", "migrate"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "ipnetwork", "migrate"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 validator = { version = "0.18", features = ["derive"] }

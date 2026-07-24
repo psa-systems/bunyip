@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 bunyip-domain = { path = "../bunyip-domain" }
 # Generic OIDC key/JWKS helpers (Ed25519 PEM loading + JWKS publishing).
-dunite-oidc = { git = "https://dev.a8n.run/psa-systems/dunite", branch = "main" }
+dunite-oidc = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ded4b9f054f677a00d42bb7c3fbd51806a12a427" }
 
 actix-web = "4"
 async-trait = "0.1"
@@ -32,7 +32,7 @@ urlencoding = "2"
 url = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 tokio = { version = "1", features = ["full", "signal"] }
-sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "uuid", "chrono", "ipnetwork", "migrate"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "ipnetwork", "migrate"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
