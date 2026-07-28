@@ -132,6 +132,102 @@ impl UserRepository {
         Ok(user)
     }
 
+    /// BUNYIP-408: store (or replace) the user's avatar. The bytes land in the
+    /// dedicated `user_avatars` table (one row per user, UPSERT on re-upload)
+    /// and `users.avatar_updated_at` is stamped to NOW() in the SAME transaction
+    /// so the cheap "an avatar exists" marker never drifts from the stored blob.
+    /// Content-type + size are validated by the caller (handler) before this is
+    /// reached; the DB CHECK constraints are the last-line backstop. Returns the
+    /// updated user row (carrying the fresh `avatar_updated_at`).
+    pub async fn set_avatar(
+        pool: &PgPool,
+        user_id: Uuid,
+        mime_type: &str,
+        data: &[u8],
+    ) -> Result<User, AppError> {
+        let size = i32::try_from(data.len())
+            .map_err(|_| AppError::validation("avatar", "Avatar is too large"))?;
+        let mut tx = pool.begin().await?;
+        sqlx::query(
+            r#"
+            INSERT INTO user_avatars (user_id, mime_type, size_bytes, data, updated_at)
+            VALUES ($1, $2, $3, $4, NOW())
+            ON CONFLICT (user_id) DO UPDATE
+                SET mime_type = EXCLUDED.mime_type,
+                    size_bytes = EXCLUDED.size_bytes,
+                    data = EXCLUDED.data,
+                    updated_at = NOW()
+            "#,
+        )
+        .bind(user_id)
+        .bind(mime_type)
+        .bind(size)
+        .bind(data)
+        .execute(&mut *tx)
+        .await?;
+
+        let user = sqlx::query_as::<_, User>(
+            r#"
+            UPDATE users
+            SET avatar_updated_at = NOW(), updated_at = NOW()
+            WHERE id = $1 AND deleted_at IS NULL
+            RETURNING *
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::not_found("User"))?;
+
+        tx.commit().await?;
+        Ok(user)
+    }
+
+    /// BUNYIP-408: remove the user's avatar. Deletes the `user_avatars` row and
+    /// clears `users.avatar_updated_at` back to NULL in one transaction, so the
+    /// UI falls back to the initials/icon. Idempotent: removing an absent avatar
+    /// simply leaves both already-empty and returns the (unchanged) user row.
+    pub async fn clear_avatar(pool: &PgPool, user_id: Uuid) -> Result<User, AppError> {
+        let mut tx = pool.begin().await?;
+        sqlx::query("DELETE FROM user_avatars WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+
+        let user = sqlx::query_as::<_, User>(
+            r#"
+            UPDATE users
+            SET avatar_updated_at = NULL, updated_at = NOW()
+            WHERE id = $1 AND deleted_at IS NULL
+            RETURNING *
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::not_found("User"))?;
+
+        tx.commit().await?;
+        Ok(user)
+    }
+
+    /// BUNYIP-408: fetch the stored avatar bytes + MIME for serving. `None` when
+    /// the user has no avatar. Only the avatar-serving handler calls this, so the
+    /// BYTEA is never loaded on the ordinary user-fetch path.
+    pub async fn get_avatar(
+        pool: &PgPool,
+        user_id: Uuid,
+    ) -> Result<Option<(String, Vec<u8>)>, AppError> {
+        let row = sqlx::query_as::<_, (String, Vec<u8>)>(
+            "SELECT mime_type, data FROM user_avatars WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(row)
+    }
+
     /// Update email verified status
     pub async fn set_email_verified(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {
         sqlx::query(

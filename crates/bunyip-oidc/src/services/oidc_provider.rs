@@ -1729,6 +1729,7 @@ mod tests {
             last_name: None,
             phone: None,
             has_used_trial: false,
+            avatar_updated_at: None,
         }
     }
 

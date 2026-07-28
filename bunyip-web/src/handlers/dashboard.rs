@@ -3,7 +3,7 @@
 //! phase 3.
 
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Multipart, Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Form;
@@ -1330,6 +1330,30 @@ pub async fn settings(
             // edge. Persistence: PUT /v1/users/me/profile via
             // `auth_api::update_profile`.
             (settings_card("user-cog", "from-primary to-teal-500", "Profile", html! {
+                // BUNYIP-408: avatar upload. Current photo (or the initial
+                // fallback) plus an upload form and, when set, a remove button.
+                // Validation of consequence is API-side; the accept filter is a
+                // UX hint only.
+                div class="flex items-center gap-4 pb-4 mb-4 border-b border-border/60 max-w-md" {
+                    @if let Some(src) = user.avatar_src() {
+                        img src=(src) alt="Current profile photo" class="h-16 w-16 rounded-full object-cover border border-border/60";
+                    } @else {
+                        span class="inline-flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-primary to-indigo-500 text-white text-xl font-semibold select-none" aria-hidden="true" { (user.avatar_initial()) }
+                    }
+                    div class="space-y-2" {
+                        form method="post" action="/settings/avatar" enctype="multipart/form-data" class="flex flex-wrap items-center gap-2" {
+                            input type="file" name="avatar" accept="image/png,image/jpeg,image/webp,image/gif" required
+                                  class="block text-sm text-muted-foreground file:mr-2 file:rounded-md file:border-0 file:bg-accent file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-accent-foreground hover:file:bg-accent/80";
+                            button type="submit" class=(button_class("outline", "sm", "")) { (icon("upload", "mr-2 h-4 w-4")) "Upload" }
+                        }
+                        @if user.avatar_src().is_some() {
+                            form method="post" action="/settings/avatar/remove" {
+                                button type="submit" class=(button_class("ghost", "sm", "text-destructive hover:text-destructive")) { (icon("trash", "mr-2 h-4 w-4")) "Remove photo" }
+                            }
+                        }
+                        p class="text-xs text-muted-foreground" { "PNG, JPEG, WebP, or GIF up to 2 MB." }
+                    }
+                }
                 form method="post" action="/settings/profile" class="space-y-4 max-w-md" {
                     div class="space-y-2" { label class="text-sm font-medium" { "First Name" } input name="first_name" type="text" maxlength="64" value=(user.first_name.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
                     div class="space-y-2" { label class="text-sm font-medium" { "Last Name" } input name="last_name" type="text" maxlength="64" value=(user.last_name.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
@@ -1672,6 +1696,120 @@ pub async fn settings_profile(
             &format!("/settings?error={}", urlenc(&e.user_message())),
             &c.set_cookies,
         ),
+    }
+}
+
+/// BUNYIP-408: 2 MiB avatar upload ceiling on the BFF, matching the API's
+/// `MAX_AVATAR_SIZE`. The API re-validates type/size/dimensions; rejecting an
+/// oversized body here avoids relaying it upstream.
+const MAX_AVATAR_UPLOAD_BYTES: usize = 2 * 1024 * 1024;
+
+/// Read the single uploaded `avatar` file (filename, declared content-type,
+/// bytes) from a multipart body. Mirrors `admin::read_backup_upload`'s field
+/// loop. The declared MIME is advisory - bunyip-api sniffs the real type from
+/// the bytes.
+async fn read_avatar_upload(
+    multipart: &mut Multipart,
+) -> Result<(String, String, Vec<u8>), String> {
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => return Err("No image was selected.".into()),
+            Err(e) => return Err(format!("Could not read upload: {e}")),
+        };
+        let is_avatar = field.name() == Some("avatar");
+        let filename = field.file_name().unwrap_or("avatar").to_string();
+        let mime = field
+            .content_type()
+            .map(str::to_string)
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        // Always drain the field body before advancing to the next one.
+        let bytes = match field.bytes().await {
+            Ok(b) => b,
+            Err(e) => return Err(format!("Could not read the image: {e}")),
+        };
+        if !is_avatar {
+            continue;
+        }
+        if bytes.is_empty() {
+            return Err("The selected file is empty.".into());
+        }
+        if bytes.len() > MAX_AVATAR_UPLOAD_BYTES {
+            return Err("The image must be 2 MB or smaller.".into());
+        }
+        return Ok((filename, mime, bytes.to_vec()));
+    }
+}
+
+/// POST /settings/avatar - upload (or replace) the profile photo. Parses the
+/// multipart body, relays the bytes to `POST /v1/users/me/avatar`, and redirects
+/// back to Settings with a toast. All validation of consequence (content type,
+/// size, dimensions) happens API-side; the BFF only guards the byte ceiling.
+pub async fn settings_avatar(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let (filename, mime, bytes) = match read_avatar_upload(&mut multipart).await {
+        Ok(v) => v,
+        Err(msg) => {
+            return redirect_cookies(&format!("/settings?error={}", urlenc(&msg)), &c.set_cookies)
+        }
+    };
+    match auth_api::upload_avatar(&st.api, c.forward.as_deref(), &filename, &mime, bytes).await {
+        Ok(()) => redirect_cookies("/settings?ok=Profile+photo+updated", &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
+    }
+}
+
+/// POST /settings/avatar/remove - clear the profile photo (idempotent).
+pub async fn settings_avatar_remove(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match auth_api::remove_avatar(&st.api, c.forward.as_deref()).await {
+        Ok(()) => redirect_cookies("/settings?ok=Profile+photo+removed", &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
+    }
+}
+
+/// GET /me/avatar - same-origin proxy of the signed-in user's avatar bytes so an
+/// `<img src="/me/avatar?v=...">` loads with the session cookie. Mirrors the
+/// `download_asset` streaming relay. On any non-2xx (no avatar set, expired
+/// session) returns 404 rather than a redirect, so a missing image never
+/// navigates the `<img>` element to an HTML page.
+pub async fn me_avatar(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (_, c) = match guard(&st, &headers, "/dashboard").await {
+        Ok(v) => v,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    match auth_api::fetch_avatar(&st.api, c.forward.as_deref()).await {
+        Ok(resp) if resp.status().is_success() => {
+            let content_type = resp
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, content_type)
+                .header(header::CACHE_CONTROL, "private, max-age=300")
+                .body(Body::from_stream(resp.bytes_stream()))
+                .unwrap_or_else(|_| StatusCode::NOT_FOUND.into_response())
+        }
+        _ => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
@@ -2252,6 +2390,7 @@ mod tests {
             first_name: None,
             last_name: None,
             phone: None,
+            avatar_updated_at: None,
         }
     }
 

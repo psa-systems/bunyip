@@ -305,6 +305,39 @@ pub async fn update_profile(
     ok_data(&r).map(|_| ())
 }
 
+/// BUNYIP-408: upload (or replace) the signed-in user's avatar. Relays the raw
+/// bytes as a multipart file part to `POST /users/me/avatar`; the API sniffs the
+/// real MIME from content, so the declared `mime` here is advisory. The API
+/// re-validates type, size, and dimensions.
+pub async fn upload_avatar(
+    api: &Api,
+    cookie: Option<&str>,
+    filename: &str,
+    mime: &str,
+    bytes: Vec<u8>,
+) -> Result<(), ApiError> {
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(filename.to_string())
+        .mime_str(mime)
+        .map_err(|e| ApiError::network(format!("invalid avatar mime: {e}")))?;
+    let form = reqwest::multipart::Form::new().part("avatar", part);
+    let r = api.post_form("/users/me/avatar", cookie, form).await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-408: remove the signed-in user's avatar (`DELETE /users/me/avatar`).
+pub async fn remove_avatar(api: &Api, cookie: Option<&str>) -> Result<(), ApiError> {
+    let r = api.delete("/users/me/avatar", cookie, None).await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-408: stream the signed-in user's avatar bytes for the `/me/avatar` BFF
+/// proxy. Returns the raw `reqwest::Response` (status/headers/body relayed by the
+/// handler) so a same-origin `<img>` can load it with the session cookie.
+pub async fn fetch_avatar(api: &Api, cookie: Option<&str>) -> Result<reqwest::Response, ApiError> {
+    api.get_stream("/users/me/avatar", cookie).await
+}
+
 pub async fn change_password(
     api: &Api,
     cookie: Option<&str>,
