@@ -49,6 +49,8 @@ fn inner(name: &str) -> &'static str {
         "chevron-down" => r#"<path d="m6 9 6 6 6-6"/>"#,
         // BUNYIP-405: disclosure chevron for clickable list rows.
         "chevron-right" => r#"<path d="m9 18 6-6-6-6"/>"#,
+        // BUNYIP-404: reorder-up affordance (pairs with chevron-down).
+        "chevron-up" => r#"<path d="m18 15-6-6-6 6"/>"#,
         "receipt" => {
             r#"<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1Z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 17.5v-11"/>"#
         }
@@ -234,7 +236,21 @@ pub fn success_box(msg: &str) -> Markup {
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_msg, error_box, success_box};
+    use super::{clamp_msg, error_box, icon, success_box};
+
+    /// BUNYIP-404: the reorder arrows must resolve to a real glyph, not the
+    /// empty-`inner` fallback (which would render a blank button). Guards both
+    /// directions used by the application-reorder controls.
+    #[test]
+    fn reorder_chevrons_render_a_path() {
+        for name in ["chevron-up", "chevron-down"] {
+            let svg = icon(name, "h-4 w-4").into_string();
+            assert!(
+                svg.contains("<path"),
+                "icon(\"{name}\") should render an SVG path, not the empty fallback"
+            );
+        }
+    }
 
     #[test]
     fn clamp_passes_short_through() {
