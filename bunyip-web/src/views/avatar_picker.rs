@@ -104,10 +104,18 @@ if(!mime||!ALLOWED[mime]){setErr('That file is not a PNG, JPEG, WebP, or GIF ima
 // Preview with a data: URL (FileReader), not URL.createObjectURL - the page CSP
 // is `img-src 'self' data: https:`, which blocks blob: URLs.
 var fr=new FileReader();fr.onload=function(){renderSlot(circle,fr.result);};fr.readAsDataURL(file);
-processImage(file,maxEdge).then(function(blob){if(!blob){setErr('Could not process that image.');return;}upload(blob);}).catch(function(){setErr('Could not read that image.');});
+// Downscale + re-encode client-side, but never trust the result blindly: some
+// browsers hand back an empty (0-byte) Blob from canvas.toBlob, which is truthy
+// and would upload as an empty file ("The selected file is empty"). If the
+// re-encode yields nothing usable, fall back to the original validated file -
+// the API accepts png/jpeg/webp/gif and re-validates either way.
+processImage(file,maxEdge).then(function(blob){
+if(blob&&blob.size>0){upload(blob,'avatar.jpg');}else{upload(file,file.name||'avatar');}
+}).catch(function(){upload(file,file.name||'avatar');});
 });}
-function upload(blob){busy(true);setProgress(0);
-var fd=new FormData();fd.append('avatar',blob,'avatar.jpg');
+function upload(payload,name){if(!payload||!payload.size){setErr('That image could not be read. Please try a different file.');return;}
+busy(true);setProgress(0);
+var fd=new FormData();fd.append('avatar',payload,name);
 var xhr=new XMLHttpRequest();xhr.open('POST',uploadUrl);xhr.setRequestHeader('Accept','application/json');
 if(xhr.upload)xhr.upload.onprogress=function(e){if(e.lengthComputable)setProgress(e.loaded/e.total*100);};
 xhr.onload=function(){busy(false);
