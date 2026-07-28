@@ -23,6 +23,7 @@ use crate::services::{
     WebhookService,
 };
 use crate::validation::validate_email;
+use bunyip_domain::device::device_label;
 use bunyip_domain::services::{BunyipEvent, EventBus};
 use uuid::Uuid;
 
@@ -452,7 +453,11 @@ pub async fn list_sessions(
             let current = current_hash.as_deref() == Some(t.token_hash.as_str());
             serde_json::json!({
                 "id": t.id,
-                "device_info": t.device_info,
+                // BUNYIP-409: derive a readable device name ("Chrome on macOS")
+                // from the stored User-Agent; None -> the web shows "Unknown
+                // device". Computed at read time so existing rows benefit with no
+                // backfill.
+                "device_info": device_label(t.device_info.as_deref()),
                 "ip_address": t.ip_address.map(|ip| ip.ip().to_string()),
                 "created_at": t.created_at,
                 "last_used_at": t.last_used_at,
