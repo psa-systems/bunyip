@@ -596,7 +596,13 @@ fn profile_menu(user: &User) -> Markup {
 
 fn app_topbar(title: &str, user: &User) -> Markup {
     html! {
-        header class="flex h-16 items-center justify-between border-b border-border/50 bg-background/80 backdrop-blur-sm px-6" {
+        // BUNYIP-408: `relative z-40` gives the topbar a stacking context that
+        // sits above the scrolling `<main>` content. Without it the profile-menu
+        // dropdown (which overflows below the h-16 bar) is painted OVER by the
+        // page's cards, so it looked cut off and its rows were neither hoverable
+        // nor clickable in the dashboard / admin shells. The public `header`
+        // already carries `z-50`, which is why the same component worked there.
+        header class="relative z-40 flex h-16 items-center justify-between border-b border-border/50 bg-background/80 backdrop-blur-sm px-6" {
             h1 class="text-lg font-semibold" { (title) }
             div class="flex items-center gap-2" {
                 (theme_controls("h-4 w-4"))
