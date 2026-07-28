@@ -2393,13 +2393,13 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                                         @if i > 0 {
                                             form method="post" action=(format!("/admin/applications/{}/swap-order", app.id)) {
                                                 input type="hidden" name="target_app_id" value=(apps[i - 1].id);
-                                                button type="submit" title="Move up" aria-label="Move up" class=(button_class("outline", "sm", "")) { "Up" }
+                                                button type="submit" title="Move up" aria-label="Move up" class=(button_class("outline", "sm", "")) { (icon("chevron-up", "h-4 w-4")) }
                                             }
                                         }
                                         @if i + 1 < apps.len() {
                                             form method="post" action=(format!("/admin/applications/{}/swap-order", app.id)) {
                                                 input type="hidden" name="target_app_id" value=(apps[i + 1].id);
-                                                button type="submit" title="Move down" aria-label="Move down" class=(button_class("outline", "sm", "")) { "Down" }
+                                                button type="submit" title="Move down" aria-label="Move down" class=(button_class("outline", "sm", "")) { (icon("chevron-down", "h-4 w-4")) }
                                             }
                                         }
                                     }
