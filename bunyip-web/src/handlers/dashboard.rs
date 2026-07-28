@@ -1330,29 +1330,11 @@ pub async fn settings(
             // edge. Persistence: PUT /v1/users/me/profile via
             // `auth_api::update_profile`.
             (settings_card("user-cog", "from-primary to-teal-500", "Profile", html! {
-                // BUNYIP-408: avatar upload. Current photo (or the initial
-                // fallback) plus an upload form and, when set, a remove button.
-                // Validation of consequence is API-side; the accept filter is a
-                // UX hint only.
-                div class="flex items-center gap-4 pb-4 mb-4 border-b border-border/60 max-w-md" {
-                    @if let Some(src) = user.avatar_src() {
-                        img src=(src) alt="Current profile photo" class="h-16 w-16 rounded-full object-cover border border-border/60";
-                    } @else {
-                        span class="inline-flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-primary to-indigo-500 text-white text-xl font-semibold select-none" aria-hidden="true" { (user.avatar_initial()) }
-                    }
-                    div class="space-y-2" {
-                        form method="post" action="/settings/avatar" enctype="multipart/form-data" class="flex flex-wrap items-center gap-2" {
-                            input type="file" name="avatar" accept="image/png,image/jpeg,image/webp,image/gif" required
-                                  class="block text-sm text-muted-foreground file:mr-2 file:rounded-md file:border-0 file:bg-accent file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-accent-foreground hover:file:bg-accent/80";
-                            button type="submit" class=(button_class("outline", "sm", "")) { (icon("upload", "mr-2 h-4 w-4")) "Upload" }
-                        }
-                        @if user.avatar_src().is_some() {
-                            form method="post" action="/settings/avatar/remove" {
-                                button type="submit" class=(button_class("ghost", "sm", "text-destructive hover:text-destructive")) { (icon("trash", "mr-2 h-4 w-4")) "Remove photo" }
-                            }
-                        }
-                        p class="text-xs text-muted-foreground" { "PNG, JPEG, WebP, or GIF up to 2 MB." }
-                    }
+                // BUNYIP-408: reusable avatar picker. Aligned to the field stack
+                // width below; all interaction (preview, validation, downscale,
+                // upload, remove) is handled by the shared component.
+                div class="pb-4 mb-4 border-b border-border/60 max-w-md" {
+                    (crate::views::avatar_picker::avatar_picker(&user))
                 }
                 form method="post" action="/settings/profile" class="space-y-4 max-w-md" {
                     div class="space-y-2" { label class="text-sm font-medium" { "First Name" } input name="first_name" type="text" maxlength="64" value=(user.first_name.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
@@ -1741,10 +1723,37 @@ async fn read_avatar_upload(
     }
 }
 
+/// BUNYIP-408: does the caller want a JSON reply (the avatar picker's XHR) rather
+/// than a redirect (the no-JS form fallback)? Keyed on the `Accept` header the
+/// XHR sets explicitly, so a normal form submit still gets the redirect + toast.
+fn wants_json(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(|a| a.contains("application/json"))
+        .unwrap_or(false)
+}
+
+/// Build a JSON response that still relays any rotated auth cookies the guard
+/// captured (so an in-flight refresh is not dropped on the XHR path).
+fn json_cookies(status: StatusCode, body: serde_json::Value, set_cookies: &[String]) -> Response {
+    let mut builder = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "application/json");
+    for cookie in set_cookies {
+        builder = builder.header(header::SET_COOKIE, cookie);
+    }
+    builder
+        .body(Body::from(body.to_string()))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
 /// POST /settings/avatar - upload (or replace) the profile photo. Parses the
-/// multipart body, relays the bytes to `POST /v1/users/me/avatar`, and redirects
-/// back to Settings with a toast. All validation of consequence (content type,
-/// size, dimensions) happens API-side; the BFF only guards the byte ceiling.
+/// multipart body and relays the bytes to `POST /v1/users/me/avatar`. The avatar
+/// picker's XHR (Accept: application/json) gets a JSON `{ok}` / `{error}` so it
+/// can update in place; a no-JS form submit gets the redirect + toast. All
+/// validation of consequence (content type, size, dimensions) happens API-side;
+/// the BFF only guards the byte ceiling.
 pub async fn settings_avatar(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1754,14 +1763,33 @@ pub async fn settings_avatar(
         Ok(v) => v,
         Err(r) => return r,
     };
+    let json = wants_json(&headers);
     let (filename, mime, bytes) = match read_avatar_upload(&mut multipart).await {
         Ok(v) => v,
         Err(msg) => {
-            return redirect_cookies(&format!("/settings?error={}", urlenc(&msg)), &c.set_cookies)
+            return if json {
+                json_cookies(
+                    StatusCode::BAD_REQUEST,
+                    serde_json::json!({ "error": msg }),
+                    &c.set_cookies,
+                )
+            } else {
+                redirect_cookies(&format!("/settings?error={}", urlenc(&msg)), &c.set_cookies)
+            }
         }
     };
     match auth_api::upload_avatar(&st.api, c.forward.as_deref(), &filename, &mime, bytes).await {
+        Ok(()) if json => json_cookies(
+            StatusCode::OK,
+            serde_json::json!({ "ok": true }),
+            &c.set_cookies,
+        ),
         Ok(()) => redirect_cookies("/settings?ok=Profile+photo+updated", &c.set_cookies),
+        Err(e) if json => json_cookies(
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({ "error": e.user_message() }),
+            &c.set_cookies,
+        ),
         Err(e) => redirect_cookies(
             &format!("/settings?error={}", urlenc(&e.user_message())),
             &c.set_cookies,
@@ -1769,14 +1797,26 @@ pub async fn settings_avatar(
     }
 }
 
-/// POST /settings/avatar/remove - clear the profile photo (idempotent).
+/// POST /settings/avatar/remove - clear the profile photo (idempotent). JSON for
+/// the picker's XHR, redirect + toast for the no-JS form.
 pub async fn settings_avatar_remove(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (_, c) = match guard(&st, &headers, "/settings").await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    let json = wants_json(&headers);
     match auth_api::remove_avatar(&st.api, c.forward.as_deref()).await {
+        Ok(()) if json => json_cookies(
+            StatusCode::OK,
+            serde_json::json!({ "ok": true }),
+            &c.set_cookies,
+        ),
         Ok(()) => redirect_cookies("/settings?ok=Profile+photo+removed", &c.set_cookies),
+        Err(e) if json => json_cookies(
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({ "error": e.user_message() }),
+            &c.set_cookies,
+        ),
         Err(e) => redirect_cookies(
             &format!("/settings?error={}", urlenc(&e.user_message())),
             &c.set_cookies,

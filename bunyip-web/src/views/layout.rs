@@ -171,6 +171,7 @@ pub fn document(title: &str, body: Markup) -> Markup {
                 script { (PreEscaped(TOAST_JS)) }
                 script { (PreEscaped(OTP_AUTOSUBMIT_JS)) }
                 script { (PreEscaped(PROFILE_MENU_JS)) }
+                script { (PreEscaped(crate::views::avatar_picker::AVATAR_PICKER_JS)) }
             }
             body {
                 // BUNYIP-243: app-wide "service unavailable" banner. Renders
@@ -551,13 +552,22 @@ fn sidebar(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup
 /// image when the user has one; otherwise a gradient circle with the display
 /// name's initial. `size` supplies the Tailwind sizing classes (e.g. `h-8 w-8`).
 fn avatar_badge(user: &User, size: &str) -> Markup {
+    let src = user.avatar_src();
+    let has = src.is_some();
     html! {
-        @if let Some(src) = user.avatar_src() {
-            img src=(src) alt="Profile photo"
-                class={ (size) " rounded-full object-cover border border-border/60" };
-        } @else {
-            span class={ (size) " inline-flex items-center justify-center rounded-full bg-gradient-to-br from-primary to-indigo-500 text-white text-sm font-semibold select-none" }
-                 aria-hidden="true" {
+        // `data-avatar-slot` marks this as an avatar surface the picker's
+        // controller repaints after an upload/removal (BUNYIP-408), so the
+        // header menu updates without a full-page reload. The image and the
+        // letter fallback are both wired via `data-avatar-image` /
+        // `data-avatar-initial`; the JS toggles between them.
+        span class={ "relative inline-flex items-center justify-center overflow-hidden rounded-full border border-border/60 " (size) }
+             data-avatar-slot data-initial=(user.avatar_initial()) {
+            @if let Some(s) = &src {
+                img src=(s) alt="Profile photo" class="avatar-slot__img" data-avatar-image;
+            }
+            span data-avatar-initial aria-hidden="true"
+                 class="inline-flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-primary to-indigo-500 text-white text-sm font-semibold select-none"
+                 style=[has.then_some("display:none")] {
                 (user.avatar_initial())
             }
         }
