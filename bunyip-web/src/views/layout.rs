@@ -171,6 +171,11 @@ pub fn document(title: &str, body: Markup) -> Markup {
                 script { (PreEscaped(TOAST_JS)) }
                 script { (PreEscaped(OTP_AUTOSUBMIT_JS)) }
                 script { (PreEscaped(PROFILE_MENU_JS)) }
+                // BUNYIP-408: avatar picker CSS shipped inline (not via the
+                // separately-cached styles.css) so a stale stylesheet can never
+                // leave the component's structural rules undefined. See
+                // `avatar_picker::AVATAR_PICKER_CSS`.
+                style { (PreEscaped(crate::views::avatar_picker::AVATAR_PICKER_CSS)) }
                 script { (PreEscaped(crate::views::avatar_picker::AVATAR_PICKER_JS)) }
             }
             body {
@@ -566,7 +571,7 @@ fn avatar_badge(user: &User, size: &str) -> Markup {
                 img src=(s) alt="Profile photo" class="avatar-slot__img" data-avatar-image;
             }
             span data-avatar-initial aria-hidden="true"
-                 class="inline-flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-primary to-indigo-500 text-white text-sm font-semibold select-none"
+                 class="inline-flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-primary to-indigo-500 text-white text-sm font-semibold"
                  style=[has.then_some("display:none")] {
                 (user.avatar_initial())
             }
