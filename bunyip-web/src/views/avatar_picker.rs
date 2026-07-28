@@ -71,8 +71,12 @@ function updateAllSlots(src){var s=document.querySelectorAll('[data-avatar-slot]
 function processImage(file,maxEdge){return createImageBitmap(file).then(function(bmp){
 var side=Math.min(bmp.width,bmp.height),sx=(bmp.width-side)/2,sy=(bmp.height-side)/2,edge=Math.min(side,maxEdge);
 var c=document.createElement('canvas');c.width=edge;c.height=edge;var ctx=c.getContext('2d');
+// White backing so a transparent PNG/GIF flattens to white (not black) once
+// encoded as JPEG. JPEG keeps the stored avatar small and is universally
+// decodable; the API accepts png/jpeg/webp/gif so the exact choice is ours.
+ctx.fillStyle='#ffffff';ctx.fillRect(0,0,edge,edge);
 ctx.drawImage(bmp,sx,sy,side,side,0,0,edge,edge);if(bmp.close)bmp.close();
-return new Promise(function(res){c.toBlob(res,'image/webp',0.9);}).then(function(blob){return blob||new Promise(function(res){c.toBlob(res,'image/jpeg',0.9);});});});}
+return new Promise(function(res){c.toBlob(res,'image/jpeg',0.85);});});}
 var dropGuard=false;
 function initPicker(root){
 if(root.__avatarInit)return;root.__avatarInit=true;root.setAttribute('data-enhanced','');
@@ -97,11 +101,13 @@ if(file.size>maxBytes){setErr('That image is '+fmtSize(file.size)+'. The limit i
 var slice=file.slice(0,16);var read=slice.arrayBuffer?slice.arrayBuffer():new Response(slice).arrayBuffer();
 Promise.resolve(read).then(function(buf){var mime=sniff(buf);
 if(!mime||!ALLOWED[mime]){setErr('That file is not a PNG, JPEG, WebP, or GIF image.');return;}
-var preview=URL.createObjectURL(file);renderSlot(circle,preview);
+// Preview with a data: URL (FileReader), not URL.createObjectURL - the page CSP
+// is `img-src 'self' data: https:`, which blocks blob: URLs.
+var fr=new FileReader();fr.onload=function(){renderSlot(circle,fr.result);};fr.readAsDataURL(file);
 processImage(file,maxEdge).then(function(blob){if(!blob){setErr('Could not process that image.');return;}upload(blob);}).catch(function(){setErr('Could not read that image.');});
 });}
 function upload(blob){busy(true);setProgress(0);
-var fd=new FormData();fd.append('avatar',blob,'avatar.webp');
+var fd=new FormData();fd.append('avatar',blob,'avatar.jpg');
 var xhr=new XMLHttpRequest();xhr.open('POST',uploadUrl);xhr.setRequestHeader('Accept','application/json');
 if(xhr.upload)xhr.upload.onprogress=function(e){if(e.lengthComputable)setProgress(e.loaded/e.total*100);};
 xhr.onload=function(){busy(false);
