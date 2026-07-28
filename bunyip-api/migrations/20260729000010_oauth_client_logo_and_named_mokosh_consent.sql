@@ -15,7 +15,13 @@
 ALTER TABLE oauth_clients
     ADD COLUMN logo_uri TEXT;
 
+-- logo_uri points at Mokosh's brand mark, self-hosted by bunyip-web
+-- (bunyip-web/assets/mokosh-logo.png, copied from mokosh-apps) so the consent
+-- icon is same-origin: it always loads, needs no cross-origin/CORS, and matches
+-- the consent page CSP ('self'), rather than depending on the Mokosh origin's
+-- asset paths or uptime.
 UPDATE oauth_clients
     SET first_party = FALSE,
-        name = 'Mokosh'
+        name = 'Mokosh',
+        logo_uri = '/assets/mokosh-logo.png'
     WHERE client_id = 'b0000000-0000-4000-8000-000000000002';
