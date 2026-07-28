@@ -787,6 +787,61 @@ pub struct UserQuery {
     pub status: Option<String>,
 }
 
+/// BUNYIP-405: one row of the admin users list.
+///
+/// The list is deliberately lightweight: identity plus a verified/unverified
+/// indicator and the Admin badge. On the Active tab the whole row is a link into
+/// the per-user detail view (`/admin/users/{id}`), where every management action
+/// now lives - the row itself carries no action buttons. On the Suspended tab
+/// the detail view is not reachable (a soft-deleted user 404s on lookup), so the
+/// single relevant action, Reactivate, stays inline and the row is not a link.
+fn user_list_row(u: &crate::api::types::AdminUser, suspended: bool) -> Markup {
+    let is_admin = matches!(u.role, crate::api::types::UserRole::Admin);
+    let verified = html! {
+        @if u.email_verified {
+            span class="inline-flex items-center gap-1 text-xs font-medium text-teal-600 dark:text-teal-400" {
+                (icon("check-circle", "h-4 w-4")) "Verified"
+            }
+        } @else {
+            span class="inline-flex items-center gap-1 text-xs font-medium text-yellow-600" {
+                (icon("alert-circle", "h-4 w-4")) "Unverified"
+            }
+        }
+    };
+    let identity = html! {
+        p class="font-medium flex items-center gap-2 truncate" {
+            (u.email)
+            @if is_admin { (badge("default", "Admin")) }
+            @if suspended { (badge("outline", "Suspended")) }
+        }
+        p class="text-xs text-muted-foreground" { "Joined " (relative_time(&u.created_at)) }
+    };
+    if suspended {
+        html! {
+            div class="flex items-center justify-between gap-3 py-3" {
+                div class="min-w-0" { (identity) }
+                div class="flex items-center gap-3 shrink-0" {
+                    (verified)
+                    form method="post" action=(format!("/admin/users/{}/reactivate", u.id)) onsubmit="return confirm('Reactivate this user? They will be able to sign in again.')" {
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Reactivate" }
+                    }
+                }
+            }
+        }
+    } else {
+        html! {
+            a href=(format!("/admin/users/{}", u.id))
+              class="flex items-center justify-between gap-3 py-3 px-2 -mx-2 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors" {
+                div class="min-w-0" { (identity) }
+                div class="flex items-center gap-3 shrink-0" {
+                    (verified)
+                    (icon("chevron-right", "h-4 w-4 text-muted-foreground"))
+                }
+            }
+        }
+    }
+}
+
 pub async fn users(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -845,45 +900,7 @@ pub async fn users(
                 div class="p-6 pt-0" {
                     div class="divide-y" {
                         @for u in &items {
-                            @let is_admin = matches!(u.role, crate::api::types::UserRole::Admin);
-                            div class="flex items-center justify-between py-3" {
-                                div {
-                                    p class="font-medium flex items-center gap-2" { (u.email) @if is_admin { (badge("default", "Admin")) } @if suspended { (badge("outline", "Suspended")) } @if !u.email_verified { (badge("outline", "Unverified")) } }
-                                    p class="text-xs text-muted-foreground" { "Joined " (relative_time(&u.created_at)) }
-                                }
-                                div class="flex items-center gap-2 flex-wrap" {
-                                    @if suspended {
-                                        form method="post" action=(format!("/admin/users/{}/reactivate", u.id)) onsubmit="return confirm('Reactivate this user? They will be able to sign in again.')" {
-                                            button type="submit" class=(button_class("outline", "sm", "")) { "Reactivate" }
-                                        }
-                                    } @else {
-                                        a href=(format!("/admin/users/{}", u.id)) class=(button_class("outline", "sm", "")) { "View" }
-                                        a href=(format!("/admin/users/{}/entitlements", u.id)) class=(button_class("outline", "sm", "")) { "Entitlements" }
-                                        form method="post" action=(format!("/admin/users/{}/role", u.id)) onsubmit="return confirm('Change this user role? Admins have full platform access.')" {
-                                            input type="hidden" name="role" value=(if is_admin { "subscriber" } else { "admin" });
-                                            button type="submit" class=(button_class("outline", "sm", "")) { @if is_admin { "Demote" } @else { "Make Admin" } }
-                                        }
-                                        form method="post" action=(format!("/admin/users/{}/reset-password", u.id)) onsubmit="return confirm('Send a password reset email to this user?')" {
-                                            button type="submit" class=(button_class("outline", "sm", "")) { "Reset Password" }
-                                        }
-                                        @if u.lifetime_member {
-                                            form method="post" action=(format!("/admin/users/{}/lifetime/revoke", u.id)) onsubmit="return confirm('Revoke lifetime membership? User will be returned to standard tier with no active subscription.')" {
-                                                button type="submit" class=(button_class("outline", "sm", "")) { "Revoke Lifetime" }
-                                            }
-                                        } @else {
-                                            form method="post" action=(format!("/admin/users/{}/lifetime", u.id)) onsubmit="return confirm('Grant lifetime membership? Creates a $0 Stripe subscription.')" {
-                                                button type="submit" class=(button_class("outline", "sm", "")) { "Lifetime" }
-                                            }
-                                        }
-                                        form method="post" action=(format!("/admin/users/{}/suspend", u.id)) onsubmit="return confirm('Suspend (soft-delete) this user?')" {
-                                            button type="submit" class=(button_class("outline", "sm", "")) { "Suspend" }
-                                        }
-                                        form method="post" action=(format!("/admin/users/{}/delete", u.id)) onsubmit="return confirm('Delete this user? This cannot be undone.')" {
-                                            button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("trash", "h-4 w-4")) }
-                                        }
-                                    }
-                                }
-                            }
+                            (user_list_row(u, suspended))
                         }
                         @if items.is_empty() { p class="text-center text-muted-foreground py-8" { @if suspended { "No suspended users" } @else { "No users found" } } }
                     }
@@ -5146,6 +5163,80 @@ mod rate_limit_tests {
         assert_eq!(fmt_retry_secs(45), "45s");
         assert_eq!(fmt_retry_secs(60), "1m");
         assert_eq!(fmt_retry_secs(125), "2m 5s");
+    }
+
+    // -- BUNYIP-405: admin users list row --------------------------------------
+
+    const ROW_UID: &str = "11111111-1111-1111-1111-111111111111";
+
+    fn admin_user(email: &str, verified: bool, admin: bool) -> crate::api::types::AdminUser {
+        serde_json::from_value(serde_json::json!({
+            "id": ROW_UID,
+            "email": email,
+            "role": if admin { "admin" } else { "subscriber" },
+            "email_verified": verified,
+            "two_factor_enabled": false,
+            "membership_status": "none",
+            "subscription_tier": "standard",
+            "lifetime_member": false,
+            "created_at": "2026-01-01T00:00:00Z",
+            "last_login_at": null,
+            "grace_period_end": null,
+        }))
+        .expect("valid admin user json")
+    }
+
+    #[test]
+    fn active_user_row_links_to_detail_with_no_inline_actions() {
+        let html =
+            super::user_list_row(&admin_user("ada@example.com", true, false), false).into_string();
+        // The whole row is a link into the per-user detail view.
+        assert!(
+            html.contains(&format!(r#"href="/admin/users/{ROW_UID}""#)),
+            "active row links to the detail view"
+        );
+        assert!(html.contains("Verified"), "verified indicator shown");
+        // Every management action moved to the detail view (BUNYIP-405): the list
+        // row must carry none of them, and no forms at all.
+        for action in [
+            "/role",
+            "/reset-password",
+            "/suspend",
+            "/delete",
+            "/lifetime",
+            "/entitlements",
+        ] {
+            assert!(
+                !html.contains(action),
+                "active list row must not carry the {action} action"
+            );
+        }
+        assert!(!html.contains("<form"), "active list row carries no forms");
+    }
+
+    #[test]
+    fn unverified_user_row_shows_unverified_status() {
+        let html =
+            super::user_list_row(&admin_user("new@example.com", false, false), false).into_string();
+        assert!(html.contains("Unverified"), "unverified status shown");
+        assert!(!html.contains(">Verified<"));
+    }
+
+    #[test]
+    fn suspended_user_row_keeps_reactivate_and_is_not_a_link() {
+        let html =
+            super::user_list_row(&admin_user("gone@example.com", true, false), true).into_string();
+        assert!(
+            html.contains(&format!(r#"action="/admin/users/{ROW_UID}/reactivate""#)),
+            "suspended row keeps the inline Reactivate action"
+        );
+        assert!(html.contains("Suspended"), "suspended badge shown");
+        // The detail view 404s for a soft-deleted user, so the suspended row is
+        // intentionally not a link into it.
+        assert!(
+            !html.contains(&format!(r#"href="/admin/users/{ROW_UID}""#)),
+            "suspended row is not a detail link"
+        );
     }
 }
 
