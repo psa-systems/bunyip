@@ -19,6 +19,40 @@ use maud::{html, Markup};
 use crate::api::types::User;
 use crate::views::ui::{button_class, icon};
 
+/// Component CSS, mounted INLINE in the document head (see `layout::document`)
+/// rather than compiled into `assets/styles.css`.
+///
+/// Why inline: `styles.css` is a separately-built, browser-cached file. A deploy
+/// that ships fresh SSR HTML + inline JS but a stale/cached stylesheet would
+/// leave every structural rule below undefined - the `absolute inset-0` fallback
+/// initial then escaped its container and filled the whole card (BUNYIP-408 bug
+/// report). Shipping these rules inline in the always-fresh SSR head removes the
+/// stale-stylesheet failure mode entirely and needs no Tailwind rebuild. Keyed
+/// on the theme tokens so light / dark / high-contrast all adapt. The markup
+/// leans only on utilities that already exist in `styles.css`; everything novel
+/// and structural lives here.
+pub const AVATAR_PICKER_CSS: &str = r#".avatar-slot__img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:9999px}
+.avatar-picker{display:flex;align-items:center;gap:1rem}
+.avatar-picker__form{margin:0}
+.avatar-picker__trigger{position:relative;display:inline-flex;align-items:center;justify-content:center;width:4rem;height:4rem;border-radius:9999px;cursor:pointer;flex:none}
+.avatar-picker__input{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
+.avatar-picker__circle{position:relative;width:100%;height:100%;border-radius:9999px;overflow:hidden;border:1px solid hsl(var(--border));background:hsl(var(--muted));display:flex;align-items:center;justify-content:center}
+.avatar-picker__circle [data-avatar-initial]{user-select:none;-webkit-user-select:none}
+.avatar-picker__overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;border-radius:9999px;color:#fff;background:rgba(0,0,0,.55);font-size:.7rem;font-weight:600;opacity:0;transition:opacity .15s ease;pointer-events:none}
+.avatar-picker__trigger:hover .avatar-picker__overlay,.avatar-picker__trigger:focus-within .avatar-picker__overlay,.avatar-picker.is-dragging .avatar-picker__overlay,.avatar-picker.is-uploading .avatar-picker__overlay{opacity:1}
+.avatar-picker__trigger:focus-within .avatar-picker__circle{outline:2px solid var(--color-bunyip-reed-600);outline-offset:2px}
+.avatar-picker.is-dragging .avatar-picker__circle{outline:2px dashed var(--color-bunyip-reed-500);outline-offset:2px;border-color:var(--color-bunyip-reed-500)}
+.avatar-picker__progress{position:absolute;inset:-3px;border-radius:9999px;opacity:0;transition:opacity .15s ease;background:conic-gradient(var(--color-bunyip-reed-500) calc(var(--avatar-progress,0)*1%),transparent 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 3px));mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 3px));pointer-events:none}
+.avatar-picker.is-uploading .avatar-picker__progress{opacity:1}
+.avatar-picker.is-uploading .avatar-picker__trigger{pointer-events:none;cursor:default}
+.avatar-picker__side{display:flex;flex-direction:column;gap:.25rem;min-width:0}
+.avatar-picker__actions{display:flex;flex-wrap:wrap;gap:.5rem}
+.avatar-picker__help{font-size:.75rem;color:hsl(var(--muted-foreground));margin:0}
+.avatar-picker__error{font-size:.75rem;color:hsl(var(--destructive));margin:0;min-height:1rem}
+.avatar-picker__enhanced{display:none}
+.avatar-picker[data-enhanced] .avatar-picker__enhanced{display:inline-flex}
+.avatar-picker[data-enhanced] .avatar-picker__nojs{display:none}"#;
+
 /// The client-side controller for every `[data-avatar-picker]` on the page.
 /// Mounted once from `layout::document`. No-op when no picker is present.
 pub const AVATAR_PICKER_JS: &str = r#"(function(){
@@ -111,17 +145,20 @@ pub fn avatar_picker(user: &User) -> Markup {
             // (`.avatar-picker__nojs`) and drives the upload instead.
             form class="avatar-picker__form" method="post" action="/settings/avatar" enctype="multipart/form-data" {
                 label class="avatar-picker__trigger" data-avatar-trigger {
-                    span class="sr-only" { "Upload a profile photo (PNG, JPEG, WebP, or GIF, up to 2 MB)" }
                     input type="file" name="avatar"
                           accept="image/png,image/jpeg,image/webp,image/gif"
                           class="avatar-picker__input" data-avatar-input
+                          aria-label="Upload a profile photo (PNG, JPEG, WebP, or GIF, up to 2 MB)"
                           aria-describedby="avatar-picker-help avatar-picker-error";
                     span class="avatar-picker__circle" data-avatar-slot data-initial=(initial) {
                         @if let Some(s) = &src {
                             img src=(s) alt="Your profile photo" class="avatar-slot__img" data-avatar-image;
                         }
+                        // `h-full w-full` (not `absolute inset-0`) so the letter
+                        // fallback can never escape its circle even if this
+                        // component's CSS is somehow missing.
                         span data-avatar-initial aria-hidden="true"
-                             class="absolute inset-0 flex items-center justify-center rounded-full bg-gradient-to-br from-primary to-teal-600 text-white text-xl font-semibold select-none"
+                             class="flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-primary to-indigo-500 text-white text-xl font-semibold"
                              style=[has.then_some("display:none")] {
                             (initial)
                         }
