@@ -88,6 +88,54 @@ pub struct User {
     pub last_name: Option<String>,
     #[serde(default)]
     pub phone: Option<String>,
+    /// BUNYIP-408: ISO-8601 timestamp of the user's most recent avatar upload,
+    /// or `None`/absent when no avatar is set. Used purely as an existence flag
+    /// and a cache-busting version for the avatar `<img>` URL; the bytes are
+    /// fetched separately through the `/me/avatar` BFF proxy. `default` keeps an
+    /// older API that predates the field deserialize-compatible.
+    #[serde(default)]
+    pub avatar_updated_at: Option<String>,
+}
+
+impl User {
+    /// BUNYIP-408: the name to show in the top-bar profile menu. Prefers the
+    /// user's first name; falls back to the email local part (before `@`) when
+    /// no first name is set, so the chrome never shows a raw full email address.
+    pub fn display_name(&self) -> String {
+        match self.first_name.as_deref().map(str::trim) {
+            Some(name) if !name.is_empty() => name.to_string(),
+            _ => self
+                .email
+                .split('@')
+                .next()
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&self.email)
+                .to_string(),
+        }
+    }
+
+    /// BUNYIP-408: single uppercase initial for the avatar fallback, derived
+    /// from [`User::display_name`]. ASCII-uppercased first character; `?` if the
+    /// display name is somehow empty.
+    pub fn avatar_initial(&self) -> String {
+        self.display_name()
+            .chars()
+            .next()
+            .map(|c| c.to_ascii_uppercase().to_string())
+            .unwrap_or_else(|| "?".to_string())
+    }
+
+    /// BUNYIP-408: same-origin `<img>` src for the avatar, or `None` when the
+    /// user has no avatar (render the initials fallback instead). Points at the
+    /// bunyip-web BFF proxy (`/me/avatar`) - never the API origin directly - and
+    /// carries the `avatar_updated_at` timestamp as a `?v=` cache-buster so a
+    /// re-upload is picked up immediately.
+    pub fn avatar_src(&self) -> Option<String> {
+        self.avatar_updated_at
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|v| format!("/me/avatar?v={}", urlencoding::encode(v)))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -748,4 +796,76 @@ pub struct AppDocSummary {
     pub title: String,
     #[serde(default)]
     pub sort_order: i32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::User;
+
+    /// Build a minimal web `User` from JSON so the many required fields don't
+    /// have to be spelled out in every test.
+    fn user(first_name: Option<&str>, email: &str, avatar_updated_at: Option<&str>) -> User {
+        serde_json::from_value(serde_json::json!({
+            "id": "00000000-0000-0000-0000-000000000001",
+            "email": email,
+            "role": "subscriber",
+            "email_verified": true,
+            "two_factor_enabled": false,
+            "membership_status": "none",
+            "price_locked": false,
+            "created_at": "2026-01-01T00:00:00Z",
+            "subscription_tier": "standard",
+            "lifetime_member": false,
+            "first_name": first_name,
+            "avatar_updated_at": avatar_updated_at,
+        }))
+        .expect("valid user json")
+    }
+
+    #[test]
+    fn display_name_prefers_first_name() {
+        assert_eq!(
+            user(Some("Ada"), "ada@example.com", None).display_name(),
+            "Ada"
+        );
+    }
+
+    #[test]
+    fn display_name_falls_back_to_email_local_part() {
+        // BUNYIP-408: no first name -> the local part, never the raw full email.
+        assert_eq!(
+            user(None, "ada.lovelace@example.com", None).display_name(),
+            "ada.lovelace"
+        );
+        // Whitespace-only first name is treated as unset.
+        assert_eq!(
+            user(Some("   "), "grace@example.com", None).display_name(),
+            "grace"
+        );
+    }
+
+    #[test]
+    fn avatar_initial_is_uppercase_first_char() {
+        assert_eq!(
+            user(Some("ada"), "ada@example.com", None).avatar_initial(),
+            "A"
+        );
+        assert_eq!(user(None, "zoe@example.com", None).avatar_initial(), "Z");
+    }
+
+    #[test]
+    fn avatar_src_present_only_when_avatar_set() {
+        // No timestamp -> no image src (render the initials fallback instead).
+        assert_eq!(
+            user(Some("Ada"), "ada@example.com", None).avatar_src(),
+            None
+        );
+        // A timestamp -> a same-origin proxy URL carrying it as a cache-buster.
+        let src = user(Some("Ada"), "ada@example.com", Some("2026-07-28T10:00:00Z"))
+            .avatar_src()
+            .expect("avatar src");
+        assert!(src.starts_with("/me/avatar?v="));
+        // The ISO-8601 `:` are percent-encoded so the query value is well-formed.
+        assert!(src.contains("2026-07-28T10%3A00%3A00Z"));
+    }
 }

@@ -154,6 +154,21 @@ async fn main() {
             "/settings/profile",
             axum::routing::post(dash::settings_profile),
         )
+        // BUNYIP-408: avatar upload / remove + same-origin avatar proxy.
+        .route(
+            "/settings/avatar",
+            axum::routing::post(dash::settings_avatar).layer(
+                // Raise the default axum 2 MB body limit so a 2 MiB image plus
+                // multipart overhead fits. The API's own MAX_AVATAR_SIZE is the
+                // authoritative cap.
+                axum::extract::DefaultBodyLimit::max(3 * 1024 * 1024),
+            ),
+        )
+        .route(
+            "/settings/avatar/remove",
+            axum::routing::post(dash::settings_avatar_remove),
+        )
+        .route("/me/avatar", get(dash::me_avatar))
         // BUNYIP-140: OIDC consent screen (rendered when /oauth2/authorize
         // on bunyip-api detects a (user, client, scope) combination that has
         // not been consented to yet).

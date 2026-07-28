@@ -292,6 +292,7 @@ mod onboarding_gate_tests {
             first_name: first.map(str::to_string),
             last_name: last.map(str::to_string),
             phone: None,
+            avatar_updated_at: None,
         }
     }
 

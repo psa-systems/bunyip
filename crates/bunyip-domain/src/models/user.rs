@@ -254,6 +254,13 @@ pub struct User {
     /// `checkout.session.completed` webhook). Trial-eligibility is `!has_used_trial`,
     /// so a returning user never re-triggers the trial.
     pub has_used_trial: bool,
+    /// BUNYIP-408: timestamp of the user's most recent avatar upload, or `None`
+    /// when no avatar is set. The bytes live in the separate `user_avatars`
+    /// table; this column is the cheap "an avatar exists" marker (so the hot
+    /// user-fetch path never loads the BYTEA) and doubles as a cache-busting
+    /// version for the avatar `<img>` URL. Set/cleared in the same transaction
+    /// that writes/deletes the `user_avatars` row.
+    pub avatar_updated_at: Option<DateTime<Utc>>,
 }
 
 impl User {
@@ -368,6 +375,10 @@ pub struct UserResponse {
     pub last_name: Option<String>,
     /// BUNYIP-139: see [`User::phone`].
     pub phone: Option<String>,
+    /// BUNYIP-408: see [`User::avatar_updated_at`]. Surfaced so bunyip-web can
+    /// decide whether to render the avatar `<img>` (and with what cache-busting
+    /// version) or fall back to initials.
+    pub avatar_updated_at: Option<DateTime<Utc>>,
 }
 
 impl From<User> for UserResponse {
@@ -390,6 +401,7 @@ impl From<User> for UserResponse {
             first_name: user.first_name,
             last_name: user.last_name,
             phone: user.phone,
+            avatar_updated_at: user.avatar_updated_at,
         }
     }
 }
@@ -532,6 +544,7 @@ mod tests {
             last_name: None,
             phone: None,
             has_used_trial: false,
+            avatar_updated_at: None,
         }
     }
 

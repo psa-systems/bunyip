@@ -45,6 +45,8 @@ fn inner(name: &str) -> &'static str {
         "upload" => {
             r#"<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>"#
         }
+        // BUNYIP-408: caret for the profile-menu disclosure.
+        "chevron-down" => r#"<path d="m6 9 6 6 6-6"/>"#,
         "receipt" => {
             r#"<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1Z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 17.5v-11"/>"#
         }

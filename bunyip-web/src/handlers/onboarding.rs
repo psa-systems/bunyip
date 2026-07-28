@@ -252,6 +252,7 @@ mod tests {
             first_name: Some("Ada".into()),
             last_name: Some("Lovelace".into()),
             phone: None,
+            avatar_updated_at: None,
         }
     }
 

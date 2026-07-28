@@ -126,6 +126,13 @@ fn sse_subscriber_script() -> String {
     SSE_SUBSCRIBER.replace("__BUNYIP_API_ORIGIN__", sse_api_origin())
 }
 
+/// BUNYIP-408: close the open profile-menu `<details data-menu>` when the user
+/// clicks anywhere outside it or presses Escape. `<details>`/`<summary>` gives a
+/// keyboard-accessible, no-JS-required dropdown; this only adds click-away /
+/// Escape dismissal so it behaves like a normal menu. One delegated listener
+/// covers every `data-menu` on the page.
+const PROFILE_MENU_JS: &str = r#"(function(){document.addEventListener('click',function(e){document.querySelectorAll('details[data-menu][open]').forEach(function(d){if(!d.contains(e.target))d.removeAttribute('open');});});document.addEventListener('keydown',function(e){if(e.key==='Escape')document.querySelectorAll('details[data-menu][open]').forEach(function(d){d.removeAttribute('open');});});})();"#;
+
 pub fn document(title: &str, body: Markup) -> Markup {
     html! {
         (DOCTYPE)
@@ -163,6 +170,7 @@ pub fn document(title: &str, body: Markup) -> Markup {
                 script { (PreEscaped(THEME_TOGGLE)) }
                 script { (PreEscaped(TOAST_JS)) }
                 script { (PreEscaped(OTP_AUTOSUBMIT_JS)) }
+                script { (PreEscaped(PROFILE_MENU_JS)) }
             }
             body {
                 // BUNYIP-243: app-wide "service unavailable" banner. Renders
@@ -267,10 +275,13 @@ fn header(user: Option<&User>, _show_feedback: bool) -> Markup {
                 }
                 div class="flex items-center gap-4" {
                     (theme_controls("h-5 w-5"))
-                    @if user.is_some() {
+                    @if let Some(u) = user {
                         a href="/dashboard" class=(button_class("ghost", "sm", "")) { "Dashboard" }
                         @if is_admin { a href="/admin" class=(button_class("ghost", "sm", "")) { "Admin" } }
-                        a href="/logout" class=(button_class("outline", "sm", "")) { "Logout" }
+                        // BUNYIP-408: same profile menu as the app shells, so the
+                        // documentation / marketing pages reach profile + logout
+                        // through the identical affordance.
+                        (profile_menu(u))
                     } @else {
                         a href="/register" class=(button_class("default", "sm", "")) { "Get Started" }
                         a href="/login" class=(button_class("outline", "sm", "")) { "Login" }
@@ -536,17 +547,60 @@ fn sidebar(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup
     }
 }
 
+/// BUNYIP-408: the round avatar shown in the profile menu. Renders the uploaded
+/// image when the user has one; otherwise a gradient circle with the display
+/// name's initial. `size` supplies the Tailwind sizing classes (e.g. `h-8 w-8`).
+fn avatar_badge(user: &User, size: &str) -> Markup {
+    html! {
+        @if let Some(src) = user.avatar_src() {
+            img src=(src) alt="Profile photo"
+                class={ (size) " rounded-full object-cover border border-border/60" };
+        } @else {
+            span class={ (size) " inline-flex items-center justify-center rounded-full bg-gradient-to-br from-primary to-indigo-500 text-white text-sm font-semibold select-none" }
+                 aria-hidden="true" {
+                (user.avatar_initial())
+            }
+        }
+    }
+}
+
+/// BUNYIP-408: the consistent upper-right profile menu shared by every shell
+/// (dashboard, admin, and the public header). An avatar button opens a dropdown
+/// containing a link to profile settings and Log out - replacing the old
+/// standalone logout link + raw-email display. Built on `<details>`/`<summary>`
+/// so it is keyboard-accessible without a framework; `PROFILE_MENU_JS` adds
+/// click-away / Escape dismissal.
+fn profile_menu(user: &User) -> Markup {
+    html! {
+        details class="relative" data-menu {
+            summary class="flex items-center gap-2 cursor-pointer list-none rounded-full py-1 pl-1 pr-2 hover:bg-accent transition-colors [&::-webkit-details-marker]:hidden" {
+                (avatar_badge(user, "h-8 w-8"))
+                span class="hidden text-sm font-medium text-foreground sm:inline" { (user.display_name()) }
+                (icon("chevron-down", "h-4 w-4 text-muted-foreground"))
+            }
+            div class="absolute right-0 z-50 mt-2 w-56 overflow-hidden rounded-md border border-border/60 bg-background py-1 shadow-lg" {
+                div class="border-b border-border/60 px-3 py-2" {
+                    p class="truncate text-sm font-medium text-foreground" { (user.display_name()) }
+                    p class="truncate text-xs text-muted-foreground" { (user.email) }
+                }
+                a href="/settings" class="flex items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-accent hover:text-accent-foreground transition-colors" {
+                    (icon("user", "h-4 w-4")) "Profile"
+                }
+                a href="/logout" class="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-accent transition-colors dark:text-red-400" {
+                    (icon("log-out", "h-4 w-4")) "Log out"
+                }
+            }
+        }
+    }
+}
+
 fn app_topbar(title: &str, user: &User) -> Markup {
     html! {
         header class="flex h-16 items-center justify-between border-b border-border/50 bg-background/80 backdrop-blur-sm px-6" {
             h1 class="text-lg font-semibold" { (title) }
-            div class="flex items-center gap-4" {
-                div class="flex items-center gap-2 text-sm text-muted-foreground" {
-                    (icon("user", "h-4 w-4"))
-                    span { (user.email) }
-                }
+            div class="flex items-center gap-2" {
                 (theme_controls("h-4 w-4"))
-                a href="/logout" class=(button_class("ghost", "sm", "")) { (icon("log-out", "h-4 w-4")) }
+                (profile_menu(user))
             }
         }
     }

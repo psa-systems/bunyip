@@ -1100,6 +1100,7 @@ mod tests {
             last_name: None,
             phone: None,
             has_used_trial: false,
+            avatar_updated_at: None,
         };
 
         let claims = AccessTokenClaims::from_atjwt_and_user(
