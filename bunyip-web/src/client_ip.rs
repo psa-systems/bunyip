@@ -38,6 +38,14 @@ tokio::task_local! {
     /// The end-user IP resolved for the in-flight request, or `None` when the
     /// inbound peer is not a trusted proxy (so nothing may be forwarded).
     static CLIENT_IP: Option<IpAddr>;
+
+    /// BUNYIP-409: the end-user's browser `User-Agent` for the in-flight
+    /// request. Forwarded to bunyip-api so its session rows record a real device
+    /// (the server-to-server call would otherwise carry the BFF's HTTP-client UA
+    /// or none, leaving sessions as "Unknown device"). Unlike the IP this is not
+    /// gated on the trusted proxy: a spoofed UA only mislabels the spoofer's own
+    /// session, so there is no cross-user surface to protect.
+    static CLIENT_UA: Option<String>;
 }
 
 /// The end-user IP resolved for the current request, if any.
@@ -46,6 +54,12 @@ tokio::task_local! {
 /// poll) via `try_with`, so callers never panic on a missing task-local.
 pub fn current() -> Option<IpAddr> {
     CLIENT_IP.try_with(|ip| *ip).unwrap_or(None)
+}
+
+/// BUNYIP-409: the end-user's browser `User-Agent` for the current request, if
+/// any. `None` outside a request scope (never panics).
+pub fn current_ua() -> Option<String> {
+    CLIENT_UA.try_with(|ua| ua.clone()).unwrap_or(None)
 }
 
 /// Axum middleware: resolve the end-user IP once per request and run the rest
@@ -68,7 +82,19 @@ pub async fn forward_client_ip(
     let real_ip = req.headers().get("X-Real-IP").and_then(|v| v.to_str().ok());
     let resolved = resolve_forwarded_ip(peer, forwarded_for, real_ip, &cfg.trusted_proxies);
 
-    CLIENT_IP.scope(resolved, next.run(req)).await
+    // BUNYIP-409: capture the browser User-Agent to forward alongside the IP so
+    // bunyip-api records the real device on the session row. Bounded to 512
+    // bytes (the API truncates to 256 anyway) so a crafted oversized header
+    // cannot bloat the forwarded request.
+    let ua = req
+        .headers()
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.chars().take(512).collect::<String>());
+
+    CLIENT_UA
+        .scope(ua, CLIENT_IP.scope(resolved, next.run(req)))
+        .await
 }
 
 /// Pure resolution of the end-user IP to forward, factored out for unit tests.
@@ -254,5 +280,42 @@ mod tests {
     #[test]
     fn current_is_none_outside_request_scope() {
         assert_eq!(current(), None);
+    }
+
+    /// BUNYIP-409: the middleware captures the inbound browser User-Agent into
+    /// the task-local so `current_ua()` can forward it on outbound API calls.
+    #[tokio::test]
+    async fn middleware_exposes_user_agent_to_handler() {
+        async fn probe_ua() -> String {
+            current_ua().unwrap_or_else(|| "none".into())
+        }
+        let app =
+            Router::new()
+                .route("/ua", get(probe_ua))
+                .layer(axum::middleware::from_fn_with_state(
+                    cfg_with(vec![]),
+                    forward_client_ip,
+                ));
+        let mut req = Request::builder()
+            .uri("/ua")
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (X11; Linux x86_64) Firefox/121.0",
+            )
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo("127.0.0.1:5000".parse::<SocketAddr>().unwrap()));
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(
+            body_string(resp).await,
+            "Mozilla/5.0 (X11; Linux x86_64) Firefox/121.0"
+        );
+    }
+
+    /// The UA task-local, like the IP, is absent outside a request scope.
+    #[test]
+    fn current_ua_is_none_outside_request_scope() {
+        assert_eq!(current_ua(), None);
     }
 }

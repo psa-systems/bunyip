@@ -272,10 +272,18 @@ impl Api {
 /// reads this as the external client because bunyip-web is in its own
 /// `TRUSTED_PROXY_CIDR`.
 fn forward_client_ip(rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-    match crate::client_ip::current() {
+    let mut rb = match crate::client_ip::current() {
         Some(ip) => rb.header("X-Forwarded-For", ip.to_string()),
         None => rb,
+    };
+    // BUNYIP-409: forward the browser's User-Agent so bunyip-api's session rows
+    // record a real device instead of the BFF's HTTP-client UA. Overriding the
+    // outbound UA is safe: bunyip-api only uses it for device labelling / access
+    // logs, both of which are more correct attributed to the real client.
+    if let Some(ua) = crate::client_ip::current_ua() {
+        rb = rb.header(reqwest::header::USER_AGENT, ua);
     }
+    rb
 }
 
 /// Parse the `Retry-After` header as whole seconds (BUNYIP-314). bunyip-api

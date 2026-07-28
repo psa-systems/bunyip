@@ -13,6 +13,7 @@ pub use dunite_core::{errors, responses, validation};
 
 // Domain layers (owned by bunyip).
 pub mod config;
+pub mod device;
 pub mod middleware;
 pub mod models;
 pub mod repositories;
