@@ -549,16 +549,24 @@ pub async fn authorize(
             );
         } else {
             // Third-party client: hand control to bunyip-web's consent page,
-            // now carrying the client's display name so the screen can name the
-            // requesting application (BUNYIP-342). The page reads every authorize
-            // parameter back from the URL so a successful Allow can issue a fresh
+            // now carrying the client's display name (BUNYIP-342) and, when set,
+            // its logo URL (BUNYIP-406) so the screen can name and picture the
+            // requesting application. The page reads every authorize parameter
+            // back from the URL so a successful Allow can issue a fresh
             // /oauth2/authorize redirect with the same state / nonce /
             // code_challenge.
+            let logo_param = client
+                .logo_uri
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .map(|logo| format!("&logo_uri={}", urlencoding::encode(logo)))
+                .unwrap_or_default();
             let consent_url = format!(
-                "{}/oauth2/consent?client_id={}&client_name={}&missing={}&continue={}",
+                "{}/oauth2/consent?client_id={}&client_name={}{}&missing={}&continue={}",
                 config.web_origin.trim_end_matches('/'),
                 urlencoding::encode(&q.client_id),
                 urlencoding::encode(&client.name),
+                logo_param,
                 urlencoding::encode(&missing.join(" ")),
                 urlencoding::encode(&format!("{}{}", provider.issuer(), req.uri())),
             );

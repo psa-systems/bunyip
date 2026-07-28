@@ -17,7 +17,7 @@ use serde_json::json;
 
 use crate::handlers::{auth_page, guard};
 use crate::views::common::auth_card;
-use crate::views::ui::{button_class, error_box};
+use crate::views::ui::{button_class, error_box, icon};
 use crate::web::{redirect, redirect_cookies, AppState};
 
 #[derive(Debug, Deserialize)]
@@ -30,6 +30,11 @@ pub struct ConsentQuery {
     /// hand-crafted URL or an older backend.
     #[serde(default)]
     pub client_name: Option<String>,
+    /// BUNYIP-406: the requesting client's icon/logo URL, passed by the
+    /// authorize handler alongside `client_name`. Absent when the client has no
+    /// logo (or on an older backend); the card then shows a name-initial badge.
+    #[serde(default)]
+    pub logo_uri: Option<String>,
     /// Absolute URL the authorize handler wants us to send the user back to
     /// after Allow. Already URL-encoded by the caller.
     #[serde(default, rename = "continue")]
@@ -66,11 +71,47 @@ fn scope_label(scope: &str) -> &'static str {
 fn consent_description(client_name: Option<&str>) -> String {
     match client_name.map(str::trim).filter(|n| !n.is_empty()) {
         Some(name) => {
-            format!("{name} is requesting access to your information. Approve below to continue.")
+            format!(
+                "{name} is requesting access to your Bunyip account. Approve below to continue."
+            )
         }
         None => {
-            "An application is requesting access to your information. Approve below to continue."
+            "An application is requesting access to your Bunyip account. Approve below to continue."
                 .to_string()
+        }
+    }
+}
+
+/// BUNYIP-406: only an `https://` or same-origin (`/…`) logo URL is rendered as
+/// an `<img>`; any other scheme (`javascript:`, `data:`, plaintext `http:` on
+/// an https page) degrades to the initial badge. Maud already escapes the
+/// attribute so a spoofed value cannot inject markup - this additionally keeps a
+/// hostile or unloadable URL from being requested at all, and matches the page
+/// CSP (`img-src 'self' https:`).
+fn safe_logo_uri(logo_uri: Option<&str>) -> Option<&str> {
+    let u = logo_uri.map(str::trim).filter(|s| !s.is_empty())?;
+    (u.starts_with("https://") || u.starts_with('/')).then_some(u)
+}
+
+/// The app-identity row on the consent card: the client's logo when a safe URL
+/// is set, otherwise a name-initial badge (generic app glyph when the name is
+/// also absent), next to the client name. Rendered by Maud as escaped text /
+/// attributes, so a spoofed name or logo URL cannot inject markup.
+fn app_identity(client_name: Option<&str>, logo_uri: Option<&str>) -> Markup {
+    let name = client_name.map(str::trim).filter(|n| !n.is_empty());
+    let initial = name
+        .and_then(|n| n.chars().next())
+        .map(|c| c.to_ascii_uppercase().to_string());
+    html! {
+        div class="mb-4 flex items-center gap-3 rounded-lg border border-border/60 p-3" {
+            @if let Some(logo) = safe_logo_uri(logo_uri) {
+                img src=(logo) alt="" class="h-10 w-10 shrink-0 rounded-lg object-cover border border-border/60";
+            } @else if let Some(i) = &initial {
+                span class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-indigo-500 text-white text-lg font-semibold" aria-hidden="true" { (i) }
+            } @else {
+                span class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground" aria-hidden="true" { (icon("app-window", "h-5 w-5")) }
+            }
+            span class="font-medium truncate" { (name.unwrap_or("An application")) }
         }
     }
 }
@@ -107,6 +148,8 @@ pub async fn consent_get(
     }
 
     let body = html! {
+        // BUNYIP-406: name + icon of the requesting application.
+        (app_identity(q.client_name.as_deref(), q.logo_uri.as_deref()))
         ul class="mb-4 space-y-2 list-disc list-inside text-sm" {
             @for s in &scopes {
                 li { (scope_label(s)) }
@@ -230,7 +273,7 @@ fn _keep_error_box_import(msg: &str) -> Markup {
 
 #[cfg(test)]
 mod tests {
-    use super::{consent_description, scope_label};
+    use super::{app_identity, consent_description, safe_logo_uri, scope_label};
 
     #[test]
     fn consent_description_names_the_client_or_falls_back() {
@@ -238,6 +281,63 @@ mod tests {
         assert!(consent_description(None).starts_with("An application is requesting access"));
         // A blank / whitespace-only name falls back to the generic wording.
         assert!(consent_description(Some("   ")).starts_with("An application is requesting access"));
+    }
+
+    /// BUNYIP-406: the copy names the account being accessed (the user's Bunyip
+    /// account), both when the client is named and in the generic fallback.
+    #[test]
+    fn consent_copy_names_the_bunyip_account() {
+        assert!(consent_description(Some("Mokosh")).contains("your Bunyip account"));
+        assert!(consent_description(None).contains("your Bunyip account"));
+    }
+
+    /// BUNYIP-406: only https / same-origin logo URLs are honoured; every other
+    /// scheme degrades to the initial badge (and never gets requested).
+    #[test]
+    fn safe_logo_uri_allows_https_and_self_only() {
+        assert_eq!(
+            safe_logo_uri(Some("https://cdn.example.com/logo.png")),
+            Some("https://cdn.example.com/logo.png")
+        );
+        assert_eq!(
+            safe_logo_uri(Some("/assets/mokosh.svg")),
+            Some("/assets/mokosh.svg")
+        );
+        assert_eq!(safe_logo_uri(Some("javascript:alert(1)")), None);
+        assert_eq!(
+            safe_logo_uri(Some("data:image/svg+xml,<svg onload=alert(1)>")),
+            None
+        );
+        assert_eq!(
+            safe_logo_uri(Some("http://insecure.example.com/logo.png")),
+            None
+        );
+        assert_eq!(safe_logo_uri(Some("   ")), None);
+        assert_eq!(safe_logo_uri(None), None);
+    }
+
+    /// BUNYIP-406: a spoofed client name or logo URL cannot inject markup, and a
+    /// hostile logo scheme is not emitted as an `<img src>` at all.
+    #[test]
+    fn app_identity_escapes_spoofed_name_and_rejects_hostile_logo() {
+        let html = app_identity(Some("<script>alert(1)</script>Evil"), None).into_string();
+        assert!(
+            !html.contains("<script>alert(1)</script>"),
+            "raw markup must not appear"
+        );
+        assert!(
+            html.contains("&lt;script&gt;"),
+            "name is rendered as escaped text"
+        );
+
+        // A javascript: logo degrades to the initial badge - no <img>, no URL.
+        let hostile = app_identity(Some("Evil"), Some("javascript:alert(1)")).into_string();
+        assert!(!hostile.contains("javascript:"));
+        assert!(!hostile.contains("<img"));
+
+        // A safe https logo IS rendered as an (escaped) <img src>.
+        let ok = app_identity(Some("Mokosh"), Some("https://cdn.example.com/m.png")).into_string();
+        assert!(ok.contains(r#"<img src="https://cdn.example.com/m.png""#));
     }
 
     #[test]
