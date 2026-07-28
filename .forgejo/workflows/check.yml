@@ -73,6 +73,15 @@ jobs:
         # nproc/2 cap: never claim more than half the host (see CI.md "Concurrency cap").
         run: echo "CARGO_BUILD_JOBS=$(($(nproc) / 2))" >> "$GITHUB_ENV"
 
+      - name: Ensure C toolchain
+        # The RUNS_ON_OPENSUSE_BASE_LATEST image stopped shipping a C compiler,
+        # so clippy / build fail with `linker cc not found`. rustc drives
+        # linking through `cc`, which the `gcc` package provides. The runner
+        # user is unprivileged, so zypper needs sudo (passwordless on the
+        # runner). Install what a trimmed base image dropped rather than
+        # assume it.
+        run: sudo zypper --non-interactive install --no-recommends gcc
+
       - name: Check formatting
         run: cargo fmt --all --check
 
