@@ -79,6 +79,13 @@ pub struct ListUsersQuery {
     /// BUNYIP-410: filter by email-verified status. Absent = both.
     #[serde(default)]
     pub verified: Option<bool>,
+    /// BUNYIP-410 overhaul: whitelisted sort column - `email` / `tier` /
+    /// `verified` / `joined`. Absent / unknown = newest-first by join date.
+    #[serde(default)]
+    pub sort: Option<String>,
+    /// Sort direction: `asc` / `desc`. Absent = `desc` (newest first).
+    #[serde(default)]
+    pub dir: Option<String>,
 }
 
 /// GET /v1/admin/users
@@ -106,6 +113,9 @@ pub async fn list_users(
         .as_deref()
         .map(str::trim)
         .filter(|t| !t.is_empty());
+    // Default direction is descending (newest-first / Z-A), so an absent `dir`
+    // preserves the historical newest-first ordering.
+    let sort_desc = query.dir.as_deref() != Some("asc");
     let (users, total) = UserRepository::list_paginated(
         &pool,
         page,
@@ -115,6 +125,8 @@ pub async fn list_users(
         query.active,
         tier_filter,
         query.verified,
+        query.sort.as_deref(),
+        sort_desc,
     )
     .await?;
 

@@ -882,9 +882,16 @@ impl UserRepository {
     /// List users with pagination.
     ///
     /// `active` selects which side of the soft-delete boundary to return:
-    /// `None`/`Some(true)` lists live accounts (the default admin view),
-    /// `Some(false)` lists suspended (soft-deleted) accounts so an admin can
-    /// find and reactivate them (BUNYIP-120).
+    /// `Some(true)` lists live accounts (the default admin view), `Some(false)`
+    /// lists suspended (soft-deleted) accounts so an admin can find and
+    /// reactivate them (BUNYIP-120), and `None` lists BOTH (the "All" segment
+    /// added in the BUNYIP-410 filter overhaul). Callers wanting the historical
+    /// active-only default must pass `Some(true)` explicitly.
+    ///
+    /// `sort_by` is a whitelisted column key (`email` / `tier` / `verified` /
+    /// `joined`); anything else falls back to newest-first by join date. `id` is
+    /// always appended as a stable tiebreak so pagination never drops or repeats
+    /// a row across pages.
     #[allow(clippy::too_many_arguments)]
     pub async fn list_paginated(
         pool: &PgPool,
@@ -899,14 +906,18 @@ impl UserRepository {
         // unfiltered, preserving the pre-410 behaviour.
         tier: Option<&str>,
         verified: Option<bool>,
+        sort_by: Option<&str>,
+        sort_desc: bool,
     ) -> Result<(Vec<User>, i64), AppError> {
         let offset = (page - 1) * per_page;
         let search_pattern = search.map(|s| format!("%{}%", s));
 
-        let deleted_clause = if active == Some(false) {
-            " WHERE deleted_at IS NOT NULL"
-        } else {
-            " WHERE deleted_at IS NULL"
+        let deleted_clause = match active {
+            Some(true) => " WHERE deleted_at IS NULL",
+            Some(false) => " WHERE deleted_at IS NOT NULL",
+            // "All": both live and suspended. `WHERE TRUE` keeps the trailing
+            // `AND <filter>` clauses below valid without special-casing them.
+            None => " WHERE TRUE",
         };
 
         // Build the filter clause once on both the page query and the count
@@ -952,8 +963,20 @@ impl UserRepository {
                 .push_bind(verified);
         }
 
+        // Whitelisted sort column -> SQL expression. Never interpolate the raw
+        // key: only these fixed expressions can reach the query, so a crafted
+        // `sort` param cannot inject SQL. Unknown / absent falls back to join
+        // date. `id` is the stable tiebreak.
+        let sort_expr = match sort_by {
+            Some("email") => "LOWER(email)",
+            Some("tier") => "COALESCE(subscription_tier, 'standard')",
+            Some("verified") => "email_verified",
+            Some("joined") => "created_at",
+            _ => "created_at",
+        };
+        let dir = if sort_desc { "DESC" } else { "ASC" };
         query
-            .push(" ORDER BY created_at DESC LIMIT ")
+            .push(format!(" ORDER BY {sort_expr} {dir}, id {dir} LIMIT "))
             .push_bind(per_page)
             .push(" OFFSET ")
             .push_bind(offset);
