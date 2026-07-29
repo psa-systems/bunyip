@@ -421,15 +421,13 @@ fn admin_items() -> Vec<NavItem> {
             href: "/admin",
             icon: "layout-dashboard",
         },
+        // BUNYIP-410: Memberships folded into the Users page (tier column +
+        // filter bar); its nav entry is removed and /admin/memberships redirects
+        // to the filtered users list.
         NavItem {
             title: "Users",
             href: "/admin/users",
             icon: "users",
-        },
-        NavItem {
-            title: "Memberships",
-            href: "/admin/memberships",
-            icon: "credit-card",
         },
         NavItem {
             title: "Applications",

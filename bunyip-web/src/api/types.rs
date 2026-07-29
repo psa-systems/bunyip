@@ -379,17 +379,6 @@ pub struct AdminUser {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AdminMembership {
-    pub user_id: String,
-    pub user_email: String,
-    pub stripe_customer_id: Option<String>,
-    pub status: String,
-    pub subscription_tier: String,
-    pub subscription_override_by: Option<String>,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminAuditLog {
     pub id: String,
     pub actor_id: Option<String>,

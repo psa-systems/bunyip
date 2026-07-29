@@ -4,11 +4,10 @@ use serde_json::{json, Value};
 
 use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeedbackDetail,
-    AdminFeedbackSummary, AdminIpBan, AdminMembership, AdminRateLimit, AdminStatsResponse,
-    AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList, ArchivedFeedback,
-    AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary,
-    PaginatedResponse, RestoreReport, SeedTemplateInfo, StripeConfigResponse, TierConfigResponse,
-    UserEntitlement,
+    AdminFeedbackSummary, AdminIpBan, AdminRateLimit, AdminStatsResponse, AdminUser, AppDoc,
+    ApplicationGroup, ApplicationGroupList, ArchivedFeedback, AutoBanConfigResponse,
+    EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary, PaginatedResponse,
+    RestoreReport, SeedTemplateInfo, StripeConfigResponse, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -21,6 +20,7 @@ pub async fn stats(api: &Api, cookie: Option<&str>) -> Result<AdminStatsResponse
 
 // --- users ------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 pub async fn users(
     api: &Api,
     cookie: Option<&str>,
@@ -28,6 +28,10 @@ pub async fn users(
     page_size: u32,
     search: &str,
     suspended: bool,
+    // BUNYIP-410: consolidated users list filters. Empty `tier` / `None`
+    // `verified` = unfiltered.
+    tier: &str,
+    verified: Option<bool>,
 ) -> Result<PaginatedResponse<AdminUser>, ApiError> {
     let mut path = format!("/admin/users?page={page}&page_size={page_size}");
     if !search.is_empty() {
@@ -37,6 +41,12 @@ pub async fn users(
     // can be listed and reactivated (BUNYIP-120).
     if suspended {
         path.push_str("&active=false");
+    }
+    if !tier.is_empty() {
+        path.push_str(&format!("&tier={}", urlenc(tier)));
+    }
+    if let Some(v) = verified {
+        path.push_str(&format!("&verified={v}"));
     }
     parse(api.get(&path, cookie).await?)
 }
@@ -223,26 +233,11 @@ pub async fn revoke_lifetime(
 }
 
 // --- memberships ------------------------------------------------------------
-
-pub async fn memberships(
-    api: &Api,
-    cookie: Option<&str>,
-    page: u32,
-    page_size: u32,
-    status: &str,
-    tier: &str,
-) -> Result<PaginatedResponse<AdminMembership>, ApiError> {
-    let mut path = format!("/admin/memberships?page={page}&page_size={page_size}");
-    if !status.is_empty() {
-        path.push_str(&format!("&status={status}"));
-    }
-    // BUNYIP-291 AC4: the tier filter drives the members-by-tier view; the
-    // API gives it precedence over `status`.
-    if !tier.is_empty() {
-        path.push_str(&format!("&tier={tier}"));
-    }
-    parse(api.get(&path, cookie).await?)
-}
+//
+// BUNYIP-410: the members-by-tier list fetch (`memberships`) was removed with
+// the standalone Memberships page (tier + verified now live on the users list).
+// The grant / revoke override actions below stay - they remain reachable via
+// `/admin/memberships/{id}/grant|revoke`, which now redirect to the user detail.
 
 /// Grant an admin-override membership (free tier, `subscription_override_by` set
 /// to the acting admin). Wraps POST /admin/memberships/grant. BUNYIP-118.
