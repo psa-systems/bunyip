@@ -72,6 +72,13 @@ pub struct ListUsersQuery {
     /// When `Some(false)`, list suspended (soft-deleted) accounts instead of
     /// live ones, so an admin can find and reactivate them (BUNYIP-120).
     pub active: Option<bool>,
+    /// BUNYIP-410: filter by subscription tier (`early_adopter` / `standard` /
+    /// `lifetime` / `free`). Blank / absent = all tiers.
+    #[serde(default)]
+    pub tier: Option<String>,
+    /// BUNYIP-410: filter by email-verified status. Absent = both.
+    #[serde(default)]
+    pub verified: Option<bool>,
 }
 
 /// GET /v1/admin/users
@@ -91,6 +98,14 @@ pub async fn list_users(
         .as_ref()
         .map(|s| MembershipStatus::from(s.as_str()));
 
+    // BUNYIP-410: tier / verified filters for the consolidated users list. Blank
+    // tier is treated as "no filter" so `?tier=` from an "All" selection is a
+    // no-op rather than matching nothing.
+    let tier_filter = query
+        .tier
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty());
     let (users, total) = UserRepository::list_paginated(
         &pool,
         page,
@@ -98,6 +113,8 @@ pub async fn list_users(
         query.search.as_deref(),
         status_filter,
         query.active,
+        tier_filter,
+        query.verified,
     )
     .await?;
 

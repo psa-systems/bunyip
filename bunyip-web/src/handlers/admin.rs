@@ -22,7 +22,7 @@ use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{relative_time, urlenc};
 use crate::views::ui::{badge, button_class, error_box, icon, success_box};
-use crate::web::{redirect_cookies, AppState};
+use crate::web::{redirect, redirect_cookies, AppState};
 
 fn title_case(action: &str) -> String {
     action
@@ -785,6 +785,37 @@ pub struct UserQuery {
     /// reactivate them; anything else (incl. absent) shows live accounts
     /// (BUNYIP-120).
     pub status: Option<String>,
+    /// BUNYIP-410: membership-tier filter (`early_adopter` / `standard` /
+    /// `lifetime` / `free`); blank / absent = all tiers.
+    #[serde(default)]
+    pub tier: Option<String>,
+    /// BUNYIP-410: verification filter (`verified` / `unverified`); blank /
+    /// absent = both.
+    #[serde(default)]
+    pub verified: Option<String>,
+}
+
+/// BUNYIP-410: map the `verified` filter query value to the API's tri-state
+/// filter: `verified` -> only verified, `unverified` -> only unverified, and
+/// anything else (blank / absent / junk) -> no filter (both).
+fn parse_verified_filter(s: &str) -> Option<bool> {
+    match s {
+        "verified" => Some(true),
+        "unverified" => Some(false),
+        _ => None,
+    }
+}
+
+/// BUNYIP-410: human-readable label for a membership tier badge on the users
+/// list (folded in from the removed Memberships page).
+fn tier_label(tier: &crate::api::types::SubscriptionTier) -> &'static str {
+    use crate::api::types::SubscriptionTier::*;
+    match tier {
+        Lifetime => "Lifetime",
+        Free => "Free",
+        EarlyAdopter => "Early Adopter",
+        Standard => "Standard",
+    }
 }
 
 /// BUNYIP-405: one row of the admin users list.
@@ -797,6 +828,8 @@ pub struct UserQuery {
 /// single relevant action, Reactivate, stays inline and the row is not a link.
 fn user_list_row(u: &crate::api::types::AdminUser, suspended: bool) -> Markup {
     let is_admin = matches!(u.role, crate::api::types::UserRole::Admin);
+    // BUNYIP-410: membership tier badge, merged in from the Memberships page.
+    let tier = html! { (badge("secondary", tier_label(&u.subscription_tier))) };
     let verified = html! {
         @if u.email_verified {
             span class="inline-flex items-center gap-1 text-xs font-medium text-teal-600 dark:text-teal-400" {
@@ -821,6 +854,7 @@ fn user_list_row(u: &crate::api::types::AdminUser, suspended: bool) -> Markup {
             div class="flex items-center justify-between gap-3 py-3" {
                 div class="min-w-0" { (identity) }
                 div class="flex items-center gap-3 shrink-0" {
+                    (tier)
                     (verified)
                     form method="post" action=(format!("/admin/users/{}/reactivate", u.id)) onsubmit="return confirm('Reactivate this user? They will be able to sign in again.')" {
                         button type="submit" class=(button_class("outline", "sm", "")) { "Reactivate" }
@@ -834,6 +868,7 @@ fn user_list_row(u: &crate::api::types::AdminUser, suspended: bool) -> Markup {
               class="flex items-center justify-between gap-3 py-3 px-2 -mx-2 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors" {
                 div class="min-w-0" { (identity) }
                 div class="flex items-center gap-3 shrink-0" {
+                    (tier)
                     (verified)
                     (icon("chevron-right", "h-4 w-4 text-muted-foreground"))
                 }
@@ -854,16 +889,38 @@ pub async fn users(
     let page = q.page.unwrap_or(1).max(1);
     let search = q.search.unwrap_or_default();
     let suspended = q.status.as_deref() == Some("suspended");
-    let data = admin_api::users(&st.api, c.forward.as_deref(), page, 20, &search, suspended)
-        .await
-        .ok();
+    // BUNYIP-410: tier + verified filters folded in from the old Memberships page.
+    let tier = q.tier.unwrap_or_default();
+    let verified_str = q.verified.unwrap_or_default();
+    let verified_bool = parse_verified_filter(&verified_str);
+    let data = admin_api::users(
+        &st.api,
+        c.forward.as_deref(),
+        page,
+        20,
+        &search,
+        suspended,
+        &tier,
+        verified_bool,
+    )
+    .await
+    .ok();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
     let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
-    // Preserve the active filters across pager links.
-    let mut params: Vec<String> = Vec::new();
+    // Filters are preserved across the pager and the Active/Suspended tabs.
+    // `status` is kept out of `filter_params` so the tabs can swap it while
+    // carrying the other filters along.
+    let mut filter_params: Vec<String> = Vec::new();
     if !search.is_empty() {
-        params.push(format!("search={}", urlenc(&search)));
+        filter_params.push(format!("search={}", urlenc(&search)));
     }
+    if !tier.is_empty() {
+        filter_params.push(format!("tier={}", urlenc(&tier)));
+    }
+    if !verified_str.is_empty() {
+        filter_params.push(format!("verified={}", urlenc(&verified_str)));
+    }
+    let mut params = filter_params.clone();
     if suspended {
         params.push("status=suspended".to_string());
     }
@@ -871,6 +928,17 @@ pub async fn users(
         "/admin/users".to_string()
     } else {
         format!("/admin/users?{}", params.join("&"))
+    };
+    let filter_qs = filter_params.join("&");
+    let active_href = if filter_qs.is_empty() {
+        "/admin/users".to_string()
+    } else {
+        format!("/admin/users?{filter_qs}")
+    };
+    let suspended_href = if filter_qs.is_empty() {
+        "/admin/users?status=suspended".to_string()
+    } else {
+        format!("/admin/users?status=suspended&{filter_qs}")
     };
     let active_tab = |on: bool| {
         if on {
@@ -882,19 +950,33 @@ pub async fn users(
 
     let content = html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Users" } p class="mt-2 text-muted-foreground" { "Manage user accounts." } }
+            div { h1 class="text-3xl font-bold" { "Users" } p class="mt-2 text-muted-foreground" { "Manage user accounts, membership tier, and verification." } }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                div class="flex flex-col space-y-1.5 p-6" {
-                    div class="flex items-center justify-between gap-4" {
-                        h3 class="text-2xl font-semibold leading-none tracking-tight" { @if suspended { "Suspended Users" } @else { "All Users" } }
-                        form method="get" action="/admin/users" class="w-64" {
-                            @if suspended { input type="hidden" name="status" value="suspended"; }
-                            input name="search" value=(search) placeholder="Search by email…" class=(dashboard_input());
+                div class="flex flex-col space-y-3 p-6" {
+                    h3 class="text-2xl font-semibold leading-none tracking-tight" { @if suspended { "Suspended Users" } @else { "All Users" } }
+                    // BUNYIP-410: filter bar (search + verified + tier), replacing
+                    // the standalone Memberships page. The selects auto-submit on
+                    // change; the search submits on Enter.
+                    form method="get" action="/admin/users" class="flex flex-wrap items-center gap-2" {
+                        @if suspended { input type="hidden" name="status" value="suspended"; }
+                        input name="search" value=(search) placeholder="Search by email…" class={ (dashboard_input()) " w-56" };
+                        select name="verified" onchange="this.form.submit()" class=(dashboard_input()) aria-label="Filter by verification status" {
+                            option value="" selected[verified_bool.is_none()] { "All verification" }
+                            option value="verified" selected[verified_bool == Some(true)] { "Verified" }
+                            option value="unverified" selected[verified_bool == Some(false)] { "Unverified" }
                         }
+                        select name="tier" onchange="this.form.submit()" class=(dashboard_input()) aria-label="Filter by membership tier" {
+                            option value="" selected[tier.is_empty()] { "All tiers" }
+                            option value="early_adopter" selected[tier == "early_adopter"] { "Early Adopter" }
+                            option value="standard" selected[tier == "standard"] { "Standard" }
+                            option value="lifetime" selected[tier == "lifetime"] { "Lifetime" }
+                            option value="free" selected[tier == "free"] { "Free" }
+                        }
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Filter" }
                     }
                     div class="flex items-center gap-2 text-sm" {
-                        a href="/admin/users" class=(active_tab(!suspended)) { "Active" }
-                        a href="/admin/users?status=suspended" class=(active_tab(suspended)) { "Suspended" }
+                        a href=(active_href) class=(active_tab(!suspended)) { "Active" }
+                        a href=(suspended_href) class=(active_tab(suspended)) { "Suspended" }
                     }
                 }
                 div class="p-6 pt-0" {
@@ -1305,18 +1387,12 @@ pub struct PageQuery {
     pub tier: Option<String>,
 }
 
-pub async fn memberships(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-    Query(q): Query<PageQuery>,
-) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
-    let page = q.page.unwrap_or(1).max(1);
-    // BUNYIP-291 AC4: members-by-tier view. Only accept known tier slugs so a
-    // junk query param falls back to the unfiltered "All" list.
+/// BUNYIP-410: the standalone Memberships page was consolidated into the users
+/// list (which now shows tier + verified with a filter bar). `/admin/memberships`
+/// redirects to the users list, preserving any tier filter as `?tier=` so old
+/// links and bookmarks land on the filtered view. The grant / revoke actions
+/// below remain and are reachable from the user-detail page.
+pub async fn memberships(Query(q): Query<PageQuery>) -> Response {
     let tier = match q.tier.as_deref() {
         Some("early_adopter") => "early_adopter",
         Some("standard") => "standard",
@@ -1324,101 +1400,11 @@ pub async fn memberships(
         Some("free") => "free",
         _ => "",
     };
-    let data = admin_api::memberships(&st.api, c.forward.as_deref(), page, 20, "", tier)
-        .await
-        .ok();
-    let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
-    let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
-
-    // Early-adopter slot occupancy comes from the tier config (used vs total),
-    // surfaced when viewing that tier so admins can see if the pool is full.
-    let tier_cfg = if tier == "early_adopter" {
-        admin_api::tier_config(&st.api, c.forward.as_deref())
-            .await
-            .ok()
+    if tier.is_empty() {
+        redirect("/admin/users")
     } else {
-        None
-    };
-
-    let tab = |slug: &str, label: &str| {
-        let active = tier == slug;
-        let href = if slug.is_empty() {
-            "/admin/memberships".to_string()
-        } else {
-            format!("/admin/memberships?tier={slug}")
-        };
-        let cls = if active {
-            "border-b-2 border-primary px-3 py-2 text-sm font-semibold text-foreground"
-        } else {
-            "border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground hover:text-foreground"
-        };
-        html! { a href=(href) class=(cls) { (label) } }
-    };
-    let list_base = if tier.is_empty() {
-        "/admin/memberships".to_string()
-    } else {
-        format!("/admin/memberships?tier={tier}")
-    };
-
-    let content = html! {
-        div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Memberships" } p class="mt-2 text-muted-foreground" { "Review members and their subscription status." } }
-            nav class="flex items-center gap-2 border-b border-border/50" aria-label="Filter by tier" {
-                (tab("", "All"))
-                (tab("early_adopter", "Early Adopter"))
-                (tab("standard", "Standard"))
-                (tab("lifetime", "Lifetime"))
-            }
-            @if let Some(cfg) = &tier_cfg {
-                @let full = cfg.early_adopter_slots_used >= cfg.early_adopter_slots;
-                div class="rounded-lg border p-4 text-sm flex items-center gap-2" {
-                    (icon("users", "h-4 w-4 text-primary"))
-                    span {
-                        b { (cfg.early_adopter_slots_used) " of " (cfg.early_adopter_slots) } " early-adopter slots filled."
-                        @if full { " " (badge("secondary", "All slots filled")) }
-                    }
-                }
-            }
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { @if tier.is_empty() { "All Memberships" } @else { "Members by tier" } } }
-                div class="p-6 pt-0" {
-                    div class="divide-y" {
-                        @for m in &items {
-                            @let has_override = m.subscription_override_by.is_some();
-                            div class="flex items-center justify-between py-3 gap-4" {
-                                div {
-                                    p class="font-medium flex items-center gap-2" { (m.user_email) @if has_override { (badge("default", "Admin override")) } }
-                                    p class="text-xs text-muted-foreground" { (m.subscription_tier) }
-                                }
-                                div class="flex items-center gap-2 flex-wrap" {
-                                    (badge("outline", &m.status))
-                                    a href=(format!("/admin/users/{}", m.user_id)) class=(button_class("outline", "sm", "")) { "View" }
-                                    @if has_override {
-                                        form method="post" action=(format!("/admin/memberships/{}/revoke", m.user_id)) onsubmit="return confirm('Revoke this admin-granted membership? The user returns to the standard tier with no active subscription.')" {
-                                            button type="submit" class=(button_class("outline", "sm", "")) { "Revoke" }
-                                        }
-                                    } @else {
-                                        form method="post" action=(format!("/admin/memberships/{}/grant", m.user_id)) onsubmit="return confirm('Grant a free admin-override membership to this user?')" {
-                                            button type="submit" class=(button_class("outline", "sm", "")) { "Grant" }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        @if items.is_empty() { p class="text-center text-muted-foreground py-8" { "No memberships found" } }
-                    }
-                    (pager(&list_base, page, total_pages))
-                }
-            }
-        }
-    };
-    admin_response(
-        &c,
-        &user,
-        "/admin/memberships",
-        "Memberships · Bunyip",
-        content,
-    )
+        redirect(&format!("/admin/users?tier={tier}"))
+    }
 }
 
 /// POST /admin/memberships/{user_id}/grant - grant a free admin-override
@@ -1434,7 +1420,9 @@ pub async fn membership_grant(
         Err(r) => return r,
     };
     let _ = admin_api::grant_membership(&st.api, c.forward.as_deref(), &user_id).await;
-    redirect_cookies("/admin/memberships", &c.set_cookies)
+    // BUNYIP-410: the Memberships page is gone; return to the user detail where
+    // the action now lives.
+    redirect_cookies(&format!("/admin/users/{user_id}"), &c.set_cookies)
 }
 
 /// POST /admin/memberships/{user_id}/revoke - revoke an admin-override
@@ -1449,12 +1437,13 @@ pub async fn membership_revoke(
         Ok(v) => v,
         Err(r) => return r,
     };
+    // BUNYIP-410: return to the user detail (the Memberships page is gone).
     let target = match admin_api::revoke_membership(&st.api, c.forward.as_deref(), &user_id).await {
-        Ok(_) => "/admin/memberships".to_string(),
+        Ok(_) => format!("/admin/users/{user_id}"),
         Err(e) => {
             tracing::warn!(user_id = %user_id, error = ?e, "admin revoke membership failed");
             format!(
-                "/admin/memberships?toast_err={}",
+                "/admin/users/{user_id}?toast_err={}",
                 urlenc("Could not revoke membership")
             )
         }
@@ -5237,6 +5226,77 @@ mod rate_limit_tests {
             !html.contains(&format!(r#"href="/admin/users/{ROW_UID}""#)),
             "suspended row is not a detail link"
         );
+    }
+
+    // -- BUNYIP-410: users + memberships consolidation --------------------------
+
+    #[test]
+    fn user_list_row_shows_membership_tier() {
+        // The row now carries the membership tier badge merged from the old
+        // Memberships page (the builder seeds the "standard" tier).
+        let html =
+            super::user_list_row(&admin_user("ada@example.com", true, false), false).into_string();
+        assert!(html.contains("Standard"), "tier badge shown on the row");
+        // Verified indicator still present alongside the tier.
+        assert!(html.contains("Verified"));
+    }
+
+    #[test]
+    fn verified_filter_parses_tri_state() {
+        assert_eq!(super::parse_verified_filter("verified"), Some(true));
+        assert_eq!(super::parse_verified_filter("unverified"), Some(false));
+        // Blank / absent / junk = no filter (both verified and unverified).
+        assert_eq!(super::parse_verified_filter(""), None);
+        assert_eq!(super::parse_verified_filter("anything"), None);
+    }
+
+    #[test]
+    fn tier_label_maps_every_tier() {
+        use crate::api::types::SubscriptionTier::*;
+        assert_eq!(super::tier_label(&Lifetime), "Lifetime");
+        assert_eq!(super::tier_label(&Free), "Free");
+        assert_eq!(super::tier_label(&EarlyAdopter), "Early Adopter");
+        assert_eq!(super::tier_label(&Standard), "Standard");
+    }
+
+    #[tokio::test]
+    async fn memberships_redirects_to_filtered_users() {
+        use axum::extract::Query;
+        use axum::http::header::LOCATION;
+
+        let loc = |resp: axum::response::Response| {
+            assert!(resp.status().is_redirection(), "must be a redirect");
+            resp.headers()
+                .get(LOCATION)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string()
+        };
+
+        // No tier -> the plain users list.
+        let r = super::memberships(Query(super::PageQuery {
+            page: None,
+            tier: None,
+        }))
+        .await;
+        assert_eq!(loc(r), "/admin/users");
+
+        // A known tier is preserved as the users-list filter.
+        let r = super::memberships(Query(super::PageQuery {
+            page: None,
+            tier: Some("lifetime".into()),
+        }))
+        .await;
+        assert_eq!(loc(r), "/admin/users?tier=lifetime");
+
+        // A junk tier falls back to the unfiltered list (matches the old page).
+        let r = super::memberships(Query(super::PageQuery {
+            page: None,
+            tier: Some("not-a-tier".into()),
+        }))
+        .await;
+        assert_eq!(loc(r), "/admin/users");
     }
 }
 

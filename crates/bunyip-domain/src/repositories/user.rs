@@ -885,6 +885,7 @@ impl UserRepository {
     /// `None`/`Some(true)` lists live accounts (the default admin view),
     /// `Some(false)` lists suspended (soft-deleted) accounts so an admin can
     /// find and reactivate them (BUNYIP-120).
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_paginated(
         pool: &PgPool,
         page: i32,
@@ -892,6 +893,12 @@ impl UserRepository {
         search: Option<&str>,
         status_filter: Option<MembershipStatus>,
         active: Option<bool>,
+        // BUNYIP-410: consolidated users+memberships admin list filters. `tier`
+        // matches `COALESCE(subscription_tier,'standard')` (rows may predate the
+        // tier column); `verified` filters on `email_verified`. Both `None` =
+        // unfiltered, preserving the pre-410 behaviour.
+        tier: Option<&str>,
+        verified: Option<bool>,
     ) -> Result<(Vec<User>, i64), AppError> {
         let offset = (page - 1) * per_page;
         let search_pattern = search.map(|s| format!("%{}%", s));
@@ -927,6 +934,22 @@ impl UserRepository {
             count_query
                 .push(" AND subscription_status = ")
                 .push_bind(status.as_str());
+        }
+
+        if let Some(tier) = tier {
+            query
+                .push(" AND COALESCE(subscription_tier, 'standard') = ")
+                .push_bind(tier);
+            count_query
+                .push(" AND COALESCE(subscription_tier, 'standard') = ")
+                .push_bind(tier);
+        }
+
+        if let Some(verified) = verified {
+            query.push(" AND email_verified = ").push_bind(verified);
+            count_query
+                .push(" AND email_verified = ")
+                .push_bind(verified);
         }
 
         query
