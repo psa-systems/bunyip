@@ -1905,7 +1905,7 @@ pub async fn membership_revoke(
 /// BUNYIP-92 added Closed + Spam so "Close" produces a visible effect
 /// (row leaves Active, lands in Closed) and spam never clutters
 /// triage.
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum FeedbackTab {
     Active,
     Closed,
@@ -1932,6 +1932,30 @@ impl FeedbackTab {
             FeedbackTab::Closed => "/admin/feedback/closed",
             FeedbackTab::Spam => "/admin/feedback/spam",
             FeedbackTab::Archive => "/admin/feedback/archive",
+        }
+    }
+
+    /// Slug for the detail page's `?from=` param, tying a detail view back to
+    /// the list tab it was opened from so its actions redirect there
+    /// (BUNYIP-422). Distinct from [`bucket`](Self::bucket), which collapses
+    /// Archive onto the active list endpoint; this preserves Archive.
+    fn query_slug(self) -> &'static str {
+        match self {
+            FeedbackTab::Active => "active",
+            FeedbackTab::Closed => "closed",
+            FeedbackTab::Spam => "spam",
+            FeedbackTab::Archive => "archive",
+        }
+    }
+
+    /// Parse the `?from=` slug back into a tab; unknown / absent defaults to
+    /// Active (the safe fallback, matching [`from_tab_path`]).
+    fn from_query(from: Option<&str>) -> FeedbackTab {
+        match from.unwrap_or("active") {
+            "closed" => FeedbackTab::Closed,
+            "spam" => FeedbackTab::Spam,
+            "archive" => FeedbackTab::Archive,
+            _ => FeedbackTab::Active,
         }
     }
 }
@@ -2031,23 +2055,35 @@ async fn render_feedback_list(
     admin_response(&c, &user, "/admin/feedback", "Feedback · Bunyip", content)
 }
 
-/// Render one row with tab-aware action buttons (BUNYIP-92).
-/// - Active: Reviewed/Un-review + Close + Mark Spam + Delete
-/// - Closed: Re-open + Mark Spam + Delete
-/// - Spam: Unmark Spam + Delete
-/// - Archive: Delete (Restore lives on the dedicated archive list)
-///
-/// Every action POSTs a `from` hidden field carrying the tab slug so
-/// the handler can redirect back to the same view after the row
-/// disappears.
-fn feedback_row(f: &crate::api::types::AdminFeedbackSummary, tab: FeedbackTab) -> Markup {
-    let already_reviewed = matches!(f.status, FeedbackStatus::Reviewed);
-    let review_action = if already_reviewed { "new" } else { "reviewed" };
-    let review_label = if already_reviewed {
-        "Un-review"
-    } else {
-        "Reviewed"
+/// Inline status chip for a feedback row / detail header, mirroring the
+/// users-list verification indicator (icon + short label, color-coded) so the
+/// two admin lists read the same (BUNYIP-422).
+fn feedback_status_chip(status: &FeedbackStatus) -> Markup {
+    let (classes, icon_name, label) = match status {
+        FeedbackStatus::New => ("text-yellow-600", "alert-circle", "New"),
+        FeedbackStatus::Reviewed => (
+            "text-teal-600 dark:text-teal-400",
+            "check-circle",
+            "Reviewed",
+        ),
+        FeedbackStatus::Responded => ("text-teal-600 dark:text-teal-400", "mail", "Responded"),
+        FeedbackStatus::Closed => ("text-muted-foreground", "check", "Closed"),
     };
+    html! {
+        span class={ "inline-flex items-center gap-1 text-xs font-medium " (classes) } {
+            (icon(icon_name, "h-4 w-4")) (label)
+        }
+    }
+}
+
+/// One feedback row: a whole-row link into the detail view (BUNYIP-422),
+/// matching the users-list row-as-link pattern. The row surfaces subject,
+/// submitter identity, source page, a message excerpt, the relative
+/// submission time, and a status chip - no inline action buttons. All triage
+/// actions moved to the detail page ([`feedback_detail_actions`]); the
+/// `?from=` param carries the tab slug so those actions redirect back to the
+/// view the admin came from.
+fn feedback_row(f: &crate::api::types::AdminFeedbackSummary, tab: FeedbackTab) -> Markup {
     let name = f.name.clone().filter(|s| !s.trim().is_empty());
     let email = f.email_masked.clone().filter(|s| !s.trim().is_empty());
     let identity = match (name.as_deref(), email.as_deref()) {
@@ -2061,14 +2097,12 @@ fn feedback_row(f: &crate::api::types::AdminFeedbackSummary, tab: FeedbackTab) -
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty() && *s != "/feedback");
-    let from = tab.bucket();
     html! {
-        div class="py-3 flex items-start justify-between gap-4" {
-            div class="min-w-0" {
+        a href=(format!("/admin/feedback/{}?from={}", f.id, tab.query_slug()))
+          class="flex items-center gap-4 py-3 px-2 -mx-2 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" {
+            div class="min-w-0 flex-1" {
                 p class="font-medium truncate" {
-                    a href=(format!("/admin/feedback/{}", f.id)) class="hover:underline" {
-                        (f.subject.clone().unwrap_or_else(|| "(no subject)".into()))
-                    }
+                    (f.subject.clone().unwrap_or_else(|| "(no subject)".into()))
                 }
                 @if let Some(line) = &identity {
                     p class="text-xs text-muted-foreground truncate" { (line) }
@@ -2079,72 +2113,84 @@ fn feedback_row(f: &crate::api::types::AdminFeedbackSummary, tab: FeedbackTab) -
                 p class="text-sm text-muted-foreground truncate" { (f.message_excerpt) }
                 p class="text-xs text-muted-foreground" { (relative_time(&f.created_at)) }
             }
-            div class="flex items-center gap-2 shrink-0" {
-                (badge("outline", f.status.as_str()))
-                // BUNYIP-93: "Reply" is a discoverability fix, not a new
-                // action. The reply form lives on the detail subpage
-                // (BUNYIP-85); the row subject already links there but
-                // wasn't obvious. The Reply anchor makes the path one
-                // explicit click. Hidden on Spam and Archive tabs:
-                // replying to spam is meaningless and archived rows are
-                // out-of-queue.
-                @if matches!(tab, FeedbackTab::Active | FeedbackTab::Closed) {
-                    a href=(format!("/admin/feedback/{}", f.id))
-                      class=(button_class("default", "sm", "")) { "Reply" }
-                }
-                @match tab {
-                    FeedbackTab::Active => {
-                        form method="post" action=(format!("/admin/feedback/{}/status", f.id)) {
-                            input type="hidden" name="status" value=(review_action);
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { (review_label) }
-                        }
-                        form method="post" action=(format!("/admin/feedback/{}/status", f.id)) {
-                            input type="hidden" name="status" value="closed";
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { "Close" }
-                        }
-                        form method="post" action=(format!("/admin/feedback/{}/archive", f.id)) {
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
-                        }
-                        form method="post" action=(format!("/admin/feedback/{}/mark-spam", f.id)) {
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { "Spam" }
-                        }
+            div class="flex items-center gap-3 shrink-0" {
+                (feedback_status_chip(&f.status))
+                (icon("chevron-right", "h-4 w-4 text-muted-foreground"))
+            }
+        }
+    }
+}
+
+/// The tab-aware triage actions for one feedback item, shown on the detail
+/// page (BUNYIP-422 moved these off the list rows). Mirrors the previous
+/// per-row action set: Active gets review / close / archive / spam / delete,
+/// Closed gets reopen / archive / spam / delete, Spam gets not-spam / archive
+/// / delete, Archive gets delete. Each POSTs a `from` hidden field carrying
+/// the tab slug so the handler redirects back to the list view the admin came
+/// from.
+fn feedback_detail_actions(id: &str, status: &FeedbackStatus, tab: FeedbackTab) -> Markup {
+    let already_reviewed = matches!(status, FeedbackStatus::Reviewed);
+    let review_action = if already_reviewed { "new" } else { "reviewed" };
+    let review_label = if already_reviewed {
+        "Un-review"
+    } else {
+        "Reviewed"
+    };
+    let from = tab.query_slug();
+    html! {
+        div class="flex flex-wrap items-center gap-2" {
+            @match tab {
+                FeedbackTab::Active => {
+                    form method="post" action=(format!("/admin/feedback/{id}/status")) {
+                        input type="hidden" name="status" value=(review_action);
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { (review_label) }
                     }
-                    FeedbackTab::Closed => {
-                        form method="post" action=(format!("/admin/feedback/{}/status", f.id)) {
-                            input type="hidden" name="status" value="new";
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { "Re-open" }
-                        }
-                        form method="post" action=(format!("/admin/feedback/{}/archive", f.id)) {
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
-                        }
-                        form method="post" action=(format!("/admin/feedback/{}/mark-spam", f.id)) {
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { "Spam" }
-                        }
+                    form method="post" action=(format!("/admin/feedback/{id}/status")) {
+                        input type="hidden" name="status" value="closed";
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Close" }
                     }
-                    FeedbackTab::Spam => {
-                        form method="post" action=(format!("/admin/feedback/{}/unmark-spam", f.id)) {
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { "Not spam" }
-                        }
-                        form method="post" action=(format!("/admin/feedback/{}/archive", f.id)) {
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
-                        }
+                    form method="post" action=(format!("/admin/feedback/{id}/archive")) {
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
                     }
-                    FeedbackTab::Archive => {}
+                    form method="post" action=(format!("/admin/feedback/{id}/mark-spam")) {
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Mark as spam" }
+                    }
                 }
-                form method="post" action=(format!("/admin/feedback/{}/delete", f.id))
-                    onsubmit="return confirm('Delete this feedback permanently? This cannot be undone.')" {
-                    input type="hidden" name="from" value=(from);
-                    button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { "Delete" }
+                FeedbackTab::Closed => {
+                    form method="post" action=(format!("/admin/feedback/{id}/status")) {
+                        input type="hidden" name="status" value="new";
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Re-open" }
+                    }
+                    form method="post" action=(format!("/admin/feedback/{id}/archive")) {
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                    }
+                    form method="post" action=(format!("/admin/feedback/{id}/mark-spam")) {
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Mark as spam" }
+                    }
                 }
+                FeedbackTab::Spam => {
+                    form method="post" action=(format!("/admin/feedback/{id}/unmark-spam")) {
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Not spam" }
+                    }
+                    form method="post" action=(format!("/admin/feedback/{id}/archive")) {
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                    }
+                }
+                FeedbackTab::Archive => {}
+            }
+            form method="post" action=(format!("/admin/feedback/{id}/delete"))
+                onsubmit="return confirm('Delete this feedback permanently? This cannot be undone.')" {
+                input type="hidden" name="from" value=(from);
+                button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { "Delete" }
             }
         }
     }
@@ -2404,20 +2450,33 @@ pub async fn feedback_detail(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    Query(q): Query<FeedbackDetailQuery>,
 ) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    // BUNYIP-422: the list rows link here with `?from=<tab>` so the triage
+    // actions (now hosted on this page) render for the right tab and redirect
+    // back to the list the admin came from.
+    let tab = FeedbackTab::from_query(q.from.as_deref());
     let detail = match admin_api::feedback_detail(&st.api, c.forward.as_deref(), &id).await {
         Ok(d) => d,
-        Err(_) => return redirect_cookies("/admin/feedback", &c.set_cookies),
+        Err(_) => return redirect_cookies(tab.path(), &c.set_cookies),
     };
-    let content = feedback_detail_view(&detail);
+    let content = feedback_detail_view(&detail, tab);
     admin_response(&c, &user, "/admin/feedback", "Feedback · Bunyip", content)
 }
 
-fn feedback_detail_view(f: &AdminFeedbackDetail) -> Markup {
+/// Query for the feedback detail page. `from` names the list tab the admin
+/// clicked from (BUNYIP-422); absent / unknown falls back to Active.
+#[derive(Deserialize)]
+pub struct FeedbackDetailQuery {
+    #[serde(default)]
+    pub from: Option<String>,
+}
+
+fn feedback_detail_view(f: &AdminFeedbackDetail, tab: FeedbackTab) -> Markup {
     // BUNYIP-94: render the masked email, never the raw one. Admins do
     // not need the raw address to reply (the API holds it and routes the
     // response server-side); leaking the raw address on the detail page
@@ -2454,10 +2513,10 @@ fn feedback_detail_view(f: &AdminFeedbackDetail) -> Markup {
                 div {
                     h1 class="text-3xl font-bold" { (f.subject.clone().unwrap_or_else(|| "(no subject)".into())) }
                     p class="mt-2 text-muted-foreground text-sm" {
-                        a href="/admin/feedback" class="hover:underline" { "← Back to feedback" }
+                        a href=(tab.path()) class="hover:underline" { "← Back to feedback" }
                     }
                 }
-                (badge("outline", f.status.as_str()))
+                (feedback_status_chip(&f.status))
             }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="p-6 space-y-4" {
@@ -2488,26 +2547,11 @@ fn feedback_detail_view(f: &AdminFeedbackDetail) -> Markup {
                     div { h3 class="text-sm font-semibold" { "Received" } p class="text-sm text-muted-foreground" { (relative_time(&f.created_at)) } }
                 }
             }
-            // BUNYIP-92: row actions on the detail page mirror the list
-            // tabs. The `from` hidden field redirects back to the list
-            // (Active by default) on success so the admin lands where
-            // most context lives, not on a detail page for a row they
-            // just deleted.
-            div class="flex flex-wrap items-center gap-2" {
-                form method="post" action=(format!("/admin/feedback/{}/archive", f.id)) {
-                    input type="hidden" name="from" value="active";
-                    button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
-                }
-                form method="post" action=(format!("/admin/feedback/{}/mark-spam", f.id)) {
-                    input type="hidden" name="from" value="active";
-                    button type="submit" class=(button_class("outline", "sm", "")) { "Mark as spam" }
-                }
-                form method="post" action=(format!("/admin/feedback/{}/delete", f.id))
-                    onsubmit="return confirm('Delete this feedback permanently? This cannot be undone.')" {
-                    input type="hidden" name="from" value="active";
-                    button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { "Delete" }
-                }
-            }
+            // BUNYIP-422: the triage actions now live here (moved off the
+            // list rows). They are tab-aware and each POSTs `from` = the tab
+            // slug, so on success the admin lands back on the list view they
+            // came from, not on a detail page for a row they just deleted.
+            (feedback_detail_actions(&f.id, &f.status, tab))
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Response" } }
                 div class="p-6 pt-0 space-y-4" {
@@ -5820,6 +5864,126 @@ mod rate_limit_tests {
         }))
         .await;
         assert_eq!(loc(r), "/admin/users");
+    }
+
+    // -- BUNYIP-422: feedback list row + detail actions ------------------------
+
+    const FB_ID: &str = "22222222-2222-2222-2222-222222222222";
+
+    fn feedback_summary(status: &str) -> crate::api::types::AdminFeedbackSummary {
+        serde_json::from_value(serde_json::json!({
+            "id": FB_ID,
+            "name": "Ada Lovelace",
+            "email_masked": "a***@example.com",
+            "subject": "A bug report",
+            "message_excerpt": "Something went wrong when I clicked save.",
+            "status": status,
+            "created_at": "2026-01-01T00:00:00Z",
+        }))
+        .expect("feedback summary fixture")
+    }
+
+    #[test]
+    fn feedback_row_links_to_detail_with_no_inline_actions() {
+        let html =
+            super::feedback_row(&feedback_summary("new"), super::FeedbackTab::Active).into_string();
+        // The whole row is a link into the detail view, carrying the tab slug.
+        assert!(
+            html.contains(&format!(r#"href="/admin/feedback/{FB_ID}?from=active""#)),
+            "row links to the detail view with the tab slug"
+        );
+        // Status chip is shown; the summary content is present.
+        assert!(html.contains("New"), "status chip rendered");
+        assert!(html.contains("A bug report"), "subject shown");
+        // Every triage action lives on the detail view now: the list row
+        // carries no forms and none of the action endpoints.
+        assert!(!html.contains("<form"), "list row carries no forms");
+        for action in [
+            "/status",
+            "/mark-spam",
+            "/unmark-spam",
+            "/archive",
+            "/delete",
+        ] {
+            assert!(
+                !html.contains(action),
+                "list row must not carry the {action} action"
+            );
+        }
+    }
+
+    #[test]
+    fn feedback_row_carries_originating_tab_slug() {
+        let html =
+            super::feedback_row(&feedback_summary("new"), super::FeedbackTab::Spam).into_string();
+        assert!(
+            html.contains(&format!(r#"href="/admin/feedback/{FB_ID}?from=spam""#)),
+            "row from the Spam tab links back with ?from=spam"
+        );
+    }
+
+    #[test]
+    fn feedback_detail_actions_are_tab_aware() {
+        use crate::api::types::FeedbackStatus;
+        // Active: review + close + archive + spam + delete, all redirecting home.
+        let active =
+            super::feedback_detail_actions(FB_ID, &FeedbackStatus::New, super::FeedbackTab::Active)
+                .into_string();
+        assert!(active.contains(&format!(r#"action="/admin/feedback/{FB_ID}/status""#)));
+        assert!(active.contains(&format!(r#"action="/admin/feedback/{FB_ID}/mark-spam""#)));
+        assert!(active.contains(&format!(r#"action="/admin/feedback/{FB_ID}/delete""#)));
+        assert!(active.contains("Close"));
+        assert!(active.contains(r#"name="from" value="active""#));
+
+        // A reviewed item offers Un-review rather than Reviewed.
+        let reviewed = super::feedback_detail_actions(
+            FB_ID,
+            &FeedbackStatus::Reviewed,
+            super::FeedbackTab::Active,
+        )
+        .into_string();
+        assert!(reviewed.contains("Un-review"));
+
+        // Spam tab: Not spam + archive + delete, redirecting back to Spam.
+        let spam =
+            super::feedback_detail_actions(FB_ID, &FeedbackStatus::New, super::FeedbackTab::Spam)
+                .into_string();
+        assert!(spam.contains("Not spam"));
+        assert!(spam.contains(&format!(r#"action="/admin/feedback/{FB_ID}/unmark-spam""#)));
+        assert!(spam.contains(r#"name="from" value="spam""#));
+        assert!(!spam.contains("Close"), "spam tab has no Close action");
+
+        // Closed tab: Re-open, redirecting back to Closed.
+        let closed = super::feedback_detail_actions(
+            FB_ID,
+            &FeedbackStatus::Closed,
+            super::FeedbackTab::Closed,
+        )
+        .into_string();
+        assert!(closed.contains("Re-open"));
+        assert!(closed.contains(r#"name="from" value="closed""#));
+    }
+
+    #[test]
+    fn feedback_tab_from_query_round_trips() {
+        for (slug, tab) in [
+            ("active", super::FeedbackTab::Active),
+            ("closed", super::FeedbackTab::Closed),
+            ("spam", super::FeedbackTab::Spam),
+            ("archive", super::FeedbackTab::Archive),
+        ] {
+            assert_eq!(super::FeedbackTab::from_query(Some(slug)), tab);
+            assert_eq!(tab.query_slug(), slug);
+        }
+        // Absent / unknown falls back to Active.
+        assert_eq!(
+            super::FeedbackTab::from_query(None),
+            super::FeedbackTab::Active
+        );
+        assert_eq!(
+            super::FeedbackTab::from_query(Some("junk")),
+            super::FeedbackTab::Active
+        );
     }
 }
 
