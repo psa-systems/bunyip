@@ -8,10 +8,10 @@ You need to be signed in, and for members-only apps you need an active membershi
 
 If the app offers a container image, its page shows the exact pull details: the registry host, the image reference, and the current version tag.
 
-1. Log in to the registry once. Use the host shown on the app's page in place of `<registry>`, and sign in with your Bunyip account when prompted:
+1. Log in to the registry once. Use the host shown on the app's page in place of `<registry>`, and your Bunyip account email for the `--username`. Docker prompts for your Bunyip password:
 
    ```
-   docker login <registry>
+   docker login <registry> --username <username>
    ```
 
 2. Pull the image using the reference shown for the app. Bunyip displays the full reference so you can copy it directly:

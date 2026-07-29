@@ -658,7 +658,8 @@ const DOCS: &[(&str, &str, &str)] = &[
 /// Minimal styling for the rendered markdown (bunyip-web has no Tailwind
 /// typography plugin), scoped to `.docs-article`.
 const DOCS_CSS: &str = "\
-.docs-article{line-height:1.65;}\
+.docs-article{line-height:1.65;color:hsl(var(--foreground));}\
+.docs-fill{background:hsl(var(--primary)/.15);color:hsl(var(--foreground));font-weight:600;padding:.05em .25em;border-radius:.2rem;}\
 .docs-article h1,.docs-article h2,.docs-article h3{font-weight:600;line-height:1.25;margin:1.6em 0 .6em;}\
 .docs-article h1{font-size:1.9rem;}.docs-article h2{font-size:1.45rem;}.docs-article h3{font-size:1.2rem;}\
 .docs-article p,.docs-article ul,.docs-article ol{margin:.75em 0;}\
@@ -692,6 +693,27 @@ fn render_markdown(md: &str) -> String {
     out
 }
 
+/// Toggle for the personalized docs view. `?raw=1` forces the generic
+/// (placeholder) rendering even when signed in.
+#[derive(Debug, Default, Deserialize)]
+pub struct DocQuery {
+    #[serde(default)]
+    raw: bool,
+}
+
+/// The escaped placeholder token, as it appears in `render_markdown` output
+/// once pulldown-cmark has HTML-escaped the fenced `<username>` literal.
+const USERNAME_TOKEN: &str = "&lt;username&gt;";
+
+/// Replace the escaped `<username>` placeholder in already-rendered docs HTML
+/// with the signed-in reader's own username (their Bunyip email, which is the
+/// `docker login --username` value), highlighted. The email is HTML-escaped via
+/// Maud before substitution so a crafted username cannot inject markup.
+fn personalize_docs(html: &str, username: &str) -> String {
+    let highlighted = maud::html! { span class="docs-fill" { (username) } }.into_string();
+    html.replace(USERNAME_TOKEN, &highlighted)
+}
+
 /// `GET /docs` - index of the embedded docs. Public (BUNYIP-385).
 pub async fn docs_index(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (c, apps) = public_ctx(&st, &headers).await;
@@ -716,6 +738,7 @@ pub async fn docs_page(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(slug): Path<String>,
+    Query(q): Query<DocQuery>,
 ) -> Response {
     let (c, apps) = public_ctx(&st, &headers).await;
     let Some(&(_, title, md)) = DOCS.iter().find(|&&(s, _, _)| s == slug.as_str()) else {
@@ -731,11 +754,35 @@ pub async fn docs_page(
         *resp.status_mut() = axum::http::StatusCode::NOT_FOUND;
         return resp;
     };
+    let rendered = render_markdown(md);
+    // Personalize only for a signed-in reader who has not opted into the raw
+    // (generic) view, and only when the doc actually carries the placeholder.
+    let username = c.user.as_ref().map(|u| u.email.as_str());
+    let has_token = rendered.contains(USERNAME_TOKEN);
+    let personalized = !q.raw && has_token && username.is_some();
+    let body_html = if personalized {
+        personalize_docs(&rendered, username.unwrap())
+    } else {
+        rendered
+    };
     let content = html! {
         style { (PreEscaped(DOCS_CSS)) }
         div class="container max-w-4xl py-12" {
             div class="mb-6" { a class="text-sm text-muted-foreground hover:underline" href="/docs" { "← Documentation" } }
-            article class="docs-article" { (PreEscaped(render_markdown(md))) }
+            @if has_token && username.is_some() {
+                @if personalized {
+                    p class="text-sm text-muted-foreground mb-6" {
+                        "Personalized with your Bunyip username. "
+                        a class="text-primary hover:underline" href=(format!("/docs/{slug}?raw=1")) { "Show the generic version" }
+                    }
+                } @else {
+                    p class="text-sm text-muted-foreground mb-6" {
+                        "Showing the generic version. "
+                        a class="text-primary hover:underline" href=(format!("/docs/{slug}")) { "Personalize with your username" }
+                    }
+                }
+            }
+            article class="docs-article" { (PreEscaped(body_html)) }
         }
     };
     public_response(
@@ -839,7 +886,7 @@ pub async fn app_docs_page(
 
 #[cfg(test)]
 mod docs_tests {
-    use super::{render_markdown, DOCS};
+    use super::{personalize_docs, render_markdown, DOCS, USERNAME_TOKEN};
     use std::collections::HashSet;
 
     #[test]
@@ -869,5 +916,45 @@ mod docs_tests {
         assert!(!html.contains("<script>"), "block raw HTML leaked");
         assert!(!html.contains("<img"), "inline raw HTML leaked");
         assert!(html.contains("Hi"), "surrounding text should survive");
+    }
+
+    #[test]
+    fn downloading_apps_carries_username_placeholder() {
+        // The personalization target: the rendered image-pull doc must contain
+        // the escaped `<username>` token, or the substitution silently no-ops.
+        let (_, _, md) = DOCS
+            .iter()
+            .find(|&&(s, _, _)| s == "downloading-apps")
+            .expect("downloading-apps doc present");
+        let html = render_markdown(md);
+        assert!(
+            html.contains(USERNAME_TOKEN),
+            "rendered doc must contain the escaped <username> placeholder"
+        );
+    }
+
+    #[test]
+    fn personalize_docs_substitutes_and_highlights() {
+        let html =
+            render_markdown("```\ndocker login registry.example --username <username>\n```\n");
+        assert!(html.contains(USERNAME_TOKEN));
+        let out = personalize_docs(&html, "member@example.com");
+        assert!(!out.contains(USERNAME_TOKEN), "placeholder should be gone");
+        assert!(
+            out.contains("<span class=\"docs-fill\">member@example.com</span>"),
+            "username should be highlighted"
+        );
+    }
+
+    #[test]
+    fn personalize_docs_escapes_crafted_username() {
+        // A crafted username must not inject markup into the public page.
+        let html = render_markdown("```\ndocker login r --username <username>\n```\n");
+        let out = personalize_docs(&html, "<script>alert(1)</script>");
+        assert!(!out.contains("<script>"), "raw script tag injected");
+        assert!(
+            out.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
+            "crafted username should be HTML-escaped"
+        );
     }
 }
