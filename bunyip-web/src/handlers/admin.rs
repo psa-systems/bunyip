@@ -6,7 +6,7 @@
 use axum::body::Body;
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::Response;
+use axum::response::{Html, IntoResponse, Response};
 use axum::Form;
 use maud::{html, Markup};
 use serde::Deserialize;
@@ -781,23 +781,30 @@ pub async fn rate_limit_reset(
 pub struct UserQuery {
     pub page: Option<u32>,
     pub search: Option<String>,
-    /// `suspended` switches the list to soft-deleted accounts so an admin can
-    /// reactivate them; anything else (incl. absent) shows live accounts
-    /// (BUNYIP-120).
+    /// Soft-delete segment: `active` (default) / `suspended` / `all` (BUNYIP-410
+    /// overhaul; was a bare `suspended` toggle).
     pub status: Option<String>,
-    /// BUNYIP-410: membership-tier filter (`early_adopter` / `standard` /
-    /// `lifetime` / `free`); blank / absent = all tiers.
+    /// Membership-tier filter (`early_adopter` / `standard` / `lifetime` /
+    /// `free`); blank / absent = all tiers.
     #[serde(default)]
     pub tier: Option<String>,
-    /// BUNYIP-410: verification filter (`verified` / `unverified`); blank /
-    /// absent = both.
+    /// Verification filter (`verified` / `unverified`); blank / absent = both.
     #[serde(default)]
     pub verified: Option<String>,
+    /// Whitelisted sort column (`email` / `tier` / `verified` / `joined`).
+    #[serde(default)]
+    pub sort: Option<String>,
+    /// Sort direction (`asc` / `desc`); absent = `desc`.
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// Rows per page (10 / 20 / 50 / 100); clamped server-side.
+    #[serde(default)]
+    pub page_size: Option<u32>,
 }
 
-/// BUNYIP-410: map the `verified` filter query value to the API's tri-state
-/// filter: `verified` -> only verified, `unverified` -> only unverified, and
-/// anything else (blank / absent / junk) -> no filter (both).
+/// BUNYIP-410 overhaul: map the `verified` filter query value to the API's
+/// tri-state filter. `verified` -> only verified, `unverified` -> only
+/// unverified, anything else -> no filter (both).
 fn parse_verified_filter(s: &str) -> Option<bool> {
     match s {
         "verified" => Some(true),
@@ -806,8 +813,7 @@ fn parse_verified_filter(s: &str) -> Option<bool> {
     }
 }
 
-/// BUNYIP-410: human-readable label for a membership tier badge on the users
-/// list (folded in from the removed Memberships page).
+/// Human-readable label for a membership tier badge.
 fn tier_label(tier: &crate::api::types::SubscriptionTier) -> &'static str {
     use crate::api::types::SubscriptionTier::*;
     match tier {
@@ -818,64 +824,154 @@ fn tier_label(tier: &crate::api::types::SubscriptionTier) -> &'static str {
     }
 }
 
-/// BUNYIP-405: one row of the admin users list.
-///
-/// The list is deliberately lightweight: identity plus a verified/unverified
-/// indicator and the Admin badge. On the Active tab the whole row is a link into
-/// the per-user detail view (`/admin/users/{id}`), where every management action
-/// now lives - the row itself carries no action buttons. On the Suspended tab
-/// the detail view is not reachable (a soft-deleted user 404s on lookup), so the
-/// single relevant action, Reactivate, stays inline and the row is not a link.
-fn user_list_row(u: &crate::api::types::AdminUser, suspended: bool) -> Markup {
-    let is_admin = matches!(u.role, crate::api::types::UserRole::Admin);
-    // BUNYIP-410: membership tier badge, merged in from the Memberships page.
-    let tier = html! { (badge("secondary", tier_label(&u.subscription_tier))) };
-    let verified = html! {
-        @if u.email_verified {
-            span class="inline-flex items-center gap-1 text-xs font-medium text-teal-600 dark:text-teal-400" {
-                (icon("check-circle", "h-4 w-4")) "Verified"
-            }
-        } @else {
-            span class="inline-flex items-center gap-1 text-xs font-medium text-yellow-600" {
-                (icon("alert-circle", "h-4 w-4")) "Unverified"
-            }
+/// Format an ISO-8601 timestamp as a compact absolute date for the `title`
+/// tooltip on a relative "Joined X ago" label. Falls back to the raw string when
+/// it does not parse.
+fn abs_time(iso: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(iso)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|_| iso.to_string())
+}
+
+/// BUNYIP-410 overhaul: the complete filter + sort + page state for the admin
+/// users list. Every link on the page (dropdown option, segment, sort header,
+/// chip removal, pager, page-size) is derived from this one struct via the
+/// builder methods, so the URL is the single source of truth and stays
+/// internally consistent (a filter change always resets the page to 1).
+#[derive(Clone)]
+struct UsersQ {
+    search: String,
+    status: String,
+    tier: String,
+    verified: String,
+    sort: String,
+    dir: String,
+    page: u32,
+    page_size: u32,
+}
+
+impl UsersQ {
+    fn from_query(q: UserQuery) -> Self {
+        let status = match q.status.as_deref() {
+            Some("suspended") => "suspended",
+            Some("all") => "all",
+            _ => "active",
         }
-    };
-    let identity = html! {
-        p class="font-medium flex items-center gap-2 truncate" {
-            (u.email)
-            @if is_admin { (badge("default", "Admin")) }
-            @if suspended { (badge("outline", "Suspended")) }
+        .to_string();
+        let dir = match q.dir.as_deref() {
+            Some("asc") => "asc",
+            _ => "desc",
         }
-        p class="text-xs text-muted-foreground" { "Joined " (relative_time(&u.created_at)) }
-    };
-    if suspended {
-        html! {
-            div class="flex items-center justify-between gap-3 py-3" {
-                div class="min-w-0" { (identity) }
-                div class="flex items-center gap-3 shrink-0" {
-                    (tier)
-                    (verified)
-                    form method="post" action=(format!("/admin/users/{}/reactivate", u.id)) onsubmit="return confirm('Reactivate this user? They will be able to sign in again.')" {
-                        button type="submit" class=(button_class("outline", "sm", "")) { "Reactivate" }
-                    }
-                }
-            }
-        }
-    } else {
-        html! {
-            a href=(format!("/admin/users/{}", u.id))
-              class="flex items-center justify-between gap-3 py-3 px-2 -mx-2 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors" {
-                div class="min-w-0" { (identity) }
-                div class="flex items-center gap-3 shrink-0" {
-                    (tier)
-                    (verified)
-                    (icon("chevron-right", "h-4 w-4 text-muted-foreground"))
-                }
-            }
+        .to_string();
+        Self {
+            search: q.search.unwrap_or_default().trim().to_string(),
+            status,
+            tier: q.tier.unwrap_or_default(),
+            verified: q.verified.unwrap_or_default(),
+            sort: q.sort.unwrap_or_default(),
+            dir,
+            page: q.page.unwrap_or(1).max(1),
+            page_size: q.page_size.unwrap_or(20).clamp(10, 100),
         }
     }
+
+    /// Build the `/admin/users` URL for this state, emitting only non-default
+    /// params so a clean list is a clean URL.
+    fn href(&self) -> String {
+        let mut p: Vec<String> = Vec::new();
+        if !self.search.is_empty() {
+            p.push(format!("search={}", urlenc(&self.search)));
+        }
+        if self.status != "active" {
+            p.push(format!("status={}", self.status));
+        }
+        if !self.tier.is_empty() {
+            p.push(format!("tier={}", self.tier));
+        }
+        if !self.verified.is_empty() {
+            p.push(format!("verified={}", self.verified));
+        }
+        if !self.sort.is_empty() {
+            p.push(format!("sort={}&dir={}", self.sort, self.dir));
+        }
+        if self.page > 1 {
+            p.push(format!("page={}", self.page));
+        }
+        if self.page_size != 20 {
+            p.push(format!("page_size={}", self.page_size));
+        }
+        if p.is_empty() {
+            "/admin/users".to_string()
+        } else {
+            format!("/admin/users?{}", p.join("&"))
+        }
+    }
+
+    fn with_search(&self, v: &str) -> Self {
+        let mut q = self.clone();
+        q.search = v.trim().to_string();
+        q.page = 1;
+        q
+    }
+    fn with_status(&self, v: &str) -> Self {
+        let mut q = self.clone();
+        q.status = v.to_string();
+        q.page = 1;
+        q
+    }
+    fn with_tier(&self, v: &str) -> Self {
+        let mut q = self.clone();
+        q.tier = v.to_string();
+        q.page = 1;
+        q
+    }
+    fn with_verified(&self, v: &str) -> Self {
+        let mut q = self.clone();
+        q.verified = v.to_string();
+        q.page = 1;
+        q
+    }
+    fn with_page(&self, v: u32) -> Self {
+        let mut q = self.clone();
+        q.page = v;
+        q
+    }
+    fn with_page_size(&self, v: u32) -> Self {
+        let mut q = self.clone();
+        q.page_size = v;
+        q.page = 1;
+        q
+    }
+    /// Toggle sort on `col`: same column flips direction, a new column starts
+    /// ascending.
+    fn with_sort(&self, col: &str) -> Self {
+        let mut q = self.clone();
+        q.page = 1;
+        if q.sort == col {
+            q.dir = if q.dir == "asc" { "desc" } else { "asc" }.to_string();
+        } else {
+            q.sort = col.to_string();
+            q.dir = "asc".to_string();
+        }
+        q
+    }
+
+    /// True when any content filter (search / tier / verification) or a
+    /// non-default status segment is applied - i.e. the list is narrowed.
+    fn is_filtered(&self) -> bool {
+        !self.search.is_empty()
+            || !self.tier.is_empty()
+            || !self.verified.is_empty()
+            || self.status != "active"
+    }
 }
+
+/// Grid column template shared by the header row and every data row so the
+/// columns line up. Inline (not a Tailwind arbitrary value) so it needs no
+/// stylesheet rebuild. Columns: avatar, email, tier, verification, joined,
+/// action.
+const USERS_GRID: &str =
+    "grid-template-columns:2.25rem minmax(0,1fr) auto auto 8.5rem 1.5rem;display:grid;align-items:center;gap:0.75rem";
 
 pub async fn users(
     State(st): State<AppState>,
@@ -886,113 +982,460 @@ pub async fn users(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let page = q.page.unwrap_or(1).max(1);
-    let search = q.search.unwrap_or_default();
-    let suspended = q.status.as_deref() == Some("suspended");
-    // BUNYIP-410: tier + verified filters folded in from the old Memberships page.
-    let tier = q.tier.unwrap_or_default();
-    let verified_str = q.verified.unwrap_or_default();
-    let verified_bool = parse_verified_filter(&verified_str);
+    let uq = UsersQ::from_query(q);
     let data = admin_api::users(
         &st.api,
         c.forward.as_deref(),
-        page,
-        20,
-        &search,
-        suspended,
-        &tier,
-        verified_bool,
+        uq.page,
+        uq.page_size,
+        &uq.search,
+        &uq.status,
+        &uq.tier,
+        parse_verified_filter(&uq.verified),
+        &uq.sort,
+        &uq.dir,
     )
-    .await
-    .ok();
-    let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
-    let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
-    // Filters are preserved across the pager and the Active/Suspended tabs.
-    // `status` is kept out of `filter_params` so the tabs can swap it while
-    // carrying the other filters along.
-    let mut filter_params: Vec<String> = Vec::new();
-    if !search.is_empty() {
-        filter_params.push(format!("search={}", urlenc(&search)));
+    .await;
+    // Denominator for "N of M users". stats.total_users counts live accounts;
+    // good enough for the common Active view and only ever a hint.
+    let total_all = admin_api::stats(&st.api, c.forward.as_deref())
+        .await
+        .map(|s| s.total_users)
+        .ok();
+
+    let panel = users_panel(&uq, data.as_ref().ok(), total_all);
+
+    // BUNYIP-410 overhaul: htmx swaps just the panel (search-as-you-type, sort,
+    // filter, page) so focus and scroll survive and there is no full reload. A
+    // non-htmx request (first load, no-JS, refresh) gets the whole page. The URL
+    // is pushed by htmx either way, so refresh / back / shareable links work.
+    if headers.contains_key("HX-Request") {
+        return Html(panel.into_string()).into_response();
     }
-    if !tier.is_empty() {
-        filter_params.push(format!("tier={}", urlenc(&tier)));
-    }
-    if !verified_str.is_empty() {
-        filter_params.push(format!("verified={}", urlenc(&verified_str)));
-    }
-    let mut params = filter_params.clone();
-    if suspended {
-        params.push("status=suspended".to_string());
-    }
-    let base = if params.is_empty() {
-        "/admin/users".to_string()
-    } else {
-        format!("/admin/users?{}", params.join("&"))
-    };
-    let filter_qs = filter_params.join("&");
-    let active_href = if filter_qs.is_empty() {
-        "/admin/users".to_string()
-    } else {
-        format!("/admin/users?{filter_qs}")
-    };
-    let suspended_href = if filter_qs.is_empty() {
-        "/admin/users?status=suspended".to_string()
-    } else {
-        format!("/admin/users?status=suspended&{filter_qs}")
-    };
-    let active_tab = |on: bool| {
-        if on {
-            button_class("secondary", "sm", "")
-        } else {
-            button_class("outline", "sm", "")
-        }
-    };
 
     let content = html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Users" } p class="mt-2 text-muted-foreground" { "Manage user accounts, membership tier, and verification." } }
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                div class="flex flex-col space-y-3 p-6" {
-                    h3 class="text-2xl font-semibold leading-none tracking-tight" { @if suspended { "Suspended Users" } @else { "All Users" } }
-                    // BUNYIP-410: filter bar (search + verified + tier), replacing
-                    // the standalone Memberships page. The selects auto-submit on
-                    // change; the search submits on Enter.
-                    form method="get" action="/admin/users" class="flex flex-wrap items-center gap-2" {
-                        @if suspended { input type="hidden" name="status" value="suspended"; }
-                        input name="search" value=(search) placeholder="Search by email…" class={ (dashboard_input()) " w-56" };
-                        select name="verified" onchange="this.form.submit()" class=(dashboard_input()) aria-label="Filter by verification status" {
-                            option value="" selected[verified_bool.is_none()] { "All verification" }
-                            option value="verified" selected[verified_bool == Some(true)] { "Verified" }
-                            option value="unverified" selected[verified_bool == Some(false)] { "Unverified" }
-                        }
-                        select name="tier" onchange="this.form.submit()" class=(dashboard_input()) aria-label="Filter by membership tier" {
-                            option value="" selected[tier.is_empty()] { "All tiers" }
-                            option value="early_adopter" selected[tier == "early_adopter"] { "Early Adopter" }
-                            option value="standard" selected[tier == "standard"] { "Standard" }
-                            option value="lifetime" selected[tier == "lifetime"] { "Lifetime" }
-                            option value="free" selected[tier == "free"] { "Free" }
-                        }
-                        button type="submit" class=(button_class("outline", "sm", "")) { "Filter" }
-                    }
-                    div class="flex items-center gap-2 text-sm" {
-                        a href=(active_href) class=(active_tab(!suspended)) { "Active" }
-                        a href=(suspended_href) class=(active_tab(suspended)) { "Suspended" }
-                    }
-                }
-                div class="p-6 pt-0" {
-                    div class="divide-y" {
-                        @for u in &items {
-                            (user_list_row(u, suspended))
-                        }
-                        @if items.is_empty() { p class="text-center text-muted-foreground py-8" { @if suspended { "No suspended users" } @else { "No users found" } } }
-                    }
-                    (pager(&base, page, total_pages))
-                }
+            div {
+                h1 class="text-3xl font-bold" { "Users" }
+                p class="mt-2 text-muted-foreground" { "Manage user accounts, membership tier, and verification." }
             }
+            (panel)
         }
+        style { (maud::PreEscaped(USERS_FILTER_CSS)) }
+        script { (maud::PreEscaped(USERS_FILTER_JS)) }
     };
     admin_response(&c, &user, "/admin/users", "Users · Bunyip", content)
 }
+
+/// Friendly label for a tier slug (for chips).
+fn tier_slug_label(slug: &str) -> &'static str {
+    match slug {
+        "early_adopter" => "Early Adopter",
+        "standard" => "Standard",
+        "lifetime" => "Lifetime",
+        "free" => "Free",
+        _ => "Any",
+    }
+}
+
+/// One of the two filter dropdowns (verification / tier), styled with the app's
+/// own `<details>` menu (matches the profile menu; `PROFILE_MENU_JS` closes it
+/// on click-away / Escape). The trigger keeps a persistent prefix
+/// ("Verification: Any") so a filtered state is always legible. `options` is
+/// `(href, label, selected)`.
+fn filter_dropdown(prefix: &str, current: &str, options: &[(String, String, bool)]) -> Markup {
+    html! {
+        details class="relative" data-menu {
+            summary class="flex items-center gap-1.5 cursor-pointer list-none rounded-md border border-input bg-background px-3 h-10 text-sm hover:bg-accent hover:text-accent-foreground transition-colors [&::-webkit-details-marker]:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" {
+                span class="text-muted-foreground" { (prefix) ":" }
+                span class="font-medium whitespace-nowrap" { (current) }
+                (icon("chevron-down", "h-4 w-4 text-muted-foreground shrink-0"))
+            }
+            div class="absolute left-0 z-50 mt-1 min-w-[11rem] overflow-hidden rounded-md border border-border/60 bg-background py-1 shadow-lg" {
+                @for (href, label, selected) in options {
+                    a href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
+                      class={ "flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground transition-colors " (if *selected { "font-medium text-foreground" } else { "text-muted-foreground" }) } {
+                        span class="inline-flex w-4 shrink-0" { @if *selected { (icon("check", "h-4 w-4 text-primary")) } }
+                        (label)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The Active / All / Suspended segmented control (single element, one selected,
+/// arrow-key navigable via `data-segmented` in `USERS_FILTER_JS`, radiogroup
+/// ARIA).
+fn segmented_control(uq: &UsersQ) -> Markup {
+    let seg = |value: &str, label: &str| -> Markup {
+        let selected = uq.status == value;
+        let href = uq.with_status(value).href();
+        html! {
+            a role="radio" aria-checked=(if selected { "true" } else { "false" })
+              tabindex=(if selected { "0" } else { "-1" })
+              href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
+              class={ "px-3 h-8 inline-flex items-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring " (if selected { "bg-background text-foreground shadow-sm" } else { "text-muted-foreground hover:text-foreground" }) } {
+                (label)
+            }
+        }
+    };
+    html! {
+        div role="radiogroup" aria-label="Account status" data-segmented
+            class="inline-flex items-center gap-1 rounded-lg border border-input bg-muted p-1" {
+            (seg("active", "Active"))
+            (seg("all", "All"))
+            (seg("suspended", "Suspended"))
+        }
+    }
+}
+
+/// A sortable column header. A link (no-JS: navigates; JS: swaps the panel), with
+/// Space-key activation added in `USERS_FILTER_JS` and a direction chevron on the
+/// active column.
+fn sort_header(uq: &UsersQ, col: &str, label: &str) -> Markup {
+    let active = uq.sort == col;
+    let href = uq.with_sort(col).href();
+    html! {
+        a data-sort-header href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
+          aria-sort=(if active { if uq.dir == "asc" { "ascending" } else { "descending" } } else { "none" })
+          class={ "inline-flex items-center gap-1 text-xs font-medium uppercase tracking-wide rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring " (if active { "text-foreground" } else { "text-muted-foreground hover:text-foreground" }) } {
+            (label)
+            @if active {
+                @if uq.dir == "asc" { (icon("chevron-up", "h-3.5 w-3.5")) } @else { (icon("chevron-down", "h-3.5 w-3.5")) }
+            }
+        }
+    }
+}
+
+/// The verification indicator (green check / amber alert), shared by rows.
+fn verified_indicator(verified: bool) -> Markup {
+    html! {
+        @if verified {
+            span class="inline-flex items-center gap-1 text-xs font-medium text-teal-600 dark:text-teal-400" { (icon("check-circle", "h-4 w-4")) "Verified" }
+        } @else {
+            span class="inline-flex items-center gap-1 text-xs font-medium text-yellow-600" { (icon("alert-circle", "h-4 w-4")) "Unverified" }
+        }
+    }
+}
+
+/// One user row in the grid. Active users are a whole-row link into the detail
+/// (hover background + focus-visible ring, chevron hint). Suspended users cannot
+/// open the detail (a soft-deleted lookup 404s), so their row is not a link and
+/// carries an inline Reactivate action instead - this matters on the "All"
+/// segment where the two are interleaved.
+fn user_grid_row(u: &crate::api::types::AdminUser) -> Markup {
+    let is_admin = matches!(u.role, crate::api::types::UserRole::Admin);
+    let initial = u
+        .email
+        .chars()
+        .next()
+        .map(|c| c.to_ascii_uppercase().to_string())
+        .unwrap_or_else(|| "?".to_string());
+    let avatar = html! {
+        span class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-indigo-500 text-white text-xs font-semibold" aria-hidden="true" { (initial) }
+    };
+    let identity = html! {
+        div class="min-w-0" {
+            p class="font-medium truncate flex items-center gap-2" {
+                (u.email)
+                @if is_admin { (badge("default", "Admin")) }
+                @if u.suspended { (badge("outline", "Suspended")) }
+            }
+        }
+    };
+    let tier = html! { (badge("secondary", tier_label(&u.subscription_tier))) };
+    let joined = html! {
+        span class="text-xs text-muted-foreground" title=(abs_time(&u.created_at)) { "Joined " (relative_time(&u.created_at)) }
+    };
+    if u.suspended {
+        html! {
+            div style=(USERS_GRID) class="py-2.5 px-2 -mx-2 rounded-md" {
+                (avatar) (identity) (tier) (verified_indicator(u.email_verified)) (joined)
+                form method="post" action=(format!("/admin/users/{}/reactivate", u.id)) onsubmit="return confirm('Reactivate this user? They will be able to sign in again.')" {
+                    button type="submit" class=(button_class("outline", "sm", "h-8 px-2 text-xs")) { "Reactivate" }
+                }
+            }
+        }
+    } else {
+        html! {
+            a href=(format!("/admin/users/{}", u.id))
+              style=(USERS_GRID)
+              class="py-2.5 px-2 -mx-2 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" {
+                (avatar) (identity) (tier) (verified_indicator(u.email_verified)) (joined)
+                span class="flex justify-end" { (icon("chevron-right", "h-4 w-4 text-muted-foreground")) }
+            }
+        }
+    }
+}
+
+/// Removable filter chips + "Clear all", in a reserved-height row so their
+/// appearance never shifts the list. Empty (no chips) still occupies the row.
+fn filter_chips(uq: &UsersQ) -> Markup {
+    let mut chips: Vec<(String, String)> = Vec::new();
+    if !uq.search.is_empty() {
+        chips.push((format!("Search: {}", uq.search), uq.with_search("").href()));
+    }
+    if uq.status != "active" {
+        let l = if uq.status == "suspended" {
+            "Suspended"
+        } else {
+            "All"
+        };
+        chips.push((format!("Status: {l}"), uq.with_status("active").href()));
+    }
+    if !uq.verified.is_empty() {
+        let l = if uq.verified == "verified" {
+            "Verified"
+        } else {
+            "Unverified"
+        };
+        chips.push((format!("Verification: {l}"), uq.with_verified("").href()));
+    }
+    if !uq.tier.is_empty() {
+        chips.push((
+            format!("Tier: {}", tier_slug_label(&uq.tier)),
+            uq.with_tier("").href(),
+        ));
+    }
+    // Clear all keeps sort + page size, resets only the filters + page.
+    let mut cleared = uq.clone();
+    cleared.search = String::new();
+    cleared.status = "active".to_string();
+    cleared.tier = String::new();
+    cleared.verified = String::new();
+    cleared.page = 1;
+    html! {
+        div style="min-height:1.75rem" class="flex flex-wrap items-center gap-2" {
+            @for (label, href) in &chips {
+                span class="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted px-2.5 py-0.5 text-xs" {
+                    span { (label) }
+                    a href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
+                      aria-label=(format!("Remove {label} filter")) class="inline-flex text-muted-foreground hover:text-foreground rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" {
+                        (icon("x", "h-3 w-3"))
+                    }
+                }
+            }
+            @if !chips.is_empty() {
+                @let href = cleared.href();
+                a href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
+                  class="text-xs font-medium text-primary hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" { "Clear all" }
+            }
+        }
+    }
+}
+
+/// Prev / next pager + a page-size dropdown, all as panel-swapping links.
+fn users_pager(uq: &UsersQ, total_pages: i64) -> Markup {
+    let size_opt = |n: u32| -> (String, String, bool) {
+        (
+            uq.with_page_size(n).href(),
+            n.to_string(),
+            uq.page_size == n,
+        )
+    };
+    html! {
+        div class="flex items-center justify-between gap-4 pt-4 flex-wrap" {
+            (filter_dropdown("Per page", &uq.page_size.to_string(), &[size_opt(10), size_opt(20), size_opt(50), size_opt(100)]))
+            @if total_pages > 1 {
+                div class="flex items-center gap-2" {
+                    @if uq.page > 1 {
+                        @let href = uq.with_page(uq.page - 1).href();
+                        a href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading" class=(button_class("outline", "sm", "")) { "Previous" }
+                    }
+                    span class="text-sm text-muted-foreground" { "Page " (uq.page) " of " (total_pages) }
+                    @if (uq.page as i64) < total_pages {
+                        @let href = uq.with_page(uq.page + 1).href();
+                        a href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading" class=(button_class("outline", "sm", "")) { "Next" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The swappable panel: heading + result count, filter bar, chips, the sortable
+/// grid list, pager. `data == None` renders the error state with a retry.
+fn users_panel(
+    uq: &UsersQ,
+    data: Option<&crate::api::types::PaginatedResponse<crate::api::types::AdminUser>>,
+    total_all: Option<i64>,
+) -> Markup {
+    let heading = match uq.status.as_str() {
+        "suspended" => "Suspended accounts",
+        "all" => "All accounts",
+        _ => "Active users",
+    };
+    let filtered_total = data.map(|p| p.total).unwrap_or(0);
+    let total_pages = data.map(|p| p.total_pages).unwrap_or(1);
+    let count_text = match (data, total_all) {
+        (Some(_), Some(all)) if uq.is_filtered() => format!("{filtered_total} of {all} users"),
+        (Some(_), _) => format!("{filtered_total} users"),
+        (None, _) => "Could not load users".to_string(),
+    };
+
+    // Verification dropdown options.
+    let ver_opts = vec![
+        (
+            uq.with_verified("").href(),
+            "Any".to_string(),
+            uq.verified.is_empty(),
+        ),
+        (
+            uq.with_verified("verified").href(),
+            "Verified".to_string(),
+            uq.verified == "verified",
+        ),
+        (
+            uq.with_verified("unverified").href(),
+            "Unverified".to_string(),
+            uq.verified == "unverified",
+        ),
+    ];
+    let ver_current = match uq.verified.as_str() {
+        "verified" => "Verified",
+        "unverified" => "Unverified",
+        _ => "Any",
+    };
+    // Tier dropdown options.
+    let tier_opts = vec![
+        (
+            uq.with_tier("").href(),
+            "Any".to_string(),
+            uq.tier.is_empty(),
+        ),
+        (
+            uq.with_tier("early_adopter").href(),
+            "Early Adopter".to_string(),
+            uq.tier == "early_adopter",
+        ),
+        (
+            uq.with_tier("standard").href(),
+            "Standard".to_string(),
+            uq.tier == "standard",
+        ),
+        (
+            uq.with_tier("lifetime").href(),
+            "Lifetime".to_string(),
+            uq.tier == "lifetime",
+        ),
+        (
+            uq.with_tier("free").href(),
+            "Free".to_string(),
+            uq.tier == "free",
+        ),
+    ];
+
+    html! {
+        div id="users-panel" class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="p-6 space-y-4" {
+                // Heading + live result count (announced on swap).
+                div class="flex items-end justify-between gap-4 flex-wrap" {
+                    h3 class="text-2xl font-semibold leading-none tracking-tight" { (heading) }
+                    span aria-live="polite" class="text-sm text-muted-foreground" { (count_text) }
+                }
+                // Filter bar: search grows, dropdowns + segmented at content width.
+                div class="flex flex-wrap items-center gap-2" {
+                    form method="get" action="/admin/users" class="flex-1 min-w-[12rem]" role="search"
+                        hx-get="/admin/users" hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
+                        hx-trigger="keyup changed delay:250ms from:input[name=search], search" {
+                        // Carry the other filters + sort so a search keeps them.
+                        @if uq.status != "active" { input type="hidden" name="status" value=(uq.status); }
+                        @if !uq.tier.is_empty() { input type="hidden" name="tier" value=(uq.tier); }
+                        @if !uq.verified.is_empty() { input type="hidden" name="verified" value=(uq.verified); }
+                        @if !uq.sort.is_empty() { input type="hidden" name="sort" value=(uq.sort); input type="hidden" name="dir" value=(uq.dir); }
+                        @if uq.page_size != 20 { input type="hidden" name="page_size" value=(uq.page_size.to_string()); }
+                        input type="search" name="search" value=(uq.search) placeholder="Search by email…" aria-label="Search users by email" class=(dashboard_input());
+                    }
+                    (filter_dropdown("Verification", ver_current, &ver_opts))
+                    (filter_dropdown("Tier", tier_slug_label(&uq.tier), &tier_opts))
+                    (segmented_control(uq))
+                }
+                (filter_chips(uq))
+            }
+            // List. `relative` so the loading overlay can sit on top without
+            // changing the container height (no jump).
+            div class="relative px-6 pb-2" style="min-height:8rem" {
+                // Column header row (sortable Email / Tier / Verification / Joined).
+                div style=(USERS_GRID) class="border-b border-border/60 pb-2 mb-1" {
+                    span {}
+                    (sort_header(uq, "email", "Email"))
+                    (sort_header(uq, "tier", "Tier"))
+                    (sort_header(uq, "verified", "Verification"))
+                    (sort_header(uq, "joined", "Joined"))
+                    span {}
+                }
+                div class="divide-y divide-border/50" {
+                    @match data {
+                        Some(p) if !p.items.is_empty() => {
+                            @for u in &p.items { (user_grid_row(u)) }
+                        }
+                        Some(_) => {
+                            // Distinguish "filters match nothing" from "no users".
+                            @if uq.is_filtered() {
+                                div class="py-10 text-center" {
+                                    p class="text-muted-foreground" { "No users match these filters." }
+                                    @let cleared_href = {
+                                        let mut c = uq.clone();
+                                        c.search = String::new(); c.status = "active".into(); c.tier = String::new(); c.verified = String::new(); c.page = 1;
+                                        c.href()
+                                    };
+                                    a href=(cleared_href) hx-get=(cleared_href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
+                                      class=(button_class("outline", "sm", "mt-3")) { "Clear all filters" }
+                                }
+                            } @else {
+                                p class="py-10 text-center text-muted-foreground" { "No users yet." }
+                            }
+                        }
+                        None => {
+                            div class="py-10 text-center" {
+                                p class="text-destructive" { "Could not load users." }
+                                @let href = uq.href();
+                                a href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
+                                  class=(button_class("outline", "sm", "mt-3")) { "Retry" }
+                            }
+                        }
+                    }
+                }
+                // Loading overlay (skeleton rows). Shown by htmx via the
+                // `htmx-request` class while a swap is in flight; absolutely
+                // positioned so it never changes the panel height.
+                div id="users-loading" class="users-loading absolute inset-x-6 top-10 space-y-2" aria-hidden="true" {
+                    @for _ in 0..3 {
+                        div class="h-10 rounded-md bg-muted users-shimmer" {}
+                    }
+                }
+            }
+            div class="px-6 pb-6" { (users_pager(uq, total_pages)) }
+        }
+    }
+}
+
+/// BUNYIP-410 overhaul: inline styles for the users-list loading overlay. Kept
+/// inline (not in the built stylesheet) so it needs no Tailwind rebuild and can
+/// never be defeated by a stale cached `styles.css`. htmx toggles the
+/// `htmx-request` class on `#users-loading` for the duration of a swap.
+const USERS_FILTER_CSS: &str = r#".users-loading{opacity:0;pointer-events:none;transition:opacity .15s ease}
+.users-loading.htmx-request,.htmx-request .users-loading{opacity:1}
+.users-shimmer{position:relative;overflow:hidden}
+.users-shimmer::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,hsl(var(--foreground)/0.06),transparent);animation:users-shimmer 1.2s infinite}
+@keyframes users-shimmer{100%{transform:translateX(100%)}}"#;
+
+/// BUNYIP-410 overhaul: keyboard behaviour the SSR markup cannot express on its
+/// own. Segmented control = arrow-key roving focus (radiogroup); sort headers =
+/// Space activation (Enter is native for the `<a>`). Delegated on `document`, so
+/// it keeps working across htmx panel swaps.
+const USERS_FILTER_JS: &str = r#"(function(){
+document.addEventListener('keydown',function(e){
+var el=e.target;if(!el||!el.closest)return;var group=el.closest('[data-segmented]');
+if(group&&el.getAttribute('role')==='radio'){
+var radios=Array.prototype.slice.call(group.querySelectorAll('[role=radio]'));var i=radios.indexOf(el);var n=null;
+if(e.key==='ArrowRight'||e.key==='ArrowDown')n=radios[(i+1)%radios.length];
+else if(e.key==='ArrowLeft'||e.key==='ArrowUp')n=radios[(i-1+radios.length)%radios.length];
+if(n){e.preventDefault();n.focus();n.click();}return;}
+if(e.key===' '&&el.matches&&el.matches('[data-sort-header]')){e.preventDefault();el.click();}
+});
+})();"#;
 
 #[derive(Deserialize)]
 pub struct RoleForm {
@@ -5175,18 +5618,24 @@ mod rate_limit_tests {
         .expect("valid admin user json")
     }
 
+    /// A suspended `AdminUser` (soft-deleted) built off the standard fixture.
+    fn suspended_admin_user(email: &str) -> crate::api::types::AdminUser {
+        let mut u = admin_user(email, true, false);
+        u.suspended = true;
+        u
+    }
+
     #[test]
     fn active_user_row_links_to_detail_with_no_inline_actions() {
-        let html =
-            super::user_list_row(&admin_user("ada@example.com", true, false), false).into_string();
+        let html = super::user_grid_row(&admin_user("ada@example.com", true, false)).into_string();
         // The whole row is a link into the per-user detail view.
         assert!(
             html.contains(&format!(r#"href="/admin/users/{ROW_UID}""#)),
             "active row links to the detail view"
         );
         assert!(html.contains("Verified"), "verified indicator shown");
-        // Every management action moved to the detail view (BUNYIP-405): the list
-        // row must carry none of them, and no forms at all.
+        // Every management action lives on the detail view (BUNYIP-405): the list
+        // row carries none of them, and no forms at all.
         for action in [
             "/role",
             "/reset-password",
@@ -5205,16 +5654,14 @@ mod rate_limit_tests {
 
     #[test]
     fn unverified_user_row_shows_unverified_status() {
-        let html =
-            super::user_list_row(&admin_user("new@example.com", false, false), false).into_string();
+        let html = super::user_grid_row(&admin_user("new@example.com", false, false)).into_string();
         assert!(html.contains("Unverified"), "unverified status shown");
         assert!(!html.contains(">Verified<"));
     }
 
     #[test]
     fn suspended_user_row_keeps_reactivate_and_is_not_a_link() {
-        let html =
-            super::user_list_row(&admin_user("gone@example.com", true, false), true).into_string();
+        let html = super::user_grid_row(&suspended_admin_user("gone@example.com")).into_string();
         assert!(
             html.contains(&format!(r#"action="/admin/users/{ROW_UID}/reactivate""#)),
             "suspended row keeps the inline Reactivate action"
@@ -5231,14 +5678,90 @@ mod rate_limit_tests {
     // -- BUNYIP-410: users + memberships consolidation --------------------------
 
     #[test]
-    fn user_list_row_shows_membership_tier() {
-        // The row now carries the membership tier badge merged from the old
-        // Memberships page (the builder seeds the "standard" tier).
-        let html =
-            super::user_list_row(&admin_user("ada@example.com", true, false), false).into_string();
+    fn user_row_shows_membership_tier() {
+        // The row carries the membership tier badge (the builder seeds "standard")
+        // alongside the verification indicator.
+        let html = super::user_grid_row(&admin_user("ada@example.com", true, false)).into_string();
         assert!(html.contains("Standard"), "tier badge shown on the row");
-        // Verified indicator still present alongside the tier.
         assert!(html.contains("Verified"));
+    }
+
+    fn q(status: &str, tier: &str, verified: &str, search: &str) -> super::UsersQ {
+        super::UsersQ::from_query(super::UserQuery {
+            page: None,
+            search: (!search.is_empty()).then(|| search.to_string()),
+            status: (!status.is_empty()).then(|| status.to_string()),
+            tier: (!tier.is_empty()).then(|| tier.to_string()),
+            verified: (!verified.is_empty()).then(|| verified.to_string()),
+            sort: None,
+            dir: None,
+            page_size: None,
+        })
+    }
+
+    #[test]
+    fn usersq_href_emits_only_nondefault_params() {
+        // A clean, default state is a clean URL.
+        assert_eq!(q("", "", "", "").href(), "/admin/users");
+        // Filters appear; the default `active` status does not.
+        let href = q("all", "lifetime", "verified", "ada").href();
+        assert!(href.contains("status=all"));
+        assert!(href.contains("tier=lifetime"));
+        assert!(href.contains("verified=verified"));
+        assert!(href.contains("search=ada"));
+        // Default status is omitted.
+        assert!(!q("active", "", "", "").href().contains("status="));
+    }
+
+    #[test]
+    fn usersq_sort_toggles_then_switches_columns() {
+        let base = q("", "", "", "");
+        // First click on a column sorts ascending.
+        let asc = base.with_sort("email");
+        assert_eq!((asc.sort.as_str(), asc.dir.as_str()), ("email", "asc"));
+        // Clicking the same column again flips to descending.
+        let desc = asc.with_sort("email");
+        assert_eq!(desc.dir, "desc");
+        // Clicking a different column restarts ascending.
+        let other = desc.with_sort("joined");
+        assert_eq!((other.sort.as_str(), other.dir.as_str()), ("joined", "asc"));
+    }
+
+    #[test]
+    fn usersq_is_filtered_only_when_narrowed() {
+        assert!(!q("active", "", "", "").is_filtered(), "plain active view");
+        assert!(q("all", "", "", "").is_filtered(), "non-default status");
+        assert!(q("active", "lifetime", "", "").is_filtered(), "tier filter");
+        assert!(
+            q("active", "", "verified", "").is_filtered(),
+            "verified filter"
+        );
+        assert!(q("active", "", "", "ada").is_filtered(), "search");
+    }
+
+    #[test]
+    fn usersq_filter_change_resets_page() {
+        let mut on_page_3 = q("", "", "", "");
+        on_page_3.page = 3;
+        assert_eq!(on_page_3.with_tier("lifetime").page, 1);
+        assert_eq!(on_page_3.with_status("all").page, 1);
+        assert_eq!(on_page_3.with_search("x").page, 1);
+        // Paging itself does not reset the page.
+        assert_eq!(on_page_3.with_page(4).page, 4);
+    }
+
+    #[test]
+    fn users_panel_shows_count_filter_bar_and_sortable_headers() {
+        let panel =
+            super::users_panel(&q("active", "lifetime", "", ""), None, Some(13)).into_string();
+        // Panel is the htmx swap target.
+        assert!(panel.contains(r#"id="users-panel""#));
+        // Segmented control + sortable headers present.
+        assert!(panel.contains(r#"role="radiogroup""#));
+        assert!(panel.contains("data-sort-header"));
+        // An active tier filter renders a removable chip + Clear all.
+        assert!(panel.contains("Tier: Lifetime"));
+        assert!(panel.contains("Clear all"));
     }
 
     #[test]

@@ -379,6 +379,10 @@ pub struct UserResponse {
     /// decide whether to render the avatar `<img>` (and with what cache-busting
     /// version) or fall back to initials.
     pub avatar_updated_at: Option<DateTime<Utc>>,
+    /// BUNYIP-410 overhaul: whether this account is soft-deleted (suspended).
+    /// Lets the admin users list distinguish suspended rows on the combined
+    /// "All" view, where active and suspended users are interleaved.
+    pub suspended: bool,
 }
 
 impl From<User> for UserResponse {
@@ -402,6 +406,7 @@ impl From<User> for UserResponse {
             last_name: user.last_name,
             phone: user.phone,
             avatar_updated_at: user.avatar_updated_at,
+            suspended: user.deleted_at.is_some(),
         }
     }
 }

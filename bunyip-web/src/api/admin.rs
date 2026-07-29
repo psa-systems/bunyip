@@ -27,26 +27,36 @@ pub async fn users(
     page: u32,
     page_size: u32,
     search: &str,
-    suspended: bool,
-    // BUNYIP-410: consolidated users list filters. Empty `tier` / `None`
-    // `verified` = unfiltered.
+    // BUNYIP-410 overhaul: soft-delete segment - "active" / "suspended" / "all".
+    status: &str,
+    // Empty `tier` / `None` `verified` = unfiltered.
     tier: &str,
     verified: Option<bool>,
+    // Whitelisted sort column + direction ("asc" / "desc"); empty = server
+    // default (newest-first).
+    sort: &str,
+    dir: &str,
 ) -> Result<PaginatedResponse<AdminUser>, ApiError> {
     let mut path = format!("/admin/users?page={page}&page_size={page_size}");
     if !search.is_empty() {
         path.push_str(&format!("&search={}", urlenc(search)));
     }
-    // `active=false` flips the API to the soft-deleted side so suspended users
-    // can be listed and reactivated (BUNYIP-120).
-    if suspended {
-        path.push_str("&active=false");
+    // The API's `active` flag is tri-state: true = live only, false =
+    // soft-deleted only (BUNYIP-120), omitted = both ("All"). Send it explicitly
+    // for active/suspended so the default page is not the "All" view.
+    match status {
+        "suspended" => path.push_str("&active=false"),
+        "all" => {}
+        _ => path.push_str("&active=true"),
     }
     if !tier.is_empty() {
         path.push_str(&format!("&tier={}", urlenc(tier)));
     }
     if let Some(v) = verified {
         path.push_str(&format!("&verified={v}"));
+    }
+    if !sort.is_empty() {
+        path.push_str(&format!("&sort={}&dir={}", urlenc(sort), urlenc(dir)));
     }
     parse(api.get(&path, cookie).await?)
 }

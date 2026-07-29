@@ -376,6 +376,11 @@ pub struct AdminUser {
     pub created_at: String,
     pub last_login_at: Option<String>,
     pub grace_period_end: Option<String>,
+    /// BUNYIP-410 overhaul: soft-deleted (suspended) flag, so the users list can
+    /// tell active from suspended rows on the combined "All" view. `default`
+    /// keeps an older API that predates the field deserialize-compatible.
+    #[serde(default)]
+    pub suspended: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
