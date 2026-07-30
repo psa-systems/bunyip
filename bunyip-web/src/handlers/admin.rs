@@ -2545,6 +2545,15 @@ fn feedback_detail_view(f: &AdminFeedbackDetail, tab: FeedbackTab) -> Markup {
                         (feedback_attachments_view(&f.id, &f.attachments))
                     }
                     div { h3 class="text-sm font-semibold" { "Received" } p class="text-sm text-muted-foreground" { (relative_time(&f.created_at)) } }
+                    // BUNYIP-411: request metadata for spam tracing. Shown only
+                    // when captured (dev / direct-hit submissions resolve no
+                    // forwarded IP). Maud escapes both values.
+                    @if let Some(ip) = f.submitter_ip.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                        div { h3 class="text-sm font-semibold" { "IP address" } p class="text-sm text-muted-foreground font-mono" { (ip) } }
+                    }
+                    @if let Some(ua) = f.user_agent.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                        div { h3 class="text-sm font-semibold" { "User agent" } p class="text-sm text-muted-foreground break-all" { (ua) } }
+                    }
                 }
             }
             // BUNYIP-422: the triage actions now live here (moved off the

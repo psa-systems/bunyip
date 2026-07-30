@@ -629,6 +629,14 @@ pub struct AdminFeedbackDetail {
     /// API that does not emit the field deserializes as an empty list.
     #[serde(default)]
     pub attachments: Vec<FeedbackAttachmentMeta>,
+    /// BUNYIP-411: request metadata captured at submission for spam tracing.
+    /// `submitter_ip` is the external client IP resolved through the trusted
+    /// proxy chain (bare host, no CIDR suffix). Both `#[serde(default)]` so an
+    /// older API that does not emit them deserializes as `None`.
+    #[serde(default)]
+    pub submitter_ip: Option<String>,
+    #[serde(default)]
+    pub user_agent: Option<String>,
 }
 
 /// Per-file metadata on a feedback detail response. Mirrors bunyip-api's
