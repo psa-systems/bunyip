@@ -467,6 +467,11 @@ async fn main() {
             "/admin/stripe/prices/:id/archive",
             post(handlers::admin::stripe_price_archive),
         )
+        // BUNYIP-417: tier -> Stripe price/product mapping moved from Tier Settings.
+        .route(
+            "/admin/stripe/catalog",
+            post(handlers::admin::stripe_catalog_save),
+        )
         // BUNYIP-353: account backup & restore, reached from the Backup add-on
         // tile on /applications.
         .route(

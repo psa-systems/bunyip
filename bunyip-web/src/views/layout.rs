@@ -516,6 +516,21 @@ fn sidebar(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup
                 }
             }
             nav class="flex-1 space-y-1 p-4" {
+                // BUNYIP-417: the user/admin dashboard switch is a top-level,
+                // frequently-used control, so it sits at the TOP of the nav
+                // (above the section items) rather than buried at the bottom.
+                @if !admin && is_admin {
+                    a href="/admin" class={ "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors " (NAV_INACTIVE) } {
+                        (icon("shield", "h-4 w-4")) "Admin Panel"
+                    }
+                    div class="my-3 border-t border-border/50" {}
+                }
+                @if admin {
+                    a href="/dashboard" class={ "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors " (NAV_INACTIVE) } {
+                        (icon("layout-dashboard", "h-4 w-4")) "User Dashboard"
+                    }
+                    div class="my-3 border-t border-border/50" {}
+                }
                 @for item in &items {
                     // BUNYIP-329: Community launches the external Let's Chat
                     // instance, so open it in a new tab and keep the Bunyip tab.
@@ -532,18 +547,6 @@ fn sidebar(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup
                         @if external {
                             (icon("external-link", "ml-auto h-3.5 w-3.5 opacity-60"))
                         }
-                    }
-                }
-                @if !admin && is_admin {
-                    div class="my-4 border-t border-border/50" {}
-                    a href="/admin" class={ "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors " (NAV_INACTIVE) } {
-                        (icon("shield", "h-4 w-4")) "Admin Panel"
-                    }
-                }
-                @if admin {
-                    div class="my-4 border-t border-border/50" {}
-                    a href="/dashboard" class={ "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors " (NAV_INACTIVE) } {
-                        (icon("layout-dashboard", "h-4 w-4")) "User Dashboard"
                     }
                 }
             }

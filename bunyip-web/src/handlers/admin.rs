@@ -4355,66 +4355,27 @@ fn tier_settings_content(
 ) -> Markup {
     html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Tier Settings" } p class="mt-2 text-muted-foreground" { "Configure pricing tiers, trials, and slot limits." } }
+            div { h1 class="text-3xl font-bold" { "Tier Settings" } p class="mt-2 text-muted-foreground" { "Trial lengths and membership slot limits. Stripe price / product mapping now lives on the " a href="/admin/stripe" class="text-primary hover:underline" { "Stripe" } " page." } }
             @match cfg {
                 None => p class="text-muted-foreground" { "Could not load tier config." },
-                // BUNYIP-415 follow-up: the same two-column block layout applied
-                // to the rest of the admin console. Slots/trials and the three
-                // Stripe-catalog groups become blocks laid out in a responsive
-                // grid (one column below lg), all inside one form so a single
-                // Save persists everything.
-                //
-                // BUNYIP-122: the Stripe price + product IDs let admins wire each
-                // tier to its Stripe catalog row from this page. Blank
-                // submissions leave the persisted value untouched (the API treats
-                // empty string as "no change"); values echo the submitted input
-                // so a failed save keeps them.
+                // BUNYIP-417: the Stripe catalog price/product mappings moved to
+                // the Stripe page to consolidate all Stripe config under one nav
+                // entry. Tier Settings keeps only its non-Stripe concerns (slots
+                // + trial lengths).
                 Some(c) => form method="post" action="/admin/tier-settings" class="space-y-6" {
                     @if let Some(e) = error { (error_box(e)) }
-                    (admin_block_grid(vec![
-                        admin_block(
-                            "Tiers & Slots",
-                            Some(&format!("{} lifetime and {} early-adopter slots used.", c.lifetime_slots_used, c.early_adopter_slots_used)),
-                            html! {
-                                div class="space-y-4" {
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Lifetime slots" } input name="lifetime_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.lifetime_slots) class=(dashboard_input()); }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter slots" } input name="early_adopter_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.early_adopter_slots) class=(dashboard_input()); }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter trial days" } input name="early_adopter_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.early_adopter_trial_days) class=(dashboard_input()); }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Standard trial days" } input name="standard_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.standard_trial_days) class=(dashboard_input()); }
-                                }
-                            },
-                        ),
-                        admin_block(
-                            "Stripe catalog (free / lifetime)",
-                            None,
-                            html! {
-                                div class="space-y-4" {
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Free price ID" } input name="free_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.free_price_id) class=(dashboard_input()); }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Lifetime product ID" } input name="lifetime_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.lifetime_product_id) class=(dashboard_input()); }
-                                }
-                            },
-                        ),
-                        admin_block(
-                            "Stripe catalog (early adopter)",
-                            None,
-                            html! {
-                                div class="space-y-4" {
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter price ID" } input name="early_adopter_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.early_adopter_price_id) class=(dashboard_input()); }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter product ID" } input name="early_adopter_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.early_adopter_product_id) class=(dashboard_input()); }
-                                }
-                            },
-                        ),
-                        admin_block(
-                            "Stripe catalog (standard)",
-                            None,
-                            html! {
-                                div class="space-y-4" {
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Standard price ID" } input name="standard_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.standard_price_id) class=(dashboard_input()); }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Standard product ID" } input name="standard_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.standard_product_id) class=(dashboard_input()); }
-                                }
-                            },
-                        ),
-                    ]))
+                    (admin_block(
+                        "Tiers & Slots",
+                        Some(&format!("{} lifetime and {} early-adopter slots used.", c.lifetime_slots_used, c.early_adopter_slots_used)),
+                        html! {
+                            div class="space-y-4 max-w-md" {
+                                div class="space-y-2" { label class="text-sm font-medium" { "Lifetime slots" } input name="lifetime_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.lifetime_slots) class=(dashboard_input()); }
+                                div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter slots" } input name="early_adopter_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.early_adopter_slots) class=(dashboard_input()); }
+                                div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter trial days" } input name="early_adopter_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.early_adopter_trial_days) class=(dashboard_input()); }
+                                div class="space-y-2" { label class="text-sm font-medium" { "Standard trial days" } input name="standard_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.standard_trial_days) class=(dashboard_input()); }
+                            }
+                        },
+                    ))
                     button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
                 },
             }
@@ -5361,6 +5322,53 @@ fn stripe_prices_block(
     )
 }
 
+/// The tier -> Stripe catalog mapping (BUNYIP-417, moved here from Tier
+/// Settings). Wires each tier to its Stripe price / product IDs. Its own form
+/// (separate from the keys/checkout config) posting to `/admin/stripe/catalog`,
+/// which partial-updates the tier config (blank = keep). `tier == None` renders
+/// a load-error note.
+fn stripe_catalog_section(tier: Option<&crate::api::types::TierConfigResponse>) -> Markup {
+    let field = |label: &str, name: &str, ph: &str, value: &Option<String>| -> Markup {
+        html! {
+            div class="space-y-2" {
+                label class="text-sm font-medium" { (label) }
+                input name=(name) type="text" maxlength="255" placeholder=(ph) value=(value.clone().unwrap_or_default()) class=(dashboard_input());
+            }
+        }
+    };
+    html! {
+        div class="space-y-3" {
+            div { h3 class="text-xl font-semibold" { "Tier catalog mapping" } p class="text-sm text-muted-foreground" { "Wire each membership tier to the Stripe price / product it should use. Leave a field blank to keep the existing value." } }
+            @match tier {
+                None => (error_box("Could not load the tier catalog mapping.")),
+                Some(t) => form method="post" action="/admin/stripe/catalog" class="space-y-6" {
+                    (admin_block_grid(vec![
+                        admin_block("Free / lifetime", None, html! {
+                            div class="space-y-4" {
+                                (field("Free price ID", "free_price_id", "price_...", &t.free_price_id))
+                                (field("Lifetime product ID", "lifetime_product_id", "prod_...", &t.lifetime_product_id))
+                            }
+                        }),
+                        admin_block("Early adopter", None, html! {
+                            div class="space-y-4" {
+                                (field("Early-adopter price ID", "early_adopter_price_id", "price_...", &t.early_adopter_price_id))
+                                (field("Early-adopter product ID", "early_adopter_product_id", "prod_...", &t.early_adopter_product_id))
+                            }
+                        }),
+                        admin_block("Standard", None, html! {
+                            div class="space-y-4" {
+                                (field("Standard price ID", "standard_price_id", "price_...", &t.standard_price_id))
+                                (field("Standard product ID", "standard_product_id", "prod_...", &t.standard_product_id))
+                            }
+                        }),
+                    ]))
+                    button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save catalog mapping" }
+                },
+            }
+        }
+    }
+}
+
 pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
@@ -5372,6 +5380,9 @@ pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response 
     // key surfaces as None and the blocks render a "could not load" note.
     let products = admin_api::list_stripe_products(&st.api, fwd).await.ok();
     let prices = admin_api::list_stripe_prices(&st.api, fwd).await.ok();
+    // BUNYIP-417: the tier -> Stripe price/product mapping moved here from Tier
+    // Settings, so all Stripe config lives under one nav entry.
+    let tier = admin_api::tier_config(&st.api, fwd).await.ok();
 
     let content = html! {
         div class="space-y-6" {
@@ -5412,6 +5423,7 @@ pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response 
                     }
                     (stripe_products_block(products.as_deref()))
                     (stripe_prices_block(prices.as_deref(), products.as_deref().unwrap_or(&[])))
+                    (stripe_catalog_section(tier.as_ref()))
                 },
             }
         }
@@ -5540,6 +5552,64 @@ pub async fn stripe_price_archive(
     };
     let target = match admin_api::archive_stripe_price(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => "/admin/stripe?toast_ok=Price%20archived".to_string(),
+        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// The tier -> Stripe catalog mapping form (BUNYIP-417). Same six price/product
+/// ID fields the Tier Settings page used to carry; they persist to the tier
+/// config via a partial update (blank = keep), so nothing is lost by the move.
+#[derive(Deserialize)]
+pub struct StripeCatalogForm {
+    #[serde(default)]
+    pub free_price_id: String,
+    #[serde(default)]
+    pub early_adopter_price_id: String,
+    #[serde(default)]
+    pub standard_price_id: String,
+    #[serde(default)]
+    pub lifetime_product_id: String,
+    #[serde(default)]
+    pub early_adopter_product_id: String,
+    #[serde(default)]
+    pub standard_product_id: String,
+}
+
+/// POST /admin/stripe/catalog - persist the tier -> Stripe price/product
+/// mapping. Only non-blank, in-bounds (<=255) fields are sent, so an untouched
+/// field keeps its stored value (matches the old Tier Settings behaviour).
+pub async fn stripe_catalog_save(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<StripeCatalogForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let mut body = serde_json::Map::new();
+    for (k, v) in [
+        ("free_price_id", &f.free_price_id),
+        ("early_adopter_price_id", &f.early_adopter_price_id),
+        ("standard_price_id", &f.standard_price_id),
+        ("lifetime_product_id", &f.lifetime_product_id),
+        ("early_adopter_product_id", &f.early_adopter_product_id),
+        ("standard_product_id", &f.standard_product_id),
+    ] {
+        let t = v.trim();
+        if !t.is_empty() && t.len() <= 255 {
+            body.insert(k.into(), json!(t));
+        }
+    }
+    let target = match admin_api::update_tier_config(
+        &st.api,
+        c.forward.as_deref(),
+        serde_json::Value::Object(body),
+    )
+    .await
+    {
+        Ok(()) => "/admin/stripe?toast_ok=Catalog%20mapping%20saved".to_string(),
         Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
     };
     redirect_cookies(&target, &c.set_cookies)
@@ -6655,7 +6725,10 @@ mod two_column_layout_tests {
     }
 
     #[test]
-    fn tier_settings_uses_two_column_blocks() {
+    fn tier_settings_shows_slots_and_no_stripe_catalog() {
+        // BUNYIP-417: the Stripe catalog mapping moved to the Stripe page, so
+        // Tier Settings keeps only slots + trial days and carries none of the
+        // price/product-ID fields.
         let vals = TierFormValues {
             lifetime_slots: "5".into(),
             early_adopter_slots: "5".into(),
@@ -6669,16 +6742,29 @@ mod two_column_layout_tests {
             standard_product_id: String::new(),
         };
         let html = tier_settings_content(Some(&tier_cfg()), &vals, None).into_string();
-        assert!(html.contains("lg:grid-cols-2"));
-        assert!(html.contains("Slots") && html.contains("Stripe catalog (free / lifetime)"));
         for f in [
             "lifetime_slots",
+            "early_adopter_slots",
             "standard_trial_days",
+        ] {
+            assert!(html.contains(f), "slots/trials field {f} present");
+        }
+        assert!(
+            !html.contains("Stripe catalog"),
+            "catalog blocks moved to the Stripe page"
+        );
+        for f in [
             "free_price_id",
             "standard_product_id",
+            "early_adopter_price_id",
         ] {
-            assert!(html.contains(f), "field {f} preserved after regrouping");
+            assert!(
+                !html.contains(f),
+                "catalog field {f} no longer on Tier Settings"
+            );
         }
+        // It links to where the mapping now lives.
+        assert!(html.contains(r#"href="/admin/stripe""#));
     }
 }
 
@@ -6773,5 +6859,35 @@ mod stripe_admin_tests {
             "create form present"
         );
         assert!(html.contains(r#"action="/admin/stripe/prices/price_free/archive""#));
+    }
+
+    #[test]
+    fn catalog_section_renders_mapping_fields_prefilled() {
+        // BUNYIP-417: the tier -> Stripe catalog mapping now lives on the Stripe
+        // page, its own form posting to /admin/stripe/catalog, prefilled from the
+        // tier config.
+        let tier: crate::api::types::TierConfigResponse =
+            serde_json::from_value(serde_json::json!({
+                "lifetime_slots": 5, "early_adopter_slots": 5, "early_adopter_trial_days": 90,
+                "standard_trial_days": 30,
+                "free_price_id": "price_free123", "early_adopter_price_id": null,
+                "standard_price_id": null, "lifetime_product_id": "prod_life123",
+                "source": "database", "lifetime_slots_used": 0, "early_adopter_slots_used": 0
+            }))
+            .unwrap();
+        let html = super::stripe_catalog_section(Some(&tier)).into_string();
+        assert!(
+            html.contains(r#"action="/admin/stripe/catalog""#),
+            "catalog form present"
+        );
+        for f in ["free_price_id", "lifetime_product_id", "standard_price_id"] {
+            assert!(html.contains(f), "mapping field {f} present");
+        }
+        // Existing values are prefilled.
+        assert!(html.contains("price_free123") && html.contains("prod_life123"));
+        // Load-error state when the tier config is unavailable.
+        assert!(super::stripe_catalog_section(None)
+            .into_string()
+            .contains("Could not load the tier catalog mapping"));
     }
 }
