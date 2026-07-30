@@ -21,6 +21,7 @@ use crate::api::types::{
 use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{relative_time, urlenc};
+use crate::views::layout::{admin_block, admin_block_grid};
 use crate::views::ui::{badge, button_class, error_box, icon, success_box};
 use crate::web::{redirect, redirect_cookies, AppState};
 
@@ -581,7 +582,10 @@ pub async fn ip_bans(State(st): State<AppState>, headers: HeaderMap) -> Response
                     } @else if bans.is_empty() {
                         p class="text-center text-muted-foreground py-8" { "No active IP bans." }
                     } @else {
-                        div class="space-y-0" { @for b in &bans { (ip_ban_row(b)) } }
+                        // BUNYIP-415: flow ban rows into two columns (one below
+                        // lg) so the list uses the width instead of a single
+                        // narrow stack.
+                        div class="grid gap-x-8 lg:grid-cols-2" { @for b in &bans { (ip_ban_row(b)) } }
                     }
                 }
             }
@@ -720,7 +724,10 @@ pub async fn rate_limits(
                     } @else if items.is_empty() {
                         p class="text-center text-muted-foreground py-8" { "No active rate limits." }
                     } @else {
-                        div class="space-y-0" { @for rl in &items { (rate_limit_row(rl, None)) } }
+                        // BUNYIP-415: flow throttle rows into two columns (one
+                        // below lg) so a long list uses the width. Each row keeps
+                        // its own bottom-border separator.
+                        div class="grid gap-x-8 lg:grid-cols-2" { @for rl in &items { (rate_limit_row(rl, None)) } }
                         (pager("/admin/rate-limits", page, total_pages))
                     }
                 }
@@ -3872,7 +3879,12 @@ pub async fn application_groups(State(st): State<AppState>, headers: HeaderMap) 
                                 }
                             }
                         }
-                        @if groups.is_empty() { p class="text-center text-muted-foreground py-8" { "No groups" } }
+                        @if groups.is_empty() {
+                            // BUNYIP-415: center the empty state as a block.
+                            div class="flex flex-col items-center justify-center py-12 text-center text-muted-foreground" {
+                                (icon("layers", "h-8 w-8 mb-2 opacity-50")) "No groups yet"
+                            }
+                        }
                     }
                 }
             }
@@ -4097,20 +4109,27 @@ pub async fn entitlements(State(st): State<AppState>, headers: HeaderMap) -> Res
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Products" } p class="text-sm text-muted-foreground" { "Restricted products are only available to users who have been granted an entitlement." } }
                 div class="p-6 pt-0" {
-                    div class="divide-y" {
-                        @for app in &apps {
-                            div class="py-3 flex items-center justify-between gap-4" {
-                                div {
-                                    p class="font-medium flex items-center gap-2" { (app.display_name) @if app.requires_entitlement { (badge("default", "Restricted")) } }
-                                    p class="text-xs text-muted-foreground" { (app.slug) }
-                                }
-                                form method="post" action=(format!("/admin/applications/{}/restricted-toggle", app.slug)) {
-                                    input type="hidden" name="value" value=(if app.requires_entitlement { "false" } else { "true" });
-                                    button type="submit" class=(button_class("outline", "sm", "")) { @if app.requires_entitlement { "Open" } @else { "Restrict" } }
+                    @if apps.is_empty() {
+                        div class="flex flex-col items-center justify-center py-12 text-center text-muted-foreground" {
+                            (icon("package", "h-8 w-8 mb-2 opacity-50")) "No applications"
+                        }
+                    } @else {
+                        // BUNYIP-415: flow product rows into two columns (one
+                        // below lg) so the catalog uses the width.
+                        div class="grid gap-x-8 lg:grid-cols-2" {
+                            @for app in &apps {
+                                div class="py-3 flex items-center justify-between gap-4 border-b last:border-0" {
+                                    div {
+                                        p class="font-medium flex items-center gap-2" { (app.display_name) @if app.requires_entitlement { (badge("default", "Restricted")) } }
+                                        p class="text-xs text-muted-foreground" { (app.slug) }
+                                    }
+                                    form method="post" action=(format!("/admin/applications/{}/restricted-toggle", app.slug)) {
+                                        input type="hidden" name="value" value=(if app.requires_entitlement { "false" } else { "true" });
+                                        button type="submit" class=(button_class("outline", "sm", "")) { @if app.requires_entitlement { "Open" } @else { "Restrict" } }
+                                    }
                                 }
                             }
                         }
-                        @if apps.is_empty() { p class="text-center text-muted-foreground py-8" { "No applications" } }
                     }
                 }
             }
@@ -4557,34 +4576,51 @@ fn email_settings_content(cfg: Option<&crate::api::types::EmailConfigResponse>) 
             div { h1 class="text-3xl font-bold" { "Email" } p class="mt-2 text-muted-foreground" { "Configure the SMTP relay for transactional email. Changes apply immediately without a restart." } }
             @match cfg {
                 None => p class="text-muted-foreground" { "Could not load email config." },
-                Some(e) => div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                    div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "SMTP Configuration" } p class="text-sm text-muted-foreground" { "Source: " (e.source) ". Leave a field blank to keep the existing value." } }
-                    div class="p-6 pt-0" {
-                        form method="post" action="/admin/email" class="space-y-4 max-w-md" {
-                            div class="space-y-2" {
-                                label class="text-sm font-medium" { "Sending" }
-                                select name="enabled" class=(dashboard_input()) {
-                                    option value="true" selected[e.enabled] { "Enabled" }
-                                    option value="false" selected[!e.enabled] { "Disabled" }
+                // BUNYIP-415: two-column block layout. The SMTP transport
+                // settings and the sender/notification settings sit in
+                // side-by-side blocks (one column below lg), inside one form so
+                // a single Save persists everything.
+                Some(e) => form method="post" action="/admin/email" class="space-y-6" {
+                    (admin_block_grid(vec![
+                        admin_block(
+                            "SMTP Connection",
+                            Some(&format!("Source: {}. Leave a field blank to keep the existing value.", e.source)),
+                            html! {
+                                div class="space-y-4" {
+                                    div class="space-y-2" {
+                                        label class="text-sm font-medium" { "Sending" }
+                                        select name="enabled" class=(dashboard_input()) {
+                                            option value="true" selected[e.enabled] { "Enabled" }
+                                            option value="false" selected[!e.enabled] { "Disabled" }
+                                        }
+                                    }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "SMTP host" } input name="smtp_host" value=(e.smtp_host) placeholder="smtp.example.com" class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "SMTP port" } input name="smtp_port" type="number" min="1" max="65535" value=(e.smtp_port) class=(dashboard_input()); }
+                                    div class="space-y-2" {
+                                        label class="text-sm font-medium" { "TLS mode" }
+                                        select name="smtp_tls" class=(dashboard_input()) {
+                                            option value="implicit" selected[e.smtp_tls == "implicit"] { "Implicit (port 465)" }
+                                            option value="starttls" selected[e.smtp_tls == "starttls"] { "STARTTLS (port 587)" }
+                                        }
+                                    }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "SMTP username" } input name="smtp_username" value=(e.smtp_username) autocomplete="off" class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "SMTP password" } input name="smtp_password" type="password" autocomplete="new-password" placeholder=(e.smtp_password_masked.clone().unwrap_or_else(|| "(unchanged)".into())) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Stored encrypted. Leave blank to keep the current password." } }
                                 }
-                            }
-                            div class="space-y-2" { label class="text-sm font-medium" { "SMTP host" } input name="smtp_host" value=(e.smtp_host) placeholder="smtp.example.com" class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "SMTP port" } input name="smtp_port" type="number" min="1" max="65535" value=(e.smtp_port) class=(dashboard_input()); }
-                            div class="space-y-2" {
-                                label class="text-sm font-medium" { "TLS mode" }
-                                select name="smtp_tls" class=(dashboard_input()) {
-                                    option value="implicit" selected[e.smtp_tls == "implicit"] { "Implicit (port 465)" }
-                                    option value="starttls" selected[e.smtp_tls == "starttls"] { "STARTTLS (port 587)" }
+                            },
+                        ),
+                        admin_block(
+                            "Sender & Notifications",
+                            Some("Who transactional mail comes from, and where operational notices go."),
+                            html! {
+                                div class="space-y-4" {
+                                    div class="space-y-2" { label class="text-sm font-medium" { "From email" } input name="from_email" type="email" value=(e.from_email) placeholder="noreply@example.com" class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "From name" } input name="from_name" value=(e.from_name) class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Admin notification emails" } input name="admin_notification_emails" value=(e.admin_notification_emails.join(", ")) placeholder="ops@example.com, alerts@example.com" class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Comma-separated recipients for operational notices." } }
                                 }
-                            }
-                            div class="space-y-2" { label class="text-sm font-medium" { "SMTP username" } input name="smtp_username" value=(e.smtp_username) autocomplete="off" class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "SMTP password" } input name="smtp_password" type="password" autocomplete="new-password" placeholder=(e.smtp_password_masked.clone().unwrap_or_else(|| "(unchanged)".into())) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Stored encrypted. Leave blank to keep the current password." } }
-                            div class="space-y-2" { label class="text-sm font-medium" { "From email" } input name="from_email" type="email" value=(e.from_email) placeholder="noreply@example.com" class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "From name" } input name="from_name" value=(e.from_name) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Admin notification emails" } input name="admin_notification_emails" value=(e.admin_notification_emails.join(", ")) placeholder="ops@example.com, alerts@example.com" class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Comma-separated recipients for operational notices." } }
-                            button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
-                        }
-                    }
+                            },
+                        ),
+                    ]))
+                    button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
                 },
             }
         }
@@ -4647,24 +4683,40 @@ fn auto_ban_settings_content(
             div { h1 class="text-3xl font-bold" { "Auto-ban Settings" } p class="mt-2 text-muted-foreground" { "Tune the automatic IP-ban thresholds. Changes apply immediately without a restart." } }
             @match cfg {
                 None => p class="text-muted-foreground" { "Could not load auto-ban config." },
-                Some(c) => div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                    div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Thresholds" } p class="text-sm text-muted-foreground" { "Values sourced from " (c.source) "." } }
-                    div class="p-6 pt-0" {
-                        form method="post" action="/admin/auto-ban-settings" class="space-y-4 max-w-md" {
-                            @if let Some(e) = error { (error_box(e)) }
-                            div class="space-y-2" {
-                                label class="text-sm font-medium" { "Auto-ban" }
-                                select name="enabled" class=(dashboard_input()) {
-                                    option value="true" selected[values.enabled] { "Enabled" }
-                                    option value="false" selected[!values.enabled] { "Disabled" }
+                // BUNYIP-415: detection (when to strike/ban) and enforcement
+                // (the on/off switch and how long a ban lasts) sit in two
+                // side-by-side blocks, one column below lg, inside one form.
+                Some(c) => form method="post" action="/admin/auto-ban-settings" class="space-y-6" {
+                    @if let Some(e) = error { (error_box(e)) }
+                    (admin_block_grid(vec![
+                        admin_block(
+                            "Detection",
+                            Some(&format!("When a source IP earns a ban. Values sourced from {}.", c.source)),
+                            html! {
+                                div class="space-y-4" {
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Strike threshold" } input name="threshold" type="number" min="1" max=(MAX_AUTO_BAN_THRESHOLD) value=(values.threshold) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Suspicious requests from one IP before it is banned." } }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Strike window (seconds)" } input name="window_secs" type="number" min="1" max=(MAX_AUTO_BAN_WINDOW_SECS) value=(values.window_secs) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Rolling window over which strikes accumulate." } }
                                 }
-                            }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Strike threshold" } input name="threshold" type="number" min="1" max=(MAX_AUTO_BAN_THRESHOLD) value=(values.threshold) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Suspicious requests from one IP before it is banned." } }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Strike window (seconds)" } input name="window_secs" type="number" min="1" max=(MAX_AUTO_BAN_WINDOW_SECS) value=(values.window_secs) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Rolling window over which strikes accumulate." } }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Ban duration (seconds)" } input name="ban_duration_secs" type="number" min="1" max=(MAX_AUTO_BAN_DURATION_SECS) value=(values.ban_duration_secs) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "How long a ban lasts before it expires." } }
-                            button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
-                        }
-                    }
+                            },
+                        ),
+                        admin_block(
+                            "Enforcement",
+                            Some("Whether auto-ban is active, and how long a ban holds."),
+                            html! {
+                                div class="space-y-4" {
+                                    div class="space-y-2" {
+                                        label class="text-sm font-medium" { "Auto-ban" }
+                                        select name="enabled" class=(dashboard_input()) {
+                                            option value="true" selected[values.enabled] { "Enabled" }
+                                            option value="false" selected[!values.enabled] { "Disabled" }
+                                        }
+                                    }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Ban duration (seconds)" } input name="ban_duration_secs" type="number" min="1" max=(MAX_AUTO_BAN_DURATION_SECS) value=(values.ban_duration_secs) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "How long a ban lasts before it expires." } }
+                                }
+                            },
+                        ),
+                    ]))
+                    button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
                 },
             }
         }
@@ -5146,20 +5198,37 @@ pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response 
             div { h1 class="text-3xl font-bold" { "Stripe" } p class="mt-2 text-muted-foreground" { "Connect and configure Stripe billing." } }
             @match cfg {
                 None => p class="text-muted-foreground" { "Could not load Stripe config." },
-                Some(s) => div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                    div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Stripe Configuration" } p class="text-sm text-muted-foreground" { "Source: " (s.source) ". Leave a field blank to keep the existing value." } }
-                    div class="p-6 pt-0" {
-                        form method="post" action="/admin/stripe" class="space-y-4 max-w-md" {
-                            div class="space-y-2" { label class="text-sm font-medium" { "Secret key" } input name="secret_key" type="password" placeholder=(s.secret_key_masked.clone().unwrap_or_else(|| "sk_live_…".into())) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Webhook secret" } input name="webhook_secret" type="password" placeholder=(s.webhook_secret_masked.clone().unwrap_or_else(|| "whsec_…".into())) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "App tag" } input name="app_tag" value=(s.app_tag) class=(dashboard_input()); }
-                            div class="mt-2 pt-4 border-t border-border space-y-1" { p class="text-sm font-semibold" { "Checkout" } }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Success URL" } input name="success_url" type="url" value=(s.success_url) placeholder="https://example.com/checkout/success" class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Cancel URL" } input name="cancel_url" type="url" value=(s.cancel_url) placeholder="https://example.com/pricing?checkout=canceled" class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Trial period (days)" } input name="trial_period_days" type="number" min="0" max="365" value=(s.trial_period_days) class=(dashboard_input()); }
-                            button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
-                        }
-                    }
+                // BUNYIP-415: group the settings into two blocks laid out in a
+                // responsive two-column grid (collapses to one column below lg)
+                // so the form uses the width instead of a single narrow column.
+                // Both blocks live inside one <form> so a single Save persists
+                // everything.
+                Some(s) => form method="post" action="/admin/stripe" class="space-y-6" {
+                    (admin_block_grid(vec![
+                        admin_block(
+                            "Stripe Configuration",
+                            Some(&format!("Source: {}. Leave a field blank to keep the existing value.", s.source)),
+                            html! {
+                                div class="space-y-4" {
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Secret key" } input name="secret_key" type="password" placeholder=(s.secret_key_masked.clone().unwrap_or_else(|| "sk_live_…".into())) class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Webhook secret" } input name="webhook_secret" type="password" placeholder=(s.webhook_secret_masked.clone().unwrap_or_else(|| "whsec_…".into())) class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "App tag" } input name="app_tag" value=(s.app_tag) class=(dashboard_input()); }
+                                }
+                            },
+                        ),
+                        admin_block(
+                            "Checkout",
+                            Some("Where Stripe returns the customer after checkout, and the trial length."),
+                            html! {
+                                div class="space-y-4" {
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Success URL" } input name="success_url" type="url" value=(s.success_url) placeholder="https://example.com/checkout/success" class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Cancel URL" } input name="cancel_url" type="url" value=(s.cancel_url) placeholder="https://example.com/pricing?checkout=canceled" class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Trial period (days)" } input name="trial_period_days" type="number" min="0" max="365" value=(s.trial_period_days) class=(dashboard_input()); }
+                                }
+                            },
+                        ),
+                    ]))
+                    button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
                 },
             }
         }
@@ -6187,4 +6256,82 @@ pub async fn application_doc_delete(
         }
     };
     redirect_cookies(&target, &c.set_cookies)
+}
+
+#[cfg(test)]
+mod two_column_layout_tests {
+    // BUNYIP-415: the SSR analog of a wide/narrow visual-regression check is to
+    // assert the responsive two-column grid class (two columns at `lg`, one
+    // below) is present and that no fields were dropped when regrouping into
+    // blocks. The list-screen conversions (rate limits, IP bans, entitlements)
+    // reuse the same `lg:grid-cols-2` wrapper and are verified via screenshots.
+    use super::*;
+
+    #[test]
+    fn admin_block_grid_is_responsive_two_column() {
+        let grid = admin_block_grid(vec![
+            admin_block("Alpha", None, maud::html! { "a" }),
+            admin_block("Beta", Some("sub"), maud::html! { "b" }),
+        ])
+        .into_string();
+        assert!(grid.contains("grid"));
+        assert!(
+            grid.contains("lg:grid-cols-2"),
+            "two columns at lg, one below"
+        );
+        assert!(
+            grid.contains(">Alpha<") && grid.contains(">Beta<"),
+            "both block titles present"
+        );
+        assert!(grid.contains("sub"), "subtitle rendered when provided");
+    }
+
+    fn email_cfg() -> crate::api::types::EmailConfigResponse {
+        serde_json::from_value(json!({
+            "enabled": true, "smtp_host": "smtp.example.com", "smtp_port": 587,
+            "smtp_tls": "starttls", "smtp_username": "u", "has_smtp_password": true,
+            "smtp_password_masked": "****", "from_email": "no-reply@example.com",
+            "from_name": "Bunyip", "admin_notification_emails": ["ops@example.com"],
+            "source": "environment"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn email_screen_uses_two_column_blocks() {
+        let html = email_settings_content(Some(&email_cfg())).into_string();
+        assert!(
+            html.contains("lg:grid-cols-2"),
+            "email settings render as a responsive two-column grid"
+        );
+        assert!(html.contains("SMTP Connection") && html.contains("Notifications"));
+        for f in [
+            "smtp_host",
+            "smtp_port",
+            "from_email",
+            "admin_notification_emails",
+        ] {
+            assert!(html.contains(f), "field {f} preserved after regrouping");
+        }
+    }
+
+    fn auto_ban_cfg() -> crate::api::types::AutoBanConfigResponse {
+        serde_json::from_value(json!({
+            "enabled": true, "threshold": 10, "window_secs": 60,
+            "ban_duration_secs": 3600, "source": "database"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn auto_ban_screen_uses_two_column_blocks() {
+        let cfg = auto_ban_cfg();
+        let vals = AutoBanFormValues::from_config(&cfg);
+        let html = auto_ban_settings_content(Some(&cfg), &vals, None).into_string();
+        assert!(html.contains("lg:grid-cols-2"));
+        assert!(html.contains("Detection") && html.contains("Enforcement"));
+        for f in ["threshold", "window_secs", "ban_duration_secs"] {
+            assert!(html.contains(f), "field {f} preserved after regrouping");
+        }
+    }
 }
