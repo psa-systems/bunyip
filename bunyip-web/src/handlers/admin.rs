@@ -4358,41 +4358,64 @@ fn tier_settings_content(
             div { h1 class="text-3xl font-bold" { "Tier Settings" } p class="mt-2 text-muted-foreground" { "Configure pricing tiers, trials, and slot limits." } }
             @match cfg {
                 None => p class="text-muted-foreground" { "Could not load tier config." },
-                Some(c) => div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                    div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Tiers & Slots" } p class="text-sm text-muted-foreground" { (c.lifetime_slots_used) " lifetime and " (c.early_adopter_slots_used) " early-adopter slots used." } }
-                    div class="p-6 pt-0" {
-                        form method="post" action="/admin/tier-settings" class="space-y-4 max-w-md" {
-                            @if let Some(e) = error { (error_box(e)) }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Lifetime slots" } input name="lifetime_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.lifetime_slots) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter slots" } input name="early_adopter_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.early_adopter_slots) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter trial days" } input name="early_adopter_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.early_adopter_trial_days) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Standard trial days" } input name="standard_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.standard_trial_days) class=(dashboard_input()); }
-                            // BUNYIP-122: surface the Stripe price + product
-                            // IDs so admins can wire each tier to its Stripe
-                            // catalog row from this page. Blank submissions
-                            // leave the persisted value untouched (the API
-                            // treats empty string as "no change"); explicit
-                            // empty-by-clear is left for v2 once the API
-                            // grows a tri-state shape. Values echo the
-                            // submitted input so a failed save keeps them.
-                            div class="mt-2 pt-4 border-t border-border space-y-1" {
-                                p class="text-sm font-semibold" { "Stripe catalog (free / lifetime tier)" }
-                            }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Free price ID" } input name="free_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.free_price_id) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Lifetime product ID" } input name="lifetime_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.lifetime_product_id) class=(dashboard_input()); }
-                            div class="mt-2 pt-4 border-t border-border space-y-1" {
-                                p class="text-sm font-semibold" { "Stripe catalog (early adopter tier)" }
-                            }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter price ID" } input name="early_adopter_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.early_adopter_price_id) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter product ID" } input name="early_adopter_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.early_adopter_product_id) class=(dashboard_input()); }
-                            div class="mt-2 pt-4 border-t border-border space-y-1" {
-                                p class="text-sm font-semibold" { "Stripe catalog (standard tier)" }
-                            }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Standard price ID" } input name="standard_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.standard_price_id) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Standard product ID" } input name="standard_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.standard_product_id) class=(dashboard_input()); }
-                            button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
-                        }
-                    }
+                // BUNYIP-415 follow-up: the same two-column block layout applied
+                // to the rest of the admin console. Slots/trials and the three
+                // Stripe-catalog groups become blocks laid out in a responsive
+                // grid (one column below lg), all inside one form so a single
+                // Save persists everything.
+                //
+                // BUNYIP-122: the Stripe price + product IDs let admins wire each
+                // tier to its Stripe catalog row from this page. Blank
+                // submissions leave the persisted value untouched (the API treats
+                // empty string as "no change"); values echo the submitted input
+                // so a failed save keeps them.
+                Some(c) => form method="post" action="/admin/tier-settings" class="space-y-6" {
+                    @if let Some(e) = error { (error_box(e)) }
+                    (admin_block_grid(vec![
+                        admin_block(
+                            "Tiers & Slots",
+                            Some(&format!("{} lifetime and {} early-adopter slots used.", c.lifetime_slots_used, c.early_adopter_slots_used)),
+                            html! {
+                                div class="space-y-4" {
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Lifetime slots" } input name="lifetime_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.lifetime_slots) class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter slots" } input name="early_adopter_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.early_adopter_slots) class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter trial days" } input name="early_adopter_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.early_adopter_trial_days) class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Standard trial days" } input name="standard_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.standard_trial_days) class=(dashboard_input()); }
+                                }
+                            },
+                        ),
+                        admin_block(
+                            "Stripe catalog (free / lifetime)",
+                            None,
+                            html! {
+                                div class="space-y-4" {
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Free price ID" } input name="free_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.free_price_id) class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Lifetime product ID" } input name="lifetime_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.lifetime_product_id) class=(dashboard_input()); }
+                                }
+                            },
+                        ),
+                        admin_block(
+                            "Stripe catalog (early adopter)",
+                            None,
+                            html! {
+                                div class="space-y-4" {
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter price ID" } input name="early_adopter_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.early_adopter_price_id) class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter product ID" } input name="early_adopter_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.early_adopter_product_id) class=(dashboard_input()); }
+                                }
+                            },
+                        ),
+                        admin_block(
+                            "Stripe catalog (standard)",
+                            None,
+                            html! {
+                                div class="space-y-4" {
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Standard price ID" } input name="standard_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.standard_price_id) class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Standard product ID" } input name="standard_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.standard_product_id) class=(dashboard_input()); }
+                                }
+                            },
+                        ),
+                    ]))
+                    button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
                 },
             }
         }
@@ -6331,6 +6354,43 @@ mod two_column_layout_tests {
         assert!(html.contains("lg:grid-cols-2"));
         assert!(html.contains("Detection") && html.contains("Enforcement"));
         for f in ["threshold", "window_secs", "ban_duration_secs"] {
+            assert!(html.contains(f), "field {f} preserved after regrouping");
+        }
+    }
+
+    fn tier_cfg() -> crate::api::types::TierConfigResponse {
+        serde_json::from_value(json!({
+            "lifetime_slots": 5, "early_adopter_slots": 5, "early_adopter_trial_days": 90,
+            "standard_trial_days": 30, "free_price_id": null, "early_adopter_price_id": null,
+            "standard_price_id": null, "source": "database",
+            "lifetime_slots_used": 2, "early_adopter_slots_used": 1
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn tier_settings_uses_two_column_blocks() {
+        let vals = TierFormValues {
+            lifetime_slots: "5".into(),
+            early_adopter_slots: "5".into(),
+            early_adopter_trial_days: "90".into(),
+            standard_trial_days: "30".into(),
+            free_price_id: String::new(),
+            early_adopter_price_id: String::new(),
+            standard_price_id: String::new(),
+            lifetime_product_id: String::new(),
+            early_adopter_product_id: String::new(),
+            standard_product_id: String::new(),
+        };
+        let html = tier_settings_content(Some(&tier_cfg()), &vals, None).into_string();
+        assert!(html.contains("lg:grid-cols-2"));
+        assert!(html.contains("Slots") && html.contains("Stripe catalog (free / lifetime)"));
+        for f in [
+            "lifetime_slots",
+            "standard_trial_days",
+            "free_price_id",
+            "standard_product_id",
+        ] {
             assert!(html.contains(f), "field {f} preserved after regrouping");
         }
     }
