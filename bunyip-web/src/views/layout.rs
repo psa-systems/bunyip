@@ -665,3 +665,36 @@ pub fn admin_shell(user: &User, active: &str, topbar_title: &str, content: Marku
         script { (PreEscaped(sse)) }
     }
 }
+
+/// A single settings/content block: a card with a title, an optional subtitle,
+/// and a body. The building unit of the two-column admin block layout
+/// (BUNYIP-415), so sparse full-width admin screens group related controls into
+/// blocks instead of one long narrow column. Matches the inline card markup
+/// already used across the admin screens (rounded border + card surface, a
+/// header stack, and a padded body).
+pub fn admin_block(title: &str, subtitle: Option<&str>, body: Markup) -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                h3 class="text-2xl font-semibold leading-none tracking-tight" { (title) }
+                @if let Some(s) = subtitle {
+                    p class="text-sm text-muted-foreground" { (s) }
+                }
+            }
+            div class="p-6 pt-0" { (body) }
+        }
+    }
+}
+
+/// Lay a set of blocks out in a responsive two-column grid that collapses to a
+/// single column below the `lg` breakpoint (BUNYIP-415). `items-start` so
+/// blocks of unequal height top-align rather than stretching to match the
+/// tallest, and `gap-6` matches the vertical rhythm of the single-column
+/// `space-y-6` stacks these screens use elsewhere.
+pub fn admin_block_grid(blocks: Vec<Markup>) -> Markup {
+    html! {
+        div class="grid gap-6 items-start lg:grid-cols-2" {
+            @for b in blocks { (b) }
+        }
+    }
+}
