@@ -804,6 +804,10 @@ pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadErr
                 message: fb.message.clone(),
                 page_path: fb.page_path.clone(),
                 is_spam: fb.is_spam,
+                // Seeded feedback has no live request; BUNYIP-411 metadata is
+                // only captured on real submissions.
+                submitter_ip: None,
+                user_agent: None,
             },
         )
         .await?;

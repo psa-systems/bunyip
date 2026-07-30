@@ -1,6 +1,7 @@
 //! Feedback models and DTOs
 
 use chrono::{DateTime, Utc};
+use ipnetwork::IpNetwork;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -52,6 +53,12 @@ pub struct Feedback {
     pub responded_by: Option<Uuid>,
     pub responded_at: Option<DateTime<Utc>>,
     pub is_spam: bool,
+    /// BUNYIP-411: external client IP resolved through the trusted-proxy chain
+    /// (not the Docker-internal peer). `None` for dev / direct-hit submissions
+    /// where no forwarded IP is trusted, and for rows predating the column.
+    pub submitter_ip: Option<IpNetwork>,
+    /// BUNYIP-411: the submitter's browser `User-Agent`, forwarded by the BFF.
+    pub user_agent: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -65,6 +72,9 @@ pub struct CreateFeedback {
     pub message: String,
     pub page_path: Option<String>,
     pub is_spam: bool,
+    /// BUNYIP-411: request metadata captured at submission for spam tracing.
+    pub submitter_ip: Option<IpNetwork>,
+    pub user_agent: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +159,10 @@ pub struct AdminFeedbackDetail {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub attachments: Vec<FeedbackAttachmentMeta>,
+    /// BUNYIP-411: request metadata for spam triage, shown inline on the admin
+    /// detail view. `submitter_ip` is the bare external IP (no CIDR suffix).
+    pub submitter_ip: Option<String>,
+    pub user_agent: Option<String>,
 }
 
 impl Feedback {
@@ -208,6 +222,10 @@ impl Feedback {
             created_at: self.created_at,
             updated_at: self.updated_at,
             attachments,
+            // Strip the /32 (or /128) CIDR suffix INET carries so the admin UI
+            // shows a bare host IP.
+            submitter_ip: self.submitter_ip.map(|n| n.ip().to_string()),
+            user_agent: self.user_agent.clone(),
         }
     }
 }

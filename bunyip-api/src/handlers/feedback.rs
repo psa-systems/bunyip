@@ -216,6 +216,36 @@ fn should_notify_admins_of_feedback(is_spam: bool) -> bool {
     !is_spam
 }
 
+/// BUNYIP-411: normalize a forwarded `User-Agent` before it is persisted and
+/// audited. The BFF already caps the header at 512 chars; we store at most 256
+/// (matching the session-row UA cap) and treat blank / whitespace as absent, so
+/// a missing header does not persist an empty string.
+fn bounded_user_agent(raw: Option<&str>) -> Option<String> {
+    raw.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.chars().take(256).collect())
+}
+
+/// BUNYIP-411: the audit-log metadata recorded for a feedback submission. Kept
+/// as a pure builder so the recorded shape (crucially, that it carries the
+/// source IP and User-Agent) is unit-testable without a database or the HTTP
+/// layer. Mirrors the request metadata also persisted on the feedback row.
+fn feedback_audit_metadata(
+    status: &str,
+    has_email: bool,
+    page_path: Option<&str>,
+    submitter_ip: Option<std::net::IpAddr>,
+    user_agent: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": status,
+        "has_email": has_email,
+        "page_path": page_path,
+        "ip": submitter_ip.map(|ip| ip.to_string()),
+        "user_agent": user_agent,
+    })
+}
+
 pub async fn submit_feedback(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -228,6 +258,14 @@ pub async fn submit_feedback(
     let ip_key = ip_address
         .map(|ip| ip.to_string())
         .unwrap_or_else(|| "unknown".to_string());
+    // BUNYIP-411: the BFF forwards the end-user's browser User-Agent (the
+    // server-to-server call would otherwise carry the HTTP-client UA). Capture
+    // it for spam tracing alongside the resolved client IP.
+    let user_agent = bounded_user_agent(
+        req.headers()
+            .get(actix_web::http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok()),
+    );
     check_feedback_rate_limit(&pool, &ip_key).await?;
 
     // Parse multipart fields
@@ -361,6 +399,8 @@ pub async fn submit_feedback(
             message,
             page_path,
             is_spam,
+            submitter_ip: ip_address.map(ipnetwork::IpNetwork::from),
+            user_agent: user_agent.clone(),
         },
     )
     .await?;
@@ -369,15 +409,22 @@ pub async fn submit_feedback(
         FeedbackRepository::save_attachments(&pool, feedback.id, attachment_parts).await?;
     }
 
+    // BUNYIP-411: mirror the request metadata into the audit log so feedback
+    // spam is traceable there too. `actor_ip_address` (INET) carries the
+    // resolved external client IP; the User-Agent rides in the metadata JSON
+    // (the audit schema has no dedicated UA column).
     AuditLogRepository::create(
         &pool,
         CreateAuditLog::new(AuditAction::FeedbackSubmitted)
             .with_resource("feedback", feedback.id)
-            .with_metadata(serde_json::json!({
-                "status": feedback.status.clone(),
-                "has_email": feedback.email.is_some(),
-                "page_path": feedback.page_path.clone(),
-            })),
+            .with_ip(ip_address.map(ipnetwork::IpNetwork::from))
+            .with_metadata(feedback_audit_metadata(
+                &feedback.status,
+                feedback.email.is_some(),
+                feedback.page_path.as_deref(),
+                ip_address,
+                user_agent.as_deref(),
+            )),
     )
     .await?;
 
@@ -880,5 +927,65 @@ mod tests {
     #[test]
     fn suppresses_admin_notification_for_spam_feedback() {
         assert!(!should_notify_admins_of_feedback(true));
+    }
+
+    // -- BUNYIP-411: request metadata capture --------------------------------
+
+    use std::net::IpAddr;
+
+    #[test]
+    fn bounded_user_agent_trims_blanks_and_caps_length() {
+        assert_eq!(bounded_user_agent(None), None);
+        assert_eq!(bounded_user_agent(Some("   ")), None);
+        assert_eq!(
+            bounded_user_agent(Some("  Mozilla/5.0  ")),
+            Some("Mozilla/5.0".to_string())
+        );
+        let long = "a".repeat(500);
+        assert_eq!(
+            bounded_user_agent(Some(&long)).unwrap().chars().count(),
+            256
+        );
+    }
+
+    #[test]
+    fn audit_metadata_carries_ip_and_user_agent() {
+        let ip: IpAddr = "203.0.113.7".parse().unwrap();
+        let meta =
+            feedback_audit_metadata("new", true, Some("/pricing"), Some(ip), Some("Mozilla/5.0"));
+        assert_eq!(meta["ip"], "203.0.113.7");
+        assert_eq!(meta["user_agent"], "Mozilla/5.0");
+        assert_eq!(meta["status"], "new");
+        assert_eq!(meta["has_email"], true);
+        assert_eq!(meta["page_path"], "/pricing");
+    }
+
+    #[test]
+    fn audit_metadata_omits_absent_ip_and_user_agent() {
+        let meta = feedback_audit_metadata("new", false, None, None, None);
+        assert!(meta["ip"].is_null());
+        assert!(meta["user_agent"].is_null());
+        assert!(meta["page_path"].is_null());
+    }
+
+    /// Behind a trusted proxy the handler passes the resolved EXTERNAL client
+    /// IP (from `extract_client_ip`, whose trusted-proxy resolution is proven by
+    /// `client_ip_uses_forwarded_for_when_peer_is_trusted_proxy` in the
+    /// bunyip-domain middleware and `resolve_forwarded_ip` in bunyip-web). This
+    /// asserts that resolved external IP - never the Docker-internal peer - is
+    /// what lands in the recorded metadata.
+    #[test]
+    fn metadata_captures_external_ip_behind_trusted_proxy() {
+        // The value `extract_client_ip` yields for a request forwarded by the
+        // trusted proxy (first X-Forwarded-For entry), not the internal peer.
+        let external: IpAddr = "203.0.113.7".parse().unwrap();
+        let internal: IpAddr = "10.1.2.3".parse().unwrap();
+        let meta = feedback_audit_metadata("new", false, None, Some(external), None);
+        assert_eq!(meta["ip"], "203.0.113.7");
+        assert_ne!(
+            meta["ip"],
+            internal.to_string(),
+            "must record the external client IP, not the internal proxy peer"
+        );
     }
 }

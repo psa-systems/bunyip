@@ -60,8 +60,8 @@ impl FeedbackRepository {
     pub async fn create(pool: &PgPool, data: CreateFeedback) -> Result<Feedback, AppError> {
         let feedback = sqlx::query_as::<_, Feedback>(
             r#"
-            INSERT INTO feedback (name, email, subject, tags, message, page_path, is_spam)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO feedback (name, email, subject, tags, message, page_path, is_spam, submitter_ip, user_agent)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING *
             "#,
         )
@@ -72,6 +72,8 @@ impl FeedbackRepository {
         .bind(data.message)
         .bind(data.page_path)
         .bind(data.is_spam)
+        .bind(data.submitter_ip)
+        .bind(data.user_agent)
         .fetch_one(pool)
         .await?;
 
