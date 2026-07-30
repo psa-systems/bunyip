@@ -7,7 +7,8 @@ use super::types::{
     AdminFeedbackSummary, AdminIpBan, AdminRateLimit, AdminStatsResponse, AdminUser, AppDoc,
     ApplicationGroup, ApplicationGroupList, ArchivedFeedback, AutoBanConfigResponse,
     EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary, PaginatedResponse,
-    RestoreReport, SeedTemplateInfo, StripeConfigResponse, TierConfigResponse, UserEntitlement,
+    RestoreReport, SeedTemplateInfo, StripeConfigResponse, StripePrice, StripeProduct,
+    TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -741,6 +742,64 @@ pub async fn update_stripe_config(
     body: Value,
 ) -> Result<(), ApiError> {
     let r = api.put("/admin/stripe", cookie, Some(body)).await?;
+    ok_data(&r).map(|_| ())
+}
+
+// --- stripe products + prices (BUNYIP-416) ----------------------------------
+
+pub async fn list_stripe_products(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Vec<StripeProduct>, ApiError> {
+    parse(api.get("/admin/stripe/products", cookie).await?)
+}
+
+pub async fn create_stripe_product(
+    api: &Api,
+    cookie: Option<&str>,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api
+        .post("/admin/stripe/products", cookie, Some(body))
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn archive_stripe_product(
+    api: &Api,
+    cookie: Option<&str>,
+    id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .delete(&format!("/admin/stripe/products/{id}"), cookie, None)
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn list_stripe_prices(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Vec<StripePrice>, ApiError> {
+    parse(api.get("/admin/stripe/prices", cookie).await?)
+}
+
+pub async fn create_stripe_price(
+    api: &Api,
+    cookie: Option<&str>,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api.post("/admin/stripe/prices", cookie, Some(body)).await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn archive_stripe_price(
+    api: &Api,
+    cookie: Option<&str>,
+    id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .delete(&format!("/admin/stripe/prices/{id}"), cookie, None)
+        .await?;
     ok_data(&r).map(|_| ())
 }
 

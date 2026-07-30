@@ -687,6 +687,35 @@ pub struct StripeConfigResponse {
     pub source: String,
 }
 
+/// BUNYIP-416: a Stripe product surfaced in the admin Stripe panel. Mirrors
+/// bunyip-api's `StripeProductResponse` (metadata is omitted here - it is not
+/// displayed, and serde ignores the extra field).
+#[derive(Debug, Clone, Deserialize)]
+pub struct StripeProduct {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub active: bool,
+    #[serde(default)]
+    pub created: i64,
+}
+
+/// BUNYIP-416: a Stripe price surfaced in the admin Stripe panel. Mirrors
+/// bunyip-api's `StripePriceResponse`. A zero-amount lifetime price has
+/// `unit_amount = Some(0)` (not `None`), so it renders as a real "$0.00".
+#[derive(Debug, Clone, Deserialize)]
+pub struct StripePrice {
+    pub id: String,
+    pub product_id: String,
+    #[serde(default)]
+    pub unit_amount: Option<i64>,
+    pub currency: String,
+    #[serde(default)]
+    pub recurring_interval: Option<String>,
+    pub active: bool,
+}
+
 /// BUNYIP-351: email / SMTP configuration surfaced to the admin settings form.
 /// Mirrors `bunyip-api`'s `EmailConfigResponse`; the SMTP password is never
 /// returned in plaintext (only a masked hint + `has_smtp_password`).
