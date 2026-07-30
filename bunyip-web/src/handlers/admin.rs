@@ -5204,59 +5204,345 @@ pub async fn backup_restore(
 }
 
 // ===========================================================================
-// Stripe config (condensed: keys + app tag)
+// Stripe: config + setup docs + products + prices (BUNYIP-416)
 // ===========================================================================
+
+/// Setup guidance ported from the a8n-tools Stripe admin panel (BUNYIP-416):
+/// how and where to create the restricted API key and how the app-tag scopes
+/// what is shown. Rendered as a full-width intro card above the config form.
+fn stripe_setup_docs() -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="p-6 space-y-3 text-sm text-muted-foreground" {
+                div class="flex items-center gap-2 text-foreground" { (icon("help-circle", "h-5 w-5 text-primary")) h3 class="text-base font-semibold" { "Setting up Stripe" } }
+                p {
+                    "Your Stripe secret key authenticates API requests. Generate a "
+                    a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline" { "restricted key" }
+                    " with these permissions set to " span class="font-medium text-foreground" { "Write" }
+                    ": Products, Prices, Customers, Subscriptions, and Checkout Sessions; and " span class="font-medium text-foreground" { "Read" } " for Invoices."
+                }
+                p {
+                    "Keys follow the format " code class="rounded bg-muted px-1 py-0.5 text-xs" { "rk_(live|test)_…" }
+                    " - the prefix shows whether it is a live or test key. Leave a field blank to keep the existing value."
+                }
+                p {
+                    "Products created here are tagged with your " span class="font-medium text-foreground" { "App tag" }
+                    " in Stripe metadata, and only products matching that tag are shown. Add your API key, save, then manage Products and Prices below. A lifetime plan is simply a product with a "
+                    span class="font-medium text-foreground" { "$0.00" } " price."
+                }
+            }
+        }
+    }
+}
+
+/// Format a Stripe price amount for display. A zero-amount lifetime price is
+/// `Some(0)` -> "$0.00" (not "--"); a null amount -> "--".
+fn format_stripe_amount(unit_amount: Option<i64>, currency: &str) -> String {
+    match unit_amount {
+        None => "--".to_string(),
+        Some(cents) => {
+            let whole = cents / 100;
+            let frac = (cents % 100).abs();
+            match currency.to_ascii_lowercase().as_str() {
+                "usd" => format!("${whole}.{frac:02}"),
+                "eur" => format!("€{whole}.{frac:02}"),
+                "gbp" => format!("£{whole}.{frac:02}"),
+                _ => format!("{whole}.{frac:02} {}", currency.to_uppercase()),
+            }
+        }
+    }
+}
+
+/// The Products block: a create form plus the app-tagged product list, each
+/// with an Archive action. `products == None` is the "could not load" state
+/// (e.g. no valid API key yet).
+fn stripe_products_block(products: Option<&[crate::api::types::StripeProduct]>) -> Markup {
+    admin_block(
+        "Products",
+        Some("Stripe products for your subscription tiers."),
+        html! {
+            form method="post" action="/admin/stripe/products" class="flex flex-wrap items-end gap-3 mb-4" {
+                div class="space-y-1 flex-1 min-w-[12rem]" { label class="text-xs font-medium" { "Name" } input name="name" required placeholder="Personal Plan" class=(dashboard_input()); }
+                div class="space-y-1 flex-1 min-w-[12rem]" { label class="text-xs font-medium" { "Description" } input name="description" placeholder="Optional" class=(dashboard_input()); }
+                button type="submit" class=(button_class("default", "sm", "")) { "Create product" }
+            }
+            @match products {
+                None => (error_box("Could not load products from Stripe. Add a valid API key above and save, then reload.")),
+                Some([]) => p class="py-6 text-center text-sm text-muted-foreground" { "No products yet. Create one to get started." },
+                Some(list) => div class="divide-y" {
+                    @for p in list {
+                        div class="py-3 flex items-center justify-between gap-4" {
+                            div class="min-w-0" {
+                                p class="font-medium flex items-center gap-2" {
+                                    (p.name)
+                                    @if p.active { (badge("success", "Active")) } @else { (badge("secondary", "Archived")) }
+                                }
+                                @if let Some(d) = p.description.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+                                    p class="text-xs text-muted-foreground truncate" { (d) }
+                                }
+                                p class="text-xs text-muted-foreground font-mono truncate" { (p.id) }
+                            }
+                            @if p.active {
+                                form method="post" action=(format!("/admin/stripe/products/{}/archive", p.id)) onsubmit="return confirm('Archive this product? It will no longer be available for new subscriptions.')" {
+                                    button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
+/// The Prices block: a create form (product dropdown limited to active
+/// products; amount in dollars, zero allowed for a lifetime plan) plus the
+/// price list, each active price with an Archive action. Prices are immutable
+/// in Stripe, so there is no edit.
+fn stripe_prices_block(
+    prices: Option<&[crate::api::types::StripePrice]>,
+    products: &[crate::api::types::StripeProduct],
+) -> Markup {
+    let name_of = |pid: &str| {
+        products
+            .iter()
+            .find(|p| p.id == pid)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| pid.to_string())
+    };
+    admin_block(
+        "Prices",
+        Some("Pricing for your products. A lifetime plan is a $0.00 price."),
+        html! {
+            form method="post" action="/admin/stripe/prices" class="flex flex-wrap items-end gap-3 mb-4" {
+                div class="space-y-1 min-w-[11rem]" {
+                    label class="text-xs font-medium" { "Product" }
+                    select name="product_id" required class=(dashboard_input()) {
+                        option value="" disabled selected { "Select a product" }
+                        @for p in products.iter().filter(|p| p.active) { option value=(p.id) { (p.name) } }
+                    }
+                }
+                div class="space-y-1 w-28" { label class="text-xs font-medium" { "Amount" } input name="amount" type="number" step="0.01" min="0" required placeholder="9.99" class=(dashboard_input()); }
+                div class="space-y-1 w-24" {
+                    label class="text-xs font-medium" { "Currency" }
+                    select name="currency" class=(dashboard_input()) { option value="usd" { "USD" } option value="eur" { "EUR" } option value="gbp" { "GBP" } }
+                }
+                div class="space-y-1 w-28" {
+                    label class="text-xs font-medium" { "Interval" }
+                    select name="interval" class=(dashboard_input()) { option value="month" { "Monthly" } option value="year" { "Yearly" } }
+                }
+                button type="submit" class=(button_class("default", "sm", "")) { "Create price" }
+            }
+            @match prices {
+                None => (error_box("Could not load prices from Stripe. Add a valid API key above and save, then reload.")),
+                Some([]) => p class="py-6 text-center text-sm text-muted-foreground" { "No prices yet. Create one to get started." },
+                Some(list) => div class="divide-y" {
+                    @for pr in list {
+                        div class={ "py-3 flex items-center justify-between gap-4 " (if pr.active { "" } else { "opacity-50" }) } {
+                            div class="min-w-0" {
+                                p class="font-medium flex items-center gap-2" {
+                                    (format_stripe_amount(pr.unit_amount, &pr.currency))
+                                    span class="text-xs font-normal text-muted-foreground" { (pr.recurring_interval.clone().unwrap_or_else(|| "One-time".into())) }
+                                    @if pr.active { (badge("success", "Active")) } @else { (badge("secondary", "Archived")) }
+                                }
+                                p class="text-xs text-muted-foreground truncate" { (name_of(&pr.product_id)) }
+                                p class="text-xs text-muted-foreground font-mono truncate" { (pr.id) }
+                            }
+                            @if pr.active {
+                                form method="post" action=(format!("/admin/stripe/prices/{}/archive", pr.id)) onsubmit="return confirm('Archive this price? Existing subscriptions using it are not affected.')" {
+                                    button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
 
 pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let cfg = admin_api::stripe_config(&st.api, c.forward.as_deref())
-        .await
-        .ok();
+    let fwd = c.forward.as_deref();
+    let cfg = admin_api::stripe_config(&st.api, fwd).await.ok();
+    // Products + prices come from Stripe via the API; an unconfigured / invalid
+    // key surfaces as None and the blocks render a "could not load" note.
+    let products = admin_api::list_stripe_products(&st.api, fwd).await.ok();
+    let prices = admin_api::list_stripe_prices(&st.api, fwd).await.ok();
 
     let content = html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Stripe" } p class="mt-2 text-muted-foreground" { "Connect and configure Stripe billing." } }
+            div { h1 class="text-3xl font-bold" { "Stripe" } p class="mt-2 text-muted-foreground" { "Connect and configure Stripe billing, products, and prices." } }
             @match cfg {
                 None => p class="text-muted-foreground" { "Could not load Stripe config." },
-                // BUNYIP-415: group the settings into two blocks laid out in a
-                // responsive two-column grid (collapses to one column below lg)
-                // so the form uses the width instead of a single narrow column.
-                // Both blocks live inside one <form> so a single Save persists
-                // everything.
-                Some(s) => form method="post" action="/admin/stripe" class="space-y-6" {
-                    (admin_block_grid(vec![
-                        admin_block(
-                            "Stripe Configuration",
-                            Some(&format!("Source: {}. Leave a field blank to keep the existing value.", s.source)),
-                            html! {
-                                div class="space-y-4" {
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Secret key" } input name="secret_key" type="password" placeholder=(s.secret_key_masked.clone().unwrap_or_else(|| "sk_live_…".into())) class=(dashboard_input()); }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Webhook secret" } input name="webhook_secret" type="password" placeholder=(s.webhook_secret_masked.clone().unwrap_or_else(|| "whsec_…".into())) class=(dashboard_input()); }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "App tag" } input name="app_tag" value=(s.app_tag) class=(dashboard_input()); }
-                                }
-                            },
-                        ),
-                        admin_block(
-                            "Checkout",
-                            Some("Where Stripe returns the customer after checkout, and the trial length."),
-                            html! {
-                                div class="space-y-4" {
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Success URL" } input name="success_url" type="url" value=(s.success_url) placeholder="https://example.com/checkout/success" class=(dashboard_input()); }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Cancel URL" } input name="cancel_url" type="url" value=(s.cancel_url) placeholder="https://example.com/pricing?checkout=canceled" class=(dashboard_input()); }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Trial period (days)" } input name="trial_period_days" type="number" min="0" max="365" value=(s.trial_period_days) class=(dashboard_input()); }
-                                }
-                            },
-                        ),
-                    ]))
-                    button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
+                Some(s) => {
+                    // BUNYIP-416: setup guidance ported from a8n-tools.
+                    (stripe_setup_docs())
+                    // BUNYIP-415: config in a responsive two-column block grid,
+                    // both blocks in one form so a single Save persists all.
+                    form method="post" action="/admin/stripe" class="space-y-6" {
+                        (admin_block_grid(vec![
+                            admin_block(
+                                "Stripe Configuration",
+                                Some(&format!("Source: {}. Leave a field blank to keep the existing value.", s.source)),
+                                html! {
+                                    div class="space-y-4" {
+                                        div class="space-y-2" { label class="text-sm font-medium" { "Secret key" } input name="secret_key" type="password" placeholder=(s.secret_key_masked.clone().unwrap_or_else(|| "sk_live_…".into())) class=(dashboard_input()); }
+                                        div class="space-y-2" { label class="text-sm font-medium" { "Webhook secret" } input name="webhook_secret" type="password" placeholder=(s.webhook_secret_masked.clone().unwrap_or_else(|| "whsec_…".into())) class=(dashboard_input()); }
+                                        div class="space-y-2" { label class="text-sm font-medium" { "App tag" } input name="app_tag" value=(s.app_tag) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Only Stripe products tagged with this value are shown below." } }
+                                    }
+                                },
+                            ),
+                            admin_block(
+                                "Checkout",
+                                Some("Where Stripe returns the customer after checkout, and the trial length."),
+                                html! {
+                                    div class="space-y-4" {
+                                        div class="space-y-2" { label class="text-sm font-medium" { "Success URL" } input name="success_url" type="url" value=(s.success_url) placeholder="https://example.com/checkout/success" class=(dashboard_input()); }
+                                        div class="space-y-2" { label class="text-sm font-medium" { "Cancel URL" } input name="cancel_url" type="url" value=(s.cancel_url) placeholder="https://example.com/pricing?checkout=canceled" class=(dashboard_input()); }
+                                        div class="space-y-2" { label class="text-sm font-medium" { "Trial period (days)" } input name="trial_period_days" type="number" min="0" max="365" value=(s.trial_period_days) class=(dashboard_input()); }
+                                    }
+                                },
+                            ),
+                        ]))
+                        button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
+                    }
+                    (stripe_products_block(products.as_deref()))
+                    (stripe_prices_block(prices.as_deref(), products.as_deref().unwrap_or(&[])))
                 },
             }
         }
     };
     admin_response(&c, &user, "/admin/stripe", "Stripe · Bunyip", content)
+}
+
+#[derive(Deserialize)]
+pub struct StripeProductForm {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// POST /admin/stripe/products - create a Stripe product, then redirect back.
+pub async fn stripe_product_create(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<StripeProductForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let name = f.name.trim();
+    if name.is_empty() {
+        return redirect_cookies(
+            "/admin/stripe?toast_err=Product%20name%20is%20required",
+            &c.set_cookies,
+        );
+    }
+    let mut body = json!({ "name": name });
+    if !f.description.trim().is_empty() {
+        body["description"] = json!(f.description.trim());
+    }
+    let target = match admin_api::create_stripe_product(&st.api, c.forward.as_deref(), body).await {
+        Ok(()) => "/admin/stripe?toast_ok=Product%20created".to_string(),
+        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// POST /admin/stripe/products/{id}/archive
+pub async fn stripe_product_archive(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::archive_stripe_product(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => "/admin/stripe?toast_ok=Product%20archived".to_string(),
+        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+#[derive(Deserialize)]
+pub struct StripePriceForm {
+    pub product_id: String,
+    pub amount: String,
+    pub currency: String,
+    pub interval: String,
+}
+
+/// Parse a dollars-and-cents amount string into integer cents. Zero is allowed
+/// (the lifetime-plan case); negatives and non-numbers are rejected. Pure so it
+/// is unit-testable.
+fn parse_price_cents(amount: &str) -> Result<i64, String> {
+    match amount.trim().parse::<f64>() {
+        Ok(a) if a >= 0.0 && a.is_finite() => Ok((a * 100.0).round() as i64),
+        _ => Err("Amount must be a number of 0 or more.".to_string()),
+    }
+}
+
+/// POST /admin/stripe/prices - create a Stripe price (dollars -> cents; 0 is a
+/// valid lifetime price), then redirect back.
+pub async fn stripe_price_create(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<StripePriceForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    if f.product_id.trim().is_empty() {
+        return redirect_cookies(
+            "/admin/stripe?toast_err=Select%20a%20product",
+            &c.set_cookies,
+        );
+    }
+    let cents = match parse_price_cents(&f.amount) {
+        Ok(v) => v,
+        Err(msg) => {
+            return redirect_cookies(
+                &format!("/admin/stripe?toast_err={}", urlenc(&msg)),
+                &c.set_cookies,
+            )
+        }
+    };
+    let body = json!({
+        "product_id": f.product_id.trim(),
+        "unit_amount": cents,
+        "currency": f.currency.trim(),
+        "interval": f.interval.trim(),
+    });
+    let target = match admin_api::create_stripe_price(&st.api, c.forward.as_deref(), body).await {
+        Ok(()) => "/admin/stripe?toast_ok=Price%20created".to_string(),
+        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// POST /admin/stripe/prices/{id}/archive
+pub async fn stripe_price_archive(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::archive_stripe_price(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => "/admin/stripe?toast_ok=Price%20archived".to_string(),
+        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 #[derive(Deserialize)]
@@ -6393,5 +6679,99 @@ mod two_column_layout_tests {
         ] {
             assert!(html.contains(f), "field {f} preserved after regrouping");
         }
+    }
+}
+
+#[cfg(test)]
+mod stripe_admin_tests {
+    // BUNYIP-416: unit coverage for the ported Products/Prices sections. The
+    // live product/price listing is exercised against Stripe by the bunyip-api
+    // integration tests (this port calls those existing endpoints); here we
+    // cover the rendering + the dollars->cents parsing, including the $0.00
+    // lifetime-price case that must render as a real price, not "--".
+    use super::{
+        format_stripe_amount, parse_price_cents, stripe_prices_block, stripe_products_block,
+    };
+    use crate::api::types::{StripePrice, StripeProduct};
+
+    fn product(id: &str, name: &str, active: bool) -> StripeProduct {
+        StripeProduct {
+            id: id.into(),
+            name: name.into(),
+            description: Some("desc".into()),
+            active,
+            created: 0,
+        }
+    }
+    fn price(id: &str, product_id: &str, amount: Option<i64>, active: bool) -> StripePrice {
+        StripePrice {
+            id: id.into(),
+            product_id: product_id.into(),
+            unit_amount: amount,
+            currency: "usd".into(),
+            recurring_interval: Some("month".into()),
+            active,
+        }
+    }
+
+    #[test]
+    fn format_stripe_amount_handles_zero_and_null() {
+        assert_eq!(format_stripe_amount(Some(0), "usd"), "$0.00");
+        assert_eq!(format_stripe_amount(Some(999), "usd"), "$9.99");
+        assert_eq!(format_stripe_amount(Some(1000), "eur"), "€10.00");
+        assert_eq!(format_stripe_amount(Some(500), "gbp"), "£5.00");
+        assert_eq!(format_stripe_amount(Some(1234), "aud"), "12.34 AUD");
+        assert_eq!(format_stripe_amount(None, "usd"), "--");
+    }
+
+    #[test]
+    fn parse_price_cents_allows_zero_rejects_bad() {
+        assert_eq!(parse_price_cents("0"), Ok(0)); // lifetime plan
+        assert_eq!(parse_price_cents("9.99"), Ok(999));
+        assert_eq!(parse_price_cents(" 10 "), Ok(1000));
+        assert!(parse_price_cents("-1").is_err());
+        assert!(parse_price_cents("").is_err());
+        assert!(parse_price_cents("abc").is_err());
+    }
+
+    #[test]
+    fn products_block_lists_and_gates_archive() {
+        let list = [
+            product("prod_a", "Personal Plan", true),
+            product("prod_b", "Old Plan", false),
+        ];
+        let html = stripe_products_block(Some(&list)).into_string();
+        assert!(html.contains("Personal Plan") && html.contains("Old Plan"));
+        assert!(html.contains(">Active<") && html.contains(">Archived<"));
+        // Create form present; archive only for the active product.
+        assert!(html.contains(r#"action="/admin/stripe/products""#));
+        assert!(html.contains(r#"action="/admin/stripe/products/prod_a/archive""#));
+        assert!(
+            !html.contains("prod_b/archive"),
+            "archived product has no Archive action"
+        );
+    }
+
+    #[test]
+    fn products_block_renders_load_error_state() {
+        let html = stripe_products_block(None).into_string();
+        assert!(html.contains("Could not load products"));
+    }
+
+    #[test]
+    fn prices_block_shows_zero_price_and_resolves_product_name() {
+        let products = [product("prod_life", "Lifetime", true)];
+        let prices = [price("price_free", "prod_life", Some(0), true)];
+        let html = stripe_prices_block(Some(&prices), &products).into_string();
+        assert!(
+            html.contains("$0.00"),
+            "zero lifetime price renders as $0.00, not --"
+        );
+        assert!(html.contains("Lifetime"), "product name resolved from id");
+        assert!(
+            html.contains(r#"action="/admin/stripe/prices""#),
+            "create form present"
+        );
+        assert!(html.contains(r#"action="/admin/stripe/prices/price_free/archive""#));
     }
 }

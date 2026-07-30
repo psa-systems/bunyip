@@ -450,6 +450,23 @@ async fn main() {
             "/admin/stripe",
             get(handlers::admin::stripe).post(handlers::admin::stripe_save),
         )
+        // BUNYIP-416: Stripe product + price management (create + archive).
+        .route(
+            "/admin/stripe/products",
+            post(handlers::admin::stripe_product_create),
+        )
+        .route(
+            "/admin/stripe/products/:id/archive",
+            post(handlers::admin::stripe_product_archive),
+        )
+        .route(
+            "/admin/stripe/prices",
+            post(handlers::admin::stripe_price_create),
+        )
+        .route(
+            "/admin/stripe/prices/:id/archive",
+            post(handlers::admin::stripe_price_archive),
+        )
         // BUNYIP-353: account backup & restore, reached from the Backup add-on
         // tile on /applications.
         .route(
