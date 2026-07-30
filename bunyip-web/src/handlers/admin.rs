@@ -22,7 +22,7 @@ use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{relative_time, urlenc};
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, error_box, icon, success_box};
+use crate::views::ui::{badge, button_class, error_box, icon, success_box, toggle_switch};
 use crate::web::{redirect, redirect_cookies, AppState};
 
 fn title_case(action: &str) -> String {
@@ -2902,17 +2902,22 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                                     }
                                 }
                                 div class="flex items-center gap-6" {
+                                    // BUNYIP-420: toggle switches (color + knob position
+                                    // convey state, single click applies) replacing the old
+                                    // "Active: on" text + separate Toggle button. Each switch
+                                    // is the form's submit control, posting the flipped value
+                                    // through the same /field path.
                                     form method="post" action=(format!("/admin/applications/{}/field", app.id)) class="flex items-center gap-2" {
                                         input type="hidden" name="field" value="is_active";
                                         input type="hidden" name="value" value=(if app.is_active { "false" } else { "true" });
-                                        span class="text-sm text-muted-foreground" { "Active: " (if app.is_active { "on" } else { "off" }) }
-                                        button type="submit" class=(button_class("outline", "sm", "")) { "Toggle" }
+                                        label class="text-sm text-muted-foreground" { "Active" }
+                                        (toggle_switch(app.is_active, "Toggle active"))
                                     }
                                     form method="post" action=(format!("/admin/applications/{}/field", app.id)) class="flex items-center gap-2" {
                                         input type="hidden" name="field" value="maintenance_mode";
                                         input type="hidden" name="value" value=(if app.maintenance_mode { "false" } else { "true" });
-                                        span class="text-sm text-muted-foreground" { "Maintenance: " (if app.maintenance_mode { "on" } else { "off" }) }
-                                        button type="submit" class=(button_class("outline", "sm", "")) { "Toggle" }
+                                        label class="text-sm text-muted-foreground" { "Maintenance" }
+                                        (toggle_switch(app.maintenance_mode, "Toggle maintenance mode"))
                                     }
                                     a href=(format!("/admin/applications/{}/edit", app.id)) class=(button_class("outline", "sm", "")) { "Edit" }
                                 }

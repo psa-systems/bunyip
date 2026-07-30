@@ -192,6 +192,33 @@ pub fn badge(variant: &str, text: &str) -> Markup {
     }
 }
 
+/// A form-submit toggle switch (BUNYIP-420). The control itself is the submit
+/// button, so a single click posts the flipped value through the enclosing
+/// form. `on` colors the track (primary) and slides the knob right; off is a
+/// muted track with the knob left. `label` names it for assistive tech
+/// (`role="switch"` + `aria-checked` + `aria-label`) since the state is
+/// conveyed only by color / position, not text.
+pub fn toggle_switch(on: bool, label: &str) -> Markup {
+    let track = if on {
+        "bg-primary"
+    } else {
+        "bg-muted-foreground/40"
+    };
+    let knob = if on {
+        "translate-x-[22px]"
+    } else {
+        "translate-x-0.5"
+    };
+    html! {
+        button type="submit" role="switch"
+          aria-checked=(if on { "true" } else { "false" })
+          aria-label=(label)
+          class={ "relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 " (track) } {
+            span class={ "inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform " (knob) } {}
+        }
+    }
+}
+
 /// Cap a banner message before it is rendered. The value is already
 /// Maud-escaped (so this is not an XSS guard); it bounds a hand-crafted
 /// `?ok=` / `?error=` link that stuffs the param with kilobytes of text to blow
@@ -236,7 +263,33 @@ pub fn success_box(msg: &str) -> Markup {
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_msg, error_box, icon, success_box};
+    use super::{clamp_msg, error_box, icon, success_box, toggle_switch};
+
+    /// BUNYIP-420: the toggle switch reflects state via color + knob position
+    /// and carries the right ARIA, so it reads as an on/off control (not text).
+    #[test]
+    fn toggle_switch_reflects_on_and_off_state() {
+        let on = toggle_switch(true, "Toggle active").into_string();
+        assert!(on.contains(r#"aria-checked="true""#));
+        assert!(on.contains("bg-primary"), "on state colors the track");
+        assert!(
+            on.contains("translate-x-[22px]"),
+            "on slides the knob right"
+        );
+        assert!(on.contains(r#"role="switch""#) && on.contains(r#"aria-label="Toggle active""#));
+        assert!(
+            on.contains(r#"type="submit""#),
+            "the switch is the form submit control"
+        );
+
+        let off = toggle_switch(false, "Toggle maintenance mode").into_string();
+        assert!(off.contains(r#"aria-checked="false""#));
+        assert!(
+            !off.contains("bg-primary"),
+            "off state is not primary-colored"
+        );
+        assert!(off.contains("translate-x-0.5"), "off keeps the knob left");
+    }
 
     /// BUNYIP-404: the reorder arrows must resolve to a real glyph, not the
     /// empty-`inner` fallback (which would render a blank button). Guards both
