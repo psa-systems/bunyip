@@ -14,9 +14,14 @@
 // change (e.g. the synchronizer-token follow-up parked in BUNYIP-259's
 // description) is a one-file diff in the suite.
 //
-// Scope: bunyip-web only. POSTs to bunyip-api have no CSRF middleware (the
-// /oauth2/* endpoints authenticate via PKCE + state + nonce + client
-// credentials) so specs that target `env.apiBaseURL` need none of this.
+// Scope: bunyip-web only. BUNYIP-423 added a matching guard on bunyip-api
+// (`bunyip-api/src/csrf.rs`), but it only fires when a state-changing request
+// carries an auth cookie AND an `Origin` / `Referer` header: a Playwright
+// request context sends neither, and the /oauth2/* + /.well-known/* + Stripe
+// webhook paths are exempt outright. Specs that target `env.apiBaseURL` still
+// need none of this - but a spec that DOES set `Origin` on an api POST must
+// use the bunyip-web origin (`env.baseURL`), because bunyip-api matches against
+// its `CORS_ORIGIN` allow-list, not against its own host.
 
 import { env } from './env';
 

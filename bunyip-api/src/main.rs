@@ -695,6 +695,10 @@ async fn main() -> anyhow::Result<()> {
         .map(str::to_string)
         .collect();
 
+    // The CSRF guard (BUNYIP-423) reuses the same allow-list: an origin trusted
+    // to read responses is the same set trusted to originate a cookie write.
+    let csrf_guard = bunyip_api::csrf::OriginGuard::new(&cors_origins);
+
     let config_data = config.clone();
 
     // Spawn rate limit cleanup background task
@@ -878,6 +882,11 @@ async fn main() -> anyhow::Result<()> {
             .wrap(bunyip_api::access_log::access_logger())
             .wrap(SecurityHeaders::with_csp(csp))
             .wrap(RequestIdMiddleware)
+            // CSRF guard for cookie-authenticated writes (BUNYIP-423). Wrapped
+            // before `cors` so it runs INSIDE it: CORS answers the preflight,
+            // this rejects a state-changing cookie request whose Origin /
+            // Referer is not a CORS_ORIGIN entry.
+            .wrap(csrf_guard.clone())
             .wrap(cors)
             // Auto-ban runs outermost — rejects banned IPs before CORS processing
             .wrap(AutoBanMiddleware::new(auto_ban_service.clone()))
