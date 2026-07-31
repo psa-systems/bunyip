@@ -548,7 +548,7 @@ fn ip_ban_row(b: &AdminIpBan) -> Markup {
                     }
                 }
             }
-            form method="post" action="/admin/ip-bans/unban" onsubmit=(format!("return confirm('Lift the ban on {}? It takes effect on the next request.')", b.ip)) {
+            form method="post" action="/admin/ip-bans/unban" data-confirm=(format!("Lift the ban on {}? It takes effect on the next request.", b.ip)) {
                 input type="hidden" name="ip" value=(b.ip);
                 button type="submit" class=(button_class("outline", "sm", "")) { "Unban" }
             }
@@ -678,7 +678,7 @@ fn rate_limit_row(rl: &AdminRateLimit, return_user: Option<&str>) -> Markup {
                     }
                 }
             }
-            form method="post" action="/admin/rate-limits/reset" onsubmit=(format!("return confirm('Reset the {} throttle? The affected user/IP can act again immediately.')", title_case(&rl.action))) {
+            form method="post" action="/admin/rate-limits/reset" data-confirm=(format!("Reset the {} throttle? The affected user/IP can act again immediately.", title_case(&rl.action))) {
                 input type="hidden" name="action" value=(rl.action);
                 input type="hidden" name="key" value=(rl.key);
                 @if let Some(uid) = return_user {
@@ -1029,7 +1029,7 @@ pub async fn users(
             (panel)
         }
         style { (maud::PreEscaped(USERS_FILTER_CSS)) }
-        script { (maud::PreEscaped(USERS_FILTER_JS)) }
+        script src="/assets/js/admin-users.js" defer {}
     };
     admin_response(&c, &user, "/admin/users", "Users · Bunyip", content)
 }
@@ -1046,7 +1046,7 @@ fn tier_slug_label(slug: &str) -> &'static str {
 }
 
 /// One of the two filter dropdowns (verification / tier), styled with the app's
-/// own `<details>` menu (matches the profile menu; `PROFILE_MENU_JS` closes it
+/// own `<details>` menu (matches the profile menu; `assets/js/app.js` closes it
 /// on click-away / Escape). The trigger keeps a persistent prefix
 /// ("Verification: Any") so a filtered state is always legible. `options` is
 /// `(href, label, selected)`.
@@ -1072,7 +1072,7 @@ fn filter_dropdown(prefix: &str, current: &str, options: &[(String, String, bool
 }
 
 /// The Active / All / Suspended segmented control (single element, one selected,
-/// arrow-key navigable via `data-segmented` in `USERS_FILTER_JS`, radiogroup
+/// arrow-key navigable via `data-segmented` in `assets/js/admin-users.js`, radiogroup
 /// ARIA).
 fn segmented_control(uq: &UsersQ) -> Markup {
     let seg = |value: &str, label: &str| -> Markup {
@@ -1098,7 +1098,7 @@ fn segmented_control(uq: &UsersQ) -> Markup {
 }
 
 /// A sortable column header. A link (no-JS: navigates; JS: swaps the panel), with
-/// Space-key activation added in `USERS_FILTER_JS` and a direction chevron on the
+/// Space-key activation added in `assets/js/admin-users.js` and a direction chevron on the
 /// active column.
 fn sort_header(uq: &UsersQ, col: &str, label: &str) -> Markup {
     let active = uq.sort == col;
@@ -1163,7 +1163,7 @@ fn user_grid_row(u: &crate::api::types::AdminUser) -> Markup {
         html! {
             div style=(USERS_GRID) class="py-2.5 px-2 -mx-2 rounded-md" {
                 (avatar) (identity) (tier) (verified_indicator(u.email_verified)) (joined)
-                form method="post" action=(format!("/admin/users/{}/reactivate", u.id)) onsubmit="return confirm('Reactivate this user? They will be able to sign in again.')" {
+                form method="post" action=(format!("/admin/users/{}/reactivate", u.id)) data-confirm="Reactivate this user? They will be able to sign in again." {
                     button type="submit" class=(button_class("outline", "sm", "h-8 px-2 text-xs")) { "Reactivate" }
                 }
             }
@@ -1431,22 +1431,6 @@ const USERS_FILTER_CSS: &str = r#".users-loading{opacity:0;pointer-events:none;t
 .users-shimmer{position:relative;overflow:hidden}
 .users-shimmer::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,hsl(var(--foreground)/0.06),transparent);animation:users-shimmer 1.2s infinite}
 @keyframes users-shimmer{100%{transform:translateX(100%)}}"#;
-
-/// BUNYIP-410 overhaul: keyboard behaviour the SSR markup cannot express on its
-/// own. Segmented control = arrow-key roving focus (radiogroup); sort headers =
-/// Space activation (Enter is native for the `<a>`). Delegated on `document`, so
-/// it keeps working across htmx panel swaps.
-const USERS_FILTER_JS: &str = r#"(function(){
-document.addEventListener('keydown',function(e){
-var el=e.target;if(!el||!el.closest)return;var group=el.closest('[data-segmented]');
-if(group&&el.getAttribute('role')==='radio'){
-var radios=Array.prototype.slice.call(group.querySelectorAll('[role=radio]'));var i=radios.indexOf(el);var n=null;
-if(e.key==='ArrowRight'||e.key==='ArrowDown')n=radios[(i+1)%radios.length];
-else if(e.key==='ArrowLeft'||e.key==='ArrowUp')n=radios[(i-1+radios.length)%radios.length];
-if(n){e.preventDefault();n.focus();n.click();}return;}
-if(e.key===' '&&el.matches&&el.matches('[data-sort-header]')){e.preventDefault();el.click();}
-});
-})();"#;
 
 #[derive(Deserialize)]
 pub struct RoleForm {
@@ -1762,12 +1746,12 @@ pub async fn user_detail(
                     }
                     div class="flex flex-wrap gap-2" {
                         @if !target.email_verified {
-                            form method="post" action=(format!("/admin/users/{}/email/verify", target.id)) onsubmit="return confirm('Force-verify this email without the user confirming it?')" {
+                            form method="post" action=(format!("/admin/users/{}/email/verify", target.id)) data-confirm="Force-verify this email without the user confirming it?" {
                                 button type="submit" class=(button_class("outline", "default", "")) { "Force-verify email" }
                             }
                         }
                         @if target.two_factor_enabled {
-                            form method="post" action=(format!("/admin/users/{}/two-factor/reset", target.id)) onsubmit="return confirm('Clear this user 2FA? Their authenticator and recovery codes are removed and they must re-enrol.')" {
+                            form method="post" action=(format!("/admin/users/{}/two-factor/reset", target.id)) data-confirm="Clear this user 2FA? Their authenticator and recovery codes are removed and they must re-enrol." {
                                 button type="submit" class=(button_class("outline", "default", "text-destructive hover:text-destructive")) { "Clear 2FA" }
                             }
                         } @else {
@@ -1800,26 +1784,26 @@ pub async fn user_detail(
                 }
                 div class="p-6 pt-2 flex flex-wrap gap-2" {
                     a href=(format!("/admin/users/{}/entitlements", target.id)) class=(button_class("outline", "default", "")) { "Manage Entitlements" }
-                    form method="post" action=(format!("/admin/users/{}/role", target.id)) onsubmit="return confirm('Change this user role? Admins have full platform access.')" {
+                    form method="post" action=(format!("/admin/users/{}/role", target.id)) data-confirm="Change this user role? Admins have full platform access." {
                         input type="hidden" name="role" value=(if is_admin_target { "subscriber" } else { "admin" });
                         button type="submit" class=(button_class("outline", "default", "")) { @if is_admin_target { "Demote to subscriber" } @else { "Promote to admin" } }
                     }
-                    form method="post" action=(format!("/admin/users/{}/reset-password", target.id)) onsubmit="return confirm('Send a password reset email to this user?')" {
+                    form method="post" action=(format!("/admin/users/{}/reset-password", target.id)) data-confirm="Send a password reset email to this user?" {
                         button type="submit" class=(button_class("outline", "default", "")) { "Send password reset" }
                     }
                     @if target.lifetime_member {
-                        form method="post" action=(format!("/admin/users/{}/lifetime/revoke", target.id)) onsubmit="return confirm('Revoke lifetime membership? User will be returned to standard tier with no active subscription.')" {
+                        form method="post" action=(format!("/admin/users/{}/lifetime/revoke", target.id)) data-confirm="Revoke lifetime membership? User will be returned to standard tier with no active subscription." {
                             button type="submit" class=(button_class("outline", "default", "")) { "Revoke lifetime" }
                         }
                     } @else {
-                        form method="post" action=(format!("/admin/users/{}/lifetime", target.id)) onsubmit="return confirm('Grant lifetime membership? Creates a $0 Stripe subscription.')" {
+                        form method="post" action=(format!("/admin/users/{}/lifetime", target.id)) data-confirm="Grant lifetime membership? Creates a $0 Stripe subscription." {
                             button type="submit" class=(button_class("outline", "default", "")) { "Grant lifetime" }
                         }
                     }
-                    form method="post" action=(format!("/admin/users/{}/suspend", target.id)) onsubmit="return confirm('Suspend (soft-delete) this user?')" {
+                    form method="post" action=(format!("/admin/users/{}/suspend", target.id)) data-confirm="Suspend (soft-delete) this user?" {
                         button type="submit" class=(button_class("outline", "default", "")) { "Suspend" }
                     }
-                    form method="post" action=(format!("/admin/users/{}/delete", target.id)) onsubmit="return confirm('Delete this user? This cannot be undone.')" {
+                    form method="post" action=(format!("/admin/users/{}/delete", target.id)) data-confirm="Delete this user? This cannot be undone." {
                         button type="submit" class=(button_class("outline", "default", "text-destructive hover:text-destructive")) { "Delete user" }
                     }
                 }
@@ -2199,7 +2183,7 @@ fn feedback_detail_actions(id: &str, status: &FeedbackStatus, tab: FeedbackTab) 
                 FeedbackTab::Archive => {}
             }
             form method="post" action=(format!("/admin/feedback/{id}/delete"))
-                onsubmit="return confirm('Delete this feedback permanently? This cannot be undone.')" {
+                data-confirm="Delete this feedback permanently? This cannot be undone." {
                 input type="hidden" name="from" value=(from);
                 button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { "Delete" }
             }
@@ -3417,7 +3401,7 @@ fn app_danger_zone(id: &str, error: Option<&str>) -> Markup {
             }
             div class="p-6 pt-0" {
                 @if let Some(e) = error { (error_box(e)) }
-                form method="post" action=(format!("/admin/applications/{id}/delete")) class="space-y-3 max-w-md mt-2" onsubmit="return confirm('Permanently delete this application? This cannot be undone.')" {
+                form method="post" action=(format!("/admin/applications/{id}/delete")) class="space-y-3 max-w-md mt-2" data-confirm="Permanently delete this application? This cannot be undone." {
                     div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" placeholder="Enter your password to confirm" class=(dashboard_input()); }
                     div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" placeholder="6-digit code" class=(dashboard_input()); }
                     button type="submit" class=(button_class("destructive", "default", "")) { (icon("trash", "mr-2 h-4 w-4")) "Delete application" }
@@ -3882,7 +3866,7 @@ pub async fn application_groups(State(st): State<AppState>, headers: HeaderMap) 
                                 div { p class="font-medium" { (g.display_name) } p class="text-xs text-muted-foreground" { (g.slug) } }
                                 div class="flex items-center gap-2" {
                                     a href=(format!("/admin/application-groups/{}/edit", g.id)) class=(button_class("outline", "sm", "")) { "Edit" }
-                                    form method="post" action=(format!("/admin/application-groups/{}/delete", g.id)) onsubmit="return confirm('Delete this application group? This cannot be undone.')" {
+                                    form method="post" action=(format!("/admin/application-groups/{}/delete", g.id)) data-confirm="Delete this application group? This cannot be undone." {
                                         button type="submit" class=(button_class("outline", "sm", "")) { "Delete" }
                                     }
                                 }
@@ -5253,7 +5237,7 @@ fn stripe_products_block(products: Option<&[crate::api::types::StripeProduct]>) 
                                 p class="text-xs text-muted-foreground font-mono truncate" { (p.id) }
                             }
                             @if p.active {
-                                form method="post" action=(format!("/admin/stripe/products/{}/archive", p.id)) onsubmit="return confirm('Archive this product? It will no longer be available for new subscriptions.')" {
+                                form method="post" action=(format!("/admin/stripe/products/{}/archive", p.id)) data-confirm="Archive this product? It will no longer be available for new subscriptions." {
                                     button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
                                 }
                             }
@@ -5319,7 +5303,7 @@ fn stripe_prices_block(
                                 p class="text-xs text-muted-foreground font-mono truncate" { (pr.id) }
                             }
                             @if pr.active {
-                                form method="post" action=(format!("/admin/stripe/prices/{}/archive", pr.id)) onsubmit="return confirm('Archive this price? Existing subscriptions using it are not affected.')" {
+                                form method="post" action=(format!("/admin/stripe/prices/{}/archive", pr.id)) data-confirm="Archive this price? Existing subscriptions using it are not affected." {
                                     button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
                                 }
                             }

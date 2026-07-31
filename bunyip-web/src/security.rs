@@ -9,14 +9,22 @@
 //!
 //! The policy is deliberately scoped to what `views::layout` actually pulls in:
 //!
-//! - inline `<script>` blocks (theme flash/toggle, toast, the SSE subscriber)
-//!   and `onclick=` handlers  -> `'unsafe-inline'` in `script-src`
-//! - htmx from `unpkg.com`, the Font Awesome kit from `kit.fontawesome.com`
-//!   -> host sources in `script-src`
+//! - JavaScript: `script-src 'self'` and nothing else. BUNYIP-424 vendored htmx
+//!   and the Font Awesome webfont build into `assets/` and moved every inline
+//!   `<script>` body and `on*=` handler into `assets/js/*.js`, so no CDN host
+//!   and no `'unsafe-inline'` is needed. The two CDNs that were allowlisted
+//!   before (`unpkg.com`, `kit.fontawesome.com`) were a standing
+//!   remote-code-execution grant: neither tag could carry SRI, and
+//!   `'unsafe-inline'` meant CSP was no barrier to a reflected-XSS bug either.
+//!   Keep it that way - server values reach the client as `data-*` attributes,
+//!   never as executable JavaScript.
 //! - the Google Fonts stylesheet from `fonts.googleapis.com` plus Tailwind's
-//!   inline `style=` usage -> `'unsafe-inline'` + host in `style-src`
-//! - font files from `fonts.gstatic.com` and the Font Awesome kit CDN
-//!   (`ka-f.fontawesome.com`) -> `font-src`
+//!   inline `style=` usage -> `'unsafe-inline'` + host in `style-src`. Styles
+//!   are a much smaller exposure than scripts, so BUNYIP-424 deliberately left
+//!   this host remote; self-hosting the two Google font families is a separate
+//!   change.
+//! - font files from `fonts.gstatic.com` (Font Awesome's are now same-origin)
+//!   -> `font-src`
 //! - the browser-facing bunyip-api origin the dashboard `EventSource` subscribes
 //!   to (`/v1/events`), which is a distinct origin from bunyip-web even in dev
 //!   (different port) -> added to `connect-src`
@@ -45,8 +53,12 @@
 //!   by assuming the OIDC hop was an unconstrained top-level `Location` redirect;
 //!   it is the redirect TARGET of a form POST, which `form-action` does constrain.
 //!
-//! Because `'unsafe-inline'` is honoured only when no nonce/hash source is
-//! present, the inline scripts/styles above keep executing under this policy.
+//! `'unsafe-inline'` is honoured only when no nonce/hash source is present, so
+//! the inline `style=` / `<style>` usage above keeps working. `script-src` has
+//! no such escape hatch any more: an inline `<script>` or `on*=` attribute added
+//! to an SSR page will simply not run. `policy_script_src_is_self_only` and
+//! `no_inline_script_or_event_handlers_in_views` (below) fail the build if
+//! either half regresses.
 
 use axum::http::header::CONTENT_SECURITY_POLICY;
 use axum::http::HeaderValue;
@@ -80,10 +92,10 @@ fn policy(api_public_origin: &str, app_domain: &str) -> String {
          frame-ancestors 'none'; \
          form-action 'self' {api_public_origin}{app_callbacks} https://checkout.stripe.com https://billing.stripe.com; \
          img-src 'self' data: https:; \
-         font-src 'self' https://fonts.gstatic.com https://ka-f.fontawesome.com; \
+         font-src 'self' https://fonts.gstatic.com; \
          style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
-         script-src 'self' 'unsafe-inline' https://unpkg.com https://kit.fontawesome.com; \
-         connect-src 'self' {api_public_origin} https://ka-f.fontawesome.com https://api.pwnedpasswords.com"
+         script-src 'self'; \
+         connect-src 'self' {api_public_origin} https://api.pwnedpasswords.com"
     )
 }
 
@@ -125,11 +137,11 @@ mod tests {
     #[test]
     fn policy_includes_required_directives() {
         let p = policy("https://api.example.com", "example.com");
-        // Self-by-default, framing locked down, and the inline assets the SSR
-        // pages actually emit are allowed.
+        // Self-by-default, framing locked down, scripts first-party only, and
+        // the inline styles the SSR pages actually emit still allowed.
         assert!(p.contains("default-src 'self'"));
         assert!(p.contains("frame-ancestors 'none'"));
-        assert!(p.contains("script-src 'self' 'unsafe-inline'"));
+        assert!(p.contains("script-src 'self';"));
         assert!(p.contains("style-src 'self' 'unsafe-inline'"));
         // The browser-facing api origin is whitelisted for the SSE EventSource.
         assert!(p.contains("connect-src 'self' https://api.example.com"));
@@ -140,6 +152,150 @@ mod tests {
             "form-action 'self' https://api.example.com https://*.example.com \
              https://checkout.stripe.com https://billing.stripe.com"
         ));
+    }
+
+    /// BUNYIP-424 guard: `script-src` is exactly `'self'`. Any third-party host
+    /// or `'unsafe-inline'` creeping back into the directive is a regression to
+    /// the pre-BUNYIP-424 policy, where a compromise at either CDN (or any
+    /// reflected-XSS bug in an SSR page) executed on the session origin.
+    #[test]
+    fn policy_script_src_is_self_only() {
+        let p = policy("https://api.example.com", "example.com");
+        let script_src = p
+            .split("; ")
+            .find(|d| d.trim_start().starts_with("script-src"))
+            .expect("script-src directive present");
+        assert_eq!(
+            script_src.trim(),
+            "script-src 'self'",
+            "script-src must stay first-party only; got: {script_src}"
+        );
+        for banned in [
+            "'unsafe-inline'",
+            "'unsafe-eval'",
+            "https://unpkg.com",
+            "https://kit.fontawesome.com",
+            "https://ka-f.fontawesome.com",
+        ] {
+            assert!(
+                !script_src.contains(banned),
+                "script-src must not allow {banned}; got: {script_src}"
+            );
+        }
+        // The Font Awesome kit CDN is fully gone: it was also in font-src and
+        // connect-src to serve the kit's fonts and telemetry.
+        assert!(
+            !p.contains("fontawesome.com"),
+            "no Font Awesome CDN source anywhere in the policy; got: {p}"
+        );
+        assert!(
+            !p.contains("unpkg.com"),
+            "no unpkg source anywhere in the policy; got: {p}"
+        );
+    }
+
+    /// BUNYIP-424 guard: `script-src 'self'` only holds if the SSR pages stop
+    /// emitting executable markup. Scan every view/handler source file for the
+    /// two shapes the browser would refuse to run under this policy - an inline
+    /// `<script>` body and an `on*=` event-handler attribute - plus any
+    /// off-origin `<script src>`. Test modules are excluded (they carry hostile
+    /// XSS fixtures on purpose); everything above the first `#[cfg(test)]` is
+    /// production markup and must stay clean.
+    #[test]
+    fn no_inline_script_or_event_handlers_in_views() {
+        // Event names only; the `on...=` needle is assembled below so this file
+        // itself never contains the literal attribute it forbids.
+        const HANDLER_EVENTS: &[&str] = &[
+            "click",
+            "submit",
+            "change",
+            "input",
+            "load",
+            "error",
+            "keydown",
+            "keyup",
+            "keypress",
+            "focus",
+            "blur",
+            "mousedown",
+            "mouseup",
+            "mouseover",
+            "mouseenter",
+            "mouseleave",
+            "toggle",
+        ];
+        let handler_attrs: Vec<String> =
+            HANDLER_EVENTS.iter().map(|e| format!(" on{e}=")).collect();
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut sources = Vec::new();
+        collect_rs(&root, &mut sources);
+        assert!(
+            sources.len() > 10,
+            "expected to scan the whole src tree, found {} files",
+            sources.len()
+        );
+
+        let mut offences = Vec::new();
+        for path in &sources {
+            let text = std::fs::read_to_string(path).expect("source file is readable");
+            // Cut the test module: fixtures there deliberately contain hostile
+            // `<script>` / `onerror=` strings that never reach a response.
+            let prod = match text.find("#[cfg(test)]") {
+                Some(i) => &text[..i],
+                None => &text[..],
+            };
+            let rel = path
+                .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                .unwrap_or(path)
+                .display()
+                .to_string();
+            for (n, line) in prod.lines().enumerate() {
+                let no = n + 1;
+                // Comments and doc comments discuss these shapes by name; only
+                // code emits them.
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                for attr in &handler_attrs {
+                    // The needle carries a leading space so a JS property
+                    // assignment (`xhr.onload=`) is not mistaken for an HTML
+                    // attribute.
+                    if line.contains(attr.as_str()) {
+                        let attr = attr.trim();
+                        offences.push(format!("{rel}:{no}: inline event handler `{attr}`"));
+                    }
+                }
+                if line.contains("<script") {
+                    offences.push(format!("{rel}:{no}: raw `<script` markup in a string"));
+                }
+                if let Some(rest) = line.split_once("script {") {
+                    if rest.1.trim() != "}" {
+                        offences.push(format!("{rel}:{no}: inline `<script>` body"));
+                    }
+                }
+                if line.contains("script src=\"http") {
+                    offences.push(format!("{rel}:{no}: off-origin `<script src>`"));
+                }
+            }
+        }
+        assert!(
+            offences.is_empty(),
+            "script-src 'self' forbids inline/off-origin scripts; move the code into \
+             bunyip-web/assets/js and wire it with data-* attributes:\n{}",
+            offences.join("\n")
+        );
+    }
+
+    fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("src directory is readable") {
+            let path = entry.expect("readable dir entry").path();
+            if path.is_dir() {
+                collect_rs(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
     }
 
     #[test]
