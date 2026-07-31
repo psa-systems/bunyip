@@ -607,13 +607,15 @@ fn download_affordance(g: &AppDownloadGroup, is_member: bool) -> Markup {
         (false, true) => "OCI",
         _ => "Download",
     };
-    // The slug is validated lowercase/digits/hyphens, so it is a safe element id
-    // and a safe literal inside the inline open handler. BUNYIP-358 always opens
-    // the dialog (even for a lone binary) so the instructions are always shown.
+    // The slug is validated lowercase/digits/hyphens, so it is a safe element id.
+    // BUNYIP-358 always opens the dialog (even for a lone binary) so the
+    // instructions are always shown. BUNYIP-424: the id travels as a passive
+    // `data-dialog-open` attribute that `assets/js/app.js` resolves at click
+    // time, so no server value is ever emitted as executable JavaScript.
     let dialog_id = format!("dl-{}", g.app_slug);
     html! {
         button type="button" class=(button_class("outline", "default", "w-full mt-2"))
-            onclick=(format!("document.getElementById('{dialog_id}').showModal()")) {
+            data-dialog-open=(dialog_id) {
             (icon("download", "mr-2 h-4 w-4")) (label)
         }
         // `m-auto` restores the native modal-dialog centering that Tailwind v4
@@ -624,7 +626,7 @@ fn download_affordance(g: &AppDownloadGroup, is_member: bool) -> Markup {
             div class="p-6 space-y-6 max-h-[80vh] overflow-y-auto" {
                 div class="flex items-center justify-between gap-4" {
                     h3 class="text-lg font-semibold" { (g.app_display_name) " downloads" }
-                    button type="button" aria-label="Close" class=(button_class("outline", "sm", "shrink-0")) onclick="this.closest('dialog').close()" { (icon("x", "h-4 w-4")) }
+                    button type="button" aria-label="Close" class=(button_class("outline", "sm", "shrink-0")) data-dialog-close { (icon("x", "h-4 w-4")) }
                 }
                 @if let Some(oci) = &g.oci { (container_instructions(oci)) }
                 @if has_binary { (binary_instructions(g)) }
@@ -672,44 +674,23 @@ fn upgrade_link() -> Markup {
     }
 }
 
-/// Static click handler shared by every copy button. It reads the command
-/// from the button's own `data-copy` attribute at click time; no value is ever
-/// spliced into this string, so it is identical for every block.
-///
-/// Clipboard API needs a secure context (HTTPS / localhost). When it is
-/// unavailable, select the command text so the user can copy manually;
-/// otherwise report success/failure on the button label. The in-button label
-/// swap ("Copy" -> "Copied") fires for the local feedback affordance, AND a
-/// toast pops top-right via `window.bunyipToast`. The `if(window.bunyipToast)`
-/// guard keeps the button usable if the toast script failed to load.
-const COPY_CMD_JS: &str = "var b=this;var t=b.innerText;var c=b.dataset.copy;\
-     if(navigator.clipboard){\
-       navigator.clipboard.writeText(c).then(\
-         function(){b.innerText='Copied';setTimeout(function(){b.innerText=t},1500);\
-                      if(window.bunyipToast)window.bunyipToast('Copied to clipboard','success');},\
-         function(){b.innerText='Copy failed';setTimeout(function(){b.innerText=t},1500);\
-                      if(window.bunyipToast)window.bunyipToast('Copy failed','error');});\
-     }else{\
-       window.getSelection().selectAllChildren(b.previousElementSibling);\
-       b.innerText='Press Ctrl+C';setTimeout(function(){b.innerText=t},3000);\
-     }";
-
 /// A copy-pasteable shell command with a copy-to-clipboard button.
 ///
 /// Trust model: `cmd` may carry API-sourced values (the registry host and
 /// image reference that bunyip-api returns for a product). Those values are
 /// rendered ONLY as passive, Maud-escaped content: the visible `<code>` text
 /// and the button's `data-copy` attribute. The click handler is the static
-/// `COPY_CMD_JS` constant, which reads the command from `this.dataset.copy` at
-/// click time and never has API data interpolated into executable JS. This
-/// removes the prior BFF-trust pattern where the command was spliced into the
-/// inline onclick (the earlier `serde_json::to_string` only blocked raw-string
-/// injection; it still shipped API data as executable content).
+/// delegated `[data-copy]` listener in `assets/js/app.js`, which reads the
+/// command from the button's own dataset at click time and never has API data
+/// interpolated into executable JS. This removes the prior BFF-trust pattern
+/// where the command was spliced into the inline onclick (the earlier
+/// `serde_json::to_string` only blocked raw-string injection; it still shipped
+/// API data as executable content).
 fn command_block(cmd: &str) -> Markup {
     html! {
         div class="flex items-center gap-2" {
             code class="flex-1 rounded bg-muted px-3 py-2 font-mono text-sm overflow-x-auto whitespace-nowrap" { (cmd) }
-            button type="button" aria-label="Copy command" data-copy=(cmd) class=(button_class("outline", "sm", "shrink-0 w-28")) onclick=(COPY_CMD_JS) {
+            button type="button" aria-label="Copy command" data-copy=(cmd) class=(button_class("outline", "sm", "shrink-0 w-28")) {
                 "Copy"
             }
         }
@@ -720,15 +701,15 @@ fn command_block(cmd: &str) -> Markup {
 /// button. Like [`command_block`] but preserves newlines instead of forcing a
 /// single line, for block content. Same trust model: the snippet is passive,
 /// Maud-escaped `<code>` text plus the button's `data-copy` attribute; the
-/// click handler is the static `COPY_CMD_JS` constant and never has API data
-/// interpolated into executable JS.
+/// click handler is the delegated `[data-copy]` listener in
+/// `assets/js/app.js` and never has API data interpolated into executable JS.
 fn compose_block(snippet: &str) -> Markup {
     html! {
         div class="flex items-start gap-2" {
             pre class="flex-1 rounded bg-muted px-3 py-2 font-mono text-sm overflow-x-auto" {
                 code class="whitespace-pre" { (snippet) }
             }
-            button type="button" aria-label="Copy compose file" data-copy=(snippet) class=(button_class("outline", "sm", "shrink-0 w-28")) onclick=(COPY_CMD_JS) {
+            button type="button" aria-label="Copy compose file" data-copy=(snippet) class=(button_class("outline", "sm", "shrink-0 w-28")) {
                 "Copy"
             }
         }
@@ -796,8 +777,7 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
                             a href="/applications" class=(button_class("default", "lg", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { (icon("app-window", "h-4 w-4")) "Browse Applications" (icon("arrow-right", "h-4 w-4")) }
                             a href="/membership" class=(button_class("outline", "default", "")) { "View Membership Details" }
                         }
-                        p class="text-xs text-muted-foreground" { "Redirecting to applications shortly…" }
-                        script { (PreEscaped("setTimeout(function(){location.href='/applications'},10000);")) }
+                        p class="text-xs text-muted-foreground" data-redirect-to="/applications" data-redirect-after="10000" { "Redirecting to applications shortly…" }
                     }
                 }
             }
@@ -835,7 +815,9 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
                         // Refresh every 3s. As soon as the webhook lands and
                         // subscription_status flips to Active, the next
                         // refresh renders the success branch above.
-                        script { (PreEscaped("setTimeout(function(){location.reload()},3000);")) }
+                        // BUNYIP-424: `data-reload-after` is read by
+                        // `assets/js/app.js`; no inline script.
+                        div data-reload-after="3000" hidden {}
                     }
                 }
             }
@@ -1052,7 +1034,7 @@ pub async fn membership(
                                             form method="post" action="/membership/cancel" {
                                                 button type="submit" class=(button_class("outline", "sm", "w-full justify-start")) { @if let Some(d) = end { "Cancel at period end - keep access until " (d) } @else { "Cancel at period end - keep access until the end of your current billing period" } }
                                             }
-                                            form method="post" action="/membership/cancel-now" onsubmit="return confirm('Cancel immediately? You will lose access right now.')" {
+                                            form method="post" action="/membership/cancel-now" data-confirm="Cancel immediately? You will lose access right now." {
                                                 button type="submit" class=(button_class("destructive", "sm", "w-full justify-start")) { "Cancel immediately - lose access now" }
                                             }
                                         }
@@ -1433,7 +1415,7 @@ pub async fn settings(
                     // hint so the manager (or iOS / Chrome AutoFill) can
                     // surface a freshly-arrived SMS / TOTP code from a sibling
                     // tab WITHOUT pre-filling the password field.
-                    form method="post" action="/settings/account/delete" autocomplete="off" class="space-y-3 max-w-md" onsubmit="return confirm('Permanently delete your account AND all of your data in Mokosh and any other connected app? This cannot be undone.')" {
+                    form method="post" action="/settings/account/delete" autocomplete="off" class="space-y-3 max-w-md" data-confirm="Permanently delete your account AND all of your data in Mokosh and any other connected app? This cannot be undone." {
                         div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" autocomplete="off" placeholder="Enter your password to confirm" class=(crate::handlers::dashboard_input()); }
                         @if user.two_factor_enabled { div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
                         button type="submit" class=(button_class("destructive", "default", "")) { (icon("trash", "mr-2 h-4 w-4")) "Delete My Account" }
@@ -1535,7 +1517,7 @@ fn sessions_card_body(
                 }
             }
             @if has_others {
-                form method="post" action="/settings/sessions/revoke-others" class="mt-4" onsubmit="return confirm('Log out all other devices?')" {
+                form method="post" action="/settings/sessions/revoke-others" class="mt-4" data-confirm="Log out all other devices?" {
                     button type="submit" class=(button_class("outline", "sm", "")) { (icon("log-out", "mr-2 h-4 w-4")) "Log out all other devices" }
                 }
             }

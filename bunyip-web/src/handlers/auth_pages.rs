@@ -130,7 +130,7 @@ fn submit_btn(label: &str) -> Markup {
 
 /// BUNYIP-282: password input with an inline show/hide eye toggle.
 /// Default state is hidden (`type=password`, `fa-eye` icon, `aria-pressed=false`,
-/// `aria-label="Show password"`); the `password_toggle_script()` flips
+/// `aria-label="Show password"`); `assets/js/password.js` flips
 /// `type`, swaps the glyph between `fa-eye` and `fa-eye-slash`, updates
 /// `aria-pressed`, and rewrites `aria-label` on click. The `pr-10` padding
 /// on the input keeps the typed text from running under the button. Scoped
@@ -156,7 +156,7 @@ fn password_field(id: &str, label: &str, autocomplete: &str) -> Markup {
 }
 
 /// BUNYIP-240: per-requirement password indicators. Each `<li>` carries a
-/// stable id so the inline `password_live_validation_script()` below can
+/// stable id so `assets/js/password.js` can
 /// flip its leading indicator between three states: `pw-pending` (neutral
 /// circle while the user has not satisfied this rule yet), `pw-pass` (green
 /// check), `pw-fail` (red x). The fourth indicator (`pw-breach`) is
@@ -165,7 +165,7 @@ fn password_field(id: &str, label: &str, autocomplete: &str) -> Markup {
 /// crosses any wire to HIBP or to bunyip.
 ///
 /// BUNYIP-250: the breach row uses a `.pw-label` span (rather than a bare
-/// text node) so the inline script can swap the wording on fail to
+/// text node) so the script can swap the wording on fail to
 /// "Found in a known data breach. Pick a different password." - the
 /// previous static "Not found ..." label paired with a ✗ glyph read as
 /// the validator being broken. A `<p id="pw-breach-help">` is rendered
@@ -202,241 +202,22 @@ fn pw_reqs() -> Markup {
             }
         }
         // Surfaced only when the breach row is in `pw-fail`. Hidden by
-        // default; the inline script toggles `hidden` per state.
+        // default; `assets/js/password.js` toggles `hidden` per state.
         p id="pw-breach-help" class="text-xs text-destructive mt-1.5 ml-6" hidden {
             "HaveIBeenPwned has seen this password in a public breach. Even strong passwords are unsafe once leaked - pick a fresh one."
         }
         // Sub-input for confirm-password match feedback; toggled by the same
-        // inline script. Empty until the user types into the Confirm field.
+        // script. Empty until the user types into the Confirm field.
         p id="pw-confirm-msg" class="text-sm mt-2 pw-pending" {}
     }
 }
 
-/// BUNYIP-240: inline JS that drives the per-rule indicators and the HIBP
-/// breach check. Lives in the SSR shell next to the password form because
-/// the CSP allows inline scripts on bunyip-web (see `crate::security`).
-/// Idempotent: the script attaches `input` listeners only when both the
-/// password + confirm fields exist and only when no previous attachment
-/// flag is set. Graceful degradation: no JS, the static rules list still
-/// renders and the server-side `password_ok()` is the final backstop.
-fn password_live_validation_script() -> Markup {
-    use maud::PreEscaped;
-    PreEscaped(String::from(
-        r#"<script>
-(function () {
-  var pw = document.getElementById('password');
-  var cf = document.getElementById('confirm');
-  if (!pw || pw.dataset.pwInit === '1') return;
-  pw.dataset.pwInit = '1';
-
-  // Tailwind utility classes for the three visual states. The leading
-  // indicator glyph + the row text color flip together so the row reads as
-  // pass/fail at a glance. BUNYIP-250: glyphs use Font Awesome (the kit is
-  // already loaded under the bunyip-web CSP) so the icons match the rest
-  // of the SaaS shell instead of bare Unicode bullets.
-  var STATES = {
-    pending: { cls: 'text-muted-foreground',                icon: 'fa-regular fa-circle' },
-    pass:    { cls: 'text-teal-600 dark:text-teal-400',     icon: 'fa-solid fa-circle-check' },
-    fail:    { cls: 'text-destructive',                     icon: 'fa-solid fa-circle-xmark' }
-  };
-  // BUNYIP-250: when a row carries data-label-{pass,fail,pending}, the
-  // visible label flips per state. The breach row uses this so a ✗ stops
-  // appearing next to the contradictory "Not found in a known data breach"
-  // copy.
-  function syncRowLabel(row, state) {
-    if (!row) return;
-    var lbl = row.querySelector('.pw-label');
-    if (!lbl) return;
-    var key = 'label' + state.charAt(0).toUpperCase() + state.slice(1);
-    var next = row.dataset[key];
-    if (typeof next === 'string' && next.length > 0) lbl.textContent = next;
-  }
-  function setState(row, state) {
-    if (!row) return;
-    var s = STATES[state];
-    row.className = (row.className || '')
-      .replace(/\b(text-muted-foreground|text-teal-600|dark:text-teal-400|text-destructive|pw-pending|pw-pass|pw-fail)\b/g, '')
-      .trim() + ' pw-' + state + ' ' + s.cls;
-    var ind = row.querySelector('.pw-indicator');
-    if (ind) ind.innerHTML = '<i class="' + s.icon + '"></i>';
-    syncRowLabel(row, state);
-    // BUNYIP-250: the breach row carries a follow-up help paragraph
-    // (#pw-breach-help) that explains what to do; surface it only when
-    // the row is in `fail` so the help text never falsely warns the user.
-    if (row.id === 'pw-breach') {
-      var help = document.getElementById('pw-breach-help');
-      if (help) help.hidden = state !== 'fail';
-    }
-  }
-  function rowState(row) {
-    if (!row) return 'pending';
-    if (row.classList.contains('pw-pass')) return 'pass';
-    if (row.classList.contains('pw-fail')) return 'fail';
-    return 'pending';
-  }
-
-  var rowLen    = document.getElementById('pw-len');
-  var rowCase   = document.getElementById('pw-case');
-  var rowDigit  = document.getElementById('pw-digit');
-  var rowBreach = document.getElementById('pw-breach');
-  var submit    = pw.form ? pw.form.querySelector('button[type="submit"]') : null;
-  var confirmMsg = document.getElementById('pw-confirm-msg');
-
-  // Mirror the server-side `password_ok()` rules verbatim (handlers/mod.rs:95).
-  function checkLocal(v) {
-    setState(rowLen,   v.length >= 12 ? 'pass' : (v.length > 0 ? 'fail' : 'pending'));
-    var hasLower = /[a-z]/.test(v);
-    var hasUpper = /[A-Z]/.test(v);
-    setState(rowCase,  (hasLower && hasUpper) ? 'pass' : (v.length > 0 ? 'fail' : 'pending'));
-    var hasDigit   = /\d/.test(v);
-    var hasSpecial = /[^A-Za-z0-9]/.test(v);
-    setState(rowDigit, (hasDigit && hasSpecial) ? 'pass' : (v.length > 0 ? 'fail' : 'pending'));
-  }
-
-  // HaveIBeenPwned k-anonymity: SHA-1 client-side, send only the first 5
-  // hex chars to api.pwnedpasswords.com/range/{prefix}, scan the returned
-  // list for the matching 35-char suffix. The full password never leaves
-  // the browser. https://haveibeenpwned.com/API/v3#PwnedPasswords
-  function bytesToHex(bytes) {
-    var out = '';
-    for (var i = 0; i < bytes.length; i++) {
-      var h = bytes[i].toString(16);
-      out += h.length === 1 ? '0' + h : h;
-    }
-    return out.toUpperCase();
-  }
-  async function checkBreach(v) {
-    if (!v || !window.crypto || !window.crypto.subtle) {
-      setState(rowBreach, 'pending');
-      refreshSubmit();
-      return;
-    }
-    try {
-      var enc = new TextEncoder().encode(v);
-      var hashBuf = await window.crypto.subtle.digest('SHA-1', enc);
-      var hash = bytesToHex(new Uint8Array(hashBuf));
-      var prefix = hash.slice(0, 5);
-      var suffix = hash.slice(5);
-      var resp = await fetch('https://api.pwnedpasswords.com/range/' + prefix);
-      if (!resp.ok) {
-        // Network / API hiccup is non-fatal; leave the row pending so the
-        // user isn't blocked on an outage.
-        setState(rowBreach, 'pending');
-        refreshSubmit();
-        return;
-      }
-      var body = await resp.text();
-      var lines = body.split(/\r?\n/);
-      var seen = false;
-      for (var i = 0; i < lines.length; i++) {
-        var s = lines[i].split(':')[0];
-        if (s && s.toUpperCase() === suffix) { seen = true; break; }
-      }
-      setState(rowBreach, seen ? 'fail' : 'pass');
-      // BUNYIP-283: refresh the submit gate so the button flips state
-      // when the breach result lands. The input-event refresh ran 500 ms
-      // ago with rowBreach=pending; without this call, a clean password
-      // that resolved to pass leaves the gate computed against the
-      // stale pending state and the button stays disabled.
-      refreshSubmit();
-    } catch (_e) {
-      setState(rowBreach, 'pending');
-      refreshSubmit();
-    }
-  }
-
-  // Debounce the breach check: avoid hammering HIBP on every keystroke. The
-  // local rules update immediately; the breach check waits for 500ms of
-  // typing-silence + at least one local rule passing.
-  var breachTimer = null;
-  function scheduleBreach(v) {
-    if (breachTimer) clearTimeout(breachTimer);
-    if (!v) { setState(rowBreach, 'pending'); return; }
-    setState(rowBreach, 'pending');
-    breachTimer = setTimeout(function () { checkBreach(v); }, 500);
-  }
-
-  function refreshSubmit() {
-    if (!submit) return;
-    var all = ['pw-len','pw-case','pw-digit','pw-breach']
-      .map(function (id) { return document.getElementById(id); })
-      .every(function (r) { return rowState(r) === 'pass'; });
-    var match = cf && cf.value.length > 0 && cf.value === pw.value;
-    submit.disabled = !(all && match);
-  }
-  function refreshConfirm() {
-    if (!cf || !confirmMsg) return;
-    if (cf.value.length === 0) {
-      confirmMsg.textContent = '';
-      confirmMsg.className = 'text-xs mt-1';
-      return;
-    }
-    if (cf.value === pw.value) {
-      confirmMsg.textContent = '✓ Passwords match';
-      confirmMsg.className = 'text-xs mt-1 text-teal-600 dark:text-teal-400';
-    } else {
-      confirmMsg.textContent = '✗ Passwords do not match';
-      confirmMsg.className = 'text-xs mt-1 text-destructive';
-    }
-  }
-
-  pw.addEventListener('input', function () {
-    checkLocal(pw.value);
-    scheduleBreach(pw.value);
-    refreshConfirm();
-    refreshSubmit();
-  });
-  if (cf) {
-    cf.addEventListener('input', function () {
-      refreshConfirm();
-      refreshSubmit();
-    });
-  }
-  // Initial pass so a value preserved across a server re-render (BUNYIP-240
-  // preserves typed password on rejection) immediately reflects state.
-  if (pw.value) {
-    checkLocal(pw.value);
-    scheduleBreach(pw.value);
-  }
-  refreshConfirm();
-  refreshSubmit();
-})();
-</script>"#,
-    ))
-}
-
-/// BUNYIP-282: inline JS that drives every `[data-pw-toggle]` button. Mirrors
-/// the live-validation script's idempotent-attach pattern so a second render
-/// (e.g. via a future htmx swap) does not double-bind. Click flips the target
-/// input's `type` between `password` and `text`, swaps the FontAwesome eye
-/// glyph, and updates the button's `aria-pressed` + `aria-label` so the
-/// reveal state is announced to assistive tech.
-fn password_toggle_script() -> Markup {
-    use maud::PreEscaped;
-    PreEscaped(String::from(
-        r#"<script>
-(function () {
-  var buttons = document.querySelectorAll('[data-pw-toggle]');
-  buttons.forEach(function (btn) {
-    if (btn.dataset.pwToggleInit === '1') return;
-    btn.dataset.pwToggleInit = '1';
-    var targetId = btn.getAttribute('data-pw-toggle');
-    var input = document.getElementById(targetId);
-    if (!input) return;
-    btn.addEventListener('click', function () {
-      var revealed = input.type === 'text';
-      input.type = revealed ? 'password' : 'text';
-      btn.setAttribute('aria-pressed', revealed ? 'false' : 'true');
-      btn.setAttribute('aria-label', revealed ? 'Show password' : 'Hide password');
-      var icon = btn.querySelector('i');
-      if (icon) {
-        icon.className = revealed ? 'fa-regular fa-eye' : 'fa-regular fa-eye-slash';
-      }
-    });
-  });
-})();
-</script>"#,
-    ))
+/// BUNYIP-240 / BUNYIP-282: the password UX script (per-rule indicators, the
+/// HaveIBeenPwned breach check, and the show/hide eye toggle). BUNYIP-424: the
+/// code lives in `assets/js/password.js` and is loaded from `'self'`, so
+/// bunyip-web's CSP no longer needs `script-src 'unsafe-inline'`.
+fn password_script() -> Markup {
+    html! { script src="/assets/js/password.js" defer {} }
 }
 
 /// Validate and normalise a post-login redirect target.
@@ -764,12 +545,10 @@ fn register_card(errors: &RegisterErrors, email: &str, signup_token: &str) -> Ma
                 a href="/terms" class="underline hover:text-foreground" { "Terms of Service" } " and "
                 a href="/privacy" class="underline hover:text-foreground" { "Privacy Policy" } "."
             }
-            // BUNYIP-240: live per-rule feedback + HIBP breach check. Inline JS;
-            // CSP allows `'unsafe-inline'` on script-src in bunyip-web.
-            (password_live_validation_script())
-            // BUNYIP-282: drive the eye toggle on every `[data-pw-toggle]`
-            // button rendered by `password_field` above.
-            (password_toggle_script())
+            // BUNYIP-240 live per-rule feedback + HIBP breach check, and the
+            // BUNYIP-282 eye toggle on every `[data-pw-toggle]` button rendered
+            // by `password_field` above.
+            (password_script())
         },
     )
 }
@@ -1033,7 +812,7 @@ fn reset_confirm_card(token: &str, error: Option<&str>) -> Markup {
             // BUNYIP-240: same live-feedback script as /register. The
             // pw_reqs() rows + the script's id-based binding are identical
             // across the two forms, so the script is reusable as-is.
-            (password_live_validation_script())
+            (password_script())
         },
     )
 }
