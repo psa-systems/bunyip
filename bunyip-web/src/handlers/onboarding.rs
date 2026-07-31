@@ -253,6 +253,7 @@ mod tests {
             last_name: Some("Lovelace".into()),
             phone: None,
             avatar_updated_at: None,
+            is_super_admin: false,
         }
     }
 

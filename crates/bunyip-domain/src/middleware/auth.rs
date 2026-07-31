@@ -223,6 +223,53 @@ impl FromRequest for AdminUser {
     }
 }
 
+/// Whether a request may use a super-admin-only surface (BUNYIP-413): the
+/// caller must hold the admin role AND the persisted `is_super_admin` flag.
+/// Pure so the gate is unit-testable without a request or a database.
+pub fn super_admin_allowed(role: &str, is_super_admin: bool) -> bool {
+    role == "admin" && is_super_admin
+}
+
+/// Extractor for the super admin (the first setup account) - returns 403 for
+/// every other caller, including ordinary admins (BUNYIP-413).
+///
+/// The flag lives on `users.is_super_admin` rather than in the JWT, so it is
+/// read per request: revoking it takes effect immediately instead of at the
+/// next token refresh, and existing sessions need no re-issue. Only the
+/// low-traffic rate-limit / IP-ban management endpoints use this extractor, so
+/// the extra lookup is off every hot path.
+#[derive(Debug, Clone)]
+pub struct SuperAdminUser(pub AccessTokenClaims);
+
+impl FromRequest for SuperAdminUser {
+    type Error = AppError;
+    type Future = ExtractorFuture<Self>;
+
+    fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
+        let jwt_service = req.app_data::<Arc<JwtService>>().cloned();
+        let at_jwt_verifier = req.app_data::<Arc<dyn AtJwtVerifier>>().cloned();
+        let pool = req
+            .app_data::<actix_web::web::Data<PgPool>>()
+            .map(|p| p.get_ref().clone());
+        let token = extract_token(req);
+
+        Box::pin(async move {
+            let token = token.ok_or(AppError::Unauthorized)?;
+            let claims =
+                verify_either(&token, jwt_service.as_ref(), at_jwt_verifier.as_ref()).await?;
+            let pool = pool.ok_or_else(|| AppError::internal("Database pool not available"))?;
+            let is_super_admin = UserRepository::find_by_id(&pool, claims.sub)
+                .await?
+                .map(|u| u.is_super_admin)
+                .unwrap_or(false);
+            if !super_admin_allowed(&claims.role, is_super_admin) {
+                return Err(AppError::Forbidden);
+            }
+            Ok(SuperAdminUser(claims))
+        })
+    }
+}
+
 /// Extractor for users with active membership - returns 403 if not a member
 #[derive(Debug, Clone)]
 pub struct MemberUser(pub AccessTokenClaims);
@@ -649,6 +696,17 @@ mod tests {
 
     fn net(s: &str) -> ipnetwork::IpNetwork {
         s.parse().unwrap()
+    }
+
+    /// BUNYIP-413: the super-admin gate needs BOTH the admin role and the
+    /// persisted flag. An ordinary admin, a flagged non-admin (a demoted super
+    /// admin whose flag was not cleared) and a plain subscriber are all refused.
+    #[test]
+    fn super_admin_gate_requires_admin_role_and_flag() {
+        assert!(super_admin_allowed("admin", true));
+        assert!(!super_admin_allowed("admin", false));
+        assert!(!super_admin_allowed("subscriber", true));
+        assert!(!super_admin_allowed("subscriber", false));
     }
 
     /// A request forwarded by a trusted proxy (Traefik) resolves to the
@@ -1101,6 +1159,7 @@ mod tests {
             phone: None,
             has_used_trial: false,
             avatar_updated_at: None,
+            is_super_admin: false,
         };
 
         let claims = AccessTokenClaims::from_atjwt_and_user(

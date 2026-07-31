@@ -293,6 +293,7 @@ mod onboarding_gate_tests {
             last_name: last.map(str::to_string),
             phone: None,
             avatar_updated_at: None,
+            is_super_admin: false,
         }
     }
 

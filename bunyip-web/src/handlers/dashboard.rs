@@ -2416,6 +2416,7 @@ mod tests {
             last_name: None,
             phone: None,
             avatar_updated_at: None,
+            is_super_admin: false,
         }
     }
 

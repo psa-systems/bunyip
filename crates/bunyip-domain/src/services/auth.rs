@@ -686,8 +686,10 @@ impl AuthService {
             return Ok(false);
         }
         // BUNYIP-265: user_id only, raw email is PII.
-        let updated =
-            UserRepository::update_role(&self.pool, user.id, UserRole::Admin.as_str()).await?;
+        UserRepository::update_role(&self.pool, user.id, UserRole::Admin.as_str()).await?;
+        // BUNYIP-413: the bootstrap admin IS the first setup account, so it also
+        // carries the super-admin flag that gates rate-limit / IP-ban management.
+        let updated = UserRepository::set_super_admin(&self.pool, user.id, true).await?;
         tracing::info!(user_id = %user.id, "BUNYIP-290: bootstrap admin promoted to admin");
         *user = updated;
         Ok(true)

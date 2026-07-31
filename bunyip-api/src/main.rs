@@ -176,6 +176,13 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
 
+            // BUNYIP-413: this IS the first setup account, so it carries the
+            // super-admin flag. Without it a deployment seeded this way would
+            // have no account able to manage rate limits or IP bans (the
+            // migration backfill runs before any user exists, and the
+            // bootstrap-email promotion is inert once an admin exists).
+            UserRepository::set_super_admin(&pool, user.id, true).await?;
+
             info!(email = %user.email, "Default admin user created from SETUP_DEFAULT_ADMIN");
         } else {
             info!("Admin user(s) already exist, skipping SETUP_DEFAULT_ADMIN");
