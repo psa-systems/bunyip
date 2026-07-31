@@ -287,14 +287,27 @@ first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODU
    ```
 
    The redirect_uri must match a registered value EXACTLY or `/oauth2/authorize`
-   returns `invalid_redirect_uri`, but it is never loaded - the suite reads the
-   `code` straight from the redirect `Location` (`maxRedirects: 0`), so reusing
-   mokosh's host is fine. The client's `audience` is mokosh's API, which is also
-   fine: the OIDC specs only call the OP's own `/oauth2/userinfo` with the token,
-   never bunyip `/v1` (that bearer comes from the hub-login cookie capture).
-   `global.setup` drives the consent Allow for this `(user, client)` pair, so the
-   token-flow specs get a `code` rather than bouncing to `/oauth2/consent`
-   (the gate that broke mokosh's headless replay - BUNYIP-146).
+   returns `invalid_redirect_uri`, but the request-context specs never load it -
+   they read the `code` straight from the redirect `Location` (`maxRedirects: 0`),
+   so reusing mokosh's host is fine. The client's `audience` is mokosh's API,
+   which is also fine: the OIDC specs only call the OP's own `/oauth2/userinfo`
+   with the token, never bunyip `/v1` (that bearer comes from the hub-login
+   cookie capture). `global.setup` drives the consent Allow for this
+   `(user, client)` pair, so the token-flow specs get a `code` rather than
+   bouncing to `/oauth2/consent` (the gate that broke mokosh's headless replay -
+   BUNYIP-146).
+
+   `global.setup` is the ONE place a real browser follows that redirect and
+   renders mokosh's callback, and rendering it killed the browser in run #2175:
+   the next `storageState` call failed with the BUNYIP-148 "Target page, context
+   or browser has been closed" signature and took setup, plus all 11 dependent
+   specs, down with it. Two guards (BUNYIP-402): the consent drive runs on a
+   throwaway page in the same context, so a renderer death on the callback cannot
+   reach the page whose session setup persists (cookies are context-scoped, so
+   the grant still lands); and the post-consent re-save is wrapped, since both
+   artifacts are already written before consent. Stubbing the callback with
+   `page.route` does NOT work - Playwright 1.60 applies route handlers only to
+   the request that starts a chain, not to the target of a server redirect.
 
    Sanity-check the row is on the target DB:
    `docker compose ... exec postgres psql -c "select client_id, name, allowed_scopes from oauth_clients where name = 'mokosh-apps';"`
