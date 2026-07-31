@@ -204,9 +204,21 @@ setup('capture bearer + OP cookies from the hub login', async ({ page }) => {
   await driveConsent(page);
 
   // Re-save AFTER consent so the granted-scope session is what gets persisted.
-  await page.context().storageState({ path: HUB_STATE_FILE });
-  await persistOpCookies(page);
-  console.log('[setup] re-persisted hub storageState + OP cookies after consent');
+  // Best-effort like the consent drive itself: both artifacts were already
+  // written above, so a browser that dies on the post-consent redirect_uri page
+  // (the BUNYIP-148 "Target page, context or browser has been closed" signature,
+  // seen in run #2175) must not fail setup and strand every dependent project.
+  try {
+    await page.context().storageState({ path: HUB_STATE_FILE });
+    await persistOpCookies(page);
+    console.log('[setup] re-persisted hub storageState + OP cookies after consent');
+  } catch (err) {
+    console.warn(
+      `[setup] post-consent re-save skipped (non-fatal): ${String(err)}. ` +
+        'The pre-consent hub storageState + OP cookies stand; consent grants live ' +
+        'server-side, so the persisted session is still usable.',
+    );
+  }
 });
 
 // Filter the browser's cookies to the OP host + parent apex and write a
@@ -272,8 +284,22 @@ async function persistOpCookies(page: import('@playwright/test').Page): Promise<
 
 // Drive the OIDC authorize -> consent Allow flow once so the OP session carries
 // granted scopes. Entirely best-effort: wrapped so nothing here fails setup.
+//
+// Runs on a THROWAWAY page in the SAME context (cookies are context-scoped, so
+// the grant still lands on the session setup persists). The flow ends on the
+// registered redirect_uri, a foreign app callback (mokosh) we neither control
+// nor need - the OP records the grant server-side before it 302s, and the `code`
+// is worthless here. Loading that page is what killed the browser in run #2175
+// (the BUNYIP-148 "Target page, context or browser has been closed" signature,
+// with a `navigating to <redirect_uri>` call log), so keep it off the page whose
+// session the rest of setup depends on. Stubbing the callback with `page.route`
+// is NOT an option: Playwright 1.60 does not apply route handlers to the target
+// of a server redirect, only to the request that starts the chain.
 async function driveConsent(page: import('@playwright/test').Page): Promise<void> {
+  let consentPage: import('@playwright/test').Page | null = null;
+
   try {
+    consentPage = await page.context().newPage();
     const pkce = makePkce();
     const params = new URLSearchParams({
       response_type: 'code',
@@ -286,27 +312,29 @@ async function driveConsent(page: import('@playwright/test').Page): Promise<void
       code_challenge_method: pkce.method,
     });
     const authorizeUrl = `${env.opBaseURL}/oauth2/authorize?${params.toString()}`;
-    await page.goto(authorizeUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await consentPage.goto(authorizeUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
 
     // bunyip 302s authorize -> /oauth2/consent when the client has un-granted
     // scopes. Click Allow to grant them.
-    if (/\/oauth2\/consent/.test(new URL(page.url()).pathname)) {
-      const allow = page
+    if (/\/oauth2\/consent/.test(new URL(consentPage.url()).pathname)) {
+      const allow = consentPage
         .locator('button[name="action"][value="allow"]')
-        .or(page.getByRole('button', { name: /allow|authorize|approve/i }))
+        .or(consentPage.getByRole('button', { name: /allow|authorize|approve/i }))
         .first();
       await allow.click({ timeout: 10_000 }).catch(() => {});
       // The post-consent redirect targets the registered redirect_uri, an app
       // callback that may 404 here. Tolerate any landing.
-      await page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
+      await consentPage.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
       console.log('[setup] drove OIDC consent Allow (granted scopes for token-flow specs)');
     } else {
       console.log(
-        `[setup] no consent screen reached (landed on ${page.url()}); scopes may already be granted`,
+        `[setup] no consent screen reached (landed on ${consentPage.url()}); scopes may already be granted`,
       );
     }
   } catch (err) {
     console.warn(`[setup] OIDC consent drive failed (non-fatal): ${String(err)}`);
+  } finally {
+    await consentPage?.close().catch(() => {});
   }
 }
 
