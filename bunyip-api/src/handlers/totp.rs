@@ -183,7 +183,10 @@ pub async fn verify_2fa(
     if !verified {
         // Count only failures (BUNYIP-201): a wrong code increments the
         // per-account counter so repeated guesses trip the lockout regardless of
-        // source IP. Best-effort - a counter write failure must not turn the
+        // source IP. A code whose step was already consumed reports itself as a
+        // plain verification failure (BUNYIP-428), so a replay lands here too and
+        // is indistinguishable from a wrong code: same status, same message, same
+        // counter behaviour. Best-effort - a counter write failure must not turn the
         // "invalid code" response into a 500, but log it because the
         // brute-force guard is degrading open under DB stress.
         if let Err(e) = RateLimitRepository::check_and_increment(

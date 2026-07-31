@@ -7,12 +7,17 @@ use argon2::{
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+use std::time::{SystemTime, UNIX_EPOCH};
 use totp_rs::{Algorithm, Secret, TOTP};
 use uuid::Uuid;
 
 use crate::errors::AppError;
 use crate::repositories::TotpRepository;
 use crate::services::encryption::EncryptionKeySet;
+
+/// RFC 6238 time step, in seconds. Also the size of the backward tolerance
+/// `match_step` applies.
+const TOTP_STEP_SECS: u64 = 30;
 
 /// Response from beginning 2FA setup
 pub struct TotpSetupInfo {
@@ -78,7 +83,7 @@ impl TotpService {
             &totp_record.nonce,
             totp_record.key_version,
         )?;
-        if !self.check_code(&secret, code)? {
+        if !self.check_and_claim_code(user_id, &secret, code).await? {
             return Err(AppError::validation("code", "Invalid verification code"));
         }
 
@@ -136,7 +141,7 @@ impl TotpService {
             &totp_record.nonce,
             totp_record.key_version,
         )?;
-        self.check_code(&secret, code)
+        self.check_and_claim_code(user_id, &secret, code).await
     }
 
     /// Verify a recovery code (marks it as used if valid).
@@ -224,7 +229,11 @@ impl TotpService {
         };
 
         let secret = self.key_set.decrypt(penc, pnonce, pkv)?;
-        if !self.check_code(&secret, code)? {
+        // The claimed step counter is per user, not per secret, so it carries
+        // over the promotion below: a code from the NEW authenticator landing in
+        // a step the OLD one already consumed costs one 30s wait, which is the
+        // safe direction to err (BUNYIP-428).
+        if !self.check_and_claim_code(user_id, &secret, code).await? {
             return Err(AppError::validation("code", "Invalid verification code"));
         }
 
@@ -265,15 +274,17 @@ impl TotpService {
     // --- Internal helpers ---
 
     fn build_totp(&self, secret: &[u8], account_name: &str) -> Result<TOTP, AppError> {
-        // skew = 0: accept only the current 30s step. A non-zero skew widens the
-        // acceptance window (each unit of skew adds the step before AND after, so
-        // skew=1 accepts 3 codes at once), which directly multiplies an
-        // attacker's per-guess success probability (BUNYIP-201).
+        // skew = 0: totp_rs's skew is SYMMETRIC (each unit adds the step before
+        // AND after, so skew=1 accepts 3 codes at once and lets a client with a
+        // fast clock authenticate early), which multiplies an attacker's
+        // per-guess success probability (BUNYIP-201). The acceptance window is
+        // widened backward only, outside this constructor: see `match_step`
+        // (BUNYIP-428).
         TOTP::new(
             Algorithm::SHA1,
             6,
             0,
-            30,
+            TOTP_STEP_SECS,
             secret.to_vec(),
             Some(self.issuer.clone()),
             account_name.to_string(),
@@ -281,26 +292,78 @@ impl TotpService {
         .map_err(|e| AppError::internal(format!("Failed to create TOTP: {}", e)))
     }
 
-    fn check_code(&self, secret: &[u8], code: &str) -> Result<bool, AppError> {
-        // Allow spaced format (e.g. "123 456" → "123456")
+    /// Verify `code` against the current step and the immediately preceding
+    /// one, returning the matched step number so the caller can consume it.
+    fn check_code(&self, secret: &[u8], code: &str) -> Result<Option<i64>, AppError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| AppError::internal(format!("System time error: {}", e)))?
+            .as_secs();
+        Self::match_step(secret, &self.issuer, code, now)
+    }
+
+    /// Match `code` at unix time `now` against the current step and the one
+    /// before it, backward only, and return the step it belongs to.
+    ///
+    /// BUNYIP-201 accepted only the current step to keep the brute-force
+    /// surface at one live code. That window is not "30 seconds" but "whatever
+    /// is left of the current step", which averages 15s and is routinely under
+    /// 2s, so a code read late in a step and typed correctly was rejected
+    /// (BUNYIP-428). RFC 6238 section 5.1 sanctions at most one step backward
+    /// to absorb typing and transmission delay, so the TOTP stays at skew = 0
+    /// (whose symmetric widening would also accept a FUTURE code) and the
+    /// previous step is probed explicitly at `now - 30`. Two live codes instead
+    /// of one takes the per-guess probability from 1e-6 to 2e-6, still
+    /// negligible against the 5-failures-per-900s per-account cap
+    /// (`RateLimitConfig::TWO_FACTOR_VERIFY_FAILURES`). What makes the wider
+    /// window safe is single use: every caller claims the returned step via
+    /// `TotpRepository::claim_totp_step`, so an accepted code is never accepted
+    /// twice (RFC 6238 section 5.2), where previously an observed code stayed
+    /// replayable for the rest of its step.
+    fn match_step(
+        secret: &[u8],
+        issuer: &str,
+        code: &str,
+        now: u64,
+    ) -> Result<Option<i64>, AppError> {
+        // Allow spaced format (e.g. "123 456" -> "123456")
         let code = code.replace(' ', "");
-        // skew = 0: only the current step is valid (see build_totp). This is the
-        // verification path that brute force targets (BUNYIP-201).
         let totp = TOTP::new(
             Algorithm::SHA1,
             6,
             0,
-            30,
+            TOTP_STEP_SECS,
             secret.to_vec(),
-            Some(self.issuer.clone()),
+            Some(issuer.to_string()),
             String::new(),
         )
         .map_err(|e| {
             AppError::internal(format!("Failed to create TOTP for verification: {}", e))
         })?;
 
-        totp.check_current(&code)
-            .map_err(|e| AppError::internal(format!("System time error: {}", e)))
+        for back in [0, TOTP_STEP_SECS] {
+            let ts = now.saturating_sub(back);
+            if totp.check(&code, ts) {
+                return Ok(Some((ts / TOTP_STEP_SECS) as i64));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Verify `code` and consume its step in one shot (BUNYIP-428). `false`
+    /// means either no step matched or the matched step was already consumed;
+    /// the two are deliberately indistinguishable to the caller so a replay
+    /// looks exactly like a wrong code.
+    async fn check_and_claim_code(
+        &self,
+        user_id: Uuid,
+        secret: &[u8],
+        code: &str,
+    ) -> Result<bool, AppError> {
+        let Some(step) = self.check_code(secret, code)? else {
+            return Ok(false);
+        };
+        Ok(TotpRepository::claim_totp_step(&self.pool, user_id, step).await? > 0)
     }
 
     async fn generate_and_store_recovery_codes(
@@ -405,6 +468,137 @@ mod tests {
             current_version: 1,
             previous: None,
         }
+    }
+
+    // -- BUNYIP-428: acceptance window + single use --
+
+    const TEST_ISSUER: &str = "bunyip-test";
+    /// RFC 6238 test key; 20 bytes clears totp_rs's 128-bit minimum.
+    const TEST_SECRET: &[u8] = b"12345678901234567890";
+    /// The failing submission from the BUNYIP-428 HAR: 0.321s after a step
+    /// boundary (`1785500160 % 30 == 0`), holding the code of the step that had
+    /// just ended.
+    const NOW: u64 = 1_785_500_160;
+
+    fn code_at(ts: u64) -> String {
+        TOTP::new(
+            Algorithm::SHA1,
+            6,
+            0,
+            TOTP_STEP_SECS,
+            TEST_SECRET.to_vec(),
+            Some(TEST_ISSUER.to_string()),
+            String::new(),
+        )
+        .unwrap()
+        .generate(ts)
+    }
+
+    fn match_at(code: &str, now: u64) -> Option<i64> {
+        TotpService::match_step(TEST_SECRET, TEST_ISSUER, code, now).unwrap()
+    }
+
+    /// The single-use guard as a predicate, mirroring the WHERE clause of
+    /// `TotpRepository::claim_totp_step` (`last_used_step IS NULL OR
+    /// last_used_step < $step`). The database applies it atomically; this lets
+    /// the replay cases below run without one.
+    fn claim(last_used_step: &mut Option<i64>, step: i64) -> bool {
+        if last_used_step.is_none_or(|last| step > last) {
+            *last_used_step = Some(step);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Verify + consume, the way `check_and_claim_code` does.
+    fn verify_and_claim(code: &str, now: u64, last_used_step: &mut Option<i64>) -> bool {
+        match match_at(code, now) {
+            Some(step) => claim(last_used_step, step),
+            None => false,
+        }
+    }
+
+    #[test]
+    fn current_step_code_is_accepted() {
+        let step = (NOW / TOTP_STEP_SECS) as i64;
+        assert_eq!(match_at(&code_at(NOW), NOW), Some(step));
+    }
+
+    #[test]
+    fn previous_step_code_is_accepted() {
+        // Read in the last second of a step, submitted just after the boundary.
+        let code = code_at(NOW - 1);
+        assert_eq!(
+            match_at(&code, NOW),
+            Some((NOW / TOTP_STEP_SECS) as i64 - 1)
+        );
+    }
+
+    #[test]
+    fn two_steps_ago_code_is_rejected() {
+        assert_eq!(match_at(&code_at(NOW - 2 * TOTP_STEP_SECS), NOW), None);
+    }
+
+    #[test]
+    fn future_step_code_is_rejected() {
+        // Tolerance is backward only: a client with a fast clock cannot
+        // authenticate early.
+        assert_eq!(match_at(&code_at(NOW + TOTP_STEP_SECS), NOW), None);
+    }
+
+    #[test]
+    fn replay_at_same_step_is_rejected() {
+        let code = code_at(NOW);
+        let mut last_used = None;
+        assert!(verify_and_claim(&code, NOW, &mut last_used));
+        assert!(!verify_and_claim(&code, NOW, &mut last_used));
+    }
+
+    #[test]
+    fn replay_across_the_accepted_pair_is_rejected() {
+        // Accepted as the CURRENT step, then re-submitted a step later when the
+        // same code is still inside the backward tolerance.
+        let code = code_at(NOW);
+        let mut last_used = None;
+        assert!(verify_and_claim(&code, NOW, &mut last_used));
+        assert!(!verify_and_claim(
+            &code,
+            NOW + TOTP_STEP_SECS,
+            &mut last_used
+        ));
+    }
+
+    #[test]
+    fn claiming_a_step_also_burns_older_steps() {
+        // The counter is monotonic, so a previous-step code is refused once a
+        // newer step has been consumed.
+        let mut last_used = None;
+        assert!(verify_and_claim(&code_at(NOW), NOW, &mut last_used));
+        assert!(!verify_and_claim(
+            &code_at(NOW - TOTP_STEP_SECS),
+            NOW,
+            &mut last_used
+        ));
+    }
+
+    #[test]
+    fn next_step_code_is_accepted_once_that_step_arrives() {
+        // The window moves with the clock: a code rejected as future is
+        // accepted 30s later, and only once.
+        let code = code_at(NOW + TOTP_STEP_SECS);
+        let mut last_used = None;
+        assert!(!verify_and_claim(&code, NOW, &mut last_used));
+        assert!(verify_and_claim(
+            &code,
+            NOW + TOTP_STEP_SECS,
+            &mut last_used
+        ));
+        assert!(!verify_and_claim(
+            &code,
+            NOW + TOTP_STEP_SECS,
+            &mut last_used
+        ));
     }
 
     // -- encrypt/decrypt round-trip --

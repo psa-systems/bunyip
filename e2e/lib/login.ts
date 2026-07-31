@@ -233,33 +233,47 @@ async function fillTotpStep(page: Page): Promise<void> {
     .first();
   await codeInput.waitFor({ state: 'visible', timeout: 10_000 });
 
-  // The server verifies with skew=0 (BUNYIP-201): only the current 30s TOTP
-  // step is accepted. A code generated in the final moment of a step can expire
-  // before the POST lands, surfacing as "Invalid verification code". If little
-  // time remains in the window, wait for the next step before generating so the
-  // submitted code carries a full step of validity.
-  const remaining = authenticator.timeRemaining();
-  if (remaining < 5) {
-    await page.waitForTimeout((remaining + 1) * 1_000);
-  }
-  const code = authenticator.generate(env.totpSecret);
+  // The server accepts the current 30s step AND the one before it, backward
+  // only, and consumes a code the moment it is accepted (BUNYIP-428), so the
+  // old "sleep when under 5s remain in the step" guard is gone: a code read at
+  // the very end of a step still verifies after the boundary. What single use
+  // introduces instead is a collision when two logins on the same E2E account
+  // land in the same step (parallel workers, or a spec that logs in twice in a
+  // row): the second submission carries an already-consumed code and bunyip
+  // renders the same "Invalid verification code". That is transient, so wait
+  // out the step and resubmit a fresh code once. Two POSTs stay well under the
+  // per-IP 2fa_verify cap (5/min, RateLimitConfig::LOGIN).
+  const offTwoFactor = (url: URL): boolean => !/\/login\/(2fa|mfa)(\/|$|\?)/.test(url.pathname);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const code = authenticator.generate(env.totpSecret);
 
-  // DOM-set, not fill(): same CI no-op applies to this input (BUNYIP-168).
-  // setInputValue dispatches a bubbling `input` event, which the BUNYIP-331
-  // data-otp-autosubmit snippet reacts to by submitting the form once the six
-  // digits are present. Wait for that navigation off /login/2fa; only click the
-  // submit button as a fallback if the auto-submit did not fire, so we never
-  // double-POST (a second submit would trip the per-IP 2fa_verify rate limit).
-  await setInputValue(codeInput, code);
-  const autoSubmitted = await page
-    .waitForURL((url) => !/\/login\/(2fa|mfa)(\/|$|\?)/.test(url.pathname), { timeout: 15_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!autoSubmitted) {
+    // DOM-set, not fill(): same CI no-op applies to this input (BUNYIP-168).
+    // setInputValue dispatches a bubbling `input` event, which the BUNYIP-331
+    // data-otp-autosubmit snippet reacts to by submitting the form once the six
+    // digits are present. Wait for that navigation off /login/2fa; only click
+    // the submit button as a fallback if the auto-submit did not fire, so we
+    // never double-POST.
+    await setInputValue(codeInput, code);
+    const autoSubmitted = await page
+      .waitForURL(offTwoFactor, { timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (autoSubmitted) return;
+
     await form
       .getByRole('button', { name: /verify|continue|submit|sign ?in|log ?in/i })
       .first()
       .click();
+    const left = await page
+      .waitForURL(offTwoFactor, { timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (left) return;
+
+    // Still on the 2FA step. Only a rejected code is worth retrying, and only
+    // with a code from a step this account has not burned yet.
+    if ((await readLoginError(page)) === null) return;
+    await page.waitForTimeout((authenticator.timeRemaining() + 1) * 1_000);
   }
 }
 
