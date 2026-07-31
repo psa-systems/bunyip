@@ -241,6 +241,10 @@ async fn main() {
         )
         .route("/admin/ip-bans", get(handlers::admin::ip_bans))
         .route(
+            "/admin/ip-bans/add",
+            axum::routing::post(handlers::admin::ip_ban_create),
+        )
+        .route(
             "/admin/ip-bans/unban",
             axum::routing::post(handlers::admin::ip_unban),
         )
@@ -248,6 +252,14 @@ async fn main() {
         .route(
             "/admin/rate-limits/reset",
             axum::routing::post(handlers::admin::rate_limit_reset),
+        )
+        .route(
+            "/admin/rate-limits/config",
+            axum::routing::post(handlers::admin::rate_limit_config_save),
+        )
+        .route(
+            "/admin/rate-limits/config/reset",
+            axum::routing::post(handlers::admin::rate_limit_config_reset),
         )
         .route("/admin/users", get(handlers::admin::users))
         .route("/admin/users/:id", get(handlers::admin::user_detail))

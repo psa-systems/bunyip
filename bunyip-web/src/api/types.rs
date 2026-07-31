@@ -95,6 +95,12 @@ pub struct User {
     /// older API that predates the field deserialize-compatible.
     #[serde(default)]
     pub avatar_updated_at: Option<String>,
+    /// BUNYIP-413: the "first setup account" flag. Only a super admin sees the
+    /// rate-limit / IP-ban management controls; the API enforces the same gate,
+    /// so hiding them is presentation, not the security boundary. `default`
+    /// keeps an older API that predates the field deserialize-compatible.
+    #[serde(default)]
+    pub is_super_admin: bool,
 }
 
 impl User {
@@ -485,6 +491,24 @@ pub struct AdminRateLimit {
     pub max_requests: i32,
     pub window_start: String,
     pub retry_after: u64,
+}
+
+/// The configured cap/window for one rate-limit action as returned by
+/// `GET /v1/admin/rate-limit-configs` (BUNYIP-413). Mirrors
+/// `bunyip_api::handlers::admin_rate_limits::RateLimitConfigEntry`:
+/// `max_requests` / `window_seconds` are what is enforced, the `default_*`
+/// fields are the bootstrap defaults an override departs from, and `overridden`
+/// says whether a persisted row is in force (and so whether a revert applies).
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminRateLimitConfig {
+    pub action: String,
+    pub max_requests: i32,
+    pub window_seconds: i64,
+    pub default_max_requests: i32,
+    pub default_window_seconds: i64,
+    pub overridden: bool,
+    #[serde(default)]
+    pub updated_at: Option<String>,
 }
 
 fn default_true() -> bool {

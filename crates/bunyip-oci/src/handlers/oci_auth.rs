@@ -15,8 +15,8 @@ use crate::errors::OciError;
 use crate::middleware::extract_client_ip;
 use crate::models::{AuditAction, CreateAuditLog, RateLimitConfig};
 use crate::repositories::{
-    ApplicationRepository, AuditLogRepository, EntitlementRepository, RateLimitRepository,
-    UserRepository,
+    ApplicationRepository, AuditLogRepository, EntitlementRepository, RateLimitConfigRepository,
+    RateLimitRepository, UserRepository,
 };
 use crate::services::{OciTokenService, PasswordService};
 
@@ -275,7 +275,12 @@ async fn failures_at_cap(
     key: &str,
     config: &RateLimitConfig,
 ) -> Result<bool, OciError> {
-    let (count, _) = RateLimitRepository::check(pool, key, config)
+    // BUNYIP-413: the cap in force may be a persisted override, so resolve it
+    // rather than comparing against the caller's compile-time preset.
+    let config = RateLimitConfigRepository::effective(pool, config)
+        .await
+        .map_err(|_| OciError::Internal)?;
+    let (count, _) = RateLimitRepository::check(pool, key, &config)
         .await
         .map_err(|_| OciError::Internal)?;
     Ok(count >= config.max_requests)

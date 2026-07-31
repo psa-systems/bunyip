@@ -1733,6 +1733,7 @@ mod tests {
             phone: None,
             has_used_trial: false,
             avatar_updated_at: None,
+            is_super_admin: false,
         }
     }
 
