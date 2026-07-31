@@ -859,7 +859,7 @@ pub async fn delete_account(
             "Hard-purged e2e account (non-production)"
         );
 
-        let secure = config.is_production();
+        let secure = config.cookies_secure(&req);
         let cookie_domain = config.cookie_domain.as_deref();
         let mut response = HttpResponse::Ok().json(crate::responses::ApiResponse::<()> {
             success: true,
@@ -943,7 +943,7 @@ pub async fn delete_account(
     }
 
     // Clear auth cookies and return success
-    let secure = config.is_production();
+    let secure = config.cookies_secure(&req);
     let cookie_domain = config.cookie_domain.as_deref();
 
     let mut response = HttpResponse::Ok().json(crate::responses::ApiResponse::<()> {

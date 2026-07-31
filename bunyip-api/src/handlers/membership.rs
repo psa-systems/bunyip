@@ -220,7 +220,7 @@ pub async fn cancel_membership(
     let access_token = jwt_service.create_access_token(&updated_user)?;
 
     // Determine if we should use secure cookies
-    let secure = config.is_production();
+    let secure = config.cookies_secure(&req);
     let cookie_domain = config.cookie_domain.as_deref();
 
     Ok(HttpResponse::Ok()
@@ -285,7 +285,7 @@ pub async fn cancel_membership_immediate(
     tracing::info!(user_id = %updated_user.id, "User canceled membership immediately");
 
     let access_token = jwt_service.create_access_token(&updated_user)?;
-    let secure = config.is_production();
+    let secure = config.cookies_secure(&req);
     let cookie_domain = config.cookie_domain.as_deref();
 
     Ok(HttpResponse::Ok()

@@ -992,6 +992,46 @@ impl Config {
         self.environment == "production"
     }
 
+    /// Whether a cookie issued for `req` must carry the `Secure` attribute
+    /// (BUNYIP-426 F4).
+    ///
+    /// Deriving this from `is_production()` alone shipped session cookies
+    /// without `Secure` on every TLS deployment whose `ENVIRONMENT` was not
+    /// exactly `production` - notably the publicly reachable `dev-sso` stack,
+    /// where `COOKIE_DOMAIN=.a8n.run` then leaked them in cleartext to any
+    /// sibling `http://*.a8n.run` name. The transport is the authority.
+    ///
+    /// `X-Forwarded-Proto` is honoured only when the immediate socket peer is a
+    /// configured trusted proxy, the same gate
+    /// [`crate::middleware::auth::extract_client_ip`] uses, so a direct client
+    /// cannot forge it. Plain-HTTP `just dev` on localhost still gets
+    /// `secure(false)` and keeps working.
+    pub fn cookies_secure(&self, req: &actix_web::HttpRequest) -> bool {
+        if self.is_production() || req.app_config().secure() {
+            return true;
+        }
+
+        // Absolute-form request line (and the test harness). Not authoritative
+        // against a hostile client, but a forged `https` here only makes the
+        // browser refuse the cookie over plaintext, which fails safe.
+        if req.uri().scheme_str() == Some("https") {
+            return true;
+        }
+
+        let peer_is_trusted_proxy = req
+            .peer_addr()
+            .map(|addr| addr.ip())
+            .is_some_and(|peer| self.trusted_proxies.iter().any(|net| net.contains(peer)));
+
+        peer_is_trusted_proxy
+            && req
+                .headers()
+                .get("X-Forwarded-Proto")
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.split(',').next().unwrap_or("").trim())
+                .is_some_and(|proto| proto.eq_ignore_ascii_case("https"))
+    }
+
     /// BUNYIP-266: cookie `Domain` applied to the OP session cookie.
     /// Returns the configured `cookie_domain` only when the operator has
     /// explicitly enabled cross-subdomain sharing via
@@ -1637,5 +1677,82 @@ mod tests {
         let cfg = OciConfig::from_env();
         assert!(cfg.enabled);
         env::remove_var("OCI_REGISTRY_ENABLED");
+    }
+
+    // -- BUNYIP-426 F4: Secure cookie attribute derives from the transport ----
+
+    /// A `development` config whose only trusted proxy is `10.0.0.0/8`.
+    fn dev_config_with_trusted_proxy() -> Config {
+        env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
+        env::set_var("ENVIRONMENT", "development");
+        env::set_var("TRUSTED_PROXY_CIDR", "10.0.0.0/8");
+        env::remove_var("SMTP_HOST");
+        env::remove_var("EMAIL_ENABLED");
+        Config::from_env_inner().expect("development config must load")
+    }
+
+    #[test]
+    fn cookies_secure_true_for_https_request_in_development() {
+        let _env = env_lock();
+        let config = dev_config_with_trusted_proxy();
+        assert!(!config.is_production());
+
+        let req = actix_web::test::TestRequest::with_uri("https://dev-bunyip-api.a8n.run/v1/login")
+            .to_http_request();
+        assert!(config.cookies_secure(&req));
+    }
+
+    #[test]
+    fn cookies_secure_true_for_trusted_proxy_forwarded_https() {
+        let _env = env_lock();
+        let config = dev_config_with_trusted_proxy();
+
+        let req = actix_web::test::TestRequest::with_uri("/v1/login")
+            .peer_addr("10.1.2.3:52000".parse().unwrap())
+            .insert_header(("X-Forwarded-Proto", "https"))
+            .to_http_request();
+        assert!(config.cookies_secure(&req));
+    }
+
+    #[test]
+    fn cookies_secure_false_for_forged_forwarded_proto_from_untrusted_peer() {
+        let _env = env_lock();
+        let config = dev_config_with_trusted_proxy();
+
+        // Same header, but the socket peer is outside TRUSTED_PROXY_CIDR, so
+        // the header is a client-controlled forgery and must not be believed.
+        let req = actix_web::test::TestRequest::with_uri("/v1/login")
+            .peer_addr("203.0.113.9:52000".parse().unwrap())
+            .insert_header(("X-Forwarded-Proto", "https"))
+            .to_http_request();
+        assert!(!config.cookies_secure(&req));
+    }
+
+    #[test]
+    fn cookies_secure_false_for_plain_http_in_development() {
+        let _env = env_lock();
+        let config = dev_config_with_trusted_proxy();
+
+        // Plain-HTTP `just dev` on localhost keeps working.
+        let req = actix_web::test::TestRequest::with_uri("/v1/login")
+            .peer_addr("127.0.0.1:52000".parse().unwrap())
+            .to_http_request();
+        assert!(!config.cookies_secure(&req));
+    }
+
+    #[test]
+    fn cookies_secure_true_in_production_regardless_of_transport() {
+        let _env = env_lock();
+        // Production is the unconditional-Secure branch; build the Config from
+        // the development parse and flip `environment`, so the test does not
+        // need the production boot guards' secrets (TOTP key, SMTP host).
+        let mut config = dev_config_with_trusted_proxy();
+        config.environment = "production".to_string();
+        assert!(config.is_production());
+
+        let req = actix_web::test::TestRequest::with_uri("/v1/login")
+            .peer_addr("203.0.113.9:52000".parse().unwrap())
+            .to_http_request();
+        assert!(config.cookies_secure(&req));
     }
 }

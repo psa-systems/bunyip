@@ -725,6 +725,22 @@ impl AuthService {
         Ok(())
     }
 
+    /// BUNYIP-426 F8: verify a signup challenge token alone (signature, issuer,
+    /// purpose, expiry), with no submit-timing check.
+    ///
+    /// This gates the unauthenticated pre-account Stripe write at
+    /// `POST /v1/billing/setup-intent`, which happens BEFORE the register submit
+    /// and so cannot carry the minimum-fill-time signal that
+    /// [`Self::verify_signup_not_bot`] applies. Fails with the same uniform
+    /// message so it is not an oracle either.
+    pub fn verify_signup_challenge(&self, token: Option<&str>) -> Result<(), AppError> {
+        let token = token.ok_or_else(signup_rejected)?;
+        self.jwt
+            .verify_signup_challenge_token(token)
+            .map_err(|_| signup_rejected())?;
+        Ok(())
+    }
+
     /// Register a new user
     pub async fn register(
         &self,
@@ -1176,8 +1192,13 @@ impl AuthService {
             return Err(AppError::TokenExpired);
         }
 
-        // Mark token as used
-        TokenRepository::mark_magic_link_token_used(&self.pool, magic_token.id).await?;
+        // Claim the token before any side-effecting work. The guarded UPDATE is
+        // the race arbiter, so two concurrent verifies of the same token can no
+        // longer both fall through to `UserRepository::create` and collide on
+        // the unique email index (BUNYIP-426 F9).
+        if !TokenRepository::mark_magic_link_token_used(&self.pool, magic_token.id).await? {
+            return Err(AppError::InvalidCredentials);
+        }
 
         // Find or create user
         let (user, is_new_user) =
@@ -1523,11 +1544,14 @@ impl AuthService {
         // Hash new password
         let password_hash = self.password.hash(&new_password)?;
 
+        // Claim the token BEFORE the password write, so the loser of a
+        // concurrent race cannot also set a password (BUNYIP-426 F9).
+        if !TokenRepository::mark_password_reset_token_used(&self.pool, reset_token.id).await? {
+            return Err(AppError::InvalidCredentials);
+        }
+
         // Update password
         UserRepository::update_password(&self.pool, user.id, &password_hash).await?;
-
-        // Mark token as used
-        TokenRepository::mark_password_reset_token_used(&self.pool, reset_token.id).await?;
 
         // Revoke all refresh tokens (logout everywhere)
         TokenRepository::revoke_all_user_refresh_tokens(&self.pool, user.id).await?;
@@ -1930,8 +1954,13 @@ impl AuthService {
         // its own advisory-locked tx.
         let mut tx = self.pool.begin().await?;
 
-        TokenRepository::mark_email_verification_token_used(&mut *tx, verification_token.id)
-            .await?;
+        // The claim runs first and inside the same tx as the write it guards, so
+        // a concurrent confirm loses the row and gets nothing (BUNYIP-426 F9).
+        if !TokenRepository::mark_email_verification_token_used(&mut *tx, verification_token.id)
+            .await?
+        {
+            return Err(AppError::InvalidCredentials);
+        }
 
         sqlx::query("UPDATE users SET email_verified = TRUE, updated_at = NOW() WHERE id = $1")
             .bind(user.id)

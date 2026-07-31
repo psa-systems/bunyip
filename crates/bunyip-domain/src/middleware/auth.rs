@@ -292,9 +292,27 @@ async fn verify_either(
     }
 }
 
+/// BUNYIP-426 F7: the verified subject of `req`, if it carries a usable access
+/// token by either scheme.
+///
+/// Shares [`extract_token`] and [`verify_either`] with the extractors, so the
+/// rate-limit floor keys on exactly the identity the handler will later see.
+/// `None` means anonymous (no token) or unverifiable, and the caller must fall
+/// back to the tighter per-IP budget rather than trusting the token.
+pub async fn resolve_rate_limit_subject(req: &HttpRequest) -> Option<Uuid> {
+    let jwt_service = req.app_data::<Arc<JwtService>>().cloned();
+    let at_jwt_verifier = req.app_data::<Arc<dyn AtJwtVerifier>>().cloned();
+    let token = extract_token(req)?;
+
+    verify_either(&token, jwt_service.as_ref(), at_jwt_verifier.as_ref())
+        .await
+        .ok()
+        .map(|claims| claims.sub)
+}
+
 /// Extract JWT token from request
 /// Checks cookie first (access_token), then Authorization header
-fn extract_token(req: &HttpRequest) -> Option<String> {
+pub fn extract_token(req: &HttpRequest) -> Option<String> {
     // Try cookie first
     if let Some(cookie) = req.cookie("access_token") {
         return Some(cookie.value().to_string());
