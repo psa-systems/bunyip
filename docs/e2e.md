@@ -101,7 +101,12 @@ secret; a manual dispatch lets the operator pick.
   enrolls that PRESET secret and enables 2FA on the seeded accounts, so the
   matching `E2E_TOTP_SECRET` stays STABLE across re-seeds (no rotation on every
   wipe). The alternative is manual UI enrollment (below), which mints a fresh
-  secret you must then re-capture.
+  secret you must then re-capture. Note that bunyip consumes a TOTP code the
+  moment it accepts it (BUNYIP-428, single use per RFC 6238 section 5.2), so two
+  logins on the SAME account inside one 30s step collide: the second sees
+  "Invalid verification code". `lib/login.ts` absorbs that by waiting out the
+  step and resubmitting a fresh code once; specs that log in repeatedly should
+  rely on `loginViaHub` rather than driving the 2FA form directly.
 - **Production:** provisioned manually (the bootstrap binary is gated to
   non-production by design). Create the account + tenant by hand, enable 2FA,
   and record the same vars under the `E2E_PRODUCTION_*` secret names.
