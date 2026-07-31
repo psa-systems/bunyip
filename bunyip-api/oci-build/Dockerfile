@@ -32,7 +32,11 @@
 # the git CLI so the optional injected token is honoured. bunyip-oidc uses
 # compile-time sqlx::query! macros; resolve them against the committed .sqlx
 # offline cache instead of a live database.
-FROM ghcr.io/niceguyit/rust-builder-musl:v1.0.0-rust1.94-alpine AS chef
+# Base images carry both the human-readable tag and the immutable digest
+# (BUNYIP-426 F10), so two builds of the same commit cannot pick up different
+# layers and a bump is a deliberate, reviewable edit. Re-resolve a digest with
+# `docker buildx imagetools inspect <ref> --raw | sha256sum` when bumping a tag.
+FROM ghcr.io/niceguyit/rust-builder-musl:v1.0.0-rust1.94-alpine@sha256:6836365513bd46d47b43d014a800f5ae8f429717544fef209b1a0c5730dd5460 AS chef
 WORKDIR /build
 ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
     CARGO_NET_GIT_FETCH_WITH_CLI=true \
@@ -96,7 +100,9 @@ FROM scratch AS export
 COPY --from=builder /build/target/release/bunyip-api /bunyip-api
 
 # ---- Stage 2: runtime -------------------------------------------------------
-FROM alpine:3.21 AS runtime
+# alpine 3.23 matches the `postgres:18.2-alpine3.23` pin in compose.yml, so the
+# repo validates one Alpine release rather than three (BUNYIP-426 F10).
+FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS runtime
 
 ARG GIT_COMMIT=unknown
 ARG GIT_TAG=unknown

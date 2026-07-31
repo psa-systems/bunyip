@@ -156,9 +156,16 @@ PR gate is a separate workflow that declares only the two base URLs (see
   e2e suite self-provisions disposable accounts from the single CI runner egress
   IP, so registrations accumulate across serial runs in the one-hour window and
   trip a spurious 429. Root-cause fix (`bunyip-api/src/handlers/auth.rs::register`):
-  the cap is applied in production ONLY (`if config.is_production()`); non-prod
-  (staging/dev) registers unthrottled, with the auto-ban still catching abusive
-  bursts. No env knob, no per-run workaround. NOTE: because the suite tests the
+  the budget varies by environment, not whether one exists. Production keeps
+  `RateLimitConfig::REGISTRATION` (3/hour/IP); staging/dev use
+  `REGISTRATION_NON_PROD` (30/hour/IP), which is loose enough for serial e2e runs
+  from one egress IP. BUNYIP-426 F7 replaced the earlier
+  `if config.is_production()` skip, which left `/v1/auth/register` completely
+  unthrottled on the publicly reachable dev-sso stack. Since BUNYIP-426 F7 the
+  `RateLimitFloor` middleware also caps every non-exempt endpoint at
+  `API_UNAUTH` (20/min/IP) for anonymous callers, so a burst-heavy spec can trip
+  that floor even where the per-endpoint cap is generous. No env knob, no
+  per-run workaround. NOTE: because the suite tests the
   DEPLOYED instance, this fix only takes effect after the new image is deployed
   to staging, so a PR's own pre-merge e2e run can still 429 against the not-yet-
   redeployed staging; it goes green on the post-merge run.

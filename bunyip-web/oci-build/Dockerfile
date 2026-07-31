@@ -14,7 +14,11 @@
 
 # ---- Stage 1: build ---------------------------------------------------------
 # bun + cargo ship in the builder image; nothing to install.
-FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie AS build
+# Base images carry both the human-readable tag and the immutable digest
+# (BUNYIP-426 F10), so two builds of the same commit cannot pick up different
+# layers and a bump is a deliberate, reviewable edit. Re-resolve a digest with
+# `docker buildx imagetools inspect <ref> --raw | sha256sum` when bumping a tag.
+FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie@sha256:f075f2433e3ba90ad9210794786d6e9b6e3dcc5c647061a468dc773c1a2789f2 AS build
 
 # nproc/2 concurrency cap (per governance CI.md).
 ARG CARGO_BUILD_JOBS=2
@@ -34,7 +38,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cd /app && cargo build --locked --release --bin bunyip-web
 
 # ---- Stage 2: run -----------------------------------------------------------
-FROM debian:trixie-slim
+FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd
 
 ARG GIT_COMMIT=unknown
 ARG GIT_TAG=unknown

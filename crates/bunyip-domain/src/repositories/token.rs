@@ -392,18 +392,25 @@ impl TokenRepository {
         Ok(token)
     }
 
-    /// Mark magic link token as used
-    pub async fn mark_magic_link_token_used(pool: &PgPool, token_id: Uuid) -> Result<(), AppError> {
-        sqlx::query(
+    /// Atomically claim a magic link token as used (BUNYIP-426 F9).
+    ///
+    /// The `used_at IS NULL` guard makes `rows_affected` the race arbiter, the
+    /// same shape as [`Self::claim_login_approval_code`]: exactly one of N
+    /// concurrent verifies of the same token gets `true`.
+    pub async fn mark_magic_link_token_used(
+        pool: &PgPool,
+        token_id: Uuid,
+    ) -> Result<bool, AppError> {
+        let result = sqlx::query(
             r#"
-            UPDATE magic_link_tokens SET used_at = NOW() WHERE id = $1
+            UPDATE magic_link_tokens SET used_at = NOW() WHERE id = $1 AND used_at IS NULL
             "#,
         )
         .bind(token_id)
         .execute(pool)
         .await?;
 
-        Ok(())
+        Ok(result.rows_affected() > 0)
     }
 
     /// Count recent magic link tokens for an email (for rate limiting)
@@ -495,21 +502,24 @@ impl TokenRepository {
         Ok(token)
     }
 
-    /// Mark password reset token as used
+    /// Atomically claim a password reset token as used (BUNYIP-426 F9).
+    ///
+    /// Returns `false` when another request already consumed it, so the caller
+    /// must refuse rather than proceed to the password write.
     pub async fn mark_password_reset_token_used(
         pool: &PgPool,
         token_id: Uuid,
-    ) -> Result<(), AppError> {
-        sqlx::query(
+    ) -> Result<bool, AppError> {
+        let result = sqlx::query(
             r#"
-            UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1
+            UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1 AND used_at IS NULL
             "#,
         )
         .bind(token_id)
         .execute(pool)
         .await?;
 
-        Ok(())
+        Ok(result.rows_affected() > 0)
     }
 
     /// Count recent password reset tokens for a user (for rate limiting)
@@ -870,24 +880,27 @@ impl TokenRepository {
         Ok(token)
     }
 
-    /// Mark email verification token as used
+    /// Atomically claim an email verification token as used (BUNYIP-426 F9).
+    ///
+    /// Takes the executor so the claim shares the caller's transaction with the
+    /// `email_verified` write it guards.
     pub async fn mark_email_verification_token_used<'e, E>(
         executor: E,
         token_id: Uuid,
-    ) -> Result<(), AppError>
+    ) -> Result<bool, AppError>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
     {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
-            UPDATE email_verification_tokens SET used_at = NOW() WHERE id = $1
+            UPDATE email_verification_tokens SET used_at = NOW() WHERE id = $1 AND used_at IS NULL
             "#,
         )
         .bind(token_id)
         .execute(executor)
         .await?;
 
-        Ok(())
+        Ok(result.rows_affected() > 0)
     }
 
     /// Count recent email verification tokens for a user (for rate limiting)
@@ -1110,5 +1123,45 @@ impl TokenRepository {
         total += result.rows_affected();
 
         Ok(total)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// BUNYIP-426 F9 regression guard: every single-use token consume in this
+    /// file must be a guarded claim whose `rows_affected` decides the race. An
+    /// unguarded `SET used_at = NOW() WHERE id = $1` reintroduces the TOCTOU,
+    /// so fail the build if one reappears.
+    #[test]
+    fn every_single_use_consume_is_guarded() {
+        // Scan the repository source only. This test module names the shape in
+        // both prose and code, and would otherwise match itself.
+        let src = include_str!("token.rs");
+        let src = src.split("\n#[cfg(test)]").next().unwrap();
+        let lines: Vec<&str> = src.lines().collect();
+
+        let mut consumes = 0;
+        for (i, line) in lines.iter().enumerate() {
+            if !line.contains("SET used_at = NOW()") {
+                continue;
+            }
+            consumes += 1;
+            // The guard may sit on the same line or on the WHERE clause that
+            // follows it in the multi-line query literal.
+            let statement = lines[i..(i + 3).min(lines.len())].join(" ");
+            assert!(
+                statement.contains("used_at IS NULL"),
+                "unguarded single-use consume at token.rs:{}: {}",
+                i + 1,
+                line.trim()
+            );
+        }
+
+        // Fail loudly if the shape is renamed away rather than silently passing
+        // on zero matches.
+        assert!(
+            consumes >= 4,
+            "expected at least 4 single-use consumes, found {consumes}"
+        );
     }
 }

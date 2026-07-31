@@ -895,6 +895,13 @@ async fn main() -> anyhow::Result<()> {
             // Referer is not a CORS_ORIGIN entry.
             .wrap(csrf_guard.clone())
             .wrap(cors)
+            // BUNYIP-426 F7: default per-IP / per-user cap under every route, so
+            // an endpoint added without its own `check_rate_limit` is still
+            // throttled. Inside AutoBanMiddleware, so a banned IP is rejected
+            // before it costs a rate-limit row.
+            .wrap(bunyip_api::rate_limit_floor::RateLimitFloor::new(
+                pool.clone(),
+            ))
             // Auto-ban runs outermost — rejects banned IPs before CORS processing
             .wrap(AutoBanMiddleware::new(auto_ban_service.clone()))
             // Explicit JSON body size limit (32 KB)
