@@ -13,12 +13,17 @@ use crate::middleware::AuthenticatedUser;
 use crate::models::RateLimitConfig;
 use crate::repositories::{RateLimitRepository, UserRepository};
 use crate::responses::{get_request_id, success};
-use crate::services::StripeService;
+use crate::services::{AuthService, StripeService};
 
 /// Request body for SetupIntent creation
 #[derive(Debug, Deserialize)]
 pub struct CreateSetupIntentRequest {
     pub email: String,
+    /// BUNYIP-426 F8: the signup challenge token the register form was rendered
+    /// with (from `GET /v1/auth/register-challenge`). Required: it is what binds
+    /// this unauthenticated Stripe write to a real form render.
+    #[serde(default)]
+    pub signup_token: Option<String>,
 }
 
 /// Response for SetupIntent creation
@@ -30,11 +35,13 @@ pub struct CreateSetupIntentResponse {
 
 /// POST /v1/billing/setup-intent
 /// Create a Stripe Customer and SetupIntent for $0 card authorization at signup.
-/// Unauthenticated — the user does not exist yet at this point.
+/// Unauthenticated - the user does not exist yet at this point, so the signup
+/// challenge token is what stands in for a credential (BUNYIP-426 F8).
 pub async fn create_setup_intent(
     req: HttpRequest,
     pool: web::Data<PgPool>,
     stripe: web::Data<Arc<StripeService>>,
+    auth_service: web::Data<Arc<AuthService>>,
     body: web::Json<CreateSetupIntentRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -54,15 +61,14 @@ pub async fn create_setup_intent(
 
     crate::validation::validate_email(&body.email)?;
 
-    // Reject early if the email is already registered, so the user does not
-    // waste a step entering card details before discovering the conflict.
-    if UserRepository::find_by_email(&pool, &body.email)
-        .await?
-        .is_some()
-    {
-        return Err(AppError::conflict("Email already registered"));
-    }
+    // BUNYIP-426 F8: bind the Stripe write to a real form render, so an
+    // unauthenticated caller cannot mint Customers at will.
+    auth_service.verify_signup_challenge(body.signup_token.as_deref())?;
 
+    // No `find_by_email` pre-check here: a 409 for a registered email and a 200
+    // for an unknown one made this endpoint a registered/not-registered oracle
+    // (BUNYIP-426 F8). `/v1/auth/register` is now the single place that reports
+    // the conflict, which is where it is authoritative anyway.
     let (customer_id, client_secret) = stripe.create_setup_intent(&body.email).await?;
 
     Ok(success(

@@ -1,0 +1,196 @@
+//! Default per-IP / per-user request cap for bunyip-api (BUNYIP-426 F7).
+//!
+//! `RateLimitConfig::API_UNAUTH` and `API_AUTH` were written as the generic
+//! floor and then wired to nothing, so per-endpoint `check_rate_limit` calls
+//! were the whole story and any handler added without one was uncapped. This
+//! middleware applies the two presets underneath every route, so an endpoint is
+//! throttled by default rather than by remembering.
+//!
+//! It is a floor, not a replacement: the per-endpoint caps are tighter and
+//! specific, and still run inside this one.
+
+use actix_web::{
+    body::EitherBody,
+    dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
+    http::Method,
+    Error, HttpResponse,
+};
+use std::{
+    future::{ready, Future, Ready},
+    pin::Pin,
+    rc::Rc,
+};
+
+use crate::middleware::{extract_client_ip, resolve_rate_limit_subject};
+use crate::models::RateLimitConfig;
+use crate::repositories::RateLimitRepository;
+use sqlx::PgPool;
+
+/// Paths the floor never throttles.
+///
+/// The probes are hit by orchestration on a fixed schedule and must not be able
+/// to consume a real client's budget; the Stripe webhook is HMAC-authenticated,
+/// carries no ambient credential, and legitimately arrives in retry bursts.
+const EXEMPT_PATHS: &[&str] = &[
+    "/",
+    "/health",
+    "/version",
+    "/e2e-bootstrapped",
+    "/v1/health",
+    "/v1/version",
+    "/v1/webhooks/stripe",
+];
+
+/// Whether the floor applies to this request.
+pub(crate) fn is_exempt(path: &str, method: &Method) -> bool {
+    // CORS preflights carry no credential and are answered by the cors layer.
+    method == Method::OPTIONS || EXEMPT_PATHS.contains(&path)
+}
+
+/// Actix middleware factory for the default request cap.
+pub struct RateLimitFloor {
+    pool: PgPool,
+}
+
+impl RateLimitFloor {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+impl<S, B> Transform<S, ServiceRequest> for RateLimitFloor
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error> + 'static,
+    S::Future: 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<EitherBody<B>>;
+    type Error = Error;
+    type Transform = RateLimitFloorService<S>;
+    type InitError = ();
+    type Future = Ready<Result<Self::Transform, Self::InitError>>;
+
+    fn new_transform(&self, service: S) -> Self::Future {
+        ready(Ok(RateLimitFloorService {
+            service: Rc::new(service),
+            pool: self.pool.clone(),
+        }))
+    }
+}
+
+pub struct RateLimitFloorService<S> {
+    service: Rc<S>,
+    pool: PgPool,
+}
+
+impl<S, B> Service<ServiceRequest> for RateLimitFloorService<S>
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error> + 'static,
+    S::Future: 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<EitherBody<B>>;
+    type Error = Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+
+    forward_ready!(service);
+
+    fn call(&self, req: ServiceRequest) -> Self::Future {
+        let service = Rc::clone(&self.service);
+        let pool = self.pool.clone();
+
+        if is_exempt(req.path(), req.method()) {
+            let fut = service.call(req);
+            return Box::pin(async move { fut.await.map(|res| res.map_into_left_body()) });
+        }
+
+        let path = req.path().to_string();
+
+        Box::pin(async move {
+            // Borrow the inner HttpRequest, never clone it: actix's router calls
+            // `match_info_mut`, which asserts it holds the only reference, so a
+            // clone alive across `service.call` panics the worker.
+            //
+            // An unverifiable token falls back to the tighter unauthenticated
+            // budget, so presenting garbage cannot buy the larger one.
+            let (key, config) = {
+                let http_req = req.request();
+                match resolve_rate_limit_subject(http_req).await {
+                    Some(sub) => (sub.to_string(), &RateLimitConfig::API_AUTH),
+                    None => (
+                        extract_client_ip(http_req)
+                            .map(|ip| ip.to_string())
+                            .unwrap_or_else(|| "unknown".into()),
+                        &RateLimitConfig::API_UNAUTH,
+                    ),
+                }
+            };
+
+            match RateLimitRepository::check_and_increment(&pool, &key, config).await {
+                Ok((_count, true)) => {
+                    let retry_after = RateLimitRepository::get_retry_after(&pool, &key, config)
+                        .await
+                        .unwrap_or(config.window_seconds.max(0) as u64);
+                    tracing::warn!(
+                        action = config.action,
+                        path = %path,
+                        "request cap floor exceeded"
+                    );
+                    let res = HttpResponse::TooManyRequests()
+                        .insert_header(("Retry-After", retry_after.to_string()))
+                        .finish();
+                    Ok(req.into_response(res).map_into_right_body())
+                }
+                Ok((_count, false)) => service.call(req).await.map(|res| res.map_into_left_body()),
+                Err(e) => {
+                    // Fail open: a rate-limit table outage must not take the API
+                    // down. The per-endpoint caps and the auto-ban still apply.
+                    tracing::error!(error = %e, "request cap floor check failed; passing through");
+                    service.call(req).await.map(|res| res.map_into_left_body())
+                }
+            }
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probes_and_the_stripe_webhook_are_exempt() {
+        assert!(is_exempt("/health", &Method::GET));
+        assert!(is_exempt("/v1/health", &Method::GET));
+        assert!(is_exempt("/version", &Method::GET));
+        assert!(is_exempt("/v1/version", &Method::GET));
+        assert!(is_exempt("/v1/webhooks/stripe", &Method::POST));
+        assert!(is_exempt("/v1/auth/refresh", &Method::OPTIONS));
+    }
+
+    #[test]
+    fn ordinary_endpoints_are_capped() {
+        assert!(!is_exempt("/v1/auth/refresh", &Method::POST));
+        assert!(!is_exempt("/v1/auth/register", &Method::POST));
+        assert!(!is_exempt("/v1/users/me", &Method::GET));
+        assert!(!is_exempt("/v1/auth/password-reset/verify", &Method::GET));
+        // Near-misses must not fall through the exact-match list.
+        assert!(!is_exempt("/v1/healthz", &Method::GET));
+        assert!(!is_exempt("/v1/webhooks/stripe/extra", &Method::POST));
+    }
+
+    /// Regression guard: this middleware must never hold a cloned
+    /// [`actix_web::HttpRequest`] across the inner `service.call`. Actix's
+    /// router calls `HttpRequest::match_info_mut`, which unwraps
+    /// `Rc::get_mut` and panics the worker when a second reference is alive, so
+    /// a clone here took down every non-exempt request rather than throttling
+    /// it. Borrow `req.request()` instead.
+    #[test]
+    fn never_clones_the_inner_http_request() {
+        let src = include_str!("rate_limit_floor.rs");
+        let body = src.split("\n#[cfg(test)]").next().unwrap();
+        assert!(
+            !body.contains("req.request().clone()"),
+            "cloning the inner HttpRequest panics actix's router; borrow it instead"
+        );
+    }
+}

@@ -248,20 +248,22 @@ pub async fn register(
     let ip_address = extract_client_ip(&req);
     let device_info = extract_device_info(&req);
 
-    // Rate limit by IP address. The per-IP registration cap is an anti-abuse
-    // control for the public production deployment. Non-production environments
-    // (staging/dev) host the deployed-instance e2e suite, which self-provisions
-    // disposable accounts from the single CI runner egress IP and accumulates
-    // registrations across serial runs inside the one-hour window, tripping a
-    // spurious 429 (BUNYIP-150 / BUNYIP-196 / BUNYIP-197). Each disposable
-    // account needs a fresh unique email, so they cannot be pre-seeded or
-    // reused the way the shared login account is. Apply the cap in production
-    // only; staging/dev register unthrottled (the auto-ban still catches
-    // abusive bursts).
-    if config.is_production() {
-        let ip_key = ip_address.map(|ip| ip.to_string()).unwrap_or_default();
-        check_rate_limit(&pool, &ip_key, &RateLimitConfig::REGISTRATION).await?;
-    }
+    // Rate limit by IP address. BUNYIP-426 F7: the cap now applies in EVERY
+    // environment, because skipping it below production left `/v1/auth/register`
+    // entirely unthrottled on the publicly reachable dev-sso stack. What varies
+    // is the budget, not whether one exists: non-production uses the looser
+    // REGISTRATION_NON_PROD preset, because the deployed-instance e2e suite
+    // self-provisions disposable accounts from the single CI runner egress IP
+    // and accumulates registrations across serial runs inside the one-hour
+    // window, which tripped a spurious 429 on the production budget
+    // (BUNYIP-150 / BUNYIP-196 / BUNYIP-197).
+    let registration_limit = if config.is_production() {
+        &RateLimitConfig::REGISTRATION
+    } else {
+        &RateLimitConfig::REGISTRATION_NON_PROD
+    };
+    let ip_key = ip_address.map(|ip| ip.to_string()).unwrap_or_default();
+    check_rate_limit(&pool, &ip_key, registration_limit).await?;
 
     // BUNYIP-377: bot guard (honeypot + submit timing). Opt-in via
     // SIGNUP_BOT_GUARD_ENABLED, off until every register form carries the hidden
@@ -325,7 +327,7 @@ pub async fn register(
         .await?;
     }
 
-    let secure = config.is_production();
+    let secure = config.cookies_secure(&req);
     let cookie_domain = config.cookie_domain.as_deref();
 
     let op_cookie = establish_op_session(
@@ -465,7 +467,7 @@ pub async fn login(
             request_id,
         )),
         LoginResult::Success(tokens, user) => {
-            let secure = config.is_production();
+            let secure = config.cookies_secure(&req);
             let cookie_domain = config.cookie_domain.as_deref();
 
             let op_cookie = establish_op_session(
@@ -625,7 +627,7 @@ pub async fn verify_magic_link(
                 }
             }
 
-            let secure = config.is_production();
+            let secure = config.cookies_secure(&req);
             let cookie_domain = config.cookie_domain.as_deref();
 
             let op_cookie = establish_op_session(
@@ -703,7 +705,7 @@ pub async fn verify_login_approval(
         .complete_login_approval(&body.challenge_token, &body.code, device_info, ip_address)
         .await?;
 
-    let secure = config.is_production();
+    let secure = config.cookies_secure(&req);
     let cookie_domain = config.cookie_domain.as_deref();
 
     // The approval proves control of the account's email on top of the primary
@@ -791,7 +793,7 @@ pub async fn accept_admin_invite(
             request_id,
         )),
         AcceptInviteResult::Success(tokens, user) => {
-            let secure = config.is_production();
+            let secure = config.cookies_secure(&req);
             let cookie_domain = config.cookie_domain.as_deref();
 
             let op_cookie = establish_op_session(
@@ -883,7 +885,7 @@ pub async fn refresh_token(
         }
     };
 
-    let secure = config.is_production();
+    let secure = config.cookies_secure(&req);
     let cookie_domain = config.cookie_domain.as_deref();
 
     let mut resp = HttpResponse::Ok();
@@ -964,7 +966,7 @@ pub async fn logout(
         revoke_op_sessions(&oidc_provider, user.sub).await;
     }
 
-    let secure = config.is_production();
+    let secure = config.cookies_secure(&req);
     let cookie_domain = config.cookie_domain.as_deref();
 
     // Clear cookies unconditionally. This is the whole point of the endpoint
@@ -1055,7 +1057,7 @@ pub async fn logout_redirect(
         revoke_op_sessions(&oidc_provider, user.sub).await;
     }
 
-    let secure = config.is_production();
+    let secure = config.cookies_secure(&req);
     let cookie_domain = config.cookie_domain.as_deref();
     let clear_cookies = AuthCookies::clear(secure, cookie_domain);
 
@@ -1084,7 +1086,7 @@ pub async fn logout_all(
     auth_service.logout_all(user.0.sub, ip_address).await?;
     revoke_op_sessions(&oidc_provider, user.0.sub).await;
 
-    let secure = config.is_production();
+    let secure = config.cookies_secure(&req);
     let cookie_domain = config.cookie_domain.as_deref();
 
     let mut response = HttpResponse::Ok().json(crate::responses::ApiResponse::<()> {
@@ -1300,7 +1302,7 @@ pub async fn auth_redirect(
         {
             Ok(tokens) => {
                 tracing::debug!(location = %target_url, "auth_redirect: refresh succeeded, redirecting to target");
-                let secure = config.is_production();
+                let secure = config.cookies_secure(&req);
                 let cookie_domain = config.cookie_domain.as_deref();
 
                 let mut resp = HttpResponse::Found();

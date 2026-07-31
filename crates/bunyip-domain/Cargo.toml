@@ -12,10 +12,13 @@ workspace = true
 
 [dependencies]
 # Generic kernel (errors, responses, validation, middleware, primitive services).
-dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", branch = "main" }
+# Pinned by rev, not branch, so a dunite bump is an explicit reviewable diff
+# instead of whatever `main` happened to point at when the lock was refreshed
+# (BUNYIP-426 F6). dunite publishes no tags; switch to `tag` when it does.
+dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "70eea0b5ab5452d2cde61ddf4ac36a27d33ee88f" }
 # Generic Forgejo binary-distribution engine (artifact metadata, asset cache,
 # rate limiting). Bunyip implements its store traits over Postgres.
-dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", branch = "main" }
+dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "70eea0b5ab5452d2cde61ddf4ac36a27d33ee88f" }
 async-trait = "0.1"
 
 # Web framework + multipart.

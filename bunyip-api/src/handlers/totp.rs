@@ -244,7 +244,7 @@ pub async fn verify_2fa(
         .complete_2fa_login(&body.challenge_token, device_info, ip_address)
         .await?;
 
-    let secure = config.is_production();
+    let secure = config.cookies_secure(&req);
     let cookie_domain = config.cookie_domain.as_deref();
 
     // BUNYIP-257: TOTP-verified login. The second factor satisfies the

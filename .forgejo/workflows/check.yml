@@ -78,6 +78,13 @@ jobs:
         # the two base URLs (BUNYIP-425).
         run: ./scripts/check-workflow-secrets.sh
 
+      - name: Check security invariants
+        # Grep-assert the shapes the BUNYIP-426 audit sweep removed: cookie
+        # Secure derived from the transport, dunite pinned by rev, no signup
+        # enumeration oracle, base images pinned by digest. None of these fails
+        # a compile, so they need an explicit gate.
+        run: ./scripts/check-security-invariants.sh
+
       - name: Cap build parallelism
         # nproc/2 cap: never claim more than half the host (see CI.md "Concurrency cap").
         run: echo "CARGO_BUILD_JOBS=$(($(nproc) / 2))" >> "$GITHUB_ENV"

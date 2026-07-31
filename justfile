@@ -42,7 +42,7 @@ pre-commit: ensure-env
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-migrations check-workflows check-build check-clippy check-fmt check-docker
+check: check-migrations check-workflows check-security check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -53,6 +53,13 @@ check-migrations:
 [group: 'checks']
 check-workflows:
     ./scripts/check-workflow-secrets.sh
+
+# Gate the security shapes the BUNYIP-426 audit sweep removed (transport-derived
+# cookie Secure, rev-pinned dunite, no signup enumeration oracle, digest-pinned
+# base images). Grep-only, so it runs without a toolchain.
+[group: 'checks']
+check-security:
+    ./scripts/check-security-invariants.sh
 
 # Build every target in the workspace.
 [group: 'checks']
@@ -508,7 +515,7 @@ dev-clean-all: dev-clean
 
 # Create a release: bump major (vx.0.0), minor (v0.x.0), or hotfix (v0.0.x), push the branch, and open the PR via fj.
 # After the PR merges, the create-release workflow creates the tag and release automatically.
-# Needs a local Rust toolchain (runs `cargo update --workspace`); on a toolchain-less dev
+# Needs a local Rust toolchain (runs a member-scoped `cargo update`); on a toolchain-less dev
 # box use `create-release-container`, which runs that one step in the rust-builder image.
 # Keep the two recipes in sync (BUNYIP-292).
 [group: 'release']
@@ -560,8 +567,9 @@ create-release bump:
     git add Cargo.toml
     # The workspace crates inherit version.workspace, so the bump changes their
     # Cargo.lock entries; sync the lock in the same commit or CI's --locked build
-    # fails (BUNYIP-59).
-    cargo update --workspace
+    # fails (BUNYIP-59). Name the members explicitly rather than `--workspace`,
+    # which would also roll every external dependency forward (BUNYIP-426 F6).
+    cargo update --package bunyip-api --package bunyip-web --package bunyip-domain --package bunyip-oci --package bunyip-oidc
     git add Cargo.lock
     git commit --signoff --message $"Release ($tag)"
 
@@ -608,7 +616,7 @@ create-release bump:
     }
     print $"After merging, the create-release workflow will tag and release ($tag) automatically."
 
-# Same as `create-release`, but runs the `cargo update --workspace` lock-sync step inside
+# Same as `create-release`, but runs the member-scoped `cargo update` lock-sync step inside
 # the pinned rust-builder image instead of on the host. For toolchain-less dev boxes that
 # have no local cargo (see `check-container`). All git / fj steps stay on the host so they
 # use the host ssh key + fj keys.json. Keep in sync with `create-release` (BUNYIP-292).
@@ -683,11 +691,11 @@ create-release-container bump:
         "-w" "/work"
         "-e" "SQLX_OFFLINE=true"
         "ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie"
-        "bash" "-c" "cargo update --workspace"
+        "bash" "-c" "cargo update --package bunyip-api --package bunyip-web --package bunyip-domain --package bunyip-oci --package bunyip-oidc"
     ]
     ^docker ...$docker_args
     if $env.LAST_EXIT_CODE != 0 {
-        print $"(ansi red)cargo update --workspace in the rust-builder container failed (exit ($env.LAST_EXIT_CODE)).(ansi reset)"
+        print $"(ansi red)the cargo update lock-sync step in the rust-builder container failed (exit ($env.LAST_EXIT_CODE)).(ansi reset)"
         exit 1
     }
     git add Cargo.lock
