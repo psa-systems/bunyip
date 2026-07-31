@@ -32,7 +32,7 @@ e2e/
     oidc/                    project `api` (request-context fixtures)
   scripts/
     wait-for-deploy.mjs       deploy-sync gate (push/dispatch-staging)
-    health-check.mjs          reachability gate (pull_request/dispatch-production)
+    health-check.mjs          reachability gate (PR gate/dispatch-production)
 ```
 
 ### Project model and the login rate limit
@@ -83,9 +83,11 @@ result on the plain `E2E_*` names via a Forgejo expression
 (`${{ inputs.environment == 'production' && secrets.<PRODUCTION> || secrets.<STAGING> }}`),
 so `env.ts` and the gate scripts only ever read the plain names. Test-only vars
 use `E2E_STAGING_*` / `E2E_PRODUCTION_*`; the OP host follows the deployment's
-own `OIDC_ISSUER_*` variable name where one exists. On `push` / `pull_request`
-the `inputs` context is empty, so each expression resolves to its staging
-secret; a manual dispatch lets the operator pick.
+own `OIDC_ISSUER_*` variable name where one exists. On `push` the `inputs`
+context is empty, so each expression resolves to its staging secret; a manual
+dispatch lets the operator pick. None of these reach a `pull_request` run: the
+PR gate is a separate workflow that declares only the two base URLs (see
+[CI workflow](#ci-workflow)).
 
 ### Provisioning the E2E account + tenant
 
@@ -215,7 +217,7 @@ is in-repo: it is account, secret, and Forgejo-admin work. Do the staging set
 first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODUCTION`.
 
 1. **Merge the suite.** Lands `e2e/`, the `just e2e` recipe, and
-   `.forgejo/workflows/e2e.yml`.
+   `.forgejo/workflows/e2e.yml` + `.forgejo/workflows/e2e-pr.yml`.
 
 2. **Seed the staging E2E account + tenant.** On the c-01 host, from the docker
    repo, run the bootstrap recipe (DEV-378). It runs the `bunyip-e2e-bootstrap`
@@ -321,14 +323,15 @@ first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODU
    ```
 
 6. **Enforce the check.** Forgejo -> repo Settings -> Branch protection on `main`
-   -> add `e2e` to the required status checks. The PR run is what actually blocks
-   a merge; a direct push to `main` can still turn the post-merge run red after
+   -> add `e2e-pr` to the required status checks (not `e2e`: since BUNYIP-425 the
+   suite does not run on `pull_request`, so it never reports a PR status). The
+   suite itself is a post-merge signal: a push to `main` turns the run red after
    the fact.
 
-7. **Verify.** Open a PR (or push to `main`) and watch the `e2e` job run the
-   runnable specs against staging. Locally: `cp e2e/.env.example e2e/.env`, fill
-   the same values, then `cd e2e && npm ci && npx playwright install chromium &&
-   just e2e`.
+7. **Verify.** Open a PR and watch the `e2e-pr` gate pass, then push to `main`
+   and watch the `e2e` job run the runnable specs against staging. Locally:
+   `cp e2e/.env.example e2e/.env`, fill the same values, then
+   `cd e2e && npm ci && npx playwright install chromium && just e2e`.
 
 After this the **runnable** specs pass. The `test.fixme` specs unblock as their
 sub-tasks land: BUNYIP-150 (staging mail sink -> signup / password-reset /
@@ -376,30 +379,47 @@ secret string as unset.
 
 ## CI workflow
 
-`.forgejo/workflows/e2e.yml` runs on three triggers, serialised through a single
-concurrency group (the suite shares one account and the 5/min login limit means
-parallel runs would collide):
+Two workflows, split by whether the run may hold credentials (BUNYIP-425).
+`.forgejo/workflows/e2e.yml` is the suite and never triggers on
+`pull_request`; `.forgejo/workflows/e2e-pr.yml` is the PR gate and holds no
+credential. The suite is serialised through a single concurrency group (it
+shares one account, and the 5/min login limit means parallel runs would
+collide); the PR gate has its own cancel-in-progress group because it never
+logs in.
 
-| Trigger | Environment | Purpose | Pre-flight gate |
-| --- | --- | --- | --- |
-| `push` to `main` | staging | post-merge validation against the deployed commit | `wait-for-deploy.mjs` (`/v1/version` `.commit`, poll 15s / 10-min timeout; walks back to the last build-relevant commit on a doc/CI-only merge) |
-| `pull_request` -> `main` | staging | merge gate: every PR passes the suite vs staging | `health-check.mjs` (`/health`, one-shot 30s) |
-| `workflow_dispatch` | input (`staging` default / `production`) | manual ad-hoc | `staging`: deploy-sync gate; `production`: reachability check (the dispatched SHA is unlikely to be what prod serves) |
+| Workflow | Trigger | Environment | Purpose | Pre-flight gate |
+| --- | --- | --- | --- | --- |
+| `e2e.yml` | `push` to `main` | staging | post-merge validation against the deployed commit | `wait-for-deploy.mjs` (`/v1/version` `.commit`, poll 15s / 10-min timeout; walks back to the last build-relevant commit on a doc/CI-only merge) |
+| `e2e.yml` | `workflow_dispatch` | input (`staging` default / `production`) | manual ad-hoc, and the only way to run the full suite against a PR's code (a maintainer dispatches it after reading the diff) | `staging`: deploy-sync gate; `production`: reachability check (the dispatched SHA is unlikely to be what prod serves) |
+| `e2e-pr.yml` | `pull_request` -> `main` | staging URLs only | merge gate: lockfile installs, Playwright installs, staging is reachable. Does NOT run the specs | `health-check.mjs` (`/health`, one-shot 30s, hub probe soft) |
+
+**Why the PR gate runs no specs.** A `pull_request` run executes the workflow
+file, the npm lifecycle scripts and the Playwright specs from the PR head, all
+of it unreviewed. Every secret in scope for that job is readable by anyone who
+can push a branch, so the PR job declares only `E2E_STAGING_BASE_URL` and
+`OIDC_ISSUER_STAGING` (which authenticate nothing) and every `npm ci` in
+`.forgejo/workflows/` runs `--ignore-scripts`.
+`scripts/check-workflow-secrets.sh` enforces both in the `Check` workflow, so
+the split cannot regress silently.
 
 **Production safety gate.** Production runs ONLY via manual dispatch. On top of
 that, the billing WRITE specs carry `test.skip(env.isProductionApex, ...)` so
 even a production dispatch cannot start or touch a live subscription. That guard
 is independent of the `test.fixme` blockers and stays after they lift.
 
-**Required check + bootstrap skip (BUNYIP-163).** After the pre-flight gate,
+**Bootstrap skip (BUNYIP-163).** After the pre-flight gate,
 `check-bootstrapped.mjs` decides whether the suite runs: on a staging run the
 Playwright suite executes only when `GET /e2e-bootstrapped` reports the seed is
-present; otherwise it is skipped and the job still passes. This makes it safe to
-mark `e2e` a REQUIRED status check on `main` (the BUNYIP-148 enforcement AC) - a
-missing or removed seed degrades to "no coverage this run", never a merge block,
-including for the PR that might re-enable bootstrapping. Enabling the required
-check itself is a one-time Forgejo branch-protection change (add `e2e` to the
-required status checks for `main`), done out of band.
+present; otherwise it is skipped and the job still passes. A missing or removed
+seed degrades to "no coverage this run", never a hard failure, including for the
+PR that might re-enable bootstrapping.
+
+**Required status check (BUNYIP-425).** The `e2e` job no longer runs on
+`pull_request`, so it can no longer be a required check on `main`: requiring a
+job that never reports would block every PR. The PR-side required check is
+`e2e-pr` instead. Updating branch protection (drop `e2e`, add `e2e-pr` to the
+required status checks for `main`) is a one-time Forgejo change, done out of
+band.
 
 **Runtime + artifacts.** Each run installs Node + Chromium, runs the gate, then
 the Playwright suite against the selected deployment. On failure it uploads

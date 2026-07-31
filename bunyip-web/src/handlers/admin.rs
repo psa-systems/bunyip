@@ -15,8 +15,8 @@ use serde_json::json;
 use crate::api::admin as admin_api;
 use crate::api::types::{
     AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, AdminIpBan,
-    AdminRateLimit, AppRestoreStatus, ApplicationGroup, FeedbackAttachmentMeta, FeedbackStatus,
-    RestoreReport, User, UserEntitlement,
+    AdminRateLimit, AdminRateLimitConfig, AppRestoreStatus, ApplicationGroup,
+    FeedbackAttachmentMeta, FeedbackStatus, RestoreReport, User, UserEntitlement,
 };
 use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
@@ -548,7 +548,7 @@ fn ip_ban_row(b: &AdminIpBan) -> Markup {
                     }
                 }
             }
-            form method="post" action="/admin/ip-bans/unban" onsubmit=(format!("return confirm('Lift the ban on {}? It takes effect on the next request.')", b.ip)) {
+            form method="post" action="/admin/ip-bans/unban" data-confirm=(format!("Lift the ban on {}? It takes effect on the next request.", b.ip)) {
                 input type="hidden" name="ip" value=(b.ip);
                 button type="submit" class=(button_class("outline", "sm", "")) { "Unban" }
             }
@@ -556,9 +556,50 @@ fn ip_ban_row(b: &AdminIpBan) -> Markup {
     }
 }
 
+/// BUNYIP-413: refuse a super-admin-only form to everybody else, as a redirect
+/// back to `back` carrying a refusal toast. The API enforces the same gate, so
+/// this is a friendlier message rather than the security boundary.
+fn refuse_non_super_admin(user: &User, c: &AuthCtx, back: &str) -> Option<Response> {
+    if user.is_super_admin {
+        return None;
+    }
+    Some(redirect_cookies(
+        &format!("{back}?toast_err=Only%20the%20super%20admin%20can%20change%20this"),
+        &c.set_cookies,
+    ))
+}
+
+/// Default manual-ban duration offered by the form: 24 hours, matching the
+/// API's default. The API bounds the value; the input mirrors those bounds.
+const DEFAULT_MANUAL_BAN_SECS: i64 = 86_400;
+const MIN_MANUAL_BAN_SECS: i64 = 60;
+const MAX_MANUAL_BAN_SECS: i64 = 31_536_000;
+
+/// The "add a ban" card (BUNYIP-413): address, reason and duration. Rendered
+/// only for the super admin, who is the only account the API will accept it
+/// from.
+fn ip_ban_add_card() -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                div class="flex items-center gap-3" { (icon("shield-off", "h-5 w-5 text-primary")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Add Ban" } }
+                p class="text-sm text-muted-foreground" { "Block an address by hand. The ban takes effect on its next request and expires on its own." }
+            }
+            div class="p-6 pt-0" {
+                form method="post" action="/admin/ip-bans/add" class="grid gap-4 sm:grid-cols-4 sm:items-end" {
+                    div class="space-y-2 sm:col-span-1" { label class="text-sm font-medium" { "IP address" } input name="ip" required placeholder="203.0.113.7" class=(dashboard_input()); }
+                    div class="space-y-2 sm:col-span-2" { label class="text-sm font-medium" { "Reason" } input name="reason" required maxlength="255" placeholder="Credential stuffing" class=(dashboard_input()); }
+                    div class="space-y-2" { label class="text-sm font-medium" { "Duration (seconds)" } input name="duration_secs" type="number" min=(MIN_MANUAL_BAN_SECS) max=(MAX_MANUAL_BAN_SECS) value=(DEFAULT_MANUAL_BAN_SECS) class=(dashboard_input()); }
+                    div class="sm:col-span-4" { button type="submit" class=(button_class("default", "default", "")) { (icon("shield-off", "mr-2 h-4 w-4")) "Ban address" } }
+                }
+            }
+        }
+    }
+}
+
 /// Admin IP auto-ban view (BUNYIP-320): the currently-active IP bans surfaced by
 /// the subtask 7 endpoint, each liftable in place. AdminUser-guarded like the
-/// other admin pages.
+/// other admin pages; the add form (BUNYIP-413) is super-admin-only.
 pub async fn ip_bans(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
@@ -570,7 +611,8 @@ pub async fn ip_bans(State(st): State<AppState>, headers: HeaderMap) -> Response
 
     let content = html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "IP Bans" } p class="mt-2 text-muted-foreground" { "IP addresses auto-banned for abusive request patterns. Lifting a ban takes effect on the address's next request." } }
+            div { h1 class="text-3xl font-bold" { "IP Bans" } p class="mt-2 text-muted-foreground" { "IP addresses banned for abusive request patterns, automatically or by hand. Adding or lifting a ban takes effect on the address's next request." } }
+            @if user.is_super_admin { (ip_ban_add_card()) }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" {
                     div class="flex items-center gap-3" { (icon("shield-off", "h-5 w-5 text-destructive")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Active Bans" } }
@@ -592,6 +634,58 @@ pub async fn ip_bans(State(st): State<AppState>, headers: HeaderMap) -> Response
         }
     };
     admin_response(&c, &user, "/admin/ip-bans", "IP Bans · Bunyip", content)
+}
+
+/// Form body for the add-ban action (BUNYIP-413). `duration_secs` is a string
+/// so a typo comes back as a toast rather than a 422 from extraction.
+#[derive(Deserialize)]
+pub struct CreateBanForm {
+    pub ip: String,
+    pub reason: String,
+    #[serde(default)]
+    pub duration_secs: String,
+}
+
+/// Ban an IP by hand (BUNYIP-413), then redirect back to the list with a
+/// success/error toast. Super-admin-only, enforced again by the API, which
+/// validates the address, reason and duration and audits the ban.
+pub async fn ip_ban_create(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<CreateBanForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    if let Some(refusal) = refuse_non_super_admin(&user, &c, "/admin/ip-bans") {
+        return refusal;
+    }
+    let duration = match f.duration_secs.trim() {
+        "" => DEFAULT_MANUAL_BAN_SECS,
+        raw => match raw.parse::<i64>() {
+            Ok(n) => n,
+            Err(_) => {
+                return redirect_cookies(
+                    "/admin/ip-bans?toast_err=Duration%20must%20be%20a%20whole%20number",
+                    &c.set_cookies,
+                )
+            }
+        },
+    };
+    let target = match admin_api::create_ip_ban(
+        &st.api,
+        c.forward.as_deref(),
+        f.ip.trim(),
+        f.reason.trim(),
+        duration,
+    )
+    .await
+    {
+        Ok(()) => format!("/admin/ip-bans?toast_ok=Banned%20{}", urlenc(f.ip.trim())),
+        Err(e) => format!("/admin/ip-bans?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 /// Form body for the unban action: the IP to lift, carried in a hidden field so
@@ -678,7 +772,7 @@ fn rate_limit_row(rl: &AdminRateLimit, return_user: Option<&str>) -> Markup {
                     }
                 }
             }
-            form method="post" action="/admin/rate-limits/reset" onsubmit=(format!("return confirm('Reset the {} throttle? The affected user/IP can act again immediately.')", title_case(&rl.action))) {
+            form method="post" action="/admin/rate-limits/reset" data-confirm=(format!("Reset the {} throttle? The affected user/IP can act again immediately.", title_case(&rl.action))) {
                 input type="hidden" name="action" value=(rl.action);
                 input type="hidden" name="key" value=(rl.key);
                 @if let Some(uid) = return_user {
@@ -690,9 +784,102 @@ fn rate_limit_row(rl: &AdminRateLimit, return_user: Option<&str>) -> Markup {
     }
 }
 
+/// Bounds on an admin-set limit, mirroring the API's validation so the input
+/// refuses out-of-range values before the round-trip.
+const MAX_LIMIT_REQUESTS: i32 = 1_000_000;
+const MAX_LIMIT_WINDOW_SECS: i64 = 604_800; // 7 days
+
+/// Format a window length as a compact label (`60s`, `10m`, `1h`).
+fn fmt_window_secs(secs: i64) -> String {
+    if secs % 3600 == 0 && secs >= 3600 {
+        format!("{}h", secs / 3600)
+    } else if secs % 60 == 0 && secs >= 60 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{secs}s")
+    }
+}
+
+/// Render one configurable limit (BUNYIP-413): the action, its effective
+/// cap/window as editable fields, and (when a persisted override is in force)
+/// what the bootstrap default was plus a button to revert to it.
+///
+/// `editable` is the super-admin flag: everybody else sees the same numbers as
+/// plain text, since the API would refuse their write anyway.
+fn rate_limit_config_row(cfg: &AdminRateLimitConfig, editable: bool) -> Markup {
+    html! {
+        div class="flex items-start justify-between gap-4 py-4 border-b last:border-0" {
+            div class="min-w-0" {
+                div class="flex items-center gap-2 flex-wrap" {
+                    p class="font-medium break-all" { (title_case(&cfg.action)) }
+                    @if cfg.overridden { (badge("warning", "Overridden")) } @else { (badge("secondary", "Default")) }
+                }
+                p class="text-xs text-muted-foreground" {
+                    @if cfg.overridden {
+                        "Default " (cfg.default_max_requests) " per " (fmt_window_secs(cfg.default_window_seconds))
+                    } @else {
+                        (cfg.max_requests) " requests per " (fmt_window_secs(cfg.window_seconds))
+                    }
+                }
+            }
+            @if editable {
+                div class="flex items-end gap-2 shrink-0" {
+                    form method="post" action="/admin/rate-limits/config" class="flex items-end gap-2" {
+                        input type="hidden" name="action" value=(cfg.action);
+                        div class="space-y-1" { label class="text-xs text-muted-foreground" { "Requests" } input name="max_requests" type="number" min="1" max=(MAX_LIMIT_REQUESTS) value=(cfg.max_requests) class=(format!("{} w-28", dashboard_input())); }
+                        div class="space-y-1" { label class="text-xs text-muted-foreground" { "Window (s)" } input name="window_seconds" type="number" min="1" max=(MAX_LIMIT_WINDOW_SECS) value=(cfg.window_seconds) class=(format!("{} w-28", dashboard_input())); }
+                        button type="submit" class=(button_class("default", "sm", "")) { "Save" }
+                    }
+                    @if cfg.overridden {
+                        form method="post" action="/admin/rate-limits/config/reset" data-confirm=(format!("Revert {} to its default limit?", title_case(&cfg.action))) {
+                            input type="hidden" name="action" value=(cfg.action);
+                            button type="submit" class=(button_class("outline", "sm", "")) { "Revert" }
+                        }
+                    }
+                }
+            } @else {
+                p class="text-sm text-muted-foreground shrink-0" { (cfg.max_requests) " / " (fmt_window_secs(cfg.window_seconds)) }
+            }
+        }
+    }
+}
+
+/// The "limit configuration" card (BUNYIP-413): every enforced action with its
+/// cap and window, editable by the super admin. `reachable` distinguishes an
+/// API that could not be reached from a genuinely empty list.
+fn rate_limit_config_card(
+    configs: &[AdminRateLimitConfig],
+    reachable: bool,
+    editable: bool,
+) -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                div class="flex items-center gap-3" { (icon("sliders-horizontal", "h-5 w-5 text-primary")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Limit Configuration" } }
+                p class="text-sm text-muted-foreground" {
+                    @if editable {
+                        "The cap and window enforced for each action. A saved value takes effect on the next request; Revert restores the built-in default."
+                    } @else {
+                        "The cap and window enforced for each action. Only the super admin can change them."
+                    }
+                }
+            }
+            div class="p-6 pt-0" {
+                @if !reachable {
+                    (error_box("Could not reach the API to load the limit configuration."))
+                } @else {
+                    div class="grid gap-x-8 lg:grid-cols-2" { @for cfg in configs { (rate_limit_config_row(cfg, editable)) } }
+                }
+            }
+        }
+    }
+}
+
 /// Admin rate-limit view (BUNYIP-317): the currently-active throttles surfaced
 /// by the BUNYIP-315 endpoint, each resettable in place via the BUNYIP-316
-/// endpoint. AdminUser-guarded like the other admin pages.
+/// endpoint, plus the configurable caps and windows themselves (BUNYIP-413).
+/// AdminUser-guarded like the other admin pages; editing a limit is
+/// super-admin-only.
 pub async fn rate_limits(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -703,6 +890,9 @@ pub async fn rate_limits(
         Err(r) => return r,
     };
     let page = q.page.unwrap_or(1).max(1);
+    let cfg_data = admin_api::rate_limit_configs(&st.api, c.forward.as_deref()).await;
+    let configs_reachable = cfg_data.is_ok();
+    let configs = cfg_data.unwrap_or_default();
     let data = admin_api::rate_limits(&st.api, c.forward.as_deref(), page, 20).await;
     let reachable = data.is_ok();
     let (items, total, total_pages) = match data {
@@ -732,6 +922,7 @@ pub async fn rate_limits(
                     }
                 }
             }
+            (rate_limit_config_card(&configs, configs_reachable, user.is_super_admin))
         }
     };
     admin_response(
@@ -776,6 +967,87 @@ pub async fn rate_limit_reset(
         match admin_api::reset_rate_limit(&st.api, c.forward.as_deref(), &f.action, &f.key).await {
             Ok(()) => format!("{base}?toast_ok=Rate%20limit%20reset"),
             Err(_) => format!("{base}?toast_err=Could%20not%20reset%20rate%20limit"),
+        };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// Form body for saving one limit's configuration (BUNYIP-413). The numerics
+/// are strings so a typo comes back as a toast rather than a 422.
+#[derive(Deserialize)]
+pub struct RateLimitConfigForm {
+    pub action: String,
+    pub max_requests: String,
+    pub window_seconds: String,
+}
+
+/// Create or update the persisted override for one action (BUNYIP-413), then
+/// redirect back to the list with a toast. Super-admin-only, enforced again by
+/// the API, which validates and audits the change.
+pub async fn rate_limit_config_save(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<RateLimitConfigForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    if let Some(refusal) = refuse_non_super_admin(&user, &c, "/admin/rate-limits") {
+        return refusal;
+    }
+    let (max_requests, window_seconds) = match (
+        f.max_requests.trim().parse::<i32>(),
+        f.window_seconds.trim().parse::<i64>(),
+    ) {
+        (Ok(m), Ok(w)) => (m, w),
+        _ => return redirect_cookies(
+            "/admin/rate-limits?toast_err=Requests%20and%20window%20must%20be%20whole%20numbers",
+            &c.set_cookies,
+        ),
+    };
+    let target = match admin_api::set_rate_limit_config(
+        &st.api,
+        c.forward.as_deref(),
+        f.action.trim(),
+        max_requests,
+        window_seconds,
+    )
+    .await
+    {
+        Ok(()) => "/admin/rate-limits?toast_ok=Rate%20limit%20updated".to_string(),
+        Err(e) => format!("/admin/rate-limits?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// Form body for reverting one limit to its default: the action alone.
+#[derive(Deserialize)]
+pub struct RateLimitConfigResetForm {
+    pub action: String,
+}
+
+/// Drop the persisted override for one action (BUNYIP-413), reverting it to the
+/// bootstrap default, then redirect back with a toast. Super-admin-only.
+pub async fn rate_limit_config_reset(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<RateLimitConfigResetForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    if let Some(refusal) = refuse_non_super_admin(&user, &c, "/admin/rate-limits") {
+        return refusal;
+    }
+    let target =
+        match admin_api::delete_rate_limit_config(&st.api, c.forward.as_deref(), f.action.trim())
+            .await
+        {
+            Ok(()) => {
+                "/admin/rate-limits?toast_ok=Reverted%20to%20the%20default%20limit".to_string()
+            }
+            Err(e) => format!("/admin/rate-limits?toast_err={}", urlenc(&e.user_message())),
         };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -1029,7 +1301,7 @@ pub async fn users(
             (panel)
         }
         style { (maud::PreEscaped(USERS_FILTER_CSS)) }
-        script { (maud::PreEscaped(USERS_FILTER_JS)) }
+        script src="/assets/js/admin-users.js" defer {}
     };
     admin_response(&c, &user, "/admin/users", "Users · Bunyip", content)
 }
@@ -1046,7 +1318,7 @@ fn tier_slug_label(slug: &str) -> &'static str {
 }
 
 /// One of the two filter dropdowns (verification / tier), styled with the app's
-/// own `<details>` menu (matches the profile menu; `PROFILE_MENU_JS` closes it
+/// own `<details>` menu (matches the profile menu; `assets/js/app.js` closes it
 /// on click-away / Escape). The trigger keeps a persistent prefix
 /// ("Verification: Any") so a filtered state is always legible. `options` is
 /// `(href, label, selected)`.
@@ -1072,7 +1344,7 @@ fn filter_dropdown(prefix: &str, current: &str, options: &[(String, String, bool
 }
 
 /// The Active / All / Suspended segmented control (single element, one selected,
-/// arrow-key navigable via `data-segmented` in `USERS_FILTER_JS`, radiogroup
+/// arrow-key navigable via `data-segmented` in `assets/js/admin-users.js`, radiogroup
 /// ARIA).
 fn segmented_control(uq: &UsersQ) -> Markup {
     let seg = |value: &str, label: &str| -> Markup {
@@ -1098,7 +1370,7 @@ fn segmented_control(uq: &UsersQ) -> Markup {
 }
 
 /// A sortable column header. A link (no-JS: navigates; JS: swaps the panel), with
-/// Space-key activation added in `USERS_FILTER_JS` and a direction chevron on the
+/// Space-key activation added in `assets/js/admin-users.js` and a direction chevron on the
 /// active column.
 fn sort_header(uq: &UsersQ, col: &str, label: &str) -> Markup {
     let active = uq.sort == col;
@@ -1163,7 +1435,7 @@ fn user_grid_row(u: &crate::api::types::AdminUser) -> Markup {
         html! {
             div style=(USERS_GRID) class="py-2.5 px-2 -mx-2 rounded-md" {
                 (avatar) (identity) (tier) (verified_indicator(u.email_verified)) (joined)
-                form method="post" action=(format!("/admin/users/{}/reactivate", u.id)) onsubmit="return confirm('Reactivate this user? They will be able to sign in again.')" {
+                form method="post" action=(format!("/admin/users/{}/reactivate", u.id)) data-confirm="Reactivate this user? They will be able to sign in again." {
                     button type="submit" class=(button_class("outline", "sm", "h-8 px-2 text-xs")) { "Reactivate" }
                 }
             }
@@ -1431,22 +1703,6 @@ const USERS_FILTER_CSS: &str = r#".users-loading{opacity:0;pointer-events:none;t
 .users-shimmer{position:relative;overflow:hidden}
 .users-shimmer::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,hsl(var(--foreground)/0.06),transparent);animation:users-shimmer 1.2s infinite}
 @keyframes users-shimmer{100%{transform:translateX(100%)}}"#;
-
-/// BUNYIP-410 overhaul: keyboard behaviour the SSR markup cannot express on its
-/// own. Segmented control = arrow-key roving focus (radiogroup); sort headers =
-/// Space activation (Enter is native for the `<a>`). Delegated on `document`, so
-/// it keeps working across htmx panel swaps.
-const USERS_FILTER_JS: &str = r#"(function(){
-document.addEventListener('keydown',function(e){
-var el=e.target;if(!el||!el.closest)return;var group=el.closest('[data-segmented]');
-if(group&&el.getAttribute('role')==='radio'){
-var radios=Array.prototype.slice.call(group.querySelectorAll('[role=radio]'));var i=radios.indexOf(el);var n=null;
-if(e.key==='ArrowRight'||e.key==='ArrowDown')n=radios[(i+1)%radios.length];
-else if(e.key==='ArrowLeft'||e.key==='ArrowUp')n=radios[(i-1+radios.length)%radios.length];
-if(n){e.preventDefault();n.focus();n.click();}return;}
-if(e.key===' '&&el.matches&&el.matches('[data-sort-header]')){e.preventDefault();el.click();}
-});
-})();"#;
 
 #[derive(Deserialize)]
 pub struct RoleForm {
@@ -1762,12 +2018,12 @@ pub async fn user_detail(
                     }
                     div class="flex flex-wrap gap-2" {
                         @if !target.email_verified {
-                            form method="post" action=(format!("/admin/users/{}/email/verify", target.id)) onsubmit="return confirm('Force-verify this email without the user confirming it?')" {
+                            form method="post" action=(format!("/admin/users/{}/email/verify", target.id)) data-confirm="Force-verify this email without the user confirming it?" {
                                 button type="submit" class=(button_class("outline", "default", "")) { "Force-verify email" }
                             }
                         }
                         @if target.two_factor_enabled {
-                            form method="post" action=(format!("/admin/users/{}/two-factor/reset", target.id)) onsubmit="return confirm('Clear this user 2FA? Their authenticator and recovery codes are removed and they must re-enrol.')" {
+                            form method="post" action=(format!("/admin/users/{}/two-factor/reset", target.id)) data-confirm="Clear this user 2FA? Their authenticator and recovery codes are removed and they must re-enrol." {
                                 button type="submit" class=(button_class("outline", "default", "text-destructive hover:text-destructive")) { "Clear 2FA" }
                             }
                         } @else {
@@ -1800,26 +2056,26 @@ pub async fn user_detail(
                 }
                 div class="p-6 pt-2 flex flex-wrap gap-2" {
                     a href=(format!("/admin/users/{}/entitlements", target.id)) class=(button_class("outline", "default", "")) { "Manage Entitlements" }
-                    form method="post" action=(format!("/admin/users/{}/role", target.id)) onsubmit="return confirm('Change this user role? Admins have full platform access.')" {
+                    form method="post" action=(format!("/admin/users/{}/role", target.id)) data-confirm="Change this user role? Admins have full platform access." {
                         input type="hidden" name="role" value=(if is_admin_target { "subscriber" } else { "admin" });
                         button type="submit" class=(button_class("outline", "default", "")) { @if is_admin_target { "Demote to subscriber" } @else { "Promote to admin" } }
                     }
-                    form method="post" action=(format!("/admin/users/{}/reset-password", target.id)) onsubmit="return confirm('Send a password reset email to this user?')" {
+                    form method="post" action=(format!("/admin/users/{}/reset-password", target.id)) data-confirm="Send a password reset email to this user?" {
                         button type="submit" class=(button_class("outline", "default", "")) { "Send password reset" }
                     }
                     @if target.lifetime_member {
-                        form method="post" action=(format!("/admin/users/{}/lifetime/revoke", target.id)) onsubmit="return confirm('Revoke lifetime membership? User will be returned to standard tier with no active subscription.')" {
+                        form method="post" action=(format!("/admin/users/{}/lifetime/revoke", target.id)) data-confirm="Revoke lifetime membership? User will be returned to standard tier with no active subscription." {
                             button type="submit" class=(button_class("outline", "default", "")) { "Revoke lifetime" }
                         }
                     } @else {
-                        form method="post" action=(format!("/admin/users/{}/lifetime", target.id)) onsubmit="return confirm('Grant lifetime membership? Creates a $0 Stripe subscription.')" {
+                        form method="post" action=(format!("/admin/users/{}/lifetime", target.id)) data-confirm="Grant lifetime membership? Creates a $0 Stripe subscription." {
                             button type="submit" class=(button_class("outline", "default", "")) { "Grant lifetime" }
                         }
                     }
-                    form method="post" action=(format!("/admin/users/{}/suspend", target.id)) onsubmit="return confirm('Suspend (soft-delete) this user?')" {
+                    form method="post" action=(format!("/admin/users/{}/suspend", target.id)) data-confirm="Suspend (soft-delete) this user?" {
                         button type="submit" class=(button_class("outline", "default", "")) { "Suspend" }
                     }
-                    form method="post" action=(format!("/admin/users/{}/delete", target.id)) onsubmit="return confirm('Delete this user? This cannot be undone.')" {
+                    form method="post" action=(format!("/admin/users/{}/delete", target.id)) data-confirm="Delete this user? This cannot be undone." {
                         button type="submit" class=(button_class("outline", "default", "text-destructive hover:text-destructive")) { "Delete user" }
                     }
                 }
@@ -2199,7 +2455,7 @@ fn feedback_detail_actions(id: &str, status: &FeedbackStatus, tab: FeedbackTab) 
                 FeedbackTab::Archive => {}
             }
             form method="post" action=(format!("/admin/feedback/{id}/delete"))
-                onsubmit="return confirm('Delete this feedback permanently? This cannot be undone.')" {
+                data-confirm="Delete this feedback permanently? This cannot be undone." {
                 input type="hidden" name="from" value=(from);
                 button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { "Delete" }
             }
@@ -3417,7 +3673,7 @@ fn app_danger_zone(id: &str, error: Option<&str>) -> Markup {
             }
             div class="p-6 pt-0" {
                 @if let Some(e) = error { (error_box(e)) }
-                form method="post" action=(format!("/admin/applications/{id}/delete")) class="space-y-3 max-w-md mt-2" onsubmit="return confirm('Permanently delete this application? This cannot be undone.')" {
+                form method="post" action=(format!("/admin/applications/{id}/delete")) class="space-y-3 max-w-md mt-2" data-confirm="Permanently delete this application? This cannot be undone." {
                     div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" placeholder="Enter your password to confirm" class=(dashboard_input()); }
                     div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" placeholder="6-digit code" class=(dashboard_input()); }
                     button type="submit" class=(button_class("destructive", "default", "")) { (icon("trash", "mr-2 h-4 w-4")) "Delete application" }
@@ -3882,7 +4138,7 @@ pub async fn application_groups(State(st): State<AppState>, headers: HeaderMap) 
                                 div { p class="font-medium" { (g.display_name) } p class="text-xs text-muted-foreground" { (g.slug) } }
                                 div class="flex items-center gap-2" {
                                     a href=(format!("/admin/application-groups/{}/edit", g.id)) class=(button_class("outline", "sm", "")) { "Edit" }
-                                    form method="post" action=(format!("/admin/application-groups/{}/delete", g.id)) onsubmit="return confirm('Delete this application group? This cannot be undone.')" {
+                                    form method="post" action=(format!("/admin/application-groups/{}/delete", g.id)) data-confirm="Delete this application group? This cannot be undone." {
                                         button type="submit" class=(button_class("outline", "sm", "")) { "Delete" }
                                     }
                                 }
@@ -5253,7 +5509,7 @@ fn stripe_products_block(products: Option<&[crate::api::types::StripeProduct]>) 
                                 p class="text-xs text-muted-foreground font-mono truncate" { (p.id) }
                             }
                             @if p.active {
-                                form method="post" action=(format!("/admin/stripe/products/{}/archive", p.id)) onsubmit="return confirm('Archive this product? It will no longer be available for new subscriptions.')" {
+                                form method="post" action=(format!("/admin/stripe/products/{}/archive", p.id)) data-confirm="Archive this product? It will no longer be available for new subscriptions." {
                                     button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
                                 }
                             }
@@ -5319,7 +5575,7 @@ fn stripe_prices_block(
                                 p class="text-xs text-muted-foreground font-mono truncate" { (pr.id) }
                             }
                             @if pr.active {
-                                form method="post" action=(format!("/admin/stripe/prices/{}/archive", pr.id)) onsubmit="return confirm('Archive this price? Existing subscriptions using it are not affected.')" {
+                                form method="post" action=(format!("/admin/stripe/prices/{}/archive", pr.id)) data-confirm="Archive this price? Existing subscriptions using it are not affected." {
                                     button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
                                 }
                             }
@@ -6945,5 +7201,83 @@ mod identity_cell_clipping_tests {
             suspended.contains(">Suspended<"),
             "suspended badge is rendered"
         );
+    }
+}
+
+#[cfg(test)]
+mod rate_limit_management_tests {
+    //! BUNYIP-413: the management controls are super-admin-only. The API
+    //! enforces that too, so these assert the UI does not offer a control the
+    //! caller's write would be refused for.
+    use super::*;
+
+    fn cfg(action: &str, overridden: bool) -> AdminRateLimitConfig {
+        AdminRateLimitConfig {
+            action: action.to_string(),
+            max_requests: if overridden { 25 } else { 5 },
+            window_seconds: 60,
+            default_max_requests: 5,
+            default_window_seconds: 60,
+            overridden,
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn config_card_offers_edit_and_revert_to_the_super_admin() {
+        let html = rate_limit_config_card(&[cfg("login", true)], true, true).into_string();
+        assert!(
+            html.contains(r#"action="/admin/rate-limits/config""#),
+            "the save form is rendered"
+        );
+        assert!(
+            html.contains(r#"action="/admin/rate-limits/config/reset""#),
+            "an overridden limit offers a revert"
+        );
+        assert!(
+            html.contains(r#"name="max_requests""#) && html.contains(r#"name="window_seconds""#)
+        );
+    }
+
+    #[test]
+    fn config_card_is_read_only_for_an_ordinary_admin() {
+        let html = rate_limit_config_card(&[cfg("login", true)], true, false).into_string();
+        assert!(
+            !html.contains("/admin/rate-limits/config"),
+            "no management form for a non-super-admin"
+        );
+        assert!(
+            html.contains("Only the super admin can change them."),
+            "the read-only card says why"
+        );
+        // The numbers are still visible, so the screen stays informative.
+        assert!(html.contains("Login"));
+    }
+
+    #[test]
+    fn a_limit_on_its_default_offers_no_revert() {
+        let html = rate_limit_config_card(&[cfg("login", false)], true, true).into_string();
+        assert!(html.contains(r#"action="/admin/rate-limits/config""#));
+        assert!(
+            !html.contains("/admin/rate-limits/config/reset"),
+            "nothing to revert when no override is in force"
+        );
+    }
+
+    #[test]
+    fn ban_add_card_posts_ip_reason_and_duration() {
+        let html = ip_ban_add_card().into_string();
+        assert!(html.contains(r#"action="/admin/ip-bans/add""#));
+        assert!(html.contains(r#"name="ip""#));
+        assert!(html.contains(r#"name="reason""#));
+        assert!(html.contains(r#"name="duration_secs""#));
+    }
+
+    #[test]
+    fn window_labels_are_compact() {
+        assert_eq!(fmt_window_secs(45), "45s");
+        assert_eq!(fmt_window_secs(60), "1m");
+        assert_eq!(fmt_window_secs(900), "15m");
+        assert_eq!(fmt_window_secs(3600), "1h");
     }
 }

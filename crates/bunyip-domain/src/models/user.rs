@@ -261,6 +261,11 @@ pub struct User {
     /// version for the avatar `<img>` URL. Set/cleared in the same transaction
     /// that writes/deletes the `user_avatars` row.
     pub avatar_updated_at: Option<DateTime<Utc>>,
+    /// BUNYIP-413: the "first setup account" flag. Set on the bootstrap admin
+    /// when it is promoted (and backfilled onto the earliest-created admin by
+    /// the migration). Gates the rate-limit and IP-ban management surfaces,
+    /// which can lock the platform out for everybody.
+    pub is_super_admin: bool,
 }
 
 impl User {
@@ -383,6 +388,9 @@ pub struct UserResponse {
     /// Lets the admin users list distinguish suspended rows on the combined
     /// "All" view, where active and suspended users are interleaved.
     pub suspended: bool,
+    /// BUNYIP-413: see [`User::is_super_admin`]. Surfaced so bunyip-web can
+    /// render (or hide) the super-admin-only rate-limit / IP-ban controls.
+    pub is_super_admin: bool,
 }
 
 impl From<User> for UserResponse {
@@ -407,6 +415,7 @@ impl From<User> for UserResponse {
             phone: user.phone,
             avatar_updated_at: user.avatar_updated_at,
             suspended: user.deleted_at.is_some(),
+            is_super_admin: user.is_super_admin,
         }
     }
 }
@@ -550,6 +559,7 @@ mod tests {
             phone: None,
             has_used_trial: false,
             avatar_updated_at: None,
+            is_super_admin: false,
         }
     }
 

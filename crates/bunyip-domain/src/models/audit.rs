@@ -155,6 +155,18 @@ pub enum AuditAction {
     /// carries the reset `action`, the raw `key`, and the resolved target
     /// user id / email when the key maps to one.
     AdminRateLimitReset,
+    /// Super admin created or updated a persisted `rate_limit_configs` override
+    /// (BUNYIP-413). Metadata carries the `action` and the new
+    /// `max_requests` / `window_seconds`.
+    AdminRateLimitConfigUpdated,
+    /// Super admin deleted a persisted `rate_limit_configs` override
+    /// (BUNYIP-413), reverting that action to its bootstrap default. Metadata
+    /// carries the `action`.
+    AdminRateLimitConfigDeleted,
+    /// Super admin banned an IP by hand (BUNYIP-413), the counterpart to
+    /// [`AuditAction::AdminIpBanLifted`]. Metadata carries the target `ip`, the
+    /// operator `reason` and the ban `expires_at`.
+    AdminIpBanCreated,
 }
 
 impl AuditAction {
@@ -251,6 +263,9 @@ impl AuditAction {
             AuditAction::OauthUserTenantUnassigned => "oauth_user_tenant_unassigned",
             AuditAction::AdminIpBanLifted => "admin_ip_ban_lifted",
             AuditAction::AdminRateLimitReset => "admin_rate_limit_reset",
+            AuditAction::AdminRateLimitConfigUpdated => "admin_rate_limit_config_updated",
+            AuditAction::AdminRateLimitConfigDeleted => "admin_rate_limit_config_deleted",
+            AuditAction::AdminIpBanCreated => "admin_ip_ban_created",
         }
     }
 
@@ -296,6 +311,9 @@ impl AuditAction {
                 | AuditAction::AdminStripePriceMappingChanged
                 | AuditAction::AdminIpBanLifted
                 | AuditAction::AdminRateLimitReset
+                | AuditAction::AdminRateLimitConfigUpdated
+                | AuditAction::AdminRateLimitConfigDeleted
+                | AuditAction::AdminIpBanCreated
         )
     }
 }

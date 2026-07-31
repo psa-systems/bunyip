@@ -346,6 +346,41 @@ impl AutoBanService {
         info!(count = map.len(), "Loaded IP bans from database");
     }
 
+    /// Ban `ip` manually for `duration_secs` with an operator-supplied `reason`
+    /// (BUNYIP-413). The counterpart to [`unban`](Self::unban): the in-memory
+    /// map (what the request path checks) is updated first so the ban is
+    /// effective on the very next request, then the `ip_bans` row is persisted
+    /// synchronously so the caller learns about a write failure instead of it
+    /// vanishing into a spawned task. Re-banning an already-banned IP replaces
+    /// its reason and expiry. Returns the ban's expiry.
+    pub async fn ban(
+        &self,
+        ip: &IpAddr,
+        reason: &str,
+        duration_secs: i64,
+    ) -> Result<DateTime<Utc>, sqlx::Error> {
+        let expires_at = Utc::now() + chrono::Duration::seconds(duration_secs);
+        {
+            let mut banned = self.banned.write().await;
+            banned.insert(
+                *ip,
+                BanEntry {
+                    reason: reason.to_string(),
+                    expires_at,
+                },
+            );
+        }
+        {
+            let mut strikes = self.strikes.write().await;
+            strikes.remove(ip);
+        }
+
+        // `strikes = 0` marks the ban as manual: no suspicious request earned it.
+        persist_ban(&self.pool, ip, reason, 0, expires_at).await?;
+        warn!(ip = %ip, reason = %reason, "IP banned manually by an admin");
+        Ok(expires_at)
+    }
+
     /// Lift a ban for `ip` immediately and durably.
     ///
     /// Removes the IP from the in-memory `banned` map (the map the request path
@@ -546,12 +581,11 @@ where
         let auto_ban = self.auto_ban.clone();
         let service = Rc::clone(&self.service);
 
-        // If auto-ban is disabled, pass through immediately
-        if !auto_ban.is_enabled() {
-            let fut = service.call(req);
-            return Box::pin(async move { fut.await.map(|res| res.map_into_left_body()) });
-        }
-
+        // BUNYIP-413: the `enabled` flag governs AUTOMATIC banning (strike
+        // recording), not enforcement. Existing bans - including the ones an
+        // admin adds by hand - are still refused with auto-banning switched
+        // off, otherwise a manual ban would silently do nothing.
+        let strikes_enabled = auto_ban.is_enabled();
         let ip = extract_client_ip(req.request());
         let path = req.path().to_string();
 
@@ -564,7 +598,7 @@ where
                 }
 
                 // Check if the path is suspicious
-                if auto_ban.is_suspicious(&path) {
+                if strikes_enabled && auto_ban.is_suspicious(&path) {
                     let newly_banned = auto_ban.record_strike(ip, &path).await;
                     if newly_banned {
                         info!(ip = %ip, path = %path, "Suspicious request triggered auto-ban");
@@ -1010,5 +1044,95 @@ mod tests {
         assert_eq!(config.threshold, 10);
         assert_eq!(config.window_secs, 600);
         assert_eq!(config.ban_duration_secs, 7200);
+    }
+
+    /// BUNYIP-413: a manual ban lands in the in-memory map (so the request path
+    /// refuses the address on its very next request) AND in `ip_bans` (so it
+    /// survives a restart), and the existing lift still clears both.
+    #[tokio::test]
+    async fn test_manual_ban_is_enforced_and_persisted() {
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
+        let ip: IpAddr = "203.0.113.77".parse().unwrap();
+        let network = ipnetwork::IpNetwork::from(ip);
+        sqlx::query("DELETE FROM ip_bans WHERE ip_address = $1")
+            .bind(network)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let config = AutoBanConfig {
+            enabled: true,
+            threshold: 3,
+            window_secs: 3600,
+            ban_duration_secs: 86400,
+        };
+        let service = AutoBanService::new(config, pool.clone());
+        assert!(!service.is_banned(&ip).await, "not banned to start with");
+
+        let expires_at = service.ban(&ip, "manual: scraping", 3600).await.unwrap();
+        assert!(expires_at > Utc::now());
+        assert!(
+            service.is_banned(&ip).await,
+            "the request path must refuse the address immediately"
+        );
+
+        // Persisted, so a restart (load_bans from the table) keeps the ban.
+        let rows = load_active_bans(&pool).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|r| r.ip_address == network)
+            .expect("manual ban persisted to ip_bans");
+        assert_eq!(row.reason, "manual: scraping");
+        assert_eq!(row.strikes, 0, "a manual ban earned no strikes");
+
+        // It also shows up on the admin list alongside auto-bans.
+        let listed = service.list_bans().await.unwrap();
+        assert!(listed.iter().any(|b| b.ip == ip));
+
+        // The existing lift clears it from both places.
+        assert!(service.unban(&ip).await.unwrap());
+        assert!(!service.is_banned(&ip).await);
+        let (remaining,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM ip_bans WHERE ip_address = $1")
+                .bind(network)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining, 0);
+    }
+
+    /// BUNYIP-413: with auto-banning switched off the middleware still refuses
+    /// an already-banned address (only strike recording is disabled), otherwise
+    /// a manual ban would silently do nothing.
+    #[tokio::test]
+    async fn test_existing_ban_is_enforced_with_auto_ban_disabled() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/bunyip_autoban_test")
+            .expect("lazy pool construction never connects");
+        let config = AutoBanConfig {
+            enabled: false,
+            threshold: 3,
+            window_secs: 3600,
+            ban_duration_secs: 86400,
+        };
+        let service = AutoBanService::new(config, pool);
+        let ip: IpAddr = "203.0.113.78".parse().unwrap();
+
+        // The DB persist errors on the lazy pool; the in-memory insert precedes
+        // it, which is what the request path checks.
+        let _ = service.ban(&ip, "manual", 3600).await;
+        assert!(
+            service.is_banned(&ip).await,
+            "a manual ban must hold even with auto-ban disabled"
+        );
+
+        // Strike recording stays off: a suspicious path earns no automatic ban.
+        let other: IpAddr = "203.0.113.79".parse().unwrap();
+        for _ in 0..5 {
+            service.record_strike(&other, "/wp-login.php").await;
+        }
+        assert!(!service.is_enabled(), "auto-ban is disabled in this config");
     }
 }

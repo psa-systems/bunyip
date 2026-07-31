@@ -9,7 +9,8 @@ use crate::errors::AppError;
 use crate::middleware::{extract_client_ip, extract_device_info, AuthCookies, AuthenticatedUser};
 use crate::models::{AuditAction, CreateAuditLog, RateLimitConfig, TWO_FACTOR_KEY_PREFIX};
 use crate::repositories::{
-    AuditLogRepository, RateLimitRepository, TrustedDeviceRepository, UserRepository,
+    AuditLogRepository, RateLimitConfigRepository, RateLimitRepository, TrustedDeviceRepository,
+    UserRepository,
 };
 use crate::responses::{get_request_id, success};
 use crate::services::{AuthService, PasswordService, TotpService};
@@ -152,19 +153,16 @@ pub async fn verify_2fa(
     // hard lockout: the attacker must wait and the user must retry later or
     // re-authenticate.
     let user_rate_key = format!("{TWO_FACTOR_KEY_PREFIX}{user_id}");
-    let (fail_count, _) = RateLimitRepository::check(
-        &pool,
-        &user_rate_key,
-        &RateLimitConfig::TWO_FACTOR_VERIFY_FAILURES,
-    )
-    .await?;
-    if fail_count >= RateLimitConfig::TWO_FACTOR_VERIFY_FAILURES.max_requests {
-        let retry_after = RateLimitRepository::get_retry_after(
-            &pool,
-            &user_rate_key,
-            &RateLimitConfig::TWO_FACTOR_VERIFY_FAILURES,
-        )
-        .await?;
+    // BUNYIP-413: compare against the cap actually in force (a super admin can
+    // override it), never the bare compile-time const.
+    let two_factor_cfg =
+        RateLimitConfigRepository::effective(&pool, &RateLimitConfig::TWO_FACTOR_VERIFY_FAILURES)
+            .await?;
+    let (fail_count, _) =
+        RateLimitRepository::check(&pool, &user_rate_key, &two_factor_cfg).await?;
+    if fail_count >= two_factor_cfg.max_requests {
+        let retry_after =
+            RateLimitRepository::get_retry_after(&pool, &user_rate_key, &two_factor_cfg).await?;
         return Err(AppError::RateLimited { retry_after });
     }
 

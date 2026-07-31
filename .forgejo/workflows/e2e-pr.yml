@@ -1,0 +1,71 @@
+---
+
+# Credential-free E2E gate for pull requests (BUNYIP-425).
+#
+# A `pull_request` run executes the workflow file, the npm lifecycle scripts
+# and the Playwright specs from the PR HEAD, i.e. code that has not been
+# reviewed. Anything this job can read, the author of any branch can
+# exfiltrate. So it holds NOTHING that authenticates: no account password, no
+# TOTP seed, no Stripe key, no mail-sink credentials. The only secrets in the
+# env: block are the two staging base URLs the reachability probe needs, and
+# neither grants access to anything.
+#
+# What that buys and what it costs: the PR still catches a broken lockfile, a
+# broken Playwright install and a staging deployment that is not serving, but
+# it does NOT run the suite. Post-merge validation is `e2e.yml` on push to
+# main; a PR-time full suite is a maintainer-triggered `workflow_dispatch` on
+# that workflow, taken after reading the diff.
+name: E2E PR gate
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  # Separate from e2e.yml's `e2e-bunyip` group: this job never logs in, so it
+  # cannot trip the 5-logins/min/email limit that forces the suite serial.
+  # Superseded PR commits are cancelled.
+  group: e2e-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-pr:
+    name: Install + reachability (no deployment secrets)
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
+
+    defaults:
+      run:
+        working-directory: e2e
+
+    # The complete credential surface of this job. Adding any other secret here
+    # hands it to unreviewed PR code; put the step in e2e.yml instead.
+    # scripts/check-workflow-secrets.sh enforces this.
+    env:
+      E2E_BASE_URL: ${{ secrets.E2E_STAGING_BASE_URL }}
+      E2E_OP_BASE_URL: ${{ secrets.OIDC_ISSUER_STAGING }}
+
+    steps:
+      - name: Clone the repository
+        uses: https://code.forgejo.org/actions/checkout@v5
+
+      # See e2e.yml for why npm/npx run through corepack and node scripts use
+      # the concrete node24 binary. --ignore-scripts: no dependency lifecycle
+      # script runs on PR-authored content.
+      - name: Install dependencies
+        run: corepack npm ci --ignore-scripts
+
+      # Download only: no Chromium system libraries and no browser launch here,
+      # this proves the install resolves. The suite that actually drives a
+      # browser runs in e2e.yml.
+      - name: Install Playwright browser
+        run: corepack npx playwright install chromium
+
+      - name: Verify deployment is reachable
+        # BUNYIP-301: the hub /healthz probe is SOFT on pull_request. A PR's
+        # SHA never deploys, so a broken staging deploy is not a signal about
+        # this PR's quality; a hard check would deadlock any PR that lands
+        # during an outage, including the PR that fixes it.
+        env:
+          E2E_HUB_SOFT: "true"
+        run: node24 scripts/health-check.mjs

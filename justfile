@@ -42,12 +42,17 @@ pre-commit: ensure-env
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-migrations check-security check-build check-clippy check-fmt check-docker
+check: check-migrations check-workflows check-security check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
 check-migrations:
     ./scripts/check-migration-versions.sh
+
+# Gate the secret scope of pull_request-triggered workflows (BUNYIP-425).
+[group: 'checks']
+check-workflows:
+    ./scripts/check-workflow-secrets.sh
 
 # Gate the security shapes the BUNYIP-426 audit sweep removed (transport-derived
 # cookie Secure, rev-pinned dunite, no signup enumeration oracle, digest-pinned

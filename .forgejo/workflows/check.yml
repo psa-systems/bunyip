@@ -25,7 +25,9 @@ on:
       - ".cargo/config.toml"
       - ".sqlx/**"
       - "scripts/**"
-      - ".forgejo/workflows/check.yml"
+      # All workflows, not just this one: the secret-scope gate below reads
+      # e2e.yml / e2e-pr.yml (BUNYIP-425).
+      - ".forgejo/workflows/**"
 
   pull_request:
     branches:
@@ -68,6 +70,13 @@ jobs:
         # checksums applied migrations and a deployed DB refuses to boot if one
         # changes. Add a new migration instead (BUNYIP-293).
         run: ./scripts/check-migration-immutability.sh
+
+      - name: Check PR-triggered workflows hold no credentials
+        # A pull_request run executes the PR head's workflow, lifecycle scripts
+        # and specs, so any secret it can read leaks to anyone who can push a
+        # branch. Keeps the E2E suite off pull_request and the PR gate down to
+        # the two base URLs (BUNYIP-425).
+        run: ./scripts/check-workflow-secrets.sh
 
       - name: Check security invariants
         # Grep-assert the shapes the BUNYIP-426 audit sweep removed: cookie

@@ -166,6 +166,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             )
             // IP auto-bans (BUNYIP-319)
             .route("/ip-bans", web::get().to(handlers::list_ip_bans))
+            // Manual ban, super-admin only (BUNYIP-413)
+            .route("/ip-bans", web::post().to(handlers::create_ip_ban))
             .route("/ip-bans/{ip}", web::delete().to(handlers::unban_ip))
             // Active rate limits (BUNYIP-315)
             .route("/rate-limits", web::get().to(handlers::list_rate_limits))
@@ -173,6 +175,20 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route(
                 "/rate-limits/reset",
                 web::post().to(handlers::reset_rate_limit),
+            )
+            // Rate-limit configuration: read for admins, write for the super
+            // admin only (BUNYIP-413)
+            .route(
+                "/rate-limit-configs",
+                web::get().to(handlers::list_rate_limit_configs),
+            )
+            .route(
+                "/rate-limit-configs/{action}",
+                web::put().to(handlers::upsert_rate_limit_config),
+            )
+            .route(
+                "/rate-limit-configs/{action}",
+                web::delete().to(handlers::delete_rate_limit_config),
             )
             // Audit logs
             .route("/audit-logs", web::get().to(handlers::list_audit_logs))

@@ -96,6 +96,11 @@ plain `E2E_*` names, so the suite stays environment-agnostic. Test-only vars use
 `OIDC_ISSUER_*` name. Automatic runs resolve to staging; production is
 manual-dispatch only. See `docs/e2e.md` for provisioning + rotation sources.
 
+`e2e.yml` does NOT run on `pull_request` (BUNYIP-425): that event executes the
+PR head's workflow, install scripts and specs, so none of these credentials may
+be in scope for it. PRs run `.forgejo/workflows/e2e-pr.yml`, which declares only
+`E2E_STAGING_BASE_URL` and `OIDC_ISSUER_STAGING`.
+
 The tables below are the authoritative list of every repository-level Forgejo
 Actions **secret** and **variable** the workflows (`.forgejo/workflows/*.yml`)
 consume. Names and purpose only - VALUES live in the Forgejo secret store and
