@@ -1514,8 +1514,11 @@ fn sessions_card_body(
                 @for s in sessions {
                     li class="flex items-center justify-between gap-4 rounded-lg border border-border/50 p-4" {
                         div class="min-w-0" {
-                            p class="font-medium truncate flex items-center gap-2" {
-                                (s.device_info.as_deref().unwrap_or("Unknown device"))
+                            // `truncate` belongs on the text span, not the flex
+                            // row: on the container it clips the badge away
+                            // instead of ellipsising the label (BUNYIP-421).
+                            p class="font-medium flex items-center gap-2 min-w-0" {
+                                span class="truncate" { (s.device_info.as_deref().unwrap_or("Unknown device")) }
                                 @if s.current { (badge("success", "This device")) }
                             }
                             p class="text-sm text-muted-foreground" {
@@ -2586,5 +2589,43 @@ mod tests {
         assert!(html.contains("Invalid verification code"));
         assert!(html.contains(r#"action="/settings/2fa/rekey/confirm""#));
         assert!(html.contains(r#"href="/settings/2fa/rekey""#)); // restart link
+    }
+}
+
+/// BUNYIP-421: the sessions list has the same identity-cell shape as the admin
+/// users list, so it gets the same guard.
+#[cfg(test)]
+mod session_row_clipping_tests {
+    use crate::api::types::{PaginatedResponse, SessionInfo};
+    use crate::views::ui::assert_no_truncating_flex_container;
+
+    #[test]
+    fn this_device_badge_survives_a_long_device_string() {
+        let page = PaginatedResponse {
+            items: vec![SessionInfo {
+                id: "s1".into(),
+                device_info: Some(
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36".into(),
+                ),
+                ip_address: Some("203.0.113.7".into()),
+                created_at: "2026-07-01T10:00:00Z".into(),
+                last_used_at: None,
+                current: true,
+            }],
+            total: 1,
+            page: 1,
+            page_size: Some(20),
+            total_pages: 1,
+        };
+        let html = super::sessions_card_body(&page, 1).into_string();
+        assert_no_truncating_flex_container(&html);
+        assert!(
+            html.contains(">This device<"),
+            "current-session badge is rendered"
+        );
+        assert!(
+            html.contains(r#"<span class="truncate">Mozilla/5.0"#),
+            "the device string, not the row, is what truncates: {html}"
+        );
     }
 }

@@ -261,6 +261,32 @@ pub fn success_box(msg: &str) -> Markup {
     }
 }
 
+/// BUNYIP-421 regression guard, shared by the page tests. `truncate` is
+/// `overflow:hidden` + `text-overflow:ellipsis` + `white-space:nowrap`, and the
+/// latter two do nothing on a flex/grid container: its items keep their
+/// max-content width and any sibling past the container's edge is clipped away
+/// with no ellipsis. So `truncate` belongs on the text element itself, never on
+/// a class list that also turns the element into a flex/grid box. Panics naming
+/// the offending class attribute.
+#[cfg(test)]
+pub fn assert_no_truncating_flex_container(html: &str) {
+    for attr in html.split("class=\"").skip(1) {
+        let Some(classes) = attr.split('"').next() else {
+            continue;
+        };
+        let tokens: Vec<&str> = classes.split_whitespace().collect();
+        let boxes_children = tokens
+            .iter()
+            .any(|t| matches!(*t, "flex" | "inline-flex" | "grid" | "inline-grid"));
+        assert!(
+            !(tokens.contains(&"truncate") && boxes_children),
+            "`truncate` on a flex/grid container clips its siblings instead of \
+             ellipsising the text (BUNYIP-421); move it to the text span: \
+             class=\"{classes}\""
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{clamp_msg, error_box, icon, success_box, toggle_switch};
