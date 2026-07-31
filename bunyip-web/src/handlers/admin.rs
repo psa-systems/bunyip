@@ -1144,8 +1144,12 @@ fn user_grid_row(u: &crate::api::types::AdminUser) -> Markup {
     };
     let identity = html! {
         div class="min-w-0" {
-            p class="font-medium truncate flex items-center gap-2" {
-                (u.email)
+            // `truncate` must sit on the text span, not on this flex row:
+            // ellipsis/nowrap do not apply to a flex container, so a long email
+            // took its full width and pushed the badges outside the row's
+            // `overflow:hidden`, clipping them away entirely (BUNYIP-421).
+            p class="font-medium flex items-center gap-2 min-w-0" {
+                span class="truncate" { (u.email) }
                 @if is_admin { (badge("default", "Admin")) }
                 @if u.suspended { (badge("outline", "Suspended")) }
             }
@@ -6894,5 +6898,52 @@ mod stripe_admin_tests {
         assert!(super::stripe_catalog_section(None)
             .into_string()
             .contains("Could not load the tier catalog mapping"));
+    }
+}
+
+/// BUNYIP-421: the users-list identity cell must ellipsise a long email without
+/// clipping the role/status badges that sit beside it.
+#[cfg(test)]
+mod identity_cell_clipping_tests {
+    use crate::api::types::{AdminUser, MembershipStatus, SubscriptionTier, UserRole};
+    use crate::views::ui::assert_no_truncating_flex_container;
+
+    fn user(role: UserRole, suspended: bool) -> AdminUser {
+        AdminUser {
+            id: "u1".into(),
+            email: "person.with.a.very.long.email.address@example.com".into(),
+            role,
+            email_verified: true,
+            two_factor_enabled: false,
+            membership_status: MembershipStatus::Active,
+            subscription_tier: SubscriptionTier::EarlyAdopter,
+            lifetime_member: false,
+            created_at: "2026-03-04T10:00:00Z".into(),
+            last_login_at: None,
+            grace_period_end: None,
+            suspended,
+        }
+    }
+
+    #[test]
+    fn badges_survive_a_long_email() {
+        let row = super::user_grid_row(&user(UserRole::Admin, false)).into_string();
+        // The clip was invisible in the markup: the badge WAS emitted, the row's
+        // own `overflow:hidden` just painted none of it. Guard the CSS shape.
+        assert_no_truncating_flex_container(&row);
+        assert!(row.contains(">Admin<"), "admin badge is rendered");
+        assert!(
+            row.contains(
+                r#"<span class="truncate">person.with.a.very.long.email.address@example.com</span>"#
+            ),
+            "the email, not the row, is what truncates: {row}"
+        );
+
+        let suspended = super::user_grid_row(&user(UserRole::Subscriber, true)).into_string();
+        assert_no_truncating_flex_container(&suspended);
+        assert!(
+            suspended.contains(">Suspended<"),
+            "suspended badge is rendered"
+        );
     }
 }
