@@ -10,19 +10,25 @@
 # plain `E2E_*` names, so env.ts and the gate scripts never need to know which
 # environment they target.
 #
-# Environments: automatic triggers (push, PR) always resolve to staging;
+# Environments: the automatic trigger (push to main) resolves to staging;
 # production runs only on a manual dispatch that selects it (the suite is
 # write-heavy and shares one rate-limited account, so it must not churn live
 # prod unattended).
+#
+# NO `pull_request` TRIGGER (BUNYIP-425). This job resolves ten deployment
+# secrets - Stripe key, account password, TOTP seed, mail-sink credentials -
+# into the environment of every step. A `pull_request` run executes the
+# workflow file, the npm lifecycle scripts and the Playwright specs from the
+# PR head, i.e. unreviewed attacker-authored code, so those secrets must never
+# be in scope for one. `push` and `workflow_dispatch` run the definition from
+# `main`, which is reviewed before it executes. The credential-free PR gate
+# lives in `e2e-pr.yml`; a PR-time full suite is a maintainer-triggered
+# `workflow_dispatch` after reading the diff.
 #
 # Triggers:
 #   - push to main: post-merge validation against staging. Runs the deploy-sync
 #     gate (`wait-for-deploy.mjs`) so it asserts the deployment is actually
 #     serving the pushed commit before the suite runs.
-#   - pull_request targeting main: merge gate against staging. PR SHAs never
-#     deploy, so the version gate is replaced with a `/health` reachability
-#     check; the suite still runs against whatever staging is currently
-#     serving.
 #   - workflow_dispatch: manual ad-hoc runs. `environment=staging` (default)
 #     behaves like a post-merge run (deploy-sync gate). `environment=production`
 #     targets prod; the dispatched SHA is unlikely to be what prod serves, so
@@ -30,18 +36,14 @@
 #
 # Serial concurrency: bunyip enforces a login rate limit of 5 requests per
 # minute per email. The suite shares one E2E account, so back-to-back runs
-# (post-merge + PR + multi-PR) would trip that limit and fail spuriously.
+# (post-merge + dispatch) would trip that limit and fail spuriously.
 # Serialise across ALL triggers via a single group and do NOT cancel in
-# progress, so post-merge runs always complete and every PR commit gets
-# exercised once it makes it through the queue. Slow throughput is the
+# progress, so post-merge runs always complete. Slow throughput is the
 # trade-off; for an auth-rate-limited gate, correctness beats throughput.
 name: E2E
 
 on:
   push:
-    branches:
-      - main
-  pull_request:
     branches:
       - main
   workflow_dispatch:
@@ -68,10 +70,10 @@ jobs:
         working-directory: e2e
 
     # Select the staging vs production secret per var and expose it on the
-    # plain E2E_* name that env.ts and the gate scripts read. On push /
-    # pull_request the `inputs` context is empty, so `inputs.environment ==
-    # 'production'` is false and every var resolves to its staging secret; a
-    # manual dispatch lets the operator pick.
+    # plain E2E_* name that env.ts and the gate scripts read. On push the
+    # `inputs` context is empty, so `inputs.environment == 'production'` is
+    # false and every var resolves to its staging secret; a manual dispatch
+    # lets the operator pick.
     env:
       E2E_BASE_URL: ${{ inputs.environment == 'production' && secrets.E2E_PRODUCTION_BASE_URL || secrets.E2E_STAGING_BASE_URL }}
       E2E_OP_BASE_URL: ${{ inputs.environment == 'production' && secrets.OIDC_ISSUER_PRODUCTION || secrets.OIDC_ISSUER_STAGING }}
@@ -100,8 +102,13 @@ jobs:
       # libalternatives wrappers whose `*-default` targets are not all
       # installed, so npm/npx run through corepack (it provisions npm on
       # demand) and node scripts use the concrete `node24` binary.
+      # --ignore-scripts (BUNYIP-425): dependency lifecycle scripts run with the
+      # job's full secret env. The only install script in the lockfile is
+      # fsevents (darwin-only, optional), so nothing on the Linux runner needs
+      # one; Playwright browsers come from the explicit `playwright install`
+      # step below, not from a postinstall.
       - name: Install dependencies
-        run: corepack npm ci
+        run: corepack npm ci --ignore-scripts
 
       - name: Install Chromium system libraries
         # The RUNS_ON_OPENSUSE_BASE_LATEST image was trimmed of the X / GTK /
@@ -133,29 +140,17 @@ jobs:
       # A production dispatch must NOT run the SHA-polling gate: the dispatched
       # commit is unlikely to be what prod currently serves, so the version
       # poll would time out. Version-sync runs on push and on a staging
-      # dispatch; reachability runs on pull_request and on a production
-      # dispatch.
+      # dispatch; reachability runs on a production dispatch.
       - name: Wait for deploy to serve this commit (push / staging dispatch)
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
         run: node24 scripts/wait-for-deploy.mjs
 
-      - name: Verify deployment is reachable (pull_request / production dispatch)
-        id: reachability
-        if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
-        # BUNYIP-301: soften the hub /healthz probe ONLY on pull_request. A PR's
-        # SHA never deploys, so a broken staging deploy is not a signal about
-        # this PR's quality; the hard check would otherwise deadlock any PR
-        # that lands during an outage (including the PR that fixes the outage,
-        # which is the failure mode we hit on the BUNYIP-299 CI hardening PR).
-        # Production dispatch keeps the hard check.
-        #
-        # BUNYIP-303: the script writes `hub_live=<true|false>` to
-        # $GITHUB_OUTPUT so the E2E suite gate below can skip (not run and
-        # fail) when the soft-probe caught the hub down. Without that gate,
-        # Playwright sat for 3 minutes waiting for a login form the mispushed
-        # SPA image never renders.
-        env:
-          E2E_HUB_SOFT: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
+      - name: Verify deployment is reachable (production dispatch)
+        if: github.event_name == 'workflow_dispatch' && inputs.environment == 'production'
+        # Hard probe: a production dispatch is operator-initiated, so a hub
+        # that is not live should fail the run rather than be swallowed. The
+        # soft-probe path (E2E_HUB_SOFT, BUNYIP-301/303) belongs to the
+        # credential-free PR gate in e2e-pr.yml.
         run: node24 scripts/health-check.mjs
 
       # E2E seed readiness (BUNYIP-163). Writes `bootstrapped` as a step output;
@@ -170,25 +165,12 @@ jobs:
         # Run when staging is seeded, OR on a production dispatch (prod is
         # reachability-only / write-skipped and its /e2e-bootstrapped always
         # reports false, so it must not gate on it).
-        #
-        # BUNYIP-303: additionally skip when the reachability step's soft-probe
-        # reported the hub down (`hub_live == 'false'`). Only pull_request runs
-        # the reachability step in soft mode; on push / staging dispatch that
-        # step never runs and the output is unset, which compares `!= 'false'`
-        # as true and preserves the existing behaviour.
-        if: (steps.bootstrap_check.outputs.bootstrapped == 'true' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'production')) && steps.reachability.outputs.hub_live != 'false'
+        if: steps.bootstrap_check.outputs.bootstrapped == 'true' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
         run: corepack npx playwright test
 
       - name: Note skipped suite (staging not bootstrapped)
         if: steps.bootstrap_check.outputs.bootstrapped != 'true' && !(github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
         run: echo "staging not bootstrapped; skipping E2E suite - run 'just e2e-bootstrap' to enable coverage."
-
-      - name: Note skipped suite (hub soft-probe reported down)
-        # Complementary note for the BUNYIP-303 skip branch. Fires when the hub
-        # was soft-degraded on a pull_request run so a reviewer knows why the
-        # suite line is skipped without digging through the reachability logs.
-        if: steps.reachability.outputs.hub_live == 'false'
-        run: echo "hub /healthz probe reported not-live (E2E_HUB_SOFT swallowed the failure); skipping E2E suite for this PR run."
 
       - name: Upload Playwright report and traces
         if: failure()

@@ -28,9 +28,10 @@ test.describe('account sessions', () => {
     //   - legacy:    { data: { sessions: [...] } }      (handler emits `{ sessions }`)
     //   - paginated: { data: { items: [...], total, page, per_page, total_pages } }
     //                (handler emits `paginated(...)`, BUNYIP-177)
-    // This suite runs against a live deployment, and on a pull_request the PR's
-    // code is NOT deployed (e2e.yml does a /health check, not a deploy), so the
-    // test always runs against whatever staging currently serves. A PR that
+    // This suite runs against a live deployment whose code is not necessarily
+    // the checked-out commit: the deploy gate waits only for the last
+    // build-relevant commit, and a manual dispatch of an unmerged branch runs
+    // against whatever staging currently serves. A change that
     // reshapes this response therefore asserts the new shape against the old
     // deployed API (or vice-versa). Accept BOTH so the assertion survives the
     // window between merge and deploy, regardless of which shape is live.
