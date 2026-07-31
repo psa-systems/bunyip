@@ -104,19 +104,26 @@ where
             return Box::pin(async move { fut.await.map(|res| res.map_into_left_body()) });
         }
 
-        let http_req = req.request().clone();
+        let path = req.path().to_string();
 
         Box::pin(async move {
+            // Borrow the inner HttpRequest, never clone it: actix's router calls
+            // `match_info_mut`, which asserts it holds the only reference, so a
+            // clone alive across `service.call` panics the worker.
+            //
             // An unverifiable token falls back to the tighter unauthenticated
             // budget, so presenting garbage cannot buy the larger one.
-            let (key, config) = match resolve_rate_limit_subject(&http_req).await {
-                Some(sub) => (sub.to_string(), &RateLimitConfig::API_AUTH),
-                None => (
-                    extract_client_ip(&http_req)
-                        .map(|ip| ip.to_string())
-                        .unwrap_or_else(|| "unknown".into()),
-                    &RateLimitConfig::API_UNAUTH,
-                ),
+            let (key, config) = {
+                let http_req = req.request();
+                match resolve_rate_limit_subject(http_req).await {
+                    Some(sub) => (sub.to_string(), &RateLimitConfig::API_AUTH),
+                    None => (
+                        extract_client_ip(http_req)
+                            .map(|ip| ip.to_string())
+                            .unwrap_or_else(|| "unknown".into()),
+                        &RateLimitConfig::API_UNAUTH,
+                    ),
+                }
             };
 
             match RateLimitRepository::check_and_increment(&pool, &key, config).await {
@@ -126,7 +133,7 @@ where
                         .unwrap_or(config.window_seconds.max(0) as u64);
                     tracing::warn!(
                         action = config.action,
-                        path = %http_req.path(),
+                        path = %path,
                         "request cap floor exceeded"
                     );
                     let res = HttpResponse::TooManyRequests()
@@ -169,5 +176,21 @@ mod tests {
         // Near-misses must not fall through the exact-match list.
         assert!(!is_exempt("/v1/healthz", &Method::GET));
         assert!(!is_exempt("/v1/webhooks/stripe/extra", &Method::POST));
+    }
+
+    /// Regression guard: this middleware must never hold a cloned
+    /// [`actix_web::HttpRequest`] across the inner `service.call`. Actix's
+    /// router calls `HttpRequest::match_info_mut`, which unwraps
+    /// `Rc::get_mut` and panics the worker when a second reference is alive, so
+    /// a clone here took down every non-exempt request rather than throttling
+    /// it. Borrow `req.request()` instead.
+    #[test]
+    fn never_clones_the_inner_http_request() {
+        let src = include_str!("rate_limit_floor.rs");
+        let body = src.split("\n#[cfg(test)]").next().unwrap();
+        assert!(
+            !body.contains("req.request().clone()"),
+            "cloning the inner HttpRequest panics actix's router; borrow it instead"
+        );
     }
 }
