@@ -1055,6 +1055,54 @@ impl UserRepository {
         Ok(())
     }
 
+    /// BUNYIP-431: move a user to an arbitrary tier as an admin override, in a
+    /// single UPDATE. Tier slot usage is a live COUNT over `subscription_tier`
+    /// (see [`Self::count_tier_assignments`]), so this one statement debits the
+    /// source tier and credits the destination atomically - there is no separate
+    /// counter to keep in sync. Marks the row as an admin override
+    /// (`subscription_override_by`, so it counts toward caps and shows in Tier
+    /// Settings per BUNYIP-96), sets `lifetime_member` for lifetime/free, and
+    /// computes the trial window for early_adopter/standard from the configured
+    /// trial days. The caller performs any Stripe-side work (the $0 invoice
+    /// subscription when moving to lifetime) and session revocation.
+    pub async fn admin_set_subscription_tier(
+        pool: &PgPool,
+        user_id: Uuid,
+        tier: &SubscriptionTier,
+        granted_by: Uuid,
+        early_adopter_trial_days: i64,
+        standard_trial_days: i64,
+    ) -> Result<User, AppError> {
+        let trial_ends_at = tier
+            .trial_days(early_adopter_trial_days, standard_trial_days)
+            .map(|days| Utc::now() + chrono::Duration::days(days));
+        let lifetime_member = matches!(tier, SubscriptionTier::Lifetime | SubscriptionTier::Free);
+
+        let user = sqlx::query_as::<_, User>(
+            r#"
+            UPDATE users
+            SET subscription_tier = $1,
+                lifetime_member = $2,
+                trial_ends_at = $3,
+                subscription_override_by = $4,
+                subscription_status = 'active',
+                updated_at = NOW()
+            WHERE id = $5 AND deleted_at IS NULL
+            RETURNING *
+            "#,
+        )
+        .bind(tier.as_str())
+        .bind(lifetime_member)
+        .bind(trial_ends_at)
+        .bind(granted_by)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("User"))?;
+
+        Ok(user)
+    }
+
     /// Count users assigned to each tier — used inside a transaction with an advisory lock
     /// to atomically determine which tier the next verified user should receive.
     ///

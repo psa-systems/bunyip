@@ -82,6 +82,10 @@ pub enum AuditAction {
     AdminInviteRevoked,
     AdminStripeConfigUpdated,
     AdminTierConfigUpdated,
+    /// BUNYIP-431: an admin moved a member to a different subscription tier.
+    /// Metadata carries `from_tier`, `to_tier`, the target email, and how many
+    /// sessions were revoked. Gated on the acting admin's 2FA code.
+    AdminTierChanged,
     AdminEmailConfigUpdated,
     /// BUNYIP-433: an admin ran the SMTP "Test connection" probe. Metadata
     /// carries host/port/tls, the `ok` result, and the failing `stage` (never
@@ -232,6 +236,7 @@ impl AuditAction {
             AuditAction::AdminInviteRevoked => "admin_invite_revoked",
             AuditAction::AdminStripeConfigUpdated => "admin_stripe_config_updated",
             AuditAction::AdminTierConfigUpdated => "admin_tier_config_updated",
+            AuditAction::AdminTierChanged => "admin_tier_changed",
             AuditAction::AdminEmailConfigUpdated => "admin_email_config_updated",
             AuditAction::AdminEmailConnectionTested => "admin_email_connection_tested",
             AuditAction::AdminAutoBanConfigUpdated => "admin_auto_ban_config_updated",
@@ -305,6 +310,7 @@ impl AuditAction {
                 | AuditAction::AdminInviteRevoked
                 | AuditAction::AdminStripeConfigUpdated
                 | AuditAction::AdminTierConfigUpdated
+                | AuditAction::AdminTierChanged
                 | AuditAction::AdminEmailConfigUpdated
                 | AuditAction::AdminEmailConnectionTested
                 | AuditAction::AdminAutoBanConfigUpdated

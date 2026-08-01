@@ -18,13 +18,13 @@ use crate::models::stripe::encrypt_secret;
 use crate::models::{
     AuditAction, CreateApplication, CreateApplicationGroup, CreateAuditLog,
     CreatePasswordResetToken, CreateRefreshToken, DeleteApplicationRequest, MembershipStatus,
-    RateLimitConfig, SetApplicationGroupRequest, StripeConfigResponse, SwapApplicationOrderRequest,
-    UpdateApplication, UpdateApplicationGroup, UserResponse,
+    RateLimitConfig, SetApplicationGroupRequest, StripeConfigResponse, SubscriptionTier,
+    SwapApplicationOrderRequest, UpdateApplication, UpdateApplicationGroup, UserResponse,
 };
 use crate::repositories::{
     ApplicationGroupRepository, ApplicationRepository, AuditLogRepository, InviteRepository,
-    NotificationRepository, StripeConfigRepository, TokenRepository, TotpRepository,
-    UserRepository,
+    NotificationRepository, StripeConfigRepository, TierConfigRepository, TokenRepository,
+    TotpRepository, UserRepository,
 };
 use crate::responses::{created, get_request_id, paginated, success, success_no_data};
 use crate::services::{
@@ -2214,6 +2214,154 @@ pub async fn revoke_lifetime_membership(
 }
 
 // =============================================================================
+// Admin tier change (BUNYIP-431)
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct SetUserTierRequest {
+    /// One of `lifetime` | `free` | `early_adopter` | `standard`.
+    pub tier: String,
+    /// The acting admin's current 2FA code. Required: a tier move has billing
+    /// consequences, so it is gated on a stronger check than the ordinary
+    /// confirm dialog.
+    pub totp_code: String,
+}
+
+/// Strictly parse a destination tier. Unlike `SubscriptionTier::from(&str)`
+/// (which defaults anything unknown to `Standard`), an unrecognised value is a
+/// client error here so a typo can never silently downgrade a member.
+fn parse_admin_tier(raw: &str) -> Result<SubscriptionTier, AppError> {
+    match raw.trim() {
+        "lifetime" => Ok(SubscriptionTier::Lifetime),
+        "free" => Ok(SubscriptionTier::Free),
+        "early_adopter" => Ok(SubscriptionTier::EarlyAdopter),
+        "standard" => Ok(SubscriptionTier::Standard),
+        _ => Err(AppError::validation("tier", "Unknown subscription tier")),
+    }
+}
+
+/// The side effects a tier move entails, decided purely from the 2FA result and
+/// the before/after tiers so upgrade / downgrade / cancelled-2FA are unit-testable
+/// without a database or Stripe. `Err` means the 2FA code failed and the caller
+/// must mutate nothing (BUNYIP-431 AC6). On `Ok`, `create_lifetime_invoice` is
+/// true only when NEWLY moving to lifetime (mirrors `grant_lifetime_membership`'s
+/// $0 invoice subscription), and `revoke_sessions` is true for any real tier
+/// change because tier flips `has_member_access` inputs on the JWT claims.
+#[derive(Debug, PartialEq, Eq)]
+struct TierMovePlan {
+    create_lifetime_invoice: bool,
+    revoke_sessions: bool,
+}
+
+fn plan_admin_tier_move(
+    totp_valid: bool,
+    from: &SubscriptionTier,
+    to: &SubscriptionTier,
+) -> Result<TierMovePlan, AppError> {
+    if !totp_valid {
+        return Err(AppError::validation("totp_code", "Invalid 2FA code"));
+    }
+    Ok(TierMovePlan {
+        create_lifetime_invoice: matches!(to, SubscriptionTier::Lifetime)
+            && !matches!(from, SubscriptionTier::Lifetime),
+        revoke_sessions: from != to,
+    })
+}
+
+/// POST /v1/admin/users/{user_id}/tier (BUNYIP-431)
+/// Move any member to any configured tier, gated on the acting admin's 2FA code.
+/// Slot usage is a live COUNT over `subscription_tier`, so the single UPDATE in
+/// `admin_set_subscription_tier` debits the source tier and credits the
+/// destination; no separate counter is touched.
+pub async fn set_user_tier(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    stripe: web::Data<Arc<StripeService>>,
+    bus: web::Data<Arc<EventBus>>,
+    totp_service: web::Data<Arc<TotpService>>,
+    path: web::Path<uuid::Uuid>,
+    body: web::Json<SetUserTierRequest>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let user_id = path.into_inner();
+
+    // Validate the destination tier before touching anything.
+    let to_tier = parse_admin_tier(&body.tier)?;
+
+    // The before-tier, for the audit trail and the move plan.
+    let before = UserRepository::find_by_id(&pool, user_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("User"))?;
+    let from_tier = SubscriptionTier::from(before.subscription_tier.as_str());
+
+    // 2FA gate. A missing/invalid code yields Err here, BEFORE any mutation, so
+    // a cancelled or wrong code leaves the tier and every slot count unchanged.
+    let totp_valid = totp_service
+        .verify_code(admin.0.sub, body.totp_code.trim())
+        .await
+        .map_err(|_| AppError::validation("totp_code", "2FA must be enabled to change a tier"))?;
+    let plan = plan_admin_tier_move(totp_valid, &from_tier, &to_tier)?;
+
+    // Trial windows come from the resolved tier settings.
+    let tier_config =
+        crate::config::TierConfig::from_db_row(&TierConfigRepository::get(&pool).await?);
+
+    let user = UserRepository::admin_set_subscription_tier(
+        &pool,
+        user_id,
+        &to_tier,
+        admin.0.sub,
+        tier_config.early_adopter_trial_days,
+        tier_config.standard_trial_days,
+    )
+    .await?;
+
+    // Moving TO lifetime mirrors grant_lifetime_membership: mint the $0 invoice
+    // subscription so the member keeps receiving invoices.
+    if plan.create_lifetime_invoice {
+        if let Some(free_price_id) = stripe.free_price_id() {
+            let customer_id = match user.stripe_customer_id.clone() {
+                Some(id) => id,
+                None => {
+                    let id = stripe.create_customer(&user.email, user.id).await?;
+                    UserRepository::update_stripe_customer_id(pool.get_ref(), user.id, &id).await?;
+                    id
+                }
+            };
+            stripe
+                .create_free_subscription(&customer_id, &free_price_id)
+                .await?;
+        }
+    }
+
+    // Any real tier change flips has_member_access inputs, so cut existing
+    // sessions (next request remints fresh claims) and nudge open tabs.
+    let sessions_revoked = if plan.revoke_sessions {
+        revoke_user_sessions(pool.get_ref(), user_id).await?
+    } else {
+        false
+    };
+    announce_claims_changed(bus.as_ref(), user_id);
+
+    AuditLogRepository::create(
+        &pool,
+        CreateAuditLog::new(AuditAction::AdminTierChanged)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+            .with_resource("user", user_id)
+            .with_metadata(serde_json::json!({
+                "from_tier": from_tier.as_str(),
+                "to_tier": to_tier.as_str(),
+                "target_email": user.email,
+                "sessions_revoked": sessions_revoked,
+            })),
+    )
+    .await?;
+
+    Ok(success(UserResponse::from(user), request_id))
+}
+
+// =============================================================================
 // Email Configuration (BUNYIP-351)
 // =============================================================================
 
@@ -3193,6 +3341,116 @@ mod tests {
     async fn maybe_pool() -> Option<PgPool> {
         let url = std::env::var("DATABASE_URL").ok()?;
         PgPool::connect(&url).await.ok()
+    }
+
+    // -- BUNYIP-431: admin tier move ------------------------------------------
+
+    #[test]
+    fn parse_admin_tier_accepts_every_tier_and_rejects_unknown() {
+        assert_eq!(
+            parse_admin_tier("lifetime").unwrap(),
+            SubscriptionTier::Lifetime
+        );
+        assert_eq!(parse_admin_tier("free").unwrap(), SubscriptionTier::Free);
+        assert_eq!(
+            parse_admin_tier("early_adopter").unwrap(),
+            SubscriptionTier::EarlyAdopter
+        );
+        assert_eq!(
+            parse_admin_tier(" standard ").unwrap(),
+            SubscriptionTier::Standard
+        );
+        assert!(
+            parse_admin_tier("gold").is_err(),
+            "an unknown tier is a client error, never a silent downgrade to Standard"
+        );
+        assert!(parse_admin_tier("").is_err());
+    }
+
+    #[test]
+    fn cancelled_2fa_plans_no_change() {
+        // AC6: a failed 2FA code yields Err before any mutation, so the tier and
+        // every slot count stay put.
+        assert!(plan_admin_tier_move(
+            false,
+            &SubscriptionTier::Standard,
+            &SubscriptionTier::Lifetime
+        )
+        .is_err());
+        assert!(plan_admin_tier_move(
+            false,
+            &SubscriptionTier::Lifetime,
+            &SubscriptionTier::Standard
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn upgrade_to_lifetime_mints_invoice_and_revokes_sessions() {
+        let plan = plan_admin_tier_move(
+            true,
+            &SubscriptionTier::Standard,
+            &SubscriptionTier::Lifetime,
+        )
+        .unwrap();
+        assert_eq!(
+            plan,
+            TierMovePlan {
+                create_lifetime_invoice: true,
+                revoke_sessions: true
+            }
+        );
+    }
+
+    #[test]
+    fn upgrade_between_non_lifetime_tiers_revokes_sessions_without_invoice() {
+        let plan = plan_admin_tier_move(
+            true,
+            &SubscriptionTier::Standard,
+            &SubscriptionTier::EarlyAdopter,
+        )
+        .unwrap();
+        assert_eq!(
+            plan,
+            TierMovePlan {
+                create_lifetime_invoice: false,
+                revoke_sessions: true
+            }
+        );
+    }
+
+    #[test]
+    fn downgrade_from_lifetime_revokes_sessions_without_new_invoice() {
+        let plan = plan_admin_tier_move(
+            true,
+            &SubscriptionTier::Lifetime,
+            &SubscriptionTier::Standard,
+        )
+        .unwrap();
+        assert_eq!(
+            plan,
+            TierMovePlan {
+                create_lifetime_invoice: false,
+                revoke_sessions: true
+            }
+        );
+    }
+
+    #[test]
+    fn same_tier_move_touches_no_sessions_and_no_invoice() {
+        let plan = plan_admin_tier_move(
+            true,
+            &SubscriptionTier::EarlyAdopter,
+            &SubscriptionTier::EarlyAdopter,
+        )
+        .unwrap();
+        assert_eq!(
+            plan,
+            TierMovePlan {
+                create_lifetime_invoice: false,
+                revoke_sessions: false
+            }
+        );
     }
 
     #[test]

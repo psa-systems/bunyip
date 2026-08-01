@@ -57,6 +57,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/users/{user_id}/lifetime/revoke",
                 web::post().to(handlers::revoke_lifetime_membership),
             )
+            // BUNYIP-431: move a member to any configured tier (2FA-gated).
+            .route(
+                "/users/{user_id}/tier",
+                web::post().to(handlers::set_user_tier),
+            )
             // Per-product entitlements (BUNYIP-39)
             .route(
                 "/users/{user_id}/entitlements",
