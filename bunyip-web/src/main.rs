@@ -303,6 +303,10 @@ async fn main() {
             "/admin/users/:id/lifetime/revoke",
             axum::routing::post(handlers::admin::user_revoke_lifetime),
         )
+        .route(
+            "/admin/users/:id/tier",
+            axum::routing::post(handlers::admin::user_set_tier),
+        )
         .route("/admin/memberships", get(handlers::admin::memberships))
         .route(
             "/admin/memberships/:user_id/grant",

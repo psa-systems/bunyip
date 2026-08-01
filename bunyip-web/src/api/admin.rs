@@ -243,6 +243,27 @@ pub async fn revoke_lifetime(
     ok_data(&r).map(|_| ())
 }
 
+/// BUNYIP-431: move a member to any configured tier (lifetime, early adopter,
+/// standard, free), gated on the acting admin's 2FA code. Wraps POST
+/// /admin/users/{id}/tier. The API returns a validation error on a bad/absent
+/// 2FA code, in which case nothing changes.
+pub async fn set_user_tier(
+    api: &Api,
+    cookie: Option<&str>,
+    user_id: &str,
+    tier: &str,
+    totp_code: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            &format!("/admin/users/{user_id}/tier"),
+            cookie,
+            Some(json!({ "tier": tier, "totp_code": totp_code })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
 // --- memberships ------------------------------------------------------------
 //
 // BUNYIP-410: the members-by-tier list fetch (`memberships`) was removed with

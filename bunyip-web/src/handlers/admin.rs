@@ -1927,6 +1927,44 @@ pub async fn user_revoke_lifetime(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+/// Body for the BUNYIP-431 tier-change form: the destination tier plus the
+/// acting admin's 2FA code.
+#[derive(serde::Deserialize)]
+pub struct TierChangeForm {
+    pub tier: String,
+    pub totp_code: String,
+}
+
+/// POST /admin/users/{id}/tier (BUNYIP-431). Relays the destination tier and the
+/// admin's 2FA code to the API, which applies the move only on a valid code. On
+/// a bad/absent code the API returns a validation error and nothing changes; we
+/// bounce back to the user page with the message as a toast, so a cancelled 2FA
+/// leaves the tier and slot counts untouched.
+pub async fn user_set_tier(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<TierChangeForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::set_user_tier(
+        &st.api,
+        c.forward.as_deref(),
+        &id,
+        f.tier.trim(),
+        f.totp_code.trim(),
+    )
+    .await
+    {
+        Ok(()) => format!("/admin/users/{id}?toast_ok=Tier%20updated"),
+        Err(e) => format!("/admin/users/{id}?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
 /// GET /admin/users/{id} - single-user detail page with all admin actions in one place.
 /// BUNYIP-430: the per-user "Actions" card. Every state-changing control here
 /// routes through the one shared confirmation dialog - the `data-confirm`
@@ -1952,20 +1990,67 @@ fn user_actions_card(target: &AdminUser, is_admin_target: bool) -> Markup {
                 form method="post" action=(format!("/admin/users/{}/reset-password", target.id)) data-confirm=(format!("Send a password reset email to {who}?")) {
                     button type="submit" class=(button_class("outline", "default", "")) { "Send password reset" }
                 }
-                @if target.lifetime_member {
-                    form method="post" action=(format!("/admin/users/{}/lifetime/revoke", target.id)) data-confirm=(format!("Revoke lifetime membership from {who}? They will be returned to standard tier with no active subscription.")) {
-                        button type="submit" class=(button_class("outline", "default", "")) { "Revoke lifetime" }
-                    }
-                } @else {
-                    form method="post" action=(format!("/admin/users/{}/lifetime", target.id)) data-confirm=(format!("Grant lifetime membership to {who}? Creates a $0 Stripe subscription.")) {
-                        button type="submit" class=(button_class("outline", "default", "")) { "Grant lifetime" }
-                    }
-                }
+                // BUNYIP-431: the two lifetime-specific buttons were replaced by
+                // the 2FA-gated tier selector in `tier_change_card` below, which
+                // moves a member to any tier (including to/from lifetime).
                 form method="post" action=(format!("/admin/users/{}/suspend", target.id)) data-confirm=(format!("Suspend (soft-delete) {who}?")) {
                     button type="submit" class=(button_class("outline", "default", "")) { "Suspend" }
                 }
                 form method="post" action=(format!("/admin/users/{}/delete", target.id)) data-confirm=(format!("Delete {who}? This cannot be undone.")) {
                     button type="submit" class=(button_class("outline", "default", "text-destructive hover:text-destructive")) { "Delete user" }
+                }
+            }
+        }
+    }
+}
+
+/// BUNYIP-431: move a member to any configured tier. The options never depend on
+/// the member's current tier (any-to-any, including downgrades). Applying a
+/// change requires the acting admin's own 2FA code - a stronger gate than the
+/// shared confirm dialog, because a tier move has billing consequences. The API
+/// records the before/after tiers in the audit log; the slot counts in Tier
+/// Settings stay correct because usage is counted live from the tier column.
+fn tier_change_card(target: &AdminUser) -> Markup {
+    use crate::api::types::SubscriptionTier::*;
+    let options = [
+        (
+            "lifetime",
+            "Lifetime",
+            matches!(target.subscription_tier, Lifetime),
+        ),
+        (
+            "early_adopter",
+            "Early Adopter",
+            matches!(target.subscription_tier, EarlyAdopter),
+        ),
+        (
+            "standard",
+            "Standard",
+            matches!(target.subscription_tier, Standard),
+        ),
+        ("free", "Free", matches!(target.subscription_tier, Free)),
+    ];
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="flex flex-col space-y-1.5 p-6 pb-2" {
+                h3 class="text-base font-semibold leading-none tracking-tight" { "Membership tier" }
+                p class="text-xs text-muted-foreground" { "Move this member to any tier, in either direction. Requires your two-factor code; the change and its before/after tiers are written to the audit log." }
+            }
+            div class="p-6 pt-2" {
+                form method="post" action=(format!("/admin/users/{}/tier", target.id)) class="flex flex-wrap items-end gap-3" {
+                    div class="space-y-2" {
+                        label class="text-sm font-medium" for="tier" { "Tier" }
+                        select id="tier" name="tier" class=(dashboard_input()) {
+                            @for (value, label, is_current) in options {
+                                option value=(value) selected[is_current] { (label) }
+                            }
+                        }
+                    }
+                    div class="space-y-2" {
+                        label class="text-sm font-medium" for="tier-totp" { "Your 2FA code" }
+                        input id="tier-totp" name="totp_code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" required class=(dashboard_input());
+                    }
+                    button type="submit" class=(button_class("default", "default", "")) { "Change tier" }
                 }
             }
         }
@@ -2109,6 +2194,8 @@ pub async fn user_detail(
             // Actions card (BUNYIP-430): extracted so every significant control
             // shares the one confirmation dialog and names the target user.
             (user_actions_card(&target, is_admin_target))
+            // BUNYIP-431: 2FA-gated any-tier-to-any-tier move.
+            (tier_change_card(&target))
         }
     };
     admin_response(&c, &user, "/admin/users", "User · Bunyip", content)
@@ -7325,31 +7412,9 @@ mod admin_action_confirm_tests {
         }
     }
 
-    #[test]
-    fn grant_lifetime_confirms_and_names_the_user() {
-        let html = user_actions_card(&target("jane@example.com", false), false).into_string();
-        assert!(
-            html.contains(&format!(r#"action="/admin/users/{UID}/lifetime""#)),
-            "grant-lifetime form shown for a non-lifetime user"
-        );
-        assert!(
-            html.contains("Grant lifetime membership to jane@example.com?"),
-            "grant confirms and names the user: {html}"
-        );
-    }
-
-    #[test]
-    fn revoke_lifetime_confirms_and_names_the_user() {
-        let html = user_actions_card(&target("jane@example.com", true), false).into_string();
-        assert!(
-            html.contains(&format!(r#"action="/admin/users/{UID}/lifetime/revoke""#)),
-            "revoke form shown for a lifetime user"
-        );
-        assert!(
-            html.contains("Revoke lifetime membership from jane@example.com?"),
-            "revoke confirms and names the user: {html}"
-        );
-    }
+    // BUNYIP-431 replaced the Grant/Revoke lifetime buttons in this card with the
+    // 2FA-gated tier selector (`tier_change_card`, covered in `tier_change_tests`),
+    // so the lifetime-specific confirm tests moved out with them.
 
     #[test]
     fn reset_password_confirms_and_names_the_user() {
@@ -7386,6 +7451,73 @@ mod admin_action_confirm_tests {
                 "every action form ({forms}) carries data-confirm ({confirms}): {html}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tier_change_tests {
+    //! BUNYIP-431: the tier selector offers every configured tier regardless of
+    //! the member's current tier (any-to-any), and applying a change requires
+    //! the acting admin's 2FA code.
+    use super::tier_change_card;
+    use crate::api::types::{AdminUser, MembershipStatus, SubscriptionTier, UserRole};
+
+    const UID: &str = "33333333-3333-3333-3333-333333333333";
+
+    fn target(tier: SubscriptionTier) -> AdminUser {
+        AdminUser {
+            id: UID.into(),
+            email: "jane@example.com".into(),
+            role: UserRole::Subscriber,
+            email_verified: true,
+            two_factor_enabled: false,
+            membership_status: MembershipStatus::None,
+            subscription_tier: tier,
+            lifetime_member: false,
+            created_at: String::new(),
+            last_login_at: None,
+            grace_period_end: None,
+            suspended: false,
+        }
+    }
+
+    #[test]
+    fn offers_every_tier_regardless_of_current() {
+        // AC3: the options do not vary with the member's current tier - whatever
+        // they hold, all four destinations are offered (including downgrades).
+        for current in [
+            SubscriptionTier::Lifetime,
+            SubscriptionTier::EarlyAdopter,
+            SubscriptionTier::Standard,
+            SubscriptionTier::Free,
+        ] {
+            let html = tier_change_card(&target(current)).into_string();
+            for value in ["lifetime", "early_adopter", "standard", "free"] {
+                assert!(
+                    html.contains(&format!(r#"value="{value}""#)),
+                    "tier option {value} is offered regardless of current tier"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn requires_a_2fa_code_and_posts_to_the_tier_route() {
+        let html = tier_change_card(&target(SubscriptionTier::Standard)).into_string();
+        assert!(html.contains(&format!(r#"action="/admin/users/{UID}/tier""#)));
+        assert!(
+            html.contains(r#"name="totp_code""#) && html.contains("required"),
+            "the admin's 2FA code is a required field: {html}"
+        );
+    }
+
+    #[test]
+    fn preselects_the_current_tier() {
+        let html = tier_change_card(&target(SubscriptionTier::EarlyAdopter)).into_string();
+        assert!(
+            html.contains(r#"value="early_adopter" selected"#),
+            "the member's current tier is preselected: {html}"
+        );
     }
 }
 
