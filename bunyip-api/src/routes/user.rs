@@ -14,6 +14,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/me/profile",
                 web::put().to(handlers::update_current_user_profile),
             )
+            // BUNYIP-408: profile avatar (multipart upload / remove / serve).
+            .route("/me/avatar", web::get().to(handlers::get_avatar))
+            .route("/me/avatar", web::post().to(handlers::upload_avatar))
+            .route("/me/avatar", web::delete().to(handlers::delete_avatar))
             // BUNYIP-140: OIDC scope consent grants (consent-screen POST target)
             .route("/me/consents", web::post().to(handlers::grant_consent))
             .route("/me/password", web::put().to(handlers::change_password))

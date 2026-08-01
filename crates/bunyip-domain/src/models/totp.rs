@@ -24,6 +24,10 @@ pub struct UserTotp {
     pub pending_nonce: Option<Vec<u8>>,
     pub pending_key_version: Option<i16>,
     pub pending_created_at: Option<DateTime<Utc>>,
+    /// BUNYIP-428: highest TOTP step already consumed by a successful
+    /// verification, NULL until the first one. Per user, monotonic; a code
+    /// whose step is at or below this value is refused as a replay.
+    pub last_used_step: Option<i64>,
 }
 
 /// Recovery code for 2FA backup

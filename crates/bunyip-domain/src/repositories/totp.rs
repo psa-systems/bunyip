@@ -119,6 +119,28 @@ impl TotpRepository {
         Ok(res.rows_affected())
     }
 
+    /// BUNYIP-428: claim TOTP step `step` for a user, enforcing single use.
+    /// The guard makes the counter monotonic, so the same step (a replay) and
+    /// any older step update zero rows; because it is one conditional UPDATE,
+    /// two concurrent submissions of the same code cannot both win. Returns the
+    /// number of rows updated (0 = already consumed, treat as a failed
+    /// verification).
+    pub async fn claim_totp_step(pool: &PgPool, user_id: Uuid, step: i64) -> Result<u64, AppError> {
+        let res = sqlx::query(
+            r#"
+            UPDATE user_totp
+            SET last_used_step = $2, updated_at = NOW()
+            WHERE user_id = $1
+              AND (last_used_step IS NULL OR last_used_step < $2)
+            "#,
+        )
+        .bind(user_id)
+        .bind(step)
+        .execute(pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// Find TOTP configuration by user ID
     pub async fn find_by_user_id(
         pool: &PgPool,

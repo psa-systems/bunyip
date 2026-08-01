@@ -80,35 +80,11 @@ pub async fn provision_app_role(pool: &PgPool, password: &str) -> Result<(), App
         .fetch_one(pool)
         .await?;
 
-    let pw = sql_quote(password);
-    let db = quote_ident(&db_name);
-
-    // CREATE ROLE is not idempotent, so guard it with a DO block; the ALTER ROLE
-    // afterwards reconciles the password + attributes on an already-existing
-    // role (e.g. a rotated password).
-    let statements: Vec<String> = vec![
-        format!(
-            "DO $do$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'bunyip_app') \
-             THEN CREATE ROLE bunyip_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD {pw}; END IF; END $do$"
-        ),
-        format!("ALTER ROLE bunyip_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD {pw}"),
-        format!("GRANT CONNECT ON DATABASE {db} TO bunyip_app"),
-        "GRANT USAGE ON SCHEMA public TO bunyip_app".to_string(),
-        "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO bunyip_app"
-            .to_string(),
-        "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO bunyip_app".to_string(),
-        "ALTER DEFAULT PRIVILEGES IN SCHEMA public \
-         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO bunyip_app"
-            .to_string(),
-        "ALTER DEFAULT PRIVILEGES IN SCHEMA public \
-         GRANT USAGE, SELECT ON SEQUENCES TO bunyip_app"
-            .to_string(),
-    ];
-
-    for stmt in &statements {
-        sqlx::query(stmt).execute(pool).await.map_err(|e| {
-            AppError::internal(format!("bunyip_app provisioning step failed ({e}): {stmt}"))
-        })?;
+    for (label, stmt) in provisioning_statements(password, &db_name) {
+        sqlx::query(&stmt)
+            .execute(pool)
+            .await
+            .map_err(|e| provisioning_error(label, &e))?;
     }
 
     tracing::info!(
@@ -116,6 +92,71 @@ pub async fn provision_app_role(pool: &PgPool, password: &str) -> Result<(), App
         "bunyip_app RLS role provisioned (NOSUPERUSER NOBYPASSRLS)"
     );
     Ok(())
+}
+
+/// The provisioning statements, each paired with a stable label.
+///
+/// Two of them embed the password as an SQL literal, so the statement text is a
+/// secret and must never reach a log or an error (BUNYIP-426 F5); the label is
+/// what identifies the failing step instead.
+fn provisioning_statements(password: &str, db_name: &str) -> Vec<(&'static str, String)> {
+    let pw = sql_quote(password);
+    let db = quote_ident(db_name);
+
+    // CREATE ROLE is not idempotent, so guard it with a DO block; the ALTER ROLE
+    // afterwards reconciles the password + attributes on an already-existing
+    // role (e.g. a rotated password).
+    vec![
+        (
+            "create_role",
+            format!(
+                "DO $do$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'bunyip_app') \
+                 THEN CREATE ROLE bunyip_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD {pw}; END IF; END $do$"
+            ),
+        ),
+        (
+            "alter_role",
+            format!("ALTER ROLE bunyip_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD {pw}"),
+        ),
+        (
+            "grant_connect",
+            format!("GRANT CONNECT ON DATABASE {db} TO bunyip_app"),
+        ),
+        (
+            "grant_usage_schema",
+            "GRANT USAGE ON SCHEMA public TO bunyip_app".to_string(),
+        ),
+        (
+            "grant_tables",
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO bunyip_app"
+                .to_string(),
+        ),
+        (
+            "grant_sequences",
+            "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO bunyip_app".to_string(),
+        ),
+        (
+            "default_privileges_tables",
+            "ALTER DEFAULT PRIVILEGES IN SCHEMA public \
+             GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO bunyip_app"
+                .to_string(),
+        ),
+        (
+            "default_privileges_sequences",
+            "ALTER DEFAULT PRIVILEGES IN SCHEMA public \
+             GRANT USAGE, SELECT ON SEQUENCES TO bunyip_app"
+                .to_string(),
+        ),
+    ]
+}
+
+/// Build the error for a failed provisioning step. Names the step by label only;
+/// the statement text is never interpolated, because two of the statements carry
+/// `BUNYIP_APP_PASSWORD` in plaintext and this error is logged at `error!`.
+fn provisioning_error(label: &str, e: &sqlx::Error) -> AppError {
+    AppError::internal(format!(
+        "bunyip_app provisioning step '{label}' failed: {e}"
+    ))
 }
 
 /// Quote a string as a single-quoted SQL literal, doubling embedded quotes.
@@ -130,7 +171,7 @@ fn quote_ident(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{quote_ident, sql_quote};
+    use super::{provisioning_error, provisioning_statements, quote_ident, sql_quote};
 
     #[test]
     fn sql_quote_doubles_embedded_single_quotes() {
@@ -143,5 +184,30 @@ mod tests {
     fn quote_ident_doubles_embedded_double_quotes() {
         assert_eq!(quote_ident("bunyip"), "\"bunyip\"");
         assert_eq!(quote_ident("we\"ird"), "\"we\"\"ird\"");
+    }
+
+    /// BUNYIP-426 F5: a failing provisioning step must name the step and never
+    /// the statement, because two statements carry the password in plaintext.
+    #[test]
+    fn provisioning_error_never_leaks_the_password() {
+        const PASSWORD: &str = "s3cr3t-app-role-password";
+        let statements = provisioning_statements(PASSWORD, "bunyip");
+
+        // Sanity check the premise: the password really is in the statement text.
+        assert!(statements[0].1.contains(PASSWORD));
+        assert!(statements[1].1.contains(PASSWORD));
+
+        for (label, _stmt) in &statements {
+            let err = provisioning_error(label, &sqlx::Error::PoolClosed);
+            let rendered = err.to_string();
+            assert!(
+                !rendered.contains(PASSWORD),
+                "step '{label}' leaked the password: {rendered}"
+            );
+            assert!(
+                rendered.contains(label),
+                "step '{label}' lost the operator diagnostic: {rendered}"
+            );
+        }
     }
 }

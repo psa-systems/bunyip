@@ -1,7 +1,13 @@
 //! Base document + page shells (public / dashboard / admin). Ported from the
-//! Dioxus layouts. Theme is handled client-side by a tiny inline script (no
-//! reactive framework): an early flash-prevention block + toggle functions that
-//! flip classes on <html> and persist to the same `theme-storage` key.
+//! Dioxus layouts. Theme is handled client-side by a tiny script (no reactive
+//! framework): an early flash-prevention block + toggles that flip classes on
+//! <html> and persist to the same `theme-storage` key.
+//!
+//! BUNYIP-424: every script this document loads is first-party and served from
+//! `/assets` - no CDN, no inline `<script>` body, no `on*=` attribute - so
+//! `crate::security` can ship `script-src 'self'`. Behaviour that used to live
+//! in an inline block now lives in `assets/js/*.js` and is wired to the markup
+//! through `data-*` attributes.
 
 use std::sync::OnceLock;
 
@@ -50,80 +56,14 @@ fn community_enabled() -> bool {
     *COMMUNITY_ENABLED.get().unwrap_or(&false)
 }
 
-const THEME_FLASH: &str = r#"(function(){try{var r=document.documentElement;var theme='system',hc=false;var raw=localStorage.getItem('theme-storage');if(raw){var p=JSON.parse(raw);theme=(p&&p.state&&p.state.theme)||'system';hc=!!(p&&p.state&&p.state.highContrast);}var dark=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;r.classList.add(theme==='system'?(dark?'dark':'light'):theme);if(hc)r.classList.add('high-contrast');}catch(e){}})();"#;
-
-const THEME_TOGGLE: &str = r#"function bunyipState(){try{var raw=localStorage.getItem('theme-storage');if(raw)return JSON.parse(raw).state||{};}catch(e){}return{};}
-function bunyipSave(t,hc){try{localStorage.setItem('theme-storage',JSON.stringify({state:{theme:t,highContrast:hc},version:0}));}catch(e){}}
-function bunyipToggleTheme(){var r=document.documentElement;var dark=r.classList.contains('dark');r.classList.remove('light','dark');var next=dark?'light':'dark';r.classList.add(next);bunyipSave(next,r.classList.contains('high-contrast'));}
-function bunyipToggleContrast(){var on=document.documentElement.classList.toggle('high-contrast');bunyipSave(bunyipState().theme||'system',on);}"#;
-
-/// Tiny toast system mounted in every <body>. Exposes `window.bunyipToast(msg, kind)`
-/// where `kind` is `"success" | "error" | "info"` (default `"info"`). Each call
-/// appends an auto-dismissing pill into `#bunyip-toast-root`.
-///
-/// Visible-pill cap (BUNYIP-98): a tight `while (root.children.length >= 5)`
-/// before the append evicts the oldest so the column never grows past 5 even
-/// under rapid-fire calls (e.g. spamming a "Copy" button). The existing
-/// auto-dismiss `setTimeout` chain is untouched and guards on `pill.parentNode`,
-/// so a manually evicted pill does not double-remove.
-///
-/// Also drains `?toast_ok=` / `?toast_err=` from the URL on page load so any
-/// handler that wants to surface a confirmation can do it via a 302 redirect:
-/// `Location: /settings?toast_ok=Email%20updated`. The query params are stripped
-/// from the URL bar via `history.replaceState` so a reload does not re-fire the
-/// toast. See docs/bunyip-upgrade/05-toast-system-and-copy-feedback.md.
-const TOAST_JS: &str = r#"window.bunyipToast=function(msg,kind){var root=document.getElementById('bunyip-toast-root');if(!root)return;while(root.children.length>=5){root.removeChild(root.firstChild);}kind=kind||'info';var palette={success:'bg-emerald-600 text-white',error:'bg-red-600 text-white',info:'bg-slate-800 text-white'}[kind]||'bg-slate-800 text-white';var pill=document.createElement('div');pill.className='pointer-events-auto rounded-md px-4 py-2 text-sm shadow-lg '+palette;pill.setAttribute('role','status');pill.textContent=msg;pill.style.transition='opacity 200ms ease, transform 200ms ease';pill.style.opacity='0';pill.style.transform='translateY(-8px)';root.appendChild(pill);requestAnimationFrame(function(){pill.style.opacity='1';pill.style.transform='translateY(0)';});setTimeout(function(){pill.style.opacity='0';pill.style.transform='translateY(-8px)';setTimeout(function(){if(pill.parentNode)pill.parentNode.removeChild(pill);},250);},2500);};
-(function(){try{var url=new URL(window.location.href);var ok=url.searchParams.get('toast_ok');var err=url.searchParams.get('toast_err');if(ok||err){url.searchParams.delete('toast_ok');url.searchParams.delete('toast_err');history.replaceState(null,'',url.pathname+(url.search||'')+url.hash);if(ok)window.bunyipToast(ok,'success');if(err)window.bunyipToast(err,'error');}}catch(e){}})();"#;
-
-/// BUNYIP-331: auto-submit a 2FA form the moment its six-digit TOTP field is
-/// complete, so the user does not click a submit button (governance
-/// Authentication UX Standards, GOV-19). Opt-in per field via
-/// `data-otp-autosubmit`; one delegated `input` listener covers every current
-/// and future one-time-code field.
-///
-/// Recovery-code safe: the exact `^[0-9]{6}$` gate never matches a dashed
-/// `XXXX-XXXX` recovery code, so combined TOTP/recovery fields never fire.
-/// `checkValidity()` gate: a multi-field form only auto-submits once its other
-/// required inputs are valid, so this never half-submits. The per-form
-/// `otpSubmitting` flag guards against a double submit while navigation is in
-/// flight. The input event also fires on paste and OS/browser OTP autofill, so
-/// a one-tap autofill submits too.
-const OTP_AUTOSUBMIT_JS: &str = r#"(function(){var OTP=/^[0-9]{6}$/;document.addEventListener('input',function(e){var el=e.target;if(!el||typeof el.matches!=='function'||!el.matches('input[data-otp-autosubmit]'))return;if(!OTP.test(el.value))return;var form=el.form;if(!form||form.dataset.otpSubmitting==='1')return;if(typeof form.checkValidity==='function'&&!form.checkValidity())return;form.dataset.otpSubmitting='1';if(typeof form.requestSubmit==='function'){form.requestSubmit();}else{form.submit();}});})();"#;
-
-/// BUNYIP-145: Server-Sent Events subscriber injected into every
-/// authenticated shell (dashboard + admin). Opens a long-lived
-/// `EventSource` against bunyip-api's `/v1/events` and reacts to four
-/// event names:
-///
-/// - `claims_changed`: an admin granted / revoked something that affects
-///   this user (membership, lifetime grant). Reload so the SPA picks up
-///   the new at+jwt + dashboard tile state. Brendon's case: lifetime
-///   grant fires this; the page self-updates without a hard refresh.
-/// - `profile_changed`: admin or self updated profile fields. Reload.
-/// - `applications_changed`: admin toggled an app slug or entitlement
-///   mapping. Reload to refresh the dashboard's app grid.
-/// - `session_revoked`: bunyip-api destroyed every active rt for this
-///   user (admin deactivate, role change, BUNYIP-144). Redirect to
-///   `/login` so the user re-auths.
-///
-/// EventSource is opened with `withCredentials: true` so the `access_token`
-/// cookie rides along on the cross-subdomain GET (Lax + matching eTLD+1).
-/// Browser auto-reconnect handles transient drops; on `resync` from a
-/// `Lagged` broadcast we also reload.
-///
-/// BUNYIP-380: bunyip-web is server-rendered, so every in-app navigation is a
-/// full page load. A `pagehide` listener closes the stream cleanly before the
-/// document unloads, so the browser no longer logs "connection ... was
-/// interrupted while the page was loading" on each navigation. `es.close()` is
-/// idempotent, so closing an already-errored stream is harmless.
-///
-/// The template carries a placeholder origin literal (`__BUNYIP_API_ORIGIN__`)
-/// that `sse_subscriber_script` replaces with the value installed via
-/// `install_sse_api_origin`.
-const SSE_SUBSCRIBER: &str = r#"(function(){try{var origin='__BUNYIP_API_ORIGIN__';if(!origin||!window.EventSource)return;var es=new EventSource(origin+'/v1/events',{withCredentials:true});window.addEventListener('pagehide',function(){try{es.close();}catch(e){}});var reload=function(){window.location.reload();};es.addEventListener('claims_changed',reload);es.addEventListener('profile_changed',reload);es.addEventListener('applications_changed',reload);es.addEventListener('resync',reload);es.addEventListener('session_revoked',function(){window.location.href='/login?toast_err=Session%20ended%20by%20an%20administrator.';});}catch(e){}})();"#;
-
-fn sse_subscriber_script() -> String {
-    SSE_SUBSCRIBER.replace("__BUNYIP_API_ORIGIN__", sse_api_origin())
+/// BUNYIP-145 / BUNYIP-424: the browser-facing origin the dashboard's
+/// `EventSource` connects to, handed to `assets/js/sse.js` as a `data-` attribute
+/// on its own `<script>` tag. Server values reach the client as passive markup,
+/// never as executable JavaScript.
+fn sse_subscriber_script() -> Markup {
+    html! {
+        script src="/assets/js/sse.js" data-api-origin=(sse_api_origin()) defer {}
+    }
 }
 
 pub fn document(title: &str, body: Markup) -> Markup {
@@ -149,20 +89,38 @@ pub fn document(title: &str, body: Markup) -> Markup {
                 link rel="preconnect" href="https://fonts.googleapis.com";
                 link rel="preconnect" href="https://fonts.gstatic.com" crossorigin;
                 link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet";
-                // BUNYIP-294: `defer` both third-party CDN scripts so neither
-                // blocks HTML parsing. A render-blocking `<script src>` in
-                // `<head>` gates page-ready timing on CDN latency, which raced the
-                // automated credential fill on chromium CI - the `/login` form was
-                // not settled when typed into, so the submit POSTed empty and the
-                // hub re-rendered the form (mokosh PMS-605). `defer` preserves
-                // execution order and runs after parse, before DOMContentLoaded.
-                script src="https://kit.fontawesome.com/6ab760c0b1.js" crossorigin="anonymous" defer {}
-                script src="https://unpkg.com/htmx.org@2.0.3" defer {}
+                // BUNYIP-424: Font Awesome is the self-hosted free webfont build,
+                // not the kit loader. The kit rotates its own contents by design
+                // and cannot carry SRI, so it was a standing remote-code grant to
+                // a third party. Vendored under assets/vendor/, version in the
+                // path so an upgrade is a visible diff.
+                link rel="stylesheet" href="/assets/vendor/fontawesome-6.7.2/css/fontawesome.min.css";
+                link rel="stylesheet" href="/assets/vendor/fontawesome-6.7.2/css/solid.min.css";
+                link rel="stylesheet" href="/assets/vendor/fontawesome-6.7.2/css/regular.min.css";
                 link rel="stylesheet" href="/assets/styles.css";
-                script { (PreEscaped(THEME_FLASH)) }
-                script { (PreEscaped(THEME_TOGGLE)) }
-                script { (PreEscaped(TOAST_JS)) }
-                script { (PreEscaped(OTP_AUTOSUBMIT_JS)) }
+                // BUNYIP-294: `defer` so no script blocks HTML parsing. A
+                // render-blocking `<script src>` in `<head>` gated page-ready
+                // timing on network latency, which raced the automated credential
+                // fill on chromium CI - the `/login` form was not settled when
+                // typed into, so the submit POSTed empty and the hub re-rendered
+                // the form (mokosh PMS-605). `defer` preserves execution order and
+                // runs after parse, before DOMContentLoaded.
+                //
+                // BUNYIP-424: htmx is vendored (byte-identical to the published
+                // htmx 2.0.3 dist, sha384-0895/pl2MU10Hqc6jd4RvrthNlDiE9U1tWmX7WRESftEDRosgxNsQG/Ze9YMRzHq)
+                // instead of pulled from unpkg, which resolves from npm at request
+                // time and so is replaceable by an upstream account compromise.
+                script src="/assets/vendor/htmx-2.0.3.min.js" defer {}
+                // theme.js is NOT deferred: the stored theme has to land on
+                // <html> before first paint or the page flashes the wrong theme.
+                script src="/assets/js/theme.js" {}
+                script src="/assets/js/app.js" defer {}
+                // BUNYIP-408: avatar picker CSS shipped inline (not via the
+                // separately-cached styles.css) so a stale stylesheet can never
+                // leave the component's structural rules undefined. See
+                // `avatar_picker::AVATAR_PICKER_CSS`.
+                style { (PreEscaped(crate::views::avatar_picker::AVATAR_PICKER_CSS)) }
+                script src="/assets/js/avatar-picker.js" defer {}
             }
             body {
                 // BUNYIP-243: app-wide "service unavailable" banner. Renders
@@ -205,11 +163,13 @@ fn brand() -> Markup {
 
 fn theme_controls(icon_class: &str) -> Markup {
     html! {
-        button type="button" aria-label="Toggle theme" class=(button_class("ghost", "icon", "")) onclick="bunyipToggleTheme()" {
+        // BUNYIP-424: `data-theme-toggle` / `data-contrast-toggle` replace the
+        // old inline click handlers; `assets/js/theme.js` binds them.
+        button type="button" aria-label="Toggle theme" class=(button_class("ghost", "icon", "")) data-theme-toggle {
             span class="rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" { (icon("sun", icon_class)) }
             span class="absolute rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" { (icon("moon", icon_class)) }
         }
-        button type="button" aria-label="Toggle high contrast" class=(button_class("ghost", "icon", "")) onclick="bunyipToggleContrast()" {
+        button type="button" aria-label="Toggle high contrast" class=(button_class("ghost", "icon", "")) data-contrast-toggle {
             (icon("contrast", icon_class))
         }
     }
@@ -224,18 +184,18 @@ fn theme_controls(icon_class: &str) -> Markup {
 /// handler.
 ///
 /// The link carries the originating page to the feedback form via a `?from=`
-/// query param. It is set client-side in an `onclick` from
-/// `location.pathname + location.search` (the launcher is shared by all shells
-/// and has no server-side access to the request path; threading it through
-/// every shell + response helper + handler call site would be far more
-/// invasive). The static `href="/feedback"` remains a no-JS fallback. The
+/// query param. It is set client-side by `assets/js/app.js` (keyed on
+/// `data-feedback-link`) from `location.pathname + location.search` - the
+/// launcher is shared by all shells and has no server-side access to the
+/// request path; threading it through every shell + response helper + handler
+/// call site would be far more invasive. The static `href="/feedback"` remains
+/// a no-JS fallback. The
 /// `/feedback` GET handler reads `?from=`, sanitizes it (must start with `/`),
 /// and round-trips it into the hidden `page_path` input.
 fn feedback_launcher() -> Markup {
     html! {
         div class="pointer-events-none fixed bottom-4 right-4 z-40 sm:bottom-6 sm:right-6" {
-            a href="/feedback" aria-label="Open feedback page"
-              onclick="this.href='/feedback?from=' + encodeURIComponent(location.pathname + location.search)"
+            a href="/feedback" aria-label="Open feedback page" data-feedback-link
               class="pointer-events-auto group flex h-14 w-[60px] items-center overflow-hidden rounded-2xl border border-border/70 bg-background/85 text-primary shadow-xl shadow-primary/10 backdrop-blur-md transition-all duration-300 hover:w-[204px] hover:border-primary/50 hover:bg-background dark:bg-card/90 sm:h-16 sm:w-16 sm:hover:w-[214px]" {
                 span class="relative inline-flex h-14 w-[60px] shrink-0 items-center justify-center rounded-2xl sm:h-16 sm:w-16" {
                     span class="absolute inset-0 rounded-2xl bg-gradient-to-br from-primary/18 via-indigo-500/12 to-teal-500/18 opacity-80" {}
@@ -267,10 +227,13 @@ fn header(user: Option<&User>, _show_feedback: bool) -> Markup {
                 }
                 div class="flex items-center gap-4" {
                     (theme_controls("h-5 w-5"))
-                    @if user.is_some() {
+                    @if let Some(u) = user {
                         a href="/dashboard" class=(button_class("ghost", "sm", "")) { "Dashboard" }
                         @if is_admin { a href="/admin" class=(button_class("ghost", "sm", "")) { "Admin" } }
-                        a href="/logout" class=(button_class("outline", "sm", "")) { "Logout" }
+                        // BUNYIP-408: same profile menu as the app shells, so the
+                        // documentation / marketing pages reach profile + logout
+                        // through the identical affordance.
+                        (profile_menu(u))
                     } @else {
                         a href="/register" class=(button_class("default", "sm", "")) { "Get Started" }
                         a href="/login" class=(button_class("outline", "sm", "")) { "Login" }
@@ -404,15 +367,13 @@ fn admin_items() -> Vec<NavItem> {
             href: "/admin",
             icon: "layout-dashboard",
         },
+        // BUNYIP-410: Memberships folded into the Users page (tier column +
+        // filter bar); its nav entry is removed and /admin/memberships redirects
+        // to the filtered users list.
         NavItem {
             title: "Users",
             href: "/admin/users",
             icon: "users",
-        },
-        NavItem {
-            title: "Memberships",
-            href: "/admin/memberships",
-            icon: "credit-card",
         },
         NavItem {
             title: "Applications",
@@ -501,6 +462,21 @@ fn sidebar(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup
                 }
             }
             nav class="flex-1 space-y-1 p-4" {
+                // BUNYIP-417: the user/admin dashboard switch is a top-level,
+                // frequently-used control, so it sits at the TOP of the nav
+                // (above the section items) rather than buried at the bottom.
+                @if !admin && is_admin {
+                    a href="/admin" class={ "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors " (NAV_INACTIVE) } {
+                        (icon("shield", "h-4 w-4")) "Admin Panel"
+                    }
+                    div class="my-3 border-t border-border/50" {}
+                }
+                @if admin {
+                    a href="/dashboard" class={ "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors " (NAV_INACTIVE) } {
+                        (icon("layout-dashboard", "h-4 w-4")) "User Dashboard"
+                    }
+                    div class="my-3 border-t border-border/50" {}
+                }
                 @for item in &items {
                     // BUNYIP-329: Community launches the external Let's Chat
                     // instance, so open it in a new tab and keep the Bunyip tab.
@@ -519,17 +495,61 @@ fn sidebar(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup
                         }
                     }
                 }
-                @if !admin && is_admin {
-                    div class="my-4 border-t border-border/50" {}
-                    a href="/admin" class={ "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors " (NAV_INACTIVE) } {
-                        (icon("shield", "h-4 w-4")) "Admin Panel"
-                    }
+            }
+        }
+    }
+}
+
+/// BUNYIP-408: the round avatar shown in the profile menu. Renders the uploaded
+/// image when the user has one; otherwise a gradient circle with the display
+/// name's initial. `size` supplies the Tailwind sizing classes (e.g. `h-8 w-8`).
+fn avatar_badge(user: &User, size: &str) -> Markup {
+    let src = user.avatar_src();
+    let has = src.is_some();
+    html! {
+        // `data-avatar-slot` marks this as an avatar surface the picker's
+        // controller repaints after an upload/removal (BUNYIP-408), so the
+        // header menu updates without a full-page reload. The image and the
+        // letter fallback are both wired via `data-avatar-image` /
+        // `data-avatar-initial`; the JS toggles between them.
+        span class={ "relative inline-flex items-center justify-center overflow-hidden rounded-full border border-border/60 " (size) }
+             data-avatar-slot data-initial=(user.avatar_initial()) {
+            @if let Some(s) = &src {
+                img src=(s) alt="Profile photo" class="avatar-slot__img" data-avatar-image;
+            }
+            span data-avatar-initial aria-hidden="true"
+                 class="inline-flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-primary to-indigo-500 text-white text-sm font-semibold"
+                 style=[has.then_some("display:none")] {
+                (user.avatar_initial())
+            }
+        }
+    }
+}
+
+/// BUNYIP-408: the consistent upper-right profile menu shared by every shell
+/// (dashboard, admin, and the public header). An avatar button opens a dropdown
+/// containing a link to profile settings and Log out - replacing the old
+/// standalone logout link + raw-email display. Built on `<details>`/`<summary>`
+/// so it is keyboard-accessible without a framework; `assets/js/app.js` adds
+/// click-away / Escape dismissal.
+fn profile_menu(user: &User) -> Markup {
+    html! {
+        details class="relative" data-menu {
+            summary class="flex items-center gap-2 cursor-pointer list-none rounded-full py-1 pl-1 pr-2 hover:bg-accent transition-colors [&::-webkit-details-marker]:hidden" {
+                (avatar_badge(user, "h-8 w-8"))
+                span class="hidden text-sm font-medium text-foreground sm:inline" { (user.display_name()) }
+                (icon("chevron-down", "h-4 w-4 text-muted-foreground"))
+            }
+            div class="absolute right-0 z-50 mt-2 w-56 overflow-hidden rounded-md border border-border/60 bg-background py-1 shadow-lg" {
+                div class="border-b border-border/60 px-3 py-2" {
+                    p class="truncate text-sm font-medium text-foreground" { (user.display_name()) }
+                    p class="truncate text-xs text-muted-foreground" { (user.email) }
                 }
-                @if admin {
-                    div class="my-4 border-t border-border/50" {}
-                    a href="/dashboard" class={ "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors " (NAV_INACTIVE) } {
-                        (icon("layout-dashboard", "h-4 w-4")) "User Dashboard"
-                    }
+                a href="/settings" class="flex items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-accent hover:text-accent-foreground transition-colors" {
+                    (icon("user", "h-4 w-4")) "Profile"
+                }
+                a href="/logout" class="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-accent transition-colors dark:text-red-400" {
+                    (icon("log-out", "h-4 w-4")) "Log out"
                 }
             }
         }
@@ -538,15 +558,17 @@ fn sidebar(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup
 
 fn app_topbar(title: &str, user: &User) -> Markup {
     html! {
-        header class="flex h-16 items-center justify-between border-b border-border/50 bg-background/80 backdrop-blur-sm px-6" {
+        // BUNYIP-408: `relative z-40` gives the topbar a stacking context that
+        // sits above the scrolling `<main>` content. Without it the profile-menu
+        // dropdown (which overflows below the h-16 bar) is painted OVER by the
+        // page's cards, so it looked cut off and its rows were neither hoverable
+        // nor clickable in the dashboard / admin shells. The public `header`
+        // already carries `z-50`, which is why the same component worked there.
+        header class="relative z-40 flex h-16 items-center justify-between border-b border-border/50 bg-background/80 backdrop-blur-sm px-6" {
             h1 class="text-lg font-semibold" { (title) }
-            div class="flex items-center gap-4" {
-                div class="flex items-center gap-2 text-sm text-muted-foreground" {
-                    (icon("user", "h-4 w-4"))
-                    span { (user.email) }
-                }
+            div class="flex items-center gap-2" {
                 (theme_controls("h-4 w-4"))
-                a href="/logout" class=(button_class("ghost", "sm", "")) { (icon("log-out", "h-4 w-4")) }
+                (profile_menu(user))
             }
         }
     }
@@ -573,7 +595,7 @@ pub fn dashboard_shell(user: &User, active: &str, topbar_title: &str, content: M
             }
             (feedback_launcher())
         }
-        script { (PreEscaped(sse)) }
+        (sse)
     }
 }
 
@@ -589,6 +611,82 @@ pub fn admin_shell(user: &User, active: &str, topbar_title: &str, content: Marku
                 }
             }
         }
-        script { (PreEscaped(sse)) }
+        (sse)
+    }
+}
+
+/// A single settings/content block: a card with a title, an optional subtitle,
+/// and a body. The building unit of the two-column admin block layout
+/// (BUNYIP-415), so sparse full-width admin screens group related controls into
+/// blocks instead of one long narrow column. Matches the inline card markup
+/// already used across the admin screens (rounded border + card surface, a
+/// header stack, and a padded body).
+pub fn admin_block(title: &str, subtitle: Option<&str>, body: Markup) -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                h3 class="text-2xl font-semibold leading-none tracking-tight" { (title) }
+                @if let Some(s) = subtitle {
+                    p class="text-sm text-muted-foreground" { (s) }
+                }
+            }
+            div class="p-6 pt-0" { (body) }
+        }
+    }
+}
+
+/// Lay a set of blocks out in a responsive two-column grid that collapses to a
+/// single column below the `lg` breakpoint (BUNYIP-415). `items-start` so
+/// blocks of unequal height top-align rather than stretching to match the
+/// tallest, and `gap-6` matches the vertical rhythm of the single-column
+/// `space-y-6` stacks these screens use elsewhere.
+pub fn admin_block_grid(blocks: Vec<Markup>) -> Markup {
+    html! {
+        div class="grid gap-6 items-start lg:grid-cols-2" {
+            @for b in blocks { (b) }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// BUNYIP-424 (render-level guard, paired with
+    /// `security::tests::no_inline_script_or_event_handlers_in_views`): the
+    /// document every SSR page is built from must load scripts only from
+    /// `'self'`, or the `script-src 'self'` policy silently breaks the app.
+    #[test]
+    fn document_head_loads_only_first_party_scripts() {
+        let html = document("Test", html! {}).into_string();
+
+        assert!(html.contains(r#"src="/assets/vendor/htmx-2.0.3.min.js""#));
+        assert!(html.contains(r#"src="/assets/js/theme.js""#));
+        assert!(html.contains(r#"src="/assets/js/app.js""#));
+        assert!(!html.contains("kit.fontawesome.com"));
+        assert!(!html.contains("unpkg.com"));
+
+        // Every <script> is a same-origin src with an empty body.
+        for tag in html.split("<script").skip(1) {
+            let (attrs, rest) = tag.split_once('>').expect("script tag closes");
+            assert!(
+                attrs.contains(r#"src="/assets/"#),
+                "script without a same-origin src: <script{attrs}>"
+            );
+            assert!(
+                rest.starts_with("</script>"),
+                "script with an inline body: <script{attrs}>"
+            );
+        }
+    }
+
+    /// The SSE subscriber takes its origin as passive markup, never as
+    /// interpolated JavaScript (BUNYIP-424).
+    #[test]
+    fn sse_subscriber_passes_origin_as_a_data_attribute() {
+        let markup = sse_subscriber_script().into_string();
+        assert!(markup.contains(r#"src="/assets/js/sse.js""#));
+        assert!(markup.contains("data-api-origin="));
+        assert!(markup.ends_with("></script>"));
     }
 }

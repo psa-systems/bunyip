@@ -3,7 +3,7 @@
 //! phase 3.
 
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Multipart, Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Form;
@@ -607,13 +607,15 @@ fn download_affordance(g: &AppDownloadGroup, is_member: bool) -> Markup {
         (false, true) => "OCI",
         _ => "Download",
     };
-    // The slug is validated lowercase/digits/hyphens, so it is a safe element id
-    // and a safe literal inside the inline open handler. BUNYIP-358 always opens
-    // the dialog (even for a lone binary) so the instructions are always shown.
+    // The slug is validated lowercase/digits/hyphens, so it is a safe element id.
+    // BUNYIP-358 always opens the dialog (even for a lone binary) so the
+    // instructions are always shown. BUNYIP-424: the id travels as a passive
+    // `data-dialog-open` attribute that `assets/js/app.js` resolves at click
+    // time, so no server value is ever emitted as executable JavaScript.
     let dialog_id = format!("dl-{}", g.app_slug);
     html! {
         button type="button" class=(button_class("outline", "default", "w-full mt-2"))
-            onclick=(format!("document.getElementById('{dialog_id}').showModal()")) {
+            data-dialog-open=(dialog_id) {
             (icon("download", "mr-2 h-4 w-4")) (label)
         }
         // `m-auto` restores the native modal-dialog centering that Tailwind v4
@@ -624,7 +626,7 @@ fn download_affordance(g: &AppDownloadGroup, is_member: bool) -> Markup {
             div class="p-6 space-y-6 max-h-[80vh] overflow-y-auto" {
                 div class="flex items-center justify-between gap-4" {
                     h3 class="text-lg font-semibold" { (g.app_display_name) " downloads" }
-                    button type="button" aria-label="Close" class=(button_class("outline", "sm", "shrink-0")) onclick="this.closest('dialog').close()" { (icon("x", "h-4 w-4")) }
+                    button type="button" aria-label="Close" class=(button_class("outline", "sm", "shrink-0")) data-dialog-close { (icon("x", "h-4 w-4")) }
                 }
                 @if let Some(oci) = &g.oci { (container_instructions(oci)) }
                 @if has_binary { (binary_instructions(g)) }
@@ -672,44 +674,23 @@ fn upgrade_link() -> Markup {
     }
 }
 
-/// Static click handler shared by every copy button. It reads the command
-/// from the button's own `data-copy` attribute at click time; no value is ever
-/// spliced into this string, so it is identical for every block.
-///
-/// Clipboard API needs a secure context (HTTPS / localhost). When it is
-/// unavailable, select the command text so the user can copy manually;
-/// otherwise report success/failure on the button label. The in-button label
-/// swap ("Copy" -> "Copied") fires for the local feedback affordance, AND a
-/// toast pops top-right via `window.bunyipToast`. The `if(window.bunyipToast)`
-/// guard keeps the button usable if the toast script failed to load.
-const COPY_CMD_JS: &str = "var b=this;var t=b.innerText;var c=b.dataset.copy;\
-     if(navigator.clipboard){\
-       navigator.clipboard.writeText(c).then(\
-         function(){b.innerText='Copied';setTimeout(function(){b.innerText=t},1500);\
-                      if(window.bunyipToast)window.bunyipToast('Copied to clipboard','success');},\
-         function(){b.innerText='Copy failed';setTimeout(function(){b.innerText=t},1500);\
-                      if(window.bunyipToast)window.bunyipToast('Copy failed','error');});\
-     }else{\
-       window.getSelection().selectAllChildren(b.previousElementSibling);\
-       b.innerText='Press Ctrl+C';setTimeout(function(){b.innerText=t},3000);\
-     }";
-
 /// A copy-pasteable shell command with a copy-to-clipboard button.
 ///
 /// Trust model: `cmd` may carry API-sourced values (the registry host and
 /// image reference that bunyip-api returns for a product). Those values are
 /// rendered ONLY as passive, Maud-escaped content: the visible `<code>` text
 /// and the button's `data-copy` attribute. The click handler is the static
-/// `COPY_CMD_JS` constant, which reads the command from `this.dataset.copy` at
-/// click time and never has API data interpolated into executable JS. This
-/// removes the prior BFF-trust pattern where the command was spliced into the
-/// inline onclick (the earlier `serde_json::to_string` only blocked raw-string
-/// injection; it still shipped API data as executable content).
+/// delegated `[data-copy]` listener in `assets/js/app.js`, which reads the
+/// command from the button's own dataset at click time and never has API data
+/// interpolated into executable JS. This removes the prior BFF-trust pattern
+/// where the command was spliced into the inline onclick (the earlier
+/// `serde_json::to_string` only blocked raw-string injection; it still shipped
+/// API data as executable content).
 fn command_block(cmd: &str) -> Markup {
     html! {
         div class="flex items-center gap-2" {
             code class="flex-1 rounded bg-muted px-3 py-2 font-mono text-sm overflow-x-auto whitespace-nowrap" { (cmd) }
-            button type="button" aria-label="Copy command" data-copy=(cmd) class=(button_class("outline", "sm", "shrink-0 w-28")) onclick=(COPY_CMD_JS) {
+            button type="button" aria-label="Copy command" data-copy=(cmd) class=(button_class("outline", "sm", "shrink-0 w-28")) {
                 "Copy"
             }
         }
@@ -720,15 +701,15 @@ fn command_block(cmd: &str) -> Markup {
 /// button. Like [`command_block`] but preserves newlines instead of forcing a
 /// single line, for block content. Same trust model: the snippet is passive,
 /// Maud-escaped `<code>` text plus the button's `data-copy` attribute; the
-/// click handler is the static `COPY_CMD_JS` constant and never has API data
-/// interpolated into executable JS.
+/// click handler is the delegated `[data-copy]` listener in
+/// `assets/js/app.js` and never has API data interpolated into executable JS.
 fn compose_block(snippet: &str) -> Markup {
     html! {
         div class="flex items-start gap-2" {
             pre class="flex-1 rounded bg-muted px-3 py-2 font-mono text-sm overflow-x-auto" {
                 code class="whitespace-pre" { (snippet) }
             }
-            button type="button" aria-label="Copy compose file" data-copy=(snippet) class=(button_class("outline", "sm", "shrink-0 w-28")) onclick=(COPY_CMD_JS) {
+            button type="button" aria-label="Copy compose file" data-copy=(snippet) class=(button_class("outline", "sm", "shrink-0 w-28")) {
                 "Copy"
             }
         }
@@ -796,8 +777,7 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
                             a href="/applications" class=(button_class("default", "lg", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { (icon("app-window", "h-4 w-4")) "Browse Applications" (icon("arrow-right", "h-4 w-4")) }
                             a href="/membership" class=(button_class("outline", "default", "")) { "View Membership Details" }
                         }
-                        p class="text-xs text-muted-foreground" { "Redirecting to applications shortly…" }
-                        script { (PreEscaped("setTimeout(function(){location.href='/applications'},10000);")) }
+                        p class="text-xs text-muted-foreground" data-redirect-to="/applications" data-redirect-after="10000" { "Redirecting to applications shortly…" }
                     }
                 }
             }
@@ -835,7 +815,9 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
                         // Refresh every 3s. As soon as the webhook lands and
                         // subscription_status flips to Active, the next
                         // refresh renders the success branch above.
-                        script { (PreEscaped("setTimeout(function(){location.reload()},3000);")) }
+                        // BUNYIP-424: `data-reload-after` is read by
+                        // `assets/js/app.js`; no inline script.
+                        div data-reload-after="3000" hidden {}
                     }
                 }
             }
@@ -1052,7 +1034,7 @@ pub async fn membership(
                                             form method="post" action="/membership/cancel" {
                                                 button type="submit" class=(button_class("outline", "sm", "w-full justify-start")) { @if let Some(d) = end { "Cancel at period end - keep access until " (d) } @else { "Cancel at period end - keep access until the end of your current billing period" } }
                                             }
-                                            form method="post" action="/membership/cancel-now" onsubmit="return confirm('Cancel immediately? You will lose access right now.')" {
+                                            form method="post" action="/membership/cancel-now" data-confirm="Cancel immediately? You will lose access right now." {
                                                 button type="submit" class=(button_class("destructive", "sm", "w-full justify-start")) { "Cancel immediately - lose access now" }
                                             }
                                         }
@@ -1330,6 +1312,12 @@ pub async fn settings(
             // edge. Persistence: PUT /v1/users/me/profile via
             // `auth_api::update_profile`.
             (settings_card("user-cog", "from-primary to-teal-500", "Profile", html! {
+                // BUNYIP-408: reusable avatar picker. Aligned to the field stack
+                // width below; all interaction (preview, validation, downscale,
+                // upload, remove) is handled by the shared component.
+                div class="pb-4 mb-4 border-b border-border/60 max-w-md" {
+                    (crate::views::avatar_picker::avatar_picker(&user))
+                }
                 form method="post" action="/settings/profile" class="space-y-4 max-w-md" {
                     div class="space-y-2" { label class="text-sm font-medium" { "First Name" } input name="first_name" type="text" maxlength="64" value=(user.first_name.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
                     div class="space-y-2" { label class="text-sm font-medium" { "Last Name" } input name="last_name" type="text" maxlength="64" value=(user.last_name.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
@@ -1427,7 +1415,7 @@ pub async fn settings(
                     // hint so the manager (or iOS / Chrome AutoFill) can
                     // surface a freshly-arrived SMS / TOTP code from a sibling
                     // tab WITHOUT pre-filling the password field.
-                    form method="post" action="/settings/account/delete" autocomplete="off" class="space-y-3 max-w-md" onsubmit="return confirm('Permanently delete your account AND all of your data in Mokosh and any other connected app? This cannot be undone.')" {
+                    form method="post" action="/settings/account/delete" autocomplete="off" class="space-y-3 max-w-md" data-confirm="Permanently delete your account AND all of your data in Mokosh and any other connected app? This cannot be undone." {
                         div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" autocomplete="off" placeholder="Enter your password to confirm" class=(crate::handlers::dashboard_input()); }
                         @if user.two_factor_enabled { div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
                         button type="submit" class=(button_class("destructive", "default", "")) { (icon("trash", "mr-2 h-4 w-4")) "Delete My Account" }
@@ -1508,8 +1496,11 @@ fn sessions_card_body(
                 @for s in sessions {
                     li class="flex items-center justify-between gap-4 rounded-lg border border-border/50 p-4" {
                         div class="min-w-0" {
-                            p class="font-medium truncate flex items-center gap-2" {
-                                (s.device_info.as_deref().unwrap_or("Unknown device"))
+                            // `truncate` belongs on the text span, not the flex
+                            // row: on the container it clips the badge away
+                            // instead of ellipsising the label (BUNYIP-421).
+                            p class="font-medium flex items-center gap-2 min-w-0" {
+                                span class="truncate" { (s.device_info.as_deref().unwrap_or("Unknown device")) }
                                 @if s.current { (badge("success", "This device")) }
                             }
                             p class="text-sm text-muted-foreground" {
@@ -1526,7 +1517,7 @@ fn sessions_card_body(
                 }
             }
             @if has_others {
-                form method="post" action="/settings/sessions/revoke-others" class="mt-4" onsubmit="return confirm('Log out all other devices?')" {
+                form method="post" action="/settings/sessions/revoke-others" class="mt-4" data-confirm="Log out all other devices?" {
                     button type="submit" class=(button_class("outline", "sm", "")) { (icon("log-out", "mr-2 h-4 w-4")) "Log out all other devices" }
                 }
             }
@@ -1672,6 +1663,178 @@ pub async fn settings_profile(
             &format!("/settings?error={}", urlenc(&e.user_message())),
             &c.set_cookies,
         ),
+    }
+}
+
+/// BUNYIP-408: 2 MiB avatar upload ceiling on the BFF, matching the API's
+/// `MAX_AVATAR_SIZE`. The API re-validates type/size/dimensions; rejecting an
+/// oversized body here avoids relaying it upstream.
+const MAX_AVATAR_UPLOAD_BYTES: usize = 2 * 1024 * 1024;
+
+/// Read the single uploaded `avatar` file (filename, declared content-type,
+/// bytes) from a multipart body. Mirrors `admin::read_backup_upload`'s field
+/// loop. The declared MIME is advisory - bunyip-api sniffs the real type from
+/// the bytes.
+async fn read_avatar_upload(
+    multipart: &mut Multipart,
+) -> Result<(String, String, Vec<u8>), String> {
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => return Err("No image was selected.".into()),
+            Err(e) => return Err(format!("Could not read upload: {e}")),
+        };
+        let is_avatar = field.name() == Some("avatar");
+        let filename = field.file_name().unwrap_or("avatar").to_string();
+        let mime = field
+            .content_type()
+            .map(str::to_string)
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        // Always drain the field body before advancing to the next one.
+        let bytes = match field.bytes().await {
+            Ok(b) => b,
+            Err(e) => return Err(format!("Could not read the image: {e}")),
+        };
+        if !is_avatar {
+            continue;
+        }
+        if bytes.is_empty() {
+            return Err("The selected file is empty.".into());
+        }
+        if bytes.len() > MAX_AVATAR_UPLOAD_BYTES {
+            return Err("The image must be 2 MB or smaller.".into());
+        }
+        return Ok((filename, mime, bytes.to_vec()));
+    }
+}
+
+/// BUNYIP-408: does the caller want a JSON reply (the avatar picker's XHR) rather
+/// than a redirect (the no-JS form fallback)? Keyed on the `Accept` header the
+/// XHR sets explicitly, so a normal form submit still gets the redirect + toast.
+fn wants_json(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(|a| a.contains("application/json"))
+        .unwrap_or(false)
+}
+
+/// Build a JSON response that still relays any rotated auth cookies the guard
+/// captured (so an in-flight refresh is not dropped on the XHR path).
+fn json_cookies(status: StatusCode, body: serde_json::Value, set_cookies: &[String]) -> Response {
+    let mut builder = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "application/json");
+    for cookie in set_cookies {
+        builder = builder.header(header::SET_COOKIE, cookie);
+    }
+    builder
+        .body(Body::from(body.to_string()))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// POST /settings/avatar - upload (or replace) the profile photo. Parses the
+/// multipart body and relays the bytes to `POST /v1/users/me/avatar`. The avatar
+/// picker's XHR (Accept: application/json) gets a JSON `{ok}` / `{error}` so it
+/// can update in place; a no-JS form submit gets the redirect + toast. All
+/// validation of consequence (content type, size, dimensions) happens API-side;
+/// the BFF only guards the byte ceiling.
+pub async fn settings_avatar(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let json = wants_json(&headers);
+    let (filename, mime, bytes) = match read_avatar_upload(&mut multipart).await {
+        Ok(v) => v,
+        Err(msg) => {
+            return if json {
+                json_cookies(
+                    StatusCode::BAD_REQUEST,
+                    serde_json::json!({ "error": msg }),
+                    &c.set_cookies,
+                )
+            } else {
+                redirect_cookies(&format!("/settings?error={}", urlenc(&msg)), &c.set_cookies)
+            }
+        }
+    };
+    match auth_api::upload_avatar(&st.api, c.forward.as_deref(), &filename, &mime, bytes).await {
+        Ok(()) if json => json_cookies(
+            StatusCode::OK,
+            serde_json::json!({ "ok": true }),
+            &c.set_cookies,
+        ),
+        Ok(()) => redirect_cookies("/settings?ok=Profile+photo+updated", &c.set_cookies),
+        Err(e) if json => json_cookies(
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({ "error": e.user_message() }),
+            &c.set_cookies,
+        ),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
+    }
+}
+
+/// POST /settings/avatar/remove - clear the profile photo (idempotent). JSON for
+/// the picker's XHR, redirect + toast for the no-JS form.
+pub async fn settings_avatar_remove(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (_, c) = match guard(&st, &headers, "/settings").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let json = wants_json(&headers);
+    match auth_api::remove_avatar(&st.api, c.forward.as_deref()).await {
+        Ok(()) if json => json_cookies(
+            StatusCode::OK,
+            serde_json::json!({ "ok": true }),
+            &c.set_cookies,
+        ),
+        Ok(()) => redirect_cookies("/settings?ok=Profile+photo+removed", &c.set_cookies),
+        Err(e) if json => json_cookies(
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({ "error": e.user_message() }),
+            &c.set_cookies,
+        ),
+        Err(e) => redirect_cookies(
+            &format!("/settings?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
+    }
+}
+
+/// GET /me/avatar - same-origin proxy of the signed-in user's avatar bytes so an
+/// `<img src="/me/avatar?v=...">` loads with the session cookie. Mirrors the
+/// `download_asset` streaming relay. On any non-2xx (no avatar set, expired
+/// session) returns 404 rather than a redirect, so a missing image never
+/// navigates the `<img>` element to an HTML page.
+pub async fn me_avatar(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (_, c) = match guard(&st, &headers, "/dashboard").await {
+        Ok(v) => v,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    match auth_api::fetch_avatar(&st.api, c.forward.as_deref()).await {
+        Ok(resp) if resp.status().is_success() => {
+            let content_type = resp
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, content_type)
+                .header(header::CACHE_CONTROL, "private, max-age=300")
+                .body(Body::from_stream(resp.bytes_stream()))
+                .unwrap_or_else(|_| StatusCode::NOT_FOUND.into_response())
+        }
+        _ => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
@@ -2252,6 +2415,8 @@ mod tests {
             first_name: None,
             last_name: None,
             phone: None,
+            avatar_updated_at: None,
+            is_super_admin: false,
         }
     }
 
@@ -2407,5 +2572,43 @@ mod tests {
         assert!(html.contains("Invalid verification code"));
         assert!(html.contains(r#"action="/settings/2fa/rekey/confirm""#));
         assert!(html.contains(r#"href="/settings/2fa/rekey""#)); // restart link
+    }
+}
+
+/// BUNYIP-421: the sessions list has the same identity-cell shape as the admin
+/// users list, so it gets the same guard.
+#[cfg(test)]
+mod session_row_clipping_tests {
+    use crate::api::types::{PaginatedResponse, SessionInfo};
+    use crate::views::ui::assert_no_truncating_flex_container;
+
+    #[test]
+    fn this_device_badge_survives_a_long_device_string() {
+        let page = PaginatedResponse {
+            items: vec![SessionInfo {
+                id: "s1".into(),
+                device_info: Some(
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36".into(),
+                ),
+                ip_address: Some("203.0.113.7".into()),
+                created_at: "2026-07-01T10:00:00Z".into(),
+                last_used_at: None,
+                current: true,
+            }],
+            total: 1,
+            page: 1,
+            page_size: Some(20),
+            total_pages: 1,
+        };
+        let html = super::sessions_card_body(&page, 1).into_string();
+        assert_no_truncating_flex_container(&html);
+        assert!(
+            html.contains(">This device<"),
+            "current-session badge is rendered"
+        );
+        assert!(
+            html.contains(r#"<span class="truncate">Mozilla/5.0"#),
+            "the device string, not the row, is what truncates: {html}"
+        );
     }
 }

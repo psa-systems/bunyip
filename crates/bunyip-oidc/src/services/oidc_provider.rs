@@ -383,7 +383,7 @@ impl OidcProvider {
         sqlx::query_as::<_, OAuthClient>(
             r#"
             SELECT
-                id, client_id, client_secret_hash, client_type, name,
+                id, client_id, client_secret_hash, client_type, name, logo_uri,
                 redirect_uris, post_logout_redirect_uris,
                 backchannel_logout_uri, lifecycle_event_uri,
                 allowed_scopes,
@@ -1352,6 +1352,9 @@ pub struct OAuthClient {
     pub client_secret_hash: Option<String>,
     pub client_type: String,
     pub name: String,
+    /// BUNYIP-406: optional icon/logo URL shown next to the client name on the
+    /// consent screen. NULL degrades to a name-initial badge in bunyip-web.
+    pub logo_uri: Option<String>,
     pub redirect_uris: Vec<String>,
     pub post_logout_redirect_uris: Vec<String>,
     pub backchannel_logout_uri: Option<String>,
@@ -1729,6 +1732,8 @@ mod tests {
             last_name: None,
             phone: None,
             has_used_trial: false,
+            avatar_updated_at: None,
+            is_super_admin: false,
         }
     }
 
@@ -1739,6 +1744,7 @@ mod tests {
             client_secret_hash: None,
             client_type: "public".to_string(),
             name: "test-client".to_string(),
+            logo_uri: None,
             redirect_uris: vec!["https://app.example.com/callback".to_string()],
             post_logout_redirect_uris: vec![],
             backchannel_logout_uri: None,

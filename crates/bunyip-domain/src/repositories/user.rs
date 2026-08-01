@@ -132,6 +132,102 @@ impl UserRepository {
         Ok(user)
     }
 
+    /// BUNYIP-408: store (or replace) the user's avatar. The bytes land in the
+    /// dedicated `user_avatars` table (one row per user, UPSERT on re-upload)
+    /// and `users.avatar_updated_at` is stamped to NOW() in the SAME transaction
+    /// so the cheap "an avatar exists" marker never drifts from the stored blob.
+    /// Content-type + size are validated by the caller (handler) before this is
+    /// reached; the DB CHECK constraints are the last-line backstop. Returns the
+    /// updated user row (carrying the fresh `avatar_updated_at`).
+    pub async fn set_avatar(
+        pool: &PgPool,
+        user_id: Uuid,
+        mime_type: &str,
+        data: &[u8],
+    ) -> Result<User, AppError> {
+        let size = i32::try_from(data.len())
+            .map_err(|_| AppError::validation("avatar", "Avatar is too large"))?;
+        let mut tx = pool.begin().await?;
+        sqlx::query(
+            r#"
+            INSERT INTO user_avatars (user_id, mime_type, size_bytes, data, updated_at)
+            VALUES ($1, $2, $3, $4, NOW())
+            ON CONFLICT (user_id) DO UPDATE
+                SET mime_type = EXCLUDED.mime_type,
+                    size_bytes = EXCLUDED.size_bytes,
+                    data = EXCLUDED.data,
+                    updated_at = NOW()
+            "#,
+        )
+        .bind(user_id)
+        .bind(mime_type)
+        .bind(size)
+        .bind(data)
+        .execute(&mut *tx)
+        .await?;
+
+        let user = sqlx::query_as::<_, User>(
+            r#"
+            UPDATE users
+            SET avatar_updated_at = NOW(), updated_at = NOW()
+            WHERE id = $1 AND deleted_at IS NULL
+            RETURNING *
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::not_found("User"))?;
+
+        tx.commit().await?;
+        Ok(user)
+    }
+
+    /// BUNYIP-408: remove the user's avatar. Deletes the `user_avatars` row and
+    /// clears `users.avatar_updated_at` back to NULL in one transaction, so the
+    /// UI falls back to the initials/icon. Idempotent: removing an absent avatar
+    /// simply leaves both already-empty and returns the (unchanged) user row.
+    pub async fn clear_avatar(pool: &PgPool, user_id: Uuid) -> Result<User, AppError> {
+        let mut tx = pool.begin().await?;
+        sqlx::query("DELETE FROM user_avatars WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+
+        let user = sqlx::query_as::<_, User>(
+            r#"
+            UPDATE users
+            SET avatar_updated_at = NULL, updated_at = NOW()
+            WHERE id = $1 AND deleted_at IS NULL
+            RETURNING *
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::not_found("User"))?;
+
+        tx.commit().await?;
+        Ok(user)
+    }
+
+    /// BUNYIP-408: fetch the stored avatar bytes + MIME for serving. `None` when
+    /// the user has no avatar. Only the avatar-serving handler calls this, so the
+    /// BYTEA is never loaded on the ordinary user-fetch path.
+    pub async fn get_avatar(
+        pool: &PgPool,
+        user_id: Uuid,
+    ) -> Result<Option<(String, Vec<u8>)>, AppError> {
+        let row = sqlx::query_as::<_, (String, Vec<u8>)>(
+            "SELECT mime_type, data FROM user_avatars WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(row)
+    }
+
     /// Update email verified status
     pub async fn set_email_verified(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {
         sqlx::query(
@@ -783,12 +879,45 @@ impl UserRepository {
         Ok(user)
     }
 
+    /// BUNYIP-413: set or clear the super-admin ("first setup account") flag.
+    /// Used by the bootstrap-admin promotion so the first admin of a fresh
+    /// install can manage rate limits and IP bans without a second step.
+    pub async fn set_super_admin(
+        pool: &PgPool,
+        user_id: Uuid,
+        is_super_admin: bool,
+    ) -> Result<User, AppError> {
+        let user = sqlx::query_as::<_, User>(
+            r#"
+            UPDATE users
+            SET is_super_admin = $2, updated_at = NOW()
+            WHERE id = $1 AND deleted_at IS NULL
+            RETURNING *
+            "#,
+        )
+        .bind(user_id)
+        .bind(is_super_admin)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("User"))?;
+
+        Ok(user)
+    }
+
     /// List users with pagination.
     ///
     /// `active` selects which side of the soft-delete boundary to return:
-    /// `None`/`Some(true)` lists live accounts (the default admin view),
-    /// `Some(false)` lists suspended (soft-deleted) accounts so an admin can
-    /// find and reactivate them (BUNYIP-120).
+    /// `Some(true)` lists live accounts (the default admin view), `Some(false)`
+    /// lists suspended (soft-deleted) accounts so an admin can find and
+    /// reactivate them (BUNYIP-120), and `None` lists BOTH (the "All" segment
+    /// added in the BUNYIP-410 filter overhaul). Callers wanting the historical
+    /// active-only default must pass `Some(true)` explicitly.
+    ///
+    /// `sort_by` is a whitelisted column key (`email` / `tier` / `verified` /
+    /// `joined`); anything else falls back to newest-first by join date. `id` is
+    /// always appended as a stable tiebreak so pagination never drops or repeats
+    /// a row across pages.
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_paginated(
         pool: &PgPool,
         page: i32,
@@ -796,14 +925,24 @@ impl UserRepository {
         search: Option<&str>,
         status_filter: Option<MembershipStatus>,
         active: Option<bool>,
+        // BUNYIP-410: consolidated users+memberships admin list filters. `tier`
+        // matches `COALESCE(subscription_tier,'standard')` (rows may predate the
+        // tier column); `verified` filters on `email_verified`. Both `None` =
+        // unfiltered, preserving the pre-410 behaviour.
+        tier: Option<&str>,
+        verified: Option<bool>,
+        sort_by: Option<&str>,
+        sort_desc: bool,
     ) -> Result<(Vec<User>, i64), AppError> {
         let offset = (page - 1) * per_page;
         let search_pattern = search.map(|s| format!("%{}%", s));
 
-        let deleted_clause = if active == Some(false) {
-            " WHERE deleted_at IS NOT NULL"
-        } else {
-            " WHERE deleted_at IS NULL"
+        let deleted_clause = match active {
+            Some(true) => " WHERE deleted_at IS NULL",
+            Some(false) => " WHERE deleted_at IS NOT NULL",
+            // "All": both live and suspended. `WHERE TRUE` keeps the trailing
+            // `AND <filter>` clauses below valid without special-casing them.
+            None => " WHERE TRUE",
         };
 
         // Build the filter clause once on both the page query and the count
@@ -833,8 +972,36 @@ impl UserRepository {
                 .push_bind(status.as_str());
         }
 
+        if let Some(tier) = tier {
+            query
+                .push(" AND COALESCE(subscription_tier, 'standard') = ")
+                .push_bind(tier);
+            count_query
+                .push(" AND COALESCE(subscription_tier, 'standard') = ")
+                .push_bind(tier);
+        }
+
+        if let Some(verified) = verified {
+            query.push(" AND email_verified = ").push_bind(verified);
+            count_query
+                .push(" AND email_verified = ")
+                .push_bind(verified);
+        }
+
+        // Whitelisted sort column -> SQL expression. Never interpolate the raw
+        // key: only these fixed expressions can reach the query, so a crafted
+        // `sort` param cannot inject SQL. Unknown / absent falls back to join
+        // date. `id` is the stable tiebreak.
+        let sort_expr = match sort_by {
+            Some("email") => "LOWER(email)",
+            Some("tier") => "COALESCE(subscription_tier, 'standard')",
+            Some("verified") => "email_verified",
+            Some("joined") => "created_at",
+            _ => "created_at",
+        };
+        let dir = if sort_desc { "DESC" } else { "ASC" };
         query
-            .push(" ORDER BY created_at DESC LIMIT ")
+            .push(format!(" ORDER BY {sort_expr} {dir}, id {dir} LIMIT "))
             .push_bind(per_page)
             .push(" OFFSET ")
             .push_bind(offset);

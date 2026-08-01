@@ -2,6 +2,8 @@
 
 use chrono::{DateTime, Duration, Utc};
 use sqlx::FromRow;
+use std::collections::HashMap;
+use std::sync::OnceLock;
 use uuid::Uuid;
 
 /// Prefix on the `rate_limits.key` for the per-account 2FA failure counter
@@ -66,7 +68,7 @@ pub enum KeySubject {
 }
 
 /// Rate limit configuration
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RateLimitConfig {
     pub action: &'static str,
     pub max_requests: i32,
@@ -121,6 +123,21 @@ impl RateLimitConfig {
     pub const REGISTRATION: Self = Self {
         action: "registration",
         max_requests: 3,
+        window_seconds: 3600,
+        key_kind: KeyKind::Ip,
+    };
+
+    /// Registration outside production: 30 requests per hour per IP
+    /// (BUNYIP-426 F7).
+    ///
+    /// The production cap used to be skipped entirely below production, which
+    /// left `/v1/auth/register` unthrottled on the publicly reachable dev-sso
+    /// stack. The budget is loosened rather than dropped because the e2e suite
+    /// registers a fresh disposable account per run from one shared CI egress
+    /// IP and would trip the 3/hour production cap.
+    pub const REGISTRATION_NON_PROD: Self = Self {
+        action: "registration_non_prod",
+        max_requests: 30,
         window_seconds: 3600,
         key_kind: KeyKind::Ip,
     };
@@ -251,6 +268,7 @@ impl RateLimitConfig {
         Self::API_AUTH,
         Self::API_UNAUTH,
         Self::REGISTRATION,
+        Self::REGISTRATION_NON_PROD,
         Self::OCI_TOKEN_FAILURES,
         Self::OCI_TOKEN_THROUGHPUT,
         Self::TWO_FACTOR_VERIFY_FAILURES,
@@ -266,8 +284,53 @@ impl RateLimitConfig {
     /// Look up the preset for a stored `rate_limits.action` string. Returns
     /// `None` for an action with no matching preset (BUNYIP-315), so the caller
     /// can skip a row whose cap/window it cannot resolve rather than guessing.
+    ///
+    /// The returned preset carries the env-var bootstrap defaults already
+    /// applied (BUNYIP-413), so no caller ever sees a bare compile-time const.
     pub fn by_action(action: &str) -> Option<Self> {
-        Self::ALL.iter().find(|c| c.action == action).copied()
+        Self::ALL
+            .iter()
+            .find(|c| c.action == action)
+            .copied()
+            .map(Self::with_env_defaults)
+    }
+
+    /// The bootstrap default for this action: the compile-time const with the
+    /// `RATE_LIMIT_{ACTION}_MAX_REQUESTS` / `RATE_LIMIT_{ACTION}_WINDOW_SECONDS`
+    /// env vars applied when set (BUNYIP-413). This is what a fresh install
+    /// enforces; a persisted `rate_limit_configs` row overrides it per action.
+    /// The env map is read once per process (see [`env_defaults`]).
+    pub fn with_env_defaults(self) -> Self {
+        match env_defaults().get(self.action) {
+            Some(o) => self.with_overrides(o.max_requests, o.window_seconds),
+            None => self,
+        }
+    }
+
+    /// Apply an override layer: each `Some` replaces the corresponding field,
+    /// `None` keeps the current value. Pure, so the const -> env -> persisted
+    /// precedence chain is unit-testable without env or a database.
+    pub fn with_overrides(
+        mut self,
+        max_requests: Option<i32>,
+        window_seconds: Option<i64>,
+    ) -> Self {
+        if let Some(m) = max_requests {
+            self.max_requests = m;
+        }
+        if let Some(w) = window_seconds {
+            self.window_seconds = w;
+        }
+        self
+    }
+
+    /// The env-var names carrying this action's bootstrap default.
+    pub fn env_var_names(action: &str) -> (String, String) {
+        let upper = action.to_uppercase();
+        (
+            format!("RATE_LIMIT_{upper}_MAX_REQUESTS"),
+            format!("RATE_LIMIT_{upper}_WINDOW_SECONDS"),
+        )
     }
 
     /// Interpret a `rate_limits.key` per this config's [`KeyKind`] into the
@@ -293,6 +356,49 @@ impl RateLimitConfig {
     }
 }
 
+/// One action's env-var bootstrap default (BUNYIP-413). Either field may be
+/// absent, so an operator can raise a cap without restating the window.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RateLimitEnvDefault {
+    pub max_requests: Option<i32>,
+    pub window_seconds: Option<i64>,
+}
+
+/// Read the env-var bootstrap defaults for every preset action, once per
+/// process. Values that are absent, unparseable, or non-positive are ignored,
+/// so a typo degrades to the compile-time const rather than disabling a limit.
+fn env_defaults() -> &'static HashMap<&'static str, RateLimitEnvDefault> {
+    static DEFAULTS: OnceLock<HashMap<&'static str, RateLimitEnvDefault>> = OnceLock::new();
+    DEFAULTS.get_or_init(|| read_env_defaults(|name| std::env::var(name).ok()))
+}
+
+/// Pure core of [`env_defaults`]: builds the map from an arbitrary env reader
+/// so the parsing and validation rules are unit-testable.
+fn read_env_defaults(
+    get: impl Fn(&str) -> Option<String>,
+) -> HashMap<&'static str, RateLimitEnvDefault> {
+    let mut map = HashMap::new();
+    for cfg in RateLimitConfig::ALL {
+        let (max_var, window_var) = RateLimitConfig::env_var_names(cfg.action);
+        let max_requests = get(&max_var)
+            .and_then(|v| v.trim().parse::<i32>().ok())
+            .filter(|m| *m > 0);
+        let window_seconds = get(&window_var)
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .filter(|w| *w > 0);
+        if max_requests.is_some() || window_seconds.is_some() {
+            map.insert(
+                cfg.action,
+                RateLimitEnvDefault {
+                    max_requests,
+                    window_seconds,
+                },
+            );
+        }
+    }
+    map
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,6 +422,63 @@ mod tests {
             assert_eq!(found.window_seconds, cfg.window_seconds);
         }
         assert!(RateLimitConfig::by_action("no_such_action").is_none());
+    }
+
+    /// BUNYIP-413: an env var raises the cap for one action only, and a bad or
+    /// non-positive value is ignored so the compile-time const still applies.
+    #[test]
+    fn env_defaults_override_only_valid_values() {
+        let env = HashMap::from([
+            ("RATE_LIMIT_LOGIN_MAX_REQUESTS", "25"),
+            ("RATE_LIMIT_REGISTRATION_WINDOW_SECONDS", "not-a-number"),
+            ("RATE_LIMIT_API_AUTH_MAX_REQUESTS", "0"),
+        ]);
+        let defaults = read_env_defaults(|n| env.get(n).map(|v| v.to_string()));
+
+        assert_eq!(
+            defaults.get("login").copied(),
+            Some(RateLimitEnvDefault {
+                max_requests: Some(25),
+                window_seconds: None,
+            })
+        );
+        // Unparseable and non-positive values leave the action untouched.
+        assert_eq!(defaults.get("registration"), None);
+        assert_eq!(defaults.get("api_auth"), None);
+        assert_eq!(defaults.get("magic_link"), None);
+    }
+
+    /// BUNYIP-413: the precedence chain is const -> env -> persisted, each layer
+    /// replacing only the fields it sets.
+    #[test]
+    fn overrides_layer_over_the_const_default() {
+        let base = RateLimitConfig::LOGIN;
+        assert_eq!((base.max_requests, base.window_seconds), (5, 60));
+
+        // Env layer: cap only.
+        let env = base.with_overrides(Some(25), None);
+        assert_eq!((env.max_requests, env.window_seconds), (25, 60));
+
+        // Persisted layer on top: both fields.
+        let persisted = env.with_overrides(Some(10), Some(300));
+        assert_eq!(
+            (persisted.max_requests, persisted.window_seconds),
+            (10, 300)
+        );
+
+        // An empty layer changes nothing.
+        assert_eq!(persisted.with_overrides(None, None), persisted);
+    }
+
+    #[test]
+    fn env_var_names_follow_the_action() {
+        assert_eq!(
+            RateLimitConfig::env_var_names("oci_token_failures"),
+            (
+                "RATE_LIMIT_OCI_TOKEN_FAILURES_MAX_REQUESTS".to_string(),
+                "RATE_LIMIT_OCI_TOKEN_FAILURES_WINDOW_SECONDS".to_string(),
+            )
+        );
     }
 
     #[test]

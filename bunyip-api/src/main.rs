@@ -176,6 +176,13 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
 
+            // BUNYIP-413: this IS the first setup account, so it carries the
+            // super-admin flag. Without it a deployment seeded this way would
+            // have no account able to manage rate limits or IP bans (the
+            // migration backfill runs before any user exists, and the
+            // bootstrap-email promotion is inert once an admin exists).
+            UserRepository::set_super_admin(&pool, user.id, true).await?;
+
             info!(email = %user.email, "Default admin user created from SETUP_DEFAULT_ADMIN");
         } else {
             info!("Admin user(s) already exist, skipping SETUP_DEFAULT_ADMIN");
@@ -695,6 +702,10 @@ async fn main() -> anyhow::Result<()> {
         .map(str::to_string)
         .collect();
 
+    // The CSRF guard (BUNYIP-423) reuses the same allow-list: an origin trusted
+    // to read responses is the same set trusted to originate a cookie write.
+    let csrf_guard = bunyip_api::csrf::OriginGuard::new(&cors_origins);
+
     let config_data = config.clone();
 
     // Spawn rate limit cleanup background task
@@ -878,7 +889,19 @@ async fn main() -> anyhow::Result<()> {
             .wrap(bunyip_api::access_log::access_logger())
             .wrap(SecurityHeaders::with_csp(csp))
             .wrap(RequestIdMiddleware)
+            // CSRF guard for cookie-authenticated writes (BUNYIP-423). Wrapped
+            // before `cors` so it runs INSIDE it: CORS answers the preflight,
+            // this rejects a state-changing cookie request whose Origin /
+            // Referer is not a CORS_ORIGIN entry.
+            .wrap(csrf_guard.clone())
             .wrap(cors)
+            // BUNYIP-426 F7: default per-IP / per-user cap under every route, so
+            // an endpoint added without its own `check_rate_limit` is still
+            // throttled. Inside AutoBanMiddleware, so a banned IP is rejected
+            // before it costs a rate-limit row.
+            .wrap(bunyip_api::rate_limit_floor::RateLimitFloor::new(
+                pool.clone(),
+            ))
             // Auto-ban runs outermost — rejects banned IPs before CORS processing
             .wrap(AutoBanMiddleware::new(auto_ban_service.clone()))
             // Explicit JSON body size limit (32 KB)

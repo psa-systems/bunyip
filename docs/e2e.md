@@ -32,7 +32,7 @@ e2e/
     oidc/                    project `api` (request-context fixtures)
   scripts/
     wait-for-deploy.mjs       deploy-sync gate (push/dispatch-staging)
-    health-check.mjs          reachability gate (pull_request/dispatch-production)
+    health-check.mjs          reachability gate (PR gate/dispatch-production)
 ```
 
 ### Project model and the login rate limit
@@ -83,9 +83,11 @@ result on the plain `E2E_*` names via a Forgejo expression
 (`${{ inputs.environment == 'production' && secrets.<PRODUCTION> || secrets.<STAGING> }}`),
 so `env.ts` and the gate scripts only ever read the plain names. Test-only vars
 use `E2E_STAGING_*` / `E2E_PRODUCTION_*`; the OP host follows the deployment's
-own `OIDC_ISSUER_*` variable name where one exists. On `push` / `pull_request`
-the `inputs` context is empty, so each expression resolves to its staging
-secret; a manual dispatch lets the operator pick.
+own `OIDC_ISSUER_*` variable name where one exists. On `push` the `inputs`
+context is empty, so each expression resolves to its staging secret; a manual
+dispatch lets the operator pick. None of these reach a `pull_request` run: the
+PR gate is a separate workflow that declares only the two base URLs (see
+[CI workflow](#ci-workflow)).
 
 ### Provisioning the E2E account + tenant
 
@@ -101,7 +103,12 @@ secret; a manual dispatch lets the operator pick.
   enrolls that PRESET secret and enables 2FA on the seeded accounts, so the
   matching `E2E_TOTP_SECRET` stays STABLE across re-seeds (no rotation on every
   wipe). The alternative is manual UI enrollment (below), which mints a fresh
-  secret you must then re-capture.
+  secret you must then re-capture. Note that bunyip consumes a TOTP code the
+  moment it accepts it (BUNYIP-428, single use per RFC 6238 section 5.2), so two
+  logins on the SAME account inside one 30s step collide: the second sees
+  "Invalid verification code". `lib/login.ts` absorbs that by waiting out the
+  step and resubmitting a fresh code once; specs that log in repeatedly should
+  rely on `loginViaHub` rather than driving the 2FA form directly.
 - **Production:** provisioned manually (the bootstrap binary is gated to
   non-production by design). Create the account + tenant by hand, enable 2FA,
   and record the same vars under the `E2E_PRODUCTION_*` secret names.
@@ -149,9 +156,16 @@ secret; a manual dispatch lets the operator pick.
   e2e suite self-provisions disposable accounts from the single CI runner egress
   IP, so registrations accumulate across serial runs in the one-hour window and
   trip a spurious 429. Root-cause fix (`bunyip-api/src/handlers/auth.rs::register`):
-  the cap is applied in production ONLY (`if config.is_production()`); non-prod
-  (staging/dev) registers unthrottled, with the auto-ban still catching abusive
-  bursts. No env knob, no per-run workaround. NOTE: because the suite tests the
+  the budget varies by environment, not whether one exists. Production keeps
+  `RateLimitConfig::REGISTRATION` (3/hour/IP); staging/dev use
+  `REGISTRATION_NON_PROD` (30/hour/IP), which is loose enough for serial e2e runs
+  from one egress IP. BUNYIP-426 F7 replaced the earlier
+  `if config.is_production()` skip, which left `/v1/auth/register` completely
+  unthrottled on the publicly reachable dev-sso stack. Since BUNYIP-426 F7 the
+  `RateLimitFloor` middleware also caps every non-exempt endpoint at
+  `API_UNAUTH` (20/min/IP) for anonymous callers, so a burst-heavy spec can trip
+  that floor even where the per-endpoint cap is generous. No env knob, no
+  per-run workaround. NOTE: because the suite tests the
   DEPLOYED instance, this fix only takes effect after the new image is deployed
   to staging, so a PR's own pre-merge e2e run can still 429 against the not-yet-
   redeployed staging; it goes green on the post-merge run.
@@ -203,7 +217,7 @@ is in-repo: it is account, secret, and Forgejo-admin work. Do the staging set
 first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODUCTION`.
 
 1. **Merge the suite.** Lands `e2e/`, the `just e2e` recipe, and
-   `.forgejo/workflows/e2e.yml`.
+   `.forgejo/workflows/e2e.yml` + `.forgejo/workflows/e2e-pr.yml`.
 
 2. **Seed the staging E2E account + tenant.** On the c-01 host, from the docker
    repo, run the bootstrap recipe (DEV-378). It runs the `bunyip-e2e-bootstrap`
@@ -273,14 +287,27 @@ first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODU
    ```
 
    The redirect_uri must match a registered value EXACTLY or `/oauth2/authorize`
-   returns `invalid_redirect_uri`, but it is never loaded - the suite reads the
-   `code` straight from the redirect `Location` (`maxRedirects: 0`), so reusing
-   mokosh's host is fine. The client's `audience` is mokosh's API, which is also
-   fine: the OIDC specs only call the OP's own `/oauth2/userinfo` with the token,
-   never bunyip `/v1` (that bearer comes from the hub-login cookie capture).
-   `global.setup` drives the consent Allow for this `(user, client)` pair, so the
-   token-flow specs get a `code` rather than bouncing to `/oauth2/consent`
-   (the gate that broke mokosh's headless replay - BUNYIP-146).
+   returns `invalid_redirect_uri`, but the request-context specs never load it -
+   they read the `code` straight from the redirect `Location` (`maxRedirects: 0`),
+   so reusing mokosh's host is fine. The client's `audience` is mokosh's API,
+   which is also fine: the OIDC specs only call the OP's own `/oauth2/userinfo`
+   with the token, never bunyip `/v1` (that bearer comes from the hub-login
+   cookie capture). `global.setup` drives the consent Allow for this
+   `(user, client)` pair, so the token-flow specs get a `code` rather than
+   bouncing to `/oauth2/consent` (the gate that broke mokosh's headless replay -
+   BUNYIP-146).
+
+   `global.setup` is the ONE place a real browser follows that redirect and
+   renders mokosh's callback, and rendering it killed the browser in run #2175:
+   the next `storageState` call failed with the BUNYIP-148 "Target page, context
+   or browser has been closed" signature and took setup, plus all 11 dependent
+   specs, down with it. Two guards (BUNYIP-402): the consent drive runs on a
+   throwaway page in the same context, so a renderer death on the callback cannot
+   reach the page whose session setup persists (cookies are context-scoped, so
+   the grant still lands); and the post-consent re-save is wrapped, since both
+   artifacts are already written before consent. Stubbing the callback with
+   `page.route` does NOT work - Playwright 1.60 applies route handlers only to
+   the request that starts a chain, not to the target of a server redirect.
 
    Sanity-check the row is on the target DB:
    `docker compose ... exec postgres psql -c "select client_id, name, allowed_scopes from oauth_clients where name = 'mokosh-apps';"`
@@ -309,14 +336,15 @@ first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODU
    ```
 
 6. **Enforce the check.** Forgejo -> repo Settings -> Branch protection on `main`
-   -> add `e2e` to the required status checks. The PR run is what actually blocks
-   a merge; a direct push to `main` can still turn the post-merge run red after
+   -> add `e2e-pr` to the required status checks (not `e2e`: since BUNYIP-425 the
+   suite does not run on `pull_request`, so it never reports a PR status). The
+   suite itself is a post-merge signal: a push to `main` turns the run red after
    the fact.
 
-7. **Verify.** Open a PR (or push to `main`) and watch the `e2e` job run the
-   runnable specs against staging. Locally: `cp e2e/.env.example e2e/.env`, fill
-   the same values, then `cd e2e && npm ci && npx playwright install chromium &&
-   just e2e`.
+7. **Verify.** Open a PR and watch the `e2e-pr` gate pass, then push to `main`
+   and watch the `e2e` job run the runnable specs against staging. Locally:
+   `cp e2e/.env.example e2e/.env`, fill the same values, then
+   `cd e2e && npm ci && npx playwright install chromium && just e2e`.
 
 After this the **runnable** specs pass. The `test.fixme` specs unblock as their
 sub-tasks land: BUNYIP-150 (staging mail sink -> signup / password-reset /
@@ -364,30 +392,47 @@ secret string as unset.
 
 ## CI workflow
 
-`.forgejo/workflows/e2e.yml` runs on three triggers, serialised through a single
-concurrency group (the suite shares one account and the 5/min login limit means
-parallel runs would collide):
+Two workflows, split by whether the run may hold credentials (BUNYIP-425).
+`.forgejo/workflows/e2e.yml` is the suite and never triggers on
+`pull_request`; `.forgejo/workflows/e2e-pr.yml` is the PR gate and holds no
+credential. The suite is serialised through a single concurrency group (it
+shares one account, and the 5/min login limit means parallel runs would
+collide); the PR gate has its own cancel-in-progress group because it never
+logs in.
 
-| Trigger | Environment | Purpose | Pre-flight gate |
-| --- | --- | --- | --- |
-| `push` to `main` | staging | post-merge validation against the deployed commit | `wait-for-deploy.mjs` (`/v1/version` `.commit`, poll 15s / 10-min timeout; walks back to the last build-relevant commit on a doc/CI-only merge) |
-| `pull_request` -> `main` | staging | merge gate: every PR passes the suite vs staging | `health-check.mjs` (`/health`, one-shot 30s) |
-| `workflow_dispatch` | input (`staging` default / `production`) | manual ad-hoc | `staging`: deploy-sync gate; `production`: reachability check (the dispatched SHA is unlikely to be what prod serves) |
+| Workflow | Trigger | Environment | Purpose | Pre-flight gate |
+| --- | --- | --- | --- | --- |
+| `e2e.yml` | `push` to `main` | staging | post-merge validation against the deployed commit | `wait-for-deploy.mjs` (`/v1/version` `.commit`, poll 15s / 10-min timeout; walks back to the last build-relevant commit on a doc/CI-only merge) |
+| `e2e.yml` | `workflow_dispatch` | input (`staging` default / `production`) | manual ad-hoc, and the only way to run the full suite against a PR's code (a maintainer dispatches it after reading the diff) | `staging`: deploy-sync gate; `production`: reachability check (the dispatched SHA is unlikely to be what prod serves) |
+| `e2e-pr.yml` | `pull_request` -> `main` | staging URLs only | merge gate: lockfile installs, Playwright installs, staging is reachable. Does NOT run the specs | `health-check.mjs` (`/health`, one-shot 30s, hub probe soft) |
+
+**Why the PR gate runs no specs.** A `pull_request` run executes the workflow
+file, the npm lifecycle scripts and the Playwright specs from the PR head, all
+of it unreviewed. Every secret in scope for that job is readable by anyone who
+can push a branch, so the PR job declares only `E2E_STAGING_BASE_URL` and
+`OIDC_ISSUER_STAGING` (which authenticate nothing) and every `npm ci` in
+`.forgejo/workflows/` runs `--ignore-scripts`.
+`scripts/check-workflow-secrets.sh` enforces both in the `Check` workflow, so
+the split cannot regress silently.
 
 **Production safety gate.** Production runs ONLY via manual dispatch. On top of
 that, the billing WRITE specs carry `test.skip(env.isProductionApex, ...)` so
 even a production dispatch cannot start or touch a live subscription. That guard
 is independent of the `test.fixme` blockers and stays after they lift.
 
-**Required check + bootstrap skip (BUNYIP-163).** After the pre-flight gate,
+**Bootstrap skip (BUNYIP-163).** After the pre-flight gate,
 `check-bootstrapped.mjs` decides whether the suite runs: on a staging run the
 Playwright suite executes only when `GET /e2e-bootstrapped` reports the seed is
-present; otherwise it is skipped and the job still passes. This makes it safe to
-mark `e2e` a REQUIRED status check on `main` (the BUNYIP-148 enforcement AC) - a
-missing or removed seed degrades to "no coverage this run", never a merge block,
-including for the PR that might re-enable bootstrapping. Enabling the required
-check itself is a one-time Forgejo branch-protection change (add `e2e` to the
-required status checks for `main`), done out of band.
+present; otherwise it is skipped and the job still passes. A missing or removed
+seed degrades to "no coverage this run", never a hard failure, including for the
+PR that might re-enable bootstrapping.
+
+**Required status check (BUNYIP-425).** The `e2e` job no longer runs on
+`pull_request`, so it can no longer be a required check on `main`: requiring a
+job that never reports would block every PR. The PR-side required check is
+`e2e-pr` instead. Updating branch protection (drop `e2e`, add `e2e-pr` to the
+required status checks for `main`) is a one-time Forgejo change, done out of
+band.
 
 **Runtime + artifacts.** Each run installs Node + Chromium, runs the gate, then
 the Playwright suite against the selected deployment. On failure it uploads

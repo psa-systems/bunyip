@@ -8,7 +8,7 @@ use sqlx::PgPool;
 
 use crate::errors::AppError;
 use crate::models::RateLimitConfig;
-use crate::repositories::{RateLimitRepository, TotpRepository};
+use crate::repositories::{RateLimitConfigRepository, RateLimitRepository, TotpRepository};
 use crate::services::TotpService;
 
 /// Check a rate limit and return `RateLimited` when the window is exceeded.
@@ -34,6 +34,10 @@ pub(crate) async fn check_rate_limit(
     key: &str,
     config: &RateLimitConfig,
 ) -> Result<(), AppError> {
+    // BUNYIP-413: resolve the cap actually in force (const -> env -> persisted
+    // override) before anything compares against it, so the log-once gate below
+    // matches the cap the counter was judged against.
+    let config = &RateLimitConfigRepository::effective(pool, config).await?;
     let (count, exceeded) = RateLimitRepository::check_and_increment(pool, key, config).await?;
     if exceeded {
         let retry_after = RateLimitRepository::get_retry_after(pool, key, config).await?;
@@ -141,6 +145,7 @@ pub mod admin_stripe;
 pub mod application;
 pub mod application_doc;
 pub mod auth;
+pub mod avatar;
 pub mod billing;
 pub mod download;
 pub mod events;
@@ -161,6 +166,7 @@ pub use auth::{
     request_password_reset, setup_status, verify_login_approval, verify_magic_link,
     verify_password_reset_token,
 };
+pub use avatar::{delete_avatar, get_avatar, upload_avatar};
 pub use billing::{create_setup_intent, download_invoice, list_invoices};
 pub use download::{
     admin_refresh_release, download_asset, download_asset_versioned, list_all_downloads,
@@ -207,9 +213,12 @@ pub use admin_entitlements::{
     add_price_mapping, grant_entitlement, list_user_entitlements, remove_price_mapping,
     revoke_entitlement, set_application_restricted,
 };
-pub use admin_ip_bans::{list_ip_bans, unban_ip};
+pub use admin_ip_bans::{create_ip_ban, list_ip_bans, unban_ip};
 pub use admin_oauth_tenants::{assign_user_tenant, list_client_assignments, unassign_user_tenant};
-pub use admin_rate_limits::{list_rate_limits, reset_rate_limit};
+pub use admin_rate_limits::{
+    delete_rate_limit_config, list_rate_limit_configs, list_rate_limits, reset_rate_limit,
+    upsert_rate_limit_config,
+};
 pub use admin_stripe::{
     archive_stripe_price, archive_stripe_product, create_stripe_price, create_stripe_product,
     create_stripe_webhook, delete_stripe_webhook, list_stripe_prices, list_stripe_products,

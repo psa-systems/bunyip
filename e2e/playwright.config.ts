@@ -49,7 +49,10 @@ export default defineConfig({
     // CSS shards (free.min, free-v4-shims, free-v5-font-face,
     // free-v4-font-face). All "downloaded a font/icon CSS, didn't
     // make it to first paint". The lighter /membership page survives
-    // because it uses fewer icons + fewer forms.
+    // because it uses fewer icons + fewer forms. (BUNYIP-424 later
+    // self-hosted htmx + Font Awesome, so the trail is now same-origin
+    // /assets requests; the icon-heavy render is unchanged and the
+    // flags below are still needed.)
     //
     // Two args, both defensive:
     //

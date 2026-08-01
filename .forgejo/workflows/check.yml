@@ -25,7 +25,9 @@ on:
       - ".cargo/config.toml"
       - ".sqlx/**"
       - "scripts/**"
-      - ".forgejo/workflows/check.yml"
+      # All workflows, not just this one: the secret-scope gate below reads
+      # e2e.yml / e2e-pr.yml (BUNYIP-425).
+      - ".forgejo/workflows/**"
 
   pull_request:
     branches:
@@ -69,9 +71,34 @@ jobs:
         # changes. Add a new migration instead (BUNYIP-293).
         run: ./scripts/check-migration-immutability.sh
 
+      - name: Check PR-triggered workflows hold no credentials
+        # A pull_request run executes the PR head's workflow, lifecycle scripts
+        # and specs, so any secret it can read leaks to anyone who can push a
+        # branch. Keeps the E2E suite off pull_request and the PR gate down to
+        # the two base URLs (BUNYIP-425).
+        run: ./scripts/check-workflow-secrets.sh
+
+      - name: Check security invariants
+        # Grep-assert the shapes the BUNYIP-426 audit sweep removed: cookie
+        # Secure derived from the transport, dunite pinned by rev, no signup
+        # enumeration oracle, base images pinned by digest. None of these fails
+        # a compile, so they need an explicit gate.
+        run: ./scripts/check-security-invariants.sh
+
       - name: Cap build parallelism
         # nproc/2 cap: never claim more than half the host (see CI.md "Concurrency cap").
         run: echo "CARGO_BUILD_JOBS=$(($(nproc) / 2))" >> "$GITHUB_ENV"
+
+      - name: Ensure C toolchain + native deps
+        # The RUNS_ON_OPENSUSE_BASE_LATEST image was trimmed of two things the
+        # build needs. `gcc` provides `cc`, which rustc drives linking through
+        # (without it: `linker cc not found`). `libopenssl-devel` provides the
+        # OpenSSL headers + `openssl.pc` that `openssl-sys` (pulled in via
+        # reqwest/native-tls) probes with pkg-config (without it:
+        # `Package 'openssl' not found`). The runner user is unprivileged, so
+        # zypper needs sudo (passwordless on the runner). Install what the
+        # trimmed base image dropped rather than assume it.
+        run: sudo zypper --non-interactive install --no-recommends gcc libopenssl-devel
 
       - name: Check formatting
         run: cargo fmt --all --check

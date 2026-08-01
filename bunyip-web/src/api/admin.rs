@@ -4,11 +4,11 @@ use serde_json::{json, Value};
 
 use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeedbackDetail,
-    AdminFeedbackSummary, AdminIpBan, AdminMembership, AdminRateLimit, AdminStatsResponse,
+    AdminFeedbackSummary, AdminIpBan, AdminRateLimit, AdminRateLimitConfig, AdminStatsResponse,
     AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList, ArchivedFeedback,
     AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary,
-    PaginatedResponse, RestoreReport, SeedTemplateInfo, StripeConfigResponse, TierConfigResponse,
-    UserEntitlement,
+    PaginatedResponse, RestoreReport, SeedTemplateInfo, StripeConfigResponse, StripePrice,
+    StripeProduct, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -21,22 +21,43 @@ pub async fn stats(api: &Api, cookie: Option<&str>) -> Result<AdminStatsResponse
 
 // --- users ------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 pub async fn users(
     api: &Api,
     cookie: Option<&str>,
     page: u32,
     page_size: u32,
     search: &str,
-    suspended: bool,
+    // BUNYIP-410 overhaul: soft-delete segment - "active" / "suspended" / "all".
+    status: &str,
+    // Empty `tier` / `None` `verified` = unfiltered.
+    tier: &str,
+    verified: Option<bool>,
+    // Whitelisted sort column + direction ("asc" / "desc"); empty = server
+    // default (newest-first).
+    sort: &str,
+    dir: &str,
 ) -> Result<PaginatedResponse<AdminUser>, ApiError> {
     let mut path = format!("/admin/users?page={page}&page_size={page_size}");
     if !search.is_empty() {
         path.push_str(&format!("&search={}", urlenc(search)));
     }
-    // `active=false` flips the API to the soft-deleted side so suspended users
-    // can be listed and reactivated (BUNYIP-120).
-    if suspended {
-        path.push_str("&active=false");
+    // The API's `active` flag is tri-state: true = live only, false =
+    // soft-deleted only (BUNYIP-120), omitted = both ("All"). Send it explicitly
+    // for active/suspended so the default page is not the "All" view.
+    match status {
+        "suspended" => path.push_str("&active=false"),
+        "all" => {}
+        _ => path.push_str("&active=true"),
+    }
+    if !tier.is_empty() {
+        path.push_str(&format!("&tier={}", urlenc(tier)));
+    }
+    if let Some(v) = verified {
+        path.push_str(&format!("&verified={v}"));
+    }
+    if !sort.is_empty() {
+        path.push_str(&format!("&sort={}&dir={}", urlenc(sort), urlenc(dir)));
     }
     parse(api.get(&path, cookie).await?)
 }
@@ -223,26 +244,11 @@ pub async fn revoke_lifetime(
 }
 
 // --- memberships ------------------------------------------------------------
-
-pub async fn memberships(
-    api: &Api,
-    cookie: Option<&str>,
-    page: u32,
-    page_size: u32,
-    status: &str,
-    tier: &str,
-) -> Result<PaginatedResponse<AdminMembership>, ApiError> {
-    let mut path = format!("/admin/memberships?page={page}&page_size={page_size}");
-    if !status.is_empty() {
-        path.push_str(&format!("&status={status}"));
-    }
-    // BUNYIP-291 AC4: the tier filter drives the members-by-tier view; the
-    // API gives it precedence over `status`.
-    if !tier.is_empty() {
-        path.push_str(&format!("&tier={tier}"));
-    }
-    parse(api.get(&path, cookie).await?)
-}
+//
+// BUNYIP-410: the members-by-tier list fetch (`memberships`) was removed with
+// the standalone Memberships page (tier + verified now live on the users list).
+// The grant / revoke override actions below stay - they remain reachable via
+// `/admin/memberships/{id}/grant|revoke`, which now redirect to the user detail.
 
 /// Grant an admin-override membership (free tier, `subscription_override_by` set
 /// to the acting admin). Wraps POST /admin/memberships/grant. BUNYIP-118.
@@ -532,6 +538,26 @@ pub async fn ip_bans(api: &Api, cookie: Option<&str>) -> Result<Vec<AdminIpBan>,
     parse(api.get("/admin/ip-bans", cookie).await?)
 }
 
+/// Ban `ip` by hand for `duration_secs` with `reason` (BUNYIP-413). Wraps
+/// `POST /v1/admin/ip-bans`, which is super-admin-only and audits the ban; a
+/// non-super-admin gets a 403 that surfaces as a permission ApiError.
+pub async fn create_ip_ban(
+    api: &Api,
+    cookie: Option<&str>,
+    ip: &str,
+    reason: &str,
+    duration_secs: i64,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            "/admin/ip-bans",
+            cookie,
+            Some(json!({ "ip": ip, "reason": reason, "duration_secs": duration_secs })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
 /// Lift the auto-ban for `ip`, effective on the next request. Wraps
 /// `DELETE /v1/admin/ip-bans/{ip}` (BUNYIP-319); the API audits the lift and
 /// 404s when the IP was not banned. `ip` is percent-encoded into the path so an
@@ -579,6 +605,56 @@ pub async fn reset_rate_limit(
             "/admin/rate-limits/reset",
             cookie,
             Some(json!({ "action": action, "key": key })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+// --- rate-limit configuration (BUNYIP-413) ----------------------------------
+
+/// The configured cap/window for every known rate-limit action, marking which
+/// ones a persisted override is in force for. Wraps
+/// `GET /v1/admin/rate-limit-configs`, whose `data` is a bare array.
+pub async fn rate_limit_configs(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Vec<AdminRateLimitConfig>, ApiError> {
+    parse(api.get("/admin/rate-limit-configs", cookie).await?)
+}
+
+/// Create or update the persisted override for `action`. Wraps
+/// `PUT /v1/admin/rate-limit-configs/{action}`, which is super-admin-only,
+/// audits the change and 400s on an unknown action or out-of-range values.
+pub async fn set_rate_limit_config(
+    api: &Api,
+    cookie: Option<&str>,
+    action: &str,
+    max_requests: i32,
+    window_seconds: i64,
+) -> Result<(), ApiError> {
+    let r = api
+        .put(
+            &format!("/admin/rate-limit-configs/{}", urlenc(action)),
+            cookie,
+            Some(json!({ "max_requests": max_requests, "window_seconds": window_seconds })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// Drop the persisted override for `action`, reverting it to the bootstrap
+/// default. Wraps `DELETE /v1/admin/rate-limit-configs/{action}`, which 404s
+/// when no override was in force.
+pub async fn delete_rate_limit_config(
+    api: &Api,
+    cookie: Option<&str>,
+    action: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .delete(
+            &format!("/admin/rate-limit-configs/{}", urlenc(action)),
+            cookie,
+            None,
         )
         .await?;
     ok_data(&r).map(|_| ())
@@ -736,6 +812,64 @@ pub async fn update_stripe_config(
     body: Value,
 ) -> Result<(), ApiError> {
     let r = api.put("/admin/stripe", cookie, Some(body)).await?;
+    ok_data(&r).map(|_| ())
+}
+
+// --- stripe products + prices (BUNYIP-416) ----------------------------------
+
+pub async fn list_stripe_products(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Vec<StripeProduct>, ApiError> {
+    parse(api.get("/admin/stripe/products", cookie).await?)
+}
+
+pub async fn create_stripe_product(
+    api: &Api,
+    cookie: Option<&str>,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api
+        .post("/admin/stripe/products", cookie, Some(body))
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn archive_stripe_product(
+    api: &Api,
+    cookie: Option<&str>,
+    id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .delete(&format!("/admin/stripe/products/{id}"), cookie, None)
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn list_stripe_prices(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Vec<StripePrice>, ApiError> {
+    parse(api.get("/admin/stripe/prices", cookie).await?)
+}
+
+pub async fn create_stripe_price(
+    api: &Api,
+    cookie: Option<&str>,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api.post("/admin/stripe/prices", cookie, Some(body)).await?;
+    ok_data(&r).map(|_| ())
+}
+
+pub async fn archive_stripe_price(
+    api: &Api,
+    cookie: Option<&str>,
+    id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .delete(&format!("/admin/stripe/prices/{id}"), cookie, None)
+        .await?;
     ok_data(&r).map(|_| ())
 }
 

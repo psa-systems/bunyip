@@ -111,3 +111,7 @@ imagesize = "0.13"
 [dev-dependencies]
 actix-rt = "2"
 wiremock = "0.6"
+# BUNYIP-428: tests/totp_single_use.rs mints real TOTP codes for the step it
+# wants to submit.
+totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
+data-encoding = "2"

@@ -45,6 +45,12 @@ fn inner(name: &str) -> &'static str {
         "upload" => {
             r#"<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>"#
         }
+        // BUNYIP-408: caret for the profile-menu disclosure.
+        "chevron-down" => r#"<path d="m6 9 6 6 6-6"/>"#,
+        // BUNYIP-405: disclosure chevron for clickable list rows.
+        "chevron-right" => r#"<path d="m9 18 6-6-6-6"/>"#,
+        // BUNYIP-404: reorder-up affordance (pairs with chevron-down).
+        "chevron-up" => r#"<path d="m18 15-6-6-6 6"/>"#,
         "receipt" => {
             r#"<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1Z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 17.5v-11"/>"#
         }
@@ -122,6 +128,9 @@ fn inner(name: &str) -> &'static str {
             r#"<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/>"#
         }
         "gauge" => r#"<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>"#,
+        "sliders-horizontal" => {
+            r#"<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>"#
+        }
         "globe" => {
             r#"<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>"#
         }
@@ -186,6 +195,33 @@ pub fn badge(variant: &str, text: &str) -> Markup {
     }
 }
 
+/// A form-submit toggle switch (BUNYIP-420). The control itself is the submit
+/// button, so a single click posts the flipped value through the enclosing
+/// form. `on` colors the track (primary) and slides the knob right; off is a
+/// muted track with the knob left. `label` names it for assistive tech
+/// (`role="switch"` + `aria-checked` + `aria-label`) since the state is
+/// conveyed only by color / position, not text.
+pub fn toggle_switch(on: bool, label: &str) -> Markup {
+    let track = if on {
+        "bg-primary"
+    } else {
+        "bg-muted-foreground/40"
+    };
+    let knob = if on {
+        "translate-x-[22px]"
+    } else {
+        "translate-x-0.5"
+    };
+    html! {
+        button type="submit" role="switch"
+          aria-checked=(if on { "true" } else { "false" })
+          aria-label=(label)
+          class={ "relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 " (track) } {
+            span class={ "inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform " (knob) } {}
+        }
+    }
+}
+
 /// Cap a banner message before it is rendered. The value is already
 /// Maud-escaped (so this is not an XSS guard); it bounds a hand-crafted
 /// `?ok=` / `?error=` link that stuffs the param with kilobytes of text to blow
@@ -228,9 +264,75 @@ pub fn success_box(msg: &str) -> Markup {
     }
 }
 
+/// BUNYIP-421 regression guard, shared by the page tests. `truncate` is
+/// `overflow:hidden` + `text-overflow:ellipsis` + `white-space:nowrap`, and the
+/// latter two do nothing on a flex/grid container: its items keep their
+/// max-content width and any sibling past the container's edge is clipped away
+/// with no ellipsis. So `truncate` belongs on the text element itself, never on
+/// a class list that also turns the element into a flex/grid box. Panics naming
+/// the offending class attribute.
+#[cfg(test)]
+pub fn assert_no_truncating_flex_container(html: &str) {
+    for attr in html.split("class=\"").skip(1) {
+        let Some(classes) = attr.split('"').next() else {
+            continue;
+        };
+        let tokens: Vec<&str> = classes.split_whitespace().collect();
+        let boxes_children = tokens
+            .iter()
+            .any(|t| matches!(*t, "flex" | "inline-flex" | "grid" | "inline-grid"));
+        assert!(
+            !(tokens.contains(&"truncate") && boxes_children),
+            "`truncate` on a flex/grid container clips its siblings instead of \
+             ellipsising the text (BUNYIP-421); move it to the text span: \
+             class=\"{classes}\""
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{clamp_msg, error_box, success_box};
+    use super::{clamp_msg, error_box, icon, success_box, toggle_switch};
+
+    /// BUNYIP-420: the toggle switch reflects state via color + knob position
+    /// and carries the right ARIA, so it reads as an on/off control (not text).
+    #[test]
+    fn toggle_switch_reflects_on_and_off_state() {
+        let on = toggle_switch(true, "Toggle active").into_string();
+        assert!(on.contains(r#"aria-checked="true""#));
+        assert!(on.contains("bg-primary"), "on state colors the track");
+        assert!(
+            on.contains("translate-x-[22px]"),
+            "on slides the knob right"
+        );
+        assert!(on.contains(r#"role="switch""#) && on.contains(r#"aria-label="Toggle active""#));
+        assert!(
+            on.contains(r#"type="submit""#),
+            "the switch is the form submit control"
+        );
+
+        let off = toggle_switch(false, "Toggle maintenance mode").into_string();
+        assert!(off.contains(r#"aria-checked="false""#));
+        assert!(
+            !off.contains("bg-primary"),
+            "off state is not primary-colored"
+        );
+        assert!(off.contains("translate-x-0.5"), "off keeps the knob left");
+    }
+
+    /// BUNYIP-404: the reorder arrows must resolve to a real glyph, not the
+    /// empty-`inner` fallback (which would render a blank button). Guards both
+    /// directions used by the application-reorder controls.
+    #[test]
+    fn reorder_chevrons_render_a_path() {
+        for name in ["chevron-up", "chevron-down"] {
+            let svg = icon(name, "h-4 w-4").into_string();
+            assert!(
+                svg.contains("<path"),
+                "icon(\"{name}\") should render an SVG path, not the empty fallback"
+            );
+        }
+    }
 
     #[test]
     fn clamp_passes_short_through() {

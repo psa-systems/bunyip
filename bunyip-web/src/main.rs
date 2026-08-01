@@ -154,6 +154,21 @@ async fn main() {
             "/settings/profile",
             axum::routing::post(dash::settings_profile),
         )
+        // BUNYIP-408: avatar upload / remove + same-origin avatar proxy.
+        .route(
+            "/settings/avatar",
+            axum::routing::post(dash::settings_avatar).layer(
+                // Raise the default axum 2 MB body limit so a 2 MiB image plus
+                // multipart overhead fits. The API's own MAX_AVATAR_SIZE is the
+                // authoritative cap.
+                axum::extract::DefaultBodyLimit::max(3 * 1024 * 1024),
+            ),
+        )
+        .route(
+            "/settings/avatar/remove",
+            axum::routing::post(dash::settings_avatar_remove),
+        )
+        .route("/me/avatar", get(dash::me_avatar))
         // BUNYIP-140: OIDC consent screen (rendered when /oauth2/authorize
         // on bunyip-api detects a (user, client, scope) combination that has
         // not been consented to yet).
@@ -226,6 +241,10 @@ async fn main() {
         )
         .route("/admin/ip-bans", get(handlers::admin::ip_bans))
         .route(
+            "/admin/ip-bans/add",
+            axum::routing::post(handlers::admin::ip_ban_create),
+        )
+        .route(
             "/admin/ip-bans/unban",
             axum::routing::post(handlers::admin::ip_unban),
         )
@@ -233,6 +252,14 @@ async fn main() {
         .route(
             "/admin/rate-limits/reset",
             axum::routing::post(handlers::admin::rate_limit_reset),
+        )
+        .route(
+            "/admin/rate-limits/config",
+            axum::routing::post(handlers::admin::rate_limit_config_save),
+        )
+        .route(
+            "/admin/rate-limits/config/reset",
+            axum::routing::post(handlers::admin::rate_limit_config_reset),
         )
         .route("/admin/users", get(handlers::admin::users))
         .route("/admin/users/:id", get(handlers::admin::user_detail))
@@ -434,6 +461,28 @@ async fn main() {
         .route(
             "/admin/stripe",
             get(handlers::admin::stripe).post(handlers::admin::stripe_save),
+        )
+        // BUNYIP-416: Stripe product + price management (create + archive).
+        .route(
+            "/admin/stripe/products",
+            post(handlers::admin::stripe_product_create),
+        )
+        .route(
+            "/admin/stripe/products/:id/archive",
+            post(handlers::admin::stripe_product_archive),
+        )
+        .route(
+            "/admin/stripe/prices",
+            post(handlers::admin::stripe_price_create),
+        )
+        .route(
+            "/admin/stripe/prices/:id/archive",
+            post(handlers::admin::stripe_price_archive),
+        )
+        // BUNYIP-417: tier -> Stripe price/product mapping moved from Tier Settings.
+        .route(
+            "/admin/stripe/catalog",
+            post(handlers::admin::stripe_catalog_save),
         )
         // BUNYIP-353: account backup & restore, reached from the Backup add-on
         // tile on /applications.

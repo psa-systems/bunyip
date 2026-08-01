@@ -6,7 +6,7 @@
 use axum::body::Body;
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::Response;
+use axum::response::{Html, IntoResponse, Response};
 use axum::Form;
 use maud::{html, Markup};
 use serde::Deserialize;
@@ -15,14 +15,15 @@ use serde_json::json;
 use crate::api::admin as admin_api;
 use crate::api::types::{
     AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, AdminIpBan,
-    AdminRateLimit, AppRestoreStatus, ApplicationGroup, FeedbackAttachmentMeta, FeedbackStatus,
-    RestoreReport, User, UserEntitlement,
+    AdminRateLimit, AdminRateLimitConfig, AppRestoreStatus, ApplicationGroup,
+    FeedbackAttachmentMeta, FeedbackStatus, RestoreReport, User, UserEntitlement,
 };
 use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{relative_time, urlenc};
-use crate::views::ui::{badge, button_class, error_box, icon, success_box};
-use crate::web::{redirect_cookies, AppState};
+use crate::views::layout::{admin_block, admin_block_grid};
+use crate::views::ui::{badge, button_class, error_box, icon, success_box, toggle_switch};
+use crate::web::{redirect, redirect_cookies, AppState};
 
 fn title_case(action: &str) -> String {
     action
@@ -547,7 +548,7 @@ fn ip_ban_row(b: &AdminIpBan) -> Markup {
                     }
                 }
             }
-            form method="post" action="/admin/ip-bans/unban" onsubmit=(format!("return confirm('Lift the ban on {}? It takes effect on the next request.')", b.ip)) {
+            form method="post" action="/admin/ip-bans/unban" data-confirm=(format!("Lift the ban on {}? It takes effect on the next request.", b.ip)) {
                 input type="hidden" name="ip" value=(b.ip);
                 button type="submit" class=(button_class("outline", "sm", "")) { "Unban" }
             }
@@ -555,9 +556,50 @@ fn ip_ban_row(b: &AdminIpBan) -> Markup {
     }
 }
 
+/// BUNYIP-413: refuse a super-admin-only form to everybody else, as a redirect
+/// back to `back` carrying a refusal toast. The API enforces the same gate, so
+/// this is a friendlier message rather than the security boundary.
+fn refuse_non_super_admin(user: &User, c: &AuthCtx, back: &str) -> Option<Response> {
+    if user.is_super_admin {
+        return None;
+    }
+    Some(redirect_cookies(
+        &format!("{back}?toast_err=Only%20the%20super%20admin%20can%20change%20this"),
+        &c.set_cookies,
+    ))
+}
+
+/// Default manual-ban duration offered by the form: 24 hours, matching the
+/// API's default. The API bounds the value; the input mirrors those bounds.
+const DEFAULT_MANUAL_BAN_SECS: i64 = 86_400;
+const MIN_MANUAL_BAN_SECS: i64 = 60;
+const MAX_MANUAL_BAN_SECS: i64 = 31_536_000;
+
+/// The "add a ban" card (BUNYIP-413): address, reason and duration. Rendered
+/// only for the super admin, who is the only account the API will accept it
+/// from.
+fn ip_ban_add_card() -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                div class="flex items-center gap-3" { (icon("shield-off", "h-5 w-5 text-primary")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Add Ban" } }
+                p class="text-sm text-muted-foreground" { "Block an address by hand. The ban takes effect on its next request and expires on its own." }
+            }
+            div class="p-6 pt-0" {
+                form method="post" action="/admin/ip-bans/add" class="grid gap-4 sm:grid-cols-4 sm:items-end" {
+                    div class="space-y-2 sm:col-span-1" { label class="text-sm font-medium" { "IP address" } input name="ip" required placeholder="203.0.113.7" class=(dashboard_input()); }
+                    div class="space-y-2 sm:col-span-2" { label class="text-sm font-medium" { "Reason" } input name="reason" required maxlength="255" placeholder="Credential stuffing" class=(dashboard_input()); }
+                    div class="space-y-2" { label class="text-sm font-medium" { "Duration (seconds)" } input name="duration_secs" type="number" min=(MIN_MANUAL_BAN_SECS) max=(MAX_MANUAL_BAN_SECS) value=(DEFAULT_MANUAL_BAN_SECS) class=(dashboard_input()); }
+                    div class="sm:col-span-4" { button type="submit" class=(button_class("default", "default", "")) { (icon("shield-off", "mr-2 h-4 w-4")) "Ban address" } }
+                }
+            }
+        }
+    }
+}
+
 /// Admin IP auto-ban view (BUNYIP-320): the currently-active IP bans surfaced by
 /// the subtask 7 endpoint, each liftable in place. AdminUser-guarded like the
-/// other admin pages.
+/// other admin pages; the add form (BUNYIP-413) is super-admin-only.
 pub async fn ip_bans(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
@@ -569,7 +611,8 @@ pub async fn ip_bans(State(st): State<AppState>, headers: HeaderMap) -> Response
 
     let content = html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "IP Bans" } p class="mt-2 text-muted-foreground" { "IP addresses auto-banned for abusive request patterns. Lifting a ban takes effect on the address's next request." } }
+            div { h1 class="text-3xl font-bold" { "IP Bans" } p class="mt-2 text-muted-foreground" { "IP addresses banned for abusive request patterns, automatically or by hand. Adding or lifting a ban takes effect on the address's next request." } }
+            @if user.is_super_admin { (ip_ban_add_card()) }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" {
                     div class="flex items-center gap-3" { (icon("shield-off", "h-5 w-5 text-destructive")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Active Bans" } }
@@ -581,13 +624,68 @@ pub async fn ip_bans(State(st): State<AppState>, headers: HeaderMap) -> Response
                     } @else if bans.is_empty() {
                         p class="text-center text-muted-foreground py-8" { "No active IP bans." }
                     } @else {
-                        div class="space-y-0" { @for b in &bans { (ip_ban_row(b)) } }
+                        // BUNYIP-415: flow ban rows into two columns (one below
+                        // lg) so the list uses the width instead of a single
+                        // narrow stack.
+                        div class="grid gap-x-8 lg:grid-cols-2" { @for b in &bans { (ip_ban_row(b)) } }
                     }
                 }
             }
         }
     };
     admin_response(&c, &user, "/admin/ip-bans", "IP Bans · Bunyip", content)
+}
+
+/// Form body for the add-ban action (BUNYIP-413). `duration_secs` is a string
+/// so a typo comes back as a toast rather than a 422 from extraction.
+#[derive(Deserialize)]
+pub struct CreateBanForm {
+    pub ip: String,
+    pub reason: String,
+    #[serde(default)]
+    pub duration_secs: String,
+}
+
+/// Ban an IP by hand (BUNYIP-413), then redirect back to the list with a
+/// success/error toast. Super-admin-only, enforced again by the API, which
+/// validates the address, reason and duration and audits the ban.
+pub async fn ip_ban_create(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<CreateBanForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    if let Some(refusal) = refuse_non_super_admin(&user, &c, "/admin/ip-bans") {
+        return refusal;
+    }
+    let duration = match f.duration_secs.trim() {
+        "" => DEFAULT_MANUAL_BAN_SECS,
+        raw => match raw.parse::<i64>() {
+            Ok(n) => n,
+            Err(_) => {
+                return redirect_cookies(
+                    "/admin/ip-bans?toast_err=Duration%20must%20be%20a%20whole%20number",
+                    &c.set_cookies,
+                )
+            }
+        },
+    };
+    let target = match admin_api::create_ip_ban(
+        &st.api,
+        c.forward.as_deref(),
+        f.ip.trim(),
+        f.reason.trim(),
+        duration,
+    )
+    .await
+    {
+        Ok(()) => format!("/admin/ip-bans?toast_ok=Banned%20{}", urlenc(f.ip.trim())),
+        Err(e) => format!("/admin/ip-bans?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 /// Form body for the unban action: the IP to lift, carried in a hidden field so
@@ -674,7 +772,7 @@ fn rate_limit_row(rl: &AdminRateLimit, return_user: Option<&str>) -> Markup {
                     }
                 }
             }
-            form method="post" action="/admin/rate-limits/reset" onsubmit=(format!("return confirm('Reset the {} throttle? The affected user/IP can act again immediately.')", title_case(&rl.action))) {
+            form method="post" action="/admin/rate-limits/reset" data-confirm=(format!("Reset the {} throttle? The affected user/IP can act again immediately.", title_case(&rl.action))) {
                 input type="hidden" name="action" value=(rl.action);
                 input type="hidden" name="key" value=(rl.key);
                 @if let Some(uid) = return_user {
@@ -686,9 +784,102 @@ fn rate_limit_row(rl: &AdminRateLimit, return_user: Option<&str>) -> Markup {
     }
 }
 
+/// Bounds on an admin-set limit, mirroring the API's validation so the input
+/// refuses out-of-range values before the round-trip.
+const MAX_LIMIT_REQUESTS: i32 = 1_000_000;
+const MAX_LIMIT_WINDOW_SECS: i64 = 604_800; // 7 days
+
+/// Format a window length as a compact label (`60s`, `10m`, `1h`).
+fn fmt_window_secs(secs: i64) -> String {
+    if secs % 3600 == 0 && secs >= 3600 {
+        format!("{}h", secs / 3600)
+    } else if secs % 60 == 0 && secs >= 60 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{secs}s")
+    }
+}
+
+/// Render one configurable limit (BUNYIP-413): the action, its effective
+/// cap/window as editable fields, and (when a persisted override is in force)
+/// what the bootstrap default was plus a button to revert to it.
+///
+/// `editable` is the super-admin flag: everybody else sees the same numbers as
+/// plain text, since the API would refuse their write anyway.
+fn rate_limit_config_row(cfg: &AdminRateLimitConfig, editable: bool) -> Markup {
+    html! {
+        div class="flex items-start justify-between gap-4 py-4 border-b last:border-0" {
+            div class="min-w-0" {
+                div class="flex items-center gap-2 flex-wrap" {
+                    p class="font-medium break-all" { (title_case(&cfg.action)) }
+                    @if cfg.overridden { (badge("warning", "Overridden")) } @else { (badge("secondary", "Default")) }
+                }
+                p class="text-xs text-muted-foreground" {
+                    @if cfg.overridden {
+                        "Default " (cfg.default_max_requests) " per " (fmt_window_secs(cfg.default_window_seconds))
+                    } @else {
+                        (cfg.max_requests) " requests per " (fmt_window_secs(cfg.window_seconds))
+                    }
+                }
+            }
+            @if editable {
+                div class="flex items-end gap-2 shrink-0" {
+                    form method="post" action="/admin/rate-limits/config" class="flex items-end gap-2" {
+                        input type="hidden" name="action" value=(cfg.action);
+                        div class="space-y-1" { label class="text-xs text-muted-foreground" { "Requests" } input name="max_requests" type="number" min="1" max=(MAX_LIMIT_REQUESTS) value=(cfg.max_requests) class=(format!("{} w-28", dashboard_input())); }
+                        div class="space-y-1" { label class="text-xs text-muted-foreground" { "Window (s)" } input name="window_seconds" type="number" min="1" max=(MAX_LIMIT_WINDOW_SECS) value=(cfg.window_seconds) class=(format!("{} w-28", dashboard_input())); }
+                        button type="submit" class=(button_class("default", "sm", "")) { "Save" }
+                    }
+                    @if cfg.overridden {
+                        form method="post" action="/admin/rate-limits/config/reset" data-confirm=(format!("Revert {} to its default limit?", title_case(&cfg.action))) {
+                            input type="hidden" name="action" value=(cfg.action);
+                            button type="submit" class=(button_class("outline", "sm", "")) { "Revert" }
+                        }
+                    }
+                }
+            } @else {
+                p class="text-sm text-muted-foreground shrink-0" { (cfg.max_requests) " / " (fmt_window_secs(cfg.window_seconds)) }
+            }
+        }
+    }
+}
+
+/// The "limit configuration" card (BUNYIP-413): every enforced action with its
+/// cap and window, editable by the super admin. `reachable` distinguishes an
+/// API that could not be reached from a genuinely empty list.
+fn rate_limit_config_card(
+    configs: &[AdminRateLimitConfig],
+    reachable: bool,
+    editable: bool,
+) -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                div class="flex items-center gap-3" { (icon("sliders-horizontal", "h-5 w-5 text-primary")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Limit Configuration" } }
+                p class="text-sm text-muted-foreground" {
+                    @if editable {
+                        "The cap and window enforced for each action. A saved value takes effect on the next request; Revert restores the built-in default."
+                    } @else {
+                        "The cap and window enforced for each action. Only the super admin can change them."
+                    }
+                }
+            }
+            div class="p-6 pt-0" {
+                @if !reachable {
+                    (error_box("Could not reach the API to load the limit configuration."))
+                } @else {
+                    div class="grid gap-x-8 lg:grid-cols-2" { @for cfg in configs { (rate_limit_config_row(cfg, editable)) } }
+                }
+            }
+        }
+    }
+}
+
 /// Admin rate-limit view (BUNYIP-317): the currently-active throttles surfaced
 /// by the BUNYIP-315 endpoint, each resettable in place via the BUNYIP-316
-/// endpoint. AdminUser-guarded like the other admin pages.
+/// endpoint, plus the configurable caps and windows themselves (BUNYIP-413).
+/// AdminUser-guarded like the other admin pages; editing a limit is
+/// super-admin-only.
 pub async fn rate_limits(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -699,6 +890,9 @@ pub async fn rate_limits(
         Err(r) => return r,
     };
     let page = q.page.unwrap_or(1).max(1);
+    let cfg_data = admin_api::rate_limit_configs(&st.api, c.forward.as_deref()).await;
+    let configs_reachable = cfg_data.is_ok();
+    let configs = cfg_data.unwrap_or_default();
     let data = admin_api::rate_limits(&st.api, c.forward.as_deref(), page, 20).await;
     let reachable = data.is_ok();
     let (items, total, total_pages) = match data {
@@ -720,11 +914,15 @@ pub async fn rate_limits(
                     } @else if items.is_empty() {
                         p class="text-center text-muted-foreground py-8" { "No active rate limits." }
                     } @else {
-                        div class="space-y-0" { @for rl in &items { (rate_limit_row(rl, None)) } }
+                        // BUNYIP-415: flow throttle rows into two columns (one
+                        // below lg) so a long list uses the width. Each row keeps
+                        // its own bottom-border separator.
+                        div class="grid gap-x-8 lg:grid-cols-2" { @for rl in &items { (rate_limit_row(rl, None)) } }
                         (pager("/admin/rate-limits", page, total_pages))
                     }
                 }
             }
+            (rate_limit_config_card(&configs, configs_reachable, user.is_super_admin))
         }
     };
     admin_response(
@@ -773,6 +971,87 @@ pub async fn rate_limit_reset(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+/// Form body for saving one limit's configuration (BUNYIP-413). The numerics
+/// are strings so a typo comes back as a toast rather than a 422.
+#[derive(Deserialize)]
+pub struct RateLimitConfigForm {
+    pub action: String,
+    pub max_requests: String,
+    pub window_seconds: String,
+}
+
+/// Create or update the persisted override for one action (BUNYIP-413), then
+/// redirect back to the list with a toast. Super-admin-only, enforced again by
+/// the API, which validates and audits the change.
+pub async fn rate_limit_config_save(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<RateLimitConfigForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    if let Some(refusal) = refuse_non_super_admin(&user, &c, "/admin/rate-limits") {
+        return refusal;
+    }
+    let (max_requests, window_seconds) = match (
+        f.max_requests.trim().parse::<i32>(),
+        f.window_seconds.trim().parse::<i64>(),
+    ) {
+        (Ok(m), Ok(w)) => (m, w),
+        _ => return redirect_cookies(
+            "/admin/rate-limits?toast_err=Requests%20and%20window%20must%20be%20whole%20numbers",
+            &c.set_cookies,
+        ),
+    };
+    let target = match admin_api::set_rate_limit_config(
+        &st.api,
+        c.forward.as_deref(),
+        f.action.trim(),
+        max_requests,
+        window_seconds,
+    )
+    .await
+    {
+        Ok(()) => "/admin/rate-limits?toast_ok=Rate%20limit%20updated".to_string(),
+        Err(e) => format!("/admin/rate-limits?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// Form body for reverting one limit to its default: the action alone.
+#[derive(Deserialize)]
+pub struct RateLimitConfigResetForm {
+    pub action: String,
+}
+
+/// Drop the persisted override for one action (BUNYIP-413), reverting it to the
+/// bootstrap default, then redirect back with a toast. Super-admin-only.
+pub async fn rate_limit_config_reset(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<RateLimitConfigResetForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    if let Some(refusal) = refuse_non_super_admin(&user, &c, "/admin/rate-limits") {
+        return refusal;
+    }
+    let target =
+        match admin_api::delete_rate_limit_config(&st.api, c.forward.as_deref(), f.action.trim())
+            .await
+        {
+            Ok(()) => {
+                "/admin/rate-limits?toast_ok=Reverted%20to%20the%20default%20limit".to_string()
+            }
+            Err(e) => format!("/admin/rate-limits?toast_err={}", urlenc(&e.user_message())),
+        };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
 // ===========================================================================
 // Users
 // ===========================================================================
@@ -781,11 +1060,197 @@ pub async fn rate_limit_reset(
 pub struct UserQuery {
     pub page: Option<u32>,
     pub search: Option<String>,
-    /// `suspended` switches the list to soft-deleted accounts so an admin can
-    /// reactivate them; anything else (incl. absent) shows live accounts
-    /// (BUNYIP-120).
+    /// Soft-delete segment: `active` (default) / `suspended` / `all` (BUNYIP-410
+    /// overhaul; was a bare `suspended` toggle).
     pub status: Option<String>,
+    /// Membership-tier filter (`early_adopter` / `standard` / `lifetime` /
+    /// `free`); blank / absent = all tiers.
+    #[serde(default)]
+    pub tier: Option<String>,
+    /// Verification filter (`verified` / `unverified`); blank / absent = both.
+    #[serde(default)]
+    pub verified: Option<String>,
+    /// Whitelisted sort column (`email` / `tier` / `verified` / `joined`).
+    #[serde(default)]
+    pub sort: Option<String>,
+    /// Sort direction (`asc` / `desc`); absent = `desc`.
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// Rows per page (10 / 20 / 50 / 100); clamped server-side.
+    #[serde(default)]
+    pub page_size: Option<u32>,
 }
+
+/// BUNYIP-410 overhaul: map the `verified` filter query value to the API's
+/// tri-state filter. `verified` -> only verified, `unverified` -> only
+/// unverified, anything else -> no filter (both).
+fn parse_verified_filter(s: &str) -> Option<bool> {
+    match s {
+        "verified" => Some(true),
+        "unverified" => Some(false),
+        _ => None,
+    }
+}
+
+/// Human-readable label for a membership tier badge.
+fn tier_label(tier: &crate::api::types::SubscriptionTier) -> &'static str {
+    use crate::api::types::SubscriptionTier::*;
+    match tier {
+        Lifetime => "Lifetime",
+        Free => "Free",
+        EarlyAdopter => "Early Adopter",
+        Standard => "Standard",
+    }
+}
+
+/// Format an ISO-8601 timestamp as a compact absolute date for the `title`
+/// tooltip on a relative "Joined X ago" label. Falls back to the raw string when
+/// it does not parse.
+fn abs_time(iso: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(iso)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|_| iso.to_string())
+}
+
+/// BUNYIP-410 overhaul: the complete filter + sort + page state for the admin
+/// users list. Every link on the page (dropdown option, segment, sort header,
+/// chip removal, pager, page-size) is derived from this one struct via the
+/// builder methods, so the URL is the single source of truth and stays
+/// internally consistent (a filter change always resets the page to 1).
+#[derive(Clone)]
+struct UsersQ {
+    search: String,
+    status: String,
+    tier: String,
+    verified: String,
+    sort: String,
+    dir: String,
+    page: u32,
+    page_size: u32,
+}
+
+impl UsersQ {
+    fn from_query(q: UserQuery) -> Self {
+        let status = match q.status.as_deref() {
+            Some("suspended") => "suspended",
+            Some("all") => "all",
+            _ => "active",
+        }
+        .to_string();
+        let dir = match q.dir.as_deref() {
+            Some("asc") => "asc",
+            _ => "desc",
+        }
+        .to_string();
+        Self {
+            search: q.search.unwrap_or_default().trim().to_string(),
+            status,
+            tier: q.tier.unwrap_or_default(),
+            verified: q.verified.unwrap_or_default(),
+            sort: q.sort.unwrap_or_default(),
+            dir,
+            page: q.page.unwrap_or(1).max(1),
+            page_size: q.page_size.unwrap_or(20).clamp(10, 100),
+        }
+    }
+
+    /// Build the `/admin/users` URL for this state, emitting only non-default
+    /// params so a clean list is a clean URL.
+    fn href(&self) -> String {
+        let mut p: Vec<String> = Vec::new();
+        if !self.search.is_empty() {
+            p.push(format!("search={}", urlenc(&self.search)));
+        }
+        if self.status != "active" {
+            p.push(format!("status={}", self.status));
+        }
+        if !self.tier.is_empty() {
+            p.push(format!("tier={}", self.tier));
+        }
+        if !self.verified.is_empty() {
+            p.push(format!("verified={}", self.verified));
+        }
+        if !self.sort.is_empty() {
+            p.push(format!("sort={}&dir={}", self.sort, self.dir));
+        }
+        if self.page > 1 {
+            p.push(format!("page={}", self.page));
+        }
+        if self.page_size != 20 {
+            p.push(format!("page_size={}", self.page_size));
+        }
+        if p.is_empty() {
+            "/admin/users".to_string()
+        } else {
+            format!("/admin/users?{}", p.join("&"))
+        }
+    }
+
+    fn with_search(&self, v: &str) -> Self {
+        let mut q = self.clone();
+        q.search = v.trim().to_string();
+        q.page = 1;
+        q
+    }
+    fn with_status(&self, v: &str) -> Self {
+        let mut q = self.clone();
+        q.status = v.to_string();
+        q.page = 1;
+        q
+    }
+    fn with_tier(&self, v: &str) -> Self {
+        let mut q = self.clone();
+        q.tier = v.to_string();
+        q.page = 1;
+        q
+    }
+    fn with_verified(&self, v: &str) -> Self {
+        let mut q = self.clone();
+        q.verified = v.to_string();
+        q.page = 1;
+        q
+    }
+    fn with_page(&self, v: u32) -> Self {
+        let mut q = self.clone();
+        q.page = v;
+        q
+    }
+    fn with_page_size(&self, v: u32) -> Self {
+        let mut q = self.clone();
+        q.page_size = v;
+        q.page = 1;
+        q
+    }
+    /// Toggle sort on `col`: same column flips direction, a new column starts
+    /// ascending.
+    fn with_sort(&self, col: &str) -> Self {
+        let mut q = self.clone();
+        q.page = 1;
+        if q.sort == col {
+            q.dir = if q.dir == "asc" { "desc" } else { "asc" }.to_string();
+        } else {
+            q.sort = col.to_string();
+            q.dir = "asc".to_string();
+        }
+        q
+    }
+
+    /// True when any content filter (search / tier / verification) or a
+    /// non-default status segment is applied - i.e. the list is narrowed.
+    fn is_filtered(&self) -> bool {
+        !self.search.is_empty()
+            || !self.tier.is_empty()
+            || !self.verified.is_empty()
+            || self.status != "active"
+    }
+}
+
+/// Grid column template shared by the header row and every data row so the
+/// columns line up. Inline (not a Tailwind arbitrary value) so it needs no
+/// stylesheet rebuild. Columns: avatar, email, tier, verification, joined,
+/// action.
+const USERS_GRID: &str =
+    "grid-template-columns:2.25rem minmax(0,1fr) auto auto 8.5rem 1.5rem;display:grid;align-items:center;gap:0.75rem";
 
 pub async fn users(
     State(st): State<AppState>,
@@ -796,104 +1261,448 @@ pub async fn users(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let page = q.page.unwrap_or(1).max(1);
-    let search = q.search.unwrap_or_default();
-    let suspended = q.status.as_deref() == Some("suspended");
-    let data = admin_api::users(&st.api, c.forward.as_deref(), page, 20, &search, suspended)
+    let uq = UsersQ::from_query(q);
+    let data = admin_api::users(
+        &st.api,
+        c.forward.as_deref(),
+        uq.page,
+        uq.page_size,
+        &uq.search,
+        &uq.status,
+        &uq.tier,
+        parse_verified_filter(&uq.verified),
+        &uq.sort,
+        &uq.dir,
+    )
+    .await;
+    // Denominator for "N of M users". stats.total_users counts live accounts;
+    // good enough for the common Active view and only ever a hint.
+    let total_all = admin_api::stats(&st.api, c.forward.as_deref())
         .await
+        .map(|s| s.total_users)
         .ok();
-    let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
-    let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
-    // Preserve the active filters across pager links.
-    let mut params: Vec<String> = Vec::new();
-    if !search.is_empty() {
-        params.push(format!("search={}", urlenc(&search)));
+
+    let panel = users_panel(&uq, data.as_ref().ok(), total_all);
+
+    // BUNYIP-410 overhaul: htmx swaps just the panel (search-as-you-type, sort,
+    // filter, page) so focus and scroll survive and there is no full reload. A
+    // non-htmx request (first load, no-JS, refresh) gets the whole page. The URL
+    // is pushed by htmx either way, so refresh / back / shareable links work.
+    if headers.contains_key("HX-Request") {
+        return Html(panel.into_string()).into_response();
     }
-    if suspended {
-        params.push("status=suspended".to_string());
-    }
-    let base = if params.is_empty() {
-        "/admin/users".to_string()
-    } else {
-        format!("/admin/users?{}", params.join("&"))
-    };
-    let active_tab = |on: bool| {
-        if on {
-            button_class("secondary", "sm", "")
-        } else {
-            button_class("outline", "sm", "")
-        }
-    };
 
     let content = html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Users" } p class="mt-2 text-muted-foreground" { "Manage user accounts." } }
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                div class="flex flex-col space-y-1.5 p-6" {
-                    div class="flex items-center justify-between gap-4" {
-                        h3 class="text-2xl font-semibold leading-none tracking-tight" { @if suspended { "Suspended Users" } @else { "All Users" } }
-                        form method="get" action="/admin/users" class="w-64" {
-                            @if suspended { input type="hidden" name="status" value="suspended"; }
-                            input name="search" value=(search) placeholder="Search by email…" class=(dashboard_input());
-                        }
-                    }
-                    div class="flex items-center gap-2 text-sm" {
-                        a href="/admin/users" class=(active_tab(!suspended)) { "Active" }
-                        a href="/admin/users?status=suspended" class=(active_tab(suspended)) { "Suspended" }
-                    }
-                }
-                div class="p-6 pt-0" {
-                    div class="divide-y" {
-                        @for u in &items {
-                            @let is_admin = matches!(u.role, crate::api::types::UserRole::Admin);
-                            div class="flex items-center justify-between py-3" {
-                                div {
-                                    p class="font-medium flex items-center gap-2" { (u.email) @if is_admin { (badge("default", "Admin")) } @if suspended { (badge("outline", "Suspended")) } @if !u.email_verified { (badge("outline", "Unverified")) } }
-                                    p class="text-xs text-muted-foreground" { "Joined " (relative_time(&u.created_at)) }
-                                }
-                                div class="flex items-center gap-2 flex-wrap" {
-                                    @if suspended {
-                                        form method="post" action=(format!("/admin/users/{}/reactivate", u.id)) onsubmit="return confirm('Reactivate this user? They will be able to sign in again.')" {
-                                            button type="submit" class=(button_class("outline", "sm", "")) { "Reactivate" }
-                                        }
-                                    } @else {
-                                        a href=(format!("/admin/users/{}", u.id)) class=(button_class("outline", "sm", "")) { "View" }
-                                        a href=(format!("/admin/users/{}/entitlements", u.id)) class=(button_class("outline", "sm", "")) { "Entitlements" }
-                                        form method="post" action=(format!("/admin/users/{}/role", u.id)) onsubmit="return confirm('Change this user role? Admins have full platform access.')" {
-                                            input type="hidden" name="role" value=(if is_admin { "subscriber" } else { "admin" });
-                                            button type="submit" class=(button_class("outline", "sm", "")) { @if is_admin { "Demote" } @else { "Make Admin" } }
-                                        }
-                                        form method="post" action=(format!("/admin/users/{}/reset-password", u.id)) onsubmit="return confirm('Send a password reset email to this user?')" {
-                                            button type="submit" class=(button_class("outline", "sm", "")) { "Reset Password" }
-                                        }
-                                        @if u.lifetime_member {
-                                            form method="post" action=(format!("/admin/users/{}/lifetime/revoke", u.id)) onsubmit="return confirm('Revoke lifetime membership? User will be returned to standard tier with no active subscription.')" {
-                                                button type="submit" class=(button_class("outline", "sm", "")) { "Revoke Lifetime" }
-                                            }
-                                        } @else {
-                                            form method="post" action=(format!("/admin/users/{}/lifetime", u.id)) onsubmit="return confirm('Grant lifetime membership? Creates a $0 Stripe subscription.')" {
-                                                button type="submit" class=(button_class("outline", "sm", "")) { "Lifetime" }
-                                            }
-                                        }
-                                        form method="post" action=(format!("/admin/users/{}/suspend", u.id)) onsubmit="return confirm('Suspend (soft-delete) this user?')" {
-                                            button type="submit" class=(button_class("outline", "sm", "")) { "Suspend" }
-                                        }
-                                        form method="post" action=(format!("/admin/users/{}/delete", u.id)) onsubmit="return confirm('Delete this user? This cannot be undone.')" {
-                                            button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("trash", "h-4 w-4")) }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        @if items.is_empty() { p class="text-center text-muted-foreground py-8" { @if suspended { "No suspended users" } @else { "No users found" } } }
-                    }
-                    (pager(&base, page, total_pages))
-                }
+            div {
+                h1 class="text-3xl font-bold" { "Users" }
+                p class="mt-2 text-muted-foreground" { "Manage user accounts, membership tier, and verification." }
             }
+            (panel)
         }
+        style { (maud::PreEscaped(USERS_FILTER_CSS)) }
+        script src="/assets/js/admin-users.js" defer {}
     };
     admin_response(&c, &user, "/admin/users", "Users · Bunyip", content)
 }
+
+/// Friendly label for a tier slug (for chips).
+fn tier_slug_label(slug: &str) -> &'static str {
+    match slug {
+        "early_adopter" => "Early Adopter",
+        "standard" => "Standard",
+        "lifetime" => "Lifetime",
+        "free" => "Free",
+        _ => "Any",
+    }
+}
+
+/// One of the two filter dropdowns (verification / tier), styled with the app's
+/// own `<details>` menu (matches the profile menu; `assets/js/app.js` closes it
+/// on click-away / Escape). The trigger keeps a persistent prefix
+/// ("Verification: Any") so a filtered state is always legible. `options` is
+/// `(href, label, selected)`.
+fn filter_dropdown(prefix: &str, current: &str, options: &[(String, String, bool)]) -> Markup {
+    html! {
+        details class="relative" data-menu {
+            summary class="flex items-center gap-1.5 cursor-pointer list-none rounded-md border border-input bg-background px-3 h-10 text-sm hover:bg-accent hover:text-accent-foreground transition-colors [&::-webkit-details-marker]:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" {
+                span class="text-muted-foreground" { (prefix) ":" }
+                span class="font-medium whitespace-nowrap" { (current) }
+                (icon("chevron-down", "h-4 w-4 text-muted-foreground shrink-0"))
+            }
+            div class="absolute left-0 z-50 mt-1 min-w-[11rem] overflow-hidden rounded-md border border-border/60 bg-background py-1 shadow-lg" {
+                @for (href, label, selected) in options {
+                    a href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
+                      class={ "flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground transition-colors " (if *selected { "font-medium text-foreground" } else { "text-muted-foreground" }) } {
+                        span class="inline-flex w-4 shrink-0" { @if *selected { (icon("check", "h-4 w-4 text-primary")) } }
+                        (label)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The Active / All / Suspended segmented control (single element, one selected,
+/// arrow-key navigable via `data-segmented` in `assets/js/admin-users.js`, radiogroup
+/// ARIA).
+fn segmented_control(uq: &UsersQ) -> Markup {
+    let seg = |value: &str, label: &str| -> Markup {
+        let selected = uq.status == value;
+        let href = uq.with_status(value).href();
+        html! {
+            a role="radio" aria-checked=(if selected { "true" } else { "false" })
+              tabindex=(if selected { "0" } else { "-1" })
+              href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
+              class={ "px-3 h-8 inline-flex items-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring " (if selected { "bg-background text-foreground shadow-sm" } else { "text-muted-foreground hover:text-foreground" }) } {
+                (label)
+            }
+        }
+    };
+    html! {
+        div role="radiogroup" aria-label="Account status" data-segmented
+            class="inline-flex items-center gap-1 rounded-lg border border-input bg-muted p-1" {
+            (seg("active", "Active"))
+            (seg("all", "All"))
+            (seg("suspended", "Suspended"))
+        }
+    }
+}
+
+/// A sortable column header. A link (no-JS: navigates; JS: swaps the panel), with
+/// Space-key activation added in `assets/js/admin-users.js` and a direction chevron on the
+/// active column.
+fn sort_header(uq: &UsersQ, col: &str, label: &str) -> Markup {
+    let active = uq.sort == col;
+    let href = uq.with_sort(col).href();
+    html! {
+        a data-sort-header href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
+          aria-sort=(if active { if uq.dir == "asc" { "ascending" } else { "descending" } } else { "none" })
+          class={ "inline-flex items-center gap-1 text-xs font-medium uppercase tracking-wide rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring " (if active { "text-foreground" } else { "text-muted-foreground hover:text-foreground" }) } {
+            (label)
+            @if active {
+                @if uq.dir == "asc" { (icon("chevron-up", "h-3.5 w-3.5")) } @else { (icon("chevron-down", "h-3.5 w-3.5")) }
+            }
+        }
+    }
+}
+
+/// The verification indicator (green check / amber alert), shared by rows.
+fn verified_indicator(verified: bool) -> Markup {
+    html! {
+        @if verified {
+            span class="inline-flex items-center gap-1 text-xs font-medium text-teal-600 dark:text-teal-400" { (icon("check-circle", "h-4 w-4")) "Verified" }
+        } @else {
+            span class="inline-flex items-center gap-1 text-xs font-medium text-yellow-600" { (icon("alert-circle", "h-4 w-4")) "Unverified" }
+        }
+    }
+}
+
+/// One user row in the grid. Active users are a whole-row link into the detail
+/// (hover background + focus-visible ring, chevron hint). Suspended users cannot
+/// open the detail (a soft-deleted lookup 404s), so their row is not a link and
+/// carries an inline Reactivate action instead - this matters on the "All"
+/// segment where the two are interleaved.
+fn user_grid_row(u: &crate::api::types::AdminUser) -> Markup {
+    let is_admin = matches!(u.role, crate::api::types::UserRole::Admin);
+    let initial = u
+        .email
+        .chars()
+        .next()
+        .map(|c| c.to_ascii_uppercase().to_string())
+        .unwrap_or_else(|| "?".to_string());
+    let avatar = html! {
+        span class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-indigo-500 text-white text-xs font-semibold" aria-hidden="true" { (initial) }
+    };
+    let identity = html! {
+        div class="min-w-0" {
+            // `truncate` must sit on the text span, not on this flex row:
+            // ellipsis/nowrap do not apply to a flex container, so a long email
+            // took its full width and pushed the badges outside the row's
+            // `overflow:hidden`, clipping them away entirely (BUNYIP-421).
+            p class="font-medium flex items-center gap-2 min-w-0" {
+                span class="truncate" { (u.email) }
+                @if is_admin { (badge("default", "Admin")) }
+                @if u.suspended { (badge("outline", "Suspended")) }
+            }
+        }
+    };
+    let tier = html! { (badge("secondary", tier_label(&u.subscription_tier))) };
+    let joined = html! {
+        span class="text-xs text-muted-foreground" title=(abs_time(&u.created_at)) { "Joined " (relative_time(&u.created_at)) }
+    };
+    if u.suspended {
+        html! {
+            div style=(USERS_GRID) class="py-2.5 px-2 -mx-2 rounded-md" {
+                (avatar) (identity) (tier) (verified_indicator(u.email_verified)) (joined)
+                form method="post" action=(format!("/admin/users/{}/reactivate", u.id)) data-confirm="Reactivate this user? They will be able to sign in again." {
+                    button type="submit" class=(button_class("outline", "sm", "h-8 px-2 text-xs")) { "Reactivate" }
+                }
+            }
+        }
+    } else {
+        html! {
+            a href=(format!("/admin/users/{}", u.id))
+              style=(USERS_GRID)
+              class="py-2.5 px-2 -mx-2 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" {
+                (avatar) (identity) (tier) (verified_indicator(u.email_verified)) (joined)
+                span class="flex justify-end" { (icon("chevron-right", "h-4 w-4 text-muted-foreground")) }
+            }
+        }
+    }
+}
+
+/// Removable filter chips + "Clear all", in a reserved-height row so their
+/// appearance never shifts the list. Empty (no chips) still occupies the row.
+fn filter_chips(uq: &UsersQ) -> Markup {
+    let mut chips: Vec<(String, String)> = Vec::new();
+    if !uq.search.is_empty() {
+        chips.push((format!("Search: {}", uq.search), uq.with_search("").href()));
+    }
+    if uq.status != "active" {
+        let l = if uq.status == "suspended" {
+            "Suspended"
+        } else {
+            "All"
+        };
+        chips.push((format!("Status: {l}"), uq.with_status("active").href()));
+    }
+    if !uq.verified.is_empty() {
+        let l = if uq.verified == "verified" {
+            "Verified"
+        } else {
+            "Unverified"
+        };
+        chips.push((format!("Verification: {l}"), uq.with_verified("").href()));
+    }
+    if !uq.tier.is_empty() {
+        chips.push((
+            format!("Tier: {}", tier_slug_label(&uq.tier)),
+            uq.with_tier("").href(),
+        ));
+    }
+    // Clear all keeps sort + page size, resets only the filters + page.
+    let mut cleared = uq.clone();
+    cleared.search = String::new();
+    cleared.status = "active".to_string();
+    cleared.tier = String::new();
+    cleared.verified = String::new();
+    cleared.page = 1;
+    html! {
+        div style="min-height:1.75rem" class="flex flex-wrap items-center gap-2" {
+            @for (label, href) in &chips {
+                span class="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted px-2.5 py-0.5 text-xs" {
+                    span { (label) }
+                    a href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
+                      aria-label=(format!("Remove {label} filter")) class="inline-flex text-muted-foreground hover:text-foreground rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" {
+                        (icon("x", "h-3 w-3"))
+                    }
+                }
+            }
+            @if !chips.is_empty() {
+                @let href = cleared.href();
+                a href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
+                  class="text-xs font-medium text-primary hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" { "Clear all" }
+            }
+        }
+    }
+}
+
+/// Prev / next pager + a page-size dropdown, all as panel-swapping links.
+fn users_pager(uq: &UsersQ, total_pages: i64) -> Markup {
+    let size_opt = |n: u32| -> (String, String, bool) {
+        (
+            uq.with_page_size(n).href(),
+            n.to_string(),
+            uq.page_size == n,
+        )
+    };
+    html! {
+        div class="flex items-center justify-between gap-4 pt-4 flex-wrap" {
+            (filter_dropdown("Per page", &uq.page_size.to_string(), &[size_opt(10), size_opt(20), size_opt(50), size_opt(100)]))
+            @if total_pages > 1 {
+                div class="flex items-center gap-2" {
+                    @if uq.page > 1 {
+                        @let href = uq.with_page(uq.page - 1).href();
+                        a href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading" class=(button_class("outline", "sm", "")) { "Previous" }
+                    }
+                    span class="text-sm text-muted-foreground" { "Page " (uq.page) " of " (total_pages) }
+                    @if (uq.page as i64) < total_pages {
+                        @let href = uq.with_page(uq.page + 1).href();
+                        a href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading" class=(button_class("outline", "sm", "")) { "Next" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The swappable panel: heading + result count, filter bar, chips, the sortable
+/// grid list, pager. `data == None` renders the error state with a retry.
+fn users_panel(
+    uq: &UsersQ,
+    data: Option<&crate::api::types::PaginatedResponse<crate::api::types::AdminUser>>,
+    total_all: Option<i64>,
+) -> Markup {
+    let heading = match uq.status.as_str() {
+        "suspended" => "Suspended accounts",
+        "all" => "All accounts",
+        _ => "Active users",
+    };
+    let filtered_total = data.map(|p| p.total).unwrap_or(0);
+    let total_pages = data.map(|p| p.total_pages).unwrap_or(1);
+    let count_text = match (data, total_all) {
+        (Some(_), Some(all)) if uq.is_filtered() => format!("{filtered_total} of {all} users"),
+        (Some(_), _) => format!("{filtered_total} users"),
+        (None, _) => "Could not load users".to_string(),
+    };
+
+    // Verification dropdown options.
+    let ver_opts = vec![
+        (
+            uq.with_verified("").href(),
+            "Any".to_string(),
+            uq.verified.is_empty(),
+        ),
+        (
+            uq.with_verified("verified").href(),
+            "Verified".to_string(),
+            uq.verified == "verified",
+        ),
+        (
+            uq.with_verified("unverified").href(),
+            "Unverified".to_string(),
+            uq.verified == "unverified",
+        ),
+    ];
+    let ver_current = match uq.verified.as_str() {
+        "verified" => "Verified",
+        "unverified" => "Unverified",
+        _ => "Any",
+    };
+    // Tier dropdown options.
+    let tier_opts = vec![
+        (
+            uq.with_tier("").href(),
+            "Any".to_string(),
+            uq.tier.is_empty(),
+        ),
+        (
+            uq.with_tier("early_adopter").href(),
+            "Early Adopter".to_string(),
+            uq.tier == "early_adopter",
+        ),
+        (
+            uq.with_tier("standard").href(),
+            "Standard".to_string(),
+            uq.tier == "standard",
+        ),
+        (
+            uq.with_tier("lifetime").href(),
+            "Lifetime".to_string(),
+            uq.tier == "lifetime",
+        ),
+        (
+            uq.with_tier("free").href(),
+            "Free".to_string(),
+            uq.tier == "free",
+        ),
+    ];
+
+    html! {
+        div id="users-panel" class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="p-6 space-y-4" {
+                // Heading + live result count (announced on swap).
+                div class="flex items-end justify-between gap-4 flex-wrap" {
+                    h3 class="text-2xl font-semibold leading-none tracking-tight" { (heading) }
+                    span aria-live="polite" class="text-sm text-muted-foreground" { (count_text) }
+                }
+                // Filter bar: search grows, dropdowns + segmented at content width.
+                div class="flex flex-wrap items-center gap-2" {
+                    form method="get" action="/admin/users" class="flex-1 min-w-[12rem]" role="search"
+                        hx-get="/admin/users" hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
+                        hx-trigger="keyup changed delay:250ms from:input[name=search], search" {
+                        // Carry the other filters + sort so a search keeps them.
+                        @if uq.status != "active" { input type="hidden" name="status" value=(uq.status); }
+                        @if !uq.tier.is_empty() { input type="hidden" name="tier" value=(uq.tier); }
+                        @if !uq.verified.is_empty() { input type="hidden" name="verified" value=(uq.verified); }
+                        @if !uq.sort.is_empty() { input type="hidden" name="sort" value=(uq.sort); input type="hidden" name="dir" value=(uq.dir); }
+                        @if uq.page_size != 20 { input type="hidden" name="page_size" value=(uq.page_size.to_string()); }
+                        input type="search" name="search" value=(uq.search) placeholder="Search by email…" aria-label="Search users by email" class=(dashboard_input());
+                    }
+                    (filter_dropdown("Verification", ver_current, &ver_opts))
+                    (filter_dropdown("Tier", tier_slug_label(&uq.tier), &tier_opts))
+                    (segmented_control(uq))
+                }
+                (filter_chips(uq))
+            }
+            // List. `relative` so the loading overlay can sit on top without
+            // changing the container height (no jump).
+            div class="relative px-6 pb-2" style="min-height:8rem" {
+                // Column header row (sortable Email / Tier / Verification / Joined).
+                div style=(USERS_GRID) class="border-b border-border/60 pb-2 mb-1" {
+                    span {}
+                    (sort_header(uq, "email", "Email"))
+                    (sort_header(uq, "tier", "Tier"))
+                    (sort_header(uq, "verified", "Verification"))
+                    (sort_header(uq, "joined", "Joined"))
+                    span {}
+                }
+                div class="divide-y divide-border/50" {
+                    @match data {
+                        Some(p) if !p.items.is_empty() => {
+                            @for u in &p.items { (user_grid_row(u)) }
+                        }
+                        Some(_) => {
+                            // Distinguish "filters match nothing" from "no users".
+                            @if uq.is_filtered() {
+                                div class="py-10 text-center" {
+                                    p class="text-muted-foreground" { "No users match these filters." }
+                                    @let cleared_href = {
+                                        let mut c = uq.clone();
+                                        c.search = String::new(); c.status = "active".into(); c.tier = String::new(); c.verified = String::new(); c.page = 1;
+                                        c.href()
+                                    };
+                                    a href=(cleared_href) hx-get=(cleared_href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
+                                      class=(button_class("outline", "sm", "mt-3")) { "Clear all filters" }
+                                }
+                            } @else {
+                                p class="py-10 text-center text-muted-foreground" { "No users yet." }
+                            }
+                        }
+                        None => {
+                            div class="py-10 text-center" {
+                                p class="text-destructive" { "Could not load users." }
+                                @let href = uq.href();
+                                a href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
+                                  class=(button_class("outline", "sm", "mt-3")) { "Retry" }
+                            }
+                        }
+                    }
+                }
+                // Loading overlay (skeleton rows). Shown by htmx via the
+                // `htmx-request` class while a swap is in flight; absolutely
+                // positioned so it never changes the panel height.
+                div id="users-loading" class="users-loading absolute inset-x-6 top-10 space-y-2" aria-hidden="true" {
+                    @for _ in 0..3 {
+                        div class="h-10 rounded-md bg-muted users-shimmer" {}
+                    }
+                }
+            }
+            div class="px-6 pb-6" { (users_pager(uq, total_pages)) }
+        }
+    }
+}
+
+/// BUNYIP-410 overhaul: inline styles for the users-list loading overlay. Kept
+/// inline (not in the built stylesheet) so it needs no Tailwind rebuild and can
+/// never be defeated by a stale cached `styles.css`. htmx toggles the
+/// `htmx-request` class on `#users-loading` for the duration of a swap.
+const USERS_FILTER_CSS: &str = r#".users-loading{opacity:0;pointer-events:none;transition:opacity .15s ease}
+.users-loading.htmx-request,.htmx-request .users-loading{opacity:1}
+.users-shimmer{position:relative;overflow:hidden}
+.users-shimmer::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,hsl(var(--foreground)/0.06),transparent);animation:users-shimmer 1.2s infinite}
+@keyframes users-shimmer{100%{transform:translateX(100%)}}"#;
 
 #[derive(Deserialize)]
 pub struct RoleForm {
@@ -1209,12 +2018,12 @@ pub async fn user_detail(
                     }
                     div class="flex flex-wrap gap-2" {
                         @if !target.email_verified {
-                            form method="post" action=(format!("/admin/users/{}/email/verify", target.id)) onsubmit="return confirm('Force-verify this email without the user confirming it?')" {
+                            form method="post" action=(format!("/admin/users/{}/email/verify", target.id)) data-confirm="Force-verify this email without the user confirming it?" {
                                 button type="submit" class=(button_class("outline", "default", "")) { "Force-verify email" }
                             }
                         }
                         @if target.two_factor_enabled {
-                            form method="post" action=(format!("/admin/users/{}/two-factor/reset", target.id)) onsubmit="return confirm('Clear this user 2FA? Their authenticator and recovery codes are removed and they must re-enrol.')" {
+                            form method="post" action=(format!("/admin/users/{}/two-factor/reset", target.id)) data-confirm="Clear this user 2FA? Their authenticator and recovery codes are removed and they must re-enrol." {
                                 button type="submit" class=(button_class("outline", "default", "text-destructive hover:text-destructive")) { "Clear 2FA" }
                             }
                         } @else {
@@ -1247,26 +2056,26 @@ pub async fn user_detail(
                 }
                 div class="p-6 pt-2 flex flex-wrap gap-2" {
                     a href=(format!("/admin/users/{}/entitlements", target.id)) class=(button_class("outline", "default", "")) { "Manage Entitlements" }
-                    form method="post" action=(format!("/admin/users/{}/role", target.id)) onsubmit="return confirm('Change this user role? Admins have full platform access.')" {
+                    form method="post" action=(format!("/admin/users/{}/role", target.id)) data-confirm="Change this user role? Admins have full platform access." {
                         input type="hidden" name="role" value=(if is_admin_target { "subscriber" } else { "admin" });
                         button type="submit" class=(button_class("outline", "default", "")) { @if is_admin_target { "Demote to subscriber" } @else { "Promote to admin" } }
                     }
-                    form method="post" action=(format!("/admin/users/{}/reset-password", target.id)) onsubmit="return confirm('Send a password reset email to this user?')" {
+                    form method="post" action=(format!("/admin/users/{}/reset-password", target.id)) data-confirm="Send a password reset email to this user?" {
                         button type="submit" class=(button_class("outline", "default", "")) { "Send password reset" }
                     }
                     @if target.lifetime_member {
-                        form method="post" action=(format!("/admin/users/{}/lifetime/revoke", target.id)) onsubmit="return confirm('Revoke lifetime membership? User will be returned to standard tier with no active subscription.')" {
+                        form method="post" action=(format!("/admin/users/{}/lifetime/revoke", target.id)) data-confirm="Revoke lifetime membership? User will be returned to standard tier with no active subscription." {
                             button type="submit" class=(button_class("outline", "default", "")) { "Revoke lifetime" }
                         }
                     } @else {
-                        form method="post" action=(format!("/admin/users/{}/lifetime", target.id)) onsubmit="return confirm('Grant lifetime membership? Creates a $0 Stripe subscription.')" {
+                        form method="post" action=(format!("/admin/users/{}/lifetime", target.id)) data-confirm="Grant lifetime membership? Creates a $0 Stripe subscription." {
                             button type="submit" class=(button_class("outline", "default", "")) { "Grant lifetime" }
                         }
                     }
-                    form method="post" action=(format!("/admin/users/{}/suspend", target.id)) onsubmit="return confirm('Suspend (soft-delete) this user?')" {
+                    form method="post" action=(format!("/admin/users/{}/suspend", target.id)) data-confirm="Suspend (soft-delete) this user?" {
                         button type="submit" class=(button_class("outline", "default", "")) { "Suspend" }
                     }
-                    form method="post" action=(format!("/admin/users/{}/delete", target.id)) onsubmit="return confirm('Delete this user? This cannot be undone.')" {
+                    form method="post" action=(format!("/admin/users/{}/delete", target.id)) data-confirm="Delete this user? This cannot be undone." {
                         button type="submit" class=(button_class("outline", "default", "text-destructive hover:text-destructive")) { "Delete user" }
                     }
                 }
@@ -1288,18 +2097,12 @@ pub struct PageQuery {
     pub tier: Option<String>,
 }
 
-pub async fn memberships(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-    Query(q): Query<PageQuery>,
-) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
-    let page = q.page.unwrap_or(1).max(1);
-    // BUNYIP-291 AC4: members-by-tier view. Only accept known tier slugs so a
-    // junk query param falls back to the unfiltered "All" list.
+/// BUNYIP-410: the standalone Memberships page was consolidated into the users
+/// list (which now shows tier + verified with a filter bar). `/admin/memberships`
+/// redirects to the users list, preserving any tier filter as `?tier=` so old
+/// links and bookmarks land on the filtered view. The grant / revoke actions
+/// below remain and are reachable from the user-detail page.
+pub async fn memberships(Query(q): Query<PageQuery>) -> Response {
     let tier = match q.tier.as_deref() {
         Some("early_adopter") => "early_adopter",
         Some("standard") => "standard",
@@ -1307,101 +2110,11 @@ pub async fn memberships(
         Some("free") => "free",
         _ => "",
     };
-    let data = admin_api::memberships(&st.api, c.forward.as_deref(), page, 20, "", tier)
-        .await
-        .ok();
-    let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
-    let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
-
-    // Early-adopter slot occupancy comes from the tier config (used vs total),
-    // surfaced when viewing that tier so admins can see if the pool is full.
-    let tier_cfg = if tier == "early_adopter" {
-        admin_api::tier_config(&st.api, c.forward.as_deref())
-            .await
-            .ok()
+    if tier.is_empty() {
+        redirect("/admin/users")
     } else {
-        None
-    };
-
-    let tab = |slug: &str, label: &str| {
-        let active = tier == slug;
-        let href = if slug.is_empty() {
-            "/admin/memberships".to_string()
-        } else {
-            format!("/admin/memberships?tier={slug}")
-        };
-        let cls = if active {
-            "border-b-2 border-primary px-3 py-2 text-sm font-semibold text-foreground"
-        } else {
-            "border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground hover:text-foreground"
-        };
-        html! { a href=(href) class=(cls) { (label) } }
-    };
-    let list_base = if tier.is_empty() {
-        "/admin/memberships".to_string()
-    } else {
-        format!("/admin/memberships?tier={tier}")
-    };
-
-    let content = html! {
-        div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Memberships" } p class="mt-2 text-muted-foreground" { "Review members and their subscription status." } }
-            nav class="flex items-center gap-2 border-b border-border/50" aria-label="Filter by tier" {
-                (tab("", "All"))
-                (tab("early_adopter", "Early Adopter"))
-                (tab("standard", "Standard"))
-                (tab("lifetime", "Lifetime"))
-            }
-            @if let Some(cfg) = &tier_cfg {
-                @let full = cfg.early_adopter_slots_used >= cfg.early_adopter_slots;
-                div class="rounded-lg border p-4 text-sm flex items-center gap-2" {
-                    (icon("users", "h-4 w-4 text-primary"))
-                    span {
-                        b { (cfg.early_adopter_slots_used) " of " (cfg.early_adopter_slots) } " early-adopter slots filled."
-                        @if full { " " (badge("secondary", "All slots filled")) }
-                    }
-                }
-            }
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { @if tier.is_empty() { "All Memberships" } @else { "Members by tier" } } }
-                div class="p-6 pt-0" {
-                    div class="divide-y" {
-                        @for m in &items {
-                            @let has_override = m.subscription_override_by.is_some();
-                            div class="flex items-center justify-between py-3 gap-4" {
-                                div {
-                                    p class="font-medium flex items-center gap-2" { (m.user_email) @if has_override { (badge("default", "Admin override")) } }
-                                    p class="text-xs text-muted-foreground" { (m.subscription_tier) }
-                                }
-                                div class="flex items-center gap-2 flex-wrap" {
-                                    (badge("outline", &m.status))
-                                    a href=(format!("/admin/users/{}", m.user_id)) class=(button_class("outline", "sm", "")) { "View" }
-                                    @if has_override {
-                                        form method="post" action=(format!("/admin/memberships/{}/revoke", m.user_id)) onsubmit="return confirm('Revoke this admin-granted membership? The user returns to the standard tier with no active subscription.')" {
-                                            button type="submit" class=(button_class("outline", "sm", "")) { "Revoke" }
-                                        }
-                                    } @else {
-                                        form method="post" action=(format!("/admin/memberships/{}/grant", m.user_id)) onsubmit="return confirm('Grant a free admin-override membership to this user?')" {
-                                            button type="submit" class=(button_class("outline", "sm", "")) { "Grant" }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        @if items.is_empty() { p class="text-center text-muted-foreground py-8" { "No memberships found" } }
-                    }
-                    (pager(&list_base, page, total_pages))
-                }
-            }
-        }
-    };
-    admin_response(
-        &c,
-        &user,
-        "/admin/memberships",
-        "Memberships · Bunyip",
-        content,
-    )
+        redirect(&format!("/admin/users?tier={tier}"))
+    }
 }
 
 /// POST /admin/memberships/{user_id}/grant - grant a free admin-override
@@ -1417,7 +2130,9 @@ pub async fn membership_grant(
         Err(r) => return r,
     };
     let _ = admin_api::grant_membership(&st.api, c.forward.as_deref(), &user_id).await;
-    redirect_cookies("/admin/memberships", &c.set_cookies)
+    // BUNYIP-410: the Memberships page is gone; return to the user detail where
+    // the action now lives.
+    redirect_cookies(&format!("/admin/users/{user_id}"), &c.set_cookies)
 }
 
 /// POST /admin/memberships/{user_id}/revoke - revoke an admin-override
@@ -1432,12 +2147,13 @@ pub async fn membership_revoke(
         Ok(v) => v,
         Err(r) => return r,
     };
+    // BUNYIP-410: return to the user detail (the Memberships page is gone).
     let target = match admin_api::revoke_membership(&st.api, c.forward.as_deref(), &user_id).await {
-        Ok(_) => "/admin/memberships".to_string(),
+        Ok(_) => format!("/admin/users/{user_id}"),
         Err(e) => {
             tracing::warn!(user_id = %user_id, error = ?e, "admin revoke membership failed");
             format!(
-                "/admin/memberships?toast_err={}",
+                "/admin/users/{user_id}?toast_err={}",
                 urlenc("Could not revoke membership")
             )
         }
@@ -1456,7 +2172,7 @@ pub async fn membership_revoke(
 /// BUNYIP-92 added Closed + Spam so "Close" produces a visible effect
 /// (row leaves Active, lands in Closed) and spam never clutters
 /// triage.
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum FeedbackTab {
     Active,
     Closed,
@@ -1483,6 +2199,30 @@ impl FeedbackTab {
             FeedbackTab::Closed => "/admin/feedback/closed",
             FeedbackTab::Spam => "/admin/feedback/spam",
             FeedbackTab::Archive => "/admin/feedback/archive",
+        }
+    }
+
+    /// Slug for the detail page's `?from=` param, tying a detail view back to
+    /// the list tab it was opened from so its actions redirect there
+    /// (BUNYIP-422). Distinct from [`bucket`](Self::bucket), which collapses
+    /// Archive onto the active list endpoint; this preserves Archive.
+    fn query_slug(self) -> &'static str {
+        match self {
+            FeedbackTab::Active => "active",
+            FeedbackTab::Closed => "closed",
+            FeedbackTab::Spam => "spam",
+            FeedbackTab::Archive => "archive",
+        }
+    }
+
+    /// Parse the `?from=` slug back into a tab; unknown / absent defaults to
+    /// Active (the safe fallback, matching [`from_tab_path`]).
+    fn from_query(from: Option<&str>) -> FeedbackTab {
+        match from.unwrap_or("active") {
+            "closed" => FeedbackTab::Closed,
+            "spam" => FeedbackTab::Spam,
+            "archive" => FeedbackTab::Archive,
+            _ => FeedbackTab::Active,
         }
     }
 }
@@ -1582,23 +2322,35 @@ async fn render_feedback_list(
     admin_response(&c, &user, "/admin/feedback", "Feedback · Bunyip", content)
 }
 
-/// Render one row with tab-aware action buttons (BUNYIP-92).
-/// - Active: Reviewed/Un-review + Close + Mark Spam + Delete
-/// - Closed: Re-open + Mark Spam + Delete
-/// - Spam: Unmark Spam + Delete
-/// - Archive: Delete (Restore lives on the dedicated archive list)
-///
-/// Every action POSTs a `from` hidden field carrying the tab slug so
-/// the handler can redirect back to the same view after the row
-/// disappears.
-fn feedback_row(f: &crate::api::types::AdminFeedbackSummary, tab: FeedbackTab) -> Markup {
-    let already_reviewed = matches!(f.status, FeedbackStatus::Reviewed);
-    let review_action = if already_reviewed { "new" } else { "reviewed" };
-    let review_label = if already_reviewed {
-        "Un-review"
-    } else {
-        "Reviewed"
+/// Inline status chip for a feedback row / detail header, mirroring the
+/// users-list verification indicator (icon + short label, color-coded) so the
+/// two admin lists read the same (BUNYIP-422).
+fn feedback_status_chip(status: &FeedbackStatus) -> Markup {
+    let (classes, icon_name, label) = match status {
+        FeedbackStatus::New => ("text-yellow-600", "alert-circle", "New"),
+        FeedbackStatus::Reviewed => (
+            "text-teal-600 dark:text-teal-400",
+            "check-circle",
+            "Reviewed",
+        ),
+        FeedbackStatus::Responded => ("text-teal-600 dark:text-teal-400", "mail", "Responded"),
+        FeedbackStatus::Closed => ("text-muted-foreground", "check", "Closed"),
     };
+    html! {
+        span class={ "inline-flex items-center gap-1 text-xs font-medium " (classes) } {
+            (icon(icon_name, "h-4 w-4")) (label)
+        }
+    }
+}
+
+/// One feedback row: a whole-row link into the detail view (BUNYIP-422),
+/// matching the users-list row-as-link pattern. The row surfaces subject,
+/// submitter identity, source page, a message excerpt, the relative
+/// submission time, and a status chip - no inline action buttons. All triage
+/// actions moved to the detail page ([`feedback_detail_actions`]); the
+/// `?from=` param carries the tab slug so those actions redirect back to the
+/// view the admin came from.
+fn feedback_row(f: &crate::api::types::AdminFeedbackSummary, tab: FeedbackTab) -> Markup {
     let name = f.name.clone().filter(|s| !s.trim().is_empty());
     let email = f.email_masked.clone().filter(|s| !s.trim().is_empty());
     let identity = match (name.as_deref(), email.as_deref()) {
@@ -1612,14 +2364,12 @@ fn feedback_row(f: &crate::api::types::AdminFeedbackSummary, tab: FeedbackTab) -
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty() && *s != "/feedback");
-    let from = tab.bucket();
     html! {
-        div class="py-3 flex items-start justify-between gap-4" {
-            div class="min-w-0" {
+        a href=(format!("/admin/feedback/{}?from={}", f.id, tab.query_slug()))
+          class="flex items-center gap-4 py-3 px-2 -mx-2 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" {
+            div class="min-w-0 flex-1" {
                 p class="font-medium truncate" {
-                    a href=(format!("/admin/feedback/{}", f.id)) class="hover:underline" {
-                        (f.subject.clone().unwrap_or_else(|| "(no subject)".into()))
-                    }
+                    (f.subject.clone().unwrap_or_else(|| "(no subject)".into()))
                 }
                 @if let Some(line) = &identity {
                     p class="text-xs text-muted-foreground truncate" { (line) }
@@ -1630,72 +2380,84 @@ fn feedback_row(f: &crate::api::types::AdminFeedbackSummary, tab: FeedbackTab) -
                 p class="text-sm text-muted-foreground truncate" { (f.message_excerpt) }
                 p class="text-xs text-muted-foreground" { (relative_time(&f.created_at)) }
             }
-            div class="flex items-center gap-2 shrink-0" {
-                (badge("outline", f.status.as_str()))
-                // BUNYIP-93: "Reply" is a discoverability fix, not a new
-                // action. The reply form lives on the detail subpage
-                // (BUNYIP-85); the row subject already links there but
-                // wasn't obvious. The Reply anchor makes the path one
-                // explicit click. Hidden on Spam and Archive tabs:
-                // replying to spam is meaningless and archived rows are
-                // out-of-queue.
-                @if matches!(tab, FeedbackTab::Active | FeedbackTab::Closed) {
-                    a href=(format!("/admin/feedback/{}", f.id))
-                      class=(button_class("default", "sm", "")) { "Reply" }
-                }
-                @match tab {
-                    FeedbackTab::Active => {
-                        form method="post" action=(format!("/admin/feedback/{}/status", f.id)) {
-                            input type="hidden" name="status" value=(review_action);
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { (review_label) }
-                        }
-                        form method="post" action=(format!("/admin/feedback/{}/status", f.id)) {
-                            input type="hidden" name="status" value="closed";
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { "Close" }
-                        }
-                        form method="post" action=(format!("/admin/feedback/{}/archive", f.id)) {
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
-                        }
-                        form method="post" action=(format!("/admin/feedback/{}/mark-spam", f.id)) {
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { "Spam" }
-                        }
+            div class="flex items-center gap-3 shrink-0" {
+                (feedback_status_chip(&f.status))
+                (icon("chevron-right", "h-4 w-4 text-muted-foreground"))
+            }
+        }
+    }
+}
+
+/// The tab-aware triage actions for one feedback item, shown on the detail
+/// page (BUNYIP-422 moved these off the list rows). Mirrors the previous
+/// per-row action set: Active gets review / close / archive / spam / delete,
+/// Closed gets reopen / archive / spam / delete, Spam gets not-spam / archive
+/// / delete, Archive gets delete. Each POSTs a `from` hidden field carrying
+/// the tab slug so the handler redirects back to the list view the admin came
+/// from.
+fn feedback_detail_actions(id: &str, status: &FeedbackStatus, tab: FeedbackTab) -> Markup {
+    let already_reviewed = matches!(status, FeedbackStatus::Reviewed);
+    let review_action = if already_reviewed { "new" } else { "reviewed" };
+    let review_label = if already_reviewed {
+        "Un-review"
+    } else {
+        "Reviewed"
+    };
+    let from = tab.query_slug();
+    html! {
+        div class="flex flex-wrap items-center gap-2" {
+            @match tab {
+                FeedbackTab::Active => {
+                    form method="post" action=(format!("/admin/feedback/{id}/status")) {
+                        input type="hidden" name="status" value=(review_action);
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { (review_label) }
                     }
-                    FeedbackTab::Closed => {
-                        form method="post" action=(format!("/admin/feedback/{}/status", f.id)) {
-                            input type="hidden" name="status" value="new";
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { "Re-open" }
-                        }
-                        form method="post" action=(format!("/admin/feedback/{}/archive", f.id)) {
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
-                        }
-                        form method="post" action=(format!("/admin/feedback/{}/mark-spam", f.id)) {
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { "Spam" }
-                        }
+                    form method="post" action=(format!("/admin/feedback/{id}/status")) {
+                        input type="hidden" name="status" value="closed";
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Close" }
                     }
-                    FeedbackTab::Spam => {
-                        form method="post" action=(format!("/admin/feedback/{}/unmark-spam", f.id)) {
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { "Not spam" }
-                        }
-                        form method="post" action=(format!("/admin/feedback/{}/archive", f.id)) {
-                            input type="hidden" name="from" value=(from);
-                            button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
-                        }
+                    form method="post" action=(format!("/admin/feedback/{id}/archive")) {
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
                     }
-                    FeedbackTab::Archive => {}
+                    form method="post" action=(format!("/admin/feedback/{id}/mark-spam")) {
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Mark as spam" }
+                    }
                 }
-                form method="post" action=(format!("/admin/feedback/{}/delete", f.id))
-                    onsubmit="return confirm('Delete this feedback permanently? This cannot be undone.')" {
-                    input type="hidden" name="from" value=(from);
-                    button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { "Delete" }
+                FeedbackTab::Closed => {
+                    form method="post" action=(format!("/admin/feedback/{id}/status")) {
+                        input type="hidden" name="status" value="new";
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Re-open" }
+                    }
+                    form method="post" action=(format!("/admin/feedback/{id}/archive")) {
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                    }
+                    form method="post" action=(format!("/admin/feedback/{id}/mark-spam")) {
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Mark as spam" }
+                    }
                 }
+                FeedbackTab::Spam => {
+                    form method="post" action=(format!("/admin/feedback/{id}/unmark-spam")) {
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Not spam" }
+                    }
+                    form method="post" action=(format!("/admin/feedback/{id}/archive")) {
+                        input type="hidden" name="from" value=(from);
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                    }
+                }
+                FeedbackTab::Archive => {}
+            }
+            form method="post" action=(format!("/admin/feedback/{id}/delete"))
+                data-confirm="Delete this feedback permanently? This cannot be undone." {
+                input type="hidden" name="from" value=(from);
+                button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { "Delete" }
             }
         }
     }
@@ -1955,20 +2717,33 @@ pub async fn feedback_detail(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    Query(q): Query<FeedbackDetailQuery>,
 ) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    // BUNYIP-422: the list rows link here with `?from=<tab>` so the triage
+    // actions (now hosted on this page) render for the right tab and redirect
+    // back to the list the admin came from.
+    let tab = FeedbackTab::from_query(q.from.as_deref());
     let detail = match admin_api::feedback_detail(&st.api, c.forward.as_deref(), &id).await {
         Ok(d) => d,
-        Err(_) => return redirect_cookies("/admin/feedback", &c.set_cookies),
+        Err(_) => return redirect_cookies(tab.path(), &c.set_cookies),
     };
-    let content = feedback_detail_view(&detail);
+    let content = feedback_detail_view(&detail, tab);
     admin_response(&c, &user, "/admin/feedback", "Feedback · Bunyip", content)
 }
 
-fn feedback_detail_view(f: &AdminFeedbackDetail) -> Markup {
+/// Query for the feedback detail page. `from` names the list tab the admin
+/// clicked from (BUNYIP-422); absent / unknown falls back to Active.
+#[derive(Deserialize)]
+pub struct FeedbackDetailQuery {
+    #[serde(default)]
+    pub from: Option<String>,
+}
+
+fn feedback_detail_view(f: &AdminFeedbackDetail, tab: FeedbackTab) -> Markup {
     // BUNYIP-94: render the masked email, never the raw one. Admins do
     // not need the raw address to reply (the API holds it and routes the
     // response server-side); leaking the raw address on the detail page
@@ -2005,10 +2780,10 @@ fn feedback_detail_view(f: &AdminFeedbackDetail) -> Markup {
                 div {
                     h1 class="text-3xl font-bold" { (f.subject.clone().unwrap_or_else(|| "(no subject)".into())) }
                     p class="mt-2 text-muted-foreground text-sm" {
-                        a href="/admin/feedback" class="hover:underline" { "← Back to feedback" }
+                        a href=(tab.path()) class="hover:underline" { "← Back to feedback" }
                     }
                 }
-                (badge("outline", f.status.as_str()))
+                (feedback_status_chip(&f.status))
             }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="p-6 space-y-4" {
@@ -2037,28 +2812,22 @@ fn feedback_detail_view(f: &AdminFeedbackDetail) -> Markup {
                         (feedback_attachments_view(&f.id, &f.attachments))
                     }
                     div { h3 class="text-sm font-semibold" { "Received" } p class="text-sm text-muted-foreground" { (relative_time(&f.created_at)) } }
+                    // BUNYIP-411: request metadata for spam tracing. Shown only
+                    // when captured (dev / direct-hit submissions resolve no
+                    // forwarded IP). Maud escapes both values.
+                    @if let Some(ip) = f.submitter_ip.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                        div { h3 class="text-sm font-semibold" { "IP address" } p class="text-sm text-muted-foreground font-mono" { (ip) } }
+                    }
+                    @if let Some(ua) = f.user_agent.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                        div { h3 class="text-sm font-semibold" { "User agent" } p class="text-sm text-muted-foreground break-all" { (ua) } }
+                    }
                 }
             }
-            // BUNYIP-92: row actions on the detail page mirror the list
-            // tabs. The `from` hidden field redirects back to the list
-            // (Active by default) on success so the admin lands where
-            // most context lives, not on a detail page for a row they
-            // just deleted.
-            div class="flex flex-wrap items-center gap-2" {
-                form method="post" action=(format!("/admin/feedback/{}/archive", f.id)) {
-                    input type="hidden" name="from" value="active";
-                    button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
-                }
-                form method="post" action=(format!("/admin/feedback/{}/mark-spam", f.id)) {
-                    input type="hidden" name="from" value="active";
-                    button type="submit" class=(button_class("outline", "sm", "")) { "Mark as spam" }
-                }
-                form method="post" action=(format!("/admin/feedback/{}/delete", f.id))
-                    onsubmit="return confirm('Delete this feedback permanently? This cannot be undone.')" {
-                    input type="hidden" name="from" value="active";
-                    button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { "Delete" }
-                }
-            }
+            // BUNYIP-422: the triage actions now live here (moved off the
+            // list rows). They are tab-aware and each POSTs `from` = the tab
+            // slug, so on success the admin lands back on the list view they
+            // came from, not on a detail page for a row they just deleted.
+            (feedback_detail_actions(&f.id, &f.status, tab))
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Response" } }
                 div class="p-6 pt-0 space-y-4" {
@@ -2376,13 +3145,13 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                                         @if i > 0 {
                                             form method="post" action=(format!("/admin/applications/{}/swap-order", app.id)) {
                                                 input type="hidden" name="target_app_id" value=(apps[i - 1].id);
-                                                button type="submit" title="Move up" aria-label="Move up" class=(button_class("outline", "sm", "")) { "Up" }
+                                                button type="submit" title="Move up" aria-label="Move up" class=(button_class("outline", "sm", "")) { (icon("chevron-up", "h-4 w-4")) }
                                             }
                                         }
                                         @if i + 1 < apps.len() {
                                             form method="post" action=(format!("/admin/applications/{}/swap-order", app.id)) {
                                                 input type="hidden" name="target_app_id" value=(apps[i + 1].id);
-                                                button type="submit" title="Move down" aria-label="Move down" class=(button_class("outline", "sm", "")) { "Down" }
+                                                button type="submit" title="Move down" aria-label="Move down" class=(button_class("outline", "sm", "")) { (icon("chevron-down", "h-4 w-4")) }
                                             }
                                         }
                                     }
@@ -2393,17 +3162,22 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                                     }
                                 }
                                 div class="flex items-center gap-6" {
+                                    // BUNYIP-420: toggle switches (color + knob position
+                                    // convey state, single click applies) replacing the old
+                                    // "Active: on" text + separate Toggle button. Each switch
+                                    // is the form's submit control, posting the flipped value
+                                    // through the same /field path.
                                     form method="post" action=(format!("/admin/applications/{}/field", app.id)) class="flex items-center gap-2" {
                                         input type="hidden" name="field" value="is_active";
                                         input type="hidden" name="value" value=(if app.is_active { "false" } else { "true" });
-                                        span class="text-sm text-muted-foreground" { "Active: " (if app.is_active { "on" } else { "off" }) }
-                                        button type="submit" class=(button_class("outline", "sm", "")) { "Toggle" }
+                                        label class="text-sm text-muted-foreground" { "Active" }
+                                        (toggle_switch(app.is_active, "Toggle active"))
                                     }
                                     form method="post" action=(format!("/admin/applications/{}/field", app.id)) class="flex items-center gap-2" {
                                         input type="hidden" name="field" value="maintenance_mode";
                                         input type="hidden" name="value" value=(if app.maintenance_mode { "false" } else { "true" });
-                                        span class="text-sm text-muted-foreground" { "Maintenance: " (if app.maintenance_mode { "on" } else { "off" }) }
-                                        button type="submit" class=(button_class("outline", "sm", "")) { "Toggle" }
+                                        label class="text-sm text-muted-foreground" { "Maintenance" }
+                                        (toggle_switch(app.maintenance_mode, "Toggle maintenance mode"))
                                     }
                                     a href=(format!("/admin/applications/{}/edit", app.id)) class=(button_class("outline", "sm", "")) { "Edit" }
                                 }
@@ -2899,7 +3673,7 @@ fn app_danger_zone(id: &str, error: Option<&str>) -> Markup {
             }
             div class="p-6 pt-0" {
                 @if let Some(e) = error { (error_box(e)) }
-                form method="post" action=(format!("/admin/applications/{id}/delete")) class="space-y-3 max-w-md mt-2" onsubmit="return confirm('Permanently delete this application? This cannot be undone.')" {
+                form method="post" action=(format!("/admin/applications/{id}/delete")) class="space-y-3 max-w-md mt-2" data-confirm="Permanently delete this application? This cannot be undone." {
                     div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" placeholder="Enter your password to confirm" class=(dashboard_input()); }
                     div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" placeholder="6-digit code" class=(dashboard_input()); }
                     button type="submit" class=(button_class("destructive", "default", "")) { (icon("trash", "mr-2 h-4 w-4")) "Delete application" }
@@ -3364,13 +4138,18 @@ pub async fn application_groups(State(st): State<AppState>, headers: HeaderMap) 
                                 div { p class="font-medium" { (g.display_name) } p class="text-xs text-muted-foreground" { (g.slug) } }
                                 div class="flex items-center gap-2" {
                                     a href=(format!("/admin/application-groups/{}/edit", g.id)) class=(button_class("outline", "sm", "")) { "Edit" }
-                                    form method="post" action=(format!("/admin/application-groups/{}/delete", g.id)) onsubmit="return confirm('Delete this application group? This cannot be undone.')" {
+                                    form method="post" action=(format!("/admin/application-groups/{}/delete", g.id)) data-confirm="Delete this application group? This cannot be undone." {
                                         button type="submit" class=(button_class("outline", "sm", "")) { "Delete" }
                                     }
                                 }
                             }
                         }
-                        @if groups.is_empty() { p class="text-center text-muted-foreground py-8" { "No groups" } }
+                        @if groups.is_empty() {
+                            // BUNYIP-415: center the empty state as a block.
+                            div class="flex flex-col items-center justify-center py-12 text-center text-muted-foreground" {
+                                (icon("layers", "h-8 w-8 mb-2 opacity-50")) "No groups yet"
+                            }
+                        }
                     }
                 }
             }
@@ -3595,20 +4374,27 @@ pub async fn entitlements(State(st): State<AppState>, headers: HeaderMap) -> Res
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Products" } p class="text-sm text-muted-foreground" { "Restricted products are only available to users who have been granted an entitlement." } }
                 div class="p-6 pt-0" {
-                    div class="divide-y" {
-                        @for app in &apps {
-                            div class="py-3 flex items-center justify-between gap-4" {
-                                div {
-                                    p class="font-medium flex items-center gap-2" { (app.display_name) @if app.requires_entitlement { (badge("default", "Restricted")) } }
-                                    p class="text-xs text-muted-foreground" { (app.slug) }
-                                }
-                                form method="post" action=(format!("/admin/applications/{}/restricted-toggle", app.slug)) {
-                                    input type="hidden" name="value" value=(if app.requires_entitlement { "false" } else { "true" });
-                                    button type="submit" class=(button_class("outline", "sm", "")) { @if app.requires_entitlement { "Open" } @else { "Restrict" } }
+                    @if apps.is_empty() {
+                        div class="flex flex-col items-center justify-center py-12 text-center text-muted-foreground" {
+                            (icon("package", "h-8 w-8 mb-2 opacity-50")) "No applications"
+                        }
+                    } @else {
+                        // BUNYIP-415: flow product rows into two columns (one
+                        // below lg) so the catalog uses the width.
+                        div class="grid gap-x-8 lg:grid-cols-2" {
+                            @for app in &apps {
+                                div class="py-3 flex items-center justify-between gap-4 border-b last:border-0" {
+                                    div {
+                                        p class="font-medium flex items-center gap-2" { (app.display_name) @if app.requires_entitlement { (badge("default", "Restricted")) } }
+                                        p class="text-xs text-muted-foreground" { (app.slug) }
+                                    }
+                                    form method="post" action=(format!("/admin/applications/{}/restricted-toggle", app.slug)) {
+                                        input type="hidden" name="value" value=(if app.requires_entitlement { "false" } else { "true" });
+                                        button type="submit" class=(button_class("outline", "sm", "")) { @if app.requires_entitlement { "Open" } @else { "Restrict" } }
+                                    }
                                 }
                             }
                         }
-                        @if apps.is_empty() { p class="text-center text-muted-foreground py-8" { "No applications" } }
                     }
                 }
             }
@@ -3834,44 +4620,28 @@ fn tier_settings_content(
 ) -> Markup {
     html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Tier Settings" } p class="mt-2 text-muted-foreground" { "Configure pricing tiers, trials, and slot limits." } }
+            div { h1 class="text-3xl font-bold" { "Tier Settings" } p class="mt-2 text-muted-foreground" { "Trial lengths and membership slot limits. Stripe price / product mapping now lives on the " a href="/admin/stripe" class="text-primary hover:underline" { "Stripe" } " page." } }
             @match cfg {
                 None => p class="text-muted-foreground" { "Could not load tier config." },
-                Some(c) => div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                    div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Tiers & Slots" } p class="text-sm text-muted-foreground" { (c.lifetime_slots_used) " lifetime and " (c.early_adopter_slots_used) " early-adopter slots used." } }
-                    div class="p-6 pt-0" {
-                        form method="post" action="/admin/tier-settings" class="space-y-4 max-w-md" {
-                            @if let Some(e) = error { (error_box(e)) }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Lifetime slots" } input name="lifetime_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.lifetime_slots) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter slots" } input name="early_adopter_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.early_adopter_slots) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter trial days" } input name="early_adopter_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.early_adopter_trial_days) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Standard trial days" } input name="standard_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.standard_trial_days) class=(dashboard_input()); }
-                            // BUNYIP-122: surface the Stripe price + product
-                            // IDs so admins can wire each tier to its Stripe
-                            // catalog row from this page. Blank submissions
-                            // leave the persisted value untouched (the API
-                            // treats empty string as "no change"); explicit
-                            // empty-by-clear is left for v2 once the API
-                            // grows a tri-state shape. Values echo the
-                            // submitted input so a failed save keeps them.
-                            div class="mt-2 pt-4 border-t border-border space-y-1" {
-                                p class="text-sm font-semibold" { "Stripe catalog (free / lifetime tier)" }
+                // BUNYIP-417: the Stripe catalog price/product mappings moved to
+                // the Stripe page to consolidate all Stripe config under one nav
+                // entry. Tier Settings keeps only its non-Stripe concerns (slots
+                // + trial lengths).
+                Some(c) => form method="post" action="/admin/tier-settings" class="space-y-6" {
+                    @if let Some(e) = error { (error_box(e)) }
+                    (admin_block(
+                        "Tiers & Slots",
+                        Some(&format!("{} lifetime and {} early-adopter slots used.", c.lifetime_slots_used, c.early_adopter_slots_used)),
+                        html! {
+                            div class="space-y-4 max-w-md" {
+                                div class="space-y-2" { label class="text-sm font-medium" { "Lifetime slots" } input name="lifetime_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.lifetime_slots) class=(dashboard_input()); }
+                                div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter slots" } input name="early_adopter_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.early_adopter_slots) class=(dashboard_input()); }
+                                div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter trial days" } input name="early_adopter_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.early_adopter_trial_days) class=(dashboard_input()); }
+                                div class="space-y-2" { label class="text-sm font-medium" { "Standard trial days" } input name="standard_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.standard_trial_days) class=(dashboard_input()); }
                             }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Free price ID" } input name="free_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.free_price_id) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Lifetime product ID" } input name="lifetime_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.lifetime_product_id) class=(dashboard_input()); }
-                            div class="mt-2 pt-4 border-t border-border space-y-1" {
-                                p class="text-sm font-semibold" { "Stripe catalog (early adopter tier)" }
-                            }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter price ID" } input name="early_adopter_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.early_adopter_price_id) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Early-adopter product ID" } input name="early_adopter_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.early_adopter_product_id) class=(dashboard_input()); }
-                            div class="mt-2 pt-4 border-t border-border space-y-1" {
-                                p class="text-sm font-semibold" { "Stripe catalog (standard tier)" }
-                            }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Standard price ID" } input name="standard_price_id" type="text" maxlength="255" placeholder="price_..." value=(values.standard_price_id) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Standard product ID" } input name="standard_product_id" type="text" maxlength="255" placeholder="prod_..." value=(values.standard_product_id) class=(dashboard_input()); }
-                            button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
-                        }
-                    }
+                        },
+                    ))
+                    button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
                 },
             }
         }
@@ -4055,34 +4825,51 @@ fn email_settings_content(cfg: Option<&crate::api::types::EmailConfigResponse>) 
             div { h1 class="text-3xl font-bold" { "Email" } p class="mt-2 text-muted-foreground" { "Configure the SMTP relay for transactional email. Changes apply immediately without a restart." } }
             @match cfg {
                 None => p class="text-muted-foreground" { "Could not load email config." },
-                Some(e) => div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                    div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "SMTP Configuration" } p class="text-sm text-muted-foreground" { "Source: " (e.source) ". Leave a field blank to keep the existing value." } }
-                    div class="p-6 pt-0" {
-                        form method="post" action="/admin/email" class="space-y-4 max-w-md" {
-                            div class="space-y-2" {
-                                label class="text-sm font-medium" { "Sending" }
-                                select name="enabled" class=(dashboard_input()) {
-                                    option value="true" selected[e.enabled] { "Enabled" }
-                                    option value="false" selected[!e.enabled] { "Disabled" }
+                // BUNYIP-415: two-column block layout. The SMTP transport
+                // settings and the sender/notification settings sit in
+                // side-by-side blocks (one column below lg), inside one form so
+                // a single Save persists everything.
+                Some(e) => form method="post" action="/admin/email" class="space-y-6" {
+                    (admin_block_grid(vec![
+                        admin_block(
+                            "SMTP Connection",
+                            Some(&format!("Source: {}. Leave a field blank to keep the existing value.", e.source)),
+                            html! {
+                                div class="space-y-4" {
+                                    div class="space-y-2" {
+                                        label class="text-sm font-medium" { "Sending" }
+                                        select name="enabled" class=(dashboard_input()) {
+                                            option value="true" selected[e.enabled] { "Enabled" }
+                                            option value="false" selected[!e.enabled] { "Disabled" }
+                                        }
+                                    }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "SMTP host" } input name="smtp_host" value=(e.smtp_host) placeholder="smtp.example.com" class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "SMTP port" } input name="smtp_port" type="number" min="1" max="65535" value=(e.smtp_port) class=(dashboard_input()); }
+                                    div class="space-y-2" {
+                                        label class="text-sm font-medium" { "TLS mode" }
+                                        select name="smtp_tls" class=(dashboard_input()) {
+                                            option value="implicit" selected[e.smtp_tls == "implicit"] { "Implicit (port 465)" }
+                                            option value="starttls" selected[e.smtp_tls == "starttls"] { "STARTTLS (port 587)" }
+                                        }
+                                    }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "SMTP username" } input name="smtp_username" value=(e.smtp_username) autocomplete="off" class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "SMTP password" } input name="smtp_password" type="password" autocomplete="new-password" placeholder=(e.smtp_password_masked.clone().unwrap_or_else(|| "(unchanged)".into())) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Stored encrypted. Leave blank to keep the current password." } }
                                 }
-                            }
-                            div class="space-y-2" { label class="text-sm font-medium" { "SMTP host" } input name="smtp_host" value=(e.smtp_host) placeholder="smtp.example.com" class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "SMTP port" } input name="smtp_port" type="number" min="1" max="65535" value=(e.smtp_port) class=(dashboard_input()); }
-                            div class="space-y-2" {
-                                label class="text-sm font-medium" { "TLS mode" }
-                                select name="smtp_tls" class=(dashboard_input()) {
-                                    option value="implicit" selected[e.smtp_tls == "implicit"] { "Implicit (port 465)" }
-                                    option value="starttls" selected[e.smtp_tls == "starttls"] { "STARTTLS (port 587)" }
+                            },
+                        ),
+                        admin_block(
+                            "Sender & Notifications",
+                            Some("Who transactional mail comes from, and where operational notices go."),
+                            html! {
+                                div class="space-y-4" {
+                                    div class="space-y-2" { label class="text-sm font-medium" { "From email" } input name="from_email" type="email" value=(e.from_email) placeholder="noreply@example.com" class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "From name" } input name="from_name" value=(e.from_name) class=(dashboard_input()); }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Admin notification emails" } input name="admin_notification_emails" value=(e.admin_notification_emails.join(", ")) placeholder="ops@example.com, alerts@example.com" class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Comma-separated recipients for operational notices." } }
                                 }
-                            }
-                            div class="space-y-2" { label class="text-sm font-medium" { "SMTP username" } input name="smtp_username" value=(e.smtp_username) autocomplete="off" class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "SMTP password" } input name="smtp_password" type="password" autocomplete="new-password" placeholder=(e.smtp_password_masked.clone().unwrap_or_else(|| "(unchanged)".into())) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Stored encrypted. Leave blank to keep the current password." } }
-                            div class="space-y-2" { label class="text-sm font-medium" { "From email" } input name="from_email" type="email" value=(e.from_email) placeholder="noreply@example.com" class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "From name" } input name="from_name" value=(e.from_name) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Admin notification emails" } input name="admin_notification_emails" value=(e.admin_notification_emails.join(", ")) placeholder="ops@example.com, alerts@example.com" class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Comma-separated recipients for operational notices." } }
-                            button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
-                        }
-                    }
+                            },
+                        ),
+                    ]))
+                    button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
                 },
             }
         }
@@ -4145,24 +4932,40 @@ fn auto_ban_settings_content(
             div { h1 class="text-3xl font-bold" { "Auto-ban Settings" } p class="mt-2 text-muted-foreground" { "Tune the automatic IP-ban thresholds. Changes apply immediately without a restart." } }
             @match cfg {
                 None => p class="text-muted-foreground" { "Could not load auto-ban config." },
-                Some(c) => div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                    div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Thresholds" } p class="text-sm text-muted-foreground" { "Values sourced from " (c.source) "." } }
-                    div class="p-6 pt-0" {
-                        form method="post" action="/admin/auto-ban-settings" class="space-y-4 max-w-md" {
-                            @if let Some(e) = error { (error_box(e)) }
-                            div class="space-y-2" {
-                                label class="text-sm font-medium" { "Auto-ban" }
-                                select name="enabled" class=(dashboard_input()) {
-                                    option value="true" selected[values.enabled] { "Enabled" }
-                                    option value="false" selected[!values.enabled] { "Disabled" }
+                // BUNYIP-415: detection (when to strike/ban) and enforcement
+                // (the on/off switch and how long a ban lasts) sit in two
+                // side-by-side blocks, one column below lg, inside one form.
+                Some(c) => form method="post" action="/admin/auto-ban-settings" class="space-y-6" {
+                    @if let Some(e) = error { (error_box(e)) }
+                    (admin_block_grid(vec![
+                        admin_block(
+                            "Detection",
+                            Some(&format!("When a source IP earns a ban. Values sourced from {}.", c.source)),
+                            html! {
+                                div class="space-y-4" {
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Strike threshold" } input name="threshold" type="number" min="1" max=(MAX_AUTO_BAN_THRESHOLD) value=(values.threshold) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Suspicious requests from one IP before it is banned." } }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Strike window (seconds)" } input name="window_secs" type="number" min="1" max=(MAX_AUTO_BAN_WINDOW_SECS) value=(values.window_secs) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Rolling window over which strikes accumulate." } }
                                 }
-                            }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Strike threshold" } input name="threshold" type="number" min="1" max=(MAX_AUTO_BAN_THRESHOLD) value=(values.threshold) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Suspicious requests from one IP before it is banned." } }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Strike window (seconds)" } input name="window_secs" type="number" min="1" max=(MAX_AUTO_BAN_WINDOW_SECS) value=(values.window_secs) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Rolling window over which strikes accumulate." } }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Ban duration (seconds)" } input name="ban_duration_secs" type="number" min="1" max=(MAX_AUTO_BAN_DURATION_SECS) value=(values.ban_duration_secs) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "How long a ban lasts before it expires." } }
-                            button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
-                        }
-                    }
+                            },
+                        ),
+                        admin_block(
+                            "Enforcement",
+                            Some("Whether auto-ban is active, and how long a ban holds."),
+                            html! {
+                                div class="space-y-4" {
+                                    div class="space-y-2" {
+                                        label class="text-sm font-medium" { "Auto-ban" }
+                                        select name="enabled" class=(dashboard_input()) {
+                                            option value="true" selected[values.enabled] { "Enabled" }
+                                            option value="false" selected[!values.enabled] { "Disabled" }
+                                        }
+                                    }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "Ban duration (seconds)" } input name="ban_duration_secs" type="number" min="1" max=(MAX_AUTO_BAN_DURATION_SECS) value=(values.ban_duration_secs) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "How long a ban lasts before it expires." } }
+                                }
+                            },
+                        ),
+                    ]))
+                    button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
                 },
             }
         }
@@ -4627,42 +5430,454 @@ pub async fn backup_restore(
 }
 
 // ===========================================================================
-// Stripe config (condensed: keys + app tag)
+// Stripe: config + setup docs + products + prices (BUNYIP-416)
 // ===========================================================================
+
+/// Setup guidance ported from the a8n-tools Stripe admin panel (BUNYIP-416):
+/// how and where to create the restricted API key and how the app-tag scopes
+/// what is shown. Rendered as a full-width intro card above the config form.
+fn stripe_setup_docs() -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="p-6 space-y-3 text-sm text-muted-foreground" {
+                div class="flex items-center gap-2 text-foreground" { (icon("help-circle", "h-5 w-5 text-primary")) h3 class="text-base font-semibold" { "Setting up Stripe" } }
+                p {
+                    "Your Stripe secret key authenticates API requests. Generate a "
+                    a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline" { "restricted key" }
+                    " with these permissions set to " span class="font-medium text-foreground" { "Write" }
+                    ": Products, Prices, Customers, Subscriptions, and Checkout Sessions; and " span class="font-medium text-foreground" { "Read" } " for Invoices."
+                }
+                p {
+                    "Keys follow the format " code class="rounded bg-muted px-1 py-0.5 text-xs" { "rk_(live|test)_…" }
+                    " - the prefix shows whether it is a live or test key. Leave a field blank to keep the existing value."
+                }
+                p {
+                    "Products created here are tagged with your " span class="font-medium text-foreground" { "App tag" }
+                    " in Stripe metadata, and only products matching that tag are shown. Add your API key, save, then manage Products and Prices below. A lifetime plan is simply a product with a "
+                    span class="font-medium text-foreground" { "$0.00" } " price."
+                }
+            }
+        }
+    }
+}
+
+/// Format a Stripe price amount for display. A zero-amount lifetime price is
+/// `Some(0)` -> "$0.00" (not "--"); a null amount -> "--".
+fn format_stripe_amount(unit_amount: Option<i64>, currency: &str) -> String {
+    match unit_amount {
+        None => "--".to_string(),
+        Some(cents) => {
+            let whole = cents / 100;
+            let frac = (cents % 100).abs();
+            match currency.to_ascii_lowercase().as_str() {
+                "usd" => format!("${whole}.{frac:02}"),
+                "eur" => format!("€{whole}.{frac:02}"),
+                "gbp" => format!("£{whole}.{frac:02}"),
+                _ => format!("{whole}.{frac:02} {}", currency.to_uppercase()),
+            }
+        }
+    }
+}
+
+/// The Products block: a create form plus the app-tagged product list, each
+/// with an Archive action. `products == None` is the "could not load" state
+/// (e.g. no valid API key yet).
+fn stripe_products_block(products: Option<&[crate::api::types::StripeProduct]>) -> Markup {
+    admin_block(
+        "Products",
+        Some("Stripe products for your subscription tiers."),
+        html! {
+            form method="post" action="/admin/stripe/products" class="flex flex-wrap items-end gap-3 mb-4" {
+                div class="space-y-1 flex-1 min-w-[12rem]" { label class="text-xs font-medium" { "Name" } input name="name" required placeholder="Personal Plan" class=(dashboard_input()); }
+                div class="space-y-1 flex-1 min-w-[12rem]" { label class="text-xs font-medium" { "Description" } input name="description" placeholder="Optional" class=(dashboard_input()); }
+                button type="submit" class=(button_class("default", "sm", "")) { "Create product" }
+            }
+            @match products {
+                None => (error_box("Could not load products from Stripe. Add a valid API key above and save, then reload.")),
+                Some([]) => p class="py-6 text-center text-sm text-muted-foreground" { "No products yet. Create one to get started." },
+                Some(list) => div class="divide-y" {
+                    @for p in list {
+                        div class="py-3 flex items-center justify-between gap-4" {
+                            div class="min-w-0" {
+                                p class="font-medium flex items-center gap-2" {
+                                    (p.name)
+                                    @if p.active { (badge("success", "Active")) } @else { (badge("secondary", "Archived")) }
+                                }
+                                @if let Some(d) = p.description.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+                                    p class="text-xs text-muted-foreground truncate" { (d) }
+                                }
+                                p class="text-xs text-muted-foreground font-mono truncate" { (p.id) }
+                            }
+                            @if p.active {
+                                form method="post" action=(format!("/admin/stripe/products/{}/archive", p.id)) data-confirm="Archive this product? It will no longer be available for new subscriptions." {
+                                    button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
+/// The Prices block: a create form (product dropdown limited to active
+/// products; amount in dollars, zero allowed for a lifetime plan) plus the
+/// price list, each active price with an Archive action. Prices are immutable
+/// in Stripe, so there is no edit.
+fn stripe_prices_block(
+    prices: Option<&[crate::api::types::StripePrice]>,
+    products: &[crate::api::types::StripeProduct],
+) -> Markup {
+    let name_of = |pid: &str| {
+        products
+            .iter()
+            .find(|p| p.id == pid)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| pid.to_string())
+    };
+    admin_block(
+        "Prices",
+        Some("Pricing for your products. A lifetime plan is a $0.00 price."),
+        html! {
+            form method="post" action="/admin/stripe/prices" class="flex flex-wrap items-end gap-3 mb-4" {
+                div class="space-y-1 min-w-[11rem]" {
+                    label class="text-xs font-medium" { "Product" }
+                    select name="product_id" required class=(dashboard_input()) {
+                        option value="" disabled selected { "Select a product" }
+                        @for p in products.iter().filter(|p| p.active) { option value=(p.id) { (p.name) } }
+                    }
+                }
+                div class="space-y-1 w-28" { label class="text-xs font-medium" { "Amount" } input name="amount" type="number" step="0.01" min="0" required placeholder="9.99" class=(dashboard_input()); }
+                div class="space-y-1 w-24" {
+                    label class="text-xs font-medium" { "Currency" }
+                    select name="currency" class=(dashboard_input()) { option value="usd" { "USD" } option value="eur" { "EUR" } option value="gbp" { "GBP" } }
+                }
+                div class="space-y-1 w-28" {
+                    label class="text-xs font-medium" { "Interval" }
+                    select name="interval" class=(dashboard_input()) { option value="month" { "Monthly" } option value="year" { "Yearly" } }
+                }
+                button type="submit" class=(button_class("default", "sm", "")) { "Create price" }
+            }
+            @match prices {
+                None => (error_box("Could not load prices from Stripe. Add a valid API key above and save, then reload.")),
+                Some([]) => p class="py-6 text-center text-sm text-muted-foreground" { "No prices yet. Create one to get started." },
+                Some(list) => div class="divide-y" {
+                    @for pr in list {
+                        div class={ "py-3 flex items-center justify-between gap-4 " (if pr.active { "" } else { "opacity-50" }) } {
+                            div class="min-w-0" {
+                                p class="font-medium flex items-center gap-2" {
+                                    (format_stripe_amount(pr.unit_amount, &pr.currency))
+                                    span class="text-xs font-normal text-muted-foreground" { (pr.recurring_interval.clone().unwrap_or_else(|| "One-time".into())) }
+                                    @if pr.active { (badge("success", "Active")) } @else { (badge("secondary", "Archived")) }
+                                }
+                                p class="text-xs text-muted-foreground truncate" { (name_of(&pr.product_id)) }
+                                p class="text-xs text-muted-foreground font-mono truncate" { (pr.id) }
+                            }
+                            @if pr.active {
+                                form method="post" action=(format!("/admin/stripe/prices/{}/archive", pr.id)) data-confirm="Archive this price? Existing subscriptions using it are not affected." {
+                                    button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
+/// The tier -> Stripe catalog mapping (BUNYIP-417, moved here from Tier
+/// Settings). Wires each tier to its Stripe price / product IDs. Its own form
+/// (separate from the keys/checkout config) posting to `/admin/stripe/catalog`,
+/// which partial-updates the tier config (blank = keep). `tier == None` renders
+/// a load-error note.
+fn stripe_catalog_section(tier: Option<&crate::api::types::TierConfigResponse>) -> Markup {
+    let field = |label: &str, name: &str, ph: &str, value: &Option<String>| -> Markup {
+        html! {
+            div class="space-y-2" {
+                label class="text-sm font-medium" { (label) }
+                input name=(name) type="text" maxlength="255" placeholder=(ph) value=(value.clone().unwrap_or_default()) class=(dashboard_input());
+            }
+        }
+    };
+    html! {
+        div class="space-y-3" {
+            div { h3 class="text-xl font-semibold" { "Tier catalog mapping" } p class="text-sm text-muted-foreground" { "Wire each membership tier to the Stripe price / product it should use. Leave a field blank to keep the existing value." } }
+            @match tier {
+                None => (error_box("Could not load the tier catalog mapping.")),
+                Some(t) => form method="post" action="/admin/stripe/catalog" class="space-y-6" {
+                    (admin_block_grid(vec![
+                        admin_block("Free / lifetime", None, html! {
+                            div class="space-y-4" {
+                                (field("Free price ID", "free_price_id", "price_...", &t.free_price_id))
+                                (field("Lifetime product ID", "lifetime_product_id", "prod_...", &t.lifetime_product_id))
+                            }
+                        }),
+                        admin_block("Early adopter", None, html! {
+                            div class="space-y-4" {
+                                (field("Early-adopter price ID", "early_adopter_price_id", "price_...", &t.early_adopter_price_id))
+                                (field("Early-adopter product ID", "early_adopter_product_id", "prod_...", &t.early_adopter_product_id))
+                            }
+                        }),
+                        admin_block("Standard", None, html! {
+                            div class="space-y-4" {
+                                (field("Standard price ID", "standard_price_id", "price_...", &t.standard_price_id))
+                                (field("Standard product ID", "standard_product_id", "prod_...", &t.standard_product_id))
+                            }
+                        }),
+                    ]))
+                    button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save catalog mapping" }
+                },
+            }
+        }
+    }
+}
 
 pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let cfg = admin_api::stripe_config(&st.api, c.forward.as_deref())
-        .await
-        .ok();
+    let fwd = c.forward.as_deref();
+    let cfg = admin_api::stripe_config(&st.api, fwd).await.ok();
+    // Products + prices come from Stripe via the API; an unconfigured / invalid
+    // key surfaces as None and the blocks render a "could not load" note.
+    let products = admin_api::list_stripe_products(&st.api, fwd).await.ok();
+    let prices = admin_api::list_stripe_prices(&st.api, fwd).await.ok();
+    // BUNYIP-417: the tier -> Stripe price/product mapping moved here from Tier
+    // Settings, so all Stripe config lives under one nav entry.
+    let tier = admin_api::tier_config(&st.api, fwd).await.ok();
 
     let content = html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Stripe" } p class="mt-2 text-muted-foreground" { "Connect and configure Stripe billing." } }
+            div { h1 class="text-3xl font-bold" { "Stripe" } p class="mt-2 text-muted-foreground" { "Connect and configure Stripe billing, products, and prices." } }
             @match cfg {
                 None => p class="text-muted-foreground" { "Could not load Stripe config." },
-                Some(s) => div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                    div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Stripe Configuration" } p class="text-sm text-muted-foreground" { "Source: " (s.source) ". Leave a field blank to keep the existing value." } }
-                    div class="p-6 pt-0" {
-                        form method="post" action="/admin/stripe" class="space-y-4 max-w-md" {
-                            div class="space-y-2" { label class="text-sm font-medium" { "Secret key" } input name="secret_key" type="password" placeholder=(s.secret_key_masked.clone().unwrap_or_else(|| "sk_live_…".into())) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Webhook secret" } input name="webhook_secret" type="password" placeholder=(s.webhook_secret_masked.clone().unwrap_or_else(|| "whsec_…".into())) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "App tag" } input name="app_tag" value=(s.app_tag) class=(dashboard_input()); }
-                            div class="mt-2 pt-4 border-t border-border space-y-1" { p class="text-sm font-semibold" { "Checkout" } }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Success URL" } input name="success_url" type="url" value=(s.success_url) placeholder="https://example.com/checkout/success" class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Cancel URL" } input name="cancel_url" type="url" value=(s.cancel_url) placeholder="https://example.com/pricing?checkout=canceled" class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Trial period (days)" } input name="trial_period_days" type="number" min="0" max="365" value=(s.trial_period_days) class=(dashboard_input()); }
-                            button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
-                        }
+                Some(s) => {
+                    // BUNYIP-416: setup guidance ported from a8n-tools.
+                    (stripe_setup_docs())
+                    // BUNYIP-415: config in a responsive two-column block grid,
+                    // both blocks in one form so a single Save persists all.
+                    form method="post" action="/admin/stripe" class="space-y-6" {
+                        (admin_block_grid(vec![
+                            admin_block(
+                                "Stripe Configuration",
+                                Some(&format!("Source: {}. Leave a field blank to keep the existing value.", s.source)),
+                                html! {
+                                    div class="space-y-4" {
+                                        div class="space-y-2" { label class="text-sm font-medium" { "Secret key" } input name="secret_key" type="password" placeholder=(s.secret_key_masked.clone().unwrap_or_else(|| "sk_live_…".into())) class=(dashboard_input()); }
+                                        div class="space-y-2" { label class="text-sm font-medium" { "Webhook secret" } input name="webhook_secret" type="password" placeholder=(s.webhook_secret_masked.clone().unwrap_or_else(|| "whsec_…".into())) class=(dashboard_input()); }
+                                        div class="space-y-2" { label class="text-sm font-medium" { "App tag" } input name="app_tag" value=(s.app_tag) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Only Stripe products tagged with this value are shown below." } }
+                                    }
+                                },
+                            ),
+                            admin_block(
+                                "Checkout",
+                                Some("Where Stripe returns the customer after checkout, and the trial length."),
+                                html! {
+                                    div class="space-y-4" {
+                                        div class="space-y-2" { label class="text-sm font-medium" { "Success URL" } input name="success_url" type="url" value=(s.success_url) placeholder="https://example.com/checkout/success" class=(dashboard_input()); }
+                                        div class="space-y-2" { label class="text-sm font-medium" { "Cancel URL" } input name="cancel_url" type="url" value=(s.cancel_url) placeholder="https://example.com/pricing?checkout=canceled" class=(dashboard_input()); }
+                                        div class="space-y-2" { label class="text-sm font-medium" { "Trial period (days)" } input name="trial_period_days" type="number" min="0" max="365" value=(s.trial_period_days) class=(dashboard_input()); }
+                                    }
+                                },
+                            ),
+                        ]))
+                        button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
                     }
+                    (stripe_products_block(products.as_deref()))
+                    (stripe_prices_block(prices.as_deref(), products.as_deref().unwrap_or(&[])))
+                    (stripe_catalog_section(tier.as_ref()))
                 },
             }
         }
     };
     admin_response(&c, &user, "/admin/stripe", "Stripe · Bunyip", content)
+}
+
+#[derive(Deserialize)]
+pub struct StripeProductForm {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// POST /admin/stripe/products - create a Stripe product, then redirect back.
+pub async fn stripe_product_create(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<StripeProductForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let name = f.name.trim();
+    if name.is_empty() {
+        return redirect_cookies(
+            "/admin/stripe?toast_err=Product%20name%20is%20required",
+            &c.set_cookies,
+        );
+    }
+    let mut body = json!({ "name": name });
+    if !f.description.trim().is_empty() {
+        body["description"] = json!(f.description.trim());
+    }
+    let target = match admin_api::create_stripe_product(&st.api, c.forward.as_deref(), body).await {
+        Ok(()) => "/admin/stripe?toast_ok=Product%20created".to_string(),
+        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// POST /admin/stripe/products/{id}/archive
+pub async fn stripe_product_archive(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::archive_stripe_product(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => "/admin/stripe?toast_ok=Product%20archived".to_string(),
+        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+#[derive(Deserialize)]
+pub struct StripePriceForm {
+    pub product_id: String,
+    pub amount: String,
+    pub currency: String,
+    pub interval: String,
+}
+
+/// Parse a dollars-and-cents amount string into integer cents. Zero is allowed
+/// (the lifetime-plan case); negatives and non-numbers are rejected. Pure so it
+/// is unit-testable.
+fn parse_price_cents(amount: &str) -> Result<i64, String> {
+    match amount.trim().parse::<f64>() {
+        Ok(a) if a >= 0.0 && a.is_finite() => Ok((a * 100.0).round() as i64),
+        _ => Err("Amount must be a number of 0 or more.".to_string()),
+    }
+}
+
+/// POST /admin/stripe/prices - create a Stripe price (dollars -> cents; 0 is a
+/// valid lifetime price), then redirect back.
+pub async fn stripe_price_create(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<StripePriceForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    if f.product_id.trim().is_empty() {
+        return redirect_cookies(
+            "/admin/stripe?toast_err=Select%20a%20product",
+            &c.set_cookies,
+        );
+    }
+    let cents = match parse_price_cents(&f.amount) {
+        Ok(v) => v,
+        Err(msg) => {
+            return redirect_cookies(
+                &format!("/admin/stripe?toast_err={}", urlenc(&msg)),
+                &c.set_cookies,
+            )
+        }
+    };
+    let body = json!({
+        "product_id": f.product_id.trim(),
+        "unit_amount": cents,
+        "currency": f.currency.trim(),
+        "interval": f.interval.trim(),
+    });
+    let target = match admin_api::create_stripe_price(&st.api, c.forward.as_deref(), body).await {
+        Ok(()) => "/admin/stripe?toast_ok=Price%20created".to_string(),
+        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// POST /admin/stripe/prices/{id}/archive
+pub async fn stripe_price_archive(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::archive_stripe_price(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => "/admin/stripe?toast_ok=Price%20archived".to_string(),
+        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// The tier -> Stripe catalog mapping form (BUNYIP-417). Same six price/product
+/// ID fields the Tier Settings page used to carry; they persist to the tier
+/// config via a partial update (blank = keep), so nothing is lost by the move.
+#[derive(Deserialize)]
+pub struct StripeCatalogForm {
+    #[serde(default)]
+    pub free_price_id: String,
+    #[serde(default)]
+    pub early_adopter_price_id: String,
+    #[serde(default)]
+    pub standard_price_id: String,
+    #[serde(default)]
+    pub lifetime_product_id: String,
+    #[serde(default)]
+    pub early_adopter_product_id: String,
+    #[serde(default)]
+    pub standard_product_id: String,
+}
+
+/// POST /admin/stripe/catalog - persist the tier -> Stripe price/product
+/// mapping. Only non-blank, in-bounds (<=255) fields are sent, so an untouched
+/// field keeps its stored value (matches the old Tier Settings behaviour).
+pub async fn stripe_catalog_save(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<StripeCatalogForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let mut body = serde_json::Map::new();
+    for (k, v) in [
+        ("free_price_id", &f.free_price_id),
+        ("early_adopter_price_id", &f.early_adopter_price_id),
+        ("standard_price_id", &f.standard_price_id),
+        ("lifetime_product_id", &f.lifetime_product_id),
+        ("early_adopter_product_id", &f.early_adopter_product_id),
+        ("standard_product_id", &f.standard_product_id),
+    ] {
+        let t = v.trim();
+        if !t.is_empty() && t.len() <= 255 {
+            body.insert(k.into(), json!(t));
+        }
+    }
+    let target = match admin_api::update_tier_config(
+        &st.api,
+        c.forward.as_deref(),
+        serde_json::Value::Object(body),
+    )
+    .await
+    {
+        Ok(()) => "/admin/stripe?toast_ok=Catalog%20mapping%20saved".to_string(),
+        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 #[derive(Deserialize)]
@@ -5147,6 +6362,351 @@ mod rate_limit_tests {
         assert_eq!(fmt_retry_secs(60), "1m");
         assert_eq!(fmt_retry_secs(125), "2m 5s");
     }
+
+    // -- BUNYIP-405: admin users list row --------------------------------------
+
+    const ROW_UID: &str = "11111111-1111-1111-1111-111111111111";
+
+    fn admin_user(email: &str, verified: bool, admin: bool) -> crate::api::types::AdminUser {
+        serde_json::from_value(serde_json::json!({
+            "id": ROW_UID,
+            "email": email,
+            "role": if admin { "admin" } else { "subscriber" },
+            "email_verified": verified,
+            "two_factor_enabled": false,
+            "membership_status": "none",
+            "subscription_tier": "standard",
+            "lifetime_member": false,
+            "created_at": "2026-01-01T00:00:00Z",
+            "last_login_at": null,
+            "grace_period_end": null,
+        }))
+        .expect("valid admin user json")
+    }
+
+    /// A suspended `AdminUser` (soft-deleted) built off the standard fixture.
+    fn suspended_admin_user(email: &str) -> crate::api::types::AdminUser {
+        let mut u = admin_user(email, true, false);
+        u.suspended = true;
+        u
+    }
+
+    #[test]
+    fn active_user_row_links_to_detail_with_no_inline_actions() {
+        let html = super::user_grid_row(&admin_user("ada@example.com", true, false)).into_string();
+        // The whole row is a link into the per-user detail view.
+        assert!(
+            html.contains(&format!(r#"href="/admin/users/{ROW_UID}""#)),
+            "active row links to the detail view"
+        );
+        assert!(html.contains("Verified"), "verified indicator shown");
+        // Every management action lives on the detail view (BUNYIP-405): the list
+        // row carries none of them, and no forms at all.
+        for action in [
+            "/role",
+            "/reset-password",
+            "/suspend",
+            "/delete",
+            "/lifetime",
+            "/entitlements",
+        ] {
+            assert!(
+                !html.contains(action),
+                "active list row must not carry the {action} action"
+            );
+        }
+        assert!(!html.contains("<form"), "active list row carries no forms");
+    }
+
+    #[test]
+    fn unverified_user_row_shows_unverified_status() {
+        let html = super::user_grid_row(&admin_user("new@example.com", false, false)).into_string();
+        assert!(html.contains("Unverified"), "unverified status shown");
+        assert!(!html.contains(">Verified<"));
+    }
+
+    #[test]
+    fn suspended_user_row_keeps_reactivate_and_is_not_a_link() {
+        let html = super::user_grid_row(&suspended_admin_user("gone@example.com")).into_string();
+        assert!(
+            html.contains(&format!(r#"action="/admin/users/{ROW_UID}/reactivate""#)),
+            "suspended row keeps the inline Reactivate action"
+        );
+        assert!(html.contains("Suspended"), "suspended badge shown");
+        // The detail view 404s for a soft-deleted user, so the suspended row is
+        // intentionally not a link into it.
+        assert!(
+            !html.contains(&format!(r#"href="/admin/users/{ROW_UID}""#)),
+            "suspended row is not a detail link"
+        );
+    }
+
+    // -- BUNYIP-410: users + memberships consolidation --------------------------
+
+    #[test]
+    fn user_row_shows_membership_tier() {
+        // The row carries the membership tier badge (the builder seeds "standard")
+        // alongside the verification indicator.
+        let html = super::user_grid_row(&admin_user("ada@example.com", true, false)).into_string();
+        assert!(html.contains("Standard"), "tier badge shown on the row");
+        assert!(html.contains("Verified"));
+    }
+
+    fn q(status: &str, tier: &str, verified: &str, search: &str) -> super::UsersQ {
+        super::UsersQ::from_query(super::UserQuery {
+            page: None,
+            search: (!search.is_empty()).then(|| search.to_string()),
+            status: (!status.is_empty()).then(|| status.to_string()),
+            tier: (!tier.is_empty()).then(|| tier.to_string()),
+            verified: (!verified.is_empty()).then(|| verified.to_string()),
+            sort: None,
+            dir: None,
+            page_size: None,
+        })
+    }
+
+    #[test]
+    fn usersq_href_emits_only_nondefault_params() {
+        // A clean, default state is a clean URL.
+        assert_eq!(q("", "", "", "").href(), "/admin/users");
+        // Filters appear; the default `active` status does not.
+        let href = q("all", "lifetime", "verified", "ada").href();
+        assert!(href.contains("status=all"));
+        assert!(href.contains("tier=lifetime"));
+        assert!(href.contains("verified=verified"));
+        assert!(href.contains("search=ada"));
+        // Default status is omitted.
+        assert!(!q("active", "", "", "").href().contains("status="));
+    }
+
+    #[test]
+    fn usersq_sort_toggles_then_switches_columns() {
+        let base = q("", "", "", "");
+        // First click on a column sorts ascending.
+        let asc = base.with_sort("email");
+        assert_eq!((asc.sort.as_str(), asc.dir.as_str()), ("email", "asc"));
+        // Clicking the same column again flips to descending.
+        let desc = asc.with_sort("email");
+        assert_eq!(desc.dir, "desc");
+        // Clicking a different column restarts ascending.
+        let other = desc.with_sort("joined");
+        assert_eq!((other.sort.as_str(), other.dir.as_str()), ("joined", "asc"));
+    }
+
+    #[test]
+    fn usersq_is_filtered_only_when_narrowed() {
+        assert!(!q("active", "", "", "").is_filtered(), "plain active view");
+        assert!(q("all", "", "", "").is_filtered(), "non-default status");
+        assert!(q("active", "lifetime", "", "").is_filtered(), "tier filter");
+        assert!(
+            q("active", "", "verified", "").is_filtered(),
+            "verified filter"
+        );
+        assert!(q("active", "", "", "ada").is_filtered(), "search");
+    }
+
+    #[test]
+    fn usersq_filter_change_resets_page() {
+        let mut on_page_3 = q("", "", "", "");
+        on_page_3.page = 3;
+        assert_eq!(on_page_3.with_tier("lifetime").page, 1);
+        assert_eq!(on_page_3.with_status("all").page, 1);
+        assert_eq!(on_page_3.with_search("x").page, 1);
+        // Paging itself does not reset the page.
+        assert_eq!(on_page_3.with_page(4).page, 4);
+    }
+
+    #[test]
+    fn users_panel_shows_count_filter_bar_and_sortable_headers() {
+        let panel =
+            super::users_panel(&q("active", "lifetime", "", ""), None, Some(13)).into_string();
+        // Panel is the htmx swap target.
+        assert!(panel.contains(r#"id="users-panel""#));
+        // Segmented control + sortable headers present.
+        assert!(panel.contains(r#"role="radiogroup""#));
+        assert!(panel.contains("data-sort-header"));
+        // An active tier filter renders a removable chip + Clear all.
+        assert!(panel.contains("Tier: Lifetime"));
+        assert!(panel.contains("Clear all"));
+    }
+
+    #[test]
+    fn verified_filter_parses_tri_state() {
+        assert_eq!(super::parse_verified_filter("verified"), Some(true));
+        assert_eq!(super::parse_verified_filter("unverified"), Some(false));
+        // Blank / absent / junk = no filter (both verified and unverified).
+        assert_eq!(super::parse_verified_filter(""), None);
+        assert_eq!(super::parse_verified_filter("anything"), None);
+    }
+
+    #[test]
+    fn tier_label_maps_every_tier() {
+        use crate::api::types::SubscriptionTier::*;
+        assert_eq!(super::tier_label(&Lifetime), "Lifetime");
+        assert_eq!(super::tier_label(&Free), "Free");
+        assert_eq!(super::tier_label(&EarlyAdopter), "Early Adopter");
+        assert_eq!(super::tier_label(&Standard), "Standard");
+    }
+
+    #[tokio::test]
+    async fn memberships_redirects_to_filtered_users() {
+        use axum::extract::Query;
+        use axum::http::header::LOCATION;
+
+        let loc = |resp: axum::response::Response| {
+            assert!(resp.status().is_redirection(), "must be a redirect");
+            resp.headers()
+                .get(LOCATION)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string()
+        };
+
+        // No tier -> the plain users list.
+        let r = super::memberships(Query(super::PageQuery {
+            page: None,
+            tier: None,
+        }))
+        .await;
+        assert_eq!(loc(r), "/admin/users");
+
+        // A known tier is preserved as the users-list filter.
+        let r = super::memberships(Query(super::PageQuery {
+            page: None,
+            tier: Some("lifetime".into()),
+        }))
+        .await;
+        assert_eq!(loc(r), "/admin/users?tier=lifetime");
+
+        // A junk tier falls back to the unfiltered list (matches the old page).
+        let r = super::memberships(Query(super::PageQuery {
+            page: None,
+            tier: Some("not-a-tier".into()),
+        }))
+        .await;
+        assert_eq!(loc(r), "/admin/users");
+    }
+
+    // -- BUNYIP-422: feedback list row + detail actions ------------------------
+
+    const FB_ID: &str = "22222222-2222-2222-2222-222222222222";
+
+    fn feedback_summary(status: &str) -> crate::api::types::AdminFeedbackSummary {
+        serde_json::from_value(serde_json::json!({
+            "id": FB_ID,
+            "name": "Ada Lovelace",
+            "email_masked": "a***@example.com",
+            "subject": "A bug report",
+            "message_excerpt": "Something went wrong when I clicked save.",
+            "status": status,
+            "created_at": "2026-01-01T00:00:00Z",
+        }))
+        .expect("feedback summary fixture")
+    }
+
+    #[test]
+    fn feedback_row_links_to_detail_with_no_inline_actions() {
+        let html =
+            super::feedback_row(&feedback_summary("new"), super::FeedbackTab::Active).into_string();
+        // The whole row is a link into the detail view, carrying the tab slug.
+        assert!(
+            html.contains(&format!(r#"href="/admin/feedback/{FB_ID}?from=active""#)),
+            "row links to the detail view with the tab slug"
+        );
+        // Status chip is shown; the summary content is present.
+        assert!(html.contains("New"), "status chip rendered");
+        assert!(html.contains("A bug report"), "subject shown");
+        // Every triage action lives on the detail view now: the list row
+        // carries no forms and none of the action endpoints.
+        assert!(!html.contains("<form"), "list row carries no forms");
+        for action in [
+            "/status",
+            "/mark-spam",
+            "/unmark-spam",
+            "/archive",
+            "/delete",
+        ] {
+            assert!(
+                !html.contains(action),
+                "list row must not carry the {action} action"
+            );
+        }
+    }
+
+    #[test]
+    fn feedback_row_carries_originating_tab_slug() {
+        let html =
+            super::feedback_row(&feedback_summary("new"), super::FeedbackTab::Spam).into_string();
+        assert!(
+            html.contains(&format!(r#"href="/admin/feedback/{FB_ID}?from=spam""#)),
+            "row from the Spam tab links back with ?from=spam"
+        );
+    }
+
+    #[test]
+    fn feedback_detail_actions_are_tab_aware() {
+        use crate::api::types::FeedbackStatus;
+        // Active: review + close + archive + spam + delete, all redirecting home.
+        let active =
+            super::feedback_detail_actions(FB_ID, &FeedbackStatus::New, super::FeedbackTab::Active)
+                .into_string();
+        assert!(active.contains(&format!(r#"action="/admin/feedback/{FB_ID}/status""#)));
+        assert!(active.contains(&format!(r#"action="/admin/feedback/{FB_ID}/mark-spam""#)));
+        assert!(active.contains(&format!(r#"action="/admin/feedback/{FB_ID}/delete""#)));
+        assert!(active.contains("Close"));
+        assert!(active.contains(r#"name="from" value="active""#));
+
+        // A reviewed item offers Un-review rather than Reviewed.
+        let reviewed = super::feedback_detail_actions(
+            FB_ID,
+            &FeedbackStatus::Reviewed,
+            super::FeedbackTab::Active,
+        )
+        .into_string();
+        assert!(reviewed.contains("Un-review"));
+
+        // Spam tab: Not spam + archive + delete, redirecting back to Spam.
+        let spam =
+            super::feedback_detail_actions(FB_ID, &FeedbackStatus::New, super::FeedbackTab::Spam)
+                .into_string();
+        assert!(spam.contains("Not spam"));
+        assert!(spam.contains(&format!(r#"action="/admin/feedback/{FB_ID}/unmark-spam""#)));
+        assert!(spam.contains(r#"name="from" value="spam""#));
+        assert!(!spam.contains("Close"), "spam tab has no Close action");
+
+        // Closed tab: Re-open, redirecting back to Closed.
+        let closed = super::feedback_detail_actions(
+            FB_ID,
+            &FeedbackStatus::Closed,
+            super::FeedbackTab::Closed,
+        )
+        .into_string();
+        assert!(closed.contains("Re-open"));
+        assert!(closed.contains(r#"name="from" value="closed""#));
+    }
+
+    #[test]
+    fn feedback_tab_from_query_round_trips() {
+        for (slug, tab) in [
+            ("active", super::FeedbackTab::Active),
+            ("closed", super::FeedbackTab::Closed),
+            ("spam", super::FeedbackTab::Spam),
+            ("archive", super::FeedbackTab::Archive),
+        ] {
+            assert_eq!(super::FeedbackTab::from_query(Some(slug)), tab);
+            assert_eq!(tab.query_slug(), slug);
+        }
+        // Absent / unknown falls back to Active.
+        assert_eq!(
+            super::FeedbackTab::from_query(None),
+            super::FeedbackTab::Active
+        );
+        assert_eq!(
+            super::FeedbackTab::from_query(Some("junk")),
+            super::FeedbackTab::Active
+        );
+    }
 }
 
 // --- application documentation (BUNYIP-388) ---------------------------------
@@ -5340,4 +6900,384 @@ pub async fn application_doc_delete(
         }
     };
     redirect_cookies(&target, &c.set_cookies)
+}
+
+#[cfg(test)]
+mod two_column_layout_tests {
+    // BUNYIP-415: the SSR analog of a wide/narrow visual-regression check is to
+    // assert the responsive two-column grid class (two columns at `lg`, one
+    // below) is present and that no fields were dropped when regrouping into
+    // blocks. The list-screen conversions (rate limits, IP bans, entitlements)
+    // reuse the same `lg:grid-cols-2` wrapper and are verified via screenshots.
+    use super::*;
+
+    #[test]
+    fn admin_block_grid_is_responsive_two_column() {
+        let grid = admin_block_grid(vec![
+            admin_block("Alpha", None, maud::html! { "a" }),
+            admin_block("Beta", Some("sub"), maud::html! { "b" }),
+        ])
+        .into_string();
+        assert!(grid.contains("grid"));
+        assert!(
+            grid.contains("lg:grid-cols-2"),
+            "two columns at lg, one below"
+        );
+        assert!(
+            grid.contains(">Alpha<") && grid.contains(">Beta<"),
+            "both block titles present"
+        );
+        assert!(grid.contains("sub"), "subtitle rendered when provided");
+    }
+
+    fn email_cfg() -> crate::api::types::EmailConfigResponse {
+        serde_json::from_value(json!({
+            "enabled": true, "smtp_host": "smtp.example.com", "smtp_port": 587,
+            "smtp_tls": "starttls", "smtp_username": "u", "has_smtp_password": true,
+            "smtp_password_masked": "****", "from_email": "no-reply@example.com",
+            "from_name": "Bunyip", "admin_notification_emails": ["ops@example.com"],
+            "source": "environment"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn email_screen_uses_two_column_blocks() {
+        let html = email_settings_content(Some(&email_cfg())).into_string();
+        assert!(
+            html.contains("lg:grid-cols-2"),
+            "email settings render as a responsive two-column grid"
+        );
+        assert!(html.contains("SMTP Connection") && html.contains("Notifications"));
+        for f in [
+            "smtp_host",
+            "smtp_port",
+            "from_email",
+            "admin_notification_emails",
+        ] {
+            assert!(html.contains(f), "field {f} preserved after regrouping");
+        }
+    }
+
+    fn auto_ban_cfg() -> crate::api::types::AutoBanConfigResponse {
+        serde_json::from_value(json!({
+            "enabled": true, "threshold": 10, "window_secs": 60,
+            "ban_duration_secs": 3600, "source": "database"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn auto_ban_screen_uses_two_column_blocks() {
+        let cfg = auto_ban_cfg();
+        let vals = AutoBanFormValues::from_config(&cfg);
+        let html = auto_ban_settings_content(Some(&cfg), &vals, None).into_string();
+        assert!(html.contains("lg:grid-cols-2"));
+        assert!(html.contains("Detection") && html.contains("Enforcement"));
+        for f in ["threshold", "window_secs", "ban_duration_secs"] {
+            assert!(html.contains(f), "field {f} preserved after regrouping");
+        }
+    }
+
+    fn tier_cfg() -> crate::api::types::TierConfigResponse {
+        serde_json::from_value(json!({
+            "lifetime_slots": 5, "early_adopter_slots": 5, "early_adopter_trial_days": 90,
+            "standard_trial_days": 30, "free_price_id": null, "early_adopter_price_id": null,
+            "standard_price_id": null, "source": "database",
+            "lifetime_slots_used": 2, "early_adopter_slots_used": 1
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn tier_settings_shows_slots_and_no_stripe_catalog() {
+        // BUNYIP-417: the Stripe catalog mapping moved to the Stripe page, so
+        // Tier Settings keeps only slots + trial days and carries none of the
+        // price/product-ID fields.
+        let vals = TierFormValues {
+            lifetime_slots: "5".into(),
+            early_adopter_slots: "5".into(),
+            early_adopter_trial_days: "90".into(),
+            standard_trial_days: "30".into(),
+            free_price_id: String::new(),
+            early_adopter_price_id: String::new(),
+            standard_price_id: String::new(),
+            lifetime_product_id: String::new(),
+            early_adopter_product_id: String::new(),
+            standard_product_id: String::new(),
+        };
+        let html = tier_settings_content(Some(&tier_cfg()), &vals, None).into_string();
+        for f in [
+            "lifetime_slots",
+            "early_adopter_slots",
+            "standard_trial_days",
+        ] {
+            assert!(html.contains(f), "slots/trials field {f} present");
+        }
+        assert!(
+            !html.contains("Stripe catalog"),
+            "catalog blocks moved to the Stripe page"
+        );
+        for f in [
+            "free_price_id",
+            "standard_product_id",
+            "early_adopter_price_id",
+        ] {
+            assert!(
+                !html.contains(f),
+                "catalog field {f} no longer on Tier Settings"
+            );
+        }
+        // It links to where the mapping now lives.
+        assert!(html.contains(r#"href="/admin/stripe""#));
+    }
+}
+
+#[cfg(test)]
+mod stripe_admin_tests {
+    // BUNYIP-416: unit coverage for the ported Products/Prices sections. The
+    // live product/price listing is exercised against Stripe by the bunyip-api
+    // integration tests (this port calls those existing endpoints); here we
+    // cover the rendering + the dollars->cents parsing, including the $0.00
+    // lifetime-price case that must render as a real price, not "--".
+    use super::{
+        format_stripe_amount, parse_price_cents, stripe_prices_block, stripe_products_block,
+    };
+    use crate::api::types::{StripePrice, StripeProduct};
+
+    fn product(id: &str, name: &str, active: bool) -> StripeProduct {
+        StripeProduct {
+            id: id.into(),
+            name: name.into(),
+            description: Some("desc".into()),
+            active,
+            created: 0,
+        }
+    }
+    fn price(id: &str, product_id: &str, amount: Option<i64>, active: bool) -> StripePrice {
+        StripePrice {
+            id: id.into(),
+            product_id: product_id.into(),
+            unit_amount: amount,
+            currency: "usd".into(),
+            recurring_interval: Some("month".into()),
+            active,
+        }
+    }
+
+    #[test]
+    fn format_stripe_amount_handles_zero_and_null() {
+        assert_eq!(format_stripe_amount(Some(0), "usd"), "$0.00");
+        assert_eq!(format_stripe_amount(Some(999), "usd"), "$9.99");
+        assert_eq!(format_stripe_amount(Some(1000), "eur"), "€10.00");
+        assert_eq!(format_stripe_amount(Some(500), "gbp"), "£5.00");
+        assert_eq!(format_stripe_amount(Some(1234), "aud"), "12.34 AUD");
+        assert_eq!(format_stripe_amount(None, "usd"), "--");
+    }
+
+    #[test]
+    fn parse_price_cents_allows_zero_rejects_bad() {
+        assert_eq!(parse_price_cents("0"), Ok(0)); // lifetime plan
+        assert_eq!(parse_price_cents("9.99"), Ok(999));
+        assert_eq!(parse_price_cents(" 10 "), Ok(1000));
+        assert!(parse_price_cents("-1").is_err());
+        assert!(parse_price_cents("").is_err());
+        assert!(parse_price_cents("abc").is_err());
+    }
+
+    #[test]
+    fn products_block_lists_and_gates_archive() {
+        let list = [
+            product("prod_a", "Personal Plan", true),
+            product("prod_b", "Old Plan", false),
+        ];
+        let html = stripe_products_block(Some(&list)).into_string();
+        assert!(html.contains("Personal Plan") && html.contains("Old Plan"));
+        assert!(html.contains(">Active<") && html.contains(">Archived<"));
+        // Create form present; archive only for the active product.
+        assert!(html.contains(r#"action="/admin/stripe/products""#));
+        assert!(html.contains(r#"action="/admin/stripe/products/prod_a/archive""#));
+        assert!(
+            !html.contains("prod_b/archive"),
+            "archived product has no Archive action"
+        );
+    }
+
+    #[test]
+    fn products_block_renders_load_error_state() {
+        let html = stripe_products_block(None).into_string();
+        assert!(html.contains("Could not load products"));
+    }
+
+    #[test]
+    fn prices_block_shows_zero_price_and_resolves_product_name() {
+        let products = [product("prod_life", "Lifetime", true)];
+        let prices = [price("price_free", "prod_life", Some(0), true)];
+        let html = stripe_prices_block(Some(&prices), &products).into_string();
+        assert!(
+            html.contains("$0.00"),
+            "zero lifetime price renders as $0.00, not --"
+        );
+        assert!(html.contains("Lifetime"), "product name resolved from id");
+        assert!(
+            html.contains(r#"action="/admin/stripe/prices""#),
+            "create form present"
+        );
+        assert!(html.contains(r#"action="/admin/stripe/prices/price_free/archive""#));
+    }
+
+    #[test]
+    fn catalog_section_renders_mapping_fields_prefilled() {
+        // BUNYIP-417: the tier -> Stripe catalog mapping now lives on the Stripe
+        // page, its own form posting to /admin/stripe/catalog, prefilled from the
+        // tier config.
+        let tier: crate::api::types::TierConfigResponse =
+            serde_json::from_value(serde_json::json!({
+                "lifetime_slots": 5, "early_adopter_slots": 5, "early_adopter_trial_days": 90,
+                "standard_trial_days": 30,
+                "free_price_id": "price_free123", "early_adopter_price_id": null,
+                "standard_price_id": null, "lifetime_product_id": "prod_life123",
+                "source": "database", "lifetime_slots_used": 0, "early_adopter_slots_used": 0
+            }))
+            .unwrap();
+        let html = super::stripe_catalog_section(Some(&tier)).into_string();
+        assert!(
+            html.contains(r#"action="/admin/stripe/catalog""#),
+            "catalog form present"
+        );
+        for f in ["free_price_id", "lifetime_product_id", "standard_price_id"] {
+            assert!(html.contains(f), "mapping field {f} present");
+        }
+        // Existing values are prefilled.
+        assert!(html.contains("price_free123") && html.contains("prod_life123"));
+        // Load-error state when the tier config is unavailable.
+        assert!(super::stripe_catalog_section(None)
+            .into_string()
+            .contains("Could not load the tier catalog mapping"));
+    }
+}
+
+/// BUNYIP-421: the users-list identity cell must ellipsise a long email without
+/// clipping the role/status badges that sit beside it.
+#[cfg(test)]
+mod identity_cell_clipping_tests {
+    use crate::api::types::{AdminUser, MembershipStatus, SubscriptionTier, UserRole};
+    use crate::views::ui::assert_no_truncating_flex_container;
+
+    fn user(role: UserRole, suspended: bool) -> AdminUser {
+        AdminUser {
+            id: "u1".into(),
+            email: "person.with.a.very.long.email.address@example.com".into(),
+            role,
+            email_verified: true,
+            two_factor_enabled: false,
+            membership_status: MembershipStatus::Active,
+            subscription_tier: SubscriptionTier::EarlyAdopter,
+            lifetime_member: false,
+            created_at: "2026-03-04T10:00:00Z".into(),
+            last_login_at: None,
+            grace_period_end: None,
+            suspended,
+        }
+    }
+
+    #[test]
+    fn badges_survive_a_long_email() {
+        let row = super::user_grid_row(&user(UserRole::Admin, false)).into_string();
+        // The clip was invisible in the markup: the badge WAS emitted, the row's
+        // own `overflow:hidden` just painted none of it. Guard the CSS shape.
+        assert_no_truncating_flex_container(&row);
+        assert!(row.contains(">Admin<"), "admin badge is rendered");
+        assert!(
+            row.contains(
+                r#"<span class="truncate">person.with.a.very.long.email.address@example.com</span>"#
+            ),
+            "the email, not the row, is what truncates: {row}"
+        );
+
+        let suspended = super::user_grid_row(&user(UserRole::Subscriber, true)).into_string();
+        assert_no_truncating_flex_container(&suspended);
+        assert!(
+            suspended.contains(">Suspended<"),
+            "suspended badge is rendered"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rate_limit_management_tests {
+    //! BUNYIP-413: the management controls are super-admin-only. The API
+    //! enforces that too, so these assert the UI does not offer a control the
+    //! caller's write would be refused for.
+    use super::*;
+
+    fn cfg(action: &str, overridden: bool) -> AdminRateLimitConfig {
+        AdminRateLimitConfig {
+            action: action.to_string(),
+            max_requests: if overridden { 25 } else { 5 },
+            window_seconds: 60,
+            default_max_requests: 5,
+            default_window_seconds: 60,
+            overridden,
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn config_card_offers_edit_and_revert_to_the_super_admin() {
+        let html = rate_limit_config_card(&[cfg("login", true)], true, true).into_string();
+        assert!(
+            html.contains(r#"action="/admin/rate-limits/config""#),
+            "the save form is rendered"
+        );
+        assert!(
+            html.contains(r#"action="/admin/rate-limits/config/reset""#),
+            "an overridden limit offers a revert"
+        );
+        assert!(
+            html.contains(r#"name="max_requests""#) && html.contains(r#"name="window_seconds""#)
+        );
+    }
+
+    #[test]
+    fn config_card_is_read_only_for_an_ordinary_admin() {
+        let html = rate_limit_config_card(&[cfg("login", true)], true, false).into_string();
+        assert!(
+            !html.contains("/admin/rate-limits/config"),
+            "no management form for a non-super-admin"
+        );
+        assert!(
+            html.contains("Only the super admin can change them."),
+            "the read-only card says why"
+        );
+        // The numbers are still visible, so the screen stays informative.
+        assert!(html.contains("Login"));
+    }
+
+    #[test]
+    fn a_limit_on_its_default_offers_no_revert() {
+        let html = rate_limit_config_card(&[cfg("login", false)], true, true).into_string();
+        assert!(html.contains(r#"action="/admin/rate-limits/config""#));
+        assert!(
+            !html.contains("/admin/rate-limits/config/reset"),
+            "nothing to revert when no override is in force"
+        );
+    }
+
+    #[test]
+    fn ban_add_card_posts_ip_reason_and_duration() {
+        let html = ip_ban_add_card().into_string();
+        assert!(html.contains(r#"action="/admin/ip-bans/add""#));
+        assert!(html.contains(r#"name="ip""#));
+        assert!(html.contains(r#"name="reason""#));
+        assert!(html.contains(r#"name="duration_secs""#));
+    }
+
+    #[test]
+    fn window_labels_are_compact() {
+        assert_eq!(fmt_window_secs(45), "45s");
+        assert_eq!(fmt_window_secs(60), "1m");
+        assert_eq!(fmt_window_secs(900), "15m");
+        assert_eq!(fmt_window_secs(3600), "1h");
+    }
 }

@@ -9,14 +9,6 @@
 // `{status,version}`), distinct from the `/v1/*` JSON API. On bunyip the
 // OIDC OP and the `/v1/*` API share one host (api.<tld>); resolve it the same
 // way the deploy-sync gate does.
-//
-// BUNYIP-303: on exit, writes `hub_live=<true|false>` to $GITHUB_OUTPUT so
-// e2e.yml can skip the Playwright suite when the soft-probe caught a broken
-// hub. Playwright otherwise sits for 3 minutes waiting for a DOM node that
-// will never appear (the mispushed-image case), then fails the whole run
-// against a PR the reviewer can do nothing about.
-
-import fs from 'node:fs';
 
 function pick(...values) {
   for (const v of values) {
@@ -100,13 +92,13 @@ async function probe(url) {
 //
 // Two callers set `soft: true` today:
 // - `hubIsProdApex` (BUNYIP-185): psa.systems does not yet serve /healthz.
-// - `E2E_HUB_SOFT` env var (BUNYIP-301): set from `.forgejo/workflows/e2e.yml`
-//   ONLY on `pull_request` events. A PR's own SHA never deploys, so a broken
+// - `E2E_HUB_SOFT` env var (BUNYIP-301): set by the PR gate,
+//   `.forgejo/workflows/e2e-pr.yml`. A PR's own SHA never deploys, so a broken
 //   staging deploy is not a signal about THIS PR's quality; downgrading to a
 //   warning stops staging outages from deadlocking outage-fix PRs. The push
 //   (post-merge deploy) path uses `wait-for-deploy.mjs` instead of this
-//   script, so post-merge staging-broken alerting is unchanged. Production
-//   `workflow_dispatch` also stays hard: E2E_HUB_SOFT is `'false'` for it.
+//   script, so post-merge staging-broken alerting is unchanged. A production
+//   `workflow_dispatch` stays hard: it does not set E2E_HUB_SOFT.
 async function probeHub(url, { soft = false } = {}) {
   console.log(`PR mode: probing ${url} (timeout ${TIMEOUT_MS / 1000}s)...`);
   const controller = new AbortController();
@@ -151,14 +143,8 @@ async function probeHub(url, { soft = false } = {}) {
 await probe(healthUrl);
 // Hub /healthz: hard + body-validating, except the prod apex stays soft until
 // psa.systems serves it (BUNYIP-185) OR the caller sets E2E_HUB_SOFT=true
-// (BUNYIP-301: set by e2e.yml on pull_request so a broken staging deploy does
-// not deadlock outage-fix PRs). See probeHub docstring for the full contract.
+// (BUNYIP-301: set by e2e-pr.yml so a broken staging deploy does not deadlock
+// outage-fix PRs). See probeHub docstring for the full contract.
 const hubSoft = hubIsProdApex || process.env.E2E_HUB_SOFT === 'true';
-const hubLive = await probeHub(hubHealthzUrl, { soft: hubSoft });
-// BUNYIP-303: emit the hub liveness to $GITHUB_OUTPUT so e2e.yml's suite step
-// can skip (not run + fail) when soft mode caught the hub down. Only fires
-// inside CI where GITHUB_OUTPUT is set; local invocations no-op.
-if (process.env.GITHUB_OUTPUT) {
-  fs.appendFileSync(process.env.GITHUB_OUTPUT, `hub_live=${hubLive ? 'true' : 'false'}\n`);
-}
+await probeHub(hubHealthzUrl, { soft: hubSoft });
 console.log('Reachability checks complete. Proceeding.');

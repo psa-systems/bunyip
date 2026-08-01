@@ -371,7 +371,7 @@ pub async fn authorize(
                 // `/login` needs them to know who the user is when offering
                 // the re-login form.
                 if stale_cookie_present {
-                    let secure = config.is_production();
+                    let secure = config.cookies_secure(&req);
                     // BUNYIP-266: clear at the configured cookie_domain so a
                     // stale domain-scoped sid from a pre-host-only deploy is
                     // also removed; `clear_op_session_only` already emits a
@@ -549,16 +549,24 @@ pub async fn authorize(
             );
         } else {
             // Third-party client: hand control to bunyip-web's consent page,
-            // now carrying the client's display name so the screen can name the
-            // requesting application (BUNYIP-342). The page reads every authorize
-            // parameter back from the URL so a successful Allow can issue a fresh
+            // now carrying the client's display name (BUNYIP-342) and, when set,
+            // its logo URL (BUNYIP-406) so the screen can name and picture the
+            // requesting application. The page reads every authorize parameter
+            // back from the URL so a successful Allow can issue a fresh
             // /oauth2/authorize redirect with the same state / nonce /
             // code_challenge.
+            let logo_param = client
+                .logo_uri
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .map(|logo| format!("&logo_uri={}", urlencoding::encode(logo)))
+                .unwrap_or_default();
             let consent_url = format!(
-                "{}/oauth2/consent?client_id={}&client_name={}&missing={}&continue={}",
+                "{}/oauth2/consent?client_id={}&client_name={}{}&missing={}&continue={}",
                 config.web_origin.trim_end_matches('/'),
                 urlencoding::encode(&q.client_id),
                 urlencoding::encode(&client.name),
+                logo_param,
                 urlencoding::encode(&missing.join(" ")),
                 urlencoding::encode(&format!("{}{}", provider.issuer(), req.uri())),
             );
@@ -699,7 +707,7 @@ async fn try_silent_sso(
         .and_then(|v| v.to_str().ok());
     let ip = crate::middleware::auth::extract_client_ip(req);
     let device_info = crate::middleware::auth::extract_device_info(req);
-    let secure = config.is_production();
+    let secure = config.cookies_secure(req);
     let cookie_domain = config.cookie_domain.as_deref();
     // BUNYIP-266: op_session cookie is host-only unless the operator
     // explicitly opted into cross-subdomain sharing. access/refresh
@@ -1337,6 +1345,7 @@ pub struct LogoutQuery {
 
 /// GET /oauth2/logout
 pub async fn logout(
+    req: HttpRequest,
     provider: web::Data<Option<Arc<OidcProvider>>>,
     query: web::Query<LogoutQuery>,
     user: OptionalUser,
@@ -1456,7 +1465,7 @@ pub async fn logout(
         }
     }
 
-    let secure = config.is_production();
+    let secure = config.cookies_secure(&req);
     let cookie_domain = config.cookie_domain.as_deref();
     let mut response = HttpResponse::Found();
     response.append_header(("Location", redirect));
