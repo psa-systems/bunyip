@@ -36,7 +36,11 @@ on:
 jobs:
   check:
     name: fmt + clippy + build + tests
-    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
+    # Dev label: this job compiles Rust natively on the runner, and only the dev
+    # image carries the C toolchain (cc/gcc/ld) plus the OpenSSL headers that
+    # crate build scripts need. On the base label it fails with
+    # `linker cc not found` (BUNYIP-444, #CLAUDE-203).
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_DEV_LATEST }}
     env:
       SQLX_OFFLINE: "true"
       # Disk-footprint controls. CI doesn't need full DWARF debug info -
@@ -78,6 +82,12 @@ jobs:
         # the two base URLs (BUNYIP-425).
         run: ./scripts/check-workflow-secrets.sh
 
+      - name: Check runner labels
+        # Keep the native cargo job on the dev image (the only one with a C
+        # toolchain), keep every label annotated, and keep the run-time
+        # toolchain install from creeping back (BUNYIP-444).
+        run: ./scripts/check-runner-labels.sh
+
       - name: Check security invariants
         # Grep-assert the shapes the BUNYIP-426 audit sweep removed: cookie
         # Secure derived from the transport, dunite pinned by rev, no signup
@@ -88,17 +98,6 @@ jobs:
       - name: Cap build parallelism
         # nproc/2 cap: never claim more than half the host (see CI.md "Concurrency cap").
         run: echo "CARGO_BUILD_JOBS=$(($(nproc) / 2))" >> "$GITHUB_ENV"
-
-      - name: Ensure C toolchain + native deps
-        # The RUNS_ON_OPENSUSE_BASE_LATEST image was trimmed of two things the
-        # build needs. `gcc` provides `cc`, which rustc drives linking through
-        # (without it: `linker cc not found`). `libopenssl-devel` provides the
-        # OpenSSL headers + `openssl.pc` that `openssl-sys` (pulled in via
-        # reqwest/native-tls) probes with pkg-config (without it:
-        # `Package 'openssl' not found`). The runner user is unprivileged, so
-        # zypper needs sudo (passwordless on the runner). Install what the
-        # trimmed base image dropped rather than assume it.
-        run: sudo zypper --non-interactive install --no-recommends gcc libopenssl-devel
 
       - name: Check formatting
         run: cargo fmt --all --check

@@ -37,6 +37,9 @@ on:
 jobs:
   build-and-push-api:
     name: Build and push API image
+    # Base label: nothing compiles on the runner. The musl build happens inside
+    # `docker buildx`, and the runner-side tooling is docker/nu/git only, all
+    # present in base (BUNYIP-444).
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
     permissions:
       contents: read

@@ -42,7 +42,7 @@ pre-commit: ensure-env
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-migrations check-workflows check-security check-build check-clippy check-fmt check-docker
+check: check-migrations check-workflows check-runners check-security check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -53,6 +53,12 @@ check-migrations:
 [group: 'checks']
 check-workflows:
     ./scripts/check-workflow-secrets.sh
+
+# Gate the runner labels: the native cargo job stays on the dev image, every
+# label carries its reason, no workflow installs a C toolchain (BUNYIP-444).
+[group: 'checks']
+check-runners:
+    ./scripts/check-runner-labels.sh
 
 # Gate the security shapes the BUNYIP-426 audit sweep removed (transport-derived
 # cookie Secure, rev-pinned dunite, no signup enumeration oracle, digest-pinned

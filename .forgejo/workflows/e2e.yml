@@ -63,6 +63,9 @@ concurrency:
 jobs:
   e2e:
     name: Playwright against deployment
+    # Base label: this job compiles nothing. It runs node/npm/Playwright against
+    # a deployed instance (`npm ci --ignore-scripts`, so no native addon builds
+    # either), and needs no C toolchain (BUNYIP-444).
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
 
     defaults:
