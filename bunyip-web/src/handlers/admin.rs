@@ -15,7 +15,7 @@ use serde_json::json;
 use crate::api::admin as admin_api;
 use crate::api::types::{
     AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, AdminIpBan,
-    AdminRateLimit, AdminRateLimitConfig, AppRestoreStatus, ApplicationGroup,
+    AdminRateLimit, AdminRateLimitConfig, AdminUser, AppRestoreStatus, ApplicationGroup,
     FeedbackAttachmentMeta, FeedbackStatus, RestoreReport, User, UserEntitlement,
 };
 use crate::auth::AuthCtx;
@@ -1928,6 +1928,50 @@ pub async fn user_revoke_lifetime(
 }
 
 /// GET /admin/users/{id} - single-user detail page with all admin actions in one place.
+/// BUNYIP-430: the per-user "Actions" card. Every state-changing control here
+/// routes through the one shared confirmation dialog - the `data-confirm`
+/// attribute, handled once in `assets/js/app.js`, which prompts on submit and
+/// cancels the POST when the admin declines. Each prompt names both the action
+/// and the specific user (by email), so an admin who opened the wrong row is
+/// told who they are about to affect before anything happens. Extracted from
+/// `user_detail` so the confirmations are unit-testable.
+fn user_actions_card(target: &AdminUser, is_admin_target: bool) -> Markup {
+    let who = target.email.as_str();
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="flex flex-col space-y-1.5 p-6 pb-2" {
+                h3 class="text-base font-semibold leading-none tracking-tight" { "Actions" }
+                p class="text-xs text-muted-foreground" { "All actions write an audit-log entry." }
+            }
+            div class="p-6 pt-2 flex flex-wrap gap-2" {
+                a href=(format!("/admin/users/{}/entitlements", target.id)) class=(button_class("outline", "default", "")) { "Manage Entitlements" }
+                form method="post" action=(format!("/admin/users/{}/role", target.id)) data-confirm=(format!("Change {}'s role to {}? Admins have full platform access.", who, if is_admin_target { "subscriber" } else { "admin" })) {
+                    input type="hidden" name="role" value=(if is_admin_target { "subscriber" } else { "admin" });
+                    button type="submit" class=(button_class("outline", "default", "")) { @if is_admin_target { "Demote to subscriber" } @else { "Promote to admin" } }
+                }
+                form method="post" action=(format!("/admin/users/{}/reset-password", target.id)) data-confirm=(format!("Send a password reset email to {who}?")) {
+                    button type="submit" class=(button_class("outline", "default", "")) { "Send password reset" }
+                }
+                @if target.lifetime_member {
+                    form method="post" action=(format!("/admin/users/{}/lifetime/revoke", target.id)) data-confirm=(format!("Revoke lifetime membership from {who}? They will be returned to standard tier with no active subscription.")) {
+                        button type="submit" class=(button_class("outline", "default", "")) { "Revoke lifetime" }
+                    }
+                } @else {
+                    form method="post" action=(format!("/admin/users/{}/lifetime", target.id)) data-confirm=(format!("Grant lifetime membership to {who}? Creates a $0 Stripe subscription.")) {
+                        button type="submit" class=(button_class("outline", "default", "")) { "Grant lifetime" }
+                    }
+                }
+                form method="post" action=(format!("/admin/users/{}/suspend", target.id)) data-confirm=(format!("Suspend (soft-delete) {who}?")) {
+                    button type="submit" class=(button_class("outline", "default", "")) { "Suspend" }
+                }
+                form method="post" action=(format!("/admin/users/{}/delete", target.id)) data-confirm=(format!("Delete {who}? This cannot be undone.")) {
+                    button type="submit" class=(button_class("outline", "default", "text-destructive hover:text-destructive")) { "Delete user" }
+                }
+            }
+        }
+    }
+}
+
 pub async fn user_detail(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -2032,12 +2076,12 @@ pub async fn user_detail(
                     }
                     div class="flex flex-wrap gap-2" {
                         @if !target.email_verified {
-                            form method="post" action=(format!("/admin/users/{}/email/verify", target.id)) data-confirm="Force-verify this email without the user confirming it?" {
+                            form method="post" action=(format!("/admin/users/{}/email/verify", target.id)) data-confirm=(format!("Force-verify {}'s email without them confirming it?", target.email)) {
                                 button type="submit" class=(button_class("outline", "default", "")) { "Force-verify email" }
                             }
                         }
                         @if target.two_factor_enabled {
-                            form method="post" action=(format!("/admin/users/{}/two-factor/reset", target.id)) data-confirm="Clear this user 2FA? Their authenticator and recovery codes are removed and they must re-enrol." {
+                            form method="post" action=(format!("/admin/users/{}/two-factor/reset", target.id)) data-confirm=(format!("Clear {}'s 2FA? Their authenticator and recovery codes are removed and they must re-enrol.", target.email)) {
                                 button type="submit" class=(button_class("outline", "default", "text-destructive hover:text-destructive")) { "Clear 2FA" }
                             }
                         } @else {
@@ -2062,38 +2106,9 @@ pub async fn user_detail(
                 }
             }
 
-            // Actions card
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                div class="flex flex-col space-y-1.5 p-6 pb-2" {
-                    h3 class="text-base font-semibold leading-none tracking-tight" { "Actions" }
-                    p class="text-xs text-muted-foreground" { "All actions write an audit-log entry." }
-                }
-                div class="p-6 pt-2 flex flex-wrap gap-2" {
-                    a href=(format!("/admin/users/{}/entitlements", target.id)) class=(button_class("outline", "default", "")) { "Manage Entitlements" }
-                    form method="post" action=(format!("/admin/users/{}/role", target.id)) data-confirm="Change this user role? Admins have full platform access." {
-                        input type="hidden" name="role" value=(if is_admin_target { "subscriber" } else { "admin" });
-                        button type="submit" class=(button_class("outline", "default", "")) { @if is_admin_target { "Demote to subscriber" } @else { "Promote to admin" } }
-                    }
-                    form method="post" action=(format!("/admin/users/{}/reset-password", target.id)) data-confirm="Send a password reset email to this user?" {
-                        button type="submit" class=(button_class("outline", "default", "")) { "Send password reset" }
-                    }
-                    @if target.lifetime_member {
-                        form method="post" action=(format!("/admin/users/{}/lifetime/revoke", target.id)) data-confirm="Revoke lifetime membership? User will be returned to standard tier with no active subscription." {
-                            button type="submit" class=(button_class("outline", "default", "")) { "Revoke lifetime" }
-                        }
-                    } @else {
-                        form method="post" action=(format!("/admin/users/{}/lifetime", target.id)) data-confirm="Grant lifetime membership? Creates a $0 Stripe subscription." {
-                            button type="submit" class=(button_class("outline", "default", "")) { "Grant lifetime" }
-                        }
-                    }
-                    form method="post" action=(format!("/admin/users/{}/suspend", target.id)) data-confirm="Suspend (soft-delete) this user?" {
-                        button type="submit" class=(button_class("outline", "default", "")) { "Suspend" }
-                    }
-                    form method="post" action=(format!("/admin/users/{}/delete", target.id)) data-confirm="Delete this user? This cannot be undone." {
-                        button type="submit" class=(button_class("outline", "default", "text-destructive hover:text-destructive")) { "Delete user" }
-                    }
-                }
-            }
+            // Actions card (BUNYIP-430): extracted so every significant control
+            // shares the one confirmation dialog and names the target user.
+            (user_actions_card(&target, is_admin_target))
         }
     };
     admin_response(&c, &user, "/admin/users", "User · Bunyip", content)
@@ -4508,12 +4523,12 @@ pub async fn user_entitlements(
                                     p class="text-xs text-muted-foreground" { (app.slug) }
                                 }
                                 @if has {
-                                    form method="post" action=(format!("/admin/users/{}/entitlements/revoke", user_id)) {
+                                    form method="post" action=(format!("/admin/users/{}/entitlements/revoke", user_id)) data-confirm=(format!("Revoke the {} entitlement from this user? They immediately lose access to it.", app.display_name)) {
                                         input type="hidden" name="slug" value=(app.slug);
                                         button type="submit" class=(button_class("outline", "sm", "")) { "Revoke" }
                                     }
                                 } @else {
-                                    form method="post" action=(format!("/admin/users/{}/entitlements/grant", user_id)) {
+                                    form method="post" action=(format!("/admin/users/{}/entitlements/grant", user_id)) data-confirm=(format!("Grant the {} entitlement to this user?", app.display_name)) {
                                         input type="hidden" name="slug" value=(app.slug);
                                         button type="submit" class=(button_class("outline", "sm", "")) { "Grant" }
                                     }
@@ -5317,7 +5332,7 @@ fn backup_settings_content(report: Option<&RestoreReport>, error: Option<&str>) 
                     p class="text-sm text-muted-foreground" { "Re-applies the account profile and re-grants the entitlements in the file, then dispatches each entitled app's data to that app. This overwrites the current profile." }
                 }
                 div class="p-6 pt-0" {
-                    form method="post" action="/integrations/backup/restore" enctype="multipart/form-data" class="space-y-4 max-w-md" {
+                    form method="post" action="/integrations/backup/restore" enctype="multipart/form-data" class="space-y-4 max-w-md" data-confirm="Restore from this backup file? This overwrites the current account profile and re-grants the entitlements in the file." {
                         div class="space-y-2" {
                             label class="text-sm font-medium" { "Backup file (.json)" }
                             input type="file" name="backup" accept="application/json,.json" required class=(dashboard_input());
@@ -6841,7 +6856,7 @@ pub async fn application_docs(
                             label class="text-sm block" { "Body (markdown)" textarea class="mt-1 w-full rounded border px-2 py-1 font-mono text-sm" name="body" rows="10" { (d.body) } }
                             button type="submit" class=(button_class("default", "sm", "")) { "Save" }
                         }
-                        form method="post" action=(format!("/admin/applications/{id}/docs/{}/delete", d.id)) {
+                        form method="post" action=(format!("/admin/applications/{id}/docs/{}/delete", d.id)) data-confirm="Delete this documentation entry? This cannot be undone." {
                             button type="submit" class=(button_class("destructive", "sm", "")) { "Delete" }
                         }
                     }
@@ -7279,6 +7294,98 @@ mod identity_cell_clipping_tests {
             suspended.contains(">Suspended<"),
             "suspended badge is rendered"
         );
+    }
+}
+
+#[cfg(test)]
+mod admin_action_confirm_tests {
+    //! BUNYIP-430: every significant admin control routes through the one shared
+    //! confirmation dialog (`data-confirm` + `assets/js/app.js`, which prompts
+    //! on submit and cancels the POST when the admin declines), and each prompt
+    //! names the action and the specific user (by email) it affects.
+    use super::user_actions_card;
+    use crate::api::types::{AdminUser, MembershipStatus, SubscriptionTier, UserRole};
+
+    const UID: &str = "22222222-2222-2222-2222-222222222222";
+
+    fn target(email: &str, lifetime_member: bool) -> AdminUser {
+        AdminUser {
+            id: UID.into(),
+            email: email.into(),
+            role: UserRole::Subscriber,
+            email_verified: true,
+            two_factor_enabled: false,
+            membership_status: MembershipStatus::None,
+            subscription_tier: SubscriptionTier::Free,
+            lifetime_member,
+            created_at: String::new(),
+            last_login_at: None,
+            grace_period_end: None,
+            suspended: false,
+        }
+    }
+
+    #[test]
+    fn grant_lifetime_confirms_and_names_the_user() {
+        let html = user_actions_card(&target("jane@example.com", false), false).into_string();
+        assert!(
+            html.contains(&format!(r#"action="/admin/users/{UID}/lifetime""#)),
+            "grant-lifetime form shown for a non-lifetime user"
+        );
+        assert!(
+            html.contains("Grant lifetime membership to jane@example.com?"),
+            "grant confirms and names the user: {html}"
+        );
+    }
+
+    #[test]
+    fn revoke_lifetime_confirms_and_names_the_user() {
+        let html = user_actions_card(&target("jane@example.com", true), false).into_string();
+        assert!(
+            html.contains(&format!(r#"action="/admin/users/{UID}/lifetime/revoke""#)),
+            "revoke form shown for a lifetime user"
+        );
+        assert!(
+            html.contains("Revoke lifetime membership from jane@example.com?"),
+            "revoke confirms and names the user: {html}"
+        );
+    }
+
+    #[test]
+    fn reset_password_confirms_and_names_the_user() {
+        let html = user_actions_card(&target("jane@example.com", false), false).into_string();
+        assert!(
+            html.contains("Send a password reset email to jane@example.com?"),
+            "reset-password confirms and names the user: {html}"
+        );
+    }
+
+    #[test]
+    fn role_change_shares_the_component_and_names_the_user() {
+        // BUNYIP-109 control (Make Admin / Demote) now routes through the same
+        // shared dialog and names the user, per BUNYIP-430 AC 3.
+        let html = user_actions_card(&target("jane@example.com", false), false).into_string();
+        assert!(
+            html.contains("Change jane@example.com's role to admin?")
+                || html.contains("Change jane@example.com&#39;s role to admin?"),
+            "role change confirms and names the user: {html}"
+        );
+    }
+
+    #[test]
+    fn every_action_form_is_gated_by_the_shared_confirm() {
+        // Cancelling the shared dialog (app.js) blocks the POST, so state is left
+        // unchanged (AC 5). Guard that no state-changing control in the card
+        // ships without data-confirm, for a lifetime and a non-lifetime user.
+        for lifetime in [false, true] {
+            let html = user_actions_card(&target("jane@example.com", lifetime), true).into_string();
+            let forms = html.matches("<form").count();
+            let confirms = html.matches("data-confirm=").count();
+            assert!(
+                forms > 0 && forms == confirms,
+                "every action form ({forms}) carries data-confirm ({confirms}): {html}"
+            );
+        }
     }
 }
 
