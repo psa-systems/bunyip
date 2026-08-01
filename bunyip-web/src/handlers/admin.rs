@@ -578,7 +578,9 @@ const MAX_MANUAL_BAN_SECS: i64 = 31_536_000;
 /// The "add a ban" card (BUNYIP-413): address, reason and duration. Rendered
 /// only for the super admin, who is the only account the API will accept it
 /// from.
-fn ip_ban_add_card() -> Markup {
+/// `prefill_ip` seeds the address field so a "Ban this address" link from
+/// elsewhere (BUNYIP-436: the feedback detail IP) lands here ready to submit.
+fn ip_ban_add_card(prefill_ip: Option<&str>) -> Markup {
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
             div class="flex flex-col space-y-1.5 p-6" {
@@ -587,7 +589,7 @@ fn ip_ban_add_card() -> Markup {
             }
             div class="p-6 pt-0" {
                 form method="post" action="/admin/ip-bans/add" class="grid gap-4 sm:grid-cols-4 sm:items-end" {
-                    div class="space-y-2 sm:col-span-1" { label class="text-sm font-medium" { "IP address" } input name="ip" required placeholder="203.0.113.7" class=(dashboard_input()); }
+                    div class="space-y-2 sm:col-span-1" { label class="text-sm font-medium" { "IP address" } input name="ip" required placeholder="203.0.113.7" value=(prefill_ip.unwrap_or_default()) class=(dashboard_input()); }
                     div class="space-y-2 sm:col-span-2" { label class="text-sm font-medium" { "Reason" } input name="reason" required maxlength="255" placeholder="Credential stuffing" class=(dashboard_input()); }
                     div class="space-y-2" { label class="text-sm font-medium" { "Duration (seconds)" } input name="duration_secs" type="number" min=(MIN_MANUAL_BAN_SECS) max=(MAX_MANUAL_BAN_SECS) value=(DEFAULT_MANUAL_BAN_SECS) class=(dashboard_input()); }
                     div class="sm:col-span-4" { button type="submit" class=(button_class("default", "default", "")) { (icon("shield-off", "mr-2 h-4 w-4")) "Ban address" } }
@@ -597,10 +599,22 @@ fn ip_ban_add_card() -> Markup {
     }
 }
 
+/// Query for the IP bans page. `ip` prefills the add-ban form so a
+/// "Ban this address" link (BUNYIP-436: from the feedback detail IP) arrives
+/// ready to submit.
+#[derive(Deserialize)]
+pub struct IpBansQuery {
+    pub ip: Option<String>,
+}
+
 /// Admin IP auto-ban view (BUNYIP-320): the currently-active IP bans surfaced by
 /// the subtask 7 endpoint, each liftable in place. AdminUser-guarded like the
 /// other admin pages; the add form (BUNYIP-413) is super-admin-only.
-pub async fn ip_bans(State(st): State<AppState>, headers: HeaderMap) -> Response {
+pub async fn ip_bans(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<IpBansQuery>,
+) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -612,7 +626,7 @@ pub async fn ip_bans(State(st): State<AppState>, headers: HeaderMap) -> Response
     let content = html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "IP Bans" } p class="mt-2 text-muted-foreground" { "IP addresses banned for abusive request patterns, automatically or by hand. Adding or lifting a ban takes effect on the address's next request." } }
-            @if user.is_super_admin { (ip_ban_add_card()) }
+            @if user.is_super_admin { (ip_ban_add_card(q.ip.as_deref())) }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" {
                     div class="flex items-center gap-3" { (icon("shield-off", "h-5 w-5 text-destructive")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Active Bans" } }
@@ -2815,8 +2829,16 @@ fn feedback_detail_view(f: &AdminFeedbackDetail, tab: FeedbackTab) -> Markup {
                     // BUNYIP-411: request metadata for spam tracing. Shown only
                     // when captured (dev / direct-hit submissions resolve no
                     // forwarded IP). Maud escapes both values.
+                    // BUNYIP-436: link the captured IP into the existing ban
+                    // flow (the /admin/ip-bans add form prefills from `?ip=`),
+                    // so a repeat spam source can be banned in one hop.
                     @if let Some(ip) = f.submitter_ip.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                        div { h3 class="text-sm font-semibold" { "IP address" } p class="text-sm text-muted-foreground font-mono" { (ip) } }
+                        div {
+                            h3 class="text-sm font-semibold" { "IP address" }
+                            p class="text-sm" {
+                                a href=(format!("/admin/ip-bans?ip={}", urlenc(ip))) class="font-mono text-primary underline-offset-4 hover:underline" title="Ban or look up this address" { (ip) }
+                            }
+                        }
                     }
                     @if let Some(ua) = f.user_agent.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
                         div { h3 class="text-sm font-semibold" { "User agent" } p class="text-sm text-muted-foreground break-all" { (ua) } }
@@ -7322,11 +7344,62 @@ mod rate_limit_management_tests {
 
     #[test]
     fn ban_add_card_posts_ip_reason_and_duration() {
-        let html = ip_ban_add_card().into_string();
+        let html = ip_ban_add_card(None).into_string();
         assert!(html.contains(r#"action="/admin/ip-bans/add""#));
         assert!(html.contains(r#"name="ip""#));
         assert!(html.contains(r#"name="reason""#));
         assert!(html.contains(r#"name="duration_secs""#));
+    }
+
+    /// BUNYIP-436: a "Ban this address" link carries the IP as `?ip=`, and the
+    /// add-ban form seeds its address field from it so the admin lands ready to
+    /// submit. An empty prefill leaves the field blank.
+    #[test]
+    fn ban_add_card_prefills_ip_from_query() {
+        let html = ip_ban_add_card(Some("203.0.113.7")).into_string();
+        assert!(
+            html.contains(r#"name="ip""#) && html.contains(r#"value="203.0.113.7""#),
+            "add-ban form seeds the address field from the prefill"
+        );
+        let blank = ip_ban_add_card(None).into_string();
+        assert!(
+            blank.contains(r#"value="""#) || !blank.contains("value="),
+            "no prefill leaves the address field empty"
+        );
+    }
+
+    /// BUNYIP-436: the captured IP on the feedback detail links into the ban
+    /// flow (the ip-bans page prefills its add form from `?ip=`), while the
+    /// user agent is shown as plain admin-only text. The address is
+    /// URL-encoded into the query.
+    #[test]
+    fn feedback_detail_links_ip_into_ban_flow() {
+        let detail = AdminFeedbackDetail {
+            id: "22222222-2222-2222-2222-222222222222".to_string(),
+            name: Some("Ada".to_string()),
+            email: None,
+            email_masked: None,
+            subject: Some("Broken button".to_string()),
+            tags: vec![],
+            message: "It does not work".to_string(),
+            page_path: None,
+            status: FeedbackStatus::New,
+            admin_response: None,
+            created_at: "2026-08-01T00:00:00Z".to_string(),
+            responded_at: None,
+            attachments: vec![],
+            submitter_ip: Some("203.0.113.7".to_string()),
+            user_agent: Some("Mozilla/5.0 Firefox/121.0".to_string()),
+        };
+        let html = super::feedback_detail_view(&detail, super::FeedbackTab::Spam).into_string();
+        assert!(
+            html.contains(r#"href="/admin/ip-bans?ip=203.0.113.7""#),
+            "the IP links into the ip-bans add flow"
+        );
+        assert!(
+            html.contains("Mozilla/5.0 Firefox/121.0"),
+            "user agent shown"
+        );
     }
 
     #[test]
