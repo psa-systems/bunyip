@@ -259,6 +259,18 @@ impl RateLimitConfig {
         key_kind: KeyKind::Ip,
     };
 
+    /// BUNYIP-433: SMTP "Test connection" button, 6 attempts per 5 minutes per
+    /// admin (keyed by the admin's user id). Each attempt opens a real
+    /// connect + TLS + AUTH handshake to the configured relay, so this bounds
+    /// how often that probe can fire and stops the button being used to hammer
+    /// (or slow-loris) the SMTP host.
+    pub const SMTP_TEST: Self = Self {
+        action: "smtp_test",
+        max_requests: 6,
+        window_seconds: 300,
+        key_kind: KeyKind::UserId,
+    };
+
     /// Every preset, so the admin read path can look one up by its stored
     /// `action` string (BUNYIP-315). Keep in lock-step with the consts above.
     pub const ALL: &'static [Self] = &[
@@ -279,6 +291,7 @@ impl RateLimitConfig {
         Self::OAUTH_REVOKE,
         Self::OAUTH_DISCOVERY,
         Self::FEEDBACK_SUBMIT,
+        Self::SMTP_TEST,
     ];
 
     /// Look up the preset for a stored `rate_limits.action` string. Returns

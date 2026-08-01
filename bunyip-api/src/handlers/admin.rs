@@ -10,6 +10,7 @@ use tokio;
 
 use chrono::{Duration, Utc};
 
+use super::check_rate_limit;
 use crate::config::Config;
 use crate::errors::AppError;
 use crate::middleware::AdminUser;
@@ -17,7 +18,7 @@ use crate::models::stripe::encrypt_secret;
 use crate::models::{
     AuditAction, CreateApplication, CreateApplicationGroup, CreateAuditLog,
     CreatePasswordResetToken, CreateRefreshToken, DeleteApplicationRequest, MembershipStatus,
-    SetApplicationGroupRequest, StripeConfigResponse, SwapApplicationOrderRequest,
+    RateLimitConfig, SetApplicationGroupRequest, StripeConfigResponse, SwapApplicationOrderRequest,
     UpdateApplication, UpdateApplicationGroup, UserResponse,
 };
 use crate::repositories::{
@@ -2401,6 +2402,73 @@ pub async fn update_email_config(
 
     Ok(success(
         email_config_response(resolved, "database", updated.updated_at, updated.updated_by),
+        request_id,
+    ))
+}
+
+/// POST /v1/admin/email/test
+///
+/// BUNYIP-433: verify the *currently saved* SMTP settings by opening a real
+/// connection, negotiating TLS, and authenticating, without sending any mail.
+/// Reports the specific stage that failed (connect / tls / auth) so an admin can
+/// tell a bad host from bad TLS from a rejected password. Motivated by PMS-669:
+/// a rotated password silently broke delivery, and only an auth-stage probe
+/// would have named it.
+///
+/// Rate limited per admin (`RateLimitConfig::SMTP_TEST`) so the button cannot be
+/// used to hammer the configured relay. Always returns 200 with an
+/// `{ ok, stage, message }` body: a failing SMTP target is a diagnostic result,
+/// not an API error. Only the rate-limit trip (429) surfaces as an error.
+pub async fn test_email_config(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    stripe_key_set: web::Data<EncryptionKeySet>,
+) -> Result<HttpResponse, AppError> {
+    use crate::config::EmailConfig;
+    use crate::repositories::EmailConfigRepository;
+
+    let request_id = get_request_id(&req);
+
+    // Keyed by the admin's user id (bare UUID, matching KeyKind::UserId so the
+    // admin rate-limit view can resolve it) rather than by IP, so the cap is
+    // per-operator and not shared across admins behind one NAT.
+    check_rate_limit(&pool, &admin.0.sub.to_string(), &RateLimitConfig::SMTP_TEST).await?;
+
+    // Test the saved config (not any unsaved form values): the point is to
+    // verify the credential email actually sends with. The web UI tells the
+    // admin to save before testing.
+    let row = EmailConfigRepository::get(&pool).await?;
+    let resolved = EmailConfig::from_db_row(&row, &stripe_key_set, config.is_production());
+
+    let outcome = EmailService::test_connection(&resolved).await;
+
+    let (ok, stage, message) = match &outcome {
+        Ok(()) => (
+            true,
+            "ok",
+            "SMTP connection and authentication succeeded.".to_string(),
+        ),
+        Err(e) => (false, e.stage.as_str(), e.message.clone()),
+    };
+
+    AuditLogRepository::create(
+        &pool,
+        CreateAuditLog::new(AuditAction::AdminEmailConnectionTested)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+            .with_metadata(serde_json::json!({
+                "smtp_host": resolved.smtp_host,
+                "smtp_port": resolved.smtp_port,
+                "smtp_tls": resolved.smtp_tls.as_str(),
+                "ok": ok,
+                "stage": stage,
+            })),
+    )
+    .await?;
+
+    Ok(success(
+        serde_json::json!({ "ok": ok, "stage": stage, "message": message }),
         request_id,
     ))
 }

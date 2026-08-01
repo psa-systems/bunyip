@@ -83,6 +83,10 @@ pub enum AuditAction {
     AdminStripeConfigUpdated,
     AdminTierConfigUpdated,
     AdminEmailConfigUpdated,
+    /// BUNYIP-433: an admin ran the SMTP "Test connection" probe. Metadata
+    /// carries host/port/tls, the `ok` result, and the failing `stage` (never
+    /// the password).
+    AdminEmailConnectionTested,
     AdminAutoBanConfigUpdated,
     AdminKeyRotation,
     /// BUNYIP-353: an account admin downloaded an account backup bundle.
@@ -229,6 +233,7 @@ impl AuditAction {
             AuditAction::AdminStripeConfigUpdated => "admin_stripe_config_updated",
             AuditAction::AdminTierConfigUpdated => "admin_tier_config_updated",
             AuditAction::AdminEmailConfigUpdated => "admin_email_config_updated",
+            AuditAction::AdminEmailConnectionTested => "admin_email_connection_tested",
             AuditAction::AdminAutoBanConfigUpdated => "admin_auto_ban_config_updated",
             AuditAction::AccountBackupCreated => "account_backup_created",
             AuditAction::AccountRestored => "account_restored",
@@ -301,6 +306,7 @@ impl AuditAction {
                 | AuditAction::AdminStripeConfigUpdated
                 | AuditAction::AdminTierConfigUpdated
                 | AuditAction::AdminEmailConfigUpdated
+                | AuditAction::AdminEmailConnectionTested
                 | AuditAction::AdminAutoBanConfigUpdated
                 | AuditAction::AccountBackupCreated
                 | AuditAction::AccountRestored

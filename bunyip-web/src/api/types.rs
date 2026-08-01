@@ -761,6 +761,16 @@ pub struct EmailConfigResponse {
     pub updated_by: Option<String>,
 }
 
+/// BUNYIP-433: result of the SMTP "Test connection" probe. `ok` is the headline
+/// pass/fail; on failure `stage` is one of `connect` / `tls` / `auth` and
+/// `message` is the admin-facing reason.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SmtpTestResult {
+    pub ok: bool,
+    pub stage: String,
+    pub message: String,
+}
+
 /// BUNYIP-351: auto-ban configuration surfaced to the admin settings form.
 /// Mirrors `bunyip-api`'s `AutoBanConfigResponse`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

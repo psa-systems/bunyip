@@ -5,6 +5,13 @@ use lettre::{
     message::header::ContentType, transport::smtp::authentication::Credentials, AsyncSmtpTransport,
     AsyncTransport, Message, Tokio1Executor,
 };
+// BUNYIP-433: lower-level SMTP client pieces for the "Test connection" probe,
+// which drives the handshake by hand (connect -> TLS -> AUTH -> QUIT) so it can
+// report the specific stage that failed instead of a generic send error.
+use lettre::transport::smtp::authentication::Mechanism;
+use lettre::transport::smtp::client::{AsyncSmtpConnection, TlsParameters};
+use lettre::transport::smtp::extension::ClientId;
+use std::time::Duration;
 use tera::{Context, Tera};
 
 use crate::config::{EmailConfig, SmtpTls};
@@ -15,6 +22,41 @@ use crate::models::Feedback;
 struct EmailRuntime {
     transport: Option<AsyncSmtpTransport<Tokio1Executor>>,
     config: EmailConfig,
+}
+
+/// BUNYIP-433: which stage of the SMTP handshake a `test_connection` probe
+/// reached before it failed. Lets the admin UI say *what* is wrong (the host,
+/// the TLS layer, or the credentials) instead of a single generic error, which
+/// is the whole point of the Test connection button: PMS-669 was a rotated
+/// password that silently broke delivery, and only the Auth stage names that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmtpTestStage {
+    /// TCP reach to `host:port` (host unreachable / connection refused / DNS).
+    Connect,
+    /// TLS negotiation: the implicit wrapper, or the STARTTLS upgrade.
+    Tls,
+    /// SMTP AUTH: the username/password was rejected by the relay.
+    Auth,
+}
+
+impl SmtpTestStage {
+    /// Stable machine-readable slug for the wire response / logs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SmtpTestStage::Connect => "connect",
+            SmtpTestStage::Tls => "tls",
+            SmtpTestStage::Auth => "auth",
+        }
+    }
+}
+
+/// BUNYIP-433: a failed SMTP connection test - the stage that failed plus an
+/// admin-facing reason. `Ok(())` from `test_connection` means connect + TLS +
+/// (when a username is set) authentication all succeeded.
+#[derive(Debug, Clone)]
+pub struct SmtpTestError {
+    pub stage: SmtpTestStage,
+    pub message: String,
 }
 
 /// Email service for sending transactional emails
@@ -57,6 +99,132 @@ impl EmailService {
         };
 
         Ok(Some(transport))
+    }
+
+    /// BUNYIP-433: verify SMTP settings by opening a real connection,
+    /// negotiating TLS, and authenticating, WITHOUT sending a message (it
+    /// issues QUIT after AUTH). Returns the specific [`SmtpTestStage`] that
+    /// failed so the admin can tell a bad host from bad TLS from a rejected
+    /// password - the failure PMS-669 hit, where a rotated password broke
+    /// delivery while everything still "looked" configured.
+    ///
+    /// Callers pass the currently *saved* config; no mail is delivered to any
+    /// recipient. `config.enabled` is intentionally ignored: the point is to
+    /// validate the credentials even before (or while) sending is switched on.
+    pub async fn test_connection(config: &EmailConfig) -> Result<(), SmtpTestError> {
+        // Bound every network step so an unresponsive relay cannot hang the
+        // request (and, with the endpoint's rate limit, cannot be used to tie
+        // up connections against a third-party host).
+        const TIMEOUT: Duration = Duration::from_secs(10);
+
+        let host = config.smtp_host.trim();
+        if host.is_empty() {
+            return Err(SmtpTestError {
+                stage: SmtpTestStage::Connect,
+                message: "SMTP host is not configured.".to_string(),
+            });
+        }
+
+        // Stage 1: plain TCP reach, done first even for implicit TLS. A combined
+        // connect+TLS call would surface an unreachable host and a TLS handshake
+        // failure through the same error; probing the socket first lets us
+        // report "connection failure" distinctly from "TLS negotiation failed".
+        match tokio::time::timeout(
+            TIMEOUT,
+            tokio::net::TcpStream::connect((host, config.smtp_port)),
+        )
+        .await
+        {
+            Err(_) => {
+                return Err(SmtpTestError {
+                    stage: SmtpTestStage::Connect,
+                    message: format!("Timed out connecting to {host}:{}.", config.smtp_port),
+                })
+            }
+            Ok(Err(e)) => {
+                return Err(SmtpTestError {
+                    stage: SmtpTestStage::Connect,
+                    message: format!("Could not connect to {host}:{}: {e}", config.smtp_port),
+                })
+            }
+            Ok(Ok(stream)) => drop(stream),
+        }
+
+        let hello = ClientId::default();
+        let tls_params = TlsParameters::new(host.to_string()).map_err(|e| SmtpTestError {
+            stage: SmtpTestStage::Tls,
+            message: format!("Could not build TLS parameters for {host}: {e}"),
+        })?;
+
+        // Stage 2: establish the SMTP connection with TLS. Implicit TLS wraps
+        // the socket during connect; STARTTLS connects plaintext then upgrades.
+        // Because the TCP reach already succeeded above, a failure here is a TLS
+        // problem (implicit) or a greeting/STARTTLS problem (explicit).
+        let mut conn = match config.smtp_tls {
+            SmtpTls::Implicit => AsyncSmtpConnection::connect_tokio1(
+                (host, config.smtp_port),
+                Some(TIMEOUT),
+                &hello,
+                Some(tls_params),
+                None,
+            )
+            .await
+            .map_err(|e| SmtpTestError {
+                stage: SmtpTestStage::Tls,
+                message: format!("TLS negotiation failed: {e}"),
+            })?,
+            SmtpTls::Starttls => {
+                let mut conn = AsyncSmtpConnection::connect_tokio1(
+                    (host, config.smtp_port),
+                    Some(TIMEOUT),
+                    &hello,
+                    None,
+                    None,
+                )
+                .await
+                .map_err(|e| SmtpTestError {
+                    stage: SmtpTestStage::Connect,
+                    message: format!("SMTP greeting failed: {e}"),
+                })?;
+                conn.starttls(tls_params, &hello)
+                    .await
+                    .map_err(|e| SmtpTestError {
+                        stage: SmtpTestStage::Tls,
+                        message: format!("STARTTLS negotiation failed: {e}"),
+                    })?;
+                conn
+            }
+        };
+
+        // Stage 3: authenticate, only when a username is configured (an open
+        // relay has none). This is the check that catches the rotated/rejected
+        // password. No message is sent - QUIT closes the session either way.
+        let auth = if config.smtp_username.is_empty() {
+            Ok(())
+        } else {
+            Self::authenticate(&mut conn, &config.smtp_username, &config.smtp_password).await
+        };
+        let _ = conn.quit().await;
+        auth
+    }
+
+    /// BUNYIP-433: run SMTP AUTH on an already-connected session and classify a
+    /// rejection as [`SmtpTestStage::Auth`]. Split out from `test_connection` so
+    /// the success and authentication-failure paths are unit-testable against an
+    /// in-process mock relay without standing up TLS.
+    async fn authenticate(
+        conn: &mut AsyncSmtpConnection,
+        username: &str,
+        password: &str,
+    ) -> Result<(), SmtpTestError> {
+        let creds = Credentials::new(username.to_string(), password.to_string());
+        conn.auth(&[Mechanism::Plain, Mechanism::Login], &creds)
+            .await
+            .map(|_| ())
+            .map_err(|e| SmtpTestError {
+                stage: SmtpTestStage::Auth,
+                message: format!("Authentication failed: {e}"),
+            })
     }
 
     /// Snapshot the current config (cheap clone under a short read lock; never held across .await).
@@ -1131,5 +1299,149 @@ mod tests {
             assert!(!body.contains("Someone asked"));
             assert!(!body.contains("(from"));
         }
+    }
+
+    // ---- BUNYIP-433: SMTP "Test connection" ---------------------------------
+
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as TokioBufReader};
+    use tokio::net::TcpListener;
+
+    fn config_with_smtp(host: &str, port: u16, tls: SmtpTls) -> EmailConfig {
+        EmailConfig {
+            smtp_host: host.to_string(),
+            smtp_port: port,
+            smtp_tls: tls,
+            smtp_username: "user@example.com".to_string(),
+            smtp_password: "pw".to_string(),
+            from_email: "noreply@a8n.run".to_string(),
+            from_name: "PSA".to_string(),
+            base_url: "http://localhost".to_string(),
+            enabled: true,
+            log_tokens: false,
+            app_name: "PSA".to_string(),
+            admin_notification_emails: Vec::new(),
+        }
+    }
+
+    /// Minimal in-process SMTP relay: greets, answers EHLO with an AUTH
+    /// advertisement, then accepts (235) or rejects (535) the first AUTH
+    /// command before QUIT. Plaintext, so the tests exercise the AUTH
+    /// classification in `authenticate` without standing up TLS.
+    async fn spawn_mock_smtp(accept_auth: bool) -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock smtp");
+        let addr = listener.local_addr().expect("mock smtp addr");
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept mock smtp");
+            let (read_half, mut write_half) = socket.into_split();
+            let mut reader = TokioBufReader::new(read_half);
+            let mut line = String::new();
+
+            write_half
+                .write_all(b"220 mock.local ESMTP\r\n")
+                .await
+                .unwrap();
+
+            // EHLO -> multiline 250 advertising AUTH.
+            reader.read_line(&mut line).await.unwrap();
+            write_half
+                .write_all(b"250-mock.local greets you\r\n250 AUTH PLAIN LOGIN\r\n")
+                .await
+                .unwrap();
+
+            // First AUTH command -> accept or reject.
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            let reply: &[u8] = if accept_auth {
+                b"235 2.7.0 Authentication successful\r\n"
+            } else {
+                b"535 5.7.8 Authentication credentials invalid\r\n"
+            };
+            write_half.write_all(reply).await.unwrap();
+
+            // Best-effort QUIT.
+            line.clear();
+            let _ = reader.read_line(&mut line).await;
+            let _ = write_half.write_all(b"221 2.0.0 Bye\r\n").await;
+        });
+        addr
+    }
+
+    #[test]
+    fn smtp_test_stage_as_str_is_stable() {
+        assert_eq!(SmtpTestStage::Connect.as_str(), "connect");
+        assert_eq!(SmtpTestStage::Tls.as_str(), "tls");
+        assert_eq!(SmtpTestStage::Auth.as_str(), "auth");
+    }
+
+    /// An unconfigured host is a Connect-stage failure, not a panic or a hang.
+    #[tokio::test]
+    async fn test_connection_reports_connect_stage_for_empty_host() {
+        let config = config_with_smtp("", 587, SmtpTls::Starttls);
+        let err = EmailService::test_connection(&config)
+            .await
+            .expect_err("empty host must fail");
+        assert_eq!(err.stage, SmtpTestStage::Connect);
+        assert!(err.message.contains("not configured"), "{}", err.message);
+    }
+
+    /// AC: "An unreachable host reports a connection failure specifically."
+    /// Bind then drop to get a loopback port with nothing listening.
+    #[tokio::test]
+    async fn test_connection_reports_connect_stage_for_unreachable_host() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let config = config_with_smtp(&addr.ip().to_string(), addr.port(), SmtpTls::Starttls);
+        let err = EmailService::test_connection(&config)
+            .await
+            .expect_err("closed port must fail");
+        assert_eq!(err.stage, SmtpTestStage::Connect);
+    }
+
+    /// AC: "A correct configuration reports success." The relay accepts AUTH.
+    #[tokio::test]
+    async fn authenticate_succeeds_when_relay_accepts() {
+        let addr = spawn_mock_smtp(true).await;
+        let hello = ClientId::default();
+        let mut conn = AsyncSmtpConnection::connect_tokio1(
+            addr,
+            Some(Duration::from_secs(5)),
+            &hello,
+            None,
+            None,
+        )
+        .await
+        .expect("connect to mock relay");
+        let result = EmailService::authenticate(&mut conn, "user@example.com", "correct").await;
+        let _ = conn.quit().await;
+        assert!(result.is_ok(), "expected auth success, got {result:?}");
+    }
+
+    /// AC: "A wrong password reports an authentication failure specifically."
+    #[tokio::test]
+    async fn authenticate_reports_auth_stage_when_relay_rejects() {
+        let addr = spawn_mock_smtp(false).await;
+        let hello = ClientId::default();
+        let mut conn = AsyncSmtpConnection::connect_tokio1(
+            addr,
+            Some(Duration::from_secs(5)),
+            &hello,
+            None,
+            None,
+        )
+        .await
+        .expect("connect to mock relay");
+        let err = EmailService::authenticate(&mut conn, "user@example.com", "wrong")
+            .await
+            .expect_err("expected auth rejection");
+        let _ = conn.quit().await;
+        assert_eq!(err.stage, SmtpTestStage::Auth);
+        assert!(
+            err.message.contains("Authentication failed"),
+            "{}",
+            err.message
+        );
     }
 }
