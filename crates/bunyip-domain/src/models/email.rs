@@ -40,8 +40,12 @@ pub struct EmailConfigResponse {
     /// "implicit" or "starttls".
     pub smtp_tls: String,
     pub smtp_username: String,
+    /// BUNYIP-432: whether a password is stored - a boolean fact only. The
+    /// password (and any masked/truncated form of it) is deliberately NOT in
+    /// this response: the field is write-only, so no representation of the
+    /// secret ever leaves the server. The client renders a fixed-length mask
+    /// from this flag alone.
     pub has_smtp_password: bool,
-    pub smtp_password_masked: Option<String>,
     pub from_email: String,
     pub from_name: String,
     pub admin_notification_emails: Vec<String>,
