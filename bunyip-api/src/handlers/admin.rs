@@ -2386,24 +2386,23 @@ fn smtp_tls_str(tls: &crate::config::SmtpTls) -> String {
     }
 }
 
-/// Build the API response from a resolved [`EmailConfig`], masking the password.
+/// Build the API response from a resolved [`EmailConfig`]. BUNYIP-432: the SMTP
+/// password is write-only, so the response carries only the boolean
+/// `has_smtp_password`; the plaintext (and any masked/last-4 form of it) never
+/// leaves the server. The client renders a fixed-length mask from the flag.
 fn email_config_response(
     resolved: crate::config::EmailConfig,
     source: &'static str,
     updated_at: chrono::DateTime<chrono::Utc>,
     updated_by: Option<uuid::Uuid>,
 ) -> crate::models::email::EmailConfigResponse {
-    use crate::models::stripe::mask_secret;
-    let has_smtp_password = !resolved.smtp_password.is_empty();
-    let smtp_password_masked = has_smtp_password.then(|| mask_secret(&resolved.smtp_password));
     crate::models::email::EmailConfigResponse {
         enabled: resolved.enabled,
         smtp_host: resolved.smtp_host,
         smtp_port: resolved.smtp_port as i32,
         smtp_tls: smtp_tls_str(&resolved.smtp_tls),
         smtp_username: resolved.smtp_username,
-        has_smtp_password,
-        smtp_password_masked,
+        has_smtp_password: !resolved.smtp_password.is_empty(),
         from_email: resolved.from_email,
         from_name: resolved.from_name,
         admin_notification_emails: resolved.admin_notification_emails,
@@ -3341,6 +3340,45 @@ mod tests {
     async fn maybe_pool() -> Option<PgPool> {
         let url = std::env::var("DATABASE_URL").ok()?;
         PgPool::connect(&url).await.ok()
+    }
+
+    // -- BUNYIP-432: SMTP password is write-only ------------------------------
+
+    #[test]
+    fn email_config_response_never_carries_the_password() {
+        // The settings payload must contain no representation of the SMTP
+        // password - not the plaintext, not a masked/last-4 form - only the
+        // has_smtp_password boolean.
+        let resp = crate::models::email::EmailConfigResponse {
+            enabled: true,
+            smtp_host: "smtp.example.com".into(),
+            smtp_port: 587,
+            smtp_tls: "starttls".into(),
+            smtp_username: "postmaster@example.com".into(),
+            has_smtp_password: true,
+            from_email: "no-reply@example.com".into(),
+            from_name: "Bunyip".into(),
+            admin_notification_emails: vec!["ops@example.com".into()],
+            source: "database",
+            updated_at: None,
+            updated_by: None,
+        };
+        let body = serde_json::to_string(&resp).unwrap();
+        assert!(
+            body.contains("\"has_smtp_password\":true"),
+            "the boolean fact is present"
+        );
+        assert!(
+            !body.contains("smtp_password_masked"),
+            "no masked-password field is serialized"
+        );
+        // The only `password` token in the whole body is the has_smtp_password
+        // key; any password value or masked field would add another.
+        assert_eq!(
+            body.matches("password").count(),
+            1,
+            "the sole password token is has_smtp_password: {body}"
+        );
     }
 
     // -- BUNYIP-431: admin tier move ------------------------------------------

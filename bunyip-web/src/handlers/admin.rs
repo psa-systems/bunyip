@@ -4978,7 +4978,12 @@ fn email_settings_content(cfg: Option<&crate::api::types::EmailConfigResponse>) 
                                         }
                                     }
                                     div class="space-y-2" { label class="text-sm font-medium" { "SMTP username" } input name="smtp_username" value=(e.smtp_username) autocomplete="off" class=(dashboard_input()); }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "SMTP password" } input name="smtp_password" type="password" autocomplete="new-password" placeholder=(e.smtp_password_masked.clone().unwrap_or_else(|| "(unchanged)".into())) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Stored encrypted. Leave blank to keep the current password." } }
+                                    div class="space-y-2" { label class="text-sm font-medium" { "SMTP password" } input name="smtp_password" type="password" autocomplete="new-password" placeholder=(if e.has_smtp_password { "••••••••" } else { "Not set" }) class=(dashboard_input()); p class="text-xs text-muted-foreground" {
+                                        // BUNYIP-432: the placeholder is a fixed-length mask driven only
+                                        // by has_smtp_password; the real password (and its length) never
+                                        // reaches the browser. Leave blank to keep the current one.
+                                        @if e.has_smtp_password { "A password is set (stored encrypted). Leave blank to keep it, or type a new one to replace it." } @else { "No password set. Stored encrypted when you save one." }
+                                    } }
                                 }
                             },
                         ),
@@ -7097,11 +7102,32 @@ mod two_column_layout_tests {
         serde_json::from_value(json!({
             "enabled": true, "smtp_host": "smtp.example.com", "smtp_port": 587,
             "smtp_tls": "starttls", "smtp_username": "u", "has_smtp_password": true,
-            "smtp_password_masked": "****", "from_email": "no-reply@example.com",
+            "from_email": "no-reply@example.com",
             "from_name": "Bunyip", "admin_notification_emails": ["ops@example.com"],
             "source": "environment"
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn smtp_password_field_is_a_fixed_mask_never_the_secret() {
+        // BUNYIP-432: the field is write-only. When a password is set the
+        // placeholder is a fixed-length mask (no last-4, no length hint); the
+        // real value is not in the type or the markup at all.
+        let html = email_settings_content(Some(&email_cfg())).into_string();
+        assert!(
+            html.contains(r#"placeholder="••••••••""#),
+            "a fixed-length mask is shown when a password is set: {html}"
+        );
+        assert!(
+            !html.contains("****") && !html.contains("(unchanged)"),
+            "no masked/last-4 or old placeholder leaks into the page"
+        );
+        // The empty-password variant shows a distinct, non-secret placeholder.
+        let mut none = email_cfg();
+        none.has_smtp_password = false;
+        let html_none = email_settings_content(Some(&none)).into_string();
+        assert!(html_none.contains(r#"placeholder="Not set""#));
     }
 
     #[test]

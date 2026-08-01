@@ -750,8 +750,11 @@ pub struct EmailConfigResponse {
     pub smtp_port: i32,
     pub smtp_tls: String,
     pub smtp_username: String,
+    /// BUNYIP-432: whether a password is stored - a boolean fact only. The API
+    /// no longer sends the password or any masked/truncated form of it (the
+    /// field is write-only), so the settings page renders a fixed-length mask
+    /// from this flag and never receives the secret.
     pub has_smtp_password: bool,
-    pub smtp_password_masked: Option<String>,
     pub from_email: String,
     pub from_name: String,
     pub admin_notification_emails: Vec<String>,
