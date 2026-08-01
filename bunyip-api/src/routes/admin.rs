@@ -280,6 +280,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             // Email config (BUNYIP-351)
             .route("/email", web::get().to(handlers::get_email_config))
             .route("/email", web::put().to(handlers::update_email_config))
+            .route("/email/test", web::post().to(handlers::test_email_config))
             // Auto-ban config (BUNYIP-351)
             .route(
                 "/auto-ban-config",

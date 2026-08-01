@@ -7,8 +7,8 @@ use super::types::{
     AdminFeedbackSummary, AdminIpBan, AdminRateLimit, AdminRateLimitConfig, AdminStatsResponse,
     AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList, ArchivedFeedback,
     AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary,
-    PaginatedResponse, RestoreReport, SeedTemplateInfo, StripeConfigResponse, StripePrice,
-    StripeProduct, TierConfigResponse, UserEntitlement,
+    PaginatedResponse, RestoreReport, SeedTemplateInfo, SmtpTestResult, StripeConfigResponse,
+    StripePrice, StripeProduct, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -887,6 +887,16 @@ pub async fn update_email_config(
 ) -> Result<(), ApiError> {
     let r = api.put("/admin/email", cookie, Some(body)).await?;
     ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-433: run the SMTP "Test connection" probe against the saved config.
+/// The API returns 200 with `{ ok, stage, message }` for a reached target
+/// (pass or fail); a non-2xx (e.g. 429 rate limit) becomes an `ApiError`.
+pub async fn test_email_config(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<SmtpTestResult, ApiError> {
+    parse(api.post("/admin/email/test", cookie, None).await?)
 }
 
 /// BUNYIP-353: POST an uploaded account backup bundle to the restore endpoint

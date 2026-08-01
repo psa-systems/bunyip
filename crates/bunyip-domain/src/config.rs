@@ -119,6 +119,17 @@ pub enum SmtpTls {
     Starttls,
 }
 
+impl SmtpTls {
+    /// Stable lowercase slug used in the DB (`email_config.smtp_tls`), the admin
+    /// API, and audit metadata. Inverse of the `from_db_row` string match.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SmtpTls::Implicit => "implicit",
+            SmtpTls::Starttls => "starttls",
+        }
+    }
+}
+
 /// Email configuration
 #[derive(Debug, Clone)]
 pub struct EmailConfig {

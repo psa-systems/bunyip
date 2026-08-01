@@ -50,7 +50,7 @@ pub use backup::{
     AppRestoreStatus, BackupService, MokoshBackupAdapter, PgAccountBackupStore, RestoreReport,
     StoredProfile, BACKUP_FORMAT_VERSION,
 };
-pub use email::EmailService;
+pub use email::{EmailService, SmtpTestError, SmtpTestStage};
 pub use event_bus::{BunyipEvent, EventBus};
 pub use geoip::GeoIpService;
 pub use jwt::{AccessTokenClaims, JwtService, RefreshTokenClaims, TwoFactorChallengeClaims};

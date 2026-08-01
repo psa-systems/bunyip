@@ -4829,7 +4829,8 @@ fn email_settings_content(cfg: Option<&crate::api::types::EmailConfigResponse>) 
                 // settings and the sender/notification settings sit in
                 // side-by-side blocks (one column below lg), inside one form so
                 // a single Save persists everything.
-                Some(e) => form method="post" action="/admin/email" class="space-y-6" {
+                Some(e) => div class="space-y-6" {
+                    form method="post" action="/admin/email" class="space-y-6" {
                     (admin_block_grid(vec![
                         admin_block(
                             "SMTP Connection",
@@ -4870,6 +4871,14 @@ fn email_settings_content(cfg: Option<&crate::api::types::EmailConfigResponse>) 
                         ),
                     ]))
                     button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
+                    }
+                    // BUNYIP-433: Test connection lives in its own form so it
+                    // submits no fields - it always tests the SAVED settings,
+                    // never the unsaved edits in the form above.
+                    form method="post" action="/admin/email/test" class="flex flex-wrap items-center gap-3 border-t border-border/50 pt-4" {
+                        button type="submit" class=(button_class("outline", "default", "")) { (icon("mail", "mr-2 h-4 w-4")) "Test connection" }
+                        p class="text-xs text-muted-foreground" { "Opens a connection to the saved SMTP server and signs in, without sending an email. Save changes first to test them." }
+                    }
                 },
             }
         }
@@ -5077,6 +5086,36 @@ pub async fn email_save(
         .ok();
     let content = html! {
         (error_box(&error))
+        (email_settings_content(cfg.as_ref()))
+    };
+    admin_response(&c, &user, "/admin/email", "Email · Bunyip", content)
+}
+
+/// POST /admin/email/test - BUNYIP-433. Run the SMTP "Test connection" probe
+/// against the saved settings and re-render the email page with a banner naming
+/// the outcome (and, on failure, the stage that failed). No mail is sent.
+pub async fn email_test(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+
+    let banner = match admin_api::test_email_config(&st.api, c.forward.as_deref()).await {
+        Ok(r) if r.ok => success_box(&r.message),
+        // Reached the relay but a stage failed: name it (connect / tls / auth).
+        Ok(r) => error_box(&format!(
+            "SMTP test failed at the {} stage. {}",
+            r.stage, r.message
+        )),
+        // Transport / rate-limit (429) error before the probe could report.
+        Err(e) => error_box(&e.user_message()),
+    };
+
+    let cfg = admin_api::email_config(&st.api, c.forward.as_deref())
+        .await
+        .ok();
+    let content = html! {
+        (banner)
         (email_settings_content(cfg.as_ref()))
     };
     admin_response(&c, &user, "/admin/email", "Email · Bunyip", content)
@@ -6957,6 +6996,23 @@ mod two_column_layout_tests {
         ] {
             assert!(html.contains(f), "field {f} preserved after regrouping");
         }
+    }
+
+    /// BUNYIP-433: the email page carries a Test connection control that POSTs to
+    /// its own endpoint (a separate form from Save, so it tests saved settings).
+    #[test]
+    fn email_screen_has_test_connection_button() {
+        let html = email_settings_content(Some(&email_cfg())).into_string();
+        assert!(
+            html.contains(r#"action="/admin/email/test""#),
+            "Test connection posts to /admin/email/test"
+        );
+        assert!(html.contains("Test connection"), "button label present");
+        // Distinct from the Save form so it submits no unsaved fields.
+        assert!(
+            html.matches("<form").count() >= 2,
+            "test control is its own form, separate from Save"
+        );
     }
 
     fn auto_ban_cfg() -> crate::api::types::AutoBanConfigResponse {
