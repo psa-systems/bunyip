@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use crate::errors::AppError;
+use crate::models::entitlement::entitlement_source;
 use crate::models::{
     CreateApplication, CreateApplicationGroup, CreateFeedback, CreateUser, MembershipStatus,
     SubscriptionTier, UserRole,
@@ -786,7 +787,7 @@ pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadErr
             .ok_or_else(|| {
                 LoadError::Reference(format!("entitlement app '{}' not found", e.app_slug))
             })?;
-        EntitlementRepository::grant(pool, user.id, app.id, None, "seed").await?;
+        EntitlementRepository::grant(pool, user.id, app.id, None, entitlement_source::SEED).await?;
         summary.entitlements += 1;
     }
 
