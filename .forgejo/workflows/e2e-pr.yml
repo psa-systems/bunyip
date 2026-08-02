@@ -33,7 +33,9 @@ jobs:
   e2e-pr:
     name: Install + reachability (no deployment secrets)
     # Base label: this job compiles nothing. It runs node/npm only
-    # (`npm ci --ignore-scripts`, so no native addon builds) (BUNYIP-444).
+    # (`npm ci --ignore-scripts`, so no native addon builds) (BUNYIP-444), and
+    # it never launches a browser, so it needs none of the browser system
+    # libraries that put e2e.yml on the dev label (BUNYIP-446).
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
 
     defaults:
@@ -57,9 +59,10 @@ jobs:
       - name: Install dependencies
         run: corepack npm ci --ignore-scripts
 
-      # Download only: no Chromium system libraries and no browser launch here,
-      # this proves the install resolves. The suite that actually drives a
-      # browser runs in e2e.yml.
+      # Download only: no browser launch here, this proves the install
+      # resolves. That is why the base label is correct for this job: nothing
+      # ever launches, so no browser system libraries are needed. The suite
+      # that actually drives a browser runs in e2e.yml, on the dev label.
       - name: Install Playwright browser
         run: corepack npx playwright install chromium
 
