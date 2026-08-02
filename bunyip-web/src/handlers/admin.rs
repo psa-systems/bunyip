@@ -384,27 +384,22 @@ pub async fn seed_data(
                     }
                 }
             }
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                div class="flex flex-col space-y-1.5 p-6" {
-                    div class="flex items-center gap-3" { (icon("download", "h-5 w-5 text-primary")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Export" } }
-                }
-                div class="p-6 pt-0" {
+            // BUNYIP-435: Export and Import flow into the two-column block grid
+            // (top-aligned, one column below lg) instead of two sparse
+            // full-width cards stacked vertically.
+            (admin_block_grid(vec![
+                admin_block("Export", None, html! {
                     p class="text-sm text-muted-foreground mb-4" { "Download the demo-domain users, feedback, and the full application catalog as a canonical seed JSON file. Passwords are never exported; re-imported accounts use the file's default password." }
                     a href="/admin/seed/export" class=(button_class("default", "default", "")) { (icon("download", "mr-2 h-4 w-4")) "Download seed export" }
-                }
-            }
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                div class="flex flex-col space-y-1.5 p-6" {
-                    div class="flex items-center gap-3" { (icon("layers", "h-5 w-5 text-primary")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Import" } }
-                }
-                div class="p-6 pt-0" {
+                }),
+                admin_block("Import", None, html! {
                     p class="text-sm text-muted-foreground mb-4" { "Paste a canonical seed JSON file. The import is idempotent and scoped to the reserved demo domain, so it only ever adds or refreshes seed rows." }
                     form method="post" action="/admin/seed/import" class="space-y-4" {
                         textarea name="seed_json" rows="12" required placeholder="{ \"version\": 1, ... }" class="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" {}
                         button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Import seed data" }
                     }
-                }
-            }
+                }),
+            ]))
         }
     };
     admin_response(&c, &user, "/admin/seed", "Seed Data · Bunyip", content)
@@ -3402,7 +3397,6 @@ fn checkbox_on(s: &str) -> bool {
 
 fn details_fields(v: &DetailsView) -> Markup {
     html! {
-        h4 class="text-lg font-semibold pt-2" { "Details" }
         div class="space-y-2" { label class="text-sm font-medium" { "Description" } input name="description" value=(v.description) class=(dashboard_input()); }
         div class="space-y-2" { label class="text-sm font-medium" { "Icon URL" } input name="icon_url" value=(v.icon_url) class=(dashboard_input()); }
         div class="space-y-2" { label class="text-sm font-medium" { "Subdomain" } input name="subdomain" value=(v.subdomain) class=(dashboard_input()); }
@@ -3525,28 +3519,40 @@ fn application_form(
                 p class="mt-2 text-muted-foreground" { (blurb) }
                 @if let Some(s) = surfaces { div class="mt-3" { (surface_tags(s)) } }
             }
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                div class="p-6" {
-                    form method="post" action=(action) class="space-y-4 max-w-md" {
-                        @if let Some(err) = error { (error_box(err)) }
-                        @if let Some(id) = identity {
-                            h4 class="text-lg font-semibold" { "Identity" }
+            // BUNYIP-435: the same two-column block layout as Email/Tier
+            // Settings. Details and Distribution sit side by side (one column
+            // below lg) inside one form, so a single Save persists everything.
+            // On create the Identity fields lead as a full-width block (they
+            // are absent when editing).
+            form method="post" action=(action) class="space-y-6" {
+                @if let Some(err) = error { (error_box(err)) }
+                @if let Some(id) = identity {
+                    (admin_block("Identity", None, html! {
+                        div class="space-y-4" {
                             div class="space-y-2" { label class="text-sm font-medium" { "Name" } input name="name" value=(id.name) required class=(dashboard_input()); }
                             div class="space-y-2" { label class="text-sm font-medium" { "Slug" } input name="slug" value=(id.slug) required class=(dashboard_input()); }
                             div class="space-y-2" { label class="text-sm font-medium" { "Display name" } input name="display_name" value=(id.display_name) required class=(dashboard_input()); }
                             div class="space-y-2" { label class="text-sm font-medium" { "Container name" } input name="container_name" value=(id.container_name) required class=(dashboard_input()); }
                         }
-                        div class="flex items-start gap-2" {
-                            input type="checkbox" name="is_hosted" value="true" checked[is_hosted] id="is_hosted" class="mt-1";
-                            label for="is_hosted" class="text-sm font-medium" { "Hosted app" p class="text-xs font-normal text-muted-foreground" { "Checked: shows as a launchable hub tile. Unchecked: catalog-only distribution product (downloads / OCI pulls only)." } }
+                    }))
+                }
+                (admin_block_grid(vec![
+                    admin_block("Details", None, html! {
+                        div class="space-y-4" {
+                            div class="flex items-start gap-2" {
+                                input type="checkbox" name="is_hosted" value="true" checked[is_hosted] id="is_hosted" class="mt-1";
+                                label for="is_hosted" class="text-sm font-medium" { "Hosted app" p class="text-xs font-normal text-muted-foreground" { "Checked: shows as a launchable hub tile. Unchecked: catalog-only distribution product (downloads / OCI pulls only)." } }
+                            }
+                            (details_fields(details))
                         }
-                        (details_fields(details))
-                        (distribution_fields(v))
-                        div class="flex items-center gap-2 pt-2" {
-                            button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
-                            a href="/admin/applications" class=(button_class("outline", "default", "")) { "Cancel" }
-                        }
-                    }
+                    }),
+                    admin_block("Distribution", None, html! {
+                        div class="space-y-4" { (distribution_fields(v)) }
+                    }),
+                ]))
+                div class="flex items-center gap-2 pt-2" {
+                    button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
+                    a href="/admin/applications" class=(button_class("outline", "default", "")) { "Cancel" }
                 }
             }
         }
@@ -4191,21 +4197,30 @@ fn group_form(
     html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { (heading) } p class="mt-2 text-muted-foreground" { "Group related applications under one heading on the Applications page." } }
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                div class="p-6" {
-                    form method="post" action=(action) class="space-y-4 max-w-md" {
-                        @if let Some(err) = error { (error_box(err)) }
-                        div class="space-y-2" { label class="text-sm font-medium" { "Name" } input name="name" value=(name) required class=(dashboard_input()); }
-                        div class="space-y-2" { label class="text-sm font-medium" { "Slug" } input name="slug" value=(slug) required class=(dashboard_input()); }
-                        div class="space-y-2" { label class="text-sm font-medium" { "Display name" } input name="display_name" value=(display_name) required class=(dashboard_input()); }
-                        div class="space-y-2" { label class="text-sm font-medium" { "Description" } input name="description" value=(description) class=(dashboard_input()); }
-                        div class="space-y-2" { label class="text-sm font-medium" { "Icon URL" } input name="icon_url" value=(icon_url) class=(dashboard_input()); }
-                        div class="space-y-2" { label class="text-sm font-medium" { "Sort order" } input name="sort_order" type="number" value=(sort_order) class=(dashboard_input()); }
-                        div class="flex items-center gap-2 pt-2" {
-                            button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
-                            a href="/admin/application-groups" class=(button_class("outline", "default", "")) { "Cancel" }
+            // BUNYIP-435: two-column block layout (Identity | Presentation),
+            // matching Email/Tier Settings, inside one form so a single Save
+            // persists everything.
+            form method="post" action=(action) class="space-y-6" {
+                @if let Some(err) = error { (error_box(err)) }
+                (admin_block_grid(vec![
+                    admin_block("Identity", None, html! {
+                        div class="space-y-4" {
+                            div class="space-y-2" { label class="text-sm font-medium" { "Name" } input name="name" value=(name) required class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Slug" } input name="slug" value=(slug) required class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Display name" } input name="display_name" value=(display_name) required class=(dashboard_input()); }
                         }
-                    }
+                    }),
+                    admin_block("Presentation", None, html! {
+                        div class="space-y-4" {
+                            div class="space-y-2" { label class="text-sm font-medium" { "Description" } input name="description" value=(description) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Icon URL" } input name="icon_url" value=(icon_url) class=(dashboard_input()); }
+                            div class="space-y-2" { label class="text-sm font-medium" { "Sort order" } input name="sort_order" type="number" value=(sort_order) class=(dashboard_input()); }
+                        }
+                    }),
+                ]))
+                div class="flex items-center gap-2 pt-2" {
+                    button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
+                    a href="/admin/application-groups" class=(button_class("outline", "default", "")) { "Cancel" }
                 }
             }
         }
@@ -7236,6 +7251,126 @@ mod two_column_layout_tests {
         }
         // It links to where the mapping now lives.
         assert!(html.contains(r#"href="/admin/stripe""#));
+    }
+
+    // BUNYIP-435: the remaining single-narrow-column settings screens adopt the
+    // same block-grid layout. Assert the responsive grid, the block titles, that
+    // every field survives the regroup, and that the old `max-w-md` cap is gone.
+
+    #[test]
+    fn application_form_uses_two_column_blocks() {
+        let details = DetailsView {
+            description: "d",
+            icon_url: "i",
+            subdomain: "s",
+            version: "v",
+            source_code_url: "src",
+            release_notes_url: "notes",
+            maintenance_message: "m",
+        };
+        let dist = DistView {
+            artifact_source: "release",
+            forgejo_owner: "o",
+            forgejo_repo: "r",
+            forgejo_package: "p",
+            pinned_release_tag: "t",
+            oci_image_owner: "oo",
+            oci_image_name: "on",
+            pinned_image_tag: "it",
+        };
+
+        // Edit page: no Identity block, Details | Distribution side by side.
+        let edit = application_form(
+            "/admin/applications/x/distribution",
+            "Edit x",
+            "blurb",
+            None,
+            true,
+            &details,
+            &dist,
+            None,
+            None,
+        )
+        .into_string();
+        assert!(
+            edit.contains("lg:grid-cols-2"),
+            "application form renders a responsive two-column grid"
+        );
+        assert!(
+            !edit.contains("max-w-md"),
+            "the fixed narrow-column cap is removed so the form fills the width"
+        );
+        assert!(edit.contains(">Details<") && edit.contains(">Distribution<"));
+        assert!(
+            !edit.contains(">Identity<"),
+            "no Identity block when editing"
+        );
+        for f in [
+            "description",
+            "icon_url",
+            "artifact_source",
+            "oci_image_owner",
+            "is_hosted",
+        ] {
+            assert!(edit.contains(f), "field {f} preserved");
+        }
+
+        // Create page: Identity fields lead as their own block.
+        let identity = IdentityView {
+            name: "n",
+            slug: "sl",
+            display_name: "dn",
+            container_name: "cn",
+        };
+        let create = application_form(
+            "/admin/applications",
+            "New",
+            "blurb",
+            Some(&identity),
+            false,
+            &details,
+            &dist,
+            None,
+            None,
+        )
+        .into_string();
+        assert!(create.contains(">Identity<"), "Identity block on create");
+        for f in ["name=\"name\"", "name=\"slug\"", "name=\"container_name\""] {
+            assert!(create.contains(f), "identity field {f} preserved");
+        }
+    }
+
+    #[test]
+    fn group_form_uses_two_column_blocks() {
+        let g = crate::api::types::ApplicationGroup {
+            id: "g1".into(),
+            name: "core".into(),
+            slug: "core".into(),
+            display_name: "Core".into(),
+            description: Some("desc".into()),
+            icon_url: Some("icon".into()),
+            sort_order: 3,
+        };
+        let html = group_form("/admin/application-groups/g1", "Edit", Some(&g), None).into_string();
+        assert!(
+            html.contains("lg:grid-cols-2"),
+            "group form renders a responsive two-column grid"
+        );
+        assert!(
+            !html.contains("max-w-md"),
+            "the fixed narrow-column cap is removed"
+        );
+        assert!(html.contains(">Identity<") && html.contains(">Presentation<"));
+        for f in [
+            "name=\"name\"",
+            "name=\"slug\"",
+            "name=\"display_name\"",
+            "name=\"description\"",
+            "name=\"icon_url\"",
+            "name=\"sort_order\"",
+        ] {
+            assert!(html.contains(f), "field {f} preserved after regrouping");
+        }
     }
 }
 
