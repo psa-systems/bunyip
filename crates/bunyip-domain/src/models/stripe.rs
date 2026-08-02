@@ -141,6 +141,17 @@ pub fn mask_secret(s: &str) -> String {
 
 #[derive(Debug, Serialize)]
 pub struct StripeConfigResponse {
+    /// BUNYIP-443: the Stripe secret key and webhook secret are returned to the
+    /// browser as a `mask_secret` hint (prefix + `***` + last 4), NOT the full
+    /// value. This is a deliberate posture, reviewed and kept under BUNYIP-443:
+    /// PMS-342 chose the last-4 hint for operator convenience in identifying
+    /// which credential is set, and BUNYIP-443 decided to retain it here rather
+    /// than take the write-only posture BUNYIP-432 chose for the SMTP password.
+    /// The ceiling is intentional and enforced by
+    /// `masked_response_never_carries_the_full_secret`: at most the last 4
+    /// characters ever leave the server, never the middle of the secret. If this
+    /// is ever revisited toward write-only, drop these two fields and render a
+    /// fixed-length mask from the `has_*` booleans (mirroring `has_smtp_password`).
     pub secret_key_masked: Option<String>,
     pub webhook_secret_masked: Option<String>,
     pub has_secret_key: bool,
@@ -337,6 +348,55 @@ mod tests {
         assert!(resp.has_secret_key);
         assert!(resp.has_webhook_secret);
         assert_eq!(resp.source, "database");
+    }
+
+    /// BUNYIP-443: keeping the last-4 hint is deliberate, but the ceiling is a
+    /// hard invariant: the serialized response must never carry the full secret
+    /// or its middle - only the prefix and last 4. This locks that ceiling so a
+    /// future change to `mask_secret` or the response cannot silently widen the
+    /// exposure back toward the full value.
+    #[test]
+    fn masked_response_never_carries_the_full_secret() {
+        let ks = test_key_set();
+        // Distinctive middles that must never appear in the payload.
+        let full_sk = "sk_live_MIDDLEsecretMATERIAL1234";
+        let full_wh = "whsec_MIDDLEsigningMATERIAL5678";
+        let (sk_ct, sk_nonce, _) = encrypt_secret(&ks, full_sk).unwrap();
+        let (wh_ct, wh_nonce, _) = encrypt_secret(&ks, full_wh).unwrap();
+
+        let config = StripeConfig {
+            id: 1,
+            secret_key: Some(sk_ct),
+            secret_key_nonce: Some(sk_nonce),
+            webhook_secret: Some(wh_ct),
+            webhook_secret_nonce: Some(wh_nonce),
+            key_version: 1,
+            updated_at: Utc::now(),
+            updated_by: None,
+            app_tag: None,
+            success_url: None,
+            cancel_url: None,
+            trial_period_days: None,
+        };
+
+        let resp = StripeConfigResponse::from_db(&config, &ks).unwrap();
+        let body = serde_json::to_string(&resp).unwrap();
+
+        // The full secrets and their sensitive middles are absent from the wire.
+        for leaked in [
+            full_sk,
+            full_wh,
+            "MIDDLEsecretMATERIAL",
+            "MIDDLEsigningMATERIAL",
+        ] {
+            assert!(
+                !body.contains(leaked),
+                "the full secret or its middle leaked into the response: {body}"
+            );
+        }
+        // Only the deliberate prefix + last-4 hint is present (BUNYIP-443).
+        assert!(body.contains("sk_live_***1234"));
+        assert!(body.contains("whsec_***5678"));
     }
 
     #[test]
