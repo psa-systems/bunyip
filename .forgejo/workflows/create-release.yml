@@ -28,6 +28,8 @@ jobs:
     if: >-
       github.event.pull_request.merged == true
       && startsWith(github.event.pull_request.head.ref, 'release/v')
+    # Base label: this job compiles nothing. It runs nu/git and one `http post`
+    # to the Forgejo release API, all present in base (BUNYIP-444).
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
     permissions:
       contents: write
