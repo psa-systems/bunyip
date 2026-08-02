@@ -11,6 +11,13 @@ pub mod entitlement_source {
     pub const ADMIN: &str = "admin";
     pub const STRIPE: &str = "stripe";
     pub const BACKFILL: &str = "backfill";
+    /// Granted by the demo-seed loader (`bunyip-api/src/seed.rs`, PMS-709). A
+    /// demo-domain reset removes these via the user CASCADE, so they never need
+    /// a source-scoped revoke the way Stripe grants do; the distinct value just
+    /// keeps demo provenance legible. Permitted by the
+    /// `application_entitlements_source_check` constraint since migration
+    /// 20260802000010.
+    pub const SEED: &str = "seed";
 }
 
 /// A grant linking one user to one product. Revoked grants are retained
