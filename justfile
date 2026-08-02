@@ -55,7 +55,8 @@ check-workflows:
     ./scripts/check-workflow-secrets.sh
 
 # Gate the runner labels: the native cargo job stays on the dev image, every
-# label carries its reason, no workflow installs a C toolchain (BUNYIP-444).
+# label carries its reason, no workflow installs at run time what the image
+# provides (C toolchain, BUNYIP-444; browser system libraries, BUNYIP-446).
 [group: 'checks']
 check-runners:
     ./scripts/check-runner-labels.sh

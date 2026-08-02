@@ -115,8 +115,8 @@ Consumed by the image-build and release workflows, not the suite.
 | --- | --- | --- | --- |
 | `PSA_SYSTEMS_PRIVATE_PACKAGE_PAT` | secret | `build-api`, `build-web`, `create-release` | Forgejo PAT. Registry push password for the published images (`REGISTRY_PASSWORD`) and the releases-API call in `create-release`. Needs `write:repository` (releases) plus package-write (image push) scope. |
 | `PSA_SYSTEMS_PRIVATE_PACKAGE_OWNER` | variable | `build-api`, `build-web` | Registry owner/org path segment for the published images (`REGISTRY_OWNER`). |
-| `RUNS_ON_OPENSUSE_BASE_LATEST` | variable | `build-api`, `build-web`, `create-release`, `e2e`, `e2e-pr` | Runner label for jobs that compile nothing on the runner (`runs-on`). |
-| `RUNS_ON_OPENSUSE_DEV_LATEST` | variable | `check` | Runner label for jobs that compile on the runner: only this image carries the C toolchain and OpenSSL headers (`runs-on`, BUNYIP-444). |
+| `RUNS_ON_OPENSUSE_BASE_LATEST` | variable | `build-api`, `build-web`, `create-release`, `e2e-pr` | Runner label for jobs that compile nothing on the runner and launch no browser (`e2e-pr` only downloads Chromium) (`runs-on`). |
+| `RUNS_ON_OPENSUSE_DEV_LATEST` | variable | `check`, `e2e` | Runner label for jobs the base image cannot serve: only this image carries the C toolchain and OpenSSL headers (`check`, BUNYIP-444) and the Playwright browser system libraries plus the pre-baked browsers (`e2e`, BUNYIP-446) (`runs-on`). |
 
 ### E2E (consumed by `e2e.yml`)
 
