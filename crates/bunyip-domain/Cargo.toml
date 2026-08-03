@@ -19,6 +19,12 @@ dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "c5730bc13
 # Generic Forgejo binary-distribution engine (artifact metadata, asset cache,
 # rate limiting). Bunyip implements its store traits over Postgres.
 dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "c5730bc13c25d9921b360e4afe314173fbbebfca" }
+# Shared Stripe primitives (DEV-495 / DEV-514): the constant-time webhook
+# signature verifier, shared with a8n-tools and mokosh. Pinned to the branch rev
+# that introduced the crate; the dunite-core/download pins stay at c5730bc since
+# dunite main advanced dunite-oidc in between (unrelated). Collapse all three to
+# the single merged rev once dunite PR #27 lands.
+dunite-stripe-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "0734f2adb4a7a85a29ae32815527d93b8efc06cb" }
 async-trait = "0.1"
 
 # Web framework + multipart.
