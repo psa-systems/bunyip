@@ -2059,6 +2059,36 @@ fn qr_svg(uri: &str) -> String {
         .unwrap_or_default()
 }
 
+/// BUNYIP-371: wrap a rendered secret (the TOTP key + QR, or recovery codes) so
+/// it is heavily blurred by default and revealed only on an explicit toggle, so
+/// a casual screen share does not expose it. CSS-only: a hidden checkbox toggled
+/// by its label un-blurs the value via `peer-checked:blur-none`, so it works
+/// even with JavaScript disabled - important because a no-JS user must still be
+/// able to read the setup key / recovery codes to finish enrolling. Best-effort
+/// only: a web page cannot mark itself hidden to native screen capture the way a
+/// native app (e.g. KeePassXC) can, and the blur is defeated by disabling GPU
+/// compositing - this stops ACCIDENTAL exposure, not a determined viewer. `id`
+/// must be unique on the page (it binds the checkbox to its reveal label).
+fn sensitive_reveal(id: &str, label: &str, content: Markup) -> Markup {
+    html! {
+        div data-sensitive {
+            // Hidden checkbox drives the reveal with NO JS; the label below is
+            // its control, and `peer-checked:blur-none` on the value un-blurs it.
+            input type="checkbox" id=(id) class="peer sr-only";
+            div class="mb-2 flex justify-end" {
+                label for=(id)
+                    class="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded px-2 text-xs text-muted-foreground hover:text-foreground peer-focus-visible:ring-2 peer-focus-visible:ring-ring" {
+                    i class="fa-regular fa-eye" aria-hidden="true" {}
+                    span { "Show / hide " (label) }
+                }
+            }
+            div class="blur-xl transition duration-150 peer-checked:blur-none" data-sensitive-value {
+                (content)
+            }
+        }
+    }
+}
+
 /// Single Maud renderer for the 2FA enrollment view: QR + manual key + the
 /// verification-code form. Used by BOTH the GET handler (no error) and the
 /// POST error path (error banner above the code input). Keeping a single
@@ -2084,11 +2114,18 @@ fn twofa_qr_view(
             div { h1 class="text-3xl font-bold" { (heading) } p class="mt-2 text-muted-foreground" { (subtitle) } }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
                 div class="p-6 space-y-6" {
-                    div class="flex justify-center rounded-lg bg-white p-4" { div class="[&_svg]:h-[200px] [&_svg]:w-[200px]" { (PreEscaped(qr_svg(&setup.otpauth_uri))) } }
-                    div class="space-y-2" {
-                        label class="text-sm text-muted-foreground" { "Or enter this key manually:" }
-                        code class="block rounded bg-muted px-3 py-2 text-sm font-mono break-all" { (setup.secret) }
-                    }
+                    // BUNYIP-371: blur the QR + manual key by default so an
+                    // in-progress enrollment on a shared screen is not captured;
+                    // the reveal toggle un-blurs to scan or copy.
+                    (sensitive_reveal("reveal-totp-key", "the authenticator setup key", html! {
+                        div class="space-y-6" {
+                            div class="flex justify-center rounded-lg bg-white p-4" { div class="[&_svg]:h-[200px] [&_svg]:w-[200px]" { (PreEscaped(qr_svg(&setup.otpauth_uri))) } }
+                            div class="space-y-2" {
+                                label class="text-sm text-muted-foreground" { "Or enter this key manually:" }
+                                code class="block rounded bg-muted px-3 py-2 text-sm font-mono break-all" { (setup.secret) }
+                            }
+                        }
+                    }))
                     @if let Some(msg) = error {
                         (error_box(msg))
                     }
@@ -2148,7 +2185,9 @@ pub async fn twofa_setup_post(
                 div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
                     div class="p-6 space-y-4" {
                         div class="rounded-lg border p-3 text-sm flex items-start gap-3" { (icon("alert-circle", "h-4 w-4 mt-0.5")) p class="text-sm" { "Save these codes now. You won't be able to see them again." } }
-                        div class="grid grid-cols-2 gap-2 rounded-lg bg-muted p-4" { @for code in &codes.codes { code class="text-center font-mono text-sm py-1" { (code) } } }
+                        (sensitive_reveal("reveal-recovery-codes", "recovery codes", html! {
+                            div class="grid grid-cols-2 gap-2 rounded-lg bg-muted p-4" { @for code in &codes.codes { code class="text-center font-mono text-sm py-1" { (code) } } }
+                        }))
                         a href="/settings" class=(button_class("default", "default", "w-full")) { "Done" }
                     }
                 }
@@ -2216,7 +2255,9 @@ fn twofa_recovery_result(codes: &[String]) -> Markup {
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
                 div class="p-6 space-y-4" {
                     div class="rounded-lg border p-3 text-sm flex items-start gap-3" { (icon("alert-circle", "h-4 w-4 mt-0.5")) p class="text-sm" { "Save these codes now. You won't be able to see them again." } }
-                    div class="grid grid-cols-2 gap-2 rounded-lg bg-muted p-4" { @for code in codes { code class="text-center font-mono text-sm py-1" { (code) } } }
+                    (sensitive_reveal("reveal-recovery-codes-new", "recovery codes", html! {
+                        div class="grid grid-cols-2 gap-2 rounded-lg bg-muted p-4" { @for code in codes { code class="text-center font-mono text-sm py-1" { (code) } } }
+                    }))
                     a href="/settings" class=(button_class("default", "default", "w-full")) { "Done" }
                 }
             }
@@ -2564,6 +2605,40 @@ mod tests {
         assert!(html.contains(r#"action="/settings/2fa/rekey/confirm""#));
         assert!(html.contains("Confirm new authenticator"));
         assert!(html.contains("ABCDABCDABCD")); // manual key rendered
+    }
+
+    // BUNYIP-371: secrets/codes are masked (blurred) by default and revealed only
+    // via a CSS-only (no-JS) checkbox toggle, but stay in the DOM (masking, not
+    // removal).
+    #[test]
+    fn sensitive_reveal_blurs_content_but_keeps_it_in_the_dom() {
+        let html =
+            super::sensitive_reveal("t-id", "recovery codes", maud::html! { code { "ABC-123" } })
+                .into_string();
+        assert!(html.contains("data-sensitive-value"));
+        assert!(html.contains("blur-xl"), "masked by default");
+        assert!(
+            html.contains("peer-checked:blur-none"),
+            "un-blurs only when revealed"
+        );
+        assert!(html.contains(r#"type="checkbox""#), "no-JS reveal control");
+        assert!(html.contains("ABC-123"), "content preserved, only masked");
+    }
+
+    #[test]
+    fn twofa_qr_view_masks_the_setup_key_by_default() {
+        let setup = crate::api::types::TwoFactorSetupResponse {
+            otpauth_uri: "otpauth://totp/Bunyip:u@x?secret=JBSWY3DP".into(),
+            secret: "JBSWY3DPEHPK3PXP".into(),
+        };
+        let html = super::twofa_qr_view(&setup, None, "h", "s", "/a", "b").into_string();
+        assert!(html.contains("data-sensitive-value"), "QR + key masked");
+        assert!(html.contains("blur-xl"), "blurred by default");
+        assert!(html.contains("peer-checked:blur-none"), "CSS-only reveal");
+        assert!(
+            html.contains("JBSWY3DPEHPK3PXP"),
+            "key still present, masked"
+        );
     }
 
     #[test]
