@@ -743,6 +743,7 @@ dependencies = [
  "dunite-core",
  "dunite-download",
  "dunite-feedback",
+ "dunite-stripe",
  "dunite-stripe-core",
  "futures-util",
  "hex",
@@ -1489,6 +1490,14 @@ dependencies = [
  "base64 0.21.7",
  "dunite-core",
  "jsonwebtoken",
+ "serde",
+]
+
+[[package]]
+name = "dunite-stripe"
+version = "0.1.0"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=0a810830c025cc1b9f9efa7d9fdfbc65cdccc8f2#0a810830c025cc1b9f9efa7d9fdfbc65cdccc8f2"
+dependencies = [
  "serde",
 ]
 

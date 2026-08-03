@@ -1,11 +1,20 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sqlx::FromRow;
-use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::errors::AppError;
 use crate::services::encryption::EncryptionKeySet;
+
+// DEV-515: the async-stripe response DTOs moved to the shared `dunite-stripe`
+// crate (consumed by a8n-tools too) and are re-exported here, so every
+// `crate::models::stripe::*` / `crate::models::*` path is unchanged across
+// bunyip-domain and bunyip-api. The DB `StripeConfig` model, the secret
+// encryption helpers, and `StripeConfigResponse` stay here (app-specific).
+pub use dunite_stripe::models::{
+    StripeCheckoutPrice, StripeInvoiceResponse, StripePriceResponse, StripeProductResponse,
+    StripeSubscriptionItemResponse, StripeSubscriptionResponse, StripeWebhookEndpointResponse,
+};
 
 #[derive(Debug, Clone, FromRow)]
 pub struct StripeConfig {
@@ -25,81 +34,6 @@ pub struct StripeConfig {
     pub success_url: Option<String>,
     pub cancel_url: Option<String>,
     pub trial_period_days: Option<i32>,
-}
-
-// --- Stripe API response structs ---
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StripeProductResponse {
-    pub id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub active: bool,
-    pub metadata: HashMap<String, String>,
-    pub created: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StripePriceResponse {
-    pub id: String,
-    pub product_id: String,
-    pub unit_amount: Option<i64>,
-    pub currency: String,
-    pub recurring_interval: Option<String>,
-    pub active: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StripeSubscriptionItemResponse {
-    pub price_id: String,
-    pub product_id: String,
-    pub quantity: Option<u64>,
-}
-
-/// The price actually purchased on a completed Checkout Session, fetched from
-/// the Stripe API (BUNYIP-215). Stripe omits `line_items` from the
-/// `checkout.session.completed` webhook payload, so this cannot be read off the
-/// event and must be retrieved with `line_items` expanded.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StripeCheckoutPrice {
-    pub price_id: String,
-    /// Amount in the smallest currency unit (cents), from the price's
-    /// `unit_amount`, falling back to the line item's `amount_total`.
-    pub amount: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StripeSubscriptionResponse {
-    pub id: String,
-    pub status: String,
-    pub current_period_start: i64,
-    pub current_period_end: i64,
-    pub cancel_at_period_end: bool,
-    pub items: Vec<StripeSubscriptionItemResponse>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StripeInvoiceResponse {
-    pub id: String,
-    pub customer_id: Option<String>,
-    pub amount_paid: i64,
-    pub currency: String,
-    pub status: Option<String>,
-    pub invoice_pdf: Option<String>,
-    pub hosted_invoice_url: Option<String>,
-    pub created: i64,
-    pub description: Option<String>,
-    pub number: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StripeWebhookEndpointResponse {
-    pub id: String,
-    pub url: String,
-    pub enabled_events: Vec<String>,
-    pub status: String,
-    /// Only present on creation
-    pub secret: Option<String>,
 }
 
 /// Encrypt plaintext with the current key. Returns (ciphertext, nonce, key_version).
