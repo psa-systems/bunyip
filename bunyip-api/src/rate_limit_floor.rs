@@ -31,6 +31,12 @@ use sqlx::PgPool;
 /// The probes are hit by orchestration on a fixed schedule and must not be able
 /// to consume a real client's budget; the Stripe webhook is HMAC-authenticated,
 /// carries no ambient credential, and legitimately arrives in retry bursts.
+/// `register-challenge` (BUNYIP-450) mints only a stateless, signed timestamp
+/// token (`JwtService::create_signup_challenge_token`: no DB write, no side
+/// effect), so minting is harmless and the floor added no protection - only a
+/// false 429 for real clients that share a source IP (a NAT/proxy, or the E2E
+/// runner) and for the register form's own challenge fetch. The register POST
+/// it precedes stays floored and bot-guarded (BUNYIP-377).
 const EXEMPT_PATHS: &[&str] = &[
     "/",
     "/health",
@@ -38,6 +44,7 @@ const EXEMPT_PATHS: &[&str] = &[
     "/e2e-bootstrapped",
     "/v1/health",
     "/v1/version",
+    "/v1/auth/register-challenge",
     "/v1/webhooks/stripe",
 ];
 
@@ -165,17 +172,24 @@ mod tests {
         assert!(is_exempt("/v1/version", &Method::GET));
         assert!(is_exempt("/v1/webhooks/stripe", &Method::POST));
         assert!(is_exempt("/v1/auth/refresh", &Method::OPTIONS));
+        // BUNYIP-450: the stateless signup timing-challenge mint is exempt.
+        assert!(is_exempt("/v1/auth/register-challenge", &Method::GET));
     }
 
     #[test]
     fn ordinary_endpoints_are_capped() {
         assert!(!is_exempt("/v1/auth/refresh", &Method::POST));
+        // The register POST stays floored even though its challenge is exempt.
         assert!(!is_exempt("/v1/auth/register", &Method::POST));
         assert!(!is_exempt("/v1/users/me", &Method::GET));
         assert!(!is_exempt("/v1/auth/password-reset/verify", &Method::GET));
         // Near-misses must not fall through the exact-match list.
         assert!(!is_exempt("/v1/healthz", &Method::GET));
         assert!(!is_exempt("/v1/webhooks/stripe/extra", &Method::POST));
+        assert!(!is_exempt(
+            "/v1/auth/register-challenge/extra",
+            &Method::GET
+        ));
     }
 
     /// Regression guard: this middleware must never hold a cloned
