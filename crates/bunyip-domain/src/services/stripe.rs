@@ -11,13 +11,18 @@ use crate::models::stripe::{
     StripeWebhookEndpointResponse,
 };
 use crate::services::encryption::EncryptionKeySet;
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use uuid::Uuid;
+// DEV-514: HMAC types are only needed by the webhook-signature tests now that
+// verification itself delegates to dunite-stripe-core.
+#[cfg(test)]
+use hmac::{Hmac, Mac};
+#[cfg(test)]
+use sha2::Sha256;
 
+#[cfg(test)]
 type HmacSha256 = Hmac<Sha256>;
 
 /// Metadata key used to tag Stripe products belonging to this application.
@@ -1297,76 +1302,44 @@ impl StripeService {
         Ok(session.url)
     }
 
-    /// Verify Stripe webhook signature (HMAC-SHA256)
+    /// Verify Stripe webhook signature (HMAC-SHA256).
+    ///
+    /// DEV-514: delegates to the shared `dunite-stripe-core` verifier, replacing
+    /// bunyip's local copy so the same check is not maintained in three repos.
+    /// The crate keeps the constant-time comparison bunyip introduced for
+    /// BUNYIP-107 (hex-decode each `v1` and `verify_slice` the MAC). Behaviour is
+    /// unchanged: `t=/v1=` parse, a 300s tolerance, and any `v1` entry matching
+    /// passes.
     pub fn verify_webhook_signature(
         &self,
         payload: &[u8],
         signature: &str,
     ) -> Result<(), AppError> {
-        let mut timestamp = None;
-        let mut signatures = Vec::new();
-
-        for part in signature.split(',') {
-            if let Some((key, value)) = part.split_once('=') {
-                match key.trim() {
-                    "t" => timestamp = Some(value.trim()),
-                    "v1" => signatures.push(value.trim().to_string()),
-                    _ => {}
+        let (config, _) = self.snapshot();
+        let now = chrono::Utc::now().timestamp();
+        dunite_stripe_core::verify_webhook_signature(
+            config.webhook_secret.as_bytes(),
+            payload,
+            signature,
+            dunite_stripe_core::DEFAULT_TOLERANCE_SECS,
+            now,
+        )
+        .map_err(|e| {
+            use dunite_stripe_core::StripeCoreError;
+            match e {
+                StripeCoreError::TimestampOutOfTolerance => {
+                    tracing::warn!("Webhook timestamp outside tolerance window");
+                    AppError::validation("signature", "Webhook timestamp too old")
+                }
+                StripeCoreError::MalformedSignatureHeader => {
+                    AppError::validation("signature", "Malformed webhook signature")
+                }
+                _ => {
+                    tracing::warn!("Webhook signature verification failed");
+                    AppError::Unauthorized
                 }
             }
-        }
-
-        let timestamp = timestamp.ok_or_else(|| {
-            AppError::validation("signature", "Missing timestamp in webhook signature")
-        })?;
-
-        if signatures.is_empty() {
-            return Err(AppError::validation("signature", "No v1 signature found"));
-        }
-
-        let ts: i64 = timestamp
-            .parse()
-            .map_err(|_| AppError::validation("signature", "Invalid timestamp"))?;
-        let now = chrono::Utc::now().timestamp();
-        if (now - ts).abs() > 300 {
-            tracing::warn!(
-                timestamp = ts,
-                now = now,
-                "Webhook timestamp outside tolerance window"
-            );
-            return Err(AppError::validation(
-                "signature",
-                "Webhook timestamp too old",
-            ));
-        }
-
-        let payload_str = std::str::from_utf8(payload)
-            .map_err(|_| AppError::validation("body", "Invalid UTF-8 in webhook payload"))?;
-        let signed_payload = format!("{}.{}", timestamp, payload_str);
-
-        let (config, _) = self.snapshot();
-        let mut mac = HmacSha256::new_from_slice(config.webhook_secret.as_bytes())
-            .map_err(|_| AppError::internal("Invalid webhook secret key"))?;
-        mac.update(signed_payload.as_bytes());
-
-        // BUNYIP-107: compare in constant time. Decode each provided `v1`
-        // signature from hex and verify it against the computed MAC with
-        // hmac's `verify_slice` (constant-time), instead of hex-encoding the
-        // expected MAC and string-comparing it (which short-circuits on the
-        // first differing byte and leaks timing on a billing-grant path).
-        // `verify_slice` consumes the MAC, so clone it per candidate signature.
-        let verified = signatures.iter().any(|sig| {
-            hex::decode(sig)
-                .map(|bytes| mac.clone().verify_slice(&bytes).is_ok())
-                .unwrap_or(false)
-        });
-
-        if verified {
-            Ok(())
-        } else {
-            tracing::warn!("Webhook signature verification failed");
-            Err(AppError::Unauthorized)
-        }
+        })
     }
 
     /// Create a Stripe Customer and a SetupIntent for $0 card authorization at signup.
