@@ -547,6 +547,15 @@ impl From<AppError> for LoadError {
     }
 }
 
+// DEV-516: the shared dunite-feedback repository returns `sqlx::Error`; the seed
+// path uses `?` into `LoadError`, so route it through the existing `AppError`
+// (which already maps `sqlx::Error`) to keep those call sites unchanged.
+impl From<sqlx::Error> for LoadError {
+    fn from(e: sqlx::Error) -> Self {
+        LoadError::Db(AppError::from(e))
+    }
+}
+
 impl fmt::Display for LoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

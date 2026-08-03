@@ -740,6 +740,22 @@ pub struct StripePrice {
     pub active: bool,
 }
 
+/// DEV-518: a Stripe webhook endpoint surfaced in the admin Stripe panel.
+/// Mirrors bunyip-api's `StripeWebhookEndpointResponse`. `secret` (the signing
+/// secret, `whsec_...`) is present ONLY in the create response - Stripe returns
+/// it once at creation and never again - so the create flow shows it once for
+/// the admin to paste into the Webhook secret field.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StripeWebhookEndpoint {
+    pub id: String,
+    pub url: String,
+    #[serde(default)]
+    pub enabled_events: Vec<String>,
+    pub status: String,
+    #[serde(default)]
+    pub secret: Option<String>,
+}
+
 /// BUNYIP-351: email / SMTP configuration surfaced to the admin settings form.
 /// Mirrors `bunyip-api`'s `EmailConfigResponse`; the SMTP password is never
 /// returned in plaintext (only a masked hint + `has_smtp_password`).

@@ -685,7 +685,11 @@ pub async fn delete_feedback(
     let request_id = get_request_id(&req);
     let feedback_id = path.into_inner();
 
-    FeedbackRepository::delete(&pool, feedback_id).await?;
+    // DEV-516: the shared repository returns `false` when no row matched; raise
+    // the not-found here (the crate stays error-agnostic).
+    if !FeedbackRepository::delete(&pool, feedback_id).await? {
+        return Err(AppError::not_found("Feedback"));
+    }
 
     AuditLogRepository::create(
         &pool,
@@ -744,7 +748,10 @@ pub async fn archive_feedback(
     let request_id = get_request_id(&req);
     let feedback_id = path.into_inner();
 
-    FeedbackRepository::archive_one(&pool, feedback_id).await?;
+    // DEV-516: shared repository returns `false` when no row matched.
+    if !FeedbackRepository::archive_one(&pool, feedback_id).await? {
+        return Err(AppError::not_found("Feedback"));
+    }
 
     AuditLogRepository::create(
         &pool,

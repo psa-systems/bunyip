@@ -8,7 +8,7 @@ use super::types::{
     AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList, ArchivedFeedback,
     AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary,
     PaginatedResponse, RestoreReport, SeedTemplateInfo, SmtpTestResult, StripeConfigResponse,
-    StripePrice, StripeProduct, TierConfigResponse, UserEntitlement,
+    StripePrice, StripeProduct, StripeWebhookEndpoint, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -890,6 +890,39 @@ pub async fn archive_stripe_price(
 ) -> Result<(), ApiError> {
     let r = api
         .delete(&format!("/admin/stripe/prices/{id}"), cookie, None)
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+// --- stripe webhook endpoints (DEV-518) -------------------------------------
+
+pub async fn list_stripe_webhooks(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Vec<StripeWebhookEndpoint>, ApiError> {
+    parse(api.get("/admin/stripe/webhooks", cookie).await?)
+}
+
+/// Returns the created endpoint, whose `secret` (the signing secret) is present
+/// exactly once here so the caller can show it for the admin to copy.
+pub async fn create_stripe_webhook(
+    api: &Api,
+    cookie: Option<&str>,
+    body: Value,
+) -> Result<StripeWebhookEndpoint, ApiError> {
+    parse(
+        api.post("/admin/stripe/webhooks", cookie, Some(body))
+            .await?,
+    )
+}
+
+pub async fn delete_stripe_webhook(
+    api: &Api,
+    cookie: Option<&str>,
+    id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .delete(&format!("/admin/stripe/webhooks/{id}"), cookie, None)
         .await?;
     ok_data(&r).map(|_| ())
 }

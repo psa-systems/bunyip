@@ -484,6 +484,15 @@ async fn main() {
             "/admin/stripe/prices/:id/archive",
             post(handlers::admin::stripe_price_archive),
         )
+        // DEV-518: Stripe webhook-endpoint management (backend already existed).
+        .route(
+            "/admin/stripe/webhooks",
+            post(handlers::admin::stripe_webhook_create),
+        )
+        .route(
+            "/admin/stripe/webhooks/:id/delete",
+            post(handlers::admin::stripe_webhook_delete),
+        )
         // BUNYIP-417: tier -> Stripe price/product mapping moved from Tier Settings.
         .route(
             "/admin/stripe/catalog",

@@ -25,6 +25,11 @@ dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "c5730
 # dunite main advanced dunite-oidc in between (unrelated). Collapse all three to
 # the single merged rev once dunite PR #27 lands.
 dunite-stripe-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "0734f2adb4a7a85a29ae32815527d93b8efc06cb" }
+# Shared feedback domain (DEV-495 / DEV-516): models + FeedbackRepository, lifted
+# from this crate's own superset into dunite so a8n-tools can share it. Pinned to
+# the branch rev that introduced the crate. The dunite pins collapse to one
+# merged rev in a follow-up.
+dunite-feedback = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "3c9d3f8e5784204230787411b25260fa9a7597b8" }
 # Shared Stripe service layer (DEV-495 / DEV-515). This slice provides the
 # async-stripe response DTOs, re-exported from this crate's models; the service
 # + runtime config land in a follow-up. Pinned to the branch rev that added it.
