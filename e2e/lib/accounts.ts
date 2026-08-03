@@ -35,14 +35,20 @@ export function disposableEmail(): string {
 // register-challenge sits under bunyip's per-IP unauthenticated rate-limit
 // floor (RateLimitConfig::API_UNAUTH = 20 req/60s/IP; the route is NOT in
 // rate_limit_floor::EXEMPT_PATHS), and every CI run shares one runner egress
-// IP, so a burst of overlapping runs can 429 it (BUNYIP-449). The floor's 429
-// carries a truthful Retry-After (seconds until the window frees), so honor it
-// up to a 65s ceiling (just over the 60s window); when the header is absent,
-// fall back to a short exponential backoff. Only 429 is retried - any other
-// non-ok status is returned unchanged so the caller surfaces it immediately.
+// IP, so a burst of overlapping runs can 429 it (BUNYIP-449). Retry only on
+// 429; any other status is returned unchanged for the caller to surface.
+//
+// The disposable specs run in the retries:0 `auth-ui` project under a 60s
+// per-test timeout (playwright.config.ts), and cannot take a whole-test retry
+// (that re-runs their login and deepens the 5/min login limit). So the in-test
+// backoff must fit inside the 60s budget with margin: cap each wait at
+// PER_WAIT_CAP_MS (10s) -> at most ~30s across the 3 retries. The floor's 429
+// carries a truthful Retry-After (seconds until the window frees); honor it but
+// clamp to the cap, and fall back to exponential backoff when it is absent. A
+// full-window (up to 60s) throttle cannot be waited out in-test - the durable
+// fix is exempting the route from the floor (BUNYIP-450).
 const CHALLENGE_MAX_RETRIES = 3;
-const RETRY_AFTER_CEIL_MS = 65_000;
-const BACKOFF_CAP_MS = 15_000;
+const PER_WAIT_CAP_MS = 10_000;
 
 async function fetchRegisterChallenge(ctx: APIRequestContext): Promise<APIResponse> {
   for (let attempt = 0; ; attempt += 1) {
@@ -58,10 +64,8 @@ async function fetchRegisterChallenge(ctx: APIRequestContext): Promise<APIRespon
       );
     }
     const parsed = Number.parseInt(retryAfter ?? '', 10);
-    const waitMs =
-      Number.isFinite(parsed) && parsed > 0
-        ? Math.min(parsed * 1_000, RETRY_AFTER_CEIL_MS)
-        : Math.min(2 ** attempt * 1_000, BACKOFF_CAP_MS);
+    const base = Number.isFinite(parsed) && parsed > 0 ? parsed * 1_000 : 2 ** attempt * 1_000;
+    const waitMs = Math.min(base, PER_WAIT_CAP_MS);
     console.warn(
       `register-challenge 429 (attempt ${attempt + 1}/${CHALLENGE_MAX_RETRIES + 1}, ` +
         `Retry-After: ${retryAfter ?? '(none)'}); waiting ${waitMs}ms before retry. body=${body}`,
