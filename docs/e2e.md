@@ -101,14 +101,33 @@ PR gate is a separate workflow that declares only the two base URLs (see
   (BUNYIP-359): choose a base32 secret, export it as `BUNYIP_E2E_TOTP_SECRET` in
   the api-container env, and run `just e2e-bootstrap --enable-2fa`; the bootstrap
   enrolls that PRESET secret and enables 2FA on the seeded accounts, so the
-  matching `E2E_TOTP_SECRET` stays STABLE across re-seeds (no rotation on every
-  wipe). The alternative is manual UI enrollment (below), which mints a fresh
+  matching `E2E_TOTP_SECRET` stays STABLE: the account's stored secret is a fixed
+  preset (not a per-enrollment random), and the c-01 Postgres is a persistent
+  external volume that no deploy or reseed wipes, so one correct enrollment
+  holds. The alternative is manual UI enrollment (below), which mints a fresh
   secret you must then re-capture. Note that bunyip consumes a TOTP code the
   moment it accepts it (BUNYIP-428, single use per RFC 6238 section 5.2), so two
   logins on the SAME account inside one 30s step collide: the second sees
   "Invalid verification code". `lib/login.ts` absorbs that by waiting out the
   step and resubmitting a fresh code once; specs that log in repeatedly should
   rely on `loginViaHub` rather than driving the 2FA form directly.
+
+  > **Invariant + recovery.** The account's enrolled secret (from `--enable-2fa`)
+  > and `E2E_STAGING_TOTP_SECRET` (the Forgejo Actions secret the suite reads as
+  > `E2E_TOTP_SECRET`) must be the byte-identical base32 string: the server
+  > verifies against the former, the suite generates codes from the latter. If
+  > they differ, EVERY code is rejected and login fails on the FIRST 2FA submit,
+  > so both `global.setup` and `login.spec` fail with `TOTP rejected on both
+  > attempts, including a fresh code from a new step` (`lib/login.ts`). Forgejo
+  > secrets are write-only, so do not try to read one to compare: pick a single
+  > base32 value `S`, set the Forgejo `E2E_STAGING_TOTP_SECRET = S`, and re-run
+  > `BUNYIP_E2E_TOTP_SECRET=S just e2e-bootstrap --enable-2fa` in the api
+  > container; the two are then equal by construction. This is a ONE-TIME fix (the
+  > enrollment persists, per the note above). Distinguish it from the single-use
+  > collision: a secret mismatch fails the FIRST login every time, whereas a
+  > collision only bites a SECOND login in the same 30s step and `lib/login.ts`
+  > already recovers it by waiting out the step (BUNYIP-453).
+
 - **Production:** provisioned manually (the bootstrap binary is gated to
   non-production by design). Create the account + tenant by hand, enable 2FA,
   and record the same vars under the `E2E_PRODUCTION_*` secret names.
