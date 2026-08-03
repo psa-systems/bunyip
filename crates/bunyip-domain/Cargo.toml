@@ -25,6 +25,10 @@ dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "c5730
 # dunite main advanced dunite-oidc in between (unrelated). Collapse all three to
 # the single merged rev once dunite PR #27 lands.
 dunite-stripe-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "0734f2adb4a7a85a29ae32815527d93b8efc06cb" }
+# Shared Stripe service layer (DEV-495 / DEV-515). This slice provides the
+# async-stripe response DTOs, re-exported from this crate's models; the service
+# + runtime config land in a follow-up. Pinned to the branch rev that added it.
+dunite-stripe = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "0a810830c025cc1b9f9efa7d9fdfbc65cdccc8f2" }
 async-trait = "0.1"
 
 # Web framework + multipart.
