@@ -5775,6 +5775,61 @@ fn stripe_prices_block(
 /// (separate from the keys/checkout config) posting to `/admin/stripe/catalog`,
 /// which partial-updates the tier config (blank = keep). `tier == None` renders
 /// a load-error note.
+/// DEV-518: events pre-filled into the create-endpoint form - the set bunyip's
+/// webhook processor actually handles. The admin can edit them before creating.
+const RECOMMENDED_WEBHOOK_EVENTS: &[&str] = &[
+    "checkout.session.completed",
+    "customer.subscription.created",
+    "customer.subscription.updated",
+    "customer.subscription.deleted",
+    "invoice.payment_succeeded",
+    "invoice.payment_failed",
+];
+
+/// DEV-518: the Webhook Endpoints block - a create form (endpoint URL + enabled
+/// events, pre-filled with the events bunyip processes) plus the list of
+/// registered endpoints, each with a Delete action. Fills the admin-UI gap the
+/// backend already had (list / create / delete_webhook_endpoint); the a8n-tools
+/// React admin already exposed this.
+fn stripe_webhooks_block(webhooks: Option<&[crate::api::types::StripeWebhookEndpoint]>) -> Markup {
+    admin_block(
+        "Webhook endpoints",
+        Some("Stripe posts subscription + payment events here. Create one, then copy its signing secret into the Webhook secret field above."),
+        html! {
+            form method="post" action="/admin/stripe/webhooks" class="space-y-3 mb-4" {
+                div class="space-y-1" { label class="text-xs font-medium" { "Endpoint URL" } input name="url" type="url" required placeholder="https://api.example.com/webhooks/stripe" class=(dashboard_input()); }
+                div class="space-y-1" {
+                    label class="text-xs font-medium" { "Enabled events" }
+                    textarea name="enabled_events" rows="2" class=(dashboard_input()) { (RECOMMENDED_WEBHOOK_EVENTS.join(", ")) }
+                    p class="text-xs text-muted-foreground" { "Comma- or whitespace-separated. Defaults to the events bunyip handles." }
+                }
+                button type="submit" class=(button_class("default", "sm", "")) { "Create endpoint" }
+            }
+            @match webhooks {
+                None => (error_box("Could not load webhook endpoints from Stripe. Add a valid API key above and save, then reload.")),
+                Some([]) => p class="py-6 text-center text-sm text-muted-foreground" { "No webhook endpoints yet. Create one to receive Stripe events." },
+                Some(list) => div class="divide-y" {
+                    @for w in list {
+                        div class="py-3 flex items-center justify-between gap-4" {
+                            div class="min-w-0" {
+                                p class="font-medium flex items-center gap-2" {
+                                    span class="truncate" { (w.url) }
+                                    @if w.status == "enabled" { (badge("success", "Enabled")) } @else { (badge("secondary", w.status.as_str())) }
+                                }
+                                p class="text-xs text-muted-foreground truncate" { (format!("{} event{}: ", w.enabled_events.len(), if w.enabled_events.len() == 1 { "" } else { "s" })) (w.enabled_events.join(", ")) }
+                                p class="text-xs text-muted-foreground font-mono truncate" { (w.id) }
+                            }
+                            form method="post" action=(format!("/admin/stripe/webhooks/{}/delete", w.id)) data-confirm="Delete this webhook endpoint? Stripe will stop sending events to it." {
+                                button type="submit" class=(button_class("outline", "sm", "")) { "Delete" }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
 fn stripe_catalog_section(tier: Option<&crate::api::types::TierConfigResponse>) -> Markup {
     let field = |label: &str, name: &str, ph: &str, value: &Option<String>| -> Markup {
         html! {
@@ -5828,6 +5883,8 @@ pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response 
     // key surfaces as None and the blocks render a "could not load" note.
     let products = admin_api::list_stripe_products(&st.api, fwd).await.ok();
     let prices = admin_api::list_stripe_prices(&st.api, fwd).await.ok();
+    // DEV-518: webhook endpoints, same load-or-None posture as products/prices.
+    let webhooks = admin_api::list_stripe_webhooks(&st.api, fwd).await.ok();
     // BUNYIP-417: the tier -> Stripe price/product mapping moved here from Tier
     // Settings, so all Stripe config lives under one nav entry.
     let tier = admin_api::tier_config(&st.api, fwd).await.ok();
@@ -5871,6 +5928,7 @@ pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response 
                     }
                     (stripe_products_block(products.as_deref()))
                     (stripe_prices_block(prices.as_deref(), products.as_deref().unwrap_or(&[])))
+                    (stripe_webhooks_block(webhooks.as_deref()))
                     (stripe_catalog_section(tier.as_ref()))
                 },
             }
@@ -5926,6 +5984,101 @@ pub async fn stripe_product_archive(
     };
     let target = match admin_api::archive_stripe_product(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => "/admin/stripe?toast_ok=Product%20archived".to_string(),
+        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+#[derive(Deserialize)]
+pub struct StripeWebhookForm {
+    pub url: String,
+    #[serde(default)]
+    pub enabled_events: String,
+}
+
+/// POST /admin/stripe/webhooks - create a Stripe webhook endpoint (DEV-518). On
+/// success renders a one-time page showing the signing secret (Stripe returns it
+/// only at creation); on error redirects back with a toast.
+pub async fn stripe_webhook_create(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<StripeWebhookForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let url = f.url.trim();
+    if url.is_empty() {
+        return redirect_cookies(
+            "/admin/stripe?toast_err=Endpoint%20URL%20is%20required",
+            &c.set_cookies,
+        );
+    }
+    // Split on commas + whitespace, drop blanks and duplicates (order-preserving).
+    let mut seen = std::collections::HashSet::new();
+    let mut events: Vec<String> = f
+        .enabled_events
+        .split(|ch: char| ch == ',' || ch.is_whitespace())
+        .map(str::trim)
+        .filter(|e| !e.is_empty() && seen.insert(e.to_string()))
+        .map(str::to_string)
+        .collect();
+    if events.is_empty() {
+        events = RECOMMENDED_WEBHOOK_EVENTS
+            .iter()
+            .map(|e| e.to_string())
+            .collect();
+    }
+    let body = json!({ "url": url, "enabled_events": events });
+    match admin_api::create_stripe_webhook(&st.api, c.forward.as_deref(), body).await {
+        Ok(w) => {
+            let content = html! {
+                div class="space-y-6 max-w-2xl" {
+                    div { h1 class="text-3xl font-bold" { "Webhook endpoint created" } p class="mt-2 text-muted-foreground" { "Copy the signing secret below into the Webhook secret field on the Stripe page - Stripe shows it only once." } }
+                    (admin_block(
+                        "Signing secret",
+                        Some(&format!("Endpoint: {}", w.url)),
+                        html! {
+                            @match w.secret.as_deref() {
+                                Some(secret) => div class="space-y-2" {
+                                    code class="block break-all rounded bg-muted p-3 font-mono text-sm" { (secret) }
+                                    p class="text-xs text-muted-foreground" { "Paste this into Stripe · Webhook secret, then Save." }
+                                },
+                                None => p class="text-sm text-muted-foreground" { "Stripe did not return a signing secret; retrieve it from the Stripe dashboard for this endpoint." },
+                            }
+                            div class="mt-4" { a href="/admin/stripe" class=(button_class("default", "default", "")) { "Back to Stripe" } }
+                        },
+                    ))
+                }
+            };
+            admin_response(
+                &c,
+                &user,
+                "/admin/stripe",
+                "Webhook created · Bunyip",
+                content,
+            )
+        }
+        Err(e) => redirect_cookies(
+            &format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
+    }
+}
+
+/// POST /admin/stripe/webhooks/{id}/delete (DEV-518).
+pub async fn stripe_webhook_delete(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::delete_stripe_webhook(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => "/admin/stripe?toast_ok=Webhook%20endpoint%20deleted".to_string(),
         Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
     };
     redirect_cookies(&target, &c.set_cookies)
