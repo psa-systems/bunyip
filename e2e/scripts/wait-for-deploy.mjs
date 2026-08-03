@@ -3,12 +3,11 @@
 // actually serving a commit at-or-newer than the most recent one that would
 // have produced an OCI image.
 //
-// The build-oci-image workflow only fires when one of a fixed set of paths
-// changes (bunyip-api/, bunyip-web/, crates/, migrations/, Cargo.toml,
-// Cargo.lock). A commit to main that touches only docs/tests/CI never
-// republishes the image, so the deployment keeps serving the PREVIOUS build.
-// Polling for GITHUB_SHA in that case times out on a hash the deployment can
-// never report.
+// The build-api.yml and build-web.yml workflows only fire when one of a fixed
+// set of paths changes (see BUILD_TRIGGER_PATHS below). A commit to main that
+// touches only docs/tests/CI never republishes an image, so the deployment
+// keeps serving the PREVIOUS build. Polling for GITHUB_SHA in that case times
+// out on a hash the deployment can never report.
 //
 // Resolve the expected SHA the same way the build trigger does: walk
 // `git log` from GITHUB_SHA backwards, find the most recent commit that
@@ -30,17 +29,23 @@
 
 import { execFileSync } from 'node:child_process';
 
-// Keep in lock-step with the on.push.paths in the build-oci-image workflow.
-// A path here that the build workflow does not list will make the gate poll
-// for a SHA the deployment never serves; a path the build lists that this
-// misses will make the gate accept a stale deploy. Audit both together.
+// Keep in lock-step with the union of on.push.paths across build-api.yml and
+// build-web.yml. A path here that neither build workflow lists will make the
+// gate poll for a SHA the deployment never serves; a path a build lists that
+// this misses will make the gate accept a stale deploy. Audit all three
+// together. `migrations/` is deliberately absent: there is no top-level
+// migrations dir (migrations live under bunyip-api/migrations/), so the
+// `bunyip-api` entry already covers them.
 const BUILD_TRIGGER_PATHS = [
-  'bunyip-api',
-  'bunyip-web',
-  'crates',
-  'migrations',
-  'Cargo.toml',
-  'Cargo.lock',
+  'bunyip-api', // build-api.yml: bunyip-api/**
+  'bunyip-web', // build-web.yml: bunyip-web/**
+  'crates', // build-api.yml: crates/**
+  'Cargo.toml', // build-api.yml + build-web.yml
+  'Cargo.lock', // build-api.yml + build-web.yml
+  '.sqlx', // build-api.yml: .sqlx/**
+  'oci-build', // build-api.yml + build-web.yml: oci-build/**
+  '.forgejo/workflows/build-api.yml', // build-api.yml self-trigger
+  '.forgejo/workflows/build-web.yml', // build-web.yml self-trigger
 ];
 
 // Forgejo Actions passes the literal empty string for secrets that are not
@@ -173,10 +178,16 @@ try {
   // commit re-creates the very problem this gate is meant to avoid -
   // polling for 10m on a SHA the deployment never serves. Skip the gate
   // entirely with a loud warning and let the suite run against whatever the
-  // deployment is currently serving.
+  // deployment is currently serving. Record that served commit (BUNYIP-448)
+  // so the run log always states exactly what was tested, not merely that the
+  // gate skipped. fetchCommit is a hoisted function declaration (defined
+  // below); versionUrl is already assigned by the time this catch runs.
+  const served = await fetchCommit();
+  const servedDesc = served.ok ? `commit=${served.commit || '(empty)'}` : served.detail;
   console.warn('============================================================');
   console.warn(`SKIPPING deploy-sync gate: ${String(err)}`);
-  console.warn('Tests will run against whatever commit the deployment is currently serving.');
+  console.warn(`Deployment is currently serving: ${servedDesc}`);
+  console.warn('Tests will run against that commit.');
   console.warn('============================================================');
   process.exit(0);
 }
