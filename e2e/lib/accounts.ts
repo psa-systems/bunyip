@@ -11,7 +11,7 @@
 // re-authenticating. Emails carry this run's tag so any residue from a crashed
 // run is recognisable.
 
-import { type APIRequestContext } from '@playwright/test';
+import { type APIRequestContext, type APIResponse } from '@playwright/test';
 import { routes } from './api';
 import { runSuffix } from './run';
 import { subaddress } from './mail-sink';
@@ -32,6 +32,48 @@ export function disposableEmail(): string {
   return subaddress(runSuffix());
 }
 
+// register-challenge sits under bunyip's per-IP unauthenticated rate-limit
+// floor (RateLimitConfig::API_UNAUTH = 20 req/60s/IP; the route is NOT in
+// rate_limit_floor::EXEMPT_PATHS), and every CI run shares one runner egress
+// IP, so a burst of overlapping runs can 429 it (BUNYIP-449). Retry only on
+// 429; any other status is returned unchanged for the caller to surface.
+//
+// The disposable specs run in the retries:0 `auth-ui` project under a 60s
+// per-test timeout (playwright.config.ts), and cannot take a whole-test retry
+// (that re-runs their login and deepens the 5/min login limit). So the in-test
+// backoff must fit inside the 60s budget with margin: cap each wait at
+// PER_WAIT_CAP_MS (10s) -> at most ~30s across the 3 retries. The floor's 429
+// carries a truthful Retry-After (seconds until the window frees); honor it but
+// clamp to the cap, and fall back to exponential backoff when it is absent. A
+// full-window (up to 60s) throttle cannot be waited out in-test - the durable
+// fix is exempting the route from the floor (BUNYIP-450).
+const CHALLENGE_MAX_RETRIES = 3;
+const PER_WAIT_CAP_MS = 10_000;
+
+async function fetchRegisterChallenge(ctx: APIRequestContext): Promise<APIResponse> {
+  for (let attempt = 0; ; attempt += 1) {
+    const res = await ctx.get(routes.registerChallenge);
+    if (res.status() !== 429) return res;
+
+    const retryAfter = res.headers()['retry-after'];
+    const body = (await res.text()).slice(0, 200);
+    if (attempt >= CHALLENGE_MAX_RETRIES) {
+      throw new Error(
+        `register-challenge still 429 after ${attempt + 1} attempts ` +
+          `(Retry-After: ${retryAfter ?? '(none)'}): ${body}`,
+      );
+    }
+    const parsed = Number.parseInt(retryAfter ?? '', 10);
+    const base = Number.isFinite(parsed) && parsed > 0 ? parsed * 1_000 : 2 ** attempt * 1_000;
+    const waitMs = Math.min(base, PER_WAIT_CAP_MS);
+    console.warn(
+      `register-challenge 429 (attempt ${attempt + 1}/${CHALLENGE_MAX_RETRIES + 1}, ` +
+        `Retry-After: ${retryAfter ?? '(none)'}); waiting ${waitMs}ms before retry. body=${body}`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+  }
+}
+
 // Register a fresh account on `ctx`. On success `ctx` holds the new account's
 // session cookies (register logs the user in), so the caller can reuse it for
 // authenticated calls and for the eventual self-delete.
@@ -43,7 +85,9 @@ export async function registerDisposable(ctx: APIRequestContext): Promise<Dispos
   // and submit only after the 2s minimum fill time (SIGNUP_MIN_FILL_SECONDS) so
   // the request is not flagged as submitted-too-fast. When the guard is off
   // (dev / prod) the extra signup_token is simply ignored server-side.
-  const challenge = await ctx.get(routes.registerChallenge);
+  // fetchRegisterChallenge retries on a transient 429 from the per-IP rate
+  // floor (BUNYIP-449); a non-429 non-ok status still surfaces below.
+  const challenge = await fetchRegisterChallenge(ctx);
   if (!challenge.ok()) {
     throw new Error(`register-challenge failed: ${challenge.status()} ${await challenge.text()}`);
   }
