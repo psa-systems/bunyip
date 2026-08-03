@@ -28,8 +28,9 @@ use crate::repositories::{
 };
 use crate::responses::{created, get_request_id, paginated, success, success_no_data};
 use crate::services::{
-    AppDownloadCache, AuthService, EmailService, EncryptionKeySet, JwtService, PasswordService,
-    ReleaseCache, StripeConfig, StripeService, TotpService, WebhookService,
+    stripe_config_from_db_model, stripe_err, AppDownloadCache, AuthService, EmailService,
+    EncryptionKeySet, JwtService, PasswordService, ReleaseCache, StripeService, TotpService,
+    WebhookService,
 };
 use crate::validation;
 use bunyip_domain::services::{BunyipEvent, EventBus};
@@ -553,14 +554,18 @@ pub async fn grant_membership(
         let customer_id = match user.stripe_customer_id {
             Some(id) => id,
             None => {
-                let id = stripe.create_customer(&user.email, user.id).await?;
+                let id = stripe
+                    .create_customer(&user.email, user.id)
+                    .await
+                    .map_err(stripe_err)?;
                 UserRepository::update_stripe_customer_id(pool.get_ref(), user.id, &id).await?;
                 id
             }
         };
         stripe
             .create_free_subscription(&customer_id, &free_price_id)
-            .await?;
+            .await
+            .map_err(stripe_err)?;
     }
 
     // Lock price at $0 if requested
@@ -2052,7 +2057,7 @@ pub async fn update_stripe_config(
     .await?;
 
     // Hot-reload the live StripeService so new API calls use the updated keys
-    match StripeConfig::from_db_model(&updated, &stripe_key_set) {
+    match stripe_config_from_db_model(&updated, &stripe_key_set) {
         Ok(new_config) => {
             stripe_service.reload(new_config);
             tracing::info!("Stripe service reloaded with updated config");
@@ -2136,14 +2141,18 @@ pub async fn grant_lifetime_membership(
         let customer_id = match user.stripe_customer_id.clone() {
             Some(id) => id,
             None => {
-                let id = stripe.create_customer(&user.email, user.id).await?;
+                let id = stripe
+                    .create_customer(&user.email, user.id)
+                    .await
+                    .map_err(stripe_err)?;
                 UserRepository::update_stripe_customer_id(pool.get_ref(), user.id, &id).await?;
                 id
             }
         };
         stripe
             .create_free_subscription(&customer_id, &free_price_id)
-            .await?;
+            .await
+            .map_err(stripe_err)?;
     }
 
     // BUNYIP-144: lifetime is a privilege-elevation that feeds directly into
@@ -2324,14 +2333,18 @@ pub async fn set_user_tier(
             let customer_id = match user.stripe_customer_id.clone() {
                 Some(id) => id,
                 None => {
-                    let id = stripe.create_customer(&user.email, user.id).await?;
+                    let id = stripe
+                        .create_customer(&user.email, user.id)
+                        .await
+                        .map_err(stripe_err)?;
                     UserRepository::update_stripe_customer_id(pool.get_ref(), user.id, &id).await?;
                     id
                 }
             };
             stripe
                 .create_free_subscription(&customer_id, &free_price_id)
-                .await?;
+                .await
+                .map_err(stripe_err)?;
         }
     }
 

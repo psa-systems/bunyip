@@ -14,7 +14,7 @@ use crate::middleware::AdminUser;
 use crate::models::stripe::encrypt_secret;
 use crate::repositories::StripeConfigRepository;
 use crate::responses::{get_request_id, success, success_no_data};
-use crate::services::{EncryptionKeySet, StripeConfig, StripeService};
+use crate::services::{stripe_config_from_db_model, stripe_err, EncryptionKeySet, StripeService};
 
 // =============================================================================
 // Request types
@@ -65,7 +65,7 @@ pub async fn list_stripe_products(
     stripe: web::Data<Arc<StripeService>>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
-    let products = stripe.list_products().await?;
+    let products = stripe.list_products().await.map_err(stripe_err)?;
     Ok(success(products, request_id))
 }
 
@@ -83,7 +83,8 @@ pub async fn create_stripe_product(
             body.description.as_deref(),
             body.metadata.clone().unwrap_or_default(),
         )
-        .await?;
+        .await
+        .map_err(stripe_err)?;
     Ok(success(product, request_id))
 }
 
@@ -105,7 +106,8 @@ pub async fn update_stripe_product(
             body.metadata.clone(),
             body.active,
         )
-        .await?;
+        .await
+        .map_err(stripe_err)?;
     Ok(success(product, request_id))
 }
 
@@ -118,7 +120,10 @@ pub async fn archive_stripe_product(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let product_id = path.into_inner();
-    stripe.archive_product(&product_id).await?;
+    stripe
+        .archive_product(&product_id)
+        .await
+        .map_err(stripe_err)?;
     Ok(success_no_data(request_id))
 }
 
@@ -134,7 +139,10 @@ pub async fn list_stripe_prices(
     query: web::Query<ListStripePricesQuery>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
-    let prices = stripe.list_prices(query.product_id.as_deref()).await?;
+    let prices = stripe
+        .list_prices(query.product_id.as_deref())
+        .await
+        .map_err(stripe_err)?;
     Ok(success(prices, request_id))
 }
 
@@ -153,7 +161,8 @@ pub async fn create_stripe_price(
             &body.currency,
             &body.interval,
         )
-        .await?;
+        .await
+        .map_err(stripe_err)?;
     Ok(success(price, request_id))
 }
 
@@ -166,7 +175,7 @@ pub async fn archive_stripe_price(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let price_id = path.into_inner();
-    stripe.archive_price(&price_id).await?;
+    stripe.archive_price(&price_id).await.map_err(stripe_err)?;
     Ok(success_no_data(request_id))
 }
 
@@ -181,7 +190,7 @@ pub async fn list_stripe_webhooks(
     stripe: web::Data<Arc<StripeService>>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
-    let webhooks = stripe.list_webhook_endpoints().await?;
+    let webhooks = stripe.list_webhook_endpoints().await.map_err(stripe_err)?;
     Ok(success(webhooks, request_id))
 }
 
@@ -201,7 +210,8 @@ pub async fn create_stripe_webhook(
 
     let webhook = stripe
         .create_webhook_endpoint(&body.url, body.enabled_events.clone())
-        .await?;
+        .await
+        .map_err(stripe_err)?;
 
     // If the webhook creation returned a signing secret, persist it encrypted
     if let Some(ref secret) = webhook.secret {
@@ -223,7 +233,7 @@ pub async fn create_stripe_webhook(
         .await?;
 
         // Hot-reload the StripeService with the new webhook secret
-        match StripeConfig::from_db_model(&updated, &stripe_key_set) {
+        match stripe_config_from_db_model(&updated, &stripe_key_set) {
             Ok(new_config) => {
                 stripe.reload(new_config);
                 tracing::info!("Stripe service reloaded with new webhook secret");
@@ -246,6 +256,9 @@ pub async fn delete_stripe_webhook(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let endpoint_id = path.into_inner();
-    stripe.delete_webhook_endpoint(&endpoint_id).await?;
+    stripe
+        .delete_webhook_endpoint(&endpoint_id)
+        .await
+        .map_err(stripe_err)?;
     Ok(success_no_data(request_id))
 }
