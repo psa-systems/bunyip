@@ -13,7 +13,7 @@ use crate::middleware::AuthenticatedUser;
 use crate::models::RateLimitConfig;
 use crate::repositories::{RateLimitRepository, UserRepository};
 use crate::responses::{get_request_id, success};
-use crate::services::{AuthService, StripeService};
+use crate::services::{stripe_err, AuthService, StripeService};
 
 /// Request body for SetupIntent creation
 #[derive(Debug, Deserialize)]
@@ -69,7 +69,10 @@ pub async fn create_setup_intent(
     // for an unknown one made this endpoint a registered/not-registered oracle
     // (BUNYIP-426 F8). `/v1/auth/register` is now the single place that reports
     // the conflict, which is where it is authoritative anyway.
-    let (customer_id, client_secret) = stripe.create_setup_intent(&body.email).await?;
+    let (customer_id, client_secret) = stripe
+        .create_setup_intent(&body.email)
+        .await
+        .map_err(stripe_err)?;
 
     Ok(success(
         CreateSetupIntentResponse {
@@ -95,7 +98,10 @@ pub async fn list_invoices(
         .ok_or(AppError::not_found("User"))?;
 
     let invoices = if let Some(ref customer_id) = db_user.stripe_customer_id {
-        stripe.list_customer_invoices(customer_id, None).await?
+        stripe
+            .list_customer_invoices(customer_id, None)
+            .await
+            .map_err(stripe_err)?
     } else {
         Vec::new()
     };
@@ -122,7 +128,7 @@ pub async fn download_invoice(
         .stripe_customer_id
         .ok_or(AppError::not_found("No billing account found"))?;
 
-    let invoice = stripe.get_invoice(&invoice_id).await?;
+    let invoice = stripe.get_invoice(&invoice_id).await.map_err(stripe_err)?;
 
     // Verify the invoice belongs to this user's Stripe customer
     let invoice_customer = invoice

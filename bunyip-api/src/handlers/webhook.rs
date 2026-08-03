@@ -14,7 +14,7 @@ use crate::models::{
     AuditAction, AuditSeverity, CreateAuditLog, MembershipStatus, SubscriptionTier,
 };
 use crate::repositories::{AuditLogRepository, EntitlementRepository, UserRepository};
-use crate::services::{EmailService, StripeService};
+use crate::services::{stripe_err, EmailService, StripeService};
 
 /// Re-sync a user's Stripe-sourced product entitlements to match the prices on
 /// their current subscription (BUNYIP-39). Revokes every prior Stripe-sourced
@@ -219,7 +219,9 @@ pub async fn stripe_webhook(
         .ok_or(AppError::Unauthorized)?;
 
     // Verify webhook signature
-    stripe.verify_webhook_signature(&body, signature)?;
+    stripe
+        .verify_webhook_signature(&body, signature)
+        .map_err(stripe_err)?;
 
     // Parse the event
     let payload = String::from_utf8(body.to_vec())
@@ -350,7 +352,10 @@ async fn handle_checkout_completed(
     // and silently locked the placeholder `"price_default"` with a hardcoded
     // amount. A transient API failure propagates so Stripe retries the delivery
     // (BUNYIP-210 makes that safe).
-    let price = stripe.get_checkout_session_price(session_id).await?;
+    let price = stripe
+        .get_checkout_session_price(session_id)
+        .await
+        .map_err(stripe_err)?;
 
     // Update user membership status and lock the real price for life.
     UserRepository::update_membership_status(pool, user_id, MembershipStatus::Active).await?;
@@ -660,7 +665,7 @@ async fn handle_subscription_deleted(
                     stripe_subscription_id = %stripe_subscription_id,
                     "Failed to query sibling subscriptions; aborting cancel-flip so Stripe retries"
                 );
-                return Err(e);
+                return Err(stripe_err(e));
             }
         }
 

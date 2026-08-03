@@ -14,7 +14,7 @@ use crate::middleware::{AuthCookies, AuthenticatedUser};
 use crate::models::MembershipResponse;
 use crate::repositories::UserRepository;
 use crate::responses::{get_request_id, success};
-use crate::services::{JwtService, StripeService};
+use crate::services::{stripe_err, JwtService, StripeService};
 
 /// Request for creating a checkout session
 #[derive(Debug, Deserialize)]
@@ -65,7 +65,11 @@ pub async fn get_membership(
     // If user has a Stripe customer, fetch live subscription data
     let (current_period_end, cancel_at_period_end) =
         if let Some(ref customer_id) = db_user.stripe_customer_id {
-            match stripe.get_customer_subscription(customer_id).await? {
+            match stripe
+                .get_customer_subscription(customer_id)
+                .await
+                .map_err(stripe_err)?
+            {
                 Some(sub) => {
                     let period_end = chrono::DateTime::from_timestamp(sub.current_period_end, 0);
                     (period_end, sub.cancel_at_period_end)
@@ -118,7 +122,7 @@ pub async fn create_checkout(
     let price_id = match &body.price_id {
         Some(id) => id.clone(),
         None => {
-            let prices = stripe.list_prices(None).await?;
+            let prices = stripe.list_prices(None).await.map_err(stripe_err)?;
             prices
                 .into_iter()
                 .find(|p| p.active)
@@ -136,7 +140,10 @@ pub async fn create_checkout(
     let customer_id = match db_user.stripe_customer_id {
         Some(id) => id,
         None => {
-            let customer_id = stripe.create_customer(&db_user.email, db_user.id).await?;
+            let customer_id = stripe
+                .create_customer(&db_user.email, db_user.id)
+                .await
+                .map_err(stripe_err)?;
             UserRepository::update_stripe_customer_id(&mut *tx, db_user.id, &customer_id).await?;
             customer_id
         }
@@ -148,7 +155,8 @@ pub async fn create_checkout(
     // when the user has never used it; returning users bill immediately.
     let (session_id, checkout_url) = stripe
         .create_checkout_session(&customer_id, db_user.id, &price_id, eligible_for_trial)
-        .await?;
+        .await
+        .map_err(stripe_err)?;
 
     tracing::info!(
         user_id = %db_user.id,
@@ -192,8 +200,15 @@ pub async fn cancel_membership(
 
     // Cancel in Stripe (at period end so user keeps access until billing cycle ends)
     if let Some(ref customer_id) = db_user.stripe_customer_id {
-        if let Some(sub) = stripe.get_customer_subscription(customer_id).await? {
-            stripe.cancel_subscription(&sub.id, true).await?;
+        if let Some(sub) = stripe
+            .get_customer_subscription(customer_id)
+            .await
+            .map_err(stripe_err)?
+        {
+            stripe
+                .cancel_subscription(&sub.id, true)
+                .await
+                .map_err(stripe_err)?;
         }
     } else {
         // No Stripe customer — just update status directly
@@ -264,8 +279,15 @@ pub async fn cancel_membership_immediate(
 
     // Cancel immediately in Stripe
     if let Some(ref customer_id) = db_user.stripe_customer_id {
-        if let Some(sub) = stripe.get_customer_subscription(customer_id).await? {
-            stripe.cancel_subscription(&sub.id, false).await?;
+        if let Some(sub) = stripe
+            .get_customer_subscription(customer_id)
+            .await
+            .map_err(stripe_err)?
+        {
+            stripe
+                .cancel_subscription(&sub.id, false)
+                .await
+                .map_err(stripe_err)?;
         }
     }
 
@@ -326,7 +348,8 @@ pub async fn reactivate_membership(
     // Get subscription from Stripe
     let sub = stripe
         .get_customer_subscription(&customer_id)
-        .await?
+        .await
+        .map_err(stripe_err)?
         .ok_or(AppError::not_found("Subscription"))?;
 
     if !sub.cancel_at_period_end {
@@ -336,7 +359,10 @@ pub async fn reactivate_membership(
     }
 
     // Reactivate in Stripe
-    stripe.reactivate_subscription(&sub.id).await?;
+    stripe
+        .reactivate_subscription(&sub.id)
+        .await
+        .map_err(stripe_err)?;
 
     Ok(crate::responses::success_no_data(request_id))
 }
@@ -360,7 +386,10 @@ pub async fn billing_portal(
         .stripe_customer_id
         .ok_or(AppError::not_found("No billing account found"))?;
 
-    let url = stripe.create_billing_portal_session(&customer_id).await?;
+    let url = stripe
+        .create_billing_portal_session(&customer_id)
+        .await
+        .map_err(stripe_err)?;
 
     Ok(success(PortalResponse { url }, request_id))
 }
@@ -382,7 +411,10 @@ pub async fn get_payment_history(
 
     let payments = if let Some(ref customer_id) = db_user.stripe_customer_id {
         let limit = query.per_page.map(|p| p.clamp(1, 100) as u64);
-        let invoices = stripe.list_customer_invoices(customer_id, limit).await?;
+        let invoices = stripe
+            .list_customer_invoices(customer_id, limit)
+            .await
+            .map_err(stripe_err)?;
         invoices
             .into_iter()
             .map(|inv| StripePaymentResponse {

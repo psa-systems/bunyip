@@ -26,10 +26,10 @@ use bunyip_api::{
     },
     routes,
     services::{
-        AppBackupAdapter, AppDownloadCache, AuthService, BackupService, DownloadLimiter,
-        EmailService, EncryptionKeySet, ForgejoAssetClient, GeoIpService, JwtConfig, JwtService,
-        MokoshBackupAdapter, PasswordService, ReleaseCache, StripeConfig, StripeService,
-        TotpService, WebhookService,
+        stripe_config_from_db_model, stripe_config_from_env, AppBackupAdapter, AppDownloadCache,
+        AuthService, BackupService, DownloadLimiter, EmailService, EncryptionKeySet,
+        ForgejoAssetClient, GeoIpService, JwtConfig, JwtService, MokoshBackupAdapter,
+        PasswordService, ReleaseCache, StripeService, TotpService, WebhookService,
     },
     version::UpdateChecker,
 };
@@ -379,18 +379,18 @@ async fn main() -> anyhow::Result<()> {
         use bunyip_api::repositories::StripeConfigRepository;
         match StripeConfigRepository::get(&pool).await {
             Ok(db_config) if db_config.secret_key.is_some() => {
-                match StripeConfig::from_db_model(&db_config, &stripe_key_set) {
+                match stripe_config_from_db_model(&db_config, &stripe_key_set) {
                     Ok(cfg) => {
                         info!("Stripe service initialized from database config");
                         cfg
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, "Failed to decrypt DB Stripe config, falling back to env vars");
-                        StripeConfig::from_env()?
+                        stripe_config_from_env()?
                     }
                 }
             }
-            _ => StripeConfig::from_env()?,
+            _ => stripe_config_from_env()?,
         }
     };
     let stripe_service = Arc::new(StripeService::new(stripe_config));
