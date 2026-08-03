@@ -12,6 +12,7 @@
 //   [data-feedback-link] a     - append the current path as ?from=
 //   [data-redirect-to]   any   - navigate after [data-redirect-after] ms
 //   [data-reload-after]  any   - reload after that many ms
+//   [data-sensitive-toggle] button - toggle the blur on the enclosing [data-sensitive]
 //
 // Loaded with `defer` from the document head, so the DOM is parsed before it
 // runs and every listener below is registered once per page load.
