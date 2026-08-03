@@ -245,36 +245,67 @@ async function fillTotpStep(page: Page): Promise<void> {
   // per-IP 2fa_verify cap (5/min, RateLimitConfig::LOGIN).
   const offTwoFactor = (url: URL): boolean => !/\/login\/(2fa|mfa)(\/|$|\?)/.test(url.pathname);
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    // Re-acquire the field each attempt: a rejected code re-renders /login/2fa
+    // with a fresh empty input, so the retry must target the new node.
+    await codeInput.waitFor({ state: 'visible', timeout: 10_000 });
     const code = authenticator.generate(env.totpSecret);
 
-    // DOM-set, not fill(): same CI no-op applies to this input (BUNYIP-168).
-    // setInputValue dispatches a bubbling `input` event, which the BUNYIP-331
-    // data-otp-autosubmit snippet reacts to by submitting the form once the six
-    // digits are present. Wait for that navigation off /login/2fa; only click
-    // the submit button as a fallback if the auto-submit did not fire, so we
-    // never double-POST.
-    await setInputValue(codeInput, code);
-    const autoSubmitted = await page
-      .waitForURL(offTwoFactor, { timeout: 15_000 })
-      .then(() => true)
-      .catch(() => false);
-    if (autoSubmitted) return;
+    // Single DOM-set, NOT setInputValue's 5x re-set loop (BUNYIP-168/331): the
+    // field auto-submits the moment six digits land, so a rejected code
+    // re-renders an empty field. setInputValue would re-set and re-submit the
+    // SAME rejected code up to five times, then throw "value did not stick" -
+    // aborting the step-wait retry below and burning five TWO_FACTOR_VERIFY
+    // failures against the 5/15min cap. Set once; on rejection the outer loop
+    // waits out the step and submits a FRESH, unconsumed code. `.catch` swallows
+    // a node detach when a prior submit is already navigating.
+    await codeInput
+      .evaluate((el, v) => {
+        const input = el as HTMLInputElement;
+        input.value = v as string;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }, code)
+      .catch(() => {});
+    if (
+      await page
+        .waitForURL(offTwoFactor, { timeout: 15_000 })
+        .then(() => true)
+        .catch(() => false)
+    ) {
+      return;
+    }
 
-    await form
-      .getByRole('button', { name: /verify|continue|submit|sign ?in|log ?in/i })
-      .first()
-      .click();
-    const left = await page
-      .waitForURL(offTwoFactor, { timeout: 15_000 })
-      .then(() => true)
-      .catch(() => false);
-    if (left) return;
+    // Fallback click ONLY if auto-submit did not fire (the digits are still in
+    // the field). After a rejected auto-submit the field is re-rendered empty,
+    // and clicking Verify would just submit a blank code.
+    if ((await codeInput.inputValue().catch(() => '')) === code) {
+      await form
+        .getByRole('button', { name: /verify|continue|submit|sign ?in|log ?in/i })
+        .first()
+        .click()
+        .catch(() => {});
+      if (
+        await page
+          .waitForURL(offTwoFactor, { timeout: 15_000 })
+          .then(() => true)
+          .catch(() => false)
+      ) {
+        return;
+      }
+    }
 
-    // Still on the 2FA step. Only a rejected code is worth retrying, and only
-    // with a code from a step this account has not burned yet.
+    // Still on the 2FA step. No error box means a navigation race, not a
+    // rejection - stop. Otherwise the code was rejected (most often a consumed
+    // same-step code on a second login); wait out the step so the next attempt
+    // reads a fresh, unconsumed code.
     if ((await readLoginError(page)) === null) return;
     await page.waitForTimeout((authenticator.timeRemaining() + 1) * 1_000);
   }
+  throw new Error(
+    'TOTP rejected on both attempts, including a fresh code from a new step. The ' +
+      "e2e account's enrolled 2FA secret likely does not match E2E_TOTP_SECRET, or " +
+      'the server clock is skewed ahead of the runner (bunyip tolerates backward only).',
+  );
 }
 
 // Browser-driven logout: GET /logout clears the access_token / refresh_token /
