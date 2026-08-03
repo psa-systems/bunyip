@@ -54,6 +54,9 @@ pub use email::{EmailService, SmtpTestError, SmtpTestStage};
 pub use event_bus::{BunyipEvent, EventBus};
 pub use geoip::GeoIpService;
 pub use jwt::{AccessTokenClaims, JwtService, RefreshTokenClaims, TwoFactorChallengeClaims};
-pub use stripe::{StripeConfig, StripeService};
+pub use stripe::{
+    stripe_config_from_db_model, stripe_config_from_env, stripe_err, StripeConfig, StripeService,
+    StripeServiceError,
+};
 pub use totp::TotpService;
 pub use webhook::WebhookService;

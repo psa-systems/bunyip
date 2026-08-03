@@ -744,7 +744,7 @@ dependencies = [
  "dunite-download",
  "dunite-feedback",
  "dunite-stripe",
- "dunite-stripe-core",
+ "dunite-stripe-core 0.1.0 (git+https://dev.a8n.run/psa-systems/dunite?rev=0734f2adb4a7a85a29ae32815527d93b8efc06cb)",
  "futures-util",
  "hex",
  "hmac",
@@ -1496,15 +1496,37 @@ dependencies = [
 [[package]]
 name = "dunite-stripe"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=0a810830c025cc1b9f9efa7d9fdfbc65cdccc8f2#0a810830c025cc1b9f9efa7d9fdfbc65cdccc8f2"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=41dbbebf6713119234e9f37b68c7fdba966b18cd#41dbbebf6713119234e9f37b68c7fdba966b18cd"
 dependencies = [
+ "async-stripe",
+ "chrono",
+ "dunite-stripe-core 0.1.0 (git+https://dev.a8n.run/psa-systems/dunite?rev=41dbbebf6713119234e9f37b68c7fdba966b18cd)",
+ "reqwest 0.12.28",
  "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
+ "uuid 1.23.1",
 ]
 
 [[package]]
 name = "dunite-stripe-core"
 version = "0.1.0"
 source = "git+https://dev.a8n.run/psa-systems/dunite?rev=0734f2adb4a7a85a29ae32815527d93b8efc06cb#0734f2adb4a7a85a29ae32815527d93b8efc06cb"
+dependencies = [
+ "hex",
+ "hmac",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dunite-stripe-core"
+version = "0.1.0"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=41dbbebf6713119234e9f37b68c7fdba966b18cd#41dbbebf6713119234e9f37b68c7fdba966b18cd"
 dependencies = [
  "hex",
  "hmac",

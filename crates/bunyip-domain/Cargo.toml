@@ -33,7 +33,7 @@ dunite-feedback = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "3c9d3
 # Shared Stripe service layer (DEV-495 / DEV-515). This slice provides the
 # async-stripe response DTOs, re-exported from this crate's models; the service
 # + runtime config land in a follow-up. Pinned to the branch rev that added it.
-dunite-stripe = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "0a810830c025cc1b9f9efa7d9fdfbc65cdccc8f2" }
+dunite-stripe = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "41dbbebf6713119234e9f37b68c7fdba966b18cd" }
 async-trait = "0.1"
 
 # Web framework + multipart.
