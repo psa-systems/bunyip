@@ -41,6 +41,10 @@ async function requestMagicLink(ctx: APIRequestContext, email: string): Promise<
 test.describe('magic-link login', () => {
   test('request a magic link and follow it to a live session', async ({ playwright }) => {
     test.skip(!env.mailSinkURL, 'needs E2E_MAIL_SINK_URL (BUNYIP-150)');
+    // requestMagicLink re-requests once if the first email lags, so the mail
+    // wait can run up to 2x40s; give this spec 3x the default 60s per-test
+    // budget so the retry has room, mirroring password-reset.spec (BUNYIP-452).
+    test.slow();
 
     const owner = await playwright.request.newContext({ baseURL: env.apiBaseURL });
     const follower = await playwright.request.newContext({ baseURL: env.apiBaseURL });
