@@ -2060,25 +2060,30 @@ fn qr_svg(uri: &str) -> String {
 }
 
 /// BUNYIP-371: wrap a rendered secret (the TOTP key + QR, or recovery codes) so
-/// it is blurred by default and only revealed on an explicit click, so a casual
-/// screen share does not expose it. Best-effort only: a web page cannot mark
-/// itself hidden to native screen capture the way a native app (e.g. KeePassXC)
-/// can, and the CSS blur is defeated by disabling GPU compositing - this stops
-/// ACCIDENTAL exposure, not a determined viewer. The reveal toggle is wired in
-/// `assets/js/app.js` (`[data-sensitive-toggle]` flips the `blur-sm` class).
-fn sensitive_reveal(label: &str, content: Markup) -> Markup {
+/// it is heavily blurred by default and revealed only on an explicit toggle, so
+/// a casual screen share does not expose it. CSS-only: a hidden checkbox toggled
+/// by its label un-blurs the value via `peer-checked:blur-none`, so it works
+/// even with JavaScript disabled - important because a no-JS user must still be
+/// able to read the setup key / recovery codes to finish enrolling. Best-effort
+/// only: a web page cannot mark itself hidden to native screen capture the way a
+/// native app (e.g. KeePassXC) can, and the blur is defeated by disabling GPU
+/// compositing - this stops ACCIDENTAL exposure, not a determined viewer. `id`
+/// must be unique on the page (it binds the checkbox to its reveal label).
+fn sensitive_reveal(id: &str, label: &str, content: Markup) -> Markup {
     html! {
-        div class="relative" data-sensitive {
-            div class="blur-sm transition duration-150" data-sensitive-value {
-                (content)
+        div data-sensitive {
+            // Hidden checkbox drives the reveal with NO JS; the label below is
+            // its control, and `peer-checked:blur-none` on the value un-blurs it.
+            input type="checkbox" id=(id) class="peer sr-only";
+            div class="mb-2 flex justify-end" {
+                label for=(id)
+                    class="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded px-2 text-xs text-muted-foreground hover:text-foreground peer-focus-visible:ring-2 peer-focus-visible:ring-ring" {
+                    i class="fa-regular fa-eye" aria-hidden="true" {}
+                    span { "Show / hide " (label) }
+                }
             }
-            button type="button"
-                data-sensitive-toggle
-                data-sensitive-label=(label)
-                aria-label=(format!("Reveal {label}"))
-                aria-pressed="false"
-                class="absolute right-2 top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded bg-background/70 text-muted-foreground backdrop-blur hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring" {
-                i class="fa-regular fa-eye" aria-hidden="true" {}
+            div class="blur-xl transition duration-150 peer-checked:blur-none" data-sensitive-value {
+                (content)
             }
         }
     }
@@ -2112,7 +2117,7 @@ fn twofa_qr_view(
                     // BUNYIP-371: blur the QR + manual key by default so an
                     // in-progress enrollment on a shared screen is not captured;
                     // the reveal toggle un-blurs to scan or copy.
-                    (sensitive_reveal("your authenticator setup key", html! {
+                    (sensitive_reveal("reveal-totp-key", "the authenticator setup key", html! {
                         div class="space-y-6" {
                             div class="flex justify-center rounded-lg bg-white p-4" { div class="[&_svg]:h-[200px] [&_svg]:w-[200px]" { (PreEscaped(qr_svg(&setup.otpauth_uri))) } }
                             div class="space-y-2" {
@@ -2180,7 +2185,7 @@ pub async fn twofa_setup_post(
                 div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
                     div class="p-6 space-y-4" {
                         div class="rounded-lg border p-3 text-sm flex items-start gap-3" { (icon("alert-circle", "h-4 w-4 mt-0.5")) p class="text-sm" { "Save these codes now. You won't be able to see them again." } }
-                        (sensitive_reveal("recovery codes", html! {
+                        (sensitive_reveal("reveal-recovery-codes", "recovery codes", html! {
                             div class="grid grid-cols-2 gap-2 rounded-lg bg-muted p-4" { @for code in &codes.codes { code class="text-center font-mono text-sm py-1" { (code) } } }
                         }))
                         a href="/settings" class=(button_class("default", "default", "w-full")) { "Done" }
@@ -2250,7 +2255,7 @@ fn twofa_recovery_result(codes: &[String]) -> Markup {
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
                 div class="p-6 space-y-4" {
                     div class="rounded-lg border p-3 text-sm flex items-start gap-3" { (icon("alert-circle", "h-4 w-4 mt-0.5")) p class="text-sm" { "Save these codes now. You won't be able to see them again." } }
-                    (sensitive_reveal("recovery codes", html! {
+                    (sensitive_reveal("reveal-recovery-codes-new", "recovery codes", html! {
                         div class="grid grid-cols-2 gap-2 rounded-lg bg-muted p-4" { @for code in codes { code class="text-center font-mono text-sm py-1" { (code) } } }
                     }))
                     a href="/settings" class=(button_class("default", "default", "w-full")) { "Done" }
@@ -2602,19 +2607,21 @@ mod tests {
         assert!(html.contains("ABCDABCDABCD")); // manual key rendered
     }
 
-    // BUNYIP-371: secrets/codes are masked (blurred) by default with an explicit
-    // reveal, but still present in the DOM (visual masking, not removal).
+    // BUNYIP-371: secrets/codes are masked (blurred) by default and revealed only
+    // via a CSS-only (no-JS) checkbox toggle, but stay in the DOM (masking, not
+    // removal).
     #[test]
     fn sensitive_reveal_blurs_content_but_keeps_it_in_the_dom() {
-        let html = super::sensitive_reveal("recovery codes", maud::html! { code { "ABC-123" } })
-            .into_string();
+        let html =
+            super::sensitive_reveal("t-id", "recovery codes", maud::html! { code { "ABC-123" } })
+                .into_string();
         assert!(html.contains("data-sensitive-value"));
-        assert!(html.contains("blur-sm"), "masked by default");
-        assert!(html.contains("data-sensitive-toggle"));
+        assert!(html.contains("blur-xl"), "masked by default");
         assert!(
-            html.contains(r#"aria-pressed="false""#),
-            "starts un-revealed"
+            html.contains("peer-checked:blur-none"),
+            "un-blurs only when revealed"
         );
+        assert!(html.contains(r#"type="checkbox""#), "no-JS reveal control");
         assert!(html.contains("ABC-123"), "content preserved, only masked");
     }
 
@@ -2625,18 +2632,12 @@ mod tests {
             secret: "JBSWY3DPEHPK3PXP".into(),
         };
         let html = super::twofa_qr_view(&setup, None, "h", "s", "/a", "b").into_string();
-        assert!(
-            html.contains("data-sensitive-value"),
-            "QR + key wrapped in a masked block"
-        );
-        assert!(html.contains("blur-sm"), "blurred by default");
-        assert!(
-            html.contains("data-sensitive-toggle"),
-            "reveal toggle present"
-        );
+        assert!(html.contains("data-sensitive-value"), "QR + key masked");
+        assert!(html.contains("blur-xl"), "blurred by default");
+        assert!(html.contains("peer-checked:blur-none"), "CSS-only reveal");
         assert!(
             html.contains("JBSWY3DPEHPK3PXP"),
-            "key still rendered (masked, not stripped)"
+            "key still present, masked"
         );
     }
 

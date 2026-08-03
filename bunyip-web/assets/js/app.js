@@ -12,7 +12,6 @@
 //   [data-feedback-link] a     - append the current path as ?from=
 //   [data-redirect-to]   any   - navigate after [data-redirect-after] ms
 //   [data-reload-after]  any   - reload after that many ms
-//   [data-sensitive-toggle] button - toggle the blur on the enclosing [data-sensitive]
 //
 // Loaded with `defer` from the document head, so the DOM is parsed before it
 // runs and every listener below is registered once per page load.
@@ -197,27 +196,5 @@
     setTimeout(function () {
       location.reload();
     }, delay);
-  });
-
-  // ------------------------------------------------- sensitive reveal --------
-  // BUNYIP-371: secrets/codes (TOTP key + QR, recovery codes) render blurred by
-  // default so a casual screen share does not expose them; the eye button flips
-  // the `blur-sm` class. Best-effort: a web page cannot hide from native screen
-  // capture the way a native app can, and the blur is defeated by disabling GPU
-  // compositing - this stops accidental exposure, not a determined viewer.
-  document.addEventListener('click', function (e) {
-    var el = e.target;
-    if (!el || typeof el.closest !== 'function') return;
-    var btn = el.closest('[data-sensitive-toggle]');
-    if (!btn) return;
-    var wrap = btn.closest('[data-sensitive]');
-    var value = wrap && wrap.querySelector('[data-sensitive-value]');
-    if (!value) return;
-    var blurred = value.classList.toggle('blur-sm');
-    btn.setAttribute('aria-pressed', blurred ? 'false' : 'true');
-    var label = btn.getAttribute('data-sensitive-label') || 'value';
-    btn.setAttribute('aria-label', (blurred ? 'Reveal ' : 'Hide ') + label);
-    var icon = btn.querySelector('i');
-    if (icon) icon.className = blurred ? 'fa-regular fa-eye' : 'fa-regular fa-eye-slash';
   });
 })();
