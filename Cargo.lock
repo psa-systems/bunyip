@@ -742,6 +742,7 @@ dependencies = [
  "dotenvy",
  "dunite-core",
  "dunite-download",
+ "dunite-feedback",
  "dunite-stripe-core",
  "futures-util",
  "hex",
@@ -1438,6 +1439,18 @@ dependencies = [
  "tracing",
  "url",
  "urlencoding",
+ "uuid 1.23.1",
+]
+
+[[package]]
+name = "dunite-feedback"
+version = "0.1.0"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=3c9d3f8e5784204230787411b25260fa9a7597b8#3c9d3f8e5784204230787411b25260fa9a7597b8"
+dependencies = [
+ "chrono",
+ "ipnetwork",
+ "serde",
+ "sqlx",
  "uuid 1.23.1",
 ]
 
