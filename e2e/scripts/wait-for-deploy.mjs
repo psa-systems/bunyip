@@ -3,11 +3,13 @@
 // actually serving a commit at-or-newer than the most recent one that would
 // have produced an OCI image.
 //
-// The build-api.yml and build-web.yml workflows only fire when one of a fixed
-// set of paths changes (see BUILD_TRIGGER_PATHS below). A commit to main that
-// touches only docs/tests/CI never republishes an image, so the deployment
-// keeps serving the PREVIOUS build. Polling for GITHUB_SHA in that case times
-// out on a hash the deployment can never report.
+// This gate polls bunyip-API's /v1/version (the only versioned endpoint), so
+// it tracks the commits that rebuild bunyip-API: the build-api.yml workflow
+// fires only when one of a fixed set of paths changes (see BUILD_TRIGGER_PATHS
+// below). A commit that touches only docs/tests/CI (or only bunyip-web) never
+// republishes the API image, so the API keeps serving the PREVIOUS build.
+// Polling for GITHUB_SHA in that case times out on a hash the API can never
+// report.
 //
 // Resolve the expected SHA the same way the build trigger does: walk
 // `git log` from GITHUB_SHA backwards, find the most recent commit that
@@ -29,23 +31,29 @@
 
 import { execFileSync } from 'node:child_process';
 
-// Keep in lock-step with the union of on.push.paths across build-api.yml and
-// build-web.yml. A path here that neither build workflow lists will make the
-// gate poll for a SHA the deployment never serves; a path a build lists that
-// this misses will make the gate accept a stale deploy. Audit all three
-// together. `migrations/` is deliberately absent: there is no top-level
-// migrations dir (migrations live under bunyip-api/migrations/), so the
-// `bunyip-api` entry already covers them.
+// Keep in lock-step with build-api.yml's on.push.paths. This gate polls
+// bunyip-API's /v1/version, so it must track exactly the paths that rebuild
+// the bunyip-API image (and thus change its baked GIT_COMMIT). A path here
+// that build-api.yml does not list makes the gate poll for a SHA the API never
+// serves; a build-api.yml path this misses makes the gate accept a stale API.
+//
+// Deliberately excluded:
+// - bunyip-web/** and .forgejo/workflows/build-web.yml: those rebuild only
+//   bunyip-web, which exposes no version endpoint (only /healthz) and does not
+//   advance the API's /v1/version. Listing them would make a web-only commit
+//   resolve to an expectedSha the API never reports, hanging the gate until
+//   its 10-minute timeout - a false failure. A web-only change is therefore
+//   not deploy-gated; it runs against whatever bunyip-web is deployed.
+// - migrations: there is no top-level migrations dir (they live under
+//   bunyip-api/migrations/), so the `bunyip-api` entry already covers them.
 const BUILD_TRIGGER_PATHS = [
-  'bunyip-api', // build-api.yml: bunyip-api/**
-  'bunyip-web', // build-web.yml: bunyip-web/**
-  'crates', // build-api.yml: crates/**
-  'Cargo.toml', // build-api.yml + build-web.yml
-  'Cargo.lock', // build-api.yml + build-web.yml
-  '.sqlx', // build-api.yml: .sqlx/**
-  'oci-build', // build-api.yml + build-web.yml: oci-build/**
-  '.forgejo/workflows/build-api.yml', // build-api.yml self-trigger
-  '.forgejo/workflows/build-web.yml', // build-web.yml self-trigger
+  'bunyip-api', // bunyip-api/**
+  'crates', // crates/**
+  'Cargo.toml',
+  'Cargo.lock',
+  '.sqlx', // .sqlx/**
+  'oci-build', // oci-build/**
+  '.forgejo/workflows/build-api.yml', // the api build's own trigger
 ];
 
 // Forgejo Actions passes the literal empty string for secrets that are not
@@ -141,8 +149,8 @@ function resolveBuildSha(headSha) {
   throw new Error(
     `No commit at-or-before ${headSha} touches any build-trigger path ` +
       `(clone depth=${depth}, shallow=${isShallow()}). Check that ` +
-      `BUILD_TRIGGER_PATHS in this script matches the build-oci-image ` +
-      `workflow's on.push.paths.`,
+      `BUILD_TRIGGER_PATHS in this script matches build-api.yml's ` +
+      `on.push.paths.`,
   );
 }
 
