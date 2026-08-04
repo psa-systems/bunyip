@@ -253,7 +253,7 @@ fn footer(cfg: &Config, apps: &[Application]) -> Markup {
                     div class="col-span-2 md:col-span-1" {
                         (brand())
                         p class="mt-4 text-sm text-muted-foreground" { "Surfaces what matters." }
-                        p class="mt-1 text-xs text-muted-foreground" { "Bunyip · a8n.systems" }
+                        p class="mt-1 text-xs text-muted-foreground" { "Bunyip · " (cfg.domain_or_localhost()) }
                     }
                     div {
                         h3 class="text-sm font-semibold" { "Product" }
