@@ -109,7 +109,7 @@ async-stripe = { version = "0.37", features = ["runtime-tokio-hyper", "checkout"
 # header-only dimension guard, the avatar policy) extracted from
 # handlers/avatar.rs in DEV-525 and shared with a8n-tools. Brings `infer` and
 # `imagesize` in transitively.
-dunite-image-upload = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "302af65f8006079510a32478a688844a0677c97e" }
+dunite-image-upload = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
 # Still direct for the feedback-attachment path (BUNYIP-90), whose allowlist
 # admits non-images (text/plain) and so does not fit `ImagePolicy`. Folding that
 # surface into the shared crate is a separate decision, not a side effect of

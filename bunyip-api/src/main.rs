@@ -28,8 +28,9 @@ use bunyip_api::{
     services::{
         stripe_config_from_db_model, stripe_config_from_env, AppBackupAdapter, AppDownloadCache,
         AuthService, BackupService, DownloadLimiter, EmailService, EncryptionKeySet,
-        ForgejoAssetClient, GeoIpService, JwtConfig, JwtService, MokoshBackupAdapter,
-        PasswordService, ReleaseCache, StripeService, TotpService, WebhookService,
+        ForgejoAssetClient, GeoIpService, IpEnrichService, JwtConfig, JwtService,
+        MokoshBackupAdapter, PasswordService, ReleaseCache, StripeService, TotpService,
+        WebhookService,
     },
     version::UpdateChecker,
 };
@@ -368,6 +369,28 @@ async fn main() -> anyhow::Result<()> {
         },
         None => {
             info!("IP2LOCATION_DB_PATH unset; login-location alerts disabled");
+            None
+        }
+    };
+
+    // BUNYIP-437: IP -> ASN / VPN enrichment for the admin abuse surfaces.
+    // Optional and independent of geoip: when IP2PROXY_DB_PATH is unset or the
+    // .BIN fails to load, ip_enrich stays None and the admin enrichment endpoint
+    // reports "no enrichment". The signal is advisory only and never gates a
+    // request, so a missing dataset degrades cleanly.
+    let ip_enrich: Option<Arc<IpEnrichService>> = match config.ip2proxy_db_path.as_deref() {
+        Some(path) => match IpEnrichService::new(path) {
+            Ok(svc) => {
+                info!(path = %path, "IP enrichment (IP2Proxy) service initialized");
+                Some(Arc::new(svc))
+            }
+            Err(e) => {
+                tracing::warn!(path = %path, error = %e, "Failed to load IP2Proxy DB; IP enrichment disabled");
+                None
+            }
+        },
+        None => {
+            info!("IP2PROXY_DB_PATH unset; IP enrichment disabled");
             None
         }
     };
@@ -968,6 +991,7 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::Data::new(tier_config.clone()))
             // Update checker for the root-level /version endpoint
             .app_data(web::Data::new(update_checker.clone()))
+            .app_data(web::Data::new(ip_enrich.clone()))
             // Configure routes
             .configure(routes::configure)
     })

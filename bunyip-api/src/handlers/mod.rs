@@ -139,6 +139,7 @@ pub mod account_backup;
 pub mod admin;
 pub mod admin_entitlements;
 pub mod admin_ip_bans;
+pub mod admin_ip_enrichment;
 pub mod admin_oauth_tenants;
 pub mod admin_rate_limits;
 pub mod admin_stripe;
@@ -215,6 +216,7 @@ pub use admin_entitlements::{
     revoke_entitlement, set_application_restricted,
 };
 pub use admin_ip_bans::{create_ip_ban, list_ip_bans, unban_ip};
+pub use admin_ip_enrichment::ip_enrichment;
 pub use admin_oauth_tenants::{assign_user_tenant, list_client_assignments, unassign_user_tenant};
 pub use admin_rate_limits::{
     delete_rate_limit_config, list_rate_limit_configs, list_rate_limits, reset_rate_limit,
