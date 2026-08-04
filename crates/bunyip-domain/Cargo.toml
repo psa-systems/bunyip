@@ -15,31 +15,31 @@ workspace = true
 # Pinned by rev, not branch, so a dunite bump is an explicit reviewable diff
 # instead of whatever `main` happened to point at when the lock was refreshed
 # (BUNYIP-426 F6). dunite publishes no tags; switch to `tag` when it does.
-dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "c5730bc13c25d9921b360e4afe314173fbbebfca" }
+dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "cc10e8358a6f21160544a415a9488c16827af699" }
 # Generic Forgejo binary-distribution engine (artifact metadata, asset cache,
 # rate limiting). Bunyip implements its store traits over Postgres.
-dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "c5730bc13c25d9921b360e4afe314173fbbebfca" }
+dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "cc10e8358a6f21160544a415a9488c16827af699" }
 # Shared Stripe primitives (DEV-495 / DEV-514): the constant-time webhook
 # signature verifier, shared with a8n-tools and mokosh. Pinned to the branch rev
 # that introduced the crate; the dunite-core/download pins stay at c5730bc since
 # dunite main advanced dunite-oidc in between (unrelated). Collapse all three to
 # the single merged rev once dunite PR #27 lands.
-dunite-stripe-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "0734f2adb4a7a85a29ae32815527d93b8efc06cb" }
+dunite-stripe-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "cc10e8358a6f21160544a415a9488c16827af699" }
 # Shared feedback domain (DEV-495 / DEV-516): models + FeedbackRepository, lifted
 # from this crate's own superset into dunite so a8n-tools can share it. Pinned to
 # the branch rev that introduced the crate. The dunite pins collapse to one
 # merged rev in a follow-up.
-dunite-feedback = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "3c9d3f8e5784204230787411b25260fa9a7597b8" }
+dunite-feedback = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "cc10e8358a6f21160544a415a9488c16827af699" }
 # Shared Stripe service layer (DEV-495 / DEV-515). This slice provides the
 # async-stripe response DTOs, re-exported from this crate's models; the service
 # + runtime config land in a follow-up. Pinned to the branch rev that added it.
-dunite-stripe = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "41dbbebf6713119234e9f37b68c7fdba966b18cd" }
+dunite-stripe = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "cc10e8358a6f21160544a415a9488c16827af699" }
 # Shared account vocabulary (DEV-495 / DEV-517): the role / membership-status /
 # subscription-tier enums and the tier-settings response, re-exported from this
 # crate's models. The User row + repository stay here (a8n's schema has not
 # caught up) and nothing in the crate derives FromRow (a8n is on sqlx 0.7).
 # Pinned to the branch rev that introduced it.
-dunite-user-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82cfbe03645f98a7285de05f2fce65351df24a14" }
+dunite-user-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "cc10e8358a6f21160544a415a9488c16827af699" }
 async-trait = "0.1"
 
 # Web framework + multipart.
