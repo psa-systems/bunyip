@@ -13,25 +13,20 @@ use crate::views::layout::{admin_block, admin_block_grid};
 
 use super::application_groups::*;
 use super::applications::*;
-use super::audit::*;
 use super::auto_ban_settings::*;
-use super::backup::*;
-use super::dashboard::*;
 use super::email_config::*;
-use super::entitlements::*;
 use super::error_log::*;
 use super::feedback::*;
 use super::ip_bans::*;
 use super::memberships::*;
 use super::rate_limits::*;
-use super::seed::*;
 use super::stripe::*;
 use super::tier_settings::*;
 use super::users::*;
 use super::*;
 
 #[cfg(test)]
-mod tests {
+mod request_body_tests {
     use super::*;
 
     fn blank_email_form() -> EmailSettingsForm {

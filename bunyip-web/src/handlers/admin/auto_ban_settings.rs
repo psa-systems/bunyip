@@ -11,10 +11,8 @@ use serde_json::json;
 use crate::api::admin as admin_api;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{button_class, error_box, icon, success_box};
+use crate::views::ui::{button_class, error_box, icon};
 use crate::web::{redirect_cookies, AppState};
-
-use super::email_config::email_settings_content;
 
 /// Upper bounds for the auto-ban fields. Threshold is a strike count; the two
 /// durations are seconds (window capped at 30 days, ban at 365 days) so a typo
