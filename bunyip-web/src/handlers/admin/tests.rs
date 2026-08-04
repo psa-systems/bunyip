@@ -964,6 +964,23 @@ mod two_column_layout_tests {
             !edit.contains(">Identity<"),
             "no Identity block when editing"
         );
+        // BUNYIP-460: the primary action is a bordered full-width footer and is
+        // relabelled so it is unmistakably the Details + Distribution Save (not
+        // the Group card's "Save group").
+        assert!(
+            edit.contains("border-t pt-6") && edit.contains("Save application"),
+            "form actions render as a bordered footer with a scoped Save label"
+        );
+        // BUNYIP-460: Binary / Container are muted, nested subheads (not loud
+        // section titles competing with the "Distribution" card title).
+        assert!(
+            edit.contains("Binary (Forgejo)") && edit.contains("Container (OCI)"),
+            "distribution subsections are still present"
+        );
+        assert!(
+            !edit.contains(r#"class="text-lg font-semibold pt-2""#),
+            "the old loud subsection heading style is gone"
+        );
         for f in [
             "description",
             "icon_url",

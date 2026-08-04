@@ -189,7 +189,10 @@ fn details_fields(v: &DetailsView) -> Markup {
 
 fn distribution_fields(v: &DistView) -> Markup {
     html! {
-        h4 class="text-lg font-semibold pt-2" { "Binary (Forgejo)" }
+        // BUNYIP-460: subsection subheads (smaller, muted, uppercase) so
+        // "Binary (Forgejo)" / "Container (OCI)" read as nested groups under the
+        // "Distribution" card title instead of competing with it.
+        h4 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground" { "Binary (Forgejo)" }
         div class="space-y-2" {
             label class="text-sm font-medium" { "Artifact source" }
             select name="artifact_source" class=(dashboard_input()) {
@@ -201,7 +204,7 @@ fn distribution_fields(v: &DistView) -> Markup {
         div class="space-y-2" { label class="text-sm font-medium" { "Forgejo repo" } input name="forgejo_repo" value=(v.forgejo_repo) class=(dashboard_input()); }
         div class="space-y-2" { label class="text-sm font-medium" { "Forgejo package" } p class="text-xs text-muted-foreground" { "generic_package sources only; leave blank to clear back to the repo name." } input name="forgejo_package" value=(v.forgejo_package) class=(dashboard_input()); }
         div class="space-y-2" { label class="text-sm font-medium" { "Pinned release tag" } input name="pinned_release_tag" value=(v.pinned_release_tag) class=(dashboard_input()); }
-        h4 class="text-lg font-semibold pt-2" { "Container (OCI)" }
+        h4 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground border-t pt-4 mt-2" { "Container (OCI)" }
         div class="space-y-2" { label class="text-sm font-medium" { "OCI image owner" } input name="oci_image_owner" value=(v.oci_image_owner) class=(dashboard_input()); }
         div class="space-y-2" { label class="text-sm font-medium" { "OCI image name" } input name="oci_image_name" value=(v.oci_image_name) class=(dashboard_input()); }
         div class="space-y-2" { label class="text-sm font-medium" { "Pinned image tag" } input name="pinned_image_tag" value=(v.pinned_image_tag) class=(dashboard_input()); }
@@ -330,8 +333,11 @@ pub(super) fn application_form(
                         div class="space-y-4" { (distribution_fields(v)) }
                     }),
                 ]))
-                div class="flex items-center gap-2 pt-2" {
-                    button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
+                // BUNYIP-460: a full-width bordered footer under the grid so the
+                // primary actions clearly terminate (and belong to) the whole
+                // Details + Distribution form, not the separate Group card below.
+                div class="flex items-center gap-2 border-t pt-6" {
+                    button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save application" }
                     a href="/admin/applications" class=(button_class("outline", "default", "")) { "Cancel" }
                 }
             }
@@ -557,7 +563,10 @@ pub async fn application_edit(
                     Some(&surfaces),
                     None,
                 ))
-                (group_assignment_form(&id, app.group_id.as_deref(), &groups))
+                // BUNYIP-460: match the Danger Zone's `mt-8` so the trailing
+                // full-width sections keep one consistent vertical rhythm below
+                // the form.
+                div class="mt-8" { (group_assignment_form(&id, app.group_id.as_deref(), &groups)) }
                 (app_danger_zone(&id, q.error.as_deref()))
             }
         }
@@ -576,7 +585,7 @@ pub async fn application_edit(
 /// both fields are collected and posted to the delete handler.
 fn app_danger_zone(id: &str, error: Option<&str>) -> Markup {
     html! {
-        div class="rounded-lg border bg-card text-card-foreground shadow-sm border-red-200 dark:border-red-900 mt-8 max-w-2xl" {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm border-red-200 dark:border-red-900 mt-8" {
             div class="flex flex-col space-y-1.5 p-6" {
                 h3 class="text-2xl font-semibold leading-none tracking-tight text-red-600 dark:text-red-400 flex items-center gap-2" { (icon("alert-triangle", "h-5 w-5")) "Danger Zone" }
                 p class="text-sm text-muted-foreground" { "Permanently delete this application. Its entitlements, price links, and download caches are removed with it. This cannot be undone." }
