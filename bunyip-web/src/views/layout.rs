@@ -115,6 +115,9 @@ pub fn document(title: &str, body: Markup) -> Markup {
                 // <html> before first paint or the page flashes the wrong theme.
                 script src="/assets/js/theme.js" {}
                 script src="/assets/js/app.js" defer {}
+                // BUNYIP-473: drag-and-drop / keyboard reordering for admin
+                // lists. Inert on pages without a `[data-reorder-list]`.
+                script src="/assets/js/app-reorder.js" defer {}
                 // BUNYIP-408: avatar picker CSS shipped inline (not via the
                 // separately-cached styles.css) so a stale stylesheet can never
                 // leave the component's structural rules undefined. See

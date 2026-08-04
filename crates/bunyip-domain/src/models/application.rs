@@ -391,10 +391,13 @@ pub struct DeleteApplicationRequest {
     pub totp_code: String,
 }
 
-/// Request body for swapping application order
+/// Request body for reordering applications (BUNYIP-473): the full list of
+/// application ids in their new display order. Each id's `sort_order` is set to
+/// its index, so positions are always distinct and the previous "swap two equal
+/// values" no-op cannot recur.
 #[derive(Debug, Clone, Deserialize)]
-pub struct SwapApplicationOrderRequest {
-    pub target_app_id: Uuid,
+pub struct ReorderApplicationsRequest {
+    pub ordered_ids: Vec<Uuid>,
 }
 
 /// Data for updating an application (admin only)
@@ -478,6 +481,17 @@ impl UpdateApplication {
 mod tests {
     use super::*;
     use chrono::Utc;
+
+    // BUNYIP-473: the reorder request carries the full ordered id list off the
+    // JSON body. Guards the wire contract the web client and JS post to.
+    #[test]
+    fn reorder_request_parses_ordered_ids() {
+        let a = uuid::Uuid::new_v4();
+        let b = uuid::Uuid::new_v4();
+        let body = format!(r#"{{"ordered_ids":["{a}","{b}"]}}"#);
+        let req: ReorderApplicationsRequest = serde_json::from_str(&body).expect("parse");
+        assert_eq!(req.ordered_ids, vec![a, b]);
+    }
 
     fn test_app() -> Application {
         Application {

@@ -124,8 +124,8 @@ pub fn routes() -> Router<AppState> {
             post(admin::application_set_group),
         )
         .route(
-            "/admin/applications/:id/swap-order",
-            post(admin::application_swap_order),
+            "/admin/applications/reorder",
+            post(admin::application_reorder),
         )
         // BUNYIP-388: per-application documentation manager (admin authoring).
         .route(

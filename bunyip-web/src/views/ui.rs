@@ -53,6 +53,10 @@ fn inner(name: &str) -> &'static str {
         "chevron-up" => r#"<path d="m18 15-6-6-6 6"/>"#,
         // BUNYIP-472 F17: dimmed sortable cue for inactive admin table headers.
         "chevrons-up-down" => r#"<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>"#,
+        // BUNYIP-473: drag handle for the drag-and-drop application reorder.
+        "grip-vertical" => {
+            r#"<circle cx="9" cy="12" r="1"/><circle cx="9" cy="5" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="19" r="1"/>"#
+        }
         "receipt" => {
             r#"<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1Z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 17.5v-11"/>"#
         }

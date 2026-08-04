@@ -338,19 +338,19 @@ pub async fn create_application(
     ok_data(&r).map(|_| ())
 }
 
-/// Swap the sort order of two applications, moving `app_id` past its neighbour
-/// `target_app_id` in the admin list. BUNYIP-121.
-pub async fn swap_application_order(
+/// Set the display order of all applications from an explicit id list
+/// (BUNYIP-473). Wraps `PUT /v1/admin/applications/reorder`, which assigns each
+/// id's sort_order from its index.
+pub async fn reorder_applications(
     api: &Api,
     cookie: Option<&str>,
-    app_id: &str,
-    target_app_id: &str,
+    ordered_ids: &[String],
 ) -> Result<(), ApiError> {
     let r = api
         .put(
-            &format!("/admin/applications/{app_id}/swap-order"),
+            "/admin/applications/reorder",
             cookie,
-            Some(json!({ "target_app_id": target_app_id })),
+            Some(json!({ "ordered_ids": ordered_ids })),
         )
         .await?;
     ok_data(&r).map(|_| ())

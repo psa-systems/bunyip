@@ -18,8 +18,8 @@ use crate::models::stripe::encrypt_secret;
 use crate::models::{
     AuditAction, CreateApplication, CreateApplicationGroup, CreateAuditLog,
     CreatePasswordResetToken, CreateRefreshToken, DeleteApplicationRequest, MembershipStatus,
-    RateLimitConfig, SetApplicationGroupRequest, StripeConfigResponse, SubscriptionTier,
-    SwapApplicationOrderRequest, UpdateApplication, UpdateApplicationGroup, UserResponse,
+    RateLimitConfig, ReorderApplicationsRequest, SetApplicationGroupRequest, StripeConfigResponse,
+    SubscriptionTier, UpdateApplication, UpdateApplicationGroup, UserResponse,
 };
 use crate::repositories::{
     ApplicationGroupRepository, ApplicationRepository, AuditLogRepository, InviteRepository,
@@ -790,19 +790,19 @@ pub async fn list_all_applications(
     ))
 }
 
-/// PUT /v1/admin/applications/{app_id}/swap-order
-/// Swap the sort order of two applications
-pub async fn swap_application_order(
+/// PUT /v1/admin/applications/reorder
+/// Set the display order of all applications from an explicit id list
+/// (BUNYIP-473). Replaces the pairwise swap: each id's `sort_order` becomes its
+/// index in the list, so positions stay distinct and reordering cannot no-op.
+pub async fn reorder_applications(
     req: HttpRequest,
     _admin: AdminUser,
     pool: web::Data<PgPool>,
-    path: web::Path<uuid::Uuid>,
-    body: web::Json<SwapApplicationOrderRequest>,
+    body: web::Json<ReorderApplicationsRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
-    let app_id = path.into_inner();
 
-    ApplicationRepository::swap_sort_order(&pool, app_id, body.target_app_id).await?;
+    ApplicationRepository::set_order(&pool, &body.ordered_ids).await?;
 
     let apps = ApplicationRepository::list_all(&pool).await?;
 

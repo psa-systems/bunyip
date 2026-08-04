@@ -1,7 +1,7 @@
 //! Admin panel: Applications.
 
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use axum::Form;
 use maud::{html, Markup};
@@ -14,9 +14,54 @@ use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::urlenc;
 use crate::views::layout::{admin_block, admin_block_grid};
 use crate::views::ui::{badge, button_class, error_box, icon, toggle_switch};
-use crate::web::{redirect_cookies, AppState};
+use crate::web::{redirect_cookies, status_cookies, AppState};
 
 use super::application_groups::group_assignment_form;
+
+/// One row of the admin Applications list (BUNYIP-473).
+///
+/// `data-reorder-item` + `data-app-id` mark the row for the reorder script, and
+/// `draggable` makes it a native drag source; the script only starts a drag from
+/// the `data-reorder-handle` button, so the toggles and Edit link stay clickable.
+/// The single grip handle replaces the old stacked up/down chevrons: it is a real
+/// `<button>`, so it is keyboard-focusable and the script moves the row on
+/// ArrowUp/ArrowDown. `cursor-grab` + the grip icon are the drag affordance.
+pub(super) fn app_admin_row(app: &AdminApplication) -> Markup {
+    html! {
+        div class="py-3 flex items-center justify-between gap-4" data-reorder-item data-app-id=(app.id) draggable="true" {
+            div class="flex items-center gap-3" {
+                button type="button" data-reorder-handle
+                    class="cursor-grab touch-none rounded p-1 text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                    aria-label=(format!("Reorder {}. Drag, or focus this handle and use the up and down arrow keys.", app.display_name)) {
+                    (icon("grip-vertical", "h-5 w-5"))
+                }
+                div class="space-y-1" {
+                    p class="font-medium" { (app.display_name) }
+                    p class="text-xs text-muted-foreground" { (app.slug) }
+                    (surface_tags(&SurfaceVisibility::of(app)))
+                }
+            }
+            div class="flex items-center gap-6" {
+                // BUNYIP-420: toggle switches (color + knob position convey state,
+                // single click applies). Each switch is its form's submit control,
+                // posting the flipped value through the /field path.
+                form method="post" action=(format!("/admin/applications/{}/field", app.id)) class="flex items-center gap-2" {
+                    input type="hidden" name="field" value="is_active";
+                    input type="hidden" name="value" value=(if app.is_active { "false" } else { "true" });
+                    label class="text-sm text-muted-foreground" { "Active" }
+                    (toggle_switch(app.is_active, "Toggle active"))
+                }
+                form method="post" action=(format!("/admin/applications/{}/field", app.id)) class="flex items-center gap-2" {
+                    input type="hidden" name="field" value="maintenance_mode";
+                    input type="hidden" name="value" value=(if app.maintenance_mode { "false" } else { "true" });
+                    label class="text-sm text-muted-foreground" { "Maintenance" }
+                    (toggle_switch(app.maintenance_mode, "Toggle maintenance mode"))
+                }
+                a href=(format!("/admin/applications/{}/edit", app.id)) class=(button_class("outline", "sm", "")) { "Edit" }
+            }
+        }
+    }
+}
 
 pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
@@ -41,52 +86,12 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                     } @else if apps.is_empty() {
                         p class="text-center text-muted-foreground py-8" { "No applications" }
                     } @else {
-                        div class="divide-y" {
-                        @for (i, app) in apps.iter().enumerate() {
-                            div class="py-3 flex items-center justify-between gap-4" {
-                                div class="flex items-center gap-3" {
-                                    div class="flex flex-col gap-1" {
-                                        @if i > 0 {
-                                            form method="post" action=(format!("/admin/applications/{}/swap-order", app.id)) {
-                                                input type="hidden" name="target_app_id" value=(apps[i - 1].id);
-                                                button type="submit" title="Move up" aria-label="Move up" class=(button_class("outline", "sm", "")) { (icon("chevron-up", "h-4 w-4")) }
-                                            }
-                                        }
-                                        @if i + 1 < apps.len() {
-                                            form method="post" action=(format!("/admin/applications/{}/swap-order", app.id)) {
-                                                input type="hidden" name="target_app_id" value=(apps[i + 1].id);
-                                                button type="submit" title="Move down" aria-label="Move down" class=(button_class("outline", "sm", "")) { (icon("chevron-down", "h-4 w-4")) }
-                                            }
-                                        }
-                                    }
-                                    div class="space-y-1" {
-                                        p class="font-medium" { (app.display_name) }
-                                        p class="text-xs text-muted-foreground" { (app.slug) }
-                                        (surface_tags(&SurfaceVisibility::of(app)))
-                                    }
-                                }
-                                div class="flex items-center gap-6" {
-                                    // BUNYIP-420: toggle switches (color + knob position
-                                    // convey state, single click applies) replacing the old
-                                    // "Active: on" text + separate Toggle button. Each switch
-                                    // is the form's submit control, posting the flipped value
-                                    // through the same /field path.
-                                    form method="post" action=(format!("/admin/applications/{}/field", app.id)) class="flex items-center gap-2" {
-                                        input type="hidden" name="field" value="is_active";
-                                        input type="hidden" name="value" value=(if app.is_active { "false" } else { "true" });
-                                        label class="text-sm text-muted-foreground" { "Active" }
-                                        (toggle_switch(app.is_active, "Toggle active"))
-                                    }
-                                    form method="post" action=(format!("/admin/applications/{}/field", app.id)) class="flex items-center gap-2" {
-                                        input type="hidden" name="field" value="maintenance_mode";
-                                        input type="hidden" name="value" value=(if app.maintenance_mode { "false" } else { "true" });
-                                        label class="text-sm text-muted-foreground" { "Maintenance" }
-                                        (toggle_switch(app.maintenance_mode, "Toggle maintenance mode"))
-                                    }
-                                    a href=(format!("/admin/applications/{}/edit", app.id)) class=(button_class("outline", "sm", "")) { "Edit" }
-                                }
-                            }
-                        }
+                        // BUNYIP-473: drag-and-drop reorder. `data-reorder-list`
+                        // + `data-reorder-action` are read by assets/js/app-reorder.js,
+                        // which moves rows on drag (or ArrowUp/ArrowDown on a focused
+                        // handle) and POSTs the new id order to the action.
+                        div class="divide-y" data-reorder-list data-reorder-action="/admin/applications/reorder" {
+                            @for app in apps.iter() { (app_admin_row(app)) }
                         }
                     }
                 }
@@ -647,28 +652,30 @@ pub async fn application_distribution_save(
 }
 
 #[derive(Deserialize)]
-pub struct SwapOrderForm {
+pub struct ReorderForm {
     #[serde(default)]
-    pub target_app_id: String,
+    pub ordered_ids: Vec<String>,
 }
 
-/// POST /admin/applications/{id}/swap-order
-/// Swap this application's sort order with the neighbour identified by
-/// `target_app_id` (the adjacent row in the admin list), then return to the
-/// list where the new ordering is visible. BUNYIP-121.
-pub async fn application_swap_order(
+/// POST /admin/applications/reorder
+/// Persist a new application display order from the drag-and-drop / keyboard
+/// reorder control (BUNYIP-473). Called by `fetch`, so it returns a bare status
+/// rather than a redirect: the page has already moved the rows, and a redirect
+/// would reload the list at the top - the "jump" this ticket removes. A failed
+/// upstream call surfaces as a non-2xx the client turns into a toast + reload.
+pub async fn application_reorder(
     State(st): State<AppState>,
     headers: HeaderMap,
-    Path(id): Path<String>,
-    Form(f): Form<SwapOrderForm>,
+    axum::Json(f): axum::Json<ReorderForm>,
 ) -> Response {
     let (_, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let _ = admin_api::swap_application_order(&st.api, c.forward.as_deref(), &id, &f.target_app_id)
-        .await;
-    redirect_cookies("/admin/applications", &c.set_cookies)
+    match admin_api::reorder_applications(&st.api, c.forward.as_deref(), &f.ordered_ids).await {
+        Ok(()) => status_cookies(StatusCode::NO_CONTENT, &c.set_cookies),
+        Err(_) => status_cookies(StatusCode::BAD_GATEWAY, &c.set_cookies),
+    }
 }
 
 #[derive(Deserialize)]

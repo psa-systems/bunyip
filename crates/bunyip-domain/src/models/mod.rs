@@ -23,7 +23,7 @@ pub mod user;
 // Re-export commonly used types
 pub use application::{
     Application, ApplicationResponse, CreateApplication, DeleteApplicationRequest,
-    DistributionConfig, SwapApplicationOrderRequest, UpdateApplication,
+    DistributionConfig, ReorderApplicationsRequest, UpdateApplication,
     ARTIFACT_SOURCE_GENERIC_PACKAGE, ARTIFACT_SOURCE_RELEASE,
 };
 pub use application_doc::{

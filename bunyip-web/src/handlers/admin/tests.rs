@@ -1016,6 +1016,58 @@ mod two_column_layout_tests {
         }
     }
 
+    // BUNYIP-473: the application list row uses one drag handle for reordering,
+    // not the old stacked up/down chevrons (which swapped equal sort_orders and
+    // did nothing). Assert the drag-and-drop markup is present and the old
+    // swap-order control is gone, while the row's other controls survive.
+    #[test]
+    fn application_row_uses_drag_handle_not_chevrons() {
+        let app: AdminApplication = serde_json::from_value(json!({
+            "id": "11111111-1111-1111-1111-111111111111",
+            "name": "backup",
+            "slug": "backup",
+            "display_name": "Backup",
+            "description": null,
+            "icon_url": null,
+            "is_active": true,
+            "maintenance_mode": false,
+            "maintenance_message": null,
+            "subdomain": null,
+            "container_name": "backup",
+            "version": null,
+            "source_code_url": null,
+            "sort_order": 1,
+            "created_at": "2026-01-01T00:00:00Z"
+        }))
+        .expect("AdminApplication");
+
+        let html = app_admin_row(&app).into_string();
+        // One clear drag affordance.
+        assert!(html.contains("data-reorder-item"), "row is a reorder item");
+        assert!(
+            html.contains("data-reorder-handle"),
+            "row has a drag handle"
+        );
+        assert!(html.contains(r#"draggable="true""#), "row is draggable");
+        assert!(html.contains(r#"data-app-id="11111111-1111-1111-1111-111111111111""#));
+        assert!(
+            html.contains("cursor-grab"),
+            "grab-cursor affordance present"
+        );
+        // The broken control is gone.
+        assert!(
+            !html.contains("swap-order"),
+            "the old swap-order form is removed"
+        );
+        assert!(
+            !html.contains("Move up") && !html.contains("Move down"),
+            "no stacked up/down chevron buttons"
+        );
+        // The row's other controls are untouched.
+        assert!(html.contains("Toggle active"), "active toggle preserved");
+        assert!(html.contains(">Edit<"), "edit link preserved");
+    }
+
     #[test]
     fn group_form_uses_two_column_blocks() {
         let g = crate::api::types::ApplicationGroup {
