@@ -393,7 +393,7 @@ fn feedback_form(submitted: bool, error: Option<&str>, page_path: Option<&str>) 
                             div class="mb-6 rounded-lg border border-teal-500/40 bg-teal-500/10 p-4 text-sm text-teal-700 dark:text-teal-300" { "Thanks for sharing. Your feedback has been sent to the team." }
                         }
                         @if let Some(e) = error {
-                            div class="mb-6 rounded-lg border border-destructive/50 p-4 text-sm text-destructive" { (e) }
+                            div class="mb-6 rounded-lg border border-destructive/50 p-4 text-sm text-destructive-text" { (e) }
                         }
                         // `enctype="multipart/form-data"` is required so the
                         // file input below can carry binary file parts. The

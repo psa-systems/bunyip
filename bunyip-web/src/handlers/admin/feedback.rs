@@ -324,7 +324,7 @@ pub(super) fn feedback_detail_actions(
             form method="post" action=(format!("/admin/feedback/{id}/delete"))
                 data-confirm="Delete this feedback permanently? This cannot be undone." {
                 input type="hidden" name="from" value=(from);
-                button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { "Delete" }
+                button type="submit" class=(button_class("outline", "sm", "text-destructive-text hover:text-destructive-text")) { "Delete" }
             }
         }
     }

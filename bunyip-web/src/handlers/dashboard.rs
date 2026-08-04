@@ -953,7 +953,7 @@ pub async fn membership(
             @if let Some(ok) = &q.ok { (success_box(ok)) }
             @if let Some(e) = &q.error { (error_box(e)) }
             @if past_due {
-                div class="rounded-lg border border-destructive/50 p-4 text-sm text-destructive flex items-center gap-2" {
+                div class="rounded-lg border border-destructive/50 p-4 text-sm text-destructive-text flex items-center gap-2" {
                     (icon("alert-triangle", "h-4 w-4")) "Your payment failed. Update your payment method within 30 days to avoid losing access."
                 }
             }
@@ -1370,7 +1370,7 @@ pub async fn settings(
                             form method="post" action="/settings/2fa/disable" class="space-y-2 max-w-md" {
                                 div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" class=(crate::handlers::dashboard_input()); }
                                 div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); }
-                                button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("shield-off", "mr-2 h-4 w-4")) "Disable 2FA" }
+                                button type="submit" class=(button_class("outline", "sm", "text-destructive-text hover:text-destructive-text")) { (icon("shield-off", "mr-2 h-4 w-4")) "Disable 2FA" }
                             }
                         } @else { p class="text-xs text-muted-foreground" { "Admin accounts cannot disable two-factor authentication." } }
                         // BUNYIP-355: recovery-code regeneration is available to
@@ -1510,7 +1510,7 @@ fn sessions_card_body(
                         }
                         @if !s.current {
                             form method="post" action=(format!("/settings/sessions/{}/revoke", urlenc(&s.id))) {
-                                button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("log-out", "mr-2 h-4 w-4")) "Revoke" }
+                                button type="submit" class=(button_class("outline", "sm", "text-destructive-text hover:text-destructive-text")) { (icon("log-out", "mr-2 h-4 w-4")) "Revoke" }
                             }
                         }
                     }
@@ -1586,7 +1586,7 @@ fn trusted_devices_card_body(
                             }
                         }
                         form method="post" action=(format!("/settings/trusted-devices/{}/revoke", urlenc(&d.id))) {
-                            button type="submit" class=(button_class("outline", "sm", "text-destructive hover:text-destructive")) { (icon("trash", "mr-2 h-4 w-4")) "Revoke" }
+                            button type="submit" class=(button_class("outline", "sm", "text-destructive-text hover:text-destructive-text")) { (icon("trash", "mr-2 h-4 w-4")) "Revoke" }
                         }
                     }
                 }

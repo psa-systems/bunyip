@@ -632,7 +632,7 @@ pub(super) fn users_panel(
                         }
                         None => {
                             div class="py-10 text-center" {
-                                p class="text-destructive" { "Could not load users." }
+                                p class="text-destructive-text" { "Could not load users." }
                                 @let href = uq.href();
                                 a href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
                                   class=(button_class("outline", "sm", "mt-3")) { "Retry" }
@@ -943,7 +943,7 @@ pub(super) fn user_actions_card(target: &AdminUser, is_admin_target: bool) -> Ma
                     button type="submit" class=(button_class("outline", "default", "")) { "Suspend" }
                 }
                 form method="post" action=(format!("/admin/users/{}/delete", target.id)) data-confirm=(format!("Delete {who}? This cannot be undone.")) {
-                    button type="submit" class=(button_class("outline", "default", "text-destructive hover:text-destructive")) { "Delete user" }
+                    button type="submit" class=(button_class("outline", "default", "text-destructive-text hover:text-destructive-text")) { "Delete user" }
                 }
             }
         }
@@ -1113,7 +1113,7 @@ pub async fn user_detail(
                         }
                         @if target.two_factor_enabled {
                             form method="post" action=(format!("/admin/users/{}/two-factor/reset", target.id)) data-confirm=(format!("Clear {}'s 2FA? Their authenticator and recovery codes are removed and they must re-enrol.", target.email)) {
-                                button type="submit" class=(button_class("outline", "default", "text-destructive hover:text-destructive")) { "Clear 2FA" }
+                                button type="submit" class=(button_class("outline", "default", "text-destructive-text hover:text-destructive-text")) { "Clear 2FA" }
                             }
                         } @else {
                             span class="text-xs text-muted-foreground self-center" { "Two-factor is not enabled for this user." }

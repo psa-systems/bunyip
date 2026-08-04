@@ -203,7 +203,7 @@ fn pw_reqs() -> Markup {
         }
         // Surfaced only when the breach row is in `pw-fail`. Hidden by
         // default; `assets/js/password.js` toggles `hidden` per state.
-        p id="pw-breach-help" class="text-xs text-destructive mt-1.5 ml-6" hidden {
+        p id="pw-breach-help" class="text-xs text-destructive-text mt-1.5 ml-6" hidden {
             "HaveIBeenPwned has seen this password in a public breach. Even strong passwords are unsafe once leaked - pick a fresh one."
         }
         // Sub-input for confirm-password match feedback; toggled by the same
@@ -468,7 +468,7 @@ impl RegisterErrors {
 /// single generic banner at the top of the form.
 fn field_error_msg(msg: &str) -> Markup {
     html! {
-        p class="text-sm text-destructive mt-1" role="alert" { (msg) }
+        p class="text-sm text-destructive-text mt-1" role="alert" { (msg) }
     }
 }
 
@@ -694,7 +694,7 @@ pub async fn magic_link_get(
             Err(e) => {
                 let card = auth_card(
                     "alert-circle",
-                    "bg-destructive/10 text-destructive",
+                    "bg-destructive/10 text-destructive-text",
                     "Verification Failed",
                     &e.user_message(),
                     html! {
@@ -835,7 +835,7 @@ pub async fn password_reset_confirm_get(
         None => {
             let card = auth_card(
                 "alert-circle",
-                "bg-destructive/10 text-destructive",
+                "bg-destructive/10 text-destructive-text",
                 "Invalid Reset Link",
                 "This password reset link is invalid or has expired.",
                 html! {
@@ -1018,7 +1018,7 @@ pub async fn invite_accept_get(
     let Some(token) = q.token else {
         let card = auth_card(
             "alert-circle",
-            "bg-destructive/10 text-destructive",
+            "bg-destructive/10 text-destructive-text",
             "Invitation Failed",
             "No invite token provided.",
             html! {
@@ -1050,7 +1050,7 @@ pub async fn invite_accept_get(
         Err(e) => {
             let card = auth_card(
                 "alert-circle",
-                "bg-destructive/10 text-destructive",
+                "bg-destructive/10 text-destructive-text",
                 "Invitation Failed",
                 &e.user_message(),
                 html! {
@@ -1121,7 +1121,7 @@ pub async fn confirm_email(
     let card = match q.token {
         None => auth_card(
             "alert-circle",
-            "bg-destructive/10 text-destructive",
+            "bg-destructive/10 text-destructive-text",
             "Invalid Link",
             "This email confirmation link is invalid or has expired.",
             html! {
@@ -1140,7 +1140,7 @@ pub async fn confirm_email(
             ),
             Err(e) => auth_card(
                 "alert-circle",
-                "bg-destructive/10 text-destructive",
+                "bg-destructive/10 text-destructive-text",
                 "Confirmation Failed",
                 &e.user_message(),
                 html! {
@@ -1170,7 +1170,7 @@ pub async fn verify_email(
         None => (
             auth_card(
                 "alert-circle",
-                "bg-destructive/10 text-destructive",
+                "bg-destructive/10 text-destructive-text",
                 "Invalid Link",
                 "This email verification link is invalid or has expired.",
                 html! {
@@ -1217,7 +1217,7 @@ pub async fn verify_email(
             Err(e) => (
                 auth_card(
                     "alert-circle",
-                    "bg-destructive/10 text-destructive",
+                    "bg-destructive/10 text-destructive-text",
                     "Verification Failed",
                     &e.user_message(),
                     html! {
