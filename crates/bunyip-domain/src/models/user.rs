@@ -5,198 +5,12 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-/// User roles in the system
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UserRole {
-    Subscriber,
-    Admin,
-}
-
-impl UserRole {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            UserRole::Subscriber => "subscriber",
-            UserRole::Admin => "admin",
-        }
-    }
-}
-
-impl From<String> for UserRole {
-    fn from(s: String) -> Self {
-        match s.as_str() {
-            "admin" => UserRole::Admin,
-            _ => UserRole::Subscriber,
-        }
-    }
-}
-
-impl From<&str> for UserRole {
-    fn from(s: &str) -> Self {
-        match s {
-            "admin" => UserRole::Admin,
-            _ => UserRole::Subscriber,
-        }
-    }
-}
-
-/// Membership status for users
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MembershipStatus {
-    None,
-    Active,
-    PastDue,
-    Canceled,
-    GracePeriod,
-}
-
-impl MembershipStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            MembershipStatus::None => "none",
-            MembershipStatus::Active => "active",
-            MembershipStatus::PastDue => "past_due",
-            MembershipStatus::Canceled => "canceled",
-            MembershipStatus::GracePeriod => "grace_period",
-        }
-    }
-
-    /// Check if the user has access to paid features
-    pub fn has_access(&self) -> bool {
-        matches!(
-            self,
-            MembershipStatus::Active | MembershipStatus::GracePeriod
-        )
-    }
-}
-
-impl From<String> for MembershipStatus {
-    fn from(s: String) -> Self {
-        match s.as_str() {
-            "active" => MembershipStatus::Active,
-            "past_due" => MembershipStatus::PastDue,
-            "canceled" => MembershipStatus::Canceled,
-            "grace_period" => MembershipStatus::GracePeriod,
-            _ => MembershipStatus::None,
-        }
-    }
-}
-
-impl From<&str> for MembershipStatus {
-    fn from(s: &str) -> Self {
-        match s {
-            "active" => MembershipStatus::Active,
-            "past_due" => MembershipStatus::PastDue,
-            "canceled" => MembershipStatus::Canceled,
-            "grace_period" => MembershipStatus::GracePeriod,
-            _ => MembershipStatus::None,
-        }
-    }
-}
-
-/// Subscription tier assigned at email verification
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SubscriptionTier {
-    /// Permanently free — first 5 verified users
-    Lifetime,
-    /// Permanently free — admin-granted (not tied to signup count)
-    Free,
-    /// 3-month free trial — users 6-10
-    EarlyAdopter,
-    /// 1-month free trial — all subsequent users
-    Standard,
-}
-
-impl SubscriptionTier {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            SubscriptionTier::Lifetime => "lifetime",
-            SubscriptionTier::Free => "free",
-            SubscriptionTier::EarlyAdopter => "early_adopter",
-            SubscriptionTier::Standard => "standard",
-        }
-    }
-
-    /// Human-readable tier name for labels and audit metadata.
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            SubscriptionTier::Lifetime => "Lifetime",
-            SubscriptionTier::Free => "Free",
-            SubscriptionTier::EarlyAdopter => "Early Adopter",
-            SubscriptionTier::Standard => "Standard",
-        }
-    }
-
-    /// Pick the tier a newly-verified account should receive from the current
-    /// slot occupancy and the admin-configured caps (BUNYIP-291, AC1).
-    ///
-    /// Lifetime slots fill first, then early-adopter slots; everyone after the
-    /// early-adopter cap is `Standard`. The boundary is `<`: once `ea_count`
-    /// reaches `ea_slots` the pool is full and the next account is `Standard`.
-    /// This is the pure decision extracted from the tier-grant transaction so
-    /// the 90-vs-30 boundary is unit-testable without a database.
-    pub fn select(
-        lifetime_count: i64,
-        early_adopter_count: i64,
-        lifetime_slots: i64,
-        early_adopter_slots: i64,
-    ) -> SubscriptionTier {
-        if lifetime_count < lifetime_slots {
-            SubscriptionTier::Lifetime
-        } else if early_adopter_count < early_adopter_slots {
-            SubscriptionTier::EarlyAdopter
-        } else {
-            SubscriptionTier::Standard
-        }
-    }
-
-    /// Trial length in days for this tier, given the admin-configured trial
-    /// windows (BUNYIP-291, AC1). `Lifetime` / `Free` never trial (`None`);
-    /// `EarlyAdopter` and `Standard` read their length from the tier settings
-    /// rather than any hardcoded constant.
-    pub fn trial_days(
-        &self,
-        early_adopter_trial_days: i64,
-        standard_trial_days: i64,
-    ) -> Option<i64> {
-        match self {
-            SubscriptionTier::Lifetime | SubscriptionTier::Free => None,
-            SubscriptionTier::EarlyAdopter => Some(early_adopter_trial_days),
-            SubscriptionTier::Standard => Some(standard_trial_days),
-        }
-    }
-
-    /// Signup trial label surfaced to the user / recorded in audit metadata
-    /// (BUNYIP-291, AC2), e.g. "Early Adopter - 90-day trial". Tiers without a
-    /// trial return `None`.
-    pub fn trial_label(
-        &self,
-        early_adopter_trial_days: i64,
-        standard_trial_days: i64,
-    ) -> Option<String> {
-        self.trial_days(early_adopter_trial_days, standard_trial_days)
-            .map(|days| format!("{} - {}-day trial", self.display_name(), days))
-    }
-}
-
-impl From<&str> for SubscriptionTier {
-    fn from(s: &str) -> Self {
-        match s {
-            "lifetime" => SubscriptionTier::Lifetime,
-            "free" => SubscriptionTier::Free,
-            "early_adopter" => SubscriptionTier::EarlyAdopter,
-            _ => SubscriptionTier::Standard,
-        }
-    }
-}
-
-impl From<String> for SubscriptionTier {
-    fn from(s: String) -> Self {
-        SubscriptionTier::from(s.as_str())
-    }
-}
+// The account vocabulary (roles, membership status, subscription tier) lives in
+// the shared `dunite-user-core` crate (DEV-517) and is re-exported here, so
+// `crate::models::user::*` paths are unchanged and a8n-tools and bunyip cannot
+// drift on the string values or on the tier-selection boundary. The `User` row
+// struct below stays bunyip-side: it carries columns a8n's schema does not have.
+pub use dunite_user_core::{MembershipStatus, SubscriptionTier, UserRole};
 
 /// User database model
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -446,58 +260,6 @@ mod tests {
     }
 
     #[test]
-    fn select_tier_fills_lifetime_then_early_adopter_then_standard() {
-        // BUNYIP-291 AC1: lifetime slots fill first, then early-adopter, then
-        // everyone else is standard. Caps here: 5 lifetime, 5 early-adopter.
-        // A free lifetime slot wins regardless of early-adopter occupancy.
-        assert_eq!(
-            SubscriptionTier::select(0, 0, 5, 5),
-            SubscriptionTier::Lifetime
-        );
-        assert_eq!(
-            SubscriptionTier::select(4, 5, 5, 5),
-            SubscriptionTier::Lifetime
-        );
-        // Lifetime full: land in the early-adopter pool while it has room.
-        assert_eq!(
-            SubscriptionTier::select(5, 0, 5, 5),
-            SubscriptionTier::EarlyAdopter
-        );
-        assert_eq!(
-            SubscriptionTier::select(5, 4, 5, 5),
-            SubscriptionTier::EarlyAdopter
-        );
-    }
-
-    #[test]
-    fn select_tier_boundary_is_exclusive_next_account_is_standard() {
-        // The Nth early adopter (ea_count == ea_slots - 1) still gets early
-        // adopter; the very next account (ea_count == ea_slots) tips to
-        // standard. This pins the 90-vs-30 trial boundary.
-        assert_eq!(
-            SubscriptionTier::select(5, 49, 5, 50),
-            SubscriptionTier::EarlyAdopter
-        );
-        assert_eq!(
-            SubscriptionTier::select(5, 50, 5, 50),
-            SubscriptionTier::Standard
-        );
-    }
-
-    #[test]
-    fn trial_days_come_from_settings_not_a_constant() {
-        // BUNYIP-291 AC1: 90 for early adopter, 30 for standard, sourced from
-        // the passed-in (admin-configured) values; lifetime/free never trial.
-        assert_eq!(SubscriptionTier::EarlyAdopter.trial_days(90, 30), Some(90));
-        assert_eq!(SubscriptionTier::Standard.trial_days(90, 30), Some(30));
-        assert_eq!(SubscriptionTier::Lifetime.trial_days(90, 30), None);
-        assert_eq!(SubscriptionTier::Free.trial_days(90, 30), None);
-        // Different admin config flows straight through (no hardcoded 90/30).
-        assert_eq!(SubscriptionTier::EarlyAdopter.trial_days(60, 14), Some(60));
-        assert_eq!(SubscriptionTier::Standard.trial_days(60, 14), Some(14));
-    }
-
-    #[test]
     fn returning_member_is_not_eligible_for_a_second_trial() {
         // BUNYIP-291 AC5 (regression on BUNYIP-225): a first-timer gets the
         // signup trial; once has_used_trial is set (a prior trial checkout
@@ -510,22 +272,6 @@ mod tests {
             !u.trial_eligible(),
             "returning member must not get a second free trial"
         );
-    }
-
-    #[test]
-    fn trial_label_distinguishes_early_adopter_from_standard() {
-        // BUNYIP-291 AC2: the applied trial is labeled at signup.
-        assert_eq!(
-            SubscriptionTier::EarlyAdopter
-                .trial_label(90, 30)
-                .as_deref(),
-            Some("Early Adopter - 90-day trial")
-        );
-        assert_eq!(
-            SubscriptionTier::Standard.trial_label(90, 30).as_deref(),
-            Some("Standard - 30-day trial")
-        );
-        assert_eq!(SubscriptionTier::Lifetime.trial_label(90, 30), None);
     }
 
     fn test_user() -> User {
@@ -565,71 +311,7 @@ mod tests {
 
     // -- UserRole --
 
-    #[test]
-    fn user_role_as_str() {
-        assert_eq!(UserRole::Subscriber.as_str(), "subscriber");
-        assert_eq!(UserRole::Admin.as_str(), "admin");
-    }
-
-    #[test]
-    fn user_role_from_string() {
-        assert_eq!(UserRole::from("admin".to_string()), UserRole::Admin);
-        assert_eq!(
-            UserRole::from("subscriber".to_string()),
-            UserRole::Subscriber
-        );
-        assert_eq!(UserRole::from("unknown".to_string()), UserRole::Subscriber);
-    }
-
-    #[test]
-    fn user_role_from_str() {
-        assert_eq!(UserRole::from("admin"), UserRole::Admin);
-        assert_eq!(UserRole::from("anything"), UserRole::Subscriber);
-    }
-
     // -- MembershipStatus --
-
-    #[test]
-    fn membership_status_as_str() {
-        assert_eq!(MembershipStatus::None.as_str(), "none");
-        assert_eq!(MembershipStatus::Active.as_str(), "active");
-        assert_eq!(MembershipStatus::PastDue.as_str(), "past_due");
-        assert_eq!(MembershipStatus::Canceled.as_str(), "canceled");
-        assert_eq!(MembershipStatus::GracePeriod.as_str(), "grace_period");
-    }
-
-    #[test]
-    fn membership_status_has_access() {
-        assert!(MembershipStatus::Active.has_access());
-        assert!(MembershipStatus::GracePeriod.has_access());
-        assert!(!MembershipStatus::None.has_access());
-        assert!(!MembershipStatus::PastDue.has_access());
-        assert!(!MembershipStatus::Canceled.has_access());
-    }
-
-    #[test]
-    fn membership_status_from_string() {
-        assert_eq!(
-            MembershipStatus::from("active".to_string()),
-            MembershipStatus::Active
-        );
-        assert_eq!(
-            MembershipStatus::from("past_due".to_string()),
-            MembershipStatus::PastDue
-        );
-        assert_eq!(
-            MembershipStatus::from("canceled".to_string()),
-            MembershipStatus::Canceled
-        );
-        assert_eq!(
-            MembershipStatus::from("grace_period".to_string()),
-            MembershipStatus::GracePeriod
-        );
-        assert_eq!(
-            MembershipStatus::from("unknown".to_string()),
-            MembershipStatus::None
-        );
-    }
 
     // -- User methods --
 
@@ -694,35 +376,6 @@ mod tests {
     }
 
     // -- SubscriptionTier --
-
-    #[test]
-    fn subscription_tier_as_str() {
-        assert_eq!(SubscriptionTier::Lifetime.as_str(), "lifetime");
-        assert_eq!(SubscriptionTier::Free.as_str(), "free");
-        assert_eq!(SubscriptionTier::EarlyAdopter.as_str(), "early_adopter");
-        assert_eq!(SubscriptionTier::Standard.as_str(), "standard");
-    }
-
-    #[test]
-    fn subscription_tier_from_str() {
-        assert_eq!(
-            SubscriptionTier::from("lifetime"),
-            SubscriptionTier::Lifetime
-        );
-        assert_eq!(SubscriptionTier::from("free"), SubscriptionTier::Free);
-        assert_eq!(
-            SubscriptionTier::from("early_adopter"),
-            SubscriptionTier::EarlyAdopter
-        );
-        assert_eq!(
-            SubscriptionTier::from("standard"),
-            SubscriptionTier::Standard
-        );
-        assert_eq!(
-            SubscriptionTier::from("unknown"),
-            SubscriptionTier::Standard
-        );
-    }
 
     fn user_with_tier(
         lifetime_member: bool,
