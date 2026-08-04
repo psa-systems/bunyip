@@ -106,13 +106,16 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/applications",
                 web::post().to(handlers::create_application),
             )
+            // BUNYIP-473: batch reorder from an explicit id list. A fixed path,
+            // registered BEFORE the `/applications/{app_id}` routes so actix
+            // never captures "reorder" as an app_id and fails the UUID parse.
+            .route(
+                "/applications/reorder",
+                web::put().to(handlers::reorder_applications),
+            )
             .route(
                 "/applications/{app_id}",
                 web::put().to(handlers::update_application),
-            )
-            .route(
-                "/applications/{app_id}/swap-order",
-                web::put().to(handlers::swap_application_order),
             )
             .route(
                 "/applications/{app_id}",

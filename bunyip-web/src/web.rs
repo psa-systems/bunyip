@@ -44,6 +44,15 @@ pub fn html_cookies(markup: Markup, cookies: &[String]) -> Response {
     resp
 }
 
+/// A bare status response that relays refreshed cookies (BUNYIP-473). For
+/// fetch-driven endpoints that must not redirect (a redirect would reload and
+/// scroll the page), the client only reads `response.ok`.
+pub fn status_cookies(status: StatusCode, cookies: &[String]) -> Response {
+    let mut resp = status.into_response();
+    attach_cookies(&mut resp, cookies);
+    resp
+}
+
 /// 303 redirect (so a POST -> GET after form submit).
 pub fn redirect(path: &str) -> Response {
     let mut resp = StatusCode::SEE_OTHER.into_response();

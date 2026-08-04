@@ -294,11 +294,16 @@ impl ApplicationRepository {
                 container_name, health_check_url, subdomain, webhook_url, version, source_code_url,
                 is_hosted,
                 forgejo_owner, forgejo_repo, forgejo_package, pinned_release_tag, artifact_source,
-                oci_image_owner, oci_image_name, pinned_image_tag, release_notes_url)
+                oci_image_owner, oci_image_name, pinned_image_tag, release_notes_url,
+                sort_order)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                 COALESCE($12, TRUE),
                 $13, $14, $15, $16, COALESCE($17, 'release'),
-                $18, $19, $20, $21)
+                $18, $19, $20, $21,
+                -- BUNYIP-473: append at the end with a distinct position so the
+                -- reorder control has something to move (the old default 0 made
+                -- every new app share a position and the swap a no-op).
+                (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM applications))
             RETURNING *
             "#,
         )
@@ -343,33 +348,31 @@ impl ApplicationRepository {
         Ok(())
     }
 
-    /// Swap sort_order between two applications (admin)
-    pub async fn swap_sort_order(
-        pool: &PgPool,
-        app_id_a: Uuid,
-        app_id_b: Uuid,
-    ) -> Result<(), AppError> {
-        let result = sqlx::query(
+    /// Set application ordering from an explicit list of ids (BUNYIP-473).
+    ///
+    /// Each id's `sort_order` becomes its 1-based index in `ordered_ids`, so the
+    /// stored order matches the list exactly and positions are always distinct
+    /// (the old `swap_sort_order` moved nothing when two rows shared a position,
+    /// which every app did while they defaulted to 0). Ids not present are left
+    /// untouched; unknown ids in the list are ignored by the join.
+    ///
+    /// One statement: `unnest ... WITH ORDINALITY` pairs each id with its
+    /// position and the join assigns it, so N rows update in a single round trip.
+    pub async fn set_order(pool: &PgPool, ordered_ids: &[Uuid]) -> Result<(), AppError> {
+        if ordered_ids.is_empty() {
+            return Ok(());
+        }
+        sqlx::query(
             r#"
             UPDATE applications AS a
-            SET sort_order = b.sort_order, updated_at = NOW()
-            FROM (
-                SELECT id, sort_order FROM applications WHERE id = ANY($1)
-            ) AS b
-            WHERE a.id = ANY($1) AND a.id != b.id
+            SET sort_order = o.ord, updated_at = NOW()
+            FROM unnest($1::uuid[]) WITH ORDINALITY AS o(id, ord)
+            WHERE a.id = o.id
             "#,
         )
-        .bind(&[app_id_a, app_id_b][..])
+        .bind(ordered_ids)
         .execute(pool)
         .await?;
-
-        // Each id pins to the OTHER row's sort_order, so a real swap touches
-        // both rows. Zero rows means one (or both) ids were missing or equal;
-        // report that instead of silently succeeding.
-        if result.rows_affected() == 0 {
-            return Err(AppError::not_found("Application"));
-        }
-
         Ok(())
     }
 
