@@ -1,34 +1,25 @@
 //! Admin panel: IP auto-bans (BUNYIP-320).
 
-use axum::body::Body;
-use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
+use axum::extract::{Query, State};
+use axum::http::HeaderMap;
+use axum::response::Response;
 use axum::Form;
 use maud::{html, Markup};
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::api::admin as admin_api;
-use crate::api::types::{
-    AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, AdminIpBan,
-    AdminRateLimit, AdminRateLimitConfig, AdminUser, AppRestoreStatus, ApplicationGroup,
-    FeedbackAttachmentMeta, FeedbackStatus, RestoreReport, User, UserEntitlement,
-};
-use crate::auth::AuthCtx;
+use crate::api::types::AdminIpBan;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{relative_time, urlenc};
-use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, error_box, icon, success_box, toggle_switch};
-use crate::web::{redirect, redirect_cookies, AppState};
+use crate::views::ui::{badge, button_class, error_box, icon};
+use crate::web::{redirect_cookies, AppState};
 
 use super::refuse_non_super_admin;
-use super::{pager, title_case};
 
 /// Render one active IP auto-ban row: the banned IP, reason, strike count, when
 /// it was banned and when it expires, plus an Unban button that POSTs to the
 /// lift handler.
-fn ip_ban_row(b: &AdminIpBan) -> Markup {
+pub(super) fn ip_ban_row(b: &AdminIpBan) -> Markup {
     html! {
         div class="flex items-start justify-between py-4 border-b last:border-0" {
             div class="flex items-start gap-4 min-w-0" {
@@ -64,7 +55,7 @@ const MAX_MANUAL_BAN_SECS: i64 = 31_536_000;
 /// from.
 /// `prefill_ip` seeds the address field so a "Ban this address" link from
 /// elsewhere (BUNYIP-436: the feedback detail IP) lands here ready to submit.
-fn ip_ban_add_card(prefill_ip: Option<&str>) -> Markup {
+pub(super) fn ip_ban_add_card(prefill_ip: Option<&str>) -> Markup {
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
             div class="flex flex-col space-y-1.5 p-6" {

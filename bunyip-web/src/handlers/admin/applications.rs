@@ -1,29 +1,22 @@
 //! Admin panel: Applications.
 
-use axum::body::Body;
-use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
+use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
+use axum::response::Response;
 use axum::Form;
 use maud::{html, Markup};
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::api::admin as admin_api;
-use crate::api::types::{
-    AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, AdminIpBan,
-    AdminRateLimit, AdminRateLimitConfig, AdminUser, AppRestoreStatus, ApplicationGroup,
-    FeedbackAttachmentMeta, FeedbackStatus, RestoreReport, User, UserEntitlement,
-};
-use crate::auth::AuthCtx;
+use crate::api::types::AdminApplication;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
-use crate::util::{relative_time, urlenc};
+use crate::util::urlenc;
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, error_box, icon, success_box, toggle_switch};
-use crate::web::{redirect, redirect_cookies, AppState};
+use crate::views::ui::{badge, button_class, error_box, icon, toggle_switch};
+use crate::web::{redirect_cookies, AppState};
 
 use super::application_groups::group_assignment_form;
-use super::{pager, title_case};
 
 pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
@@ -141,38 +134,38 @@ pub async fn application_field(
 
 /// Current values of the distribution form, borrowed for rendering. Shared by
 /// the create and edit forms so the field layout cannot drift between them.
-struct DistView<'a> {
-    artifact_source: &'a str,
-    forgejo_owner: &'a str,
-    forgejo_repo: &'a str,
-    forgejo_package: &'a str,
-    pinned_release_tag: &'a str,
-    oci_image_owner: &'a str,
-    oci_image_name: &'a str,
-    pinned_image_tag: &'a str,
+pub(super) struct DistView<'a> {
+    pub(super) artifact_source: &'a str,
+    pub(super) forgejo_owner: &'a str,
+    pub(super) forgejo_repo: &'a str,
+    pub(super) forgejo_package: &'a str,
+    pub(super) pinned_release_tag: &'a str,
+    pub(super) oci_image_owner: &'a str,
+    pub(super) oci_image_name: &'a str,
+    pub(super) pinned_image_tag: &'a str,
 }
 
 /// Identity fields shown only on the create form (the backend requires them;
 /// they are immutable afterwards, so the edit form omits them).
-struct IdentityView<'a> {
-    name: &'a str,
-    slug: &'a str,
-    display_name: &'a str,
-    container_name: &'a str,
+pub(super) struct IdentityView<'a> {
+    pub(super) name: &'a str,
+    pub(super) slug: &'a str,
+    pub(super) display_name: &'a str,
+    pub(super) container_name: &'a str,
 }
 
 /// The descriptive / metadata fields the API accepts on both create and update
 /// (`UpdateApplication` / `CreateApplication`): everything other than identity
 /// and the distribution coordinates. Shared by the create and edit forms so the
 /// field layout cannot drift between them. Borrowed for rendering.
-struct DetailsView<'a> {
-    description: &'a str,
-    icon_url: &'a str,
-    subdomain: &'a str,
-    version: &'a str,
-    source_code_url: &'a str,
-    release_notes_url: &'a str,
-    maintenance_message: &'a str,
+pub(super) struct DetailsView<'a> {
+    pub(super) description: &'a str,
+    pub(super) icon_url: &'a str,
+    pub(super) subdomain: &'a str,
+    pub(super) version: &'a str,
+    pub(super) source_code_url: &'a str,
+    pub(super) release_notes_url: &'a str,
+    pub(super) maintenance_message: &'a str,
 }
 
 /// An HTML checkbox submits its value only when checked, so an unchecked box is
@@ -227,7 +220,7 @@ fn distribution_fields(v: &DistView) -> Markup {
 /// - `oci`: `Application::is_pullable` (is_active + all three OCI fields set).
 ///
 /// `None` and empty/whitespace string fields are both treated as absent.
-struct SurfaceVisibility {
+pub(super) struct SurfaceVisibility {
     hub: bool,
     binary: bool,
     oci: bool,
@@ -288,7 +281,7 @@ fn surface_tags(s: &SurfaceVisibility) -> Markup {
 /// only on the edit page of a persisted app, where the Hub/Binary/OCI badges
 /// can be derived; create and error re-renders pass `None`. `error` renders a
 /// banner and the form keeps the submitted values for correction.
-fn application_form(
+pub(super) fn application_form(
     action: &str,
     heading: &str,
     blurb: &str,
@@ -408,7 +401,7 @@ fn insert_detail_fields(
 /// sources: it is meaningless there, and re-sending a prefilled package while
 /// the admin flips the source to `release` would fail backend validation.
 /// `is_hosted` is always sent so the checkbox can toggle it in both directions.
-fn distribution_update_body(f: &DistributionForm) -> serde_json::Value {
+pub(super) fn distribution_update_body(f: &DistributionForm) -> serde_json::Value {
     let mut m = serde_json::Map::new();
     if !f.artifact_source.trim().is_empty() {
         m.insert("artifact_source".into(), json!(f.artifact_source.trim()));
@@ -758,7 +751,7 @@ pub struct CreateAppForm {
 /// validation). `forgejo_package` is only sent on a `generic_package` source
 /// (it is invalid on `release`). `is_hosted` reflects the checkbox so a
 /// catalog-only product (unchecked) is not forced to the DB default of hosted.
-fn create_app_body(f: &CreateAppForm) -> Result<serde_json::Value, String> {
+pub(super) fn create_app_body(f: &CreateAppForm) -> Result<serde_json::Value, String> {
     use crate::handlers::validate;
     // BUNYIP-112: identity fields are bounded + slug-checked at the edge.
     // `slug` is load-bearing for OCI repo paths in
@@ -922,4 +915,197 @@ pub async fn application_create(
         Ok(()) => redirect_cookies("/admin/applications", &c.set_cookies),
         Err(e) => render_form_error(&e.user_message()),
     }
+}
+
+// --- application documentation (BUNYIP-388) ---------------------------------
+
+/// Add/edit form fields for one documentation page.
+#[derive(Debug, Deserialize)]
+pub struct DocForm {
+    pub slug: String,
+    pub title: String,
+    pub body: String,
+    // Parsed with `validate::parse_i32` (empty -> 0, non-numeric -> handled),
+    // not deserialized as i32, so a cleared number input does not 400 the form.
+    #[serde(default)]
+    pub sort_order: String,
+}
+
+/// GET /admin/applications/{id}/docs - manage an app's documentation pages.
+pub async fn application_docs(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let app_name = match admin_api::applications(&st.api, c.forward.as_deref()).await {
+        Ok(apps) => apps
+            .iter()
+            .find(|a| a.id == id)
+            .map(|a| a.display_name.clone())
+            .unwrap_or_else(|| id.clone()),
+        Err(e) => {
+            let content = html! {
+                div class="space-y-6" {
+                    h1 class="text-3xl font-bold" { "Manage documentation" }
+                    (error_box(&e.user_message()))
+                }
+            };
+            return admin_response(
+                &c,
+                &user,
+                "/admin/applications",
+                "Manage documentation · Bunyip",
+                content,
+            );
+        }
+    };
+    let docs = admin_api::app_docs(&st.api, c.forward.as_deref(), &id)
+        .await
+        .unwrap_or_default();
+    let content = html! {
+        div class="space-y-8" {
+            div {
+                a class="text-sm text-muted-foreground hover:underline" href="/admin/applications" { "← Applications" }
+                h1 class="text-3xl font-bold mt-2" { "Documentation: " (app_name) }
+                p class="text-muted-foreground" { "Public pages, rendered as markdown (raw HTML is stripped). Lower sort order shows first." }
+            }
+            div class="space-y-6" {
+                @if docs.is_empty() {
+                    p class="text-muted-foreground" { "No pages yet. Add one below." }
+                }
+                @for d in &docs {
+                    div class="rounded-lg border p-4 space-y-3" {
+                        form method="post" action=(format!("/admin/applications/{id}/docs/{}", d.id)) class="space-y-3" {
+                            div class="grid gap-3 md:grid-cols-3" {
+                                label class="text-sm block" { "Title" input class="mt-1 w-full rounded border px-2 py-1" name="title" value=(d.title) required; }
+                                label class="text-sm block" { "Slug" input class="mt-1 w-full rounded border px-2 py-1" name="slug" value=(d.slug) required; }
+                                label class="text-sm block" { "Sort order" input type="number" class="mt-1 w-full rounded border px-2 py-1" name="sort_order" value=(d.sort_order); }
+                            }
+                            label class="text-sm block" { "Body (markdown)" textarea class="mt-1 w-full rounded border px-2 py-1 font-mono text-sm" name="body" rows="10" { (d.body) } }
+                            button type="submit" class=(button_class("default", "sm", "")) { "Save" }
+                        }
+                        form method="post" action=(format!("/admin/applications/{id}/docs/{}/delete", d.id)) data-confirm="Delete this documentation entry? This cannot be undone." {
+                            button type="submit" class=(button_class("destructive", "sm", "")) { "Delete" }
+                        }
+                    }
+                }
+            }
+            div class="rounded-lg border p-4 space-y-3" {
+                h2 class="text-xl font-semibold" { "Add a page" }
+                form method="post" action=(format!("/admin/applications/{id}/docs")) class="space-y-3" {
+                    div class="grid gap-3 md:grid-cols-3" {
+                        label class="text-sm block" { "Title" input class="mt-1 w-full rounded border px-2 py-1" name="title" required; }
+                        label class="text-sm block" { "Slug" input class="mt-1 w-full rounded border px-2 py-1" name="slug" placeholder="getting-started" required; }
+                        label class="text-sm block" { "Sort order" input type="number" class="mt-1 w-full rounded border px-2 py-1" name="sort_order" value="0"; }
+                    }
+                    label class="text-sm block" { "Body (markdown)" textarea class="mt-1 w-full rounded border px-2 py-1 font-mono text-sm" name="body" rows="10" {} }
+                    button type="submit" class=(button_class("default", "sm", "")) { "Add page" }
+                }
+            }
+        }
+    };
+    admin_response(
+        &c,
+        &user,
+        "/admin/applications",
+        "Manage documentation · Bunyip",
+        content,
+    )
+}
+
+/// POST /admin/applications/{id}/docs - create a page, then back to the manager.
+pub async fn application_doc_create(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<DocForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let sort_order = crate::handlers::validate::parse_i32(&f.sort_order, "Sort order").unwrap_or(0);
+    let target = match admin_api::create_app_doc(
+        &st.api,
+        c.forward.as_deref(),
+        &id,
+        &f.slug,
+        &f.title,
+        &f.body,
+        sort_order,
+    )
+    .await
+    {
+        Ok(_) => format!("/admin/applications/{id}/docs"),
+        Err(e) => {
+            tracing::warn!(app_id = %id, slug = %f.slug, error = ?e, "admin create app doc failed");
+            format!(
+                "/admin/applications/{id}/docs?toast_err={}",
+                urlenc("Could not create documentation page")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// POST /admin/applications/{id}/docs/{doc_id} - update a page.
+pub async fn application_doc_update(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path((id, doc_id)): Path<(String, String)>,
+    Form(f): Form<DocForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let sort_order = crate::handlers::validate::parse_i32(&f.sort_order, "Sort order").unwrap_or(0);
+    let target = match admin_api::update_app_doc(
+        &st.api,
+        c.forward.as_deref(),
+        &doc_id,
+        &f.slug,
+        &f.title,
+        &f.body,
+        sort_order,
+    )
+    .await
+    {
+        Ok(_) => format!("/admin/applications/{id}/docs"),
+        Err(e) => {
+            tracing::warn!(app_id = %id, doc_id = %doc_id, error = ?e, "admin update app doc failed");
+            format!(
+                "/admin/applications/{id}/docs?toast_err={}",
+                urlenc("Could not update documentation page")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// POST /admin/applications/{id}/docs/{doc_id}/delete - delete a page.
+pub async fn application_doc_delete(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path((id, doc_id)): Path<(String, String)>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::delete_app_doc(&st.api, c.forward.as_deref(), &doc_id).await {
+        Ok(_) => format!("/admin/applications/{id}/docs"),
+        Err(e) => {
+            tracing::warn!(app_id = %id, doc_id = %doc_id, error = ?e, "admin delete app doc failed");
+            format!(
+                "/admin/applications/{id}/docs?toast_err={}",
+                urlenc("Could not delete documentation page")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }

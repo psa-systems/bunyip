@@ -1,30 +1,23 @@
 //! Admin panel: Feedback.
 
 use axum::body::Body;
-use axum::extract::{Multipart, Path, Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::Response;
 use axum::Form;
 use maud::{html, Markup};
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::api::admin as admin_api;
-use crate::api::types::{
-    AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, AdminIpBan,
-    AdminRateLimit, AdminRateLimitConfig, AdminUser, AppRestoreStatus, ApplicationGroup,
-    FeedbackAttachmentMeta, FeedbackStatus, RestoreReport, User, UserEntitlement,
-};
-use crate::auth::AuthCtx;
-use crate::handlers::{admin_guard, admin_response, dashboard_input};
+use crate::api::types::{AdminFeedbackDetail, FeedbackAttachmentMeta, FeedbackStatus};
+use crate::handlers::{admin_guard, admin_response};
 use crate::util::{relative_time, urlenc};
-use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, error_box, icon, success_box, toggle_switch};
-use crate::web::{redirect, redirect_cookies, AppState};
+use crate::views::ui::{badge, button_class, icon};
+use crate::web::{redirect_cookies, AppState};
 
+use super::pager;
 use super::with_attachment_hardening;
 use super::PageQuery;
-use super::{pager, title_case};
 
 /// Top-of-page tabs that bucket the feedback queue by triage state.
 /// Active is the working queue (new/reviewed/responded, not spam).
@@ -34,7 +27,7 @@ use super::{pager, title_case};
 /// (row leaves Active, lands in Closed) and spam never clutters
 /// triage.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-enum FeedbackTab {
+pub(super) enum FeedbackTab {
     Active,
     Closed,
     Spam,
@@ -43,7 +36,7 @@ enum FeedbackTab {
 
 impl FeedbackTab {
     /// Bucket string passed to the bunyip-api list endpoint.
-    fn bucket(self) -> &'static str {
+    pub(super) fn bucket(self) -> &'static str {
         match self {
             FeedbackTab::Active => "active",
             FeedbackTab::Closed => "closed",
@@ -54,7 +47,7 @@ impl FeedbackTab {
 
     /// Path used to return to this tab after a row action (so the
     /// admin lands back on the same view they clicked from).
-    fn path(self) -> &'static str {
+    pub(super) fn path(self) -> &'static str {
         match self {
             FeedbackTab::Active => "/admin/feedback",
             FeedbackTab::Closed => "/admin/feedback/closed",
@@ -67,7 +60,7 @@ impl FeedbackTab {
     /// the list tab it was opened from so its actions redirect there
     /// (BUNYIP-422). Distinct from [`bucket`](Self::bucket), which collapses
     /// Archive onto the active list endpoint; this preserves Archive.
-    fn query_slug(self) -> &'static str {
+    pub(super) fn query_slug(self) -> &'static str {
         match self {
             FeedbackTab::Active => "active",
             FeedbackTab::Closed => "closed",
@@ -78,7 +71,7 @@ impl FeedbackTab {
 
     /// Parse the `?from=` slug back into a tab; unknown / absent defaults to
     /// Active (the safe fallback, matching [`from_tab_path`]).
-    fn from_query(from: Option<&str>) -> FeedbackTab {
+    pub(super) fn from_query(from: Option<&str>) -> FeedbackTab {
         match from.unwrap_or("active") {
             "closed" => FeedbackTab::Closed,
             "spam" => FeedbackTab::Spam,
@@ -211,7 +204,10 @@ fn feedback_status_chip(status: &FeedbackStatus) -> Markup {
 /// actions moved to the detail page ([`feedback_detail_actions`]); the
 /// `?from=` param carries the tab slug so those actions redirect back to the
 /// view the admin came from.
-fn feedback_row(f: &crate::api::types::AdminFeedbackSummary, tab: FeedbackTab) -> Markup {
+pub(super) fn feedback_row(
+    f: &crate::api::types::AdminFeedbackSummary,
+    tab: FeedbackTab,
+) -> Markup {
     let name = f.name.clone().filter(|s| !s.trim().is_empty());
     let email = f.email_masked.clone().filter(|s| !s.trim().is_empty());
     let identity = match (name.as_deref(), email.as_deref()) {
@@ -256,7 +252,11 @@ fn feedback_row(f: &crate::api::types::AdminFeedbackSummary, tab: FeedbackTab) -
 /// / delete, Archive gets delete. Each POSTs a `from` hidden field carrying
 /// the tab slug so the handler redirects back to the list view the admin came
 /// from.
-fn feedback_detail_actions(id: &str, status: &FeedbackStatus, tab: FeedbackTab) -> Markup {
+pub(super) fn feedback_detail_actions(
+    id: &str,
+    status: &FeedbackStatus,
+    tab: FeedbackTab,
+) -> Markup {
     let already_reviewed = matches!(status, FeedbackStatus::Reviewed);
     let review_action = if already_reviewed { "new" } else { "reviewed" };
     let review_label = if already_reviewed {
@@ -576,7 +576,7 @@ pub struct FeedbackDetailQuery {
     pub from: Option<String>,
 }
 
-fn feedback_detail_view(f: &AdminFeedbackDetail, tab: FeedbackTab) -> Markup {
+pub(super) fn feedback_detail_view(f: &AdminFeedbackDetail, tab: FeedbackTab) -> Markup {
     // BUNYIP-94: render the masked email, never the raw one. Admins do
     // not need the raw address to reply (the API holds it and routes the
     // response server-side); leaking the raw address on the detail page

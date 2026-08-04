@@ -1,29 +1,20 @@
 //! Admin panel: Users.
 
-use axum::body::Body;
-use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Response};
 use axum::Form;
 use maud::{html, Markup};
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::api::admin as admin_api;
-use crate::api::types::{
-    AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, AdminIpBan,
-    AdminRateLimit, AdminRateLimitConfig, AdminUser, AppRestoreStatus, ApplicationGroup,
-    FeedbackAttachmentMeta, FeedbackStatus, RestoreReport, User, UserEntitlement,
-};
-use crate::auth::AuthCtx;
+use crate::api::types::{AdminRateLimit, AdminUser};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{relative_time, urlenc};
-use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, error_box, icon, success_box, toggle_switch};
-use crate::web::{redirect, redirect_cookies, AppState};
+use crate::views::ui::{badge, button_class, icon};
+use crate::web::{redirect_cookies, AppState};
 
 use super::rate_limits::rate_limit_row;
-use super::{pager, title_case};
 
 #[derive(Deserialize)]
 pub struct UserQuery {
@@ -53,7 +44,7 @@ pub struct UserQuery {
 /// BUNYIP-410 overhaul: map the `verified` filter query value to the API's
 /// tri-state filter. `verified` -> only verified, `unverified` -> only
 /// unverified, anything else -> no filter (both).
-fn parse_verified_filter(s: &str) -> Option<bool> {
+pub(super) fn parse_verified_filter(s: &str) -> Option<bool> {
     match s {
         "verified" => Some(true),
         "unverified" => Some(false),
@@ -62,7 +53,7 @@ fn parse_verified_filter(s: &str) -> Option<bool> {
 }
 
 /// Human-readable label for a membership tier badge.
-fn tier_label(tier: &crate::api::types::SubscriptionTier) -> &'static str {
+pub(super) fn tier_label(tier: &crate::api::types::SubscriptionTier) -> &'static str {
     use crate::api::types::SubscriptionTier::*;
     match tier {
         Lifetime => "Lifetime",
@@ -87,19 +78,19 @@ fn abs_time(iso: &str) -> String {
 /// builder methods, so the URL is the single source of truth and stays
 /// internally consistent (a filter change always resets the page to 1).
 #[derive(Clone)]
-struct UsersQ {
-    search: String,
-    status: String,
-    tier: String,
-    verified: String,
-    sort: String,
-    dir: String,
-    page: u32,
-    page_size: u32,
+pub(super) struct UsersQ {
+    pub(super) search: String,
+    pub(super) status: String,
+    pub(super) tier: String,
+    pub(super) verified: String,
+    pub(super) sort: String,
+    pub(super) dir: String,
+    pub(super) page: u32,
+    pub(super) page_size: u32,
 }
 
 impl UsersQ {
-    fn from_query(q: UserQuery) -> Self {
+    pub(super) fn from_query(q: UserQuery) -> Self {
         let status = match q.status.as_deref() {
             Some("suspended") => "suspended",
             Some("all") => "all",
@@ -125,7 +116,7 @@ impl UsersQ {
 
     /// Build the `/admin/users` URL for this state, emitting only non-default
     /// params so a clean list is a clean URL.
-    fn href(&self) -> String {
+    pub(super) fn href(&self) -> String {
         let mut p: Vec<String> = Vec::new();
         if !self.search.is_empty() {
             p.push(format!("search={}", urlenc(&self.search)));
@@ -155,36 +146,36 @@ impl UsersQ {
         }
     }
 
-    fn with_search(&self, v: &str) -> Self {
+    pub(super) fn with_search(&self, v: &str) -> Self {
         let mut q = self.clone();
         q.search = v.trim().to_string();
         q.page = 1;
         q
     }
-    fn with_status(&self, v: &str) -> Self {
+    pub(super) fn with_status(&self, v: &str) -> Self {
         let mut q = self.clone();
         q.status = v.to_string();
         q.page = 1;
         q
     }
-    fn with_tier(&self, v: &str) -> Self {
+    pub(super) fn with_tier(&self, v: &str) -> Self {
         let mut q = self.clone();
         q.tier = v.to_string();
         q.page = 1;
         q
     }
-    fn with_verified(&self, v: &str) -> Self {
+    pub(super) fn with_verified(&self, v: &str) -> Self {
         let mut q = self.clone();
         q.verified = v.to_string();
         q.page = 1;
         q
     }
-    fn with_page(&self, v: u32) -> Self {
+    pub(super) fn with_page(&self, v: u32) -> Self {
         let mut q = self.clone();
         q.page = v;
         q
     }
-    fn with_page_size(&self, v: u32) -> Self {
+    pub(super) fn with_page_size(&self, v: u32) -> Self {
         let mut q = self.clone();
         q.page_size = v;
         q.page = 1;
@@ -192,7 +183,7 @@ impl UsersQ {
     }
     /// Toggle sort on `col`: same column flips direction, a new column starts
     /// ascending.
-    fn with_sort(&self, col: &str) -> Self {
+    pub(super) fn with_sort(&self, col: &str) -> Self {
         let mut q = self.clone();
         q.page = 1;
         if q.sort == col {
@@ -206,7 +197,7 @@ impl UsersQ {
 
     /// True when any content filter (search / tier / verification) or a
     /// non-default status segment is applied - i.e. the list is narrowed.
-    fn is_filtered(&self) -> bool {
+    pub(super) fn is_filtered(&self) -> bool {
         !self.search.is_empty()
             || !self.tier.is_empty()
             || !self.verified.is_empty()
@@ -372,7 +363,7 @@ fn verified_indicator(verified: bool) -> Markup {
 /// open the detail (a soft-deleted lookup 404s), so their row is not a link and
 /// carries an inline Reactivate action instead - this matters on the "All"
 /// segment where the two are interleaved.
-fn user_grid_row(u: &crate::api::types::AdminUser) -> Markup {
+pub(super) fn user_grid_row(u: &crate::api::types::AdminUser) -> Markup {
     let is_admin = matches!(u.role, crate::api::types::UserRole::Admin);
     let initial = u
         .email
@@ -508,7 +499,7 @@ fn users_pager(uq: &UsersQ, total_pages: i64) -> Markup {
 
 /// The swappable panel: heading + result count, filter bar, chips, the sortable
 /// grid list, pager. `data == None` renders the error state with a retry.
-fn users_panel(
+pub(super) fn users_panel(
     uq: &UsersQ,
     data: Option<&crate::api::types::PaginatedResponse<crate::api::types::AdminUser>>,
     total_all: Option<i64>,
@@ -928,7 +919,7 @@ pub async fn user_set_tier(
 /// and the specific user (by email), so an admin who opened the wrong row is
 /// told who they are about to affect before anything happens. Extracted from
 /// `user_detail` so the confirmations are unit-testable.
-fn user_actions_card(target: &AdminUser, is_admin_target: bool) -> Markup {
+pub(super) fn user_actions_card(target: &AdminUser, is_admin_target: bool) -> Markup {
     let who = target.email.as_str();
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
@@ -965,7 +956,7 @@ fn user_actions_card(target: &AdminUser, is_admin_target: bool) -> Markup {
 /// shared confirm dialog, because a tier move has billing consequences. The API
 /// records the before/after tiers in the audit log; the slot counts in Tier
 /// Settings stay correct because usage is counted live from the tier column.
-fn tier_change_card(target: &AdminUser) -> Markup {
+pub(super) fn tier_change_card(target: &AdminUser) -> Markup {
     use crate::api::types::SubscriptionTier::*;
     let options = [
         (

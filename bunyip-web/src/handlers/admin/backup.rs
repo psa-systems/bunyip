@@ -1,29 +1,18 @@
 //! Admin panel: Account backup & restore (BUNYIP-353).
 
 use axum::body::Body;
-use axum::extract::{Multipart, Path, Query, State};
+use axum::extract::{Multipart, State};
 use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
-use axum::Form;
+use axum::response::Response;
 use maud::{html, Markup};
-use serde::Deserialize;
-use serde_json::json;
 
 use crate::api::admin as admin_api;
-use crate::api::types::{
-    AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, AdminIpBan,
-    AdminRateLimit, AdminRateLimitConfig, AdminUser, AppRestoreStatus, ApplicationGroup,
-    FeedbackAttachmentMeta, FeedbackStatus, RestoreReport, User, UserEntitlement,
-};
-use crate::auth::AuthCtx;
+use crate::api::types::{AppRestoreStatus, RestoreReport};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
-use crate::util::{relative_time, urlenc};
-use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, error_box, icon, success_box, toggle_switch};
-use crate::web::{redirect, redirect_cookies, AppState};
+use crate::views::ui::{button_class, error_box, icon};
+use crate::web::{redirect_cookies, AppState};
 
 use super::with_attachment_hardening;
-use super::{pager, title_case};
 
 /// Upper bound on an uploaded backup file. The bundle embeds each entitled
 /// app's backup, so it can be larger than a form post but is not unbounded.

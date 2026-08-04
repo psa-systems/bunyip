@@ -1,28 +1,20 @@
 //! Admin panel: Application Groups (BUNYIP-100).
 
-use axum::body::Body;
-use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
+use axum::extract::{Path, State};
+use axum::http::HeaderMap;
+use axum::response::Response;
 use axum::Form;
 use maud::{html, Markup};
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::api::admin as admin_api;
-use crate::api::types::{
-    AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, AdminIpBan,
-    AdminRateLimit, AdminRateLimitConfig, AdminUser, AppRestoreStatus, ApplicationGroup,
-    FeedbackAttachmentMeta, FeedbackStatus, RestoreReport, User, UserEntitlement,
-};
-use crate::auth::AuthCtx;
+use crate::api::types::ApplicationGroup;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
-use crate::util::{relative_time, urlenc};
+use crate::util::urlenc;
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, error_box, icon, success_box, toggle_switch};
-use crate::web::{redirect, redirect_cookies, AppState};
-
-use super::{pager, title_case};
+use crate::views::ui::{button_class, error_box, icon};
+use crate::web::{redirect_cookies, AppState};
 
 #[derive(Deserialize, Default)]
 pub struct GroupForm {
@@ -65,7 +57,7 @@ fn group_body(f: &GroupForm) -> Result<serde_json::Value, String> {
 }
 
 /// Shared create/edit form for a group.
-fn group_form(
+pub(super) fn group_form(
     action: &str,
     heading: &str,
     g: Option<&ApplicationGroup>,

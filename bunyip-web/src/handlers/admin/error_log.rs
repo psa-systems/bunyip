@@ -1,28 +1,17 @@
 //! Admin panel: Error Log (BUNYIP-327).
 
-use axum::body::Body;
-use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
-use axum::Form;
+use axum::extract::{Query, State};
+use axum::http::HeaderMap;
+use axum::response::Response;
 use maud::{html, Markup};
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::api::admin as admin_api;
-use crate::api::types::{
-    AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, AdminIpBan,
-    AdminRateLimit, AdminRateLimitConfig, AdminUser, AppRestoreStatus, ApplicationGroup,
-    FeedbackAttachmentMeta, FeedbackStatus, RestoreReport, User, UserEntitlement,
-};
-use crate::auth::AuthCtx;
-use crate::handlers::{admin_guard, admin_response, dashboard_input};
-use crate::util::{relative_time, urlenc};
-use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, error_box, icon, success_box, toggle_switch};
-use crate::web::{redirect, redirect_cookies, AppState};
-
-use super::{pager, title_case};
+use crate::api::types::AdminErrorLog;
+use crate::handlers::{admin_guard, admin_response};
+use crate::util::relative_time;
+use crate::views::ui::{badge, button_class, error_box, icon};
+use crate::web::AppState;
 
 #[derive(Deserialize)]
 pub struct LogsQuery {
@@ -31,7 +20,7 @@ pub struct LogsQuery {
 
 /// Render a single captured ERROR entry: message + category/level badges, the
 /// route/client attribution line, and any extra structured fields.
-fn log_row(e: &AdminErrorLog) -> Markup {
+pub(super) fn log_row(e: &AdminErrorLog) -> Markup {
     html! {
         div class="flex items-start justify-between py-4 border-b last:border-0" {
             div class="flex items-start gap-4 min-w-0" {

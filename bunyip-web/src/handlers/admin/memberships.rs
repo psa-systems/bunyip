@@ -1,29 +1,15 @@
 //! Admin panel: Memberships.
 
-use axum::body::Body;
-use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
-use axum::Form;
-use maud::{html, Markup};
-use serde::Deserialize;
-use serde_json::json;
+use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
+use axum::response::Response;
 
 use crate::api::admin as admin_api;
-use crate::api::types::{
-    AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, AdminIpBan,
-    AdminRateLimit, AdminRateLimitConfig, AdminUser, AppRestoreStatus, ApplicationGroup,
-    FeedbackAttachmentMeta, FeedbackStatus, RestoreReport, User, UserEntitlement,
-};
-use crate::auth::AuthCtx;
-use crate::handlers::{admin_guard, admin_response, dashboard_input};
-use crate::util::{relative_time, urlenc};
-use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, error_box, icon, success_box, toggle_switch};
+use crate::handlers::admin_guard;
+use crate::util::urlenc;
 use crate::web::{redirect, redirect_cookies, AppState};
 
 use super::PageQuery;
-use super::{pager, title_case};
 
 /// BUNYIP-410: the standalone Memberships page was consolidated into the users
 /// list (which now shows tier + verified with a filter bar). `/admin/memberships`

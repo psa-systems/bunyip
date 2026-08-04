@@ -1,26 +1,18 @@
 //! Admin panel: Rate limits (BUNYIP-317).
 
-use axum::body::Body;
-use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
+use axum::extract::{Query, State};
+use axum::http::HeaderMap;
+use axum::response::Response;
 use axum::Form;
 use maud::{html, Markup};
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::api::admin as admin_api;
-use crate::api::types::{
-    AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, AdminIpBan,
-    AdminRateLimit, AdminRateLimitConfig, AdminUser, AppRestoreStatus, ApplicationGroup,
-    FeedbackAttachmentMeta, FeedbackStatus, RestoreReport, User, UserEntitlement,
-};
-use crate::auth::AuthCtx;
+use crate::api::types::{AdminRateLimit, AdminRateLimitConfig};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{relative_time, urlenc};
-use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, error_box, icon, success_box, toggle_switch};
-use crate::web::{redirect, redirect_cookies, AppState};
+use crate::views::ui::{badge, button_class, error_box, icon};
+use crate::web::{redirect_cookies, AppState};
 
 use super::refuse_non_super_admin;
 use super::PageQuery;
@@ -29,7 +21,7 @@ use super::{pager, title_case};
 /// Format a `retry_after` second count as a compact "retry in" label
 /// (e.g. `2m 5s`, `45s`). Zero (or a window that has just elapsed) reads as
 /// "any moment", since the throttle clears on the next request.
-fn fmt_retry_secs(secs: u64) -> String {
+pub(super) fn fmt_retry_secs(secs: u64) -> String {
     if secs == 0 {
         return "any moment".to_string();
     }
@@ -96,7 +88,7 @@ const MAX_LIMIT_REQUESTS: i32 = 1_000_000;
 const MAX_LIMIT_WINDOW_SECS: i64 = 604_800; // 7 days
 
 /// Format a window length as a compact label (`60s`, `10m`, `1h`).
-fn fmt_window_secs(secs: i64) -> String {
+pub(super) fn fmt_window_secs(secs: i64) -> String {
     if secs % 3600 == 0 && secs >= 3600 {
         format!("{}h", secs / 3600)
     } else if secs % 60 == 0 && secs >= 60 {
@@ -153,7 +145,7 @@ fn rate_limit_config_row(cfg: &AdminRateLimitConfig, editable: bool) -> Markup {
 /// The "limit configuration" card (BUNYIP-413): every enforced action with its
 /// cap and window, editable by the super admin. `reachable` distinguishes an
 /// API that could not be reached from a genuinely empty list.
-fn rate_limit_config_card(
+pub(super) fn rate_limit_config_card(
     configs: &[AdminRateLimitConfig],
     reachable: bool,
     editable: bool,

@@ -1,28 +1,18 @@
 //! Admin panel: Email / SMTP config (BUNYIP-351).
 
-use axum::body::Body;
-use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
+use axum::extract::State;
+use axum::http::HeaderMap;
+use axum::response::Response;
 use axum::Form;
 use maud::{html, Markup};
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::api::admin as admin_api;
-use crate::api::types::{
-    AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, AdminIpBan,
-    AdminRateLimit, AdminRateLimitConfig, AdminUser, AppRestoreStatus, ApplicationGroup,
-    FeedbackAttachmentMeta, FeedbackStatus, RestoreReport, User, UserEntitlement,
-};
-use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
-use crate::util::{relative_time, urlenc};
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, error_box, icon, success_box, toggle_switch};
-use crate::web::{redirect, redirect_cookies, AppState};
-
-use super::{pager, title_case};
+use crate::views::ui::{button_class, error_box, icon, success_box};
+use crate::web::{redirect_cookies, AppState};
 
 pub(super) fn email_settings_content(
     cfg: Option<&crate::api::types::EmailConfigResponse>,
@@ -95,4 +85,144 @@ pub(super) fn email_settings_content(
             }
         }
     }
+}
+
+pub async fn email(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let cfg = admin_api::email_config(&st.api, c.forward.as_deref())
+        .await
+        .ok();
+    let content = email_settings_content(cfg.as_ref());
+    admin_response(&c, &user, "/admin/email", "Email · Bunyip", content)
+}
+
+#[derive(Deserialize)]
+pub struct EmailSettingsForm {
+    #[serde(default)]
+    pub enabled: String,
+    #[serde(default)]
+    pub smtp_host: String,
+    #[serde(default)]
+    pub smtp_port: String,
+    #[serde(default)]
+    pub smtp_tls: String,
+    #[serde(default)]
+    pub smtp_username: String,
+    #[serde(default)]
+    pub smtp_password: String,
+    #[serde(default)]
+    pub from_email: String,
+    #[serde(default)]
+    pub from_name: String,
+    #[serde(default)]
+    pub admin_notification_emails: String,
+}
+
+/// Build the PUT body from the submitted form. `enabled` and `smtp_tls` (both
+/// from `<select>`s) are always sent; the SMTP port is validated when present;
+/// every other field is sent only when non-blank so an untouched field leaves
+/// the persisted value unchanged. Pure so it can be unit-tested.
+pub(super) fn email_update_body(f: &EmailSettingsForm) -> Result<serde_json::Value, String> {
+    let mut body = serde_json::Map::new();
+    body.insert("enabled".into(), json!(f.enabled.trim() == "true"));
+
+    let port = f.smtp_port.trim();
+    if !port.is_empty() {
+        let n: i32 = port
+            .parse()
+            .map_err(|_| "SMTP port must be a whole number.".to_string())?;
+        if !(1..=65535).contains(&n) {
+            return Err("SMTP port must be between 1 and 65535.".to_string());
+        }
+        body.insert("smtp_port".into(), json!(n));
+    }
+
+    let tls = f.smtp_tls.trim();
+    if tls == "implicit" || tls == "starttls" {
+        body.insert("smtp_tls".into(), json!(tls));
+    }
+
+    let from_email = f.from_email.trim();
+    if !from_email.is_empty() && !from_email.contains('@') {
+        return Err("From email must be a valid address.".to_string());
+    }
+
+    for (key, raw) in [
+        ("smtp_host", &f.smtp_host),
+        ("smtp_username", &f.smtp_username),
+        ("smtp_password", &f.smtp_password),
+        ("from_email", &f.from_email),
+        ("from_name", &f.from_name),
+        ("admin_notification_emails", &f.admin_notification_emails),
+    ] {
+        let t = raw.trim();
+        if !t.is_empty() {
+            body.insert(key.into(), json!(t));
+        }
+    }
+
+    Ok(serde_json::Value::Object(body))
+}
+
+pub async fn email_save(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<EmailSettingsForm>,
+) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+
+    let error = match email_update_body(&f) {
+        Ok(body) => match admin_api::update_email_config(&st.api, c.forward.as_deref(), body).await
+        {
+            Ok(()) => return redirect_cookies("/admin/email", &c.set_cookies),
+            Err(e) => e.user_message(),
+        },
+        Err(msg) => msg,
+    };
+
+    // Re-render with the persisted values plus the inline error.
+    let cfg = admin_api::email_config(&st.api, c.forward.as_deref())
+        .await
+        .ok();
+    let content = html! {
+        (error_box(&error))
+        (email_settings_content(cfg.as_ref()))
+    };
+    admin_response(&c, &user, "/admin/email", "Email · Bunyip", content)
+}
+
+/// POST /admin/email/test - BUNYIP-433. Run the SMTP "Test connection" probe
+/// against the saved settings and re-render the email page with a banner naming
+/// the outcome (and, on failure, the stage that failed). No mail is sent.
+pub async fn email_test(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+
+    let banner = match admin_api::test_email_config(&st.api, c.forward.as_deref()).await {
+        Ok(r) if r.ok => success_box(&r.message),
+        // Reached the relay but a stage failed: name it (connect / tls / auth).
+        Ok(r) => error_box(&format!(
+            "SMTP test failed at the {} stage. {}",
+            r.stage, r.message
+        )),
+        // Transport / rate-limit (429) error before the probe could report.
+        Err(e) => error_box(&e.user_message()),
+    };
+
+    let cfg = admin_api::email_config(&st.api, c.forward.as_deref())
+        .await
+        .ok();
+    let content = html! {
+        (banner)
+        (email_settings_content(cfg.as_ref()))
+    };
+    admin_response(&c, &user, "/admin/email", "Email · Bunyip", content)
 }

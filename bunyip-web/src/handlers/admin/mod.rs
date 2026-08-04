@@ -24,6 +24,9 @@ mod stripe;
 mod tier_settings;
 mod users;
 
+#[cfg(test)]
+mod tests;
+
 pub use application_groups::*;
 pub use applications::*;
 pub use audit::*;

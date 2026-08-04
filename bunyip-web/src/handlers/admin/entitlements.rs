@@ -1,28 +1,18 @@
 //! Admin panel: Entitlements.
 
-use axum::body::Body;
-use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
+use axum::extract::{Path, State};
+use axum::http::HeaderMap;
+use axum::response::Response;
 use axum::Form;
-use maud::{html, Markup};
+use maud::html;
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::api::admin as admin_api;
-use crate::api::types::{
-    AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, AdminIpBan,
-    AdminRateLimit, AdminRateLimitConfig, AdminUser, AppRestoreStatus, ApplicationGroup,
-    FeedbackAttachmentMeta, FeedbackStatus, RestoreReport, User, UserEntitlement,
-};
-use crate::auth::AuthCtx;
-use crate::handlers::{admin_guard, admin_response, dashboard_input};
-use crate::util::{relative_time, urlenc};
-use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, error_box, icon, success_box, toggle_switch};
-use crate::web::{redirect, redirect_cookies, AppState};
-
-use super::{pager, title_case};
+use crate::api::types::UserEntitlement;
+use crate::handlers::{admin_guard, admin_response};
+use crate::util::relative_time;
+use crate::views::ui::{badge, button_class, icon};
+use crate::web::{redirect_cookies, AppState};
 
 pub async fn entitlements(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {

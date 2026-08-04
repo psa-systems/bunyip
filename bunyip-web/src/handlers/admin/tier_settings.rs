@@ -1,28 +1,18 @@
 //! Admin panel: Tier settings.
 
-use axum::body::Body;
-use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
+use axum::extract::State;
+use axum::http::HeaderMap;
+use axum::response::Response;
 use axum::Form;
 use maud::{html, Markup};
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::api::admin as admin_api;
-use crate::api::types::{
-    AdminApplication, AdminAuditLog, AdminErrorLog, AdminFeedbackDetail, AdminIpBan,
-    AdminRateLimit, AdminRateLimitConfig, AdminUser, AppRestoreStatus, ApplicationGroup,
-    FeedbackAttachmentMeta, FeedbackStatus, RestoreReport, User, UserEntitlement,
-};
-use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
-use crate::util::{relative_time, urlenc};
-use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, error_box, icon, success_box, toggle_switch};
-use crate::web::{redirect, redirect_cookies, AppState};
-
-use super::{pager, title_case};
+use crate::views::layout::admin_block;
+use crate::views::ui::{button_class, error_box, icon};
+use crate::web::{redirect_cookies, AppState};
 
 /// Upper bounds for tier-settings fields. Slots and trial days are i64 with no
 /// business meaning beyond these caps; rejecting larger input keeps obvious
@@ -33,23 +23,23 @@ const MAX_TRIAL_DAYS: i64 = 3_650;
 /// Field values shown in the tier-settings form. Kept as strings so a failed
 /// save can echo back exactly what the admin typed, including junk that did not
 /// parse as an integer.
-struct TierFormValues {
-    lifetime_slots: String,
-    early_adopter_slots: String,
-    early_adopter_trial_days: String,
-    standard_trial_days: String,
+pub(super) struct TierFormValues {
+    pub(super) lifetime_slots: String,
+    pub(super) early_adopter_slots: String,
+    pub(super) early_adopter_trial_days: String,
+    pub(super) standard_trial_days: String,
     // BUNYIP-122: Stripe catalog IDs echoed back on a failed save so the admin
     // does not lose what they typed when a numeric field fails validation.
-    free_price_id: String,
-    early_adopter_price_id: String,
-    standard_price_id: String,
-    lifetime_product_id: String,
-    early_adopter_product_id: String,
-    standard_product_id: String,
+    pub(super) free_price_id: String,
+    pub(super) early_adopter_price_id: String,
+    pub(super) standard_price_id: String,
+    pub(super) lifetime_product_id: String,
+    pub(super) early_adopter_product_id: String,
+    pub(super) standard_product_id: String,
 }
 
 impl TierFormValues {
-    fn from_config(c: &crate::api::types::TierConfigResponse) -> Self {
+    pub(super) fn from_config(c: &crate::api::types::TierConfigResponse) -> Self {
         TierFormValues {
             lifetime_slots: c.lifetime_slots.to_string(),
             early_adopter_slots: c.early_adopter_slots.to_string(),
@@ -81,7 +71,7 @@ fn parse_tier_field(raw: &str, label: &str, max: i64) -> Result<i64, String> {
     Ok(n)
 }
 
-fn tier_settings_content(
+pub(super) fn tier_settings_content(
     cfg: Option<&crate::api::types::TierConfigResponse>,
     values: &TierFormValues,
     error: Option<&str>,
