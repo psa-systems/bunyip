@@ -10,8 +10,8 @@ use crate::api::auth as auth_api;
 use crate::api::calls::{self, FeedbackAttachment, FeedbackInput};
 use crate::api::types::SubscriptionTier;
 use crate::handlers::dashboard::tier_name;
-use crate::handlers::{public_ctx, public_response};
-use crate::views::ui::{button_class, icon};
+use crate::handlers::{dashboard_input, public_ctx, public_response};
+use crate::views::ui::{button_class, error_box, icon, success_box};
 use crate::web::AppState;
 
 /// Displayed at the top of /terms and /privacy. Bump this string the SAME
@@ -390,20 +390,20 @@ fn feedback_form(submitted: bool, error: Option<&str>, page_path: Option<&str>) 
                     }
                     div class="p-6 pt-0" {
                         @if submitted {
-                            div class="mb-6 rounded-lg border border-teal-500/40 bg-teal-500/10 p-4 text-sm text-teal-700 dark:text-teal-300" { "Thanks for sharing. Your feedback has been sent to the team." }
+                            div class="mb-6" { (success_box("Thanks for sharing. Your feedback has been sent to the team.")) }
                         }
                         @if let Some(e) = error {
-                            div class="mb-6 rounded-lg border border-destructive/50 p-4 text-sm text-destructive-text" { (e) }
+                            div class="mb-6" { (error_box(e)) }
                         }
                         // `enctype="multipart/form-data"` is required so the
                         // file input below can carry binary file parts. The
                         // form-handler reads via axum's Multipart extractor.
-                        form method="post" action="/feedback" enctype="multipart/form-data" class="space-y-5" {
-                            div class="grid gap-5 md:grid-cols-2" {
-                                div class="grid gap-2" { label for="name" class="text-sm font-medium" { "Name" } input id="name" name="name" maxlength="100" placeholder="Optional" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"; }
-                                div class="grid gap-2" { label for="email" class="text-sm font-medium" { "Email" } input id="email" name="email" type="email" maxlength="254" placeholder="you@example.com" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"; }
+                        form method="post" action="/feedback" enctype="multipart/form-data" class="space-y-4" {
+                            div class="grid gap-4 md:grid-cols-2" {
+                                div class="grid gap-2" { label for="name" class="text-sm font-medium" { "Name" } input id="name" name="name" maxlength="100" placeholder="Optional" class=(dashboard_input()); }
+                                div class="grid gap-2" { label for="email" class="text-sm font-medium" { "Email" } input id="email" name="email" type="email" maxlength="254" placeholder="you@example.com" class=(dashboard_input()); }
                             }
-                            div class="grid gap-2" { label for="subject" class="text-sm font-medium" { "Subject" } input id="subject" name="subject" maxlength="200" placeholder="Optional" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"; }
+                            div class="grid gap-2" { label for="subject" class="text-sm font-medium" { "Subject" } input id="subject" name="subject" maxlength="200" placeholder="Optional" class=(dashboard_input()); }
                             div class="grid gap-3" {
                                 label class="text-sm font-medium" { "Tags" }
                                 div class="flex flex-wrap gap-3" {
@@ -420,7 +420,7 @@ fn feedback_form(submitted: bool, error: Option<&str>, page_path: Option<&str>) 
                             }
                             div class="grid gap-2" {
                                 label for="message" class="text-sm font-medium" { "Message" }
-                                textarea id="message" name="message" rows="7" required maxlength="16000" placeholder="What would you like to see improved?" class="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" {}
+                                textarea id="message" name="message" rows="7" required maxlength="16000" placeholder="What would you like to see improved?" class={ (dashboard_input()) " min-h-[168px]" } {}
                             }
                             div class="grid gap-2" {
                                 label for="attachments" class="text-sm font-medium" { "Attachments " span class="text-muted-foreground font-normal" { "(optional)" } }

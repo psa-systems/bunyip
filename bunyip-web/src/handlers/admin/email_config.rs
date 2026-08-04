@@ -21,7 +21,7 @@ pub(super) fn email_settings_content(
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Email" } p class="mt-2 text-muted-foreground" { "Configure the SMTP relay for transactional email. Changes apply immediately without a restart." } }
             @match cfg {
-                None => p class="text-muted-foreground" { "Could not load email config." },
+                None => (error_box("Could not load email config.")),
                 // BUNYIP-415: two-column block layout. The SMTP transport
                 // settings and the sender/notification settings sit in
                 // side-by-side blocks (one column below lg), inside one form so

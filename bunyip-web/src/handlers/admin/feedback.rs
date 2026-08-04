@@ -12,10 +12,9 @@ use crate::api::admin as admin_api;
 use crate::api::types::{AdminFeedbackDetail, FeedbackAttachmentMeta, FeedbackStatus};
 use crate::handlers::{admin_guard, admin_response};
 use crate::util::{relative_time, urlenc};
-use crate::views::ui::{badge, button_class, error_box, icon};
+use crate::views::ui::{badge, button_class, error_box, icon, pager};
 use crate::web::{redirect_cookies, AppState};
 
-use super::pager;
 use super::with_attachment_hardening;
 use super::PageQuery;
 
@@ -174,7 +173,7 @@ async fn render_feedback_list(
                             }
                         }
                     }
-                    (pager(tab.path(), page, total_pages))
+                    (pager(tab.path(), "page", page, total_pages))
                 }
             }
         }
@@ -835,7 +834,7 @@ pub async fn feedback_archive(
                         }
                         @if items.is_empty() { p class="text-center text-muted-foreground py-8" { "Archive is empty" } }
                     }
-                    (pager("/admin/feedback/archive", page, total_pages))
+                    (pager("/admin/feedback/archive", "page", page, total_pages))
                     }
                 }
             }

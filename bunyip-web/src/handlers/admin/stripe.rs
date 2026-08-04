@@ -298,7 +298,7 @@ pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response 
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Stripe" } p class="mt-2 text-muted-foreground" { "Connect and configure Stripe billing, products, and prices." } }
             @match cfg {
-                None => p class="text-muted-foreground" { "Could not load Stripe config." },
+                None => (error_box("Could not load Stripe config.")),
                 Some(s) => {
                     // BUNYIP-416: setup guidance ported from a8n-tools.
                     (stripe_setup_docs())

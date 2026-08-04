@@ -10,10 +10,10 @@ use crate::api::admin as admin_api;
 use crate::api::types::AdminAuditLog;
 use crate::handlers::{admin_guard, admin_response};
 use crate::util::relative_time;
-use crate::views::ui::{badge, button_class, error_box, icon};
+use crate::views::ui::{badge, button_class, error_box, icon, pager};
 use crate::web::AppState;
 
-use super::{pager, title_case};
+use super::title_case;
 
 #[derive(Deserialize)]
 pub struct AuditQuery {
@@ -93,7 +93,7 @@ pub async fn audit_logs(
                     @if !reachable { (error_box("Could not reach the API to load audit logs.")) }
                     @else if items.is_empty() { p class="text-center text-muted-foreground py-8" { "No audit logs found" } }
                     @else { div class="space-y-0" { @for log in &items { (audit_row(log)) } } }
-                    (pager(base, page, total_pages))
+                    (pager(base, "page", page, total_pages))
                 }
             }
         }

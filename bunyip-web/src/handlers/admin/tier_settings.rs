@@ -80,7 +80,7 @@ pub(super) fn tier_settings_content(
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Tier Settings" } p class="mt-2 text-muted-foreground" { "Trial lengths and membership slot limits. Stripe price / product mapping now lives on the " a href="/admin/stripe" class="text-primary hover:underline" { "Stripe" } " page." } }
             @match cfg {
-                None => p class="text-muted-foreground" { "Could not load tier config." },
+                None => (error_box("Could not load tier config.")),
                 // BUNYIP-417: the Stripe catalog price/product mappings moved to
                 // the Stripe page to consolidate all Stripe config under one nav
                 // entry. Tier Settings keeps only its non-Stripe concerns (slots

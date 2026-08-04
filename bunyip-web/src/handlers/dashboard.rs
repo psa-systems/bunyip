@@ -18,7 +18,7 @@ use crate::api::types::{
 };
 use crate::handlers::{dashboard_response, guard, needs_onboarding, password_ok, rotating_index};
 use crate::util::{app_gradient, days_until, has_active_membership, urlenc};
-use crate::views::ui::{badge, button_class, error_box, icon, success_box};
+use crate::views::ui::{badge, button_class, error_box, icon, pager, success_box};
 use crate::web::{redirect_cookies, AppState};
 
 const TAGLINES: [&str; 5] = [
@@ -1460,22 +1460,6 @@ fn time_ago(iso: &str) -> String {
     }
 }
 
-/// Prev/Next links for one of the two /settings lists (BUNYIP-177). `param` is
-/// this list's page query key; `keep` carries the OTHER list's page so paging
-/// one list does not reset the other. Plain links (no htmx), mirroring the only
-/// existing pager in bunyip-web (the admin pager).
-fn settings_pager(param: &str, page: i64, total_pages: i64, keep: &str) -> Markup {
-    html! {
-        @if total_pages > 1 {
-            div class="flex justify-center gap-2 mt-4" {
-                @if page > 1 { a href=(format!("/settings?{keep}&{param}={}", page - 1)) class=(button_class("outline", "sm", "")) { "Previous" } }
-                span class="flex items-center px-3 text-sm text-muted-foreground" { "Page " (page) " of " (total_pages) }
-                @if page < total_pages { a href=(format!("/settings?{keep}&{param}={}", page + 1)) class=(button_class("outline", "sm", "")) { "Next" } }
-            }
-        }
-    }
-}
-
 /// Body of the "Active Sessions" card: one row per session with device, IP,
 /// last-active time, a "This device" badge on the current session, a per-row
 /// revoke action for non-current sessions, and a "log out all other devices"
@@ -1522,7 +1506,7 @@ fn sessions_card_body(
                 }
             }
         }
-        (settings_pager("session_page", page.page, page.total_pages, &format!("device_page={device_page}")))
+        (pager(&format!("/settings?device_page={device_page}"), "session_page", page.page as u32, page.total_pages))
     }
 }
 
@@ -1592,7 +1576,7 @@ fn trusted_devices_card_body(
                 }
             }
         }
-        (settings_pager("device_page", page.page, page.total_pages, &format!("session_page={session_page}")))
+        (pager(&format!("/settings?session_page={session_page}"), "device_page", page.page as u32, page.total_pages))
     }
 }
 
