@@ -360,7 +360,7 @@ fn verified_indicator(verified: bool) -> Markup {
         @if verified {
             span class="inline-flex items-center gap-1 text-xs font-medium text-teal-600 dark:text-teal-400" { (icon("check-circle", "h-4 w-4")) "Verified" }
         } @else {
-            span class="inline-flex items-center gap-1 text-xs font-medium text-yellow-600" { (icon("alert-circle", "h-4 w-4")) "Unverified" }
+            span class="inline-flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400" { (icon("alert-circle", "h-4 w-4")) "Unverified" }
         }
     }
 }

@@ -770,7 +770,7 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
                             p class="text-muted-foreground text-lg" { "Your membership is now active. You have full access to all applications." }
                         }
                         div class="bg-gradient-to-r from-indigo-500/5 via-primary/5 to-teal-500/5 rounded-lg p-4 space-y-2 text-sm border border-border/50" {
-                            div class="flex items-center justify-center gap-2" { (icon("credit-card", "h-4 w-4 text-indigo-500")) span class="font-medium" { (tier) " Plan" } }
+                            div class="flex items-center justify-center gap-2" { (icon("credit-card", "h-4 w-4 text-indigo-500 dark:text-indigo-400")) span class="font-medium" { (tier) " Plan" } }
                             p class="text-muted-foreground" { "Your price is locked in for life - it will never increase." }
                         }
                         div class="flex flex-col gap-3 pt-2" {
@@ -1045,7 +1045,7 @@ pub async fn membership(
                     } @else {
                         div class="py-8" {
                             div class="text-center mb-8" {
-                                div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500/20 to-teal-500/20" { (icon("credit-card", "h-8 w-8 text-indigo-500")) }
+                                div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500/20 to-teal-500/20" { (icon("credit-card", "h-8 w-8 text-indigo-500 dark:text-indigo-400")) }
                                 h3 class="text-lg font-semibold mb-2" { "No Active Membership" }
                                 p class="text-muted-foreground" { "Subscribe to access all applications." }
                             }
@@ -1299,7 +1299,7 @@ pub async fn settings(
                     div class="grid gap-4 md:grid-cols-2" {
                         div { p class="text-sm text-muted-foreground" { "Email" } p class="font-medium" { (user.email) } }
                         div { p class="text-sm text-muted-foreground" { "Account Type" } p class="font-medium flex items-center gap-2" { @if is_admin { "admin" (badge("default", "Admin")) } @else { (tier_name(&user.subscription_tier)) } } }
-                        div { p class="text-sm text-muted-foreground" { "Email Verified" } p class="font-medium flex items-center gap-2" { @if user.email_verified { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) "Verified" } @else { (icon("alert-circle", "h-4 w-4 text-yellow-600")) "Not Verified" } } @if !user.email_verified { form method="post" action="/settings/verify-email/resend" class="mt-2" { button type="submit" class=(button_class("outline", "sm", "")) { (icon("mail", "mr-2 h-4 w-4")) "Resend verification email" } } } }
+                        div { p class="text-sm text-muted-foreground" { "Email Verified" } p class="font-medium flex items-center gap-2" { @if user.email_verified { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) "Verified" } @else { (icon("alert-circle", "h-4 w-4 text-amber-700 dark:text-amber-400")) "Not Verified" } } @if !user.email_verified { form method="post" action="/settings/verify-email/resend" class="mt-2" { button type="submit" class=(button_class("outline", "sm", "")) { (icon("mail", "mr-2 h-4 w-4")) "Resend verification email" } } } }
                         div { p class="text-sm text-muted-foreground" { "Membership Status" } p class="font-medium" { (status_label(&user.membership_status)) } }
                     }
                 }
@@ -1405,8 +1405,8 @@ pub async fn settings(
             }
 
             // Danger zone
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm border-red-200 dark:border-red-900" {
-                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight text-red-600 dark:text-red-400 flex items-center gap-2" { (icon("alert-triangle", "h-5 w-5")) "Danger Zone" } p class="text-sm text-muted-foreground" { "This permanently deletes your account AND all of your data in Mokosh and any other connected app. This cannot be undone." } }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm border-destructive/30" {
+                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight text-destructive-text flex items-center gap-2" { (icon("alert-triangle", "h-5 w-5")) "Danger Zone" } p class="text-sm text-muted-foreground" { "This permanently deletes your account AND all of your data in Mokosh and any other connected app. This cannot be undone." } }
                 div class="p-6 pt-0" {
                     // Delete account. autocomplete="off" on the form + on the
                     // password input together suppress the password-manager
