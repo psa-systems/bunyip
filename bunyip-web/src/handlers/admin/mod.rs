@@ -46,12 +46,10 @@ pub use tier_settings::*;
 pub use users::*;
 
 use axum::response::Response;
-use maud::{html, Markup};
 use serde::Deserialize;
 
 use crate::api::types::User;
 use crate::auth::AuthCtx;
-use crate::views::ui::button_class;
 use crate::web::redirect_cookies;
 
 /// Page number plus the tier filter, shared by every paginated admin list
@@ -117,17 +115,4 @@ fn title_case(action: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn pager(base: &str, page: u32, total_pages: i64) -> Markup {
-    let sep = if base.contains('?') { "&" } else { "?" };
-    html! {
-        @if total_pages > 1 {
-            div class="flex justify-center gap-2 mt-6" {
-                @if page > 1 { a href=(format!("{base}{sep}page={}", page - 1)) class=(button_class("outline", "sm", "")) { "Previous" } }
-                span class="flex items-center px-3 text-sm" { "Page " (page) " of " (total_pages) }
-                @if (page as i64) < total_pages { a href=(format!("{base}{sep}page={}", page + 1)) class=(button_class("outline", "sm", "")) { "Next" } }
-            }
-        }
-    }
 }

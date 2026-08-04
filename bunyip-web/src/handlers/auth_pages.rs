@@ -12,7 +12,7 @@ use crate::api::auth::{self as auth_api, LoginOutcome};
 use crate::api::calls;
 use crate::config::Config;
 use crate::handlers::{auth_page, cookie_of, cookie_value, ctx, dashboard_input, password_ok};
-use crate::views::common::auth_card;
+use crate::views::common::{auth_card, auth_card_plain};
 use crate::views::layout::{document, public_shell};
 
 /// BUNYIP-255: 2FA challenge-token TTL aligned with the JWT exp set in
@@ -265,53 +265,47 @@ pub struct RedirectQuery {
 }
 
 fn login_content(error: Option<&str>, redirect: &str) -> Markup {
-    html! {
-        div class="flex min-h-[calc(100vh-8rem)] items-center justify-center py-12" {
-            div class="w-full max-w-md rounded-lg border bg-card text-card-foreground shadow-sm" {
-                div class="flex flex-col space-y-1.5 p-6 text-center" {
-                    h3 class="text-2xl font-semibold leading-none tracking-tight" { "Welcome back" }
-                    p class="text-sm text-muted-foreground" { "Sign in to your account to continue" }
+    // Login's header is title + subtitle only (no icon bubble), so it routes
+    // through `auth_card_plain` instead of re-implementing the card shell
+    // (BUNYIP-467 F14).
+    let body = html! {
+        form method="post" action="/login" class="space-y-4" {
+            input type="hidden" name="redirect" value=(redirect);
+            @if let Some(e) = error { (error_box(e)) }
+            div class="space-y-2" {
+                label for="email" class="text-sm font-medium leading-none" { "Email" }
+                input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="email"
+                    class=(dashboard_input());
+            }
+            div class="space-y-2" {
+                div class="flex items-center justify-between" {
+                    label for="password" class="text-sm font-medium leading-none" { "Password" }
+                    a href="/password-reset" class="text-sm text-primary hover:underline" { "Forgot password?" }
                 }
-                div class="p-6 pt-0" {
-                    form method="post" action="/login" class="space-y-4" {
-                        input type="hidden" name="redirect" value=(redirect);
-                        @if let Some(e) = error { (error_box(e)) }
-                        div class="space-y-2" {
-                            label for="email" class="text-sm font-medium leading-none" { "Email" }
-                            input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="email"
-                                class=(dashboard_input());
-                        }
-                        div class="space-y-2" {
-                            div class="flex items-center justify-between" {
-                                label for="password" class="text-sm font-medium leading-none" { "Password" }
-                                a href="/password-reset" class="text-sm text-primary hover:underline" { "Forgot password?" }
-                            }
-                            input id="password" name="password" type="password" autocomplete="current-password"
-                                class=(dashboard_input());
-                        }
-                        div class="flex items-center space-x-2" {
-                            input id="remember" name="remember" type="checkbox" value="on" class="h-4 w-4 rounded border-border";
-                            label for="remember" class="text-sm font-normal cursor-pointer" { "Remember me for 30 days" }
-                        }
-                        button type="submit" class=(button_class("default", "default", "w-full")) { "Sign In" }
-                    }
-                    div class="mt-6" {
-                        div class="relative" {
-                            div class="absolute inset-0 flex items-center" { span class="w-full border-t" {} }
-                            div class="relative flex justify-center text-xs uppercase" {
-                                span class="bg-background px-2 text-muted-foreground" { "Or continue with" }
-                            }
-                        }
-                        a href="/magic-link" class=(button_class("outline", "default", "mt-4 w-full")) { "Sign in with Magic Link" }
-                    }
-                    p class="mt-6 text-center text-sm text-muted-foreground" {
-                        "Don't have an account? "
-                        a href="/register" class="text-primary hover:underline" { "Sign up" }
-                    }
+                input id="password" name="password" type="password" autocomplete="current-password"
+                    class=(dashboard_input());
+            }
+            div class="flex items-center space-x-2" {
+                input id="remember" name="remember" type="checkbox" value="on" class="h-4 w-4 rounded border-border";
+                label for="remember" class="text-sm font-normal cursor-pointer" { "Remember me for 30 days" }
+            }
+            button type="submit" class=(button_class("default", "default", "w-full")) { "Sign In" }
+        }
+        div class="mt-6" {
+            div class="relative" {
+                div class="absolute inset-0 flex items-center" { span class="w-full border-t" {} }
+                div class="relative flex justify-center text-xs uppercase" {
+                    span class="bg-background px-2 text-muted-foreground" { "Or continue with" }
                 }
             }
+            a href="/magic-link" class=(button_class("outline", "default", "mt-4 w-full")) { "Sign in with Magic Link" }
         }
-    }
+        p class="mt-6 text-center text-sm text-muted-foreground" {
+            "Don't have an account? "
+            a href="/register" class="text-primary hover:underline" { "Sign up" }
+        }
+    };
+    auth_card_plain("Welcome back", "Sign in to your account to continue", body)
 }
 
 pub async fn login_get(

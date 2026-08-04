@@ -999,14 +999,14 @@ pub async fn application_docs(
                     p class="text-muted-foreground" { "No pages yet. Add one below." }
                 }
                 @for d in &docs {
-                    div class="rounded-lg border p-4 space-y-3" {
+                    div class="rounded-lg border p-6 space-y-3" {
                         form method="post" action=(format!("/admin/applications/{id}/docs/{}", d.id)) class="space-y-3" {
                             div class="grid gap-3 md:grid-cols-3" {
-                                label class="text-sm block" { "Title" input class="mt-1 w-full rounded border px-2 py-1" name="title" value=(d.title) required; }
-                                label class="text-sm block" { "Slug" input class="mt-1 w-full rounded border px-2 py-1" name="slug" value=(d.slug) required; }
-                                label class="text-sm block" { "Sort order" input type="number" class="mt-1 w-full rounded border px-2 py-1" name="sort_order" value=(d.sort_order); }
+                                label class="text-sm block" { "Title" input class=(dashboard_input()) name="title" value=(d.title) required; }
+                                label class="text-sm block" { "Slug" input class=(dashboard_input()) name="slug" value=(d.slug) required; }
+                                label class="text-sm block" { "Sort order" input type="number" class=(dashboard_input()) name="sort_order" value=(d.sort_order); }
                             }
-                            label class="text-sm block" { "Body (markdown)" textarea class="mt-1 w-full rounded border px-2 py-1 font-mono text-sm" name="body" rows="10" { (d.body) } }
+                            label class="text-sm block" { "Body (markdown)" textarea class={ (dashboard_input()) " min-h-[200px] font-mono text-sm" } name="body" rows="10" { (d.body) } }
                             button type="submit" class=(button_class("default", "sm", "")) { "Save" }
                         }
                         form method="post" action=(format!("/admin/applications/{id}/docs/{}/delete", d.id)) data-confirm="Delete this documentation entry? This cannot be undone." {
@@ -1015,15 +1015,15 @@ pub async fn application_docs(
                     }
                 }
             }
-            div class="rounded-lg border p-4 space-y-3" {
+            div class="rounded-lg border p-6 space-y-3" {
                 h2 class="text-xl font-semibold" { "Add a page" }
                 form method="post" action=(format!("/admin/applications/{id}/docs")) class="space-y-3" {
                     div class="grid gap-3 md:grid-cols-3" {
-                        label class="text-sm block" { "Title" input class="mt-1 w-full rounded border px-2 py-1" name="title" required; }
-                        label class="text-sm block" { "Slug" input class="mt-1 w-full rounded border px-2 py-1" name="slug" placeholder="getting-started" required; }
-                        label class="text-sm block" { "Sort order" input type="number" class="mt-1 w-full rounded border px-2 py-1" name="sort_order" value="0"; }
+                        label class="text-sm block" { "Title" input class=(dashboard_input()) name="title" required; }
+                        label class="text-sm block" { "Slug" input class=(dashboard_input()) name="slug" placeholder="getting-started" required; }
+                        label class="text-sm block" { "Sort order" input type="number" class=(dashboard_input()) name="sort_order" value="0"; }
                     }
-                    label class="text-sm block" { "Body (markdown)" textarea class="mt-1 w-full rounded border px-2 py-1 font-mono text-sm" name="body" rows="10" {} }
+                    label class="text-sm block" { "Body (markdown)" textarea class={ (dashboard_input()) " min-h-[200px] font-mono text-sm" } name="body" rows="10" {} }
                     button type="submit" class=(button_class("default", "sm", "")) { "Add page" }
                 }
             }

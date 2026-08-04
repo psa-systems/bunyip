@@ -11,12 +11,12 @@ use crate::api::admin as admin_api;
 use crate::api::types::{AdminRateLimit, AdminRateLimitConfig};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{relative_time, urlenc};
-use crate::views::ui::{badge, button_class, error_box, icon};
+use crate::views::ui::{badge, button_class, error_box, icon, pager};
 use crate::web::{redirect_cookies, AppState};
 
 use super::refuse_non_super_admin;
+use super::title_case;
 use super::PageQuery;
-use super::{pager, title_case};
 
 /// Format a `retry_after` second count as a compact "retry in" label
 /// (e.g. `2m 5s`, `45s`). Zero (or a window that has just elapsed) reads as
@@ -216,7 +216,7 @@ pub async fn rate_limits(
                         // below lg) so a long list uses the width. Each row keeps
                         // its own bottom-border separator.
                         div class="grid gap-x-8 lg:grid-cols-2" { @for rl in &items { (rate_limit_row(rl, None)) } }
-                        (pager("/admin/rate-limits", page, total_pages))
+                        (pager("/admin/rate-limits", "page", page, total_pages))
                     }
                 }
             }

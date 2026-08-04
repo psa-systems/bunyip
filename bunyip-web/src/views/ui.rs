@@ -187,6 +187,25 @@ pub fn button_class(variant: &str, size: &str, extra: &str) -> String {
     )
 }
 
+/// Prev/Next pager shared by the admin tables and the two `/settings` lists
+/// (BUNYIP-467 F15). `base` is the path (optionally already carrying query
+/// params) and `param` is the page query key: `page` for the admin tables, and
+/// `session_page` / `device_page` for the two independent `/settings` lists, so
+/// two pagers can coexist on one page without their page numbers colliding.
+/// Plain links (no htmx).
+pub fn pager(base: &str, param: &str, page: u32, total_pages: i64) -> Markup {
+    let sep = if base.contains('?') { "&" } else { "?" };
+    html! {
+        @if total_pages > 1 {
+            div class="flex justify-center gap-2 mt-6" {
+                @if page > 1 { a href=(format!("{base}{sep}{param}={}", page - 1)) class=(button_class("outline", "sm", "")) { "Previous" } }
+                span class="flex items-center px-3 text-sm" { "Page " (page) " of " (total_pages) }
+                @if (page as i64) < total_pages { a href=(format!("{base}{sep}{param}={}", page + 1)) class=(button_class("outline", "sm", "")) { "Next" } }
+            }
+        }
+    }
+}
+
 pub fn badge(variant: &str, text: &str) -> Markup {
     let v = match variant {
         "secondary" => "border-transparent bg-secondary text-secondary-foreground",
