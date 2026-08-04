@@ -187,7 +187,7 @@ pub fn badge(variant: &str, text: &str) -> Markup {
         "destructive" => "border-transparent bg-destructive text-destructive-foreground",
         "outline" => "text-foreground",
         "success" => "border-transparent bg-teal-500/15 text-teal-600 dark:text-teal-400",
-        "warning" => "border-transparent bg-primary/15 text-primary",
+        "warning" => "border-transparent bg-amber-500/15 text-amber-700 dark:text-amber-300",
         _ => "border-transparent bg-primary text-primary-foreground",
     };
     html! {
