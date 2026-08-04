@@ -1771,6 +1771,10 @@ pub struct SystemHealth {
     pub database: HealthStatus,
     pub uptime_seconds: u64,
     pub version: String,
+    /// BUNYIP-474: age/staleness of the offline IP datasets (IP2Location for
+    /// login country, IP2Proxy for ASN/VPN enrichment), so a missed refresh is
+    /// visible to an admin.
+    pub datasets: Vec<DatasetHealth>,
 }
 
 /// Health status for a component
@@ -1779,6 +1783,56 @@ pub struct HealthStatus {
     pub status: String,
     pub latency_ms: Option<u64>,
     pub message: Option<String>,
+}
+
+/// One offline dataset's freshness (BUNYIP-474). The `.BIN` is provisioned and
+/// refreshed outside the app (see `scripts/refresh-ip2-datasets.sh`); this only
+/// reports what is on disk so a stale or missing file surfaces in admin.
+#[derive(Debug, Serialize)]
+pub struct DatasetHealth {
+    pub name: String,
+    pub env_var: String,
+    /// The path env var is set to a non-empty value.
+    pub configured: bool,
+    /// The file at that path is readable (so `age_days` is populated).
+    pub present: bool,
+    /// Whole days since the file's mtime, or `None` when unconfigured/unreadable.
+    pub age_days: Option<i64>,
+    /// Configured, present, and older than the refresh cadence allows.
+    pub stale: bool,
+}
+
+/// IP2Location / IP2Proxy LITE datasets refresh about monthly, so flag one stale
+/// once it is older than this. Gives a missed monthly refresh a week of grace
+/// before it lights up (BUNYIP-474).
+const DATASET_STALE_AFTER_DAYS: i64 = 40;
+
+fn dataset_is_stale(age_days: Option<i64>) -> bool {
+    matches!(age_days, Some(d) if d > DATASET_STALE_AFTER_DAYS)
+}
+
+/// Whole days since the mtime of the file at `path`, or `None` if it cannot be
+/// read (unset path, missing file, or a future mtime from clock skew).
+fn dataset_age_days(path: &str) -> Option<i64> {
+    let mtime = std::fs::metadata(path).ok()?.modified().ok()?;
+    let age = std::time::SystemTime::now().duration_since(mtime).ok()?;
+    Some((age.as_secs() / 86_400) as i64)
+}
+
+/// Build a [`DatasetHealth`] from a configured `.BIN` path (or `None`).
+fn dataset_health(name: &str, env_var: &str, path: Option<&str>) -> DatasetHealth {
+    let path = path.map(str::trim).filter(|p| !p.is_empty());
+    let configured = path.is_some();
+    let age_days = path.and_then(dataset_age_days);
+    let present = age_days.is_some();
+    DatasetHealth {
+        name: name.to_string(),
+        env_var: env_var.to_string(),
+        configured,
+        present,
+        age_days,
+        stale: dataset_is_stale(age_days),
+    }
 }
 
 // =============================================================================
@@ -1881,6 +1935,7 @@ pub async fn get_system_health(
     _admin: AdminUser,
     pool: web::Data<PgPool>,
     server_start: web::Data<std::time::Instant>,
+    config: web::Data<Config>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
@@ -1916,11 +1971,27 @@ pub async fn get_system_health(
         "degraded"
     };
 
+    // BUNYIP-474: dataset freshness. Read-only (the .BIN is refreshed out of
+    // band by scripts/refresh-ip2-datasets.sh); this just reports the on-disk age.
+    let datasets = vec![
+        dataset_health(
+            "IP2Location (login country)",
+            "IP2LOCATION_DB_PATH",
+            config.ip2location_db_path.as_deref(),
+        ),
+        dataset_health(
+            "IP2Proxy (ASN / VPN enrichment)",
+            "IP2PROXY_DB_PATH",
+            config.ip2proxy_db_path.as_deref(),
+        ),
+    ];
+
     let health = SystemHealth {
         status: overall_status.to_string(),
         database: db_health,
         uptime_seconds: server_start.elapsed().as_secs(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        datasets,
     };
 
     let response = serde_json::json!({
@@ -3349,6 +3420,38 @@ pub(crate) async fn dispatch_lifecycle_event(
 mod tests {
     use super::*;
     use sqlx::PgPool;
+
+    // BUNYIP-474: a dataset is stale only once it is past the refresh cadence;
+    // an unread/unconfigured file (None age) is never "stale" (it is "not
+    // present" instead, a distinct state the readout shows separately).
+    #[test]
+    fn dataset_staleness_tracks_the_refresh_cadence() {
+        assert!(
+            !dataset_is_stale(None),
+            "unconfigured/unreadable is not stale"
+        );
+        assert!(!dataset_is_stale(Some(0)), "a fresh file is not stale");
+        assert!(
+            !dataset_is_stale(Some(DATASET_STALE_AFTER_DAYS)),
+            "at the threshold is not yet stale"
+        );
+        assert!(
+            dataset_is_stale(Some(DATASET_STALE_AFTER_DAYS + 1)),
+            "past the threshold is stale"
+        );
+    }
+
+    #[test]
+    fn dataset_health_reports_unconfigured_cleanly() {
+        // Unconfigured: not configured, not present, no age, not stale (never a
+        // false alarm for a dataset an operator chose not to deploy).
+        let d = dataset_health("X", "X_DB_PATH", None);
+        assert!(!d.configured && !d.present && d.age_days.is_none() && !d.stale);
+        // A configured but missing file is configured-but-not-present, still not
+        // "stale" (you cannot age a file that is not there).
+        let d = dataset_health("X", "X_DB_PATH", Some("/no/such/file.BIN"));
+        assert!(d.configured && !d.present && d.age_days.is_none() && !d.stale);
+    }
 
     async fn maybe_pool() -> Option<PgPool> {
         let url = std::env::var("DATABASE_URL").ok()?;

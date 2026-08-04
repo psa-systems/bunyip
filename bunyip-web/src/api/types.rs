@@ -369,6 +369,35 @@ pub struct AdminStatsResponse {
     pub active_applications: i64,
 }
 
+/// Freshness of one offline IP dataset (BUNYIP-474). Mirrors
+/// `bunyip_api::handlers::admin::DatasetHealth`: `age_days` is the whole days
+/// since the `.BIN`'s mtime (`None` when unconfigured/unreadable), and the
+/// (configured, present, stale) triple distinguishes "operator did not deploy
+/// it", "path set but file missing", and "deployed but overdue for a refresh".
+#[derive(Debug, Clone, Deserialize)]
+pub struct DatasetHealth {
+    pub name: String,
+    pub env_var: String,
+    pub configured: bool,
+    pub present: bool,
+    pub age_days: Option<i64>,
+    pub stale: bool,
+}
+
+/// The `health` block of `GET /v1/admin/health`. Only the fields the dashboard
+/// renders are captured; the rest of the payload is ignored.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SystemHealth {
+    #[serde(default)]
+    pub datasets: Vec<DatasetHealth>,
+}
+
+/// Envelope of `GET /v1/admin/health` (`{ health, stats }`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct SystemHealthResponse {
+    pub health: SystemHealth,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminUser {
     pub id: String,
