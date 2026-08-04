@@ -169,6 +169,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/account-deletes/{user_id}/replay",
                 web::post().to(handlers::replay_account_delete),
             )
+            // Advisory ASN / VPN enrichment for one address (BUNYIP-437)
+            .route("/ip-enrichment", web::get().to(handlers::ip_enrichment))
             // IP auto-bans (BUNYIP-319)
             .route("/ip-bans", web::get().to(handlers::list_ip_bans))
             // Manual ban, super-admin only (BUNYIP-413)

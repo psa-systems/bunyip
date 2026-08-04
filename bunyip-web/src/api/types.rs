@@ -474,6 +474,29 @@ pub struct AdminIpBan {
     pub expires_at: String,
 }
 
+/// Advisory ASN / VPN enrichment for one address as returned by
+/// `GET /v1/admin/ip-enrichment?ip=<addr>` (BUNYIP-437). Mirrors
+/// `bunyip_api::handlers::admin_ip_enrichment::IpEnrichmentResponse`: `category`
+/// and `vpn` are lowercase labels of the classified enums, `is_anonymizing` is
+/// the one-bit "looks like a VPN / proxy" summary, and `advisory` is always true
+/// (the signal is context for a human, never an automatic abuse verdict). The
+/// endpoint returns no data when there is nothing to report, so the client maps
+/// it to `Option<IpEnrichment>`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct IpEnrichment {
+    pub ip: String,
+    pub asn: Option<String>,
+    pub organization: Option<String>,
+    pub isp: Option<String>,
+    pub category: String,
+    pub vpn: String,
+    pub is_anonymizing: bool,
+    pub proxy_type: Option<String>,
+    pub provider: Option<String>,
+    pub threat: Option<String>,
+    pub advisory: bool,
+}
+
 /// One currently-active throttle as returned by `GET /v1/admin/rate-limits`
 /// (BUNYIP-315). Mirrors `bunyip_api::handlers::admin_rate_limits::RateLimitEntry`:
 /// `user_id` serializes as a UUID string, `window_start` as an RFC3339 timestamp,

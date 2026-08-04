@@ -8,7 +8,7 @@ use maud::{html, Markup};
 use serde::Deserialize;
 
 use crate::api::admin as admin_api;
-use crate::api::types::AdminIpBan;
+use crate::api::types::{AdminIpBan, IpEnrichment};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{relative_time, urlenc};
 use crate::views::ui::{badge, button_class, error_box, icon};
@@ -82,6 +82,71 @@ pub struct IpBansQuery {
     pub ip: Option<String>,
 }
 
+/// One labelled field in the enrichment panel, rendered only when present.
+fn enrich_field(label: &str, value: Option<&str>) -> Markup {
+    html! {
+        @if let Some(v) = value {
+            div {
+                p class="text-xs text-muted-foreground" { (label) }
+                p class="text-sm font-medium" { (v) }
+            }
+        }
+    }
+}
+
+/// Advisory ASN / VPN enrichment panel for the looked-up address (BUNYIP-437).
+///
+/// Rendered only when the page arrives with `?ip=` (an admin looking up or about
+/// to ban a specific address). `enrichment` is `None` when the dataset is not
+/// configured or has nothing for the address, in which case a muted note says so
+/// rather than implying the address is clean. The panel is explicitly advisory:
+/// it never asserts the address is abusive, it only describes it.
+fn ip_enrichment_panel(ip: &str, enrichment: &Option<IpEnrichment>) -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                div class="flex items-center gap-3" {
+                    (icon("globe", "h-5 w-5 text-muted-foreground"))
+                    h3 class="text-2xl font-semibold leading-none tracking-tight" { "Address intel" }
+                }
+                p class="text-sm text-muted-foreground" { "Advisory context for " span class="font-mono" { (ip) } ". Never an automatic spam verdict: a legitimate user can be behind a VPN." }
+            }
+            div class="p-6 pt-0" {
+                @match enrichment {
+                    Some(e) => {
+                        div class="flex flex-wrap items-center gap-2 mb-4" {
+                            (badge("secondary", &format!("Network: {}", e.category)))
+                            @if e.is_anonymizing {
+                                (badge("destructive", &format!("VPN/proxy: {}", e.vpn)))
+                            } @else if e.vpn == "data-center" {
+                                (badge("secondary", "Data centre"))
+                            } @else if e.vpn == "not-proxy" {
+                                (badge("outline", "No proxy signal"))
+                            } @else {
+                                (badge("outline", &format!("VPN/proxy: {}", e.vpn)))
+                            }
+                            @if e.threat.is_some() {
+                                (badge("destructive", "Threat-listed"))
+                            }
+                        }
+                        div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" {
+                            (enrich_field("ASN", e.asn.as_deref()))
+                            (enrich_field("Organization", e.organization.as_deref()))
+                            (enrich_field("ISP", e.isp.as_deref()))
+                            (enrich_field("Proxy type", e.proxy_type.as_deref()))
+                            (enrich_field("VPN provider", e.provider.as_deref()))
+                            (enrich_field("Threat", e.threat.as_deref()))
+                        }
+                    },
+                    None => {
+                        p class="text-sm text-muted-foreground" { "No enrichment available for this address (the dataset is not configured, or has no record for a private or unlisted address)." }
+                    },
+                }
+            }
+        }
+    }
+}
+
 /// Admin IP auto-ban view (BUNYIP-320): the currently-active IP bans surfaced by
 /// the subtask 7 endpoint, each liftable in place. AdminUser-guarded like the
 /// other admin pages; the add form (BUNYIP-413) is super-admin-only.
@@ -98,9 +163,25 @@ pub async fn ip_bans(
     let reachable = data.is_ok();
     let bans = data.unwrap_or_default();
 
+    // BUNYIP-437: when the page is opened for a specific address (a "look up /
+    // ban this address" link), fetch its advisory ASN / VPN enrichment. A failed
+    // or empty lookup degrades to None (the panel then says so); it never blocks
+    // the page.
+    let looked_up_ip = q.ip.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let enrichment = match looked_up_ip {
+        Some(ip) => Some(
+            admin_api::ip_enrichment(&st.api, c.forward.as_deref(), ip)
+                .await
+                .ok()
+                .flatten(),
+        ),
+        None => None,
+    };
+
     let content = html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "IP Bans" } p class="mt-2 text-muted-foreground" { "IP addresses banned for abusive request patterns, automatically or by hand. Adding or lifting a ban takes effect on the address's next request." } }
+            @if let (Some(ip), Some(e)) = (looked_up_ip, &enrichment) { (ip_enrichment_panel(ip, e)) }
             @if user.is_super_admin { (ip_ban_add_card(q.ip.as_deref())) }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" {
@@ -203,4 +284,48 @@ pub async fn ip_unban(
         Err(_) => "/admin/ip-bans?toast_err=Could%20not%20lift%20ban".to_string(),
     };
     redirect_cookies(&target, &c.set_cookies)
+}
+
+#[cfg(test)]
+mod enrichment_panel_tests {
+    use super::*;
+
+    fn sample(anon: bool) -> IpEnrichment {
+        IpEnrichment {
+            ip: "203.0.113.7".into(),
+            asn: Some("15169".into()),
+            organization: Some("Google LLC".into()),
+            isp: None,
+            category: "hosting".into(),
+            vpn: if anon {
+                "vpn".into()
+            } else {
+                "not-proxy".into()
+            },
+            is_anonymizing: anon,
+            proxy_type: if anon { Some("VPN".into()) } else { None },
+            provider: if anon { Some("NordVPN".into()) } else { None },
+            threat: None,
+            advisory: true,
+        }
+    }
+
+    #[test]
+    fn panel_shows_fields_and_advisory_note_for_a_vpn() {
+        let html = ip_enrichment_panel("203.0.113.7", &Some(sample(true))).into_string();
+        assert!(html.contains("Address intel"));
+        // The advisory framing is present and explicit (BUNYIP-437: never a verdict).
+        assert!(html.contains("Never an automatic spam verdict"));
+        assert!(html.contains("Google LLC"));
+        assert!(html.contains("Network: hosting"));
+        assert!(html.contains("VPN/proxy: vpn"));
+    }
+
+    #[test]
+    fn panel_notes_absence_rather_than_implying_clean() {
+        let html = ip_enrichment_panel("10.0.0.1", &None).into_string();
+        assert!(html.contains("No enrichment available"));
+        // No field labels leak when there is nothing to show.
+        assert!(!html.contains("Organization"));
+    }
 }

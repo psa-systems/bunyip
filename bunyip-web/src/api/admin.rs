@@ -7,8 +7,9 @@ use super::types::{
     AdminFeedbackSummary, AdminIpBan, AdminRateLimit, AdminRateLimitConfig, AdminStatsResponse,
     AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList, ArchivedFeedback,
     AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary,
-    PaginatedResponse, RestoreReport, SeedTemplateInfo, SmtpTestResult, StripeConfigResponse,
-    StripePrice, StripeProduct, StripeWebhookEndpoint, TierConfigResponse, UserEntitlement,
+    IpEnrichment, PaginatedResponse, RestoreReport, SeedTemplateInfo, SmtpTestResult,
+    StripeConfigResponse, StripePrice, StripeProduct, StripeWebhookEndpoint, TierConfigResponse,
+    UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -557,6 +558,21 @@ pub async fn import_seed_template(
 /// bare array of ban objects.
 pub async fn ip_bans(api: &Api, cookie: Option<&str>) -> Result<Vec<AdminIpBan>, ApiError> {
     parse(api.get("/admin/ip-bans", cookie).await?)
+}
+
+/// Advisory ASN / VPN enrichment for `ip` (BUNYIP-437). Wraps
+/// `GET /v1/admin/ip-enrichment?ip=<addr>`, which returns no data (mapped to
+/// `Ok(None)`) when enrichment is unavailable: no dataset configured, a
+/// private/reserved address, or an address the dataset does not know.
+pub async fn ip_enrichment(
+    api: &Api,
+    cookie: Option<&str>,
+    ip: &str,
+) -> Result<Option<IpEnrichment>, ApiError> {
+    parse(
+        api.get(&format!("/admin/ip-enrichment?ip={}", urlenc(ip)), cookie)
+            .await?,
+    )
 }
 
 /// Ban `ip` by hand for `duration_secs` with `reason` (BUNYIP-413). Wraps

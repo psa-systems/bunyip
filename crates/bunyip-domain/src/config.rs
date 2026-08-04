@@ -98,6 +98,12 @@ pub struct Config {
     /// client IP to a country for login-location alerts (BUNYIP-366). `None`
     /// when unset: the login-location-alert feature is disabled.
     pub ip2location_db_path: Option<String>,
+    /// Path to the IP2Proxy PX `.BIN` database used to enrich a client IP with
+    /// its ASN, owning organization, network category and VPN/proxy likelihood
+    /// (BUNYIP-437). `None` when unset: the enrichment feature is disabled and
+    /// admin views simply show no enrichment. Advisory only; never drives an
+    /// automatic abuse verdict.
+    pub ip2proxy_db_path: Option<String>,
     /// BUNYIP-373: opt-in switch for the suspicious-login notify-and-approve
     /// gate (`LOGIN_APPROVAL_ENABLED`). Off by default: the gate can withhold a
     /// login, so it is enabled per deployment for a staged rollout.
@@ -942,6 +948,12 @@ impl Config {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
+        // BUNYIP-437: IP2Proxy PX DB path for ASN / VPN enrichment (optional).
+        let ip2proxy_db_path = env::var("IP2PROXY_DB_PATH")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
         // BUNYIP-373: opt-in switch for the suspicious-login approval gate.
         // Default false (the gate can withhold a login; enable per deployment).
         let login_approval_enabled = env::var("LOGIN_APPROVAL_ENABLED")
@@ -983,6 +995,7 @@ impl Config {
             oidc,
             bootstrap_admin_email,
             ip2location_db_path,
+            ip2proxy_db_path,
             login_approval_enabled,
             signup_bot_guard_enabled,
         };

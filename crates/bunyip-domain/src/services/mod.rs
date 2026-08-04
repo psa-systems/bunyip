@@ -11,6 +11,7 @@ pub mod backup;
 pub mod email;
 pub mod event_bus;
 pub mod geoip;
+pub mod ip_enrich;
 pub mod jwt;
 pub mod password_breach;
 pub mod stripe;
@@ -53,6 +54,7 @@ pub use backup::{
 pub use email::{EmailService, SmtpTestError, SmtpTestStage};
 pub use event_bus::{BunyipEvent, EventBus};
 pub use geoip::GeoIpService;
+pub use ip_enrich::{IpEnrichService, IpEnrichment, NetworkCategory, VpnLikelihood};
 pub use jwt::{AccessTokenClaims, JwtService, RefreshTokenClaims, TwoFactorChallengeClaims};
 pub use stripe::{
     stripe_config_from_db_model, stripe_config_from_env, stripe_err, StripeConfig, StripeService,
