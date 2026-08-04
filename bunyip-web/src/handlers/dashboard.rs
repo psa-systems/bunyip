@@ -857,7 +857,7 @@ pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap)
         &c,
         &user,
         "/dashboard",
-        "Membership required · Bunyip",
+        "Membership Required · Bunyip",
         content,
     )
 }
