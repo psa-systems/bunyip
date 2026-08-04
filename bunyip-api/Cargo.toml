@@ -105,6 +105,15 @@ async-stripe = { version = "0.37", features = ["runtime-tokio-hyper", "checkout"
 # decompression. `infer` sniffs the magic bytes to identify the file
 # type; `imagesize` reads image dimensions without decoding the pixels,
 # which is the cheap defence against decompression bombs.
+# DEV-531: content-based upload validation (magic-byte type sniffing, the
+# header-only dimension guard, the avatar policy) extracted from
+# handlers/avatar.rs in DEV-525 and shared with a8n-tools. Brings `infer` and
+# `imagesize` in transitively.
+dunite-image-upload = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "302af65f8006079510a32478a688844a0677c97e" }
+# Still direct for the feedback-attachment path (BUNYIP-90), whose allowlist
+# admits non-images (text/plain) and so does not fit `ImagePolicy`. Folding that
+# surface into the shared crate is a separate decision, not a side effect of
+# DEV-531.
 infer = "0.16"
 imagesize = "0.13"
 

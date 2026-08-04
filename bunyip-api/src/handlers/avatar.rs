@@ -1,15 +1,21 @@
 //! BUNYIP-408: profile avatar upload / removal / serving.
 //!
-//! Storage and validation mirror the feedback-attachment hardening (BUNYIP-90):
-//! the bytes live in a Postgres BYTEA (`user_avatars`), every check runs against
-//! file CONTENT (magic-byte sniff + header-only dimension parse), never the
-//! browser's declared MIME or filename, and the bytes are served back only
-//! through [`get_avatar`] with an explicit image Content-Type and
-//! `Content-Disposition: inline`. bunyip-api has no static file mount, so an
-//! uploaded avatar can never be served from an origin where it could execute.
+//! DEV-531: the validation moved to the shared `dunite-image-upload` crate,
+//! which a8n-tools consumes too (DEV-525). The rules are unchanged - every
+//! check still runs against file CONTENT (magic-byte sniff + header-only
+//! dimension parse), never the browser's declared MIME or filename, and
+//! `ImagePolicy::avatar()` carries the same 2 MiB / 4096px / PNG-JPEG-WebP-GIF
+//! limits this file used to define as constants.
+//!
+//! Storage and serving are unchanged and stay here: the bytes live in a
+//! Postgres BYTEA (`user_avatars`) and come back only through [`get_avatar`]
+//! with an explicit image Content-Type and `Content-Disposition: inline`.
+//! bunyip-api has no static file mount, so an uploaded avatar can never be
+//! served from an origin where it could execute.
 
 use actix_multipart::Multipart;
 use actix_web::{web, HttpRequest, HttpResponse};
+use dunite_image_upload::{validate_image, ImagePolicy, ImageValidationError};
 use futures_util::TryStreamExt;
 use sqlx::PgPool;
 
@@ -19,61 +25,13 @@ use crate::models::UserResponse;
 use crate::repositories::UserRepository;
 use crate::responses::{get_request_id, success};
 
-/// 2 MiB. Matches the `user_avatars.size_bytes` CHECK constraint so a bypassed
-/// app-layer check still cannot store an unbounded blob.
-const MAX_AVATAR_SIZE: usize = 2 * 1024 * 1024;
-
-/// Avatars are images only - a tighter allowlist than feedback (no text/plain).
-const ALLOWED_MIME_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
-
-/// Reject decompression-bomb / oversized images by their pixel dimensions,
-/// parsed header-only so no decoder ever runs against adversarial input.
-const MAX_IMAGE_DIMENSION: usize = 4096;
-
-/// Resolve the canonical MIME from the file's magic bytes, ignoring whatever the
-/// browser claimed. Only the sniffed type is trusted, and it must be in the
-/// image allowlist; anything unrecognised or non-image is rejected.
-fn sniff_image_mime(bytes: &[u8]) -> Result<String, AppError> {
-    match infer::get(bytes) {
-        Some(kind) if ALLOWED_MIME_TYPES.contains(&kind.mime_type()) => {
-            Ok(kind.mime_type().to_string())
-        }
-        Some(kind) => {
-            tracing::warn!(sniffed_mime = %kind.mime_type(), "Avatar rejected: not an allowed image type");
-            Err(AppError::validation(
-                "avatar",
-                "File must be a PNG, JPEG, WebP, or GIF image",
-            ))
-        }
-        None => {
-            tracing::warn!("Avatar rejected: could not verify image type from content");
-            Err(AppError::validation(
-                "avatar",
-                "Could not verify the file is an image",
-            ))
-        }
-    }
-}
-
-/// Header-only dimension guard (via `imagesize`, no pixel decode). Blocks a
-/// billion-pixel "PNG" bomb before it is ever stored or served.
-fn enforce_dimensions(bytes: &[u8]) -> Result<(), AppError> {
-    let size = imagesize::blob_size(bytes).map_err(|e| {
-        tracing::warn!(error = %e, "Avatar rejected: could not parse image dimensions");
-        AppError::validation("avatar", "Could not parse image dimensions")
-    })?;
-    if size.width > MAX_IMAGE_DIMENSION || size.height > MAX_IMAGE_DIMENSION {
-        tracing::warn!(
-            width = size.width,
-            height = size.height,
-            "Avatar rejected: dimensions exceed limit"
-        );
-        return Err(AppError::validation(
-            "avatar",
-            "Image is larger than 4096x4096 pixels",
-        ));
-    }
-    Ok(())
+/// Convert a shared-crate validation failure into bunyip's error type.
+///
+/// The wording is the crate's, which describes the rule and never the bytes;
+/// the field name stays `avatar` so the client attaches it to the right input.
+fn avatar_err(e: ImageValidationError) -> AppError {
+    tracing::warn!(reason = ?e, "Avatar rejected");
+    AppError::validation("avatar", e.to_string())
 }
 
 /// POST /v1/users/me/avatar (multipart, field name `avatar`).
@@ -88,6 +46,7 @@ pub async fn upload_avatar(
     mut payload: Multipart,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
+    let policy = ImagePolicy::avatar();
 
     let mut avatar_bytes: Option<Vec<u8>> = None;
     while let Some(mut field) = payload
@@ -117,24 +76,18 @@ pub async fn upload_avatar(
             .map_err(|_| AppError::validation("avatar", "Failed to read field"))?
         {
             bytes.extend_from_slice(&chunk);
-            if bytes.len() > MAX_AVATAR_SIZE {
-                return Err(AppError::validation(
-                    "avatar",
-                    "Image exceeds the 2 MB limit",
-                ));
+            if bytes.len() > policy.max_bytes {
+                return Err(avatar_err(ImageValidationError::TooLarge {
+                    max_bytes: policy.max_bytes,
+                }));
             }
         }
         avatar_bytes = Some(bytes);
         break;
     }
 
-    let bytes = avatar_bytes.ok_or_else(|| AppError::validation("avatar", "No image provided"))?;
-    if bytes.is_empty() {
-        return Err(AppError::validation("avatar", "No image provided"));
-    }
-
-    let mime = sniff_image_mime(&bytes)?;
-    enforce_dimensions(&bytes)?;
+    let bytes = avatar_bytes.ok_or_else(|| avatar_err(ImageValidationError::Empty))?;
+    let mime = validate_image(&bytes, &policy).map_err(avatar_err)?;
 
     let updated = UserRepository::set_avatar(&pool, user.0.sub, &mime, &bytes).await?;
     tracing::info!(user_id = %user.0.sub, mime = %mime, size = bytes.len(), "Avatar updated");
@@ -179,38 +132,27 @@ pub async fn get_avatar(
 mod tests {
     use super::*;
 
-    // 1x1 transparent PNG.
-    const PNG_1X1: &[u8] = &[
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
-        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
-        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00,
-        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
-        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
-    ];
-
     #[test]
-    fn sniffs_png_from_magic_bytes() {
-        assert_eq!(sniff_image_mime(PNG_1X1).unwrap(), "image/png");
+    fn validation_failures_are_field_scoped_and_carry_the_rule() {
+        // DEV-531: the sniffing and dimension cases live in dunite-image-upload
+        // now, with a superset of what was here. What is still bunyip's to get
+        // right is the conversion: the client attaches the message to the
+        // avatar input, so the field name has to be ours while the wording
+        // stays the shared crate's.
+        match avatar_err(ImageValidationError::UnknownType) {
+            AppError::ValidationError { field, message } => {
+                assert_eq!(field, "avatar");
+                assert_eq!(message, "Could not verify the file is an image");
+            }
+            other => panic!("expected a field validation error, got {other:?}"),
+        }
     }
 
     #[test]
-    fn rejects_non_image_content() {
-        // A plain-text payload has no image magic bytes.
-        let err = sniff_image_mime(b"#!/bin/sh\necho pwned\n").unwrap_err();
-        assert!(matches!(err, AppError::ValidationError { .. }));
-    }
-
-    #[test]
-    fn rejects_disallowed_image_type_by_content() {
-        // A BMP is a real image but not in the allowlist; the sniffer catches it
-        // regardless of any claimed content-type.
-        let bmp = b"BM\x00\x00\x00\x00\x00\x00\x00\x00\x36\x00\x00\x00";
-        let err = sniff_image_mime(bmp).unwrap_err();
-        assert!(matches!(err, AppError::ValidationError { .. }));
-    }
-
-    #[test]
-    fn accepts_dimensions_within_limit() {
-        assert!(enforce_dimensions(PNG_1X1).is_ok());
+    fn the_size_cap_matches_the_storage_constraint() {
+        // `user_avatars.size_bytes` has a CHECK at 2 MiB. If the shared policy
+        // ever exceeded it, a valid upload would pass validation and then fail
+        // on insert with a database error instead of a useful message.
+        assert_eq!(ImagePolicy::avatar().max_bytes, 2 * 1024 * 1024);
     }
 }

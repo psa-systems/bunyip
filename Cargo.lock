@@ -696,6 +696,7 @@ dependencies = [
  "chrono",
  "data-encoding",
  "dotenvy",
+ "dunite-image-upload",
  "futures-util",
  "imagesize",
  "infer 0.16.0",
@@ -743,13 +744,13 @@ dependencies = [
  "dunite-core",
  "dunite-download",
  "dunite-feedback",
+ "dunite-geoip",
  "dunite-stripe",
  "dunite-stripe-core",
  "dunite-user-core",
  "futures-util",
  "hex",
  "hmac",
- "ip2location",
  "ipnetwork",
  "jsonwebtoken",
  "lazy_static",
@@ -1399,7 +1400,7 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 [[package]]
 name = "dunite-core"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=cc10e8358a6f21160544a415a9488c16827af699#cc10e8358a6f21160544a415a9488c16827af699"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=302af65f8006079510a32478a688844a0677c97e#302af65f8006079510a32478a688844a0677c97e"
 dependencies = [
  "actix-web",
  "aes-gcm",
@@ -1422,7 +1423,7 @@ dependencies = [
 [[package]]
 name = "dunite-download"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=cc10e8358a6f21160544a415a9488c16827af699#cc10e8358a6f21160544a415a9488c16827af699"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=302af65f8006079510a32478a688844a0677c97e#302af65f8006079510a32478a688844a0677c97e"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1447,7 +1448,7 @@ dependencies = [
 [[package]]
 name = "dunite-feedback"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=cc10e8358a6f21160544a415a9488c16827af699#cc10e8358a6f21160544a415a9488c16827af699"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=302af65f8006079510a32478a688844a0677c97e#302af65f8006079510a32478a688844a0677c97e"
 dependencies = [
  "chrono",
  "ipnetwork",
@@ -1457,9 +1458,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "dunite-geoip"
+version = "0.1.0"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=302af65f8006079510a32478a688844a0677c97e#302af65f8006079510a32478a688844a0677c97e"
+dependencies = [
+ "ip2location",
+]
+
+[[package]]
+name = "dunite-image-upload"
+version = "0.1.0"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=302af65f8006079510a32478a688844a0677c97e#302af65f8006079510a32478a688844a0677c97e"
+dependencies = [
+ "imagesize",
+ "infer 0.16.0",
+]
+
+[[package]]
 name = "dunite-oci"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=cc10e8358a6f21160544a415a9488c16827af699#cc10e8358a6f21160544a415a9488c16827af699"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=302af65f8006079510a32478a688844a0677c97e#302af65f8006079510a32478a688844a0677c97e"
 dependencies = [
  "actix-web",
  "async-trait",
@@ -1486,7 +1504,7 @@ dependencies = [
 [[package]]
 name = "dunite-oidc"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=cc10e8358a6f21160544a415a9488c16827af699#cc10e8358a6f21160544a415a9488c16827af699"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=302af65f8006079510a32478a688844a0677c97e#302af65f8006079510a32478a688844a0677c97e"
 dependencies = [
  "base64 0.21.7",
  "dunite-core",
@@ -1497,7 +1515,7 @@ dependencies = [
 [[package]]
 name = "dunite-stripe"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=cc10e8358a6f21160544a415a9488c16827af699#cc10e8358a6f21160544a415a9488c16827af699"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=302af65f8006079510a32478a688844a0677c97e#302af65f8006079510a32478a688844a0677c97e"
 dependencies = [
  "async-stripe",
  "chrono",
@@ -1513,7 +1531,7 @@ dependencies = [
 [[package]]
 name = "dunite-stripe-core"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=cc10e8358a6f21160544a415a9488c16827af699#cc10e8358a6f21160544a415a9488c16827af699"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=302af65f8006079510a32478a688844a0677c97e#302af65f8006079510a32478a688844a0677c97e"
 dependencies = [
  "hex",
  "hmac",
@@ -1527,7 +1545,7 @@ dependencies = [
 [[package]]
 name = "dunite-user-core"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=cc10e8358a6f21160544a415a9488c16827af699#cc10e8358a6f21160544a415a9488c16827af699"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=302af65f8006079510a32478a688844a0677c97e#302af65f8006079510a32478a688844a0677c97e"
 dependencies = [
  "chrono",
  "serde",
