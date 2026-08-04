@@ -1016,6 +1016,21 @@ impl Config {
         self.environment == "production"
     }
 
+    /// Whether any trusted proxy is configured, i.e. whether bunyip-api will
+    /// honour a forwarded client IP at all (BUNYIP-476).
+    ///
+    /// With no trusted proxy, every `X-Forwarded-For` is ignored and the socket
+    /// peer is used. On the two-hop BFF path (Traefik -> bunyip-web ->
+    /// bunyip-api) that peer is the bunyip-web container, so SSR-proxied client
+    /// IPs - the audit `actor_ip_address`, the access-log IP, and the per-IP
+    /// rate-limit key - are attributed to bunyip-web instead of the real
+    /// browser. This is safe (never a forged IP) but silent; `main.rs` logs it
+    /// at boot so the misconfiguration is visible. See
+    /// `docs/client-ip-forwarding.md`.
+    pub fn trusts_forwarded_client_ip(&self) -> bool {
+        !self.trusted_proxies.is_empty()
+    }
+
     /// Whether a cookie issued for `req` must carry the `Secure` attribute
     /// (BUNYIP-426 F4).
     ///
@@ -1701,6 +1716,28 @@ mod tests {
         let cfg = OciConfig::from_env();
         assert!(cfg.enabled);
         env::remove_var("OCI_REGISTRY_ENABLED");
+    }
+
+    // BUNYIP-476: the boot diagnostic keys off this. A configured CIDR means
+    // forwarded client IPs (audit actor_ip_address, access log, rate-limit key)
+    // resolve to the real client; an empty list means they fall back to the
+    // socket peer (bunyip-web on the two-hop path).
+    #[test]
+    fn trusts_forwarded_client_ip_tracks_the_cidr_list() {
+        let _env = env_lock();
+        let cfg = dev_config_with_trusted_proxy();
+        assert!(
+            cfg.trusts_forwarded_client_ip(),
+            "a configured TRUSTED_PROXY_CIDR trusts forwarding"
+        );
+
+        env::set_var("TRUSTED_PROXY_CIDR", "");
+        let cfg = Config::from_env_inner().expect("development config must load");
+        assert!(
+            !cfg.trusts_forwarded_client_ip(),
+            "an empty TRUSTED_PROXY_CIDR trusts no forwarding"
+        );
+        assert!(cfg.trusted_proxies.is_empty());
     }
 
     // -- BUNYIP-426 F4: Secure cookie attribute derives from the transport ----

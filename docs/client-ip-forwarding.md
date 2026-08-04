@@ -80,3 +80,39 @@ needed to deploy. For access lines and spans to carry the external client IP,
 `TRUSTED_PROXY_CIDR` must include the reverse-proxy address range that fronts
 the direct-to-API paths (SSE `/v1/events`, `/oauth2/*`, `/.well-known/*`), the
 same range the SSR chain above already requires.
+
+## The audited-login path (BUNYIP-476)
+
+A login is audited on the two-hop BFF path (browser -> Traefik -> bunyip-web ->
+bunyip-api), so the `audit_log` row's `actor_ip_address` follows exactly the
+rule above: it is the real browser IP only when bunyip-web re-forwards
+`X-Forwarded-For` (its peer Traefik is inside `WEB_TRUSTED_PROXY_CIDR`) AND
+bunyip-api trusts bunyip-web's container peer (inside `TRUSTED_PROXY_CIDR`). If
+either hop is missing, the audited IP is bunyip-web's container address, not the
+client - this is the "audit records a Docker IP" symptom. It is a topology /
+config condition, not a resolver bug: the same `extract_client_ip` serves every
+surface, and auto-ban's direct-to-API endpoints (single hop) resolve correctly
+regardless, which is why they can disagree with the audited-login row.
+
+### Verifying
+
+- **At boot:** bunyip-api logs its posture once at startup (BUNYIP-476). With a
+  configured CIDR it logs `TRUSTED_PROXY_CIDR set; forwarded client IPs ...
+  resolve to the real client`; with none it logs a `WARN` naming the exact
+  fallback (audit `actor_ip_address`, access log, per-IP rate limit attributed
+  to the bunyip-web peer). A `WARN` on a TLS/BFF deployment is the misconfig.
+- **From the data:** sign in through the browser, then read the newest
+  `audit_log` row's `ip_address` (admin Audit Logs, or
+  `SELECT ip_address FROM audit_log WHERE action='login' ORDER BY timestamp DESC LIMIT 1`).
+  It should be the browser's public IP, not a `172.16.0.0/12` /
+  `10.0.0.0/8` container address.
+
+### Default config
+
+`compose.yml` / `compose.dev.yml` default both `TRUSTED_PROXY_CIDR` (api) and
+`WEB_TRUSTED_PROXY_CIDR` (web) to `172.16.0.0/12,10.0.0.0/8,192.168.0.0/16`,
+which spans the private ranges Docker assigns container and Traefik addresses,
+so the two-hop path resolves correctly out of the box. A deployment that
+narrows these to specific proxy addresses MUST keep bunyip-web's container
+address in bunyip-api's `TRUSTED_PROXY_CIDR`, or audited-login IPs revert to the
+bunyip-web peer.
