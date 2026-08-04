@@ -50,7 +50,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
     // is set before the dashboard is reachable, so the nudge is dead code.
 
     let content = html! {
-        div class="space-y-8" {
+        div class="space-y-6" {
             div {
                 h1 class="text-3xl font-bold" { "Welcome back!" }
                 p class="mt-2 text-muted-foreground" { (tagline) }
@@ -102,7 +102,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                     }
                     h2 class="text-xl font-semibold" { "Your Applications" }
                 }
-                div class="grid gap-4 lg:grid-cols-2" {
+                div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
                     @for (i, app) in apps.iter().enumerate() {
                         @let subdomain = app.subdomain.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| app.slug.clone());
                         @let app_url = format!("{subdomain}.{base_domain}");
