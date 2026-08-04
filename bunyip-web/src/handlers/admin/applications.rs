@@ -23,9 +23,9 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
         Ok(v) => v,
         Err(r) => return r,
     };
-    let apps = admin_api::applications(&st.api, c.forward.as_deref())
-        .await
-        .unwrap_or_default();
+    let data = admin_api::applications(&st.api, c.forward.as_deref()).await;
+    let reachable = data.is_ok();
+    let apps = data.unwrap_or_default();
 
     let content = html! {
         div class="space-y-6" {
@@ -36,7 +36,12 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "All Applications" } }
                 div class="p-6 pt-0" {
-                    div class="divide-y" {
+                    @if !reachable {
+                        (error_box("Could not reach the API to load applications."))
+                    } @else if apps.is_empty() {
+                        p class="text-center text-muted-foreground py-8" { "No applications" }
+                    } @else {
+                        div class="divide-y" {
                         @for (i, app) in apps.iter().enumerate() {
                             div class="py-3 flex items-center justify-between gap-4" {
                                 div class="flex items-center gap-3" {
@@ -82,7 +87,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                                 }
                             }
                         }
-                        @if apps.is_empty() { p class="text-center text-muted-foreground py-8" { "No applications" } }
+                        }
                     }
                 }
             }

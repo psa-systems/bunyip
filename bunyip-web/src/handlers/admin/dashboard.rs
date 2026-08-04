@@ -8,7 +8,7 @@ use maud::html;
 use crate::api::admin as admin_api;
 use crate::handlers::{admin_guard, admin_response};
 use crate::util::relative_time;
-use crate::views::ui::{button_class, icon};
+use crate::views::ui::{button_class, error_box, icon};
 use crate::web::AppState;
 
 use super::title_case;
@@ -20,10 +20,9 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
     };
     let fwd = c.forward.as_deref();
     let stats = admin_api::stats(&st.api, fwd).await.ok();
-    let logs = admin_api::audit_logs(&st.api, fwd, 1, 5, false)
-        .await
-        .map(|p| p.items)
-        .unwrap_or_default();
+    let logs_data = admin_api::audit_logs(&st.api, fwd, 1, 5, false).await;
+    let logs_reachable = logs_data.is_ok();
+    let logs = logs_data.map(|p| p.items).unwrap_or_default();
     // Only prompt when we positively know the catalog is empty (stats fetched
     // and zero apps), not when the stats call failed (PSA-57).
     let catalog_empty = stats
@@ -57,16 +56,21 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                     }
                 }
             }
-            div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4" {
-                (stat("Total Users", stats.as_ref().map(|s| s.total_users.to_string()).unwrap_or_else(|| "0".into()), "Registered accounts", "users"))
-                (stat("Active Memberships", stats.as_ref().map(|s| s.active_members.to_string()).unwrap_or_else(|| "0".into()), "Paying customers", "credit-card"))
-                (stat("Active Apps", stats.as_ref().map(|s| format!("{}/{}", s.active_applications, s.total_applications)).unwrap_or_else(|| "0/0".into()), "Applications online", "trending-up"))
-                (stat("Past Due", stats.as_ref().map(|s| s.past_due_members.to_string()).unwrap_or_else(|| "0".into()), "In grace period", "alert-triangle"))
+            @if stats.is_none() {
+                (error_box("Could not reach the API."))
+            } @else {
+                div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4" {
+                    (stat("Total Users", stats.as_ref().map(|s| s.total_users.to_string()).unwrap_or_else(|| "0".into()), "Registered accounts", "users"))
+                    (stat("Active Memberships", stats.as_ref().map(|s| s.active_members.to_string()).unwrap_or_else(|| "0".into()), "Paying customers", "credit-card"))
+                    (stat("Active Apps", stats.as_ref().map(|s| format!("{}/{}", s.active_applications, s.total_applications)).unwrap_or_else(|| "0/0".into()), "Applications online", "trending-up"))
+                    (stat("Past Due", stats.as_ref().map(|s| s.past_due_members.to_string()).unwrap_or_else(|| "0".into()), "In grace period", "alert-triangle"))
+                }
             }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Recent Activity" } p class="text-sm text-muted-foreground" { "Latest platform events" } }
                 div class="p-6 pt-0" {
-                    @if logs.is_empty() { p class="text-muted-foreground text-center py-8" { "No recent activity" } }
+                    @if !logs_reachable { (error_box("Could not reach the API to load recent activity.")) }
+                    @else if logs.is_empty() { p class="text-muted-foreground text-center py-8" { "No recent activity" } }
                     @else {
                         div class="space-y-4" {
                             @for log in &logs {
