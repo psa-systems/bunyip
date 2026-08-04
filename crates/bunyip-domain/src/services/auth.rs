@@ -23,6 +23,7 @@ use crate::repositories::{
     UserRepository,
 };
 use crate::services::{EmailService, GeoIpService, JwtService, PasswordService};
+use dunite_geoip::{is_non_public_ip, login_location_decision, LoginLocationDecision};
 
 /// Authentication tokens returned after login
 #[derive(Debug, Clone)]
@@ -292,7 +293,7 @@ impl AuthService {
         // Private / loopback / link-local / unspecified addresses never map to a
         // public country and only show up behind a misconfigured proxy or in
         // dev; skip them so they cannot spuriously "change country".
-        if Self::is_non_public_ip(&ip) {
+        if is_non_public_ip(&ip) {
             return;
         }
         let Some(country) = geoip.country_code(ip) else {
@@ -336,28 +337,6 @@ impl AuthService {
         }
     }
 
-    /// True for addresses that can never map to a public country: loopback,
-    /// RFC1918 / unique-local, link-local, unspecified, broadcast. BUNYIP-366
-    /// skips these so a request arriving without a real client IP does not
-    /// register as a country change.
-    fn is_non_public_ip(ip: &IpAddr) -> bool {
-        match ip {
-            IpAddr::V4(v4) => {
-                v4.is_private()
-                    || v4.is_loopback()
-                    || v4.is_link_local()
-                    || v4.is_unspecified()
-                    || v4.is_broadcast()
-            }
-            IpAddr::V6(v6) => {
-                v6.is_loopback()
-                    || v6.is_unspecified()
-                    || v6.is_unique_local()
-                    || v6.is_unicast_link_local()
-            }
-        }
-    }
-
     /// BUNYIP-397: resolve the full country name for a request IP, for the
     /// password-reset email. Best-effort and privacy-preserving in the same way
     /// as the login-location signal (`assess_login` above): yields `None` when
@@ -366,7 +345,7 @@ impl AuthService {
     /// shows.
     pub fn country_name_for_ip(&self, ip_address: Option<IpAddr>) -> Option<String> {
         match (self.geoip.as_ref(), ip_address) {
-            (Some(geoip), Some(ip)) if !Self::is_non_public_ip(&ip) => geoip.country_name(ip),
+            (Some(geoip), Some(ip)) if !is_non_public_ip(&ip) => geoip.country_name(ip),
             _ => None,
         }
     }
@@ -389,7 +368,7 @@ impl AuthService {
         // Resolve the country (best-effort). Mirror check_login_location's
         // filters: no geoip DB, no IP, or a non-public IP all yield None.
         let country = match (self.geoip.as_ref(), ip_address) {
-            (Some(geoip), Some(ip)) if !Self::is_non_public_ip(&ip) => geoip.country_code(ip),
+            (Some(geoip), Some(ip)) if !is_non_public_ip(&ip) => geoip.country_code(ip),
             _ => None,
         };
         let country_is_new = matches!(
@@ -2386,28 +2365,6 @@ pub(crate) fn generate_secure_token(length: usize) -> String {
     base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &bytes)
 }
 
-/// BUNYIP-366: the action to take for a resolved login country, given the
-/// country recorded at the user's previous login. Kept pure (no DB, no mailer)
-/// so the branch logic is unit-testable in isolation.
-#[derive(Debug, PartialEq, Eq)]
-enum LoginLocationDecision {
-    /// No prior country on record: store this one silently, no alert.
-    Record,
-    /// Same country as last time: do nothing.
-    Unchanged,
-    /// Country differs from last time: alert the user, then store the new one.
-    Alert,
-}
-
-/// Decide what to do for the `current` login country given the `previous` one.
-fn login_location_decision(previous: Option<&str>, current: &str) -> LoginLocationDecision {
-    match previous {
-        None => LoginLocationDecision::Record,
-        Some(prev) if prev == current => LoginLocationDecision::Unchanged,
-        Some(_) => LoginLocationDecision::Alert,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2600,51 +2557,4 @@ mod tests {
 
     // BUNYIP-366: only genuinely public client IPs may drive a country-change
     // alert; loopback / RFC1918 / link-local / unspecified must be ignored.
-    #[test]
-    fn non_public_ip_detection() {
-        let non_public = [
-            "127.0.0.1",     // loopback v4
-            "10.1.2.3",      // RFC1918
-            "192.168.1.1",   // RFC1918
-            "172.16.0.1",    // RFC1918
-            "169.254.10.10", // link-local v4
-            "0.0.0.0",       // unspecified v4
-            "::1",           // loopback v6
-            "::",            // unspecified v6
-            "fd00::1",       // unique-local v6
-            "fe80::1",       // link-local v6
-        ];
-        for ip in non_public {
-            assert!(
-                AuthService::is_non_public_ip(&ip.parse().unwrap()),
-                "{ip} should be treated as non-public"
-            );
-        }
-
-        let public = ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"];
-        for ip in public {
-            assert!(
-                !AuthService::is_non_public_ip(&ip.parse().unwrap()),
-                "{ip} should be treated as public"
-            );
-        }
-    }
-
-    // BUNYIP-366: the None -> Record / same -> Unchanged / differ -> Alert
-    // decision that drives whether a login sends the new-location email.
-    #[test]
-    fn login_location_decision_branches() {
-        assert_eq!(
-            login_location_decision(None, "US"),
-            LoginLocationDecision::Record
-        );
-        assert_eq!(
-            login_location_decision(Some("US"), "US"),
-            LoginLocationDecision::Unchanged
-        );
-        assert_eq!(
-            login_location_decision(Some("US"), "GB"),
-            LoginLocationDecision::Alert
-        );
-    }
 }
