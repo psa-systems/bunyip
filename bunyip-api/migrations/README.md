@@ -61,3 +61,29 @@ re-run, so the DDL guards `9c082eb` added are **not** retro-applied to a databas
 that already ran the original bodies. Delivering those guards to already-migrated
 data requires new forward-only migrations and is tracked separately. This is why
 new behavioral changes must ship as fresh migrations, not in-place edits.
+
+## BUNYIP-457: source-check backfill (when forward-only is blocked)
+
+The caveat above bit `20260605000010`: its `CHECK (source IN ('admin', 'stripe',
+'backfill'))` on `application_entitlements.source` was added by the `9c082eb`
+in-place edit, so a database that applied the pre-edit body never got the
+constraint. `20260802000010` then widens that constraint to allow `'seed'` with a
+bare `ALTER TABLE ... DROP CONSTRAINT application_entitlements_source_check`, which
+raises `constraint ... does not exist` and aborts startup on those databases.
+
+The usual fix (a new forward-only migration) is impossible here: `20260802000010`
+is itself the failing migration, so the chain never reaches a later one on the
+affected database. Instead `migrate_reconcile::backfill_entitlement_source_check`
+runs at startup, **after** the checksum reconcile and **before** the migrator, and
+adds the missing constraint so the migrator's `DROP` + `ADD` then succeeds and
+widens it to include `'seed'`. It is tightly scoped and idempotent: it acts only
+when `20260802000010` is not yet applied, the table exists, and the constraint is
+absent, so it is a no-op on already-migrated databases (802 applied), on fresh
+databases (table created in order by the migrator), and on every boot after it has
+run once, and it can never fight a future migration that deliberately alters the
+constraint. `20260802000010` itself is left unedited (immutable), so databases
+that already applied it need no checksum reconciliation.
+
+This is a deliberate exception to "deliver un-retro-applied guards via forward
+migrations": use it only when the migration that depends on the guard is the one
+that fails, leaving no earlier forward slot.
