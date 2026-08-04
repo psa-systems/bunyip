@@ -10,8 +10,10 @@
 #
 # Committed migrations are therefore immutable: the only safe change is a NEW
 # migration file. This gate fails any PR (and push to main) that modifies (M),
-# renames (R), or deletes (D) a migration file relative to the merge-base with
-# the base ref, before it can merge. Adding new migration files passes.
+# renames (R), or deletes (D) a migration (*.sql) file relative to the merge-base
+# with the base ref, before it can merge. Adding new migration files passes.
+# Only *.sql is guarded: sqlx never checksums docs such as README.md that live in
+# the migrations dir, so editing them is safe and exempt (BUNYIP-458).
 #
 # This exact break took down the mokosh-server v0.4.0 production deploy on nc-01
 # (DEV-395), and has bitten this repo before (BUNYIP-79 edited 11 applied
@@ -37,6 +39,11 @@ if ! changed="$(git diff --diff-filter=MRD --name-only "${BASE_REF}...HEAD" -- "
     echo "       The base ref must be fetched with full history (CI: fetch-depth: 0)." >&2
     exit 2
 fi
+
+# sqlx only checksums *.sql; docs like README.md live in the migrations dir but
+# are not migrations, so a change to them must not trip the gate (BUNYIP-458). A
+# modified/renamed/deleted *.sql still ends in .sql, so real coverage is kept.
+changed="$(grep -E '\.sql$' <<<"$changed" || true)"
 
 if [[ -n "$changed" ]]; then
     echo "error: the following already-committed migration file(s) were modified, renamed, or deleted:" >&2

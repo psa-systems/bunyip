@@ -89,6 +89,17 @@ async fn main() -> anyhow::Result<()> {
             e
         })?;
 
+    // BUNYIP-457: deliver the application_entitlements_source_check guard that
+    // 20260605000010's in-place edit added but the reconcile above never
+    // retro-applies, so 20260802000010's bare DROP CONSTRAINT does not abort
+    // startup on databases that applied the pre-edit body. No-op elsewhere.
+    bunyip_api::migrate_reconcile::backfill_entitlement_source_check(&pool)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to backfill entitlement source-check constraint");
+            e
+        })?;
+
     // Run database migrations
     info!("Running database migrations...");
     sqlx::migrate!("./migrations")

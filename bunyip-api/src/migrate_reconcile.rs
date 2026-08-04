@@ -26,6 +26,12 @@
 //! that `9c082eb` added to a database that already ran the original bodies; a
 //! row marked applied is never re-run. Delivering those guards to already-
 //! migrated data requires forward-only migrations and is tracked separately.
+//!
+//! BUNYIP-457: one of those un-retro-applied guards
+//! (`application_entitlements_source_check`, added in place to
+//! `20260605000010`) IS delivered here, by `backfill_entitlement_source_check`
+//! below, because the usual forward-only path is blocked: the migration that
+//! needs it (`20260802000010`) is the one that fails on databases lacking it.
 
 use sqlx::migrate::Migrator;
 use sqlx::PgPool;
@@ -105,6 +111,86 @@ pub async fn reconcile_legacy_migration_checksums(pool: &PgPool) -> Result<(), s
              already-migrated database. See bunyip-api/migrations/README.md."
         );
     }
+    Ok(())
+}
+
+/// BUNYIP-457: backfill the `application_entitlements_source_check` constraint
+/// that migration `20260605000010` added by an in-place edit but that
+/// `reconcile_legacy_migration_checksums` never retro-applies (see the module
+/// note). Migration `20260802000010` widens that constraint to allow the
+/// `'seed'` source with a bare `DROP CONSTRAINT`, so on a database that applied
+/// the pre-edit 605 body (constraint absent) it aborts startup with
+/// `constraint "application_entitlements_source_check" ... does not exist`.
+///
+/// A forward-only migration cannot fix this: `20260802000010` is itself the
+/// migration that fails, so the chain never reaches a later one on the affected
+/// database. Deliver the missing guard here instead, before the migrator runs,
+/// exactly as 605 would have. Tightly scoped so it can only ever act on a
+/// database stuck BEFORE `20260802000010`:
+///
+/// - `20260802000010` already applied -> return (never fight a future migration
+///   that legitimately alters this constraint).
+/// - `application_entitlements` absent -> return (fresh database; the migrator
+///   creates the table and its constraint in order).
+/// - constraint already present -> return.
+///
+/// Otherwise add `CHECK (source IN ('admin', 'stripe', 'backfill'))`; the
+/// migrator then runs `20260802000010`'s DROP + ADD and widens it to include
+/// `'seed'`. Idempotent: a no-op on already-migrated databases (802 applied),
+/// fresh databases, and every boot after it has run once. Must run BEFORE
+/// `Migrator::run`.
+pub async fn backfill_entitlement_source_check(pool: &PgPool) -> Result<(), sqlx::Error> {
+    // 1. Already past 20260802000010? Never touch the constraint again, so a
+    //    future migration that deliberately alters it is not fought.
+    let applied: Option<i64> =
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE version = 20260802000010")
+            .fetch_optional(pool)
+            .await?;
+    if applied.is_some() {
+        return Ok(());
+    }
+
+    // 2. Fresh database (or one stuck before 20260605000010): the table does not
+    //    exist yet, so there is nothing to backfill and the `::regclass` cast in
+    //    step 3 would raise "relation does not exist".
+    let table: Option<String> =
+        sqlx::query_scalar("SELECT to_regclass('application_entitlements')::text")
+            .fetch_one(pool)
+            .await?;
+    if table.is_none() {
+        return Ok(());
+    }
+
+    // 3. Constraint already present (post-edit 605 body, or a prior backfill)?
+    let has_constraint: bool = sqlx::query_scalar(
+        "SELECT EXISTS ( \
+             SELECT 1 FROM pg_constraint \
+             WHERE conrelid = 'application_entitlements'::regclass \
+               AND conname = 'application_entitlements_source_check')",
+    )
+    .fetch_one(pool)
+    .await?;
+    if has_constraint {
+        return Ok(());
+    }
+
+    // 4. Deliver the guard 20260605000010's in-place edit should have applied.
+    //    Every existing source value is one of these three (the loader's 'seed'
+    //    grants only exist once 20260802000010 has widened the constraint, which
+    //    has not happened on a database reaching this branch), so it validates.
+    sqlx::query(
+        "ALTER TABLE application_entitlements \
+         ADD CONSTRAINT application_entitlements_source_check \
+         CHECK (source IN ('admin', 'stripe', 'backfill'))",
+    )
+    .execute(pool)
+    .await?;
+
+    warn!(
+        "BUNYIP-457: backfilled the missing application_entitlements_source_check constraint before \
+         20260802000010 (20260605000010's in-place guard was never retro-applied on this database). \
+         See bunyip-api/migrations/README.md."
+    );
     Ok(())
 }
 
