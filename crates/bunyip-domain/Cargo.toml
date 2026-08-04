@@ -34,6 +34,12 @@ dunite-feedback = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "3c9d3
 # async-stripe response DTOs, re-exported from this crate's models; the service
 # + runtime config land in a follow-up. Pinned to the branch rev that added it.
 dunite-stripe = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "41dbbebf6713119234e9f37b68c7fdba966b18cd" }
+# Shared account vocabulary (DEV-495 / DEV-517): the role / membership-status /
+# subscription-tier enums and the tier-settings response, re-exported from this
+# crate's models. The User row + repository stay here (a8n's schema has not
+# caught up) and nothing in the crate derives FromRow (a8n is on sqlx 0.7).
+# Pinned to the branch rev that introduced it.
+dunite-user-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82cfbe03645f98a7285de05f2fce65351df24a14" }
 async-trait = "0.1"
 
 # Web framework + multipart.

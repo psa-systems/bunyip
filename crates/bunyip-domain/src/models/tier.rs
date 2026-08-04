@@ -1,7 +1,6 @@
 //! Tier configuration models
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
 use uuid::Uuid;
 
 /// Database row for the `tier_config` singleton table.
@@ -22,25 +21,7 @@ pub struct TierConfigRow {
     pub updated_by: Option<Uuid>,
 }
 
-/// API response for tier configuration.
-#[derive(Debug, Serialize)]
-pub struct TierConfigResponse {
-    pub lifetime_slots: i64,
-    pub early_adopter_slots: i64,
-    pub early_adopter_trial_days: i64,
-    pub standard_trial_days: i64,
-    pub free_price_id: Option<String>,
-    pub early_adopter_price_id: Option<String>,
-    pub standard_price_id: Option<String>,
-    pub lifetime_product_id: Option<String>,
-    pub early_adopter_product_id: Option<String>,
-    pub standard_product_id: Option<String>,
-    /// Whether values come from "database" or "environment"
-    pub source: &'static str,
-    /// How many lifetime slots are currently filled
-    pub lifetime_slots_used: i64,
-    /// How many early adopter slots are currently filled
-    pub early_adopter_slots_used: i64,
-    pub updated_at: DateTime<Utc>,
-    pub updated_by: Option<Uuid>,
-}
+// DEV-517: the response shape is shared with a8n-tools via `dunite-user-core`.
+// `TierConfigRow` above stays here because it derives `sqlx::FromRow` and the two
+// consumers are on different sqlx majors (a8n 0.7, bunyip 0.8).
+pub use dunite_user_core::TierConfigResponse;
