@@ -187,13 +187,13 @@ fn checkbox_on(s: &str) -> bool {
 
 fn details_fields(v: &DetailsView) -> Markup {
     html! {
-        div class="space-y-2" { label class="text-sm font-medium" { "Description" } input name="description" value=(v.description) class=(dashboard_input()); }
-        div class="space-y-2" { label class="text-sm font-medium" { "Icon URL" } input name="icon_url" value=(v.icon_url) class=(dashboard_input()); }
-        div class="space-y-2" { label class="text-sm font-medium" { "Subdomain" } input name="subdomain" value=(v.subdomain) class=(dashboard_input()); }
-        div class="space-y-2" { label class="text-sm font-medium" { "Version" } input name="version" value=(v.version) class=(dashboard_input()); }
-        div class="space-y-2" { label class="text-sm font-medium" { "Source code URL" } input name="source_code_url" value=(v.source_code_url) class=(dashboard_input()); }
-        div class="space-y-2" { label class="text-sm font-medium" { "Release notes URL" } p class="text-xs text-muted-foreground" { "Linked from the applications view so users can see what changed (e.g. the Forgejo releases page)." } input name="release_notes_url" value=(v.release_notes_url) class=(dashboard_input()); }
-        div class="space-y-2" { label class="text-sm font-medium" { "Maintenance message" } p class="text-xs text-muted-foreground" { "Shown to users while maintenance mode is on." } input name="maintenance_message" value=(v.maintenance_message) class=(dashboard_input()); }
+        div class="space-y-2" { label for="description" class="text-sm font-medium" { "Description" } input id="description" name="description" value=(v.description) class=(dashboard_input()); }
+        div class="space-y-2" { label for="icon_url" class="text-sm font-medium" { "Icon URL" } input id="icon_url" name="icon_url" value=(v.icon_url) class=(dashboard_input()); }
+        div class="space-y-2" { label for="subdomain" class="text-sm font-medium" { "Subdomain" } input id="subdomain" name="subdomain" value=(v.subdomain) class=(dashboard_input()); }
+        div class="space-y-2" { label for="version" class="text-sm font-medium" { "Version" } input id="version" name="version" value=(v.version) class=(dashboard_input()); }
+        div class="space-y-2" { label for="source_code_url" class="text-sm font-medium" { "Source code URL" } input id="source_code_url" name="source_code_url" value=(v.source_code_url) class=(dashboard_input()); }
+        div class="space-y-2" { label for="release_notes_url" class="text-sm font-medium" { "Release notes URL" } p class="text-xs text-muted-foreground" { "Linked from the applications view so users can see what changed (e.g. the Forgejo releases page)." } input id="release_notes_url" name="release_notes_url" value=(v.release_notes_url) class=(dashboard_input()); }
+        div class="space-y-2" { label for="maintenance_message" class="text-sm font-medium" { "Maintenance message" } p class="text-xs text-muted-foreground" { "Shown to users while maintenance mode is on." } input id="maintenance_message" name="maintenance_message" value=(v.maintenance_message) class=(dashboard_input()); }
     }
 }
 
@@ -204,20 +204,20 @@ fn distribution_fields(v: &DistView) -> Markup {
         // "Distribution" card title instead of competing with it.
         h4 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground" { "Binary (Forgejo)" }
         div class="space-y-2" {
-            label class="text-sm font-medium" { "Artifact source" }
-            select name="artifact_source" class=(dashboard_input()) {
+            label for="artifact_source" class="text-sm font-medium" { "Artifact source" }
+            select id="artifact_source" name="artifact_source" class=(dashboard_input()) {
                 option value="release" selected[v.artifact_source != "generic_package"] { "release" }
                 option value="generic_package" selected[v.artifact_source == "generic_package"] { "generic_package" }
             }
         }
-        div class="space-y-2" { label class="text-sm font-medium" { "Forgejo owner" } input name="forgejo_owner" value=(v.forgejo_owner) class=(dashboard_input()); }
-        div class="space-y-2" { label class="text-sm font-medium" { "Forgejo repo" } input name="forgejo_repo" value=(v.forgejo_repo) class=(dashboard_input()); }
-        div class="space-y-2" { label class="text-sm font-medium" { "Forgejo package" } p class="text-xs text-muted-foreground" { "generic_package sources only; leave blank to clear back to the repo name." } input name="forgejo_package" value=(v.forgejo_package) class=(dashboard_input()); }
-        div class="space-y-2" { label class="text-sm font-medium" { "Pinned release tag" } input name="pinned_release_tag" value=(v.pinned_release_tag) class=(dashboard_input()); }
+        div class="space-y-2" { label for="forgejo_owner" class="text-sm font-medium" { "Forgejo owner" } input id="forgejo_owner" name="forgejo_owner" value=(v.forgejo_owner) class=(dashboard_input()); }
+        div class="space-y-2" { label for="forgejo_repo" class="text-sm font-medium" { "Forgejo repo" } input id="forgejo_repo" name="forgejo_repo" value=(v.forgejo_repo) class=(dashboard_input()); }
+        div class="space-y-2" { label for="forgejo_package" class="text-sm font-medium" { "Forgejo package" } p class="text-xs text-muted-foreground" { "generic_package sources only; leave blank to clear back to the repo name." } input id="forgejo_package" name="forgejo_package" value=(v.forgejo_package) class=(dashboard_input()); }
+        div class="space-y-2" { label for="pinned_release_tag" class="text-sm font-medium" { "Pinned release tag" } input id="pinned_release_tag" name="pinned_release_tag" value=(v.pinned_release_tag) class=(dashboard_input()); }
         h4 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground border-t pt-4 mt-2" { "Container (OCI)" }
-        div class="space-y-2" { label class="text-sm font-medium" { "OCI image owner" } input name="oci_image_owner" value=(v.oci_image_owner) class=(dashboard_input()); }
-        div class="space-y-2" { label class="text-sm font-medium" { "OCI image name" } input name="oci_image_name" value=(v.oci_image_name) class=(dashboard_input()); }
-        div class="space-y-2" { label class="text-sm font-medium" { "Pinned image tag" } input name="pinned_image_tag" value=(v.pinned_image_tag) class=(dashboard_input()); }
+        div class="space-y-2" { label for="oci_image_owner" class="text-sm font-medium" { "OCI image owner" } input id="oci_image_owner" name="oci_image_owner" value=(v.oci_image_owner) class=(dashboard_input()); }
+        div class="space-y-2" { label for="oci_image_name" class="text-sm font-medium" { "OCI image name" } input id="oci_image_name" name="oci_image_name" value=(v.oci_image_name) class=(dashboard_input()); }
+        div class="space-y-2" { label for="pinned_image_tag" class="text-sm font-medium" { "Pinned image tag" } input id="pinned_image_tag" name="pinned_image_tag" value=(v.pinned_image_tag) class=(dashboard_input()); }
     }
 }
 
@@ -322,10 +322,10 @@ pub(super) fn application_form(
                 @if let Some(id) = identity {
                     (admin_block("Identity", None, html! {
                         div class="space-y-4" {
-                            div class="space-y-2" { label class="text-sm font-medium" { "Name" } input name="name" value=(id.name) required class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Slug" } input name="slug" value=(id.slug) required class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Display name" } input name="display_name" value=(id.display_name) required class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Container name" } input name="container_name" value=(id.container_name) required class=(dashboard_input()); }
+                            div class="space-y-2" { label for="name" class="text-sm font-medium" { "Name" } input id="name" name="name" value=(id.name) required class=(dashboard_input()); }
+                            div class="space-y-2" { label for="slug" class="text-sm font-medium" { "Slug" } input id="slug" name="slug" value=(id.slug) required class=(dashboard_input()); }
+                            div class="space-y-2" { label for="display_name" class="text-sm font-medium" { "Display name" } input id="display_name" name="display_name" value=(id.display_name) required class=(dashboard_input()); }
+                            div class="space-y-2" { label for="container_name" class="text-sm font-medium" { "Container name" } input id="container_name" name="container_name" value=(id.container_name) required class=(dashboard_input()); }
                         }
                     }))
                 }
@@ -603,8 +603,8 @@ fn app_danger_zone(id: &str, error: Option<&str>) -> Markup {
             div class="p-6 pt-0" {
                 @if let Some(e) = error { (error_box(e)) }
                 form method="post" action=(format!("/admin/applications/{id}/delete")) class="space-y-3 max-w-md mt-2" data-confirm="Permanently delete this application? This cannot be undone." {
-                    div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" placeholder="Enter your password to confirm" class=(dashboard_input()); }
-                    div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" placeholder="6-digit code" class=(dashboard_input()); }
+                    div class="space-y-2" { label for="password" class="text-sm font-medium" { "Password" } input id="password" name="password" type="password" placeholder="Enter your password to confirm" class=(dashboard_input()); }
+                    div class="space-y-2" { label for="totp_code" class="text-sm font-medium" { "Two-Factor Code" } input id="totp_code" name="totp_code" placeholder="6-digit code" class=(dashboard_input()); }
                     button type="submit" class=(button_class("destructive", "default", "")) { (icon("trash", "mr-2 h-4 w-4")) "Delete application" }
                 }
             }

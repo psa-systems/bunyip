@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::api::admin as admin_api;
 use crate::api::types::{AdminFeedbackDetail, FeedbackAttachmentMeta, FeedbackStatus};
 use crate::handlers::{admin_guard, admin_response};
-use crate::util::{relative_time, urlenc};
+use crate::util::{rel_time, urlenc};
 use crate::views::ui::{badge, button_class, error_box, icon, pager};
 use crate::web::{redirect_cookies, AppState};
 
@@ -240,7 +240,7 @@ pub(super) fn feedback_row(
                     p class="text-xs text-muted-foreground truncate" { "From: " (p) }
                 }
                 p class="text-sm text-muted-foreground truncate" { (f.message_excerpt) }
-                p class="text-xs text-muted-foreground" { (relative_time(&f.created_at)) }
+                p class="text-xs text-muted-foreground" { (rel_time(&f.created_at)) }
             }
             div class="flex items-center gap-3 shrink-0" {
                 (feedback_status_chip(&f.status))
@@ -649,7 +649,7 @@ pub(super) fn feedback_detail_view(f: &AdminFeedbackDetail, tab: FeedbackTab) ->
                     @if !f.attachments.is_empty() {
                         (feedback_attachments_view(&f.id, &f.attachments))
                     }
-                    div { h3 class="text-sm font-semibold" { "Received" } p class="text-sm text-muted-foreground" { (relative_time(&f.created_at)) } }
+                    div { h3 class="text-sm font-semibold" { "Received" } p class="text-sm text-muted-foreground" { (rel_time(&f.created_at)) } }
                     // BUNYIP-411: request metadata for spam tracing. Shown only
                     // when captured (dev / direct-hit submissions resolve no
                     // forwarded IP). Maud escapes both values.
@@ -703,7 +703,7 @@ pub(super) fn feedback_detail_view(f: &AdminFeedbackDetail, tab: FeedbackTab) ->
                     @let existing_response = f.admin_response.as_deref().map(str::trim).filter(|s| !s.is_empty());
                     @if existing_response.is_some() {
                         @if let Some(at) = &f.responded_at {
-                            p class="text-xs text-muted-foreground" { "Sent " (relative_time(at)) }
+                            p class="text-xs text-muted-foreground" { "Sent " (rel_time(at)) }
                         }
                     }
                     form method="post" action=(format!("/admin/feedback/{}/respond", f.id)) class="space-y-3" {
@@ -819,7 +819,7 @@ pub async fn feedback_archive(
                                     }
                                     p class="text-sm text-muted-foreground truncate" { (a.message_excerpt) }
                                     p class="text-xs text-muted-foreground" {
-                                        "Archived " (relative_time(&a.archived_at))
+                                        "Archived " (rel_time(&a.archived_at))
                                         @if let Some(orig) = &a.original_status {
                                             " · was " (orig)
                                         }

@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::api::admin as admin_api;
 use crate::api::types::{AdminRateLimit, AdminRateLimitConfig};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
-use crate::util::{relative_time, urlenc};
+use crate::util::{rel_time, urlenc};
 use crate::views::ui::{badge, button_class, error_box, icon, pager};
 use crate::web::{redirect_cookies, AppState};
 
@@ -66,7 +66,7 @@ pub(super) fn rate_limit_row(rl: &AdminRateLimit, return_user: Option<&str>) -> 
                         p class="text-xs text-muted-foreground font-mono break-all" { (sub) }
                     }
                     p class="text-xs text-muted-foreground" {
-                        "Window started " (relative_time(&rl.window_start)) " • retry in " (fmt_retry_secs(rl.retry_after))
+                        "Window started " (rel_time(&rl.window_start)) " • retry in " (fmt_retry_secs(rl.retry_after))
                     }
                 }
             }
@@ -124,8 +124,8 @@ fn rate_limit_config_row(cfg: &AdminRateLimitConfig, editable: bool) -> Markup {
                 div class="flex items-end gap-2 shrink-0" {
                     form method="post" action="/admin/rate-limits/config" class="flex items-end gap-2" {
                         input type="hidden" name="action" value=(cfg.action);
-                        div class="space-y-1" { label class="text-xs text-muted-foreground" { "Requests" } input name="max_requests" type="number" min="1" max=(MAX_LIMIT_REQUESTS) value=(cfg.max_requests) class=(format!("{} w-28", dashboard_input())); }
-                        div class="space-y-1" { label class="text-xs text-muted-foreground" { "Window (s)" } input name="window_seconds" type="number" min="1" max=(MAX_LIMIT_WINDOW_SECS) value=(cfg.window_seconds) class=(format!("{} w-28", dashboard_input())); }
+                        div class="space-y-1" { label for=(format!("max_requests-{}", cfg.action)) class="text-xs text-muted-foreground" { "Requests" } input id=(format!("max_requests-{}", cfg.action)) name="max_requests" type="number" min="1" max=(MAX_LIMIT_REQUESTS) value=(cfg.max_requests) class=(format!("{} w-28", dashboard_input())); }
+                        div class="space-y-1" { label for=(format!("window_seconds-{}", cfg.action)) class="text-xs text-muted-foreground" { "Window (s)" } input id=(format!("window_seconds-{}", cfg.action)) name="window_seconds" type="number" min="1" max=(MAX_LIMIT_WINDOW_SECS) value=(cfg.window_seconds) class=(format!("{} w-28", dashboard_input())); }
                         button type="submit" class=(button_class("default", "sm", "")) { "Save" }
                     }
                     @if cfg.overridden {

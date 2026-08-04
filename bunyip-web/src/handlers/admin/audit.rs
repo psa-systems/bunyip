@@ -9,7 +9,7 @@ use serde::Deserialize;
 use crate::api::admin as admin_api;
 use crate::api::types::AdminAuditLog;
 use crate::handlers::{admin_guard, admin_response};
-use crate::util::relative_time;
+use crate::util::rel_time;
 use crate::views::ui::{badge, button_class, error_box, icon, pager};
 use crate::web::AppState;
 
@@ -48,7 +48,7 @@ fn audit_row(log: &AdminAuditLog) -> Markup {
                     }
                 }
             }
-            p class="text-sm text-muted-foreground whitespace-nowrap" { (relative_time(&log.created_at)) }
+            p class="text-sm text-muted-foreground whitespace-nowrap" { (rel_time(&log.created_at)) }
         }
     }
 }

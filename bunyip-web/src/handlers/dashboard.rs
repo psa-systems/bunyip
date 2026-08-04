@@ -17,7 +17,7 @@ use crate::api::types::{
     TwoFactorSetupResponse, User,
 };
 use crate::handlers::{dashboard_response, guard, needs_onboarding, password_ok, rotating_index};
-use crate::util::{app_gradient, days_until, has_active_membership, urlenc};
+use crate::util::{app_gradient, days_until, has_active_membership, rel_time, urlenc};
 use crate::views::ui::{badge, button_class, error_box, icon, pager, success_box};
 use crate::web::{redirect_cookies, AppState};
 
@@ -1319,9 +1319,9 @@ pub async fn settings(
                     (crate::views::avatar_picker::avatar_picker(&user))
                 }
                 form method="post" action="/settings/profile" class="space-y-4 max-w-md" {
-                    div class="space-y-2" { label class="text-sm font-medium" { "First Name" } input name="first_name" type="text" maxlength="64" value=(user.first_name.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
-                    div class="space-y-2" { label class="text-sm font-medium" { "Last Name" } input name="last_name" type="text" maxlength="64" value=(user.last_name.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
-                    div class="space-y-2" { label class="text-sm font-medium" { "Phone " span class="text-xs text-muted-foreground" { "(optional)" } } input name="phone" type="tel" maxlength="64" value=(user.phone.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label for="first_name" class="text-sm font-medium" { "First Name" } input id="first_name" name="first_name" type="text" maxlength="64" value=(user.first_name.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label for="last_name" class="text-sm font-medium" { "Last Name" } input id="last_name" name="last_name" type="text" maxlength="64" value=(user.last_name.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label for="phone" class="text-sm font-medium" { "Phone " span class="text-xs text-muted-foreground" { "(optional)" } } input id="phone" name="phone" type="tel" maxlength="64" value=(user.phone.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
                     p class="text-xs text-muted-foreground" { "Apps that connect to your Bunyip account can request these fields. You will be asked to confirm before any new app sees them." }
                     button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-teal-500 text-white border-0")) { "Save Profile" }
                 }
@@ -1340,9 +1340,9 @@ pub async fn settings(
                     // chars / RFC 5321 max, required + type=email for the
                     // browser's own shape check). Authoritative validation
                     // is still in `services::auth::request_email_change`.
-                    div class="space-y-2" { label class="text-sm font-medium" { "New Email Address" } input name="new_email" type="email" value="" autocomplete="off" maxlength="254" required placeholder="Enter your new email" class=(crate::handlers::dashboard_input()); }
-                    div class="space-y-2" { label class="text-sm font-medium" { "Current Password" } input name="current_password" type="password" autocomplete="off" required placeholder="Enter your current password" class=(crate::handlers::dashboard_input()); }
-                    @if twofa_enabled { div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
+                    div class="space-y-2" { label for="new_email" class="text-sm font-medium" { "New Email Address" } input id="new_email" name="new_email" type="email" value="" autocomplete="off" maxlength="254" required placeholder="Enter your new email" class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label for="email-current_password" class="text-sm font-medium" { "Current Password" } input id="email-current_password" name="current_password" type="password" autocomplete="off" required placeholder="Enter your current password" class=(crate::handlers::dashboard_input()); }
+                    @if twofa_enabled { div class="space-y-2" { label for="email-totp_code" class="text-sm font-medium" { "Two-Factor Code" } input id="email-totp_code" name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
                     button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-teal-500 text-white border-0")) { "Change Email" }
                 }
             }))
@@ -1353,10 +1353,10 @@ pub async fn settings(
             // updated credential after submit.
             (settings_card("lock", "from-indigo-500 to-teal-500", "Change Password", html! {
                 form method="post" action="/settings/password" class="space-y-4 max-w-md" {
-                    div class="space-y-2" { label class="text-sm font-medium" { "Current Password" } input name="current_password" type="password" autocomplete="current-password" class=(crate::handlers::dashboard_input()); }
-                    div class="space-y-2" { label class="text-sm font-medium" { "New Password" } input name="new_password" type="password" autocomplete="new-password" class=(crate::handlers::dashboard_input()); }
-                    div class="space-y-2" { label class="text-sm font-medium" { "Confirm Password" } input name="confirm" type="password" autocomplete="new-password" class=(crate::handlers::dashboard_input()); }
-                    @if twofa_enabled { div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
+                    div class="space-y-2" { label for="password-current_password" class="text-sm font-medium" { "Current Password" } input id="password-current_password" name="current_password" type="password" autocomplete="current-password" class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label for="new_password" class="text-sm font-medium" { "New Password" } input id="new_password" name="new_password" type="password" autocomplete="new-password" class=(crate::handlers::dashboard_input()); }
+                    div class="space-y-2" { label for="confirm" class="text-sm font-medium" { "Confirm Password" } input id="confirm" name="confirm" type="password" autocomplete="new-password" class=(crate::handlers::dashboard_input()); }
+                    @if twofa_enabled { div class="space-y-2" { label for="password-totp_code" class="text-sm font-medium" { "Two-Factor Code" } input id="password-totp_code" name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
                     button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Update Password" }
                 }
             }))
@@ -1368,8 +1368,8 @@ pub async fn settings(
                         div class="flex items-center gap-2" { (icon("shield-check", "h-5 w-5 text-teal-600 dark:text-teal-400")) span class="font-medium" { "Enabled" } (badge("success", "Active")) }
                         @if !is_admin {
                             form method="post" action="/settings/2fa/disable" class="space-y-2 max-w-md" {
-                                div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" class=(crate::handlers::dashboard_input()); }
-                                div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); }
+                                div class="space-y-2" { label for="disable-2fa-password" class="text-sm font-medium" { "Password" } input id="disable-2fa-password" name="password" type="password" class=(crate::handlers::dashboard_input()); }
+                                div class="space-y-2" { label for="disable-2fa-totp_code" class="text-sm font-medium" { "Two-Factor Code" } input id="disable-2fa-totp_code" name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); }
                                 button type="submit" class=(button_class("outline", "sm", "text-destructive-text hover:text-destructive-text")) { (icon("shield-off", "mr-2 h-4 w-4")) "Disable 2FA" }
                             }
                         } @else { p class="text-xs text-muted-foreground" { "Admin accounts cannot disable two-factor authentication." } }
@@ -1416,8 +1416,8 @@ pub async fn settings(
                     // surface a freshly-arrived SMS / TOTP code from a sibling
                     // tab WITHOUT pre-filling the password field.
                     form method="post" action="/settings/account/delete" autocomplete="off" class="space-y-3 max-w-md" data-confirm="Permanently delete your account AND all of your data in Mokosh and any other connected app? This cannot be undone." {
-                        div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" autocomplete="off" placeholder="Enter your password to confirm" class=(crate::handlers::dashboard_input()); }
-                        @if user.two_factor_enabled { div class="space-y-2" { label class="text-sm font-medium" { "Two-Factor Code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
+                        div class="space-y-2" { label for="delete-account-password" class="text-sm font-medium" { "Password" } input id="delete-account-password" name="password" type="password" autocomplete="off" placeholder="Enter your password to confirm" class=(crate::handlers::dashboard_input()); }
+                        @if user.two_factor_enabled { div class="space-y-2" { label for="delete-account-totp_code" class="text-sm font-medium" { "Two-Factor Code" } input id="delete-account-totp_code" name="totp_code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
                         button type="submit" class=(button_class("destructive", "default", "")) { (icon("trash", "mr-2 h-4 w-4")) "Delete My Account" }
                     }
                 }
@@ -1435,28 +1435,6 @@ fn settings_card(icon_name: &str, gradient: &str, title: &str, body: Markup) -> 
             }
             div class="p-6 pt-0" { (body) }
         }
-    }
-}
-
-/// Human "time ago" from an ISO-8601 timestamp; falls back to the date prefix
-/// if the value does not parse.
-fn time_ago(iso: &str) -> String {
-    match chrono::DateTime::parse_from_rfc3339(iso) {
-        Ok(t) => {
-            let secs = (chrono::Utc::now() - t.with_timezone(&chrono::Utc))
-                .num_seconds()
-                .max(0);
-            if secs < 60 {
-                "just now".to_string()
-            } else if secs < 3600 {
-                format!("{} min ago", secs / 60)
-            } else if secs < 86_400 {
-                format!("{} hr ago", secs / 3600)
-            } else {
-                format!("{} days ago", secs / 86_400)
-            }
-        }
-        Err(_) => iso.chars().take(10).collect(),
     }
 }
 
@@ -1489,7 +1467,7 @@ fn sessions_card_body(
                             }
                             p class="text-sm text-muted-foreground" {
                                 @if let Some(ip) = &s.ip_address { (ip) " · " }
-                                "last active " (time_ago(s.last_used_at.as_deref().unwrap_or(&s.created_at)))
+                                "last active " (rel_time(s.last_used_at.as_deref().unwrap_or(&s.created_at)))
                             }
                         }
                         @if !s.current {
@@ -1566,7 +1544,7 @@ fn trusted_devices_card_body(
                             p class="font-medium truncate" { (d.label.as_deref().unwrap_or("Unknown device")) }
                             p class="text-sm text-muted-foreground" {
                                 @if let Some(ip) = &d.ip_address { (ip) " · " }
-                                "added " (time_ago(&d.created_at))
+                                "added " (rel_time(&d.created_at))
                             }
                         }
                         form method="post" action=(format!("/settings/trusted-devices/{}/revoke", urlenc(&d.id))) {
@@ -2119,7 +2097,7 @@ fn twofa_qr_view(
                         // still domain-side via `services::totp::verify_code`.
                         // BUNYIP-331: data-otp-autosubmit submits this
                         // single-field form once the six-digit code is complete.
-                        div class="space-y-2" { label class="text-sm font-medium" { "Verification Code" } input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000000" autocomplete="one-time-code" data-otp-autosubmit class=(crate::handlers::dashboard_input()); }
+                        div class="space-y-2" { label for="code" class="text-sm font-medium" { "Verification Code" } input id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000000" autocomplete="one-time-code" data-otp-autosubmit class=(crate::handlers::dashboard_input()); }
                         button type="submit" class=(button_class("default", "default", "w-full")) { (button) }
                     }
                 }
@@ -2218,7 +2196,7 @@ fn twofa_recovery_form(err: Option<&str>) -> Markup {
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="p-6" {
                     form method="post" action="/settings/2fa/recovery-codes" class="space-y-4 max-w-md" {
-                        div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" autocomplete="current-password" required class=(crate::handlers::dashboard_input()); }
+                        div class="space-y-2" { label for="password" class="text-sm font-medium" { "Password" } input id="password" name="password" type="password" autocomplete="current-password" required class=(crate::handlers::dashboard_input()); }
                         div class="flex gap-2" {
                             button type="submit" class=(button_class("default", "default", "")) { (icon("key", "mr-2 h-4 w-4")) "Regenerate codes" }
                             a href="/settings" class=(button_class("outline", "default", "")) { "Cancel" }
@@ -2299,8 +2277,8 @@ fn twofa_rekey_stepup_form(err: Option<&str>) -> Markup {
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="p-6" {
                     form method="post" action="/settings/2fa/rekey" class="space-y-4 max-w-md" {
-                        div class="space-y-2" { label class="text-sm font-medium" { "Password" } input name="password" type="password" autocomplete="current-password" required class=(crate::handlers::dashboard_input()); }
-                        div class="space-y-2" { label class="text-sm font-medium" { "Current two-factor code" } input name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit or recovery code" class=(crate::handlers::dashboard_input()); }
+                        div class="space-y-2" { label for="password" class="text-sm font-medium" { "Password" } input id="password" name="password" type="password" autocomplete="current-password" required class=(crate::handlers::dashboard_input()); }
+                        div class="space-y-2" { label for="totp_code" class="text-sm font-medium" { "Current two-factor code" } input id="totp_code" name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit or recovery code" class=(crate::handlers::dashboard_input()); }
                         div class="flex gap-2" {
                             button type="submit" class=(button_class("default", "default", "")) { (icon("shield", "mr-2 h-4 w-4")) "Continue" }
                             a href="/settings" class=(button_class("outline", "default", "")) { "Cancel" }
@@ -2322,7 +2300,7 @@ fn twofa_rekey_code_form(err: Option<&str>) -> Markup {
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
                 div class="p-6 space-y-4" {
                     form method="post" action="/settings/2fa/rekey/confirm" class="space-y-4" {
-                        div class="space-y-2" { label class="text-sm font-medium" { "Verification Code" } input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000000" autocomplete="one-time-code" data-otp-autosubmit class=(crate::handlers::dashboard_input()); }
+                        div class="space-y-2" { label for="code" class="text-sm font-medium" { "Verification Code" } input id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000000" autocomplete="one-time-code" data-otp-autosubmit class=(crate::handlers::dashboard_input()); }
                         button type="submit" class=(button_class("default", "default", "w-full")) { "Confirm new authenticator" }
                     }
                     p class="text-xs text-muted-foreground" { "Need the QR code again? " a href="/settings/2fa/rekey" class="underline" { "Restart the reset" } "." }

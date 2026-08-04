@@ -77,8 +77,8 @@ pub(super) fn auto_ban_settings_content(
                             Some(&format!("When a source IP earns a ban. Values sourced from {}.", c.source)),
                             html! {
                                 div class="space-y-4" {
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Strike threshold" } input name="threshold" type="number" min="1" max=(MAX_AUTO_BAN_THRESHOLD) value=(values.threshold) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Suspicious requests from one IP before it is banned." } }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Strike window (seconds)" } input name="window_secs" type="number" min="1" max=(MAX_AUTO_BAN_WINDOW_SECS) value=(values.window_secs) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Rolling window over which strikes accumulate." } }
+                                    div class="space-y-2" { label for="threshold" class="text-sm font-medium" { "Strike threshold" } input id="threshold" name="threshold" type="number" min="1" max=(MAX_AUTO_BAN_THRESHOLD) value=(values.threshold) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Suspicious requests from one IP before it is banned." } }
+                                    div class="space-y-2" { label for="window_secs" class="text-sm font-medium" { "Strike window (seconds)" } input id="window_secs" name="window_secs" type="number" min="1" max=(MAX_AUTO_BAN_WINDOW_SECS) value=(values.window_secs) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Rolling window over which strikes accumulate." } }
                                 }
                             },
                         ),
@@ -88,13 +88,13 @@ pub(super) fn auto_ban_settings_content(
                             html! {
                                 div class="space-y-4" {
                                     div class="space-y-2" {
-                                        label class="text-sm font-medium" { "Auto-ban" }
-                                        select name="enabled" class=(dashboard_input()) {
+                                        label for="enabled" class="text-sm font-medium" { "Auto-ban" }
+                                        select id="enabled" name="enabled" class=(dashboard_input()) {
                                             option value="true" selected[values.enabled] { "Enabled" }
                                             option value="false" selected[!values.enabled] { "Disabled" }
                                         }
                                     }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Ban duration (seconds)" } input name="ban_duration_secs" type="number" min="1" max=(MAX_AUTO_BAN_DURATION_SECS) value=(values.ban_duration_secs) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "How long a ban lasts before it expires." } }
+                                    div class="space-y-2" { label for="ban_duration_secs" class="text-sm font-medium" { "Ban duration (seconds)" } input id="ban_duration_secs" name="ban_duration_secs" type="number" min="1" max=(MAX_AUTO_BAN_DURATION_SECS) value=(values.ban_duration_secs) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "How long a ban lasts before it expires." } }
                                 }
                             },
                         ),

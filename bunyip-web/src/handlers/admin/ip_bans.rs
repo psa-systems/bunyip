@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::api::admin as admin_api;
 use crate::api::types::{AdminIpBan, IpEnrichment};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
-use crate::util::{relative_time, urlenc};
+use crate::util::{rel_time, urlenc};
 use crate::views::ui::{badge, button_class, error_box, icon};
 use crate::web::{redirect_cookies, AppState};
 
@@ -32,7 +32,7 @@ pub(super) fn ip_ban_row(b: &AdminIpBan) -> Markup {
                     }
                     p class="text-sm text-muted-foreground break-words" { (b.reason) }
                     p class="text-xs text-muted-foreground" {
-                        "Banned " (relative_time(&b.banned_at)) " • expires " (relative_time(&b.expires_at))
+                        "Banned " (rel_time(&b.banned_at)) " • expires " (rel_time(&b.expires_at))
                     }
                 }
             }
@@ -64,9 +64,9 @@ pub(super) fn ip_ban_add_card(prefill_ip: Option<&str>) -> Markup {
             }
             div class="p-6 pt-0" {
                 form method="post" action="/admin/ip-bans/add" class="grid gap-4 sm:grid-cols-4 sm:items-end" {
-                    div class="space-y-2 sm:col-span-1" { label class="text-sm font-medium" { "IP address" } input name="ip" required placeholder="203.0.113.7" value=(prefill_ip.unwrap_or_default()) class=(dashboard_input()); }
-                    div class="space-y-2 sm:col-span-2" { label class="text-sm font-medium" { "Reason" } input name="reason" required maxlength="255" placeholder="Credential stuffing" class=(dashboard_input()); }
-                    div class="space-y-2" { label class="text-sm font-medium" { "Duration (seconds)" } input name="duration_secs" type="number" min=(MIN_MANUAL_BAN_SECS) max=(MAX_MANUAL_BAN_SECS) value=(DEFAULT_MANUAL_BAN_SECS) class=(dashboard_input()); }
+                    div class="space-y-2 sm:col-span-1" { label for="ip" class="text-sm font-medium" { "IP address" } input id="ip" name="ip" required placeholder="203.0.113.7" value=(prefill_ip.unwrap_or_default()) class=(dashboard_input()); }
+                    div class="space-y-2 sm:col-span-2" { label for="reason" class="text-sm font-medium" { "Reason" } input id="reason" name="reason" required maxlength="255" placeholder="Credential stuffing" class=(dashboard_input()); }
+                    div class="space-y-2" { label for="duration_secs" class="text-sm font-medium" { "Duration (seconds)" } input id="duration_secs" name="duration_secs" type="number" min=(MIN_MANUAL_BAN_SECS) max=(MAX_MANUAL_BAN_SECS) value=(DEFAULT_MANUAL_BAN_SECS) class=(dashboard_input()); }
                     div class="sm:col-span-4" { button type="submit" class=(button_class("default", "default", "")) { (icon("shield-off", "mr-2 h-4 w-4")) "Ban address" } }
                 }
             }

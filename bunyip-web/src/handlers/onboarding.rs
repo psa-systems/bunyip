@@ -184,10 +184,10 @@ fn onboarding_content(user: &User, error: Option<&str>, ok: Option<&str>) -> Mar
             (step_card("user-cog", "from-primary to-indigo-500", "Tell us your name", name_done, html! {
                 form method="post" action="/onboarding" class="space-y-4" {
                     div class="grid gap-4 sm:grid-cols-2" {
-                        div class="space-y-2" { label class="text-sm font-medium" { "First name" } input name="first_name" type="text" required maxlength="64" value=(user.first_name.as_deref().unwrap_or("")) class=(dashboard_input()); }
-                        div class="space-y-2" { label class="text-sm font-medium" { "Last name" } input name="last_name" type="text" required maxlength="64" value=(user.last_name.as_deref().unwrap_or("")) class=(dashboard_input()); }
+                        div class="space-y-2" { label for="first_name" class="text-sm font-medium" { "First name" } input id="first_name" name="first_name" type="text" required maxlength="64" value=(user.first_name.as_deref().unwrap_or("")) class=(dashboard_input()); }
+                        div class="space-y-2" { label for="last_name" class="text-sm font-medium" { "Last name" } input id="last_name" name="last_name" type="text" required maxlength="64" value=(user.last_name.as_deref().unwrap_or("")) class=(dashboard_input()); }
                     }
-                    div class="space-y-2" { label class="text-sm font-medium" { "Phone " span class="text-xs text-muted-foreground" { "(optional)" } } input name="phone" type="tel" maxlength="64" value=(user.phone.as_deref().unwrap_or("")) class=(dashboard_input()); }
+                    div class="space-y-2" { label for="phone" class="text-sm font-medium" { "Phone " span class="text-xs text-muted-foreground" { "(optional)" } } input id="phone" name="phone" type="tel" maxlength="64" value=(user.phone.as_deref().unwrap_or("")) class=(dashboard_input()); }
                     button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Save and continue" }
                 }
             }))

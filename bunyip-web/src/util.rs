@@ -1,6 +1,7 @@
 //! Small shared helpers ported from `src/lib/utils.ts`.
 
 use chrono::{DateTime, Utc};
+use maud::{html, Markup};
 
 use crate::api::types::{Application, MembershipStatus, User, UserRole};
 
@@ -82,6 +83,25 @@ pub fn relative_time(iso: &str) -> String {
     }
     let y = days / 365;
     format!("{y} year{} ago", if y == 1 { "" } else { "s" })
+}
+
+/// Format an ISO-8601 timestamp as a compact absolute time for the `title`
+/// tooltip on a relative timestamp. Falls back to the raw string when it does
+/// not parse.
+fn abs_time(iso: &str) -> String {
+    DateTime::parse_from_rfc3339(iso)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|_| iso.to_string())
+}
+
+/// Render an ISO-8601 timestamp as a `<time>` element (BUNYIP-466 F23): a
+/// machine-readable `datetime`, an absolute-time `title` tooltip, and the coarse
+/// `relative_time` string as the visible text. Single source for relative
+/// timestamps across the dashboard/admin views.
+pub fn rel_time(iso: &str) -> Markup {
+    html! {
+        time datetime=(iso) title=(abs_time(iso)) { (relative_time(iso)) }
+    }
 }
 
 /// Percent-encode a string for a URL query value (single source for the BFF).

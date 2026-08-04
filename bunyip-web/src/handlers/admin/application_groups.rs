@@ -80,16 +80,16 @@ pub(super) fn group_form(
                 (admin_block_grid(vec![
                     admin_block("Identity", None, html! {
                         div class="space-y-4" {
-                            div class="space-y-2" { label class="text-sm font-medium" { "Name" } input name="name" value=(name) required class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Slug" } input name="slug" value=(slug) required class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Display name" } input name="display_name" value=(display_name) required class=(dashboard_input()); }
+                            div class="space-y-2" { label for="name" class="text-sm font-medium" { "Name" } input id="name" name="name" value=(name) required class=(dashboard_input()); }
+                            div class="space-y-2" { label for="slug" class="text-sm font-medium" { "Slug" } input id="slug" name="slug" value=(slug) required class=(dashboard_input()); }
+                            div class="space-y-2" { label for="display_name" class="text-sm font-medium" { "Display name" } input id="display_name" name="display_name" value=(display_name) required class=(dashboard_input()); }
                         }
                     }),
                     admin_block("Presentation", None, html! {
                         div class="space-y-4" {
-                            div class="space-y-2" { label class="text-sm font-medium" { "Description" } input name="description" value=(description) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Icon URL" } input name="icon_url" value=(icon_url) class=(dashboard_input()); }
-                            div class="space-y-2" { label class="text-sm font-medium" { "Sort order" } input name="sort_order" type="number" value=(sort_order) class=(dashboard_input()); }
+                            div class="space-y-2" { label for="description" class="text-sm font-medium" { "Description" } input id="description" name="description" value=(description) class=(dashboard_input()); }
+                            div class="space-y-2" { label for="icon_url" class="text-sm font-medium" { "Icon URL" } input id="icon_url" name="icon_url" value=(icon_url) class=(dashboard_input()); }
+                            div class="space-y-2" { label for="sort_order" class="text-sm font-medium" { "Sort order" } input id="sort_order" name="sort_order" type="number" value=(sort_order) class=(dashboard_input()); }
                         }
                     }),
                 ]))
