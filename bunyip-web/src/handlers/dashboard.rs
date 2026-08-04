@@ -65,7 +65,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                             div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-indigo-500" {
                                 (icon("credit-card", "h-4 w-4 text-white"))
                             }
-                            h3 class="text-lg font-semibold leading-none tracking-tight" { "Membership" }
+                            h3 class="text-2xl font-semibold leading-none tracking-tight" { "Membership" }
                         }
                         (membership_badge(&user))
                     }
@@ -100,7 +100,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                     div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-teal-500" {
                         (icon("app-window", "h-4 w-4 text-white"))
                     }
-                    h2 class="text-xl font-semibold" { "Your Applications" }
+                    h2 class="text-xl font-semibold tracking-tight" { "Your Applications" }
                 }
                 div class="grid gap-4 lg:grid-cols-2" {
                     @for (i, app) in apps.iter().enumerate() {
@@ -109,7 +109,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                         div class="rounded-lg border bg-card text-card-foreground shadow-sm flex h-full flex-col border-border/50 transition-all hover:shadow-lg hover:shadow-indigo-500/5" {
                             div class="flex flex-col space-y-1.5 p-6" {
                                 div class="flex items-center justify-between" {
-                                    h3 class="text-lg font-semibold leading-none tracking-tight" { (app.display_name) }
+                                    h3 class="text-2xl font-semibold leading-none tracking-tight" { (app.display_name) }
                                     @if app.maintenance_mode { (badge("warning", "Maintenance")) }
                                     @else if app.is_accessible { (badge("success", "Active")) }
                                     @else { (badge("secondary", "Locked")) }
