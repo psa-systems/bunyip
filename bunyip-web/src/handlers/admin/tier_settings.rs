@@ -134,7 +134,7 @@ pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Re
         &c,
         &user,
         "/admin/tier-settings",
-        "Tier settings · Bunyip",
+        "Tier Settings · Bunyip",
         content,
     )
 }
@@ -268,7 +268,7 @@ pub async fn tier_settings_save(
         &c,
         &user,
         "/admin/tier-settings",
-        "Tier settings · Bunyip",
+        "Tier Settings · Bunyip",
         content,
     )
 }
