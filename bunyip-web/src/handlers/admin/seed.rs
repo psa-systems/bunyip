@@ -47,9 +47,9 @@ pub async fn seed_data(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let templates = admin_api::seed_templates(&st.api, c.forward.as_deref())
-        .await
-        .unwrap_or_default();
+    let data = admin_api::seed_templates(&st.api, c.forward.as_deref()).await;
+    let reachable = data.is_ok();
+    let templates = data.unwrap_or_default();
     let content = html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Seed Data" } p class="mt-2 text-muted-foreground" { "Export the current demo data as a canonical file, or import one to populate this environment. Import is disabled in production." } }
@@ -61,7 +61,9 @@ pub async fn seed_data(
                 }
                 div class="p-6 pt-0 space-y-4" {
                     p class="text-sm text-muted-foreground" { "Start empty and add your own data, or load a starter template below. Loading is idempotent and scoped to the reserved demo domain, so it only ever adds or refreshes demo rows." }
-                    @if templates.is_empty() {
+                    @if !reachable {
+                        (error_box("Could not reach the API to load seed templates."))
+                    } @else if templates.is_empty() {
                         p class="text-sm text-muted-foreground" { "No starter templates are available." }
                     } @else {
                         div class="grid gap-4 md:grid-cols-2" {

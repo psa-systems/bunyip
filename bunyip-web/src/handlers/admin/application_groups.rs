@@ -137,9 +137,9 @@ pub async fn application_groups(State(st): State<AppState>, headers: HeaderMap) 
         Ok(v) => v,
         Err(r) => return r,
     };
-    let groups = admin_api::application_groups(&st.api, c.forward.as_deref())
-        .await
-        .unwrap_or_default();
+    let data = admin_api::application_groups(&st.api, c.forward.as_deref()).await;
+    let reachable = data.is_ok();
+    let groups = data.unwrap_or_default();
     let content = html! {
         div class="space-y-6" {
             div class="flex items-center justify-between gap-4" {
@@ -148,22 +148,25 @@ pub async fn application_groups(State(st): State<AppState>, headers: HeaderMap) 
             }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="p-6 pt-0" {
-                    div class="divide-y" {
-                        @for g in &groups {
-                            div class="py-3 flex items-center justify-between gap-4" {
-                                div { p class="font-medium" { (g.display_name) } p class="text-xs text-muted-foreground" { (g.slug) } }
-                                div class="flex items-center gap-2" {
-                                    a href=(format!("/admin/application-groups/{}/edit", g.id)) class=(button_class("outline", "sm", "")) { "Edit" }
-                                    form method="post" action=(format!("/admin/application-groups/{}/delete", g.id)) data-confirm="Delete this application group? This cannot be undone." {
-                                        button type="submit" class=(button_class("outline", "sm", "")) { "Delete" }
+                    @if !reachable {
+                        (error_box("Could not reach the API to load application groups."))
+                    } @else if groups.is_empty() {
+                        // BUNYIP-415: center the empty state as a block.
+                        div class="flex flex-col items-center justify-center py-12 text-center text-muted-foreground" {
+                            (icon("layers", "h-8 w-8 mb-2 opacity-50")) "No groups yet"
+                        }
+                    } @else {
+                        div class="divide-y" {
+                            @for g in &groups {
+                                div class="py-3 flex items-center justify-between gap-4" {
+                                    div { p class="font-medium" { (g.display_name) } p class="text-xs text-muted-foreground" { (g.slug) } }
+                                    div class="flex items-center gap-2" {
+                                        a href=(format!("/admin/application-groups/{}/edit", g.id)) class=(button_class("outline", "sm", "")) { "Edit" }
+                                        form method="post" action=(format!("/admin/application-groups/{}/delete", g.id)) data-confirm="Delete this application group? This cannot be undone." {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Delete" }
+                                        }
                                     }
                                 }
-                            }
-                        }
-                        @if groups.is_empty() {
-                            // BUNYIP-415: center the empty state as a block.
-                            div class="flex flex-col items-center justify-center py-12 text-center text-muted-foreground" {
-                                (icon("layers", "h-8 w-8 mb-2 opacity-50")) "No groups yet"
                             }
                         }
                     }
@@ -249,12 +252,18 @@ pub async fn application_group_edit(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let groups = admin_api::application_groups(&st.api, c.forward.as_deref())
-        .await
-        .unwrap_or_default();
+    let data = admin_api::application_groups(&st.api, c.forward.as_deref()).await;
+    let reachable = data.is_ok();
+    let groups = data.unwrap_or_default();
     let content = match groups.iter().find(|g| g.id == id) {
         None => {
-            html! { div class="space-y-6" { h1 class="text-3xl font-bold" { "Edit group" } p class="text-muted-foreground" { "Group not found." } } }
+            html! { div class="space-y-6" { h1 class="text-3xl font-bold" { "Edit group" }
+                @if !reachable {
+                    (error_box("Could not reach the API to load application groups."))
+                } @else {
+                    p class="text-muted-foreground" { "Group not found." }
+                }
+            } }
         }
         Some(g) => group_form(
             &format!("/admin/application-groups/{id}"),

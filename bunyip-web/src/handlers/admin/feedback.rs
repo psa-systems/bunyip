@@ -12,7 +12,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::{AdminFeedbackDetail, FeedbackAttachmentMeta, FeedbackStatus};
 use crate::handlers::{admin_guard, admin_response};
 use crate::util::{relative_time, urlenc};
-use crate::views::ui::{badge, button_class, icon};
+use crate::views::ui::{badge, button_class, error_box, icon};
 use crate::web::{redirect_cookies, AppState};
 
 use super::pager;
@@ -142,6 +142,7 @@ async fn render_feedback_list(
     let data = admin_api::feedback(&st.api, c.forward.as_deref(), page, 20, tab.bucket())
         .await
         .ok();
+    let reachable = data.is_some();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
     let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
 
@@ -162,11 +163,16 @@ async fn render_feedback_list(
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { (section_title) } }
                 div class="p-6 pt-0" {
-                    div class="divide-y" {
-                        @for f in &items {
-                            (feedback_row(f, tab))
+                    @if !reachable {
+                        (error_box("Could not reach the API to load feedback."))
+                    } @else if items.is_empty() {
+                        p class="text-center text-muted-foreground py-8" { (empty_msg) }
+                    } @else {
+                        div class="divide-y" {
+                            @for f in &items {
+                                (feedback_row(f, tab))
+                            }
                         }
-                        @if items.is_empty() { p class="text-center text-muted-foreground py-8" { (empty_msg) } }
                     }
                     (pager(tab.path(), page, total_pages))
                 }
@@ -779,6 +785,7 @@ pub async fn feedback_archive(
     let data = admin_api::feedback_archive(&st.api, c.forward.as_deref(), page, 20)
         .await
         .ok();
+    let reachable = data.is_some();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
     let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
 
@@ -792,6 +799,9 @@ pub async fn feedback_archive(
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Archived" } }
                 div class="p-6 pt-0" {
+                    @if !reachable {
+                        (error_box("Could not reach the API to load archived feedback."))
+                    } @else {
                     div class="divide-y" {
                         @for a in &items {
                             @let name = a.name.clone().filter(|s| !s.trim().is_empty());
@@ -826,6 +836,7 @@ pub async fn feedback_archive(
                         @if items.is_empty() { p class="text-center text-muted-foreground py-8" { "Archive is empty" } }
                     }
                     (pager("/admin/feedback/archive", page, total_pages))
+                    }
                 }
             }
         }
