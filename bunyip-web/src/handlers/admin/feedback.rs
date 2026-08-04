@@ -187,7 +187,7 @@ async fn render_feedback_list(
 /// two admin lists read the same (BUNYIP-422).
 fn feedback_status_chip(status: &FeedbackStatus) -> Markup {
     let (classes, icon_name, label) = match status {
-        FeedbackStatus::New => ("text-yellow-600", "alert-circle", "New"),
+        FeedbackStatus::New => ("text-amber-700 dark:text-amber-400", "alert-circle", "New"),
         FeedbackStatus::Reviewed => (
             "text-teal-600 dark:text-teal-400",
             "check-circle",

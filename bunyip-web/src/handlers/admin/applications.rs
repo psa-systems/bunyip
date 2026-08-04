@@ -590,9 +590,9 @@ pub async fn application_edit(
 /// both fields are collected and posted to the delete handler.
 fn app_danger_zone(id: &str, error: Option<&str>) -> Markup {
     html! {
-        div class="rounded-lg border bg-card text-card-foreground shadow-sm border-red-200 dark:border-red-900 mt-8" {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm border-destructive/30 mt-8" {
             div class="flex flex-col space-y-1.5 p-6" {
-                h3 class="text-2xl font-semibold leading-none tracking-tight text-red-600 dark:text-red-400 flex items-center gap-2" { (icon("alert-triangle", "h-5 w-5")) "Danger Zone" }
+                h3 class="text-2xl font-semibold leading-none tracking-tight text-destructive-text flex items-center gap-2" { (icon("alert-triangle", "h-5 w-5")) "Danger Zone" }
                 p class="text-sm text-muted-foreground" { "Permanently delete this application. Its entitlements, price links, and download caches are removed with it. This cannot be undone." }
             }
             div class="p-6 pt-0" {

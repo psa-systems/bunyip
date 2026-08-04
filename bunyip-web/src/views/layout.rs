@@ -548,7 +548,7 @@ fn profile_menu(user: &User) -> Markup {
                 a href="/settings" class="flex items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-accent hover:text-accent-foreground transition-colors" {
                     (icon("user", "h-4 w-4")) "Profile"
                 }
-                a href="/logout" class="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-accent transition-colors dark:text-red-400" {
+                a href="/logout" class="flex items-center gap-2 px-3 py-2 text-sm text-destructive-text hover:bg-accent transition-colors" {
                     (icon("log-out", "h-4 w-4")) "Log out"
                 }
             }
