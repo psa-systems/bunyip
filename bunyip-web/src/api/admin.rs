@@ -8,8 +8,8 @@ use super::types::{
     AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList, ArchivedFeedback,
     AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary,
     IpEnrichment, PaginatedResponse, RestoreReport, SeedTemplateInfo, SmtpTestResult,
-    StripeConfigResponse, StripePrice, StripeProduct, StripeWebhookEndpoint, TierConfigResponse,
-    UserEntitlement,
+    StripeConfigResponse, StripePrice, StripeProduct, StripeWebhookEndpoint, SystemHealth,
+    SystemHealthResponse, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -18,6 +18,13 @@ use crate::util::urlenc;
 
 pub async fn stats(api: &Api, cookie: Option<&str>) -> Result<AdminStatsResponse, ApiError> {
     parse(api.get("/admin/stats", cookie).await?)
+}
+
+/// System health (BUNYIP-474): used by the dashboard for the dataset-freshness
+/// card. Returns just the `health` block of `GET /v1/admin/health`.
+pub async fn system_health(api: &Api, cookie: Option<&str>) -> Result<SystemHealth, ApiError> {
+    let resp: SystemHealthResponse = parse(api.get("/admin/health", cookie).await?)?;
+    Ok(resp.health)
 }
 
 // --- users ------------------------------------------------------------------
