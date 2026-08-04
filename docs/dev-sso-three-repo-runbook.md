@@ -267,6 +267,23 @@ generate `secrets/oidc/dev-2026.pem`, recreate the api. Durable fix: `ensure-oid
 recipe (`feat/dev-ensure-oidc-keys`) + the existing `ensure-env` key generation.
 See 3.7.
 
+### 6.10 Audit log / access log shows a Docker IP, not the real client (BUNYIP-476)
+Symptom: an audited login's `actor_ip_address` (or the access-log IP) is a
+`172.x` / `10.x` container address, not the browser's public IP. Cause: the
+client IP travels the two-hop BFF path (Traefik -> bunyip-web -> bunyip-api), and
+each hop honours `X-Forwarded-For` only from a peer inside its trusted-proxy
+list. If bunyip-api's `TRUSTED_PROXY_CIDR` does not contain bunyip-web's
+container address (or bunyip-web's `WEB_TRUSTED_PROXY_CIDR` does not contain
+Traefik's), the forwarded IP is dropped and the socket peer (bunyip-web) is
+recorded instead. It is a config/topology condition, not a resolver bug:
+auto-ban's single-hop direct-to-API endpoints still resolve correctly, which is
+why they can disagree. Fix: keep the compose defaults
+(`172.16.0.0/12,10.0.0.0/8,192.168.0.0/16` on both), which already span the
+Docker/Traefik ranges; if you narrow them, keep bunyip-web's address in
+bunyip-api's `TRUSTED_PROXY_CIDR`. bunyip-api logs its posture once at boot (a
+`WARN` when `TRUSTED_PROXY_CIDR` is empty). Full walkthrough:
+`docs/client-ip-forwarding.md` (section "The audited-login path").
+
 ## 7. Troubleshooting quick-reference
 
 | Symptom | Most likely cause | Where |

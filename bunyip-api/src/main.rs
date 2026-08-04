@@ -67,6 +67,24 @@ async fn main() -> anyhow::Result<()> {
         "Starting bunyip-api"
     );
 
+    // BUNYIP-476: make the trusted-proxy posture visible at boot. With no
+    // trusted proxy, X-Forwarded-For is ignored and the socket peer is used - on
+    // the two-hop BFF path that is the bunyip-web container, so audited-login
+    // actor_ip_address, the access-log IP, and the per-IP rate-limit key are all
+    // attributed to bunyip-web instead of the real browser. That is safe but
+    // silent, and is the "audit records a Docker IP" symptom; surface it so a
+    // misconfiguration is diagnosable from the logs rather than the data.
+    if config.trusts_forwarded_client_ip() {
+        info!(
+            trusted_proxy_cidrs = config.trusted_proxies.len(),
+            "TRUSTED_PROXY_CIDR set; forwarded client IPs (audit, access log, rate limit) resolve to the real client behind a trusted proxy"
+        );
+    } else {
+        tracing::warn!(
+            "TRUSTED_PROXY_CIDR is empty: X-Forwarded-For is not trusted, so SSR-proxied client IPs (audit actor_ip_address, access log, per-IP rate limit) are attributed to the bunyip-web peer, not the real browser. Set TRUSTED_PROXY_CIDR to include bunyip-web's network address. See docs/client-ip-forwarding.md."
+        );
+    }
+
     // Create database connection pool
     let pool = PgPoolOptions::new()
         .max_connections(10)
