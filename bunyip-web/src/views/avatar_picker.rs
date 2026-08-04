@@ -49,7 +49,7 @@ pub const AVATAR_PICKER_CSS: &str = r#".avatar-slot__img{position:absolute;inset
 .avatar-picker__side{display:flex;flex-direction:column;gap:.25rem;min-width:0}
 .avatar-picker__actions{display:flex;flex-wrap:wrap;gap:.5rem}
 .avatar-picker__help{font-size:.75rem;color:hsl(var(--muted-foreground));margin:0}
-.avatar-picker__error{font-size:.75rem;color:hsl(var(--destructive));margin:0;min-height:1rem}
+.avatar-picker__error{font-size:.75rem;color:hsl(var(--destructive-text));margin:0;min-height:1rem}
 .avatar-picker__enhanced{display:none}
 .avatar-picker[data-enhanced] .avatar-picker__enhanced{display:inline-flex}
 .avatar-picker[data-enhanced] .avatar-picker__nojs{display:none}"#;
@@ -111,14 +111,14 @@ pub fn avatar_picker(user: &User) -> Markup {
                     // JS remove (confirm + delete without reload); hidden until
                     // an avatar exists.
                     button type="button"
-                           class=(button_class("ghost", "sm", "avatar-picker__enhanced text-destructive hover:text-destructive"))
+                           class=(button_class("ghost", "sm", "avatar-picker__enhanced text-destructive-text hover:text-destructive-text"))
                            data-avatar-remove data-has-avatar=(if has { "1" } else { "0" }) {
                         (icon("trash", "mr-2 h-4 w-4")) "Remove photo"
                     }
                     // No-JS remove form (hidden once enhanced), only when set.
                     @if has {
                         form method="post" action="/settings/avatar/remove" class="avatar-picker__nojs" {
-                            button type="submit" class=(button_class("ghost", "sm", "text-destructive hover:text-destructive")) {
+                            button type="submit" class=(button_class("ghost", "sm", "text-destructive-text hover:text-destructive-text")) {
                                 (icon("trash", "mr-2 h-4 w-4")) "Remove photo"
                             }
                         }

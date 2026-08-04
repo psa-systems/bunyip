@@ -244,7 +244,7 @@ fn clamp_msg(s: &str) -> String {
 /// Destructive inline error box (replaces the shadcn Alert for error display).
 pub fn error_box(msg: &str) -> Markup {
     html! {
-        div class="rounded-lg border border-destructive/50 p-3 text-sm text-destructive flex items-center gap-2" {
+        div class="rounded-lg border border-destructive/50 p-3 text-sm text-destructive-text flex items-center gap-2" {
             (icon("alert-circle", "h-4 w-4"))
             (clamp_msg(msg))
         }
