@@ -253,20 +253,20 @@ pub(super) fn stripe_catalog_section(
                     (admin_block_grid(vec![
                         admin_block("Free / lifetime", None, html! {
                             div class="space-y-4" {
-                                (field("Free price ID", "free_price_id", "price_...", &t.free_price_id))
-                                (field("Lifetime product ID", "lifetime_product_id", "prod_...", &t.lifetime_product_id))
+                                (field("Free price ID", "free_price_id", "price_…", &t.free_price_id))
+                                (field("Lifetime product ID", "lifetime_product_id", "prod_…", &t.lifetime_product_id))
                             }
                         }),
                         admin_block("Early adopter", None, html! {
                             div class="space-y-4" {
-                                (field("Early-adopter price ID", "early_adopter_price_id", "price_...", &t.early_adopter_price_id))
-                                (field("Early-adopter product ID", "early_adopter_product_id", "prod_...", &t.early_adopter_product_id))
+                                (field("Early-adopter price ID", "early_adopter_price_id", "price_…", &t.early_adopter_price_id))
+                                (field("Early-adopter product ID", "early_adopter_product_id", "prod_…", &t.early_adopter_product_id))
                             }
                         }),
                         admin_block("Standard", None, html! {
                             div class="space-y-4" {
-                                (field("Standard price ID", "standard_price_id", "price_...", &t.standard_price_id))
-                                (field("Standard product ID", "standard_product_id", "prod_...", &t.standard_product_id))
+                                (field("Standard price ID", "standard_price_id", "price_…", &t.standard_price_id))
+                                (field("Standard product ID", "standard_product_id", "prod_…", &t.standard_product_id))
                             }
                         }),
                     ]))

@@ -208,9 +208,11 @@ impl UsersQ {
 /// Grid column template shared by the header row and every data row so the
 /// columns line up. Inline (not a Tailwind arbitrary value) so it needs no
 /// stylesheet rebuild. Columns: avatar, email, tier, verification, joined,
-/// action.
+/// action. The `min-width` keeps the fixed columns from crushing on a narrow
+/// viewport; the header + list live in an `overflow-x-auto` wrapper so the grid
+/// scrolls inside its own card instead of the whole admin pane (BUNYIP-472 F26).
 const USERS_GRID: &str =
-    "grid-template-columns:2.25rem minmax(0,1fr) auto auto 8.5rem 1.5rem;display:grid;align-items:center;gap:0.75rem";
+    "grid-template-columns:2.25rem minmax(0,1fr) auto auto 8.5rem 1.5rem;display:grid;align-items:center;gap:0.75rem;min-width:42rem";
 
 pub async fn users(
     State(st): State<AppState>,
@@ -330,8 +332,9 @@ fn segmented_control(uq: &UsersQ) -> Markup {
 }
 
 /// A sortable column header. A link (no-JS: navigates; JS: swaps the panel), with
-/// Space-key activation added in `assets/js/admin-users.js` and a direction chevron on the
-/// active column.
+/// Space-key activation added in `assets/js/admin-users.js`, a direction chevron on the
+/// active column, and a dimmed up/down chevron on inactive columns so their
+/// sortability is cued at rest (BUNYIP-472 F17).
 fn sort_header(uq: &UsersQ, col: &str, label: &str) -> Markup {
     let active = uq.sort == col;
     let href = uq.with_sort(col).href();
@@ -342,6 +345,10 @@ fn sort_header(uq: &UsersQ, col: &str, label: &str) -> Markup {
             (label)
             @if active {
                 @if uq.dir == "asc" { (icon("chevron-up", "h-3.5 w-3.5")) } @else { (icon("chevron-down", "h-3.5 w-3.5")) }
+            } @else {
+                // BUNYIP-472 F17: dimmed up/down chevron cues that this column is
+                // sortable even before it becomes the active sort.
+                (icon("chevrons-up-down", "h-3.5 w-3.5 opacity-40"))
             }
         }
     }
@@ -599,6 +606,10 @@ pub(super) fn users_panel(
             // List. `relative` so the loading overlay can sit on top without
             // changing the container height (no jump).
             div class="relative px-6 pb-2" style="min-height:8rem" {
+                // BUNYIP-472 F26: the header row and the list share a fixed-column
+                // grid wider than a phone viewport, so scroll it inside this
+                // wrapper - a narrow screen scrolls the table, not the whole pane.
+                div class="overflow-x-auto" {
                 // Column header row (sortable Email / Tier / Verification / Joined).
                 div style=(USERS_GRID) class="border-b border-border/60 pb-2 mb-1" {
                     span {}
@@ -640,6 +651,7 @@ pub(super) fn users_panel(
                         }
                     }
                 }
+                } // end .overflow-x-auto wrapper (BUNYIP-472 F26)
                 // Loading overlay (skeleton rows). Shown by htmx via the
                 // `htmx-request` class while a swap is in flight; absolutely
                 // positioned so it never changes the panel height.

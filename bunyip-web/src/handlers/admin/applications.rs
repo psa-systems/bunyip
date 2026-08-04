@@ -981,7 +981,7 @@ pub async fn application_docs(
         .await
         .unwrap_or_default();
     let content = html! {
-        div class="space-y-8" {
+        div class="space-y-6" {
             div {
                 a class="text-sm text-muted-foreground hover:underline" href="/admin/applications" { "← Applications" }
                 h1 class="text-3xl font-bold mt-2" { "Documentation: " (app_name) }

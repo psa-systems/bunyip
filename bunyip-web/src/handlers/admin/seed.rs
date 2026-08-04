@@ -92,7 +92,7 @@ pub async fn seed_data(
                 admin_block("Import", None, html! {
                     p class="text-sm text-muted-foreground mb-4" { "Paste a canonical seed JSON file. The import is idempotent and scoped to the reserved demo domain, so it only ever adds or refreshes seed rows." }
                     form method="post" action="/admin/seed/import" class="space-y-4" {
-                        textarea name="seed_json" rows="12" required placeholder="{ \"version\": 1, ... }" class="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" {}
+                        textarea name="seed_json" rows="12" required placeholder="{ \"version\": 1, … }" class="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" {}
                         button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Import seed data" }
                     }
                 }),
