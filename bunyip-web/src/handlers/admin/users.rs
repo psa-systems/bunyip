@@ -924,7 +924,7 @@ pub(super) fn user_actions_card(target: &AdminUser, is_admin_target: bool) -> Ma
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
             div class="flex flex-col space-y-1.5 p-6 pb-2" {
-                h3 class="text-base font-semibold leading-none tracking-tight" { "Actions" }
+                h3 class="text-2xl font-semibold leading-none tracking-tight" { "Actions" }
                 p class="text-xs text-muted-foreground" { "All actions write an audit-log entry." }
             }
             div class="p-6 pt-2 flex flex-wrap gap-2" {
@@ -979,7 +979,7 @@ pub(super) fn tier_change_card(target: &AdminUser) -> Markup {
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
             div class="flex flex-col space-y-1.5 p-6 pb-2" {
-                h3 class="text-base font-semibold leading-none tracking-tight" { "Membership tier" }
+                h3 class="text-2xl font-semibold leading-none tracking-tight" { "Membership tier" }
                 p class="text-xs text-muted-foreground" { "Move this member to any tier, in either direction. Requires your two-factor code; the change and its before/after tiers are written to the audit log." }
             }
             div class="p-6 pt-2" {
@@ -1048,7 +1048,7 @@ pub async fn user_detail(
         div class="space-y-6" {
             div class="flex items-center justify-between" {
                 div {
-                    h1 class="text-2xl font-bold flex items-center gap-2" {
+                    h1 class="text-3xl font-bold flex items-center gap-2" {
                         (target.email)
                         @if is_admin_target { (badge("default", "Admin")) }
                         @if target.lifetime_member { (badge("default", "Lifetime")) }
@@ -1067,7 +1067,7 @@ pub async fn user_detail(
             // Profile card
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6 pb-2" {
-                    h3 class="text-base font-semibold leading-none tracking-tight" { "Profile" }
+                    h3 class="text-2xl font-semibold leading-none tracking-tight" { "Profile" }
                 }
                 div class="p-6 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm" {
                     div { span class="text-muted-foreground" { "User ID: " } code class="font-mono text-xs" { (target.id) } }
@@ -1090,7 +1090,7 @@ pub async fn user_detail(
             // it, or clear a stuck second factor.
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6 pb-2" {
-                    h3 class="text-base font-semibold leading-none tracking-tight" { "Identity & security" }
+                    h3 class="text-2xl font-semibold leading-none tracking-tight" { "Identity & security" }
                     p class="text-xs text-muted-foreground" { "Correct the email, force-verify it, or clear a stuck second factor. All actions write an audit-log entry." }
                 }
                 div class="p-6 pt-2 space-y-4" {
@@ -1128,7 +1128,7 @@ pub async fn user_detail(
             @if !user_throttles.is_empty() {
                 div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                     div class="flex flex-col space-y-1.5 p-6 pb-2" {
-                        div class="flex items-center gap-2" { (icon("gauge", "h-4 w-4 text-muted-foreground")) h3 class="text-base font-semibold leading-none tracking-tight" { "Active rate limits" } }
+                        div class="flex items-center gap-2" { (icon("gauge", "h-4 w-4 text-muted-foreground")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Active rate limits" } }
                         p class="text-xs text-muted-foreground" { "Throttles currently applied to this user. Resetting one lets them act again immediately; the reset is audited." }
                     }
                     div class="p-6 pt-0" {

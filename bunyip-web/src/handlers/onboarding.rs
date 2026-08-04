@@ -217,7 +217,7 @@ fn step_card(icon_name: &str, gradient: &str, title: &str, done: bool, body: Mar
         div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
             div class="flex items-center gap-3 p-6 pb-0" {
                 div class={ "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br " (gradient) } { (icon(icon_name, "h-4 w-4 text-white")) }
-                h3 class="text-xl font-semibold leading-none tracking-tight flex-1" { (title) }
+                h3 class="text-2xl font-semibold leading-none tracking-tight flex-1" { (title) }
                 @if done { (icon("check", "h-5 w-5 text-teal-600 dark:text-teal-400")) }
             }
             div class="p-6 pt-4" { (body) }
