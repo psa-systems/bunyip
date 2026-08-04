@@ -110,23 +110,25 @@ pub(super) fn group_assignment_form(
     current: Option<&str>,
     groups: &[ApplicationGroup],
 ) -> Markup {
-    html! {
-        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-            div class="p-6" {
-                h4 class="text-lg font-semibold" { "Group" }
-                p class="text-xs text-muted-foreground mb-3" { "Assign this application to a group, or leave it ungrouped." }
-                form method="post" action=(format!("/admin/applications/{app_id}/group")) class="flex items-end gap-2 max-w-md" {
-                    select name="group_id" class=(dashboard_input()) {
-                        option value="" selected[current.is_none()] { "Ungrouped" }
-                        @for g in groups {
-                            option value=(g.id) selected[current == Some(g.id.as_str())] { (g.display_name) }
-                        }
+    // BUNYIP-460: same card treatment (title scale + subtitle) as the Details /
+    // Distribution / Danger Zone sections so "Group" reads as a peer section, and
+    // its own "Save group" is unmistakably scoped to the group assignment rather
+    // than the Details + Distribution form above.
+    admin_block(
+        "Group",
+        Some("Assign this application to a group, or leave it ungrouped."),
+        html! {
+            form method="post" action=(format!("/admin/applications/{app_id}/group")) class="flex items-end gap-2 max-w-md" {
+                select name="group_id" class=(dashboard_input()) {
+                    option value="" selected[current.is_none()] { "Ungrouped" }
+                    @for g in groups {
+                        option value=(g.id) selected[current == Some(g.id.as_str())] { (g.display_name) }
                     }
-                    button type="submit" class=(button_class("default", "default", "")) { "Save" }
                 }
+                button type="submit" class=(button_class("default", "default", "")) { "Save group" }
             }
-        }
-    }
+        },
+    )
 }
 
 /// GET /admin/application-groups
