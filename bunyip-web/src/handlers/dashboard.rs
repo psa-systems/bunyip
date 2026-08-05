@@ -18,7 +18,7 @@ use crate::api::types::{
 };
 use crate::handlers::{dashboard_response, guard, needs_onboarding, password_ok, rotating_index};
 use crate::util::{app_gradient, days_until, has_active_membership, rel_time, urlenc};
-use crate::views::ui::{badge, button_class, error_box, icon, pager, success_box};
+use crate::views::ui::{badge, button_class, empty_state, error_box, icon, pager, success_box};
 use crate::web::{redirect_cookies, AppState};
 
 const TAGLINES: [&str; 5] = [
@@ -1067,10 +1067,7 @@ pub async fn membership(
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Invoices" } p class="text-sm text-muted-foreground" { "Your billing history" } }
                 div class="p-6 pt-0" {
                     @if invoices.is_empty() {
-                        div class="flex flex-col items-center justify-center py-12 text-center" {
-                            (icon("file-text", "h-10 w-10 text-muted-foreground mb-3"))
-                            p class="text-muted-foreground" { "No invoices yet." }
-                        }
+                        (empty_state("file-text", "No invoices yet.", None))
                     } @else {
                         div class="divide-y" {
                             @for inv in &invoices {
@@ -1095,7 +1092,7 @@ pub async fn membership(
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Payment History" } }
                 div class="p-6 pt-0" {
-                    @if payments.is_empty() { p class="text-center text-muted-foreground py-8" { "No payment history yet." } }
+                    @if payments.is_empty() { (empty_state("receipt", "No payment history yet.", None)) }
                     @else {
                         div class="space-y-4" {
                             @for p in &payments {
@@ -1452,7 +1449,7 @@ fn sessions_card_body(
     let has_others = page.total > 1;
     html! {
         @if sessions.is_empty() {
-            p class="text-sm text-muted-foreground" { "No active sessions found." }
+            (empty_state("log-in", "No active sessions found.", None))
         } @else {
             ul class="space-y-3" {
                 @for s in sessions {
@@ -1535,7 +1532,7 @@ fn trusted_devices_card_body(
     html! {
         p class="text-sm text-muted-foreground mb-4" { "Devices that skip the two-factor prompt when you sign in. Revoke any you do not recognize." }
         @if devices.is_empty() {
-            p class="text-sm text-muted-foreground" { "No trusted devices." }
+            (empty_state("shield-check", "No trusted devices.", None))
         } @else {
             ul class="space-y-3" {
                 @for d in devices {

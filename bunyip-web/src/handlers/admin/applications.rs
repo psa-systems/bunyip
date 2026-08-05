@@ -13,7 +13,7 @@ use crate::api::types::AdminApplication;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::urlenc;
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, error_box, icon, toggle_switch};
+use crate::views::ui::{badge, button_class, empty_state, error_box, icon, toggle_switch};
 use crate::web::{redirect_cookies, status_cookies, AppState};
 
 use super::application_groups::group_assignment_form;
@@ -84,7 +84,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                     @if !reachable {
                         (error_box("Could not reach the API to load applications."))
                     } @else if apps.is_empty() {
-                        p class="text-center text-muted-foreground py-8" { "No applications" }
+                        (empty_state("app-window", "No applications", None))
                     } @else {
                         // BUNYIP-473: drag-and-drop reorder. `data-reorder-list`
                         // + `data-reorder-action` are read by assets/js/app-reorder.js,
@@ -996,7 +996,7 @@ pub async fn application_docs(
             }
             div class="space-y-6" {
                 @if docs.is_empty() {
-                    p class="text-muted-foreground" { "No pages yet. Add one below." }
+                    (empty_state("file-text", "No pages yet. Add one below.", None))
                 }
                 @for d in &docs {
                     div class="rounded-lg border p-6 space-y-3" {

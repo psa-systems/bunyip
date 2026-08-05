@@ -12,7 +12,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::{AdminFeedbackDetail, FeedbackAttachmentMeta, FeedbackStatus};
 use crate::handlers::{admin_guard, admin_response};
 use crate::util::{rel_time, urlenc};
-use crate::views::ui::{badge, button_class, error_box, icon, pager};
+use crate::views::ui::{badge, button_class, empty_state, error_box, icon, pager};
 use crate::web::{redirect_cookies, AppState};
 
 use super::with_attachment_hardening;
@@ -165,7 +165,7 @@ async fn render_feedback_list(
                     @if !reachable {
                         (error_box("Could not reach the API to load feedback."))
                     } @else if items.is_empty() {
-                        p class="text-center text-muted-foreground py-8" { (empty_msg) }
+                        (empty_state("message-square-quote", empty_msg, None))
                     } @else {
                         div class="divide-y" {
                             @for f in &items {
@@ -832,7 +832,7 @@ pub async fn feedback_archive(
                                 }
                             }
                         }
-                        @if items.is_empty() { p class="text-center text-muted-foreground py-8" { "Archive is empty" } }
+                        @if items.is_empty() { (empty_state("message-square-quote", "Archive is empty", None)) }
                     }
                     (pager("/admin/feedback/archive", "page", page, total_pages))
                     }

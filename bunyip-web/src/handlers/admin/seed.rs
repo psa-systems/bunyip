@@ -12,7 +12,7 @@ use crate::api::admin as admin_api;
 use crate::handlers::{admin_guard, admin_response};
 use crate::util::urlenc;
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{button_class, error_box, icon, success_box};
+use crate::views::ui::{button_class, empty_state, error_box, icon, success_box};
 use crate::web::{redirect_cookies, AppState};
 
 use super::with_attachment_hardening;
@@ -64,7 +64,7 @@ pub async fn seed_data(
                     @if !reachable {
                         (error_box("Could not reach the API to load seed templates."))
                     } @else if templates.is_empty() {
-                        p class="text-sm text-muted-foreground" { "No starter templates are available." }
+                        (empty_state("layers", "No starter templates are available.", None))
                     } @else {
                         div class="grid gap-4 md:grid-cols-2" {
                             @for t in &templates {

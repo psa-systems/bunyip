@@ -9,7 +9,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::DatasetHealth;
 use crate::handlers::{admin_guard, admin_response};
 use crate::util::rel_time;
-use crate::views::ui::{badge, button_class, error_box, icon};
+use crate::views::ui::{badge, button_class, empty_state, error_box, icon};
 use crate::web::AppState;
 
 use super::title_case;
@@ -123,7 +123,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Recent Activity" } p class="text-sm text-muted-foreground" { "Latest platform events" } }
                 div class="p-6 pt-0" {
                     @if !logs_reachable { (error_box("Could not reach the API to load recent activity.")) }
-                    @else if logs.is_empty() { p class="text-muted-foreground text-center py-8" { "No recent activity" } }
+                    @else if logs.is_empty() { (empty_state("activity", "No recent activity", None)) }
                     @else {
                         div class="space-y-4" {
                             @for log in &logs {

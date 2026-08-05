@@ -11,7 +11,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::{AdminIpBan, IpEnrichment};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{rel_time, urlenc};
-use crate::views::ui::{badge, button_class, error_box, icon};
+use crate::views::ui::{badge, button_class, empty_state, error_box, icon};
 use crate::web::{redirect_cookies, AppState};
 
 use super::refuse_non_super_admin;
@@ -192,7 +192,7 @@ pub async fn ip_bans(
                     @if !reachable {
                         (error_box("Could not reach the API to load IP bans."))
                     } @else if bans.is_empty() {
-                        p class="text-center text-muted-foreground py-8" { "No active IP bans." }
+                        (empty_state("shield-off", "No active IP bans.", None))
                     } @else {
                         // BUNYIP-415: flow ban rows into two columns (one below
                         // lg) so the list uses the width instead of a single
