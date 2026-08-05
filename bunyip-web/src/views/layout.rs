@@ -238,8 +238,8 @@ fn header(user: Option<&User>, _show_feedback: bool) -> Markup {
                         // through the identical affordance.
                         (profile_menu(u))
                     } @else {
-                        a href="/register" class=(button_class("default", "sm", "")) { "Get Started" }
-                        a href="/login" class=(button_class("outline", "sm", "")) { "Login" }
+                        a href="/register" class=(button_class("default", "sm", "")) { "Sign up" }
+                        a href="/login" class=(button_class("outline", "sm", "")) { "Sign in" }
                     }
                 }
             }
@@ -272,8 +272,8 @@ fn footer(cfg: &Config, apps: &[Application]) -> Markup {
                     div {
                         h3 class="text-sm font-semibold" { "Account" }
                         ul class="mt-4 space-y-3 text-sm" {
-                            li { a href="/login" class="text-muted-foreground hover:text-foreground transition-colors" { "Login" } }
-                            li { a href="/register" class="text-muted-foreground hover:text-foreground transition-colors" { "Register" } }
+                            li { a href="/login" class="text-muted-foreground hover:text-foreground transition-colors" { "Sign in" } }
+                            li { a href="/register" class="text-muted-foreground hover:text-foreground transition-colors" { "Sign up" } }
                         }
                     }
                     div {

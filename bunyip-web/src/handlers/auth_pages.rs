@@ -289,7 +289,7 @@ fn login_content(error: Option<&str>, redirect: &str) -> Markup {
                 input id="remember" name="remember" type="checkbox" value="on" class="h-4 w-4 rounded border-border";
                 label for="remember" class="text-sm font-normal cursor-pointer" { "Remember me for 30 days" }
             }
-            button type="submit" class=(button_class("default", "default", "w-full")) { "Sign In" }
+            button type="submit" class=(button_class("default", "default", "w-full")) { "Sign in" }
         }
         div class="mt-6" {
             div class="relative" {
@@ -481,7 +481,7 @@ fn register_card(errors: &RegisterErrors, email: &str, signup_token: &str) -> Ma
     auth_card(
         "shield",
         "bg-primary/10 text-primary",
-        "Create an account",
+        "Create your account",
         "Get access to all tools for $3/month",
         html! {
             form method="post" action="/register" class="space-y-4" {
@@ -526,7 +526,7 @@ fn register_card(errors: &RegisterErrors, email: &str, signup_token: &str) -> Ma
                     // BUNYIP-271: surface a passwords-don't-match rule inline.
                     @if let Some(e) = errors.confirm.as_deref() { (field_error_msg(e)) }
                 }
-                (submit_btn("Create Account"))
+                (submit_btn("Sign up"))
             }
             div class="mt-6" {
                 a href="/magic-link" class=(button_class("outline", "default", "w-full")) { "Sign up with Magic Link" }
@@ -560,7 +560,7 @@ pub async fn register_get(State(st): State<AppState>, headers: HeaderMap) -> Res
     auth_page(
         &st,
         &headers,
-        "Create account · Bunyip",
+        "Sign up · Bunyip",
         register_card(&RegisterErrors::default(), "", &signup_token),
     )
     .await
@@ -590,7 +590,7 @@ pub async fn register_post(
         return auth_page(
             &st,
             &headers,
-            "Create account · Bunyip",
+            "Sign up · Bunyip",
             register_card(&errs, f.email.trim(), &f.signup_token),
         )
         .await;
@@ -619,7 +619,7 @@ pub async fn register_post(
             auth_page(
                 &st,
                 &headers,
-                "Create account · Bunyip",
+                "Sign up · Bunyip",
                 register_card(&errs, f.email.trim(), &f.signup_token),
             )
             .await
@@ -650,7 +650,7 @@ fn magic_form(error: Option<&str>, success: bool) -> Markup {
             "We've sent a magic link to your email address.",
             html! {
                 p class="text-center text-sm text-muted-foreground" { "The link will expire in 15 minutes." }
-                a href="/login" class=(button_class("outline", "default", "mt-6 w-full")) { "Back to Login" }
+                a href="/login" class=(button_class("outline", "default", "mt-6 w-full")) { "Back to sign in" }
             },
         );
     }
@@ -667,7 +667,7 @@ fn magic_form(error: Option<&str>, success: bool) -> Markup {
             }
             p class="mt-6 text-center text-sm text-muted-foreground" {
                 a href="/login" class="text-primary hover:underline" { "Sign in with password" } " · "
-                a href="/register" class="text-primary hover:underline" { "Create account" }
+                a href="/register" class="text-primary hover:underline" { "Sign up" }
             }
         },
     )
@@ -733,7 +733,7 @@ fn reset_form(error: Option<&str>, success: bool) -> Markup {
             "If an account exists with that email, we've sent reset instructions.",
             html! {
                 p class="text-center text-sm text-muted-foreground" { "The link will expire in 1 hour." }
-                a href="/login" class=(button_class("outline", "default", "mt-6 w-full")) { "Back to Login" }
+                a href="/login" class=(button_class("outline", "default", "mt-6 w-full")) { "Back to sign in" }
             },
         );
     }
@@ -915,7 +915,7 @@ fn twofa_card(error: Option<&str>, redirect: Option<&str>) -> Markup {
                 (submit_btn("Verify"))
             }
             div class="mt-4 text-center" {
-                a href="/login" class="inline-flex items-center text-sm text-muted-foreground hover:text-foreground" { "Back to login" }
+                a href="/login" class="inline-flex items-center text-sm text-muted-foreground hover:text-foreground" { "Back to sign in" }
             }
         },
     )
@@ -933,7 +933,7 @@ pub async fn twofa_verify_get(
             "No pending verification",
             "Please log in first.",
             html! {
-                a href="/login" class=(button_class("default", "default", "w-full")) { "Go to Login" }
+                a href="/login" class=(button_class("default", "default", "w-full")) { "Back to sign in" }
             },
         );
         return auth_page(&st, &headers, "Two-factor · Bunyip", card).await;
@@ -989,7 +989,7 @@ fn invite_password_card(token: &str, email: &str, error: Option<&str>) -> Markup
     auth_card(
         "shield",
         "bg-primary/10 text-primary",
-        "Create Your Account",
+        "Create your account",
         &format!("Set a password for {email} to complete your account setup."),
         html! {
             form method="post" action="/invite/accept" class="space-y-4" {
@@ -998,7 +998,7 @@ fn invite_password_card(token: &str, email: &str, error: Option<&str>) -> Markup
                 (field("password", "Password", "password", "At least 12 characters", "new-password"))
                 (field("confirm", "Confirm Password", "password", "Re-enter your password", "new-password"))
                 (pw_reqs())
-                (submit_btn("Create Account"))
+                (submit_btn("Sign up"))
             }
         },
     )
@@ -1016,7 +1016,7 @@ pub async fn invite_accept_get(
             "Invitation Failed",
             "No invite token provided.",
             html! {
-                a href="/login" class=(button_class("default", "default", "w-full")) { "Go to Login" }
+                a href="/login" class=(button_class("default", "default", "w-full")) { "Back to sign in" }
             },
         );
         return auth_page(&st, &headers, "Accept invite · Bunyip", card).await;
@@ -1048,7 +1048,7 @@ pub async fn invite_accept_get(
                 "Invitation Failed",
                 &e.user_message(),
                 html! {
-                    a href="/login" class=(button_class("default", "default", "w-full")) { "Go to Login" }
+                    a href="/login" class=(button_class("default", "default", "w-full")) { "Back to sign in" }
                 },
             );
             auth_page(&st, &headers, "Accept invite · Bunyip", card).await
@@ -1129,7 +1129,7 @@ pub async fn confirm_email(
                 "Email Updated",
                 "Your email address has been changed. Please log in with your new email.",
                 html! {
-                    a href="/login" class=(button_class("default", "default", "w-full")) { "Go to Login" }
+                    a href="/login" class=(button_class("default", "default", "w-full")) { "Back to sign in" }
                 },
             ),
             Err(e) => auth_card(
