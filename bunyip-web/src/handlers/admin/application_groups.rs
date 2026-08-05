@@ -13,7 +13,7 @@ use crate::api::types::ApplicationGroup;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::urlenc;
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{button_class, error_box, icon};
+use crate::views::ui::{button_class, empty_state, error_box, icon};
 use crate::web::{redirect_cookies, AppState};
 
 #[derive(Deserialize, Default)]
@@ -151,10 +151,7 @@ pub async fn application_groups(State(st): State<AppState>, headers: HeaderMap) 
                     @if !reachable {
                         (error_box("Could not reach the API to load application groups."))
                     } @else if groups.is_empty() {
-                        // BUNYIP-415: center the empty state as a block.
-                        div class="flex flex-col items-center justify-center py-12 text-center text-muted-foreground" {
-                            (icon("layers", "h-8 w-8 mb-2 opacity-50")) "No groups yet"
-                        }
+                        (empty_state("layers", "No groups yet", None))
                     } @else {
                         div class="divide-y" {
                             @for g in &groups {

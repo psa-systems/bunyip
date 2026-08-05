@@ -11,7 +11,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::UserEntitlement;
 use crate::handlers::{admin_guard, admin_response};
 use crate::util::rel_time;
-use crate::views::ui::{badge, button_class, error_box, icon};
+use crate::views::ui::{badge, button_class, empty_state, error_box};
 use crate::web::{redirect_cookies, AppState};
 
 pub async fn entitlements(State(st): State<AppState>, headers: HeaderMap) -> Response {
@@ -32,9 +32,7 @@ pub async fn entitlements(State(st): State<AppState>, headers: HeaderMap) -> Res
                     @if !reachable {
                         (error_box("Could not reach the API to load applications."))
                     } @else if apps.is_empty() {
-                        div class="flex flex-col items-center justify-center py-12 text-center text-muted-foreground" {
-                            (icon("package", "h-8 w-8 mb-2 opacity-50")) "No applications"
-                        }
+                        (empty_state("package", "No applications", None))
                     } @else {
                         // BUNYIP-415: flow product rows into two columns (one
                         // below lg) so the catalog uses the width.
@@ -121,7 +119,7 @@ pub async fn user_entitlements(
                     @if !granted_reachable {
                         (error_box("Could not reach the API to load entitlements."))
                     } @else if granted.is_empty() {
-                        p class="text-center text-muted-foreground py-8" { "No entitlements granted" }
+                        (empty_state("shield-check", "No entitlements granted", None))
                     } @else {
                         div class="divide-y" {
                             @for e in &granted {
@@ -142,7 +140,7 @@ pub async fn user_entitlements(
                     @if !apps_reachable {
                         (error_box("Could not reach the API to load applications."))
                     } @else if apps.is_empty() {
-                        p class="text-center text-muted-foreground py-8" { "No applications" }
+                        (empty_state("package", "No applications", None))
                     } @else {
                         div class="divide-y" {
                             @for app in &apps {

@@ -14,7 +14,7 @@ use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::urlenc;
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, error_box, icon};
+use crate::views::ui::{badge, button_class, empty_state, error_box, icon};
 use crate::web::{redirect_cookies, AppState};
 
 /// Setup guidance ported from the a8n-tools Stripe admin panel (BUNYIP-416):
@@ -80,7 +80,7 @@ pub(super) fn stripe_products_block(
             }
             @match products {
                 None => (error_box("Could not load products from Stripe. Add a valid API key above and save, then reload.")),
-                Some([]) => p class="py-6 text-center text-sm text-muted-foreground" { "No products yet. Create one to get started." },
+                Some([]) => (empty_state("package", "No products yet. Create one to get started.", None)),
                 Some(list) => div class="divide-y" {
                     @for p in list {
                         div class="py-3 flex items-center justify-between gap-4" {
@@ -147,7 +147,7 @@ pub(super) fn stripe_prices_block(
             }
             @match prices {
                 None => (error_box("Could not load prices from Stripe. Add a valid API key above and save, then reload.")),
-                Some([]) => p class="py-6 text-center text-sm text-muted-foreground" { "No prices yet. Create one to get started." },
+                Some([]) => (empty_state("banknote", "No prices yet. Create one to get started.", None)),
                 Some(list) => div class="divide-y" {
                     @for pr in list {
                         div class={ "py-3 flex items-center justify-between gap-4 " (if pr.active { "" } else { "opacity-50" }) } {
@@ -210,7 +210,7 @@ fn stripe_webhooks_block(webhooks: Option<&[crate::api::types::StripeWebhookEndp
             }
             @match webhooks {
                 None => (error_box("Could not load webhook endpoints from Stripe. Add a valid API key above and save, then reload.")),
-                Some([]) => p class="py-6 text-center text-sm text-muted-foreground" { "No webhook endpoints yet. Create one to receive Stripe events." },
+                Some([]) => (empty_state("link-2", "No webhook endpoints yet. Create one to receive Stripe events.", None)),
                 Some(list) => div class="divide-y" {
                     @for w in list {
                         div class="py-3 flex items-center justify-between gap-4" {

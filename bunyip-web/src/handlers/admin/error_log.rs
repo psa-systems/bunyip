@@ -10,7 +10,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::AdminErrorLog;
 use crate::handlers::{admin_guard, admin_response};
 use crate::util::rel_time;
-use crate::views::ui::{badge, button_class, error_box, icon};
+use crate::views::ui::{badge, button_class, empty_state, error_box, icon};
 use crate::web::AppState;
 
 #[derive(Deserialize)]
@@ -94,7 +94,7 @@ pub async fn logs(
                     @if !reachable {
                         (error_box("Could not reach the API to load error logs."))
                     } @else if entries.is_empty() {
-                        p class="text-center text-muted-foreground py-8" { "No errors captured" @if category.is_some() { " in this category" } "." }
+                        (empty_state("alert-triangle", &format!("No errors captured{}.", if category.is_some() { " in this category" } else { "" }), None))
                     } @else {
                         div class="space-y-0" { @for e in &entries { (log_row(e)) } }
                     }

@@ -289,6 +289,20 @@ pub fn success_box(msg: &str) -> Markup {
     }
 }
 
+/// BUNYIP-468: the one shared list empty-state - centered column, large muted
+/// icon, muted message, optional CTA below. Every `is_empty()` list branch routes here.
+pub fn empty_state(icon_name: &str, message: &str, cta: Option<Markup>) -> Markup {
+    html! {
+        div class="flex flex-col items-center justify-center py-12 text-center" {
+            (icon(icon_name, "h-10 w-10 text-muted-foreground/60 mb-3"))
+            p class="text-muted-foreground" { (message) }
+            @if let Some(c) = cta {
+                div class="mt-4" { (c) }
+            }
+        }
+    }
+}
+
 /// BUNYIP-421 regression guard, shared by the page tests. `truncate` is
 /// `overflow:hidden` + `text-overflow:ellipsis` + `white-space:nowrap`, and the
 /// latter two do nothing on a flex/grid container: its items keep their
@@ -317,7 +331,7 @@ pub fn assert_no_truncating_flex_container(html: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_msg, error_box, icon, success_box, toggle_switch};
+    use super::{clamp_msg, empty_state, error_box, icon, success_box, toggle_switch};
 
     /// BUNYIP-420: the toggle switch reflects state via color + knob position
     /// and carries the right ARIA, so it reads as an on/off control (not text).
@@ -357,6 +371,31 @@ mod tests {
                 "icon(\"{name}\") should render an SVG path, not the empty fallback"
             );
         }
+    }
+
+    /// BUNYIP-468: the shared empty-state renders the centered py-12 block with
+    /// the named icon and message, and only wraps a CTA when one is passed.
+    #[test]
+    fn empty_state_renders_icon_message_and_optional_cta() {
+        let plain = empty_state("users", "No users yet.", None).into_string();
+        assert!(
+            plain.contains("py-12"),
+            "empty state is the centered py-12 block"
+        );
+        assert!(plain.contains("No users yet."));
+        assert!(plain.contains("<svg"), "renders the named icon");
+        assert!(!plain.contains("mt-4"), "no CTA wrapper when cta is None");
+
+        let with_cta = empty_state(
+            "users",
+            "No matches",
+            Some(maud::html! { a href="/x" { "Clear" } }),
+        )
+        .into_string();
+        assert!(
+            with_cta.contains("mt-4") && with_cta.contains("Clear"),
+            "CTA renders in its own wrapper below the message"
+        );
     }
 
     #[test]

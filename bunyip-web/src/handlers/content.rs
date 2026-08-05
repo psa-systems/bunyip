@@ -11,7 +11,7 @@ use crate::api::calls::{self, FeedbackAttachment, FeedbackInput};
 use crate::api::types::SubscriptionTier;
 use crate::handlers::dashboard::tier_name;
 use crate::handlers::{dashboard_input, public_ctx, public_response};
-use crate::views::ui::{button_class, error_box, icon, success_box};
+use crate::views::ui::{button_class, empty_state, error_box, icon, success_box};
 use crate::web::AppState;
 
 /// Displayed at the top of /terms and /privacy. Bump this string the SAME
@@ -813,7 +813,7 @@ pub async fn app_docs_index(
         div class="container max-w-4xl py-12" {
             h1 class="text-4xl font-bold mb-4" { (app_name) " documentation" }
             @if docs.is_empty() {
-                p class="text-muted-foreground" { "Sorry. No docs for this app yet :(" }
+                (empty_state("file-text", "Sorry. No docs for this app yet :(", None))
             } @else {
                 ul class="space-y-3" {
                     @for d in &docs {

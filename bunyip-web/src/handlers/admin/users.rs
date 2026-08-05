@@ -11,7 +11,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::{AdminRateLimit, AdminUser};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{rel_time, urlenc};
-use crate::views::ui::{badge, button_class, icon};
+use crate::views::ui::{badge, button_class, empty_state, icon};
 use crate::web::{redirect_cookies, AppState};
 
 use super::rate_limits::rate_limit_row;
@@ -618,18 +618,17 @@ pub(super) fn users_panel(
                         Some(_) => {
                             // Distinguish "filters match nothing" from "no users".
                             @if uq.is_filtered() {
-                                div class="py-10 text-center" {
-                                    p class="text-muted-foreground" { "No users match these filters." }
-                                    @let cleared_href = {
-                                        let mut c = uq.clone();
-                                        c.search = String::new(); c.status = "active".into(); c.tier = String::new(); c.verified = String::new(); c.page = 1;
-                                        c.href()
-                                    };
+                                @let cleared_href = {
+                                    let mut c = uq.clone();
+                                    c.search = String::new(); c.status = "active".into(); c.tier = String::new(); c.verified = String::new(); c.page = 1;
+                                    c.href()
+                                };
+                                (empty_state("users", "No users match these filters.", Some(html! {
                                     a href=(cleared_href) hx-get=(cleared_href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
-                                      class=(button_class("outline", "sm", "mt-3")) { "Clear all filters" }
-                                }
+                                      class=(button_class("outline", "sm", "")) { "Clear all filters" }
+                                })))
                             } @else {
-                                p class="py-10 text-center text-muted-foreground" { "No users yet." }
+                                (empty_state("users", "No users yet.", None))
                             }
                         }
                         None => {
