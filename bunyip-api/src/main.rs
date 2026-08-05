@@ -956,8 +956,14 @@ async fn main() -> anyhow::Result<()> {
             ))
             // Auto-ban runs outermost — rejects banned IPs before CORS processing
             .wrap(AutoBanMiddleware::new(auto_ban_service.clone()))
-            // Explicit JSON body size limit (32 KB)
-            .app_data(web::JsonConfig::default().limit(32_768))
+            // Generic extractor errors (BUNYIP-481): malformed body / path /
+            // query / form parameters return the AppError envelope with a
+            // generic message instead of actix's raw parse text. JSON keeps its
+            // 32 KB limit.
+            .app_data(bunyip_api::extractors::json_config())
+            .app_data(bunyip_api::extractors::path_config())
+            .app_data(bunyip_api::extractors::query_config())
+            .app_data(bunyip_api::extractors::form_config())
             // Add database pool to app state
             .app_data(web::Data::new(pool.clone()))
             // Self-service NOBYPASSRLS pool for per-user RLS reads (BUNYIP-344).
