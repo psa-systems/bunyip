@@ -144,6 +144,9 @@ impl Api {
         }
         let resp = rb.send().await.map_err(|e| {
             // BUNYIP-243: a transport failure means bunyip-api is unreachable.
+            // BUNYIP-477: user_message() shows the browser a generic line, so
+            // log the real transport detail here for operators.
+            tracing::warn!(error = %e, %url, "bunyip-api request failed (transport)");
             crate::server_status::note_transport_error();
             ApiError::network(e.to_string())
         })?;
@@ -221,6 +224,8 @@ impl Api {
                 Ok(resp)
             }
             Err(e) => {
+                // BUNYIP-477: generic to the user, detailed in the operator log.
+                tracing::warn!(error = %e, %url, "bunyip-api stream request failed (transport)");
                 crate::server_status::note_transport_error();
                 Err(ApiError::network(e.to_string()))
             }
@@ -246,6 +251,8 @@ impl Api {
         rb = forward_client_ip(rb);
         let resp = rb.send().await.map_err(|e| {
             // BUNYIP-243: a transport failure means bunyip-api is unreachable.
+            // BUNYIP-477: generic to the user, detailed in the operator log.
+            tracing::warn!(error = %e, %url, "bunyip-api form request failed (transport)");
             crate::server_status::note_transport_error();
             ApiError::network(e.to_string())
         })?;
@@ -346,11 +353,16 @@ pub fn ok_data(resp: &Resp) -> Result<&Value, ApiError> {
 pub fn parse<T: DeserializeOwned>(resp: Resp) -> Result<T, ApiError> {
     if resp.ok() {
         let data = resp.body.get("data").cloned().unwrap_or(Value::Null);
-        serde_json::from_value(data).map_err(|e| ApiError {
-            status: 0,
-            code: "DECODE_ERROR".into(),
-            message: e.to_string(),
-            retry_after: None,
+        serde_json::from_value(data).map_err(|e| {
+            // BUNYIP-477: the user sees a generic message; log the decode detail
+            // (a 2xx body that did not match the expected shape) for operators.
+            tracing::warn!(error = %e, "failed to decode bunyip-api response body");
+            ApiError {
+                status: 0,
+                code: "DECODE_ERROR".into(),
+                message: e.to_string(),
+                retry_after: None,
+            }
         })
     } else {
         Err(error_from(&resp))
