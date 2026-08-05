@@ -110,7 +110,7 @@ async function submitLoginOnce(page: Page): Promise<'ok' | string | null> {
     .then(() => '2fa' as const)
     .catch(() => 'timeout' as const);
   const earlyError = page
-    .locator('.text-destructive')
+    .locator('[class*="text-destructive"]')
     .first()
     .waitFor({ state: 'visible', timeout: 15_000 })
     .then(() => 'error' as const)
@@ -138,11 +138,13 @@ async function submitLoginOnce(page: Page): Promise<'ok' | string | null> {
     .waitForURL(() => !stillOnLogin(), { timeout: 30_000 })
     .then(() => 'ok' as const)
     .catch(() => 'timeout' as const);
-  // `.text-destructive` is the only destructive-styled element on the login
-  // page; bunyip's error_box (views/ui.rs) renders solely on a failed login, so
-  // it is a false-positive-free signal.
+  // bunyip's error_box (views/ui.rs) is the only destructive-styled element on
+  // the login/2fa page and renders solely on a failed login. Its text token is
+  // `text-destructive-text` since BUNYIP-464, so match the `text-destructive`
+  // substring (BUNYIP-480) rather than the exact class, keeping this a
+  // false-positive-free signal that survives a token rename.
   const errorShown = page
-    .locator('.text-destructive')
+    .locator('[class*="text-destructive"]')
     .first()
     .waitFor({ state: 'visible', timeout: 30_000 })
     .then(() => 'error' as const)
@@ -207,12 +209,14 @@ export async function setInputValue(loc: Locator, value: string): Promise<void> 
   );
 }
 
-// Scrape bunyip's login error_box (`.text-destructive`, views/ui.rs) into a
-// single-line string, or null when no error is rendered. The box holds an icon
-// (svg, no text) plus the message, so innerText is the message.
+// Scrape bunyip's login error_box (token `text-destructive-text` since
+// BUNYIP-464, views/ui.rs; matched via the `text-destructive` class substring so
+// a token rename does not re-break it, BUNYIP-480) into a single-line string, or
+// null when no error is rendered. The box holds an icon (svg, no text) plus the
+// message, so innerText is the message.
 async function readLoginError(page: Page): Promise<string | null> {
   try {
-    const box = page.locator('.text-destructive').first();
+    const box = page.locator('[class*="text-destructive"]').first();
     if ((await box.count()) === 0) return null;
     const text = (await box.innerText()).trim().replace(/\s+/g, ' ');
     return text.length > 0 ? text : null;
