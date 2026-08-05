@@ -15,7 +15,11 @@
 # it does NOT run the suite. Post-merge validation is `e2e.yml` on push to
 # main; a PR-time full suite is a maintainer-triggered `workflow_dispatch` on
 # that workflow, taken after reading the diff.
-name: E2E PR gate
+# Workflow name is `E2E` (not `E2E PR gate`) so the published check is
+# `<workflow> / <job>` = `E2E / PR gate`, matching the `E2E /*` pattern beside
+# e2e.yml's `E2E / deployment` (BUNYIP-478). Two workflow files share the `E2E`
+# display name; their file paths and job names keep them distinct.
+name: E2E
 
 on:
   pull_request:
@@ -31,11 +35,10 @@ concurrency:
 
 jobs:
   e2e-pr:
-    # BUNYIP-478: shared `E2E /` prefix; this is the credential-free PR gate, the
-    # check branch protection requires on pull requests. Its counterpart is
-    # `E2E / deployment` in e2e.yml. Name still describes what it does (install +
-    # reachability, no suite) in the workflow-level `name:` above.
-    name: E2E / PR gate
+    # BUNYIP-478: renders as `E2E / PR gate` (workflow `E2E` / job `PR gate`).
+    # The credential-free PR gate that branch protection requires on pull
+    # requests; counterpart is `E2E / deployment` in e2e.yml.
+    name: PR gate
     # Base label: this job compiles nothing. It runs node/npm only
     # (`npm ci --ignore-scripts`, so no native addon builds) (BUNYIP-444), and
     # it never launches a browser, so it needs none of the browser system
