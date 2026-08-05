@@ -33,8 +33,8 @@ pub(super) fn log_row(e: &AdminErrorLog) -> Markup {
                     }
                     p class="text-sm text-muted-foreground break-words" {
                         span class="font-mono" { (e.target) }
-                        @if let Some(r) = &e.route { " • " (r) }
-                        @if let Some(cl) = &e.client { " • client " span class="font-medium text-foreground" { (cl) } }
+                        @if let Some(r) = &e.route { " · " (r) }
+                        @if let Some(cl) = &e.client { " · client " span class="font-medium text-foreground" { (cl) } }
                     }
                     @if !e.fields.is_empty() {
                         p class="text-xs text-muted-foreground mt-1 font-mono break-words" {

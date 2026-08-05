@@ -32,7 +32,7 @@ pub(super) fn ip_ban_row(b: &AdminIpBan) -> Markup {
                     }
                     p class="text-sm text-muted-foreground break-words" { (b.reason) }
                     p class="text-xs text-muted-foreground" {
-                        "Banned " (rel_time(&b.banned_at)) " • expires " (rel_time(&b.expires_at))
+                        "Banned " (rel_time(&b.banned_at)) " · expires " (rel_time(&b.expires_at))
                     }
                 }
             }

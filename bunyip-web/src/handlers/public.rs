@@ -167,7 +167,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
 
     let body = public_shell(&st.cfg, c.user.as_ref(), &apps, true, content);
     html_cookies(
-        document("Bunyip · Surfaces what matters.", body),
+        document("Surfaces what matters. · Bunyip", body),
         &c.set_cookies,
     )
 }

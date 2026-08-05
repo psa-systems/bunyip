@@ -99,7 +99,7 @@ pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response
     let (cta_href, cta_label) = if signed_in {
         ("/membership", "Go to Membership")
     } else {
-        ("/register", "Get Started")
+        ("/register", "Sign up")
     };
     let grid = if show_business {
         "md:grid-cols-2 max-w-4xl"

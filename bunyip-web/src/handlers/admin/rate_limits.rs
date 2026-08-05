@@ -66,7 +66,7 @@ pub(super) fn rate_limit_row(rl: &AdminRateLimit, return_user: Option<&str>) -> 
                         p class="text-xs text-muted-foreground font-mono break-all" { (sub) }
                     }
                     p class="text-xs text-muted-foreground" {
-                        "Window started " (rel_time(&rl.window_start)) " • retry in " (fmt_retry_secs(rl.retry_after))
+                        "Window started " (rel_time(&rl.window_start)) " · retry in " (fmt_retry_secs(rl.retry_after))
                     }
                 }
             }

@@ -44,7 +44,7 @@ fn audit_row(log: &AdminAuditLog) -> Markup {
                     }
                     p class="text-sm text-muted-foreground" {
                         (log.actor_email.clone().unwrap_or_else(|| "System".into()))
-                        @if let Some(ip) = &log.actor_ip_address { " • " (ip) }
+                        @if let Some(ip) = &log.actor_ip_address { " · " (ip) }
                     }
                 }
             }
