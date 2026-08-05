@@ -83,10 +83,17 @@ impl ApiError {
                 );
             }
         }
-        if self.message.is_empty() {
-            "An unexpected error occurred".into()
-        } else {
-            self.message.clone()
+        // BUNYIP-477: never surface backend/transport internals to the browser.
+        // status 0 is a transport or JSON-decode failure whose raw text carries
+        // the internal API URL or serde detail; a 5xx body can carry a raw
+        // backend string. Both collapse to a generic line (the unauthenticated
+        // login page renders this directly). A 4xx carries API-authored,
+        // user-safe copy and passes through.
+        match self.status {
+            0 => "Couldn't reach the server. Please try again in a moment.".to_string(),
+            500..=599 => "An unexpected error occurred. Please try again later.".to_string(),
+            _ if self.message.is_empty() => "An unexpected error occurred".to_string(),
+            _ => self.message.clone(),
         }
     }
 
@@ -447,18 +454,46 @@ mod tests {
     }
 
     #[test]
-    fn non_429_error_handling_is_unchanged() {
-        // A 500 keeps its raw message and no retry_after; both message
-        // helpers fall through to the plain message.
+    fn server_and_transport_errors_never_echo_internals() {
+        // BUNYIP-477: a 5xx body must collapse to a generic line, never echoing
+        // a raw backend string (schema names, SQL, migration detail) to the
+        // browser. The unauthenticated login page renders user_message() directly.
         let resp = err_resp(
             500,
             None,
-            json!({ "error": { "code": "INTERNAL_ERROR", "message": "Server exploded" } }),
+            json!({ "error": { "code": "INTERNAL_ERROR", "message": "relation \"app.users\" violates constraint app_users_source_check" } }),
         );
         let e = error_from(&resp);
         assert_eq!(e.retry_after, None);
-        assert_eq!(e.user_message(), "Server exploded");
-        assert_eq!(e.verification_message(), "Server exploded");
+        let msg = e.user_message();
+        assert!(
+            !msg.contains("constraint"),
+            "5xx must not echo backend text: {msg}"
+        );
+        assert_eq!(msg, "An unexpected error occurred. Please try again later.");
+        assert_eq!(e.verification_message(), msg);
+
+        // A transport failure (status 0) carries the internal API URL in its
+        // message; it must not reach the browser.
+        let transport = ApiError {
+            status: 0,
+            code: "NETWORK_ERROR".into(),
+            message: "error sending request for url (http://bunyip-api:4401/v1/auth/login): connection refused".into(),
+            retry_after: None,
+        };
+        let tmsg = transport.user_message();
+        assert!(
+            !tmsg.contains("bunyip-api"),
+            "transport error must not leak the internal host: {tmsg}"
+        );
+        assert!(
+            !tmsg.contains("4401"),
+            "transport error must not leak the internal port: {tmsg}"
+        );
+        assert_eq!(
+            tmsg,
+            "Couldn't reach the server. Please try again in a moment."
+        );
     }
 
     #[test]
