@@ -31,7 +31,11 @@ concurrency:
 
 jobs:
   e2e-pr:
-    name: Install + reachability (no deployment secrets)
+    # BUNYIP-478: shared `E2E /` prefix; this is the credential-free PR gate, the
+    # check branch protection requires on pull requests. Its counterpart is
+    # `E2E / deployment` in e2e.yml. Name still describes what it does (install +
+    # reachability, no suite) in the workflow-level `name:` above.
+    name: E2E / PR gate
     # Base label: this job compiles nothing. It runs node/npm only
     # (`npm ci --ignore-scripts`, so no native addon builds) (BUNYIP-444), and
     # it never launches a browser, so it needs none of the browser system
