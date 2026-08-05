@@ -8,7 +8,7 @@ use maud::html;
 use crate::api::admin as admin_api;
 use crate::api::types::DatasetHealth;
 use crate::handlers::{admin_guard, admin_response};
-use crate::util::relative_time;
+use crate::util::rel_time;
 use crate::views::ui::{badge, button_class, error_box, icon};
 use crate::web::AppState;
 
@@ -130,7 +130,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                                 div class="flex items-center gap-3" {
                                     (icon("activity", "h-4 w-4 text-muted-foreground"))
                                     div class="flex-1 min-w-0" { p class="text-sm font-medium truncate" { (title_case(&log.action)) } p class="text-xs text-muted-foreground truncate" { (log.actor_email.clone().unwrap_or_else(|| "System".into())) } }
-                                    span class="text-xs text-muted-foreground" { (relative_time(&log.created_at)) }
+                                    span class="text-xs text-muted-foreground" { (rel_time(&log.created_at)) }
                                 }
                             }
                         }

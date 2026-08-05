@@ -768,7 +768,7 @@ pub async fn docs_page(
     let content = html! {
         style { (PreEscaped(DOCS_CSS)) }
         div class="container max-w-4xl py-12" {
-            div class="mb-6" { a class="text-sm text-muted-foreground hover:underline" href="/docs" { "← Documentation" } }
+            div class="mb-6" { a class="text-sm text-primary hover:underline" href="/docs" { "← Documentation" } }
             @if has_token && username.is_some() {
                 @if personalized {
                     p class="text-sm text-muted-foreground mb-6" {

@@ -68,8 +68,8 @@ fn backup_settings_content(report: Option<&RestoreReport>, error: Option<&str>) 
                 div class="p-6 pt-0" {
                     form method="post" action="/integrations/backup/restore" enctype="multipart/form-data" class="space-y-4 max-w-md" data-confirm="Restore from this backup file? This overwrites the current account profile and re-grants the entitlements in the file." {
                         div class="space-y-2" {
-                            label class="text-sm font-medium" { "Backup file (.json)" }
-                            input type="file" name="backup" accept="application/json,.json" required class=(dashboard_input());
+                            label for="backup" class="text-sm font-medium" { "Backup file (.json)" }
+                            input id="backup" type="file" name="backup" accept="application/json,.json" required class=(dashboard_input());
                         }
                         button type="submit" class=(button_class("default", "default", "")) { (icon("upload", "mr-2 h-4 w-4")) "Restore" }
                     }

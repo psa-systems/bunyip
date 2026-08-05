@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::api::admin as admin_api;
 use crate::api::types::UserEntitlement;
 use crate::handlers::{admin_guard, admin_response};
-use crate::util::relative_time;
+use crate::util::rel_time;
 use crate::views::ui::{badge, button_class, error_box, icon};
 use crate::web::{redirect_cookies, AppState};
 
@@ -113,7 +113,7 @@ pub async fn user_entitlements(
             div {
                 h1 class="text-3xl font-bold" { "User Entitlements" }
                 p class="mt-2 text-muted-foreground" { "Grant or revoke per-product access for this user." }
-                p class="mt-1 text-xs text-muted-foreground" { a href="/admin/users" class="hover:underline" { "Back to users" } }
+                p class="mt-1 text-xs text-muted-foreground" { a href="/admin/users" class="text-primary hover:underline" { "Back to users" } }
             }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Granted Entitlements" } }
@@ -128,7 +128,7 @@ pub async fn user_entitlements(
                                 div class="flex items-center justify-between py-3" {
                                     div {
                                         p class="font-medium flex items-center gap-2" { (e.display_name) (badge("outline", &e.source)) }
-                                        p class="text-xs text-muted-foreground" { (e.slug) " · granted " (relative_time(&e.granted_at)) }
+                                        p class="text-xs text-muted-foreground" { (e.slug) " · granted " (rel_time(&e.granted_at)) }
                                     }
                                 }
                             }

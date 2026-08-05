@@ -35,23 +35,23 @@ pub(super) fn email_settings_content(
                             html! {
                                 div class="space-y-4" {
                                     div class="space-y-2" {
-                                        label class="text-sm font-medium" { "Sending" }
-                                        select name="enabled" class=(dashboard_input()) {
+                                        label for="enabled" class="text-sm font-medium" { "Sending" }
+                                        select id="enabled" name="enabled" class=(dashboard_input()) {
                                             option value="true" selected[e.enabled] { "Enabled" }
                                             option value="false" selected[!e.enabled] { "Disabled" }
                                         }
                                     }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "SMTP host" } input name="smtp_host" value=(e.smtp_host) placeholder="smtp.example.com" class=(dashboard_input()); }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "SMTP port" } input name="smtp_port" type="number" min="1" max="65535" value=(e.smtp_port) class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="smtp_host" class="text-sm font-medium" { "SMTP host" } input id="smtp_host" name="smtp_host" value=(e.smtp_host) placeholder="smtp.example.com" class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="smtp_port" class="text-sm font-medium" { "SMTP port" } input id="smtp_port" name="smtp_port" type="number" min="1" max="65535" value=(e.smtp_port) class=(dashboard_input()); }
                                     div class="space-y-2" {
-                                        label class="text-sm font-medium" { "TLS mode" }
-                                        select name="smtp_tls" class=(dashboard_input()) {
+                                        label for="smtp_tls" class="text-sm font-medium" { "TLS mode" }
+                                        select id="smtp_tls" name="smtp_tls" class=(dashboard_input()) {
                                             option value="implicit" selected[e.smtp_tls == "implicit"] { "Implicit (port 465)" }
                                             option value="starttls" selected[e.smtp_tls == "starttls"] { "STARTTLS (port 587)" }
                                         }
                                     }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "SMTP username" } input name="smtp_username" value=(e.smtp_username) autocomplete="off" class=(dashboard_input()); }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "SMTP password" } input name="smtp_password" type="password" autocomplete="new-password" placeholder=(if e.has_smtp_password { "••••••••" } else { "Not set" }) class=(dashboard_input()); p class="text-xs text-muted-foreground" {
+                                    div class="space-y-2" { label for="smtp_username" class="text-sm font-medium" { "SMTP username" } input id="smtp_username" name="smtp_username" value=(e.smtp_username) autocomplete="off" class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="smtp_password" class="text-sm font-medium" { "SMTP password" } input id="smtp_password" name="smtp_password" type="password" autocomplete="new-password" placeholder=(if e.has_smtp_password { "••••••••" } else { "Not set" }) class=(dashboard_input()); p class="text-xs text-muted-foreground" {
                                         // BUNYIP-432: the placeholder is a fixed-length mask driven only
                                         // by has_smtp_password; the real password (and its length) never
                                         // reaches the browser. Leave blank to keep the current one.
@@ -65,9 +65,9 @@ pub(super) fn email_settings_content(
                             Some("Who transactional mail comes from, and where operational notices go."),
                             html! {
                                 div class="space-y-4" {
-                                    div class="space-y-2" { label class="text-sm font-medium" { "From email" } input name="from_email" type="email" value=(e.from_email) placeholder="noreply@example.com" class=(dashboard_input()); }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "From name" } input name="from_name" value=(e.from_name) class=(dashboard_input()); }
-                                    div class="space-y-2" { label class="text-sm font-medium" { "Admin notification emails" } input name="admin_notification_emails" value=(e.admin_notification_emails.join(", ")) placeholder="ops@example.com, alerts@example.com" class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Comma-separated recipients for operational notices." } }
+                                    div class="space-y-2" { label for="from_email" class="text-sm font-medium" { "From email" } input id="from_email" name="from_email" type="email" value=(e.from_email) placeholder="noreply@example.com" class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="from_name" class="text-sm font-medium" { "From name" } input id="from_name" name="from_name" value=(e.from_name) class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="admin_notification_emails" class="text-sm font-medium" { "Admin notification emails" } input id="admin_notification_emails" name="admin_notification_emails" value=(e.admin_notification_emails.join(", ")) placeholder="ops@example.com, alerts@example.com" class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Comma-separated recipients for operational notices." } }
                                 }
                             },
                         ),

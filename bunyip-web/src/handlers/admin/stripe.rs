@@ -74,8 +74,8 @@ pub(super) fn stripe_products_block(
         Some("Stripe products for your subscription tiers."),
         html! {
             form method="post" action="/admin/stripe/products" class="flex flex-wrap items-end gap-3 mb-4" {
-                div class="space-y-1 flex-1 min-w-[12rem]" { label class="text-xs font-medium" { "Name" } input name="name" required placeholder="Personal Plan" class=(dashboard_input()); }
-                div class="space-y-1 flex-1 min-w-[12rem]" { label class="text-xs font-medium" { "Description" } input name="description" placeholder="Optional" class=(dashboard_input()); }
+                div class="space-y-1 flex-1 min-w-[12rem]" { label for="name" class="text-xs font-medium" { "Name" } input id="name" name="name" required placeholder="Personal Plan" class=(dashboard_input()); }
+                div class="space-y-1 flex-1 min-w-[12rem]" { label for="description" class="text-xs font-medium" { "Description" } input id="description" name="description" placeholder="Optional" class=(dashboard_input()); }
                 button type="submit" class=(button_class("default", "sm", "")) { "Create product" }
             }
             @match products {
@@ -128,20 +128,20 @@ pub(super) fn stripe_prices_block(
         html! {
             form method="post" action="/admin/stripe/prices" class="flex flex-wrap items-end gap-3 mb-4" {
                 div class="space-y-1 min-w-[11rem]" {
-                    label class="text-xs font-medium" { "Product" }
-                    select name="product_id" required class=(dashboard_input()) {
+                    label for="product_id" class="text-xs font-medium" { "Product" }
+                    select id="product_id" name="product_id" required class=(dashboard_input()) {
                         option value="" disabled selected { "Select a product" }
                         @for p in products.iter().filter(|p| p.active) { option value=(p.id) { (p.name) } }
                     }
                 }
-                div class="space-y-1 w-28" { label class="text-xs font-medium" { "Amount" } input name="amount" type="number" step="0.01" min="0" required placeholder="9.99" class=(dashboard_input()); }
+                div class="space-y-1 w-28" { label for="amount" class="text-xs font-medium" { "Amount" } input id="amount" name="amount" type="number" step="0.01" min="0" required placeholder="9.99" class=(dashboard_input()); }
                 div class="space-y-1 w-24" {
-                    label class="text-xs font-medium" { "Currency" }
-                    select name="currency" class=(dashboard_input()) { option value="usd" { "USD" } option value="eur" { "EUR" } option value="gbp" { "GBP" } }
+                    label for="currency" class="text-xs font-medium" { "Currency" }
+                    select id="currency" name="currency" class=(dashboard_input()) { option value="usd" { "USD" } option value="eur" { "EUR" } option value="gbp" { "GBP" } }
                 }
                 div class="space-y-1 w-28" {
-                    label class="text-xs font-medium" { "Interval" }
-                    select name="interval" class=(dashboard_input()) { option value="month" { "Monthly" } option value="year" { "Yearly" } }
+                    label for="interval" class="text-xs font-medium" { "Interval" }
+                    select id="interval" name="interval" class=(dashboard_input()) { option value="month" { "Monthly" } option value="year" { "Yearly" } }
                 }
                 button type="submit" class=(button_class("default", "sm", "")) { "Create price" }
             }
@@ -200,10 +200,10 @@ fn stripe_webhooks_block(webhooks: Option<&[crate::api::types::StripeWebhookEndp
         Some("Stripe posts subscription + payment events here. Create one, then copy its signing secret into the Webhook secret field above."),
         html! {
             form method="post" action="/admin/stripe/webhooks" class="space-y-3 mb-4" {
-                div class="space-y-1" { label class="text-xs font-medium" { "Endpoint URL" } input name="url" type="url" required placeholder="https://api.example.com/webhooks/stripe" class=(dashboard_input()); }
+                div class="space-y-1" { label for="url" class="text-xs font-medium" { "Endpoint URL" } input id="url" name="url" type="url" required placeholder="https://api.example.com/webhooks/stripe" class=(dashboard_input()); }
                 div class="space-y-1" {
-                    label class="text-xs font-medium" { "Enabled events" }
-                    textarea name="enabled_events" rows="2" class=(dashboard_input()) { (RECOMMENDED_WEBHOOK_EVENTS.join(", ")) }
+                    label for="enabled_events" class="text-xs font-medium" { "Enabled events" }
+                    textarea id="enabled_events" name="enabled_events" rows="2" class=(dashboard_input()) { (RECOMMENDED_WEBHOOK_EVENTS.join(", ")) }
                     p class="text-xs text-muted-foreground" { "Comma- or whitespace-separated. Defaults to the events bunyip handles." }
                 }
                 button type="submit" class=(button_class("default", "sm", "")) { "Create endpoint" }
@@ -239,8 +239,8 @@ pub(super) fn stripe_catalog_section(
     let field = |label: &str, name: &str, ph: &str, value: &Option<String>| -> Markup {
         html! {
             div class="space-y-2" {
-                label class="text-sm font-medium" { (label) }
-                input name=(name) type="text" maxlength="255" placeholder=(ph) value=(value.clone().unwrap_or_default()) class=(dashboard_input());
+                label for=(name) class="text-sm font-medium" { (label) }
+                input id=(name) name=(name) type="text" maxlength="255" placeholder=(ph) value=(value.clone().unwrap_or_default()) class=(dashboard_input());
             }
         }
     };
@@ -311,9 +311,9 @@ pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response 
                                 Some(&format!("Source: {}. Leave a field blank to keep the existing value.", s.source)),
                                 html! {
                                     div class="space-y-4" {
-                                        div class="space-y-2" { label class="text-sm font-medium" { "Secret key" } input name="secret_key" type="password" placeholder=(s.secret_key_masked.clone().unwrap_or_else(|| "sk_live_…".into())) class=(dashboard_input()); }
-                                        div class="space-y-2" { label class="text-sm font-medium" { "Webhook secret" } input name="webhook_secret" type="password" placeholder=(s.webhook_secret_masked.clone().unwrap_or_else(|| "whsec_…".into())) class=(dashboard_input()); }
-                                        div class="space-y-2" { label class="text-sm font-medium" { "App tag" } input name="app_tag" value=(s.app_tag) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Only Stripe products tagged with this value are shown below." } }
+                                        div class="space-y-2" { label for="secret_key" class="text-sm font-medium" { "Secret key" } input id="secret_key" name="secret_key" type="password" placeholder=(s.secret_key_masked.clone().unwrap_or_else(|| "sk_live_…".into())) class=(dashboard_input()); }
+                                        div class="space-y-2" { label for="webhook_secret" class="text-sm font-medium" { "Webhook secret" } input id="webhook_secret" name="webhook_secret" type="password" placeholder=(s.webhook_secret_masked.clone().unwrap_or_else(|| "whsec_…".into())) class=(dashboard_input()); }
+                                        div class="space-y-2" { label for="app_tag" class="text-sm font-medium" { "App tag" } input id="app_tag" name="app_tag" value=(s.app_tag) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Only Stripe products tagged with this value are shown below." } }
                                     }
                                 },
                             ),
@@ -322,9 +322,9 @@ pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response 
                                 Some("Where Stripe returns the customer after checkout, and the trial length."),
                                 html! {
                                     div class="space-y-4" {
-                                        div class="space-y-2" { label class="text-sm font-medium" { "Success URL" } input name="success_url" type="url" value=(s.success_url) placeholder="https://example.com/checkout/success" class=(dashboard_input()); }
-                                        div class="space-y-2" { label class="text-sm font-medium" { "Cancel URL" } input name="cancel_url" type="url" value=(s.cancel_url) placeholder="https://example.com/pricing?checkout=canceled" class=(dashboard_input()); }
-                                        div class="space-y-2" { label class="text-sm font-medium" { "Trial period (days)" } input name="trial_period_days" type="number" min="0" max="365" value=(s.trial_period_days) class=(dashboard_input()); }
+                                        div class="space-y-2" { label for="success_url" class="text-sm font-medium" { "Success URL" } input id="success_url" name="success_url" type="url" value=(s.success_url) placeholder="https://example.com/checkout/success" class=(dashboard_input()); }
+                                        div class="space-y-2" { label for="cancel_url" class="text-sm font-medium" { "Cancel URL" } input id="cancel_url" name="cancel_url" type="url" value=(s.cancel_url) placeholder="https://example.com/pricing?checkout=canceled" class=(dashboard_input()); }
+                                        div class="space-y-2" { label for="trial_period_days" class="text-sm font-medium" { "Trial period (days)" } input id="trial_period_days" name="trial_period_days" type="number" min="0" max="365" value=(s.trial_period_days) class=(dashboard_input()); }
                                     }
                                 },
                             ),

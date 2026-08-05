@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::api::admin as admin_api;
 use crate::api::types::{AdminRateLimit, AdminUser};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
-use crate::util::{relative_time, urlenc};
+use crate::util::{rel_time, urlenc};
 use crate::views::ui::{badge, button_class, icon};
 use crate::web::{redirect_cookies, AppState};
 
@@ -61,15 +61,6 @@ pub(super) fn tier_label(tier: &crate::api::types::SubscriptionTier) -> &'static
         EarlyAdopter => "Early Adopter",
         Standard => "Standard",
     }
-}
-
-/// Format an ISO-8601 timestamp as a compact absolute date for the `title`
-/// tooltip on a relative "Joined X ago" label. Falls back to the raw string when
-/// it does not parse.
-fn abs_time(iso: &str) -> String {
-    chrono::DateTime::parse_from_rfc3339(iso)
-        .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
-        .unwrap_or_else(|_| iso.to_string())
 }
 
 /// BUNYIP-410 overhaul: the complete filter + sort + page state for the admin
@@ -396,7 +387,7 @@ pub(super) fn user_grid_row(u: &crate::api::types::AdminUser) -> Markup {
     };
     let tier = html! { (badge("secondary", tier_label(&u.subscription_tier))) };
     let joined = html! {
-        span class="text-xs text-muted-foreground" title=(abs_time(&u.created_at)) { "Joined " (relative_time(&u.created_at)) }
+        span class="text-xs text-muted-foreground" { "Joined " (rel_time(&u.created_at)) }
     };
     if u.suspended {
         html! {
@@ -1067,9 +1058,9 @@ pub async fn user_detail(
                         @if !target.email_verified { (badge("outline", "Unverified")) }
                     }
                     p class="text-sm text-muted-foreground mt-1" {
-                        "Joined " (relative_time(&target.created_at))
+                        "Joined " (rel_time(&target.created_at))
                         @if let Some(last) = target.last_login_at.as_deref() {
-                            " · last login " (relative_time(last))
+                            " · last login " (rel_time(last))
                         }
                     }
                 }
@@ -1091,7 +1082,7 @@ pub async fn user_detail(
                     div { span class="text-muted-foreground" { "Tier: " } (format!("{:?}", target.subscription_tier)) }
                     @if target.lifetime_member { div { span class="text-muted-foreground" { "Lifetime: " } "Yes" } }
                     @if let Some(grace) = target.grace_period_end.as_deref() {
-                        div { span class="text-muted-foreground" { "Grace ends: " } (relative_time(grace)) }
+                        div { span class="text-muted-foreground" { "Grace ends: " } (rel_time(grace)) }
                     }
                 }
             }
