@@ -14,6 +14,7 @@ pub mod access_log;
 pub mod csrf;
 pub mod db;
 pub mod error_log;
+pub mod extractors;
 pub mod handlers;
 pub mod migrate_reconcile;
 pub mod mokosh_backup;
