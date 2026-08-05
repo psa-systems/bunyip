@@ -62,7 +62,10 @@ concurrency:
 
 jobs:
   e2e:
-    name: Playwright against deployment
+    # BUNYIP-478: shared `E2E /` check-name prefix so one branch-protection
+    # pattern matches both E2E checks. This is the main/deploy check (push +
+    # dispatch, never pull_request); the PR gate is `E2E / PR gate` in e2e-pr.yml.
+    name: E2E / deployment
     # Dev label: this job launches Playwright's bundled Chromium, and only the
     # dev stage of the opensuse image installs the X / GTK / NSS / glib shared
     # libraries that browser links against; the base stage carries none of them.
