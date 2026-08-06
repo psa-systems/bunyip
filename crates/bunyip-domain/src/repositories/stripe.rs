@@ -33,6 +33,41 @@ impl StripeConfigRepository {
         Ok(())
     }
 
+    /// Rewrite the stored secrets under a new key version, touching nothing else
+    /// (BUNYIP-483 re-encrypt pass). A `None` ciphertext leaves that column
+    /// alone; `updated_by` is left alone because re-encryption is not an
+    /// operator edit of the configuration.
+    pub async fn update_secret_encryption(
+        pool: &PgPool,
+        secret_key: Option<Vec<u8>>,
+        secret_key_nonce: Option<Vec<u8>>,
+        webhook_secret: Option<Vec<u8>>,
+        webhook_secret_nonce: Option<Vec<u8>>,
+        key_version: i16,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            UPDATE stripe_config
+            SET
+                secret_key           = CASE WHEN $1::BYTEA IS NOT NULL THEN $1 ELSE secret_key END,
+                secret_key_nonce     = CASE WHEN $1::BYTEA IS NOT NULL THEN $2 ELSE secret_key_nonce END,
+                webhook_secret       = CASE WHEN $3::BYTEA IS NOT NULL THEN $3 ELSE webhook_secret END,
+                webhook_secret_nonce = CASE WHEN $3::BYTEA IS NOT NULL THEN $4 ELSE webhook_secret_nonce END,
+                key_version          = $5,
+                updated_at           = NOW()
+            WHERE id = 1
+            "#,
+        )
+        .bind(secret_key)
+        .bind(secret_key_nonce)
+        .bind(webhook_secret)
+        .bind(webhook_secret_nonce)
+        .bind(key_version)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     /// Updates only the fields that are `Some`. `None` leaves the existing DB value unchanged.
     /// Secrets are passed as pre-encrypted (ciphertext, nonce) pairs.
     ///
