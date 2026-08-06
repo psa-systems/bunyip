@@ -751,7 +751,12 @@ async fn main() -> anyhow::Result<()> {
         enabled = update_check_url.is_some(),
         "Update checker initialized"
     );
-    let update_checker = Arc::new(UpdateChecker::new(update_check_url, update_check_token));
+    let update_checker = Arc::new(UpdateChecker::new(
+        update_check_url,
+        update_check_token,
+        bunyip_api::version::current_version().to_string(),
+        concat!("bunyip-api/", env!("CARGO_PKG_VERSION")),
+    ));
 
     let server_addr = config.server_addr();
     // CORS_ORIGIN is a comma-separated allow-list once multiple RPs register
