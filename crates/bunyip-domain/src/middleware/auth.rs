@@ -629,55 +629,12 @@ impl AuthCookies {
 /// registered in app data - the real socket address is used. This keeps client
 /// IPs correct behind the real ingress while closing the spoofing vector that
 /// let any client evade the auto-ban or ban a victim by forging their IP.
+// DEV-529: the trusted-proxy resolution moved to `dunite_core::middleware`
+// (`resolve_client_ip` + the actix `client_ip` reader). bunyip keeps this thin
+// wrapper because it supplies the app-specific trusted-proxy config; every
+// `crate::middleware::extract_client_ip` call site is unchanged.
 pub fn extract_client_ip(req: &HttpRequest) -> Option<std::net::IpAddr> {
-    let peer_ip = req.peer_addr().map(|addr| addr.ip());
-    let forwarded_for = req
-        .headers()
-        .get("X-Forwarded-For")
-        .and_then(|v| v.to_str().ok());
-    let real_ip = req.headers().get("X-Real-IP").and_then(|v| v.to_str().ok());
-    resolve_client_ip(
-        peer_ip,
-        forwarded_for,
-        real_ip,
-        trusted_proxies(req).unwrap_or(&[]),
-    )
-}
-
-/// Pure resolution of the external client IP, factored out of
-/// [`extract_client_ip`] so the trusted-proxy logic is unit-testable without an
-/// actix request. `X-Forwarded-For` (first hop) then `X-Real-IP` are honoured
-/// ONLY when `peer_ip` is inside a configured trusted-proxy CIDR; for every
-/// other peer (including when `trusted_proxies` is empty) the socket peer is
-/// returned, so a direct client cannot spoof its IP. This is the same
-/// resolution the rate-limit records use, so request-log lines and rate-limit
-/// entries attribute to the same external client behind Traefik (BUNYIP-328).
-pub(crate) fn resolve_client_ip(
-    peer_ip: Option<std::net::IpAddr>,
-    forwarded_for: Option<&str>,
-    real_ip: Option<&str>,
-    trusted_proxies: &[ipnetwork::IpNetwork],
-) -> Option<std::net::IpAddr> {
-    let peer_is_trusted_proxy = match peer_ip {
-        Some(peer) => trusted_proxies.iter().any(|net| net.contains(peer)),
-        None => false,
-    };
-
-    if peer_is_trusted_proxy {
-        // X-Forwarded-For: first entry is the original client.
-        if let Some(first_ip) = forwarded_for.and_then(|s| s.split(',').next()) {
-            if let Ok(ip) = first_ip.trim().parse() {
-                return Some(ip);
-            }
-        }
-
-        // X-Real-IP fallback (still only from a trusted proxy).
-        if let Some(ip) = real_ip.and_then(|s| s.trim().parse().ok()) {
-            return Some(ip);
-        }
-    }
-
-    peer_ip
+    dunite_core::middleware::client_ip(req, trusted_proxies(req).unwrap_or(&[]))
 }
 
 /// Read the configured trusted-proxy CIDRs from request app data. Returns
@@ -706,15 +663,6 @@ pub fn extract_device_info(req: &HttpRequest) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::IpAddr;
-
-    fn ip(s: &str) -> IpAddr {
-        s.parse().unwrap()
-    }
-
-    fn net(s: &str) -> ipnetwork::IpNetwork {
-        s.parse().unwrap()
-    }
 
     /// BUNYIP-413: the super-admin gate needs BOTH the admin role and the
     /// persisted flag. An ordinary admin, a flagged non-admin (a demoted super
@@ -725,63 +673,6 @@ mod tests {
         assert!(!super_admin_allowed("admin", false));
         assert!(!super_admin_allowed("subscriber", true));
         assert!(!super_admin_allowed("subscriber", false));
-    }
-
-    /// A request forwarded by a trusted proxy (Traefik) resolves to the
-    /// external client in `X-Forwarded-For`, not the proxy's internal peer IP,
-    /// so request-log and rate-limit entries are attributable (BUNYIP-328).
-    #[test]
-    fn client_ip_uses_forwarded_for_when_peer_is_trusted_proxy() {
-        let proxies = [net("10.0.0.0/8")];
-        let resolved = resolve_client_ip(
-            Some(ip("10.1.2.3")),          // peer = Traefik, internal IP
-            Some("203.0.113.7, 10.1.2.3"), // XFF: real client first
-            None,
-            &proxies,
-        );
-        assert_eq!(
-            resolved,
-            Some(ip("203.0.113.7")),
-            "should log the external client, not the proxy/internal IP"
-        );
-    }
-
-    /// A direct (untrusted) client forging `X-Forwarded-For` cannot spoof its
-    /// IP: the socket peer is logged instead.
-    #[test]
-    fn client_ip_ignores_spoofed_forwarded_for_from_untrusted_peer() {
-        let proxies = [net("10.0.0.0/8")];
-        let resolved = resolve_client_ip(
-            Some(ip("198.51.100.9")), // peer is NOT a trusted proxy
-            Some("203.0.113.7"),      // forged XFF
-            None,
-            &proxies,
-        );
-        assert_eq!(
-            resolved,
-            Some(ip("198.51.100.9")),
-            "spoofed XFF from an untrusted peer must be ignored"
-        );
-    }
-
-    /// `X-Real-IP` is the fallback when a trusted proxy sets it without XFF.
-    #[test]
-    fn client_ip_falls_back_to_real_ip_from_trusted_proxy() {
-        let proxies = [net("10.0.0.0/8")];
-        let resolved = resolve_client_ip(Some(ip("10.1.2.3")), None, Some("203.0.113.7"), &proxies);
-        assert_eq!(resolved, Some(ip("203.0.113.7")));
-    }
-
-    /// With no trusted proxies configured, forwarding headers are never
-    /// honoured; the socket peer is authoritative.
-    #[test]
-    fn client_ip_is_peer_when_no_trusted_proxies_configured() {
-        let resolved = resolve_client_ip(Some(ip("203.0.113.7")), Some("1.2.3.4"), None, &[]);
-        assert_eq!(
-            resolved,
-            Some(ip("203.0.113.7")),
-            "no configured proxies -> XFF is never trusted"
-        );
     }
 
     #[test]
