@@ -746,10 +746,12 @@ dependencies = [
  "dunite-download",
  "dunite-feedback",
  "dunite-geoip",
+ "dunite-hibp",
  "dunite-ipenrich",
  "dunite-stripe",
  "dunite-stripe-core",
  "dunite-user-core",
+ "dunite-webhook",
  "futures-util",
  "hex",
  "hmac",
@@ -1468,6 +1470,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dunite-hibp"
+version = "0.1.0"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=82f9baa96c61e682269d9ff43c8042cb6882f5d1#82f9baa96c61e682269d9ff43c8042cb6882f5d1"
+dependencies = [
+ "hex",
+ "reqwest 0.11.27",
+ "sha1 0.10.6",
+ "tracing",
+]
+
+[[package]]
 name = "dunite-image-upload"
 version = "0.1.0"
 source = "git+https://dev.a8n.run/psa-systems/dunite?rev=ae62c276ab187852578daad1c4b9c823579b194a#ae62c276ab187852578daad1c4b9c823579b194a"
@@ -1560,6 +1573,20 @@ dependencies = [
  "chrono",
  "serde",
  "uuid 1.23.1",
+]
+
+[[package]]
+name = "dunite-webhook"
+version = "0.1.0"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=82f9baa96c61e682269d9ff43c8042cb6882f5d1#82f9baa96c61e682269d9ff43c8042cb6882f5d1"
+dependencies = [
+ "hex",
+ "hmac",
+ "reqwest 0.11.27",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

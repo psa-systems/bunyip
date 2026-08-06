@@ -53,6 +53,12 @@ dunite-geoip = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276
 # likelihood); advisory only, never a spam verdict. Same offline, leaf, owns-its-
 # error contract as dunite-geoip.
 dunite-ipenrich = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
+# DEV-527: the HIBP k-anonymity password-breach check and the outbound
+# HMAC-signed webhook sender, extracted from this crate's services. Leaf crates
+# (own their types, no dunite-core dep), so they pin independently of the
+# dunite-core graph rev.
+dunite-hibp = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
+dunite-webhook = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
 async-trait = "0.1"
 
 # Web framework + multipart.
