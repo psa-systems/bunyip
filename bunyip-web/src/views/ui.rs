@@ -533,11 +533,15 @@ mod tests {
             let fill = token(block, "--primary");
             for surface in ["--card", "--background", "--muted"] {
                 let bg = token(block, surface);
-                for (label, against) in [("", bg), (" under bg-primary/10", mix(fill, bg, 0.10))] {
+                // 0 is the bare surface; the rest are every `*-primary/<n>`
+                // wash the views paint over it (bubbles, gradients, panels).
+                for wash in [0, 5, 10, 18, 20] {
+                    let against = mix(fill, bg, f64::from(wash) / 100.0);
                     let ratio = contrast(text, against);
                     assert!(
                         ratio >= 4.5,
-                        "{theme}: --primary-text on {surface}{label} is {ratio:.2}:1, below AA 4.5:1"
+                        "{theme}: --primary-text on {surface} under a {wash}% \
+                         --primary wash is {ratio:.2}:1, below AA 4.5:1"
                     );
                 }
             }
