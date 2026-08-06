@@ -24,10 +24,10 @@ fn stripe_setup_docs() -> Markup {
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
             div class="p-6 space-y-3 text-sm text-muted-foreground" {
-                div class="flex items-center gap-2 text-foreground" { (icon("help-circle", "h-5 w-5 text-primary")) h3 class="text-base font-semibold" { "Setting up Stripe" } }
+                div class="flex items-center gap-2 text-foreground" { (icon("help-circle", "h-5 w-5 text-primary-text")) h3 class="text-base font-semibold" { "Setting up Stripe" } }
                 p {
                     "Your Stripe secret key authenticates API requests. Generate a "
-                    a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline" { "restricted key" }
+                    a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noopener noreferrer" class="text-primary-text hover:underline" { "restricted key" }
                     " with these permissions set to " span class="font-medium text-foreground" { "Write" }
                     ": Products, Prices, Customers, Subscriptions, and Checkout Sessions; and " span class="font-medium text-foreground" { "Read" } " for Invoices."
                 }

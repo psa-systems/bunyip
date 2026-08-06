@@ -59,7 +59,7 @@ pub(super) fn ip_ban_add_card(prefill_ip: Option<&str>) -> Markup {
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
             div class="flex flex-col space-y-1.5 p-6" {
-                div class="flex items-center gap-3" { (icon("shield-off", "h-5 w-5 text-primary")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Add Ban" } }
+                div class="flex items-center gap-3" { (icon("shield-off", "h-5 w-5 text-primary-text")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Add Ban" } }
                 p class="text-sm text-muted-foreground" { "Block an address by hand. The ban takes effect on its next request and expires on its own." }
             }
             div class="p-6 pt-0" {

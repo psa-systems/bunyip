@@ -99,7 +99,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
             @if catalog_empty {
                 div class="rounded-lg border border-primary/30 bg-primary/5 p-6" {
                     div class="flex items-start gap-3" {
-                        (icon("layers", "h-5 w-5 text-primary mt-0.5"))
+                        (icon("layers", "h-5 w-5 text-primary-text mt-0.5"))
                         div class="flex-1" {
                             h3 class="text-lg font-semibold" { "This environment has no applications yet" }
                             p class="text-sm text-muted-foreground mt-1" { "Load a starter template or import your own data to populate the catalog." }

@@ -72,7 +72,7 @@ fn pricing_card(
             div class="p-6 pt-0" {
                 ul class="space-y-4" {
                     @for f in features {
-                        li class="flex items-center gap-3" { (icon("check", "h-5 w-5 text-primary flex-shrink-0")) span { (f) } }
+                        li class="flex items-center gap-3" { (icon("check", "h-5 w-5 text-primary-text flex-shrink-0")) span { (f) } }
                     }
                 }
                 @if stripe {
@@ -207,7 +207,7 @@ fn roadmap_section(title: &str, blurb: &str, items: &[(&str, &str)]) -> Markup {
                 @for (name, desc) in items {
                     div class="rounded-lg border bg-card text-card-foreground shadow-sm p-6" {
                         div class="flex items-start gap-3" {
-                            (icon("check", "h-5 w-5 text-primary flex-shrink-0 mt-0.5"))
+                            (icon("check", "h-5 w-5 text-primary-text flex-shrink-0 mt-0.5"))
                             div {
                                 h3 class="font-semibold leading-none tracking-tight" { (name) }
                                 p class="mt-2 text-sm text-muted-foreground" { (desc) }
@@ -278,7 +278,7 @@ pub async fn terms(State(st): State<AppState>, headers: HeaderMap) -> Response {
                     "Do not transmit malware, spam, or other harmful content.",
                 ]))
                 (legal_p("6. Limitation of Liability", html! { (d) " shall not be liable for any indirect, incidental, special, consequential, or punitive damages resulting from your access to or use of the Service." }))
-                (legal_p("7. Contact", html! { "For any questions about these Terms, contact us at " a href=(format!("mailto:support@{d}")) class="text-primary hover:underline" { "support@" (d) } "." }))
+                (legal_p("7. Contact", html! { "For any questions about these Terms, contact us at " a href=(format!("mailto:support@{d}")) class="text-primary-text hover:underline" { "support@" (d) } "." }))
             }
         }
     };
@@ -313,7 +313,7 @@ pub async fn privacy(State(st): State<AppState>, headers: HeaderMap) -> Response
                     "Authentication tokens are cryptographically signed.",
                     "Regular security audits and monitoring.",
                 ]))
-                (legal_p("5. Your Rights", html! { "You may request access to, correction of, or deletion of your personal data. To exercise these rights, contact us at " a href=(format!("mailto:privacy@{d}")) class="text-primary hover:underline" { "privacy@" (d) } "." }))
+                (legal_p("5. Your Rights", html! { "You may request access to, correction of, or deletion of your personal data. To exercise these rights, contact us at " a href=(format!("mailto:privacy@{d}")) class="text-primary-text hover:underline" { "privacy@" (d) } "." }))
                 (legal_p("6. Cookies", html! { "We use essential cookies for authentication and session management. We do not use third-party tracking or advertising cookies." }))
             }
         }
@@ -724,7 +724,7 @@ pub async fn docs_index(State(st): State<AppState>, headers: HeaderMap) -> Respo
             ul class="space-y-3" {
                 @for &(slug, title, _) in DOCS.iter() {
                     li {
-                        a class="text-lg text-primary hover:underline" href=(format!("/docs/{slug}")) { (title) }
+                        a class="text-lg text-primary-text hover:underline" href=(format!("/docs/{slug}")) { (title) }
                     }
                 }
             }
@@ -746,7 +746,7 @@ pub async fn docs_page(
             div class="container max-w-4xl py-12" {
                 h1 class="text-4xl font-bold mb-4" { "Document not found" }
                 p class="text-muted-foreground" {
-                    "No such doc. " a class="text-primary hover:underline" href="/docs" { "Back to documentation" } "."
+                    "No such doc. " a class="text-primary-text hover:underline" href="/docs" { "Back to documentation" } "."
                 }
             }
         };
@@ -768,17 +768,17 @@ pub async fn docs_page(
     let content = html! {
         style { (PreEscaped(DOCS_CSS)) }
         div class="container max-w-4xl py-12" {
-            div class="mb-6" { a class="text-sm text-primary hover:underline" href="/docs" { "← Documentation" } }
+            div class="mb-6" { a class="text-sm text-primary-text hover:underline" href="/docs" { "← Documentation" } }
             @if has_token && username.is_some() {
                 @if personalized {
                     p class="text-sm text-muted-foreground mb-6" {
                         "Personalized with your Bunyip username. "
-                        a class="text-primary hover:underline" href=(format!("/docs/{slug}?raw=1")) { "Show the generic version" }
+                        a class="text-primary-text hover:underline" href=(format!("/docs/{slug}?raw=1")) { "Show the generic version" }
                     }
                 } @else {
                     p class="text-sm text-muted-foreground mb-6" {
                         "Showing the generic version. "
-                        a class="text-primary hover:underline" href=(format!("/docs/{slug}")) { "Personalize with your username" }
+                        a class="text-primary-text hover:underline" href=(format!("/docs/{slug}")) { "Personalize with your username" }
                     }
                 }
             }
@@ -818,7 +818,7 @@ pub async fn app_docs_index(
                 ul class="space-y-3" {
                     @for d in &docs {
                         li {
-                            a class="text-lg text-primary hover:underline" href=(format!("/apps/{slug}/docs/{}", d.slug)) { (d.title) }
+                            a class="text-lg text-primary-text hover:underline" href=(format!("/apps/{slug}/docs/{}", d.slug)) { (d.title) }
                         }
                     }
                 }
@@ -855,7 +855,7 @@ pub async fn app_docs_page(
                     h1 class="text-4xl font-bold mb-4" { "Document not found" }
                     p class="text-muted-foreground" {
                         "No such page. "
-                        a class="text-primary hover:underline" href=(format!("/apps/{slug}/docs")) { "Back to " (app_name) " docs" }
+                        a class="text-primary-text hover:underline" href=(format!("/apps/{slug}/docs")) { "Back to " (app_name) " docs" }
                         "."
                     }
                 }
