@@ -179,9 +179,12 @@ fn theme_controls(icon_class: &str) -> Markup {
 }
 
 /// Floating "open feedback" launcher pinned to the bottom-right of the
-/// viewport. Mounted by `dashboard_shell` (always on for authenticated
-/// users) and by `public_shell` (gated by `show_feedback`, kept off on
-/// the login / register flow). Pages whose primary action lands in the
+/// viewport. BUNYIP-370: mounted by EVERY authenticated shell -
+/// `dashboard_shell` and `admin_shell` - so feedback can be sent from any
+/// app surface, not just the user dashboard. `public_shell` mounts it too,
+/// gated by `show_feedback` (kept off on the login / register / consent flow,
+/// where the chrome is deliberately minimal, and off on `/feedback` itself).
+/// Pages whose primary action lands in the
 /// bottom-right (currently `/downloads`) add their own `pb-24` so the
 /// launcher does not occlude content; see the wrapper in the Downloads
 /// handler.
@@ -619,6 +622,9 @@ pub fn admin_shell(user: &User, active: &str, topbar_title: &str, content: Marku
                     div class="relative" { (content) }
                 }
             }
+            // BUNYIP-370: same launcher the user dashboard carries, so an admin
+            // can report from the panel they are looking at.
+            (feedback_launcher())
         }
         (sse)
     }
@@ -660,6 +666,87 @@ pub fn admin_block_grid(blocks: Vec<Markup>) -> Markup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::types::{MembershipStatus, SubscriptionTier};
+
+    fn test_user(role: UserRole) -> User {
+        User {
+            id: "u1".into(),
+            email: "u@example.com".into(),
+            role,
+            email_verified: true,
+            two_factor_enabled: true,
+            membership_status: MembershipStatus::None,
+            price_locked: false,
+            locked_price_id: None,
+            locked_price_amount: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+            subscription_tier: SubscriptionTier::Free,
+            trial_ends_at: None,
+            lifetime_member: false,
+            first_name: Some("Ada".into()),
+            last_name: Some("Lovelace".into()),
+            phone: None,
+            avatar_updated_at: None,
+            is_super_admin: false,
+        }
+    }
+
+    /// BUNYIP-370: the feedback entry point belongs on EVERY authenticated
+    /// surface, not just the user dashboard. This is the guard for the
+    /// invariant: adding a new authenticated shell that forgets the launcher
+    /// (as `admin_shell` did) fails here.
+    #[test]
+    fn every_authenticated_shell_mounts_the_feedback_launcher() {
+        let admin = test_user(UserRole::Admin);
+        let member = test_user(UserRole::Subscriber);
+        let shells = [
+            (
+                "admin_shell",
+                admin_shell(&admin, "/admin", "Admin", html! {}).into_string(),
+            ),
+            (
+                "dashboard_shell",
+                dashboard_shell(&member, "/dashboard", "Dashboard", html! {}).into_string(),
+            ),
+        ];
+        for (name, markup) in shells {
+            assert!(
+                markup.contains("data-feedback-link"),
+                "{name} must mount the feedback launcher"
+            );
+            assert!(
+                markup.contains(r#"href="/feedback""#),
+                "{name}'s launcher must point at the existing /feedback route"
+            );
+            assert!(
+                markup.contains("Have feedback?"),
+                "{name}'s launcher must render its label"
+            );
+        }
+    }
+
+    /// The admin panel's own "review submitted feedback" page is a different
+    /// thing from the "send feedback" launcher; the panel carries both and the
+    /// launcher must not be mistaken for the nav entry (BUNYIP-370).
+    #[test]
+    fn admin_panel_has_both_the_review_page_and_the_send_launcher() {
+        let markup = admin_shell(
+            &test_user(UserRole::Admin),
+            "/admin/users",
+            "Users",
+            html! {},
+        )
+        .into_string();
+        assert!(
+            markup.contains(r#"href="/admin/feedback""#),
+            "admin nav keeps the feedback review page"
+        );
+        assert!(
+            markup.contains(r#"aria-label="Open feedback page""#),
+            "admin shell also carries the submit-feedback launcher"
+        );
+    }
 
     /// BUNYIP-424 (render-level guard, paired with
     /// `security::tests::no_inline_script_or_event_handlers_in_views`): the
