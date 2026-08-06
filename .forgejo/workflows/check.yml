@@ -96,10 +96,15 @@ jobs:
         run: ./scripts/check-security-invariants.sh
 
       - name: Check Stripe config stays DB-only
-        # No STRIPE_* env surface outside the at-rest encryption-key family and
-        # the e2e harness. An env read compiles fine but reinstates the
-        # "container env overrides the admin" behaviour removed in BUNYIP-482.
+        # No STRIPE_* env surface outside the e2e harness. An env read compiles
+        # fine but reinstates the "container env overrides the admin" behaviour
+        # removed in BUNYIP-482.
         run: ./scripts/check-no-stripe-env.sh
+
+      - name: Check the at-rest key stays single
+        # No retired per-consumer encryption-key env names: TOTP, Stripe and
+        # SMTP secrets are all protected by APP_ENCRYPTION_KEY (BUNYIP-483).
+        run: ./scripts/check-no-legacy-key-env.sh
 
       - name: Cap build parallelism
         # nproc/2 cap: never claim more than half the host (see CI.md "Concurrency cap").

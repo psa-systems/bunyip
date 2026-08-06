@@ -4,7 +4,7 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 use crate::errors::AppError;
-use crate::services::encryption::EncryptionKeySet;
+use crate::services::AppKeySet;
 
 // DEV-515: the async-stripe response DTOs moved to the shared `dunite-stripe`
 // crate (consumed by a8n-tools too) and are re-exported here, so every
@@ -38,7 +38,7 @@ pub struct StripeConfig {
 
 /// Encrypt plaintext with the current key. Returns (ciphertext, nonce, key_version).
 pub fn encrypt_secret(
-    key_set: &EncryptionKeySet,
+    key_set: &AppKeySet,
     plaintext: &str,
 ) -> Result<(Vec<u8>, Vec<u8>, i16), AppError> {
     key_set.encrypt(plaintext.as_bytes())
@@ -46,7 +46,7 @@ pub fn encrypt_secret(
 
 /// Decrypt ciphertext using the key set (with fallback). Returns plaintext string.
 pub fn decrypt_secret(
-    key_set: &EncryptionKeySet,
+    key_set: &AppKeySet,
     ciphertext: &[u8],
     nonce: &[u8],
     key_version: i16,
@@ -103,7 +103,7 @@ pub struct StripeConfigResponse {
 }
 
 impl StripeConfigResponse {
-    pub fn from_db(config: &StripeConfig, key_set: &EncryptionKeySet) -> Result<Self, AppError> {
+    pub fn from_db(config: &StripeConfig, key_set: &AppKeySet) -> Result<Self, AppError> {
         let secret_key_plain = match (&config.secret_key, &config.secret_key_nonce) {
             (Some(ct), Some(nonce)) => {
                 Some(decrypt_secret(key_set, ct, nonce, config.key_version)?)
@@ -170,11 +170,11 @@ impl StripeConfigResponse {
 mod tests {
     use super::*;
 
-    fn test_key_set() -> EncryptionKeySet {
-        EncryptionKeySet {
+    fn test_key_set() -> AppKeySet {
+        AppKeySet {
             current: [0xAA; 32],
             current_version: 1,
-            previous: None,
+            previous: Vec::new(),
         }
     }
 
@@ -200,10 +200,10 @@ mod tests {
     fn decrypt_with_wrong_key_fails() {
         let ks = test_key_set();
         let (ciphertext, nonce, _) = encrypt_secret(&ks, "secret").unwrap();
-        let wrong_ks = EncryptionKeySet {
+        let wrong_ks = AppKeySet {
             current: [0xBB; 32],
             current_version: 1,
-            previous: None,
+            previous: Vec::new(),
         };
         assert!(decrypt_secret(&wrong_ks, &ciphertext, &nonce, 1).is_err());
     }
@@ -361,10 +361,10 @@ mod tests {
         let (ct, nonce, _) = encrypt_secret(&ks_v1, "sk_live_old").unwrap();
 
         // Rotate: new key is current, old key is previous
-        let ks_v2 = EncryptionKeySet {
+        let ks_v2 = AppKeySet {
             current: [0xBB; 32],
             current_version: 2,
-            previous: Some([0xAA; 32]),
+            previous: vec![[0xAA; 32]],
         };
         let decrypted = decrypt_secret(&ks_v2, &ct, &nonce, 1).unwrap();
         assert_eq!(decrypted, "sk_live_old");
@@ -377,10 +377,10 @@ mod tests {
         let (ct_old, nonce_old, _) = encrypt_secret(&ks_v1, "whsec_original").unwrap();
 
         // Rotate to v2
-        let ks_v2 = EncryptionKeySet {
+        let ks_v2 = AppKeySet {
             current: [0xBB; 32],
             current_version: 2,
-            previous: Some([0xAA; 32]),
+            previous: vec![[0xAA; 32]],
         };
 
         // Decrypt old, re-encrypt with new
@@ -389,10 +389,10 @@ mod tests {
         assert_eq!(ver_new, 2);
 
         // New ciphertext decryptable with v2 key only
-        let ks_v2_only = EncryptionKeySet {
+        let ks_v2_only = AppKeySet {
             current: [0xBB; 32],
             current_version: 2,
-            previous: None,
+            previous: Vec::new(),
         };
         let final_plain = decrypt_secret(&ks_v2_only, &ct_new, &nonce_new, 2).unwrap();
         assert_eq!(final_plain, "whsec_original");
@@ -420,10 +420,10 @@ mod tests {
         };
 
         // Decrypt with v2 key set (v1 as previous)
-        let ks_v2 = EncryptionKeySet {
+        let ks_v2 = AppKeySet {
             current: [0xBB; 32],
             current_version: 2,
-            previous: Some([0xAA; 32]),
+            previous: vec![[0xAA; 32]],
         };
         let resp = StripeConfigResponse::from_db(&config, &ks_v2).unwrap();
         assert_eq!(resp.secret_key_masked.as_deref(), Some("sk_live_***ated"));
@@ -452,10 +452,10 @@ mod tests {
         };
 
         // v2 key only, no previous — cannot decrypt v1 data
-        let ks_v2_no_prev = EncryptionKeySet {
+        let ks_v2_no_prev = AppKeySet {
             current: [0xBB; 32],
             current_version: 2,
-            previous: None,
+            previous: Vec::new(),
         };
         assert!(StripeConfigResponse::from_db(&config, &ks_v2_no_prev).is_err());
     }

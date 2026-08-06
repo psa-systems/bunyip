@@ -37,7 +37,7 @@ use sqlx::postgres::PgPoolOptions;
 
 use bunyip_api::config::{secret_env, Config};
 use bunyip_api::repositories::UserRepository;
-use bunyip_api::services::{EncryptionKeySet, TotpService};
+use bunyip_api::services::TotpService;
 use bunyip_api::{seed, E2E_ACCOUNT_EMAILS};
 
 /// The committed E2E seed template: the two accounts, owning their exact emails,
@@ -84,7 +84,7 @@ fn print_help() {
          \x20   --help        show this message\n\n\
          Requires BUNYIP_E2E_BOOTSTRAP_ALLOW=true and a non-production ENVIRONMENT.\n\
          The shared password is read from BUNYIP_E2E_TEST_USER_PASSWORD; --enable-2fa\n\
-         additionally reads BUNYIP_E2E_TOTP_SECRET and needs the same TOTP_ENCRYPTION_KEY\n\
+         additionally reads BUNYIP_E2E_TOTP_SECRET and needs the same APP_ENCRYPTION_KEY\n\
          the API uses (run it in the API container)."
     );
 }
@@ -156,18 +156,18 @@ async fn main() -> anyhow::Result<()> {
 /// seeded E2E account and enable 2FA, so a re-seed keeps a STABLE TOTP secret
 /// that the shared Forgejo `E2E_*_TOTP_SECRET` already matches (BUNYIP-359) - no
 /// interactive enrollment and no per-wipe secret rotation. Reuses the app's
-/// `TotpService`, so the secret is encrypted under the SAME `TOTP_ENCRYPTION_KEY`
+/// `TotpService`, so the secret is encrypted under the SAME `APP_ENCRYPTION_KEY`
 /// the API decrypts with; run this in the API container so that env is present.
 /// Idempotent: re-running re-enrolls the same secret and re-enables 2FA.
 async fn enroll_2fa(pool: &sqlx::PgPool, config: &Config) -> anyhow::Result<()> {
-    // Guard the silent footgun: with TOTP_ENCRYPTION_KEY unset, Config falls back
+    // Guard the silent footgun: with APP_ENCRYPTION_KEY unset, Config falls back
     // to the all-zero DEV key in a non-production env (which the bootstrap
     // requires). Encrypting the E2E secret under that while the API uses a real
     // key yields a secret the API cannot decrypt, so 2FA login would break with
     // no error surfaced here. Refuse instead of enrolling an unusable secret.
-    if config.totp_encryption_key == [0u8; 32] {
+    if config.app_encryption_key == [0u8; 32] {
         bail!(
-            "--enable-2fa needs TOTP_ENCRYPTION_KEY set to the API's key (run in the API \
+            "--enable-2fa needs APP_ENCRYPTION_KEY set to the API's key (run in the API \
              container); refusing to enroll under the all-zero dev key"
         );
     }
@@ -176,12 +176,7 @@ async fn enroll_2fa(pool: &sqlx::PgPool, config: &Config) -> anyhow::Result<()> 
         .filter(|s| !s.is_empty())
         .context("--enable-2fa requires BUNYIP_E2E_TOTP_SECRET (a base32 TOTP secret) to be set")?;
 
-    let key_set = EncryptionKeySet {
-        current: config.totp_encryption_key,
-        current_version: config.totp_key_version,
-        previous: config.totp_encryption_key_prev,
-    };
-    let totp = TotpService::new(key_set, config.app_name.clone(), pool.clone());
+    let totp = TotpService::new(config.app_key_set(), config.app_name.clone(), pool.clone());
 
     let mut enrolled = 0usize;
     for email in E2E_ACCOUNT_EMAILS {

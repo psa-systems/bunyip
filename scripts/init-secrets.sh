@@ -135,8 +135,8 @@ chmod 700 "$OIDC_DIR"
 # ---------------------------------------------------------------------------
 
 secret_from_env_or_gen "${SECRETS_DIR}/jwt_secret"            JWT_SECRET            "openssl rand -hex 32"
-secret_from_env_or_gen "${SECRETS_DIR}/totp_encryption_key"   TOTP_ENCRYPTION_KEY   "openssl rand -hex 32"
-secret_from_env_or_gen "${SECRETS_DIR}/stripe_encryption_key" STRIPE_ENCRYPTION_KEY "openssl rand -hex 32"
+# BUNYIP-483: ONE at-rest key for the TOTP, Stripe and SMTP secrets.
+secret_from_env_or_gen "${SECRETS_DIR}/app_encryption_key"    APP_ENCRYPTION_KEY    "openssl rand -hex 32"
 
 # postgres_password MUST be non-empty: postgres refuses an empty password.
 secret_from_env_or_gen "${SECRETS_DIR}/postgres_password"     POSTGRES_PASSWORD     "openssl rand -hex 32"
@@ -185,7 +185,7 @@ secret_from_env_or_empty "${SECRETS_DIR}/update_check_token"   BUNYIP_UPDATE_CHE
 
 # BUNYIP-482: no stripe_secret_key / stripe_webhook_secret files. The Stripe API
 # keys live only in the stripe_config DB row (admin Stripe page), encrypted with
-# stripe_encryption_key above.
+# app_encryption_key above.
 
 # ---------------------------------------------------------------------------
 # OIDC signing keys
