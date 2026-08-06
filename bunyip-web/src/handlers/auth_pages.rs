@@ -100,7 +100,21 @@ use crate::views::ui::{button_class, error_box};
 use crate::web::{html, html_cookies, redirect, redirect_cookies, AppState};
 
 fn field(id: &str, label: &str, ty: &str, placeholder: &str, autocomplete: &str) -> Markup {
-    field_with_value(id, label, ty, placeholder, autocomplete, "")
+    field_with_value(id, label, ty, placeholder, autocomplete, "", false)
+}
+
+/// BUNYIP-486: `field` for the FIRST editable field of a single-purpose auth
+/// card, which takes keyboard focus on load so the user can type without
+/// tabbing past the site nav. Native `autofocus`, so it works with JS off.
+/// Only ever one per rendered page.
+fn field_autofocus(
+    id: &str,
+    label: &str,
+    ty: &str,
+    placeholder: &str,
+    autocomplete: &str,
+) -> Markup {
+    field_with_value(id, label, ty, placeholder, autocomplete, "", true)
 }
 
 /// BUNYIP-240: like `field`, but preserves a pre-filled `value` across
@@ -115,11 +129,12 @@ fn field_with_value(
     placeholder: &str,
     autocomplete: &str,
     value: &str,
+    autofocus: bool,
 ) -> Markup {
     html! {
         div class="space-y-2" {
             label for=(id) class="text-sm font-medium leading-none" { (label) }
-            input id=(id) name=(id) type=(ty) placeholder=(placeholder) autocomplete=(autocomplete) value=(value) class=(dashboard_input());
+            input id=(id) name=(id) type=(ty) placeholder=(placeholder) autocomplete=(autocomplete) value=(value) autofocus[autofocus] class=(dashboard_input());
         }
     }
 }
@@ -274,8 +289,9 @@ fn login_content(error: Option<&str>, redirect: &str) -> Markup {
             @if let Some(e) = error { (error_box(e)) }
             div class="space-y-2" {
                 label for="email" class="text-sm font-medium leading-none" { "Email" }
+                // BUNYIP-486: first editable field of the card takes focus on load.
                 input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="email"
-                    class=(dashboard_input());
+                    autofocus class=(dashboard_input());
             }
             div class="space-y-2" {
                 div class="flex items-center justify-between" {
@@ -505,7 +521,7 @@ fn register_card(errors: &RegisterErrors, email: &str, signup_token: &str) -> Ma
                 // autofill safety, and re-rendering with a server-known password
                 // would round-trip plaintext through HTML history).
                 div {
-                    (field_with_value("email", "Email", "email", "you@example.com", "email", email))
+                    (field_with_value("email", "Email", "email", "you@example.com", "email", email, true))
                     // BUNYIP-271: surface an invalid-email rule next to the input.
                     @if let Some(e) = errors.email.as_deref() { (field_error_msg(e)) }
                 }
@@ -662,7 +678,7 @@ fn magic_form(error: Option<&str>, success: bool) -> Markup {
         html! {
             form method="post" action="/magic-link" class="space-y-4" {
                 @if let Some(e) = error { (error_box(e)) }
-                (field("email", "Email", "email", "you@example.com", "email"))
+                (field_autofocus("email", "Email", "email", "you@example.com", "email"))
                 (submit_btn("Send Magic Link"))
             }
             p class="mt-6 text-center text-sm text-muted-foreground" {
@@ -745,7 +761,7 @@ fn reset_form(error: Option<&str>, success: bool) -> Markup {
         html! {
             form method="post" action="/password-reset" class="space-y-4" {
                 @if let Some(e) = error { (error_box(e)) }
-                (field("email", "Email", "email", "you@example.com", "email"))
+                (field_autofocus("email", "Email", "email", "you@example.com", "email"))
                 (submit_btn("Send Reset Link"))
             }
             p class="mt-6 text-center text-sm text-muted-foreground" {
@@ -798,7 +814,7 @@ fn reset_confirm_card(token: &str, error: Option<&str>) -> Markup {
             form method="post" action="/password-reset/confirm" class="space-y-4" {
                 input type="hidden" name="token" value=(token);
                 @if let Some(e) = error { (error_box(e)) }
-                (field("password", "New Password", "password", "", "new-password"))
+                (field_autofocus("password", "New Password", "password", "", "new-password"))
                 (pw_reqs())
                 (field("confirm", "Confirm Password", "password", "", "new-password"))
                 (submit_btn("Reset Password"))
@@ -910,7 +926,10 @@ fn twofa_card(error: Option<&str>, redirect: Option<&str>) -> Markup {
                     // (services::totp::verify_code). BUNYIP-331:
                     // data-otp-autosubmit submits the form once the code is
                     // a complete six digits (typed / pasted / autofilled).
-                    input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000 000" autocomplete="one-time-code" data-otp-autosubmit class={ (dashboard_input()) " text-center text-lg tracking-widest" };
+                    // BUNYIP-486: autofocus so the whole screen is "type six
+                    // digits" - the autosubmit fires on input, not on focus,
+                    // so focusing alone submits nothing.
+                    input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000 000" autocomplete="one-time-code" autofocus data-otp-autosubmit class={ (dashboard_input()) " text-center text-lg tracking-widest" };
                 }
                 (submit_btn("Verify"))
             }
@@ -995,7 +1014,7 @@ fn invite_password_card(token: &str, email: &str, error: Option<&str>) -> Markup
             form method="post" action="/invite/accept" class="space-y-4" {
                 input type="hidden" name="token" value=(token);
                 @if let Some(e) = error { (error_box(e)) }
-                (field("password", "Password", "password", "At least 12 characters", "new-password"))
+                (field_autofocus("password", "Password", "password", "At least 12 characters", "new-password"))
                 (field("confirm", "Confirm Password", "password", "Re-enter your password", "new-password"))
                 (pw_reqs())
                 (submit_btn("Sign up"))
@@ -1496,5 +1515,112 @@ mod register_card_tests {
             !html.to_lowercase().contains("re-enter your password"),
             "clean render must not nag about re-entry: {html}"
         );
+    }
+}
+
+#[cfg(test)]
+mod autofocus_tests {
+    //! BUNYIP-486: every single-purpose auth card focuses its first editable
+    //! field on load, exactly once. Cards whose only control is a link keep the
+    //! default document focus.
+
+    use super::{
+        invite_password_card, login_content, magic_form, register_card, reset_confirm_card,
+        reset_form, twofa_card, RegisterErrors,
+    };
+
+    fn autofocus_count(html: &str) -> usize {
+        html.matches("autofocus").count()
+    }
+
+    /// The autofocused input must be the one named `name`, so the attribute
+    /// cannot drift onto a later field.
+    fn assert_focuses(html: &str, name: &str) {
+        assert_eq!(
+            autofocus_count(html),
+            1,
+            "expected exactly one autofocus: {html}"
+        );
+        let at = html.find("autofocus").expect("autofocus present");
+        let lt = html[..at].rfind('<').expect("input opens with <");
+        let gt = html[lt..].find('>').expect("input closes with >") + lt;
+        let tag = &html[lt..=gt];
+        assert!(
+            tag.contains(&format!("name=\"{name}\"")),
+            "autofocus landed on the wrong input, expected name={name}: {tag}"
+        );
+    }
+
+    #[test]
+    fn every_auth_card_focuses_its_first_field() {
+        assert_focuses(&login_content(None, "/dashboard").into_string(), "email");
+        assert_focuses(
+            &register_card(&RegisterErrors::default(), "", "").into_string(),
+            "email",
+        );
+        assert_focuses(&magic_form(None, false).into_string(), "email");
+        assert_focuses(&reset_form(None, false).into_string(), "email");
+        assert_focuses(&reset_confirm_card("tok", None).into_string(), "password");
+        assert_focuses(&twofa_card(None, None).into_string(), "code");
+        assert_focuses(
+            &invite_password_card("tok", "user@example.com", None).into_string(),
+            "password",
+        );
+    }
+
+    #[test]
+    fn error_rerenders_still_focus_the_first_field() {
+        // The wrong-code retry is a full page load of the same card, so the
+        // attribute has to survive the error path too.
+        assert_focuses(
+            &twofa_card(Some("Invalid code."), None).into_string(),
+            "code",
+        );
+        assert_focuses(
+            &login_content(Some("Bad login."), "/").into_string(),
+            "email",
+        );
+        assert_focuses(
+            &register_card(
+                &RegisterErrors {
+                    email: Some("Enter a valid email address.".into()),
+                    ..Default::default()
+                },
+                "user@example.com",
+                "",
+            )
+            .into_string(),
+            "email",
+        );
+        assert_focuses(
+            &magic_form(Some("Try again."), false).into_string(),
+            "email",
+        );
+        assert_focuses(
+            &reset_form(Some("Try again."), false).into_string(),
+            "email",
+        );
+        assert_focuses(
+            &reset_confirm_card("tok", Some("Try again.")).into_string(),
+            "password",
+        );
+        assert_focuses(
+            &invite_password_card("tok", "user@example.com", Some("Try again.")).into_string(),
+            "password",
+        );
+    }
+
+    #[test]
+    fn link_only_confirmation_cards_do_not_steal_focus() {
+        for html in [
+            magic_form(None, true).into_string(),
+            reset_form(None, true).into_string(),
+        ] {
+            assert_eq!(
+                autofocus_count(&html),
+                0,
+                "a card with no form field must not autofocus: {html}"
+            );
+        }
     }
 }
