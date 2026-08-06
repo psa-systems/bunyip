@@ -161,7 +161,6 @@ services:
       BUNYIP_BIND_ADDR: 0.0.0.0:4400
       BUNYIP_API_URL: ${BUNYIP_API_URL:-http://api:4401}
       BUNYIP_APP_DOMAIN: ${BUNYIP_APP_DOMAIN:-localhost}
-      BUNYIP_SHOW_BUSINESS_PRICING: ${BUNYIP_SHOW_BUSINESS_PRICING:-false}
       BUNYIP_COMMUNITY_URL: ${BUNYIP_COMMUNITY_URL:-}
       # BUNYIP-409: trust the ingress (Traefik on dev-sso) so bunyip-web reads
       # the end-user IP from X-Forwarded-For and forwards it to bunyip-api.

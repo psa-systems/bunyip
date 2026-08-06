@@ -261,7 +261,6 @@ services:
       BUNYIP_API_URL: ${BUNYIP_API_URL:-http://api:4401}
       BUNYIP_OIDC_ISSUER: ${BUNYIP_OIDC_ISSUER:-}
       BUNYIP_APP_DOMAIN: ${BUNYIP_APP_DOMAIN:-}
-      BUNYIP_SHOW_BUSINESS_PRICING: ${BUNYIP_SHOW_BUSINESS_PRICING:-false}
       BUNYIP_COMMUNITY_URL: ${BUNYIP_COMMUNITY_URL:-}
       # BUNYIP-311 / BUNYIP-409: trusted-proxy CIDRs for the FIRST hop of the
       # client-IP trust chain (Traefik -> bunyip-web). bunyip-web reads the

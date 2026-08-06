@@ -17,6 +17,10 @@ pub struct TierConfigRow {
     pub lifetime_product_id: Option<String>,
     pub early_adopter_product_id: Option<String>,
     pub standard_product_id: Option<String>,
+    /// BUNYIP-487: publish switch for the public `/pricing` page. `NOT NULL`
+    /// with a `false` default, so unlike the nullable columns above it has no
+    /// env fallback.
+    pub pricing_enabled: bool,
     pub updated_at: DateTime<Utc>,
     pub updated_by: Option<Uuid>,
 }
@@ -25,3 +29,13 @@ pub struct TierConfigRow {
 // `TierConfigRow` above stays here because it derives `sqlx::FromRow` and the two
 // consumers are on different sqlx majors (a8n 0.7, bunyip 0.8).
 pub use dunite_user_core::TierConfigResponse;
+
+/// BUNYIP-487: the shared response plus bunyip's own `pricing_enabled` switch.
+/// Flattened, so the wire shape stays the shared one with one field added and
+/// `dunite-user-core` keeps a single definition for both consumers.
+#[derive(Debug, serde::Serialize)]
+pub struct TierConfigWithPricing {
+    #[serde(flatten)]
+    pub config: TierConfigResponse,
+    pub pricing_enabled: bool,
+}

@@ -287,6 +287,14 @@ mod tests {
         );
     }
 
+    /// BUNYIP-367: the two step cards stack on the same 24px rhythm as the rest
+    /// of the authenticated screens.
+    #[test]
+    fn step_cards_are_spaced() {
+        let html = onboarding_content(&unverified_user(), None, None).into_string();
+        crate::views::ui::assert_cards_are_spaced(&html);
+    }
+
     #[test]
     fn no_feedback_boxes_when_both_none() {
         let html = onboarding_content(&unverified_user(), None, None).into_string();

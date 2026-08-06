@@ -12,7 +12,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::User;
 use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
-use crate::util::urlenc;
+use crate::util::{format_stripe_amount, urlenc};
 use crate::views::layout::{admin_block, admin_block_grid};
 use crate::views::ui::{badge, button_class, empty_state, error_box, icon};
 use crate::web::{redirect_cookies, AppState};
@@ -24,10 +24,10 @@ fn stripe_setup_docs() -> Markup {
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
             div class="p-6 space-y-3 text-sm text-muted-foreground" {
-                div class="flex items-center gap-2 text-foreground" { (icon("help-circle", "h-5 w-5 text-primary")) h3 class="text-base font-semibold" { "Setting up Stripe" } }
+                div class="flex items-center gap-2 text-foreground" { (icon("help-circle", "h-5 w-5 text-primary-text")) h3 class="text-base font-semibold" { "Setting up Stripe" } }
                 p {
                     "Your Stripe secret key authenticates API requests. Generate a "
-                    a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline" { "restricted key" }
+                    a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noopener noreferrer" class="text-primary-text hover:underline" { "restricted key" }
                     " with these permissions set to " span class="font-medium text-foreground" { "Write" }
                     ": Products, Prices, Customers, Subscriptions, and Checkout Sessions; and " span class="font-medium text-foreground" { "Read" } " for Invoices."
                 }
@@ -40,24 +40,6 @@ fn stripe_setup_docs() -> Markup {
                     " in Stripe metadata, and only products matching that tag are shown. Add your API key, save, then manage Products and Prices below. A lifetime plan is simply a product with a "
                     span class="font-medium text-foreground" { "$0.00" } " price."
                 }
-            }
-        }
-    }
-}
-
-/// Format a Stripe price amount for display. A zero-amount lifetime price is
-/// `Some(0)` -> "$0.00" (not "--"); a null amount -> "--".
-pub(super) fn format_stripe_amount(unit_amount: Option<i64>, currency: &str) -> String {
-    match unit_amount {
-        None => "--".to_string(),
-        Some(cents) => {
-            let whole = cents / 100;
-            let frac = (cents % 100).abs();
-            match currency.to_ascii_lowercase().as_str() {
-                "usd" => format!("${whole}.{frac:02}"),
-                "eur" => format!("€{whole}.{frac:02}"),
-                "gbp" => format!("£{whole}.{frac:02}"),
-                _ => format!("{whole}.{frac:02} {}", currency.to_uppercase()),
             }
         }
     }
@@ -564,7 +546,7 @@ pub async fn stripe_price_archive(
 }
 
 /// The tier -> Stripe catalog mapping form (BUNYIP-417). Same six price/product
-/// ID fields the Tier Settings page used to carry; they persist to the tier
+/// ID fields the Pricing tiers page used to carry; they persist to the tier
 /// config via a partial update (blank = keep), so nothing is lost by the move.
 #[derive(Deserialize)]
 pub struct StripeCatalogForm {
@@ -584,7 +566,7 @@ pub struct StripeCatalogForm {
 
 /// POST /admin/stripe/catalog - persist the tier -> Stripe price/product
 /// mapping. Only non-blank, in-bounds (<=255) fields are sent, so an untouched
-/// field keeps its stored value (matches the old Tier Settings behaviour).
+/// field keeps its stored value (matches the old Pricing tiers behaviour).
 pub async fn stripe_catalog_save(
     State(st): State<AppState>,
     headers: HeaderMap,

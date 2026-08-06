@@ -15,6 +15,17 @@ use crate::handlers::{auth_page, cookie_of, cookie_value, ctx, dashboard_input, 
 use crate::views::common::{auth_card, auth_card_plain};
 use crate::views::layout::{document, public_shell};
 
+/// BUNYIP-487: whether the header and footer should carry a Pricing link. The
+/// auth cards render the public shell directly (they need to attach their own
+/// cookies), so they resolve the flag themselves rather than through
+/// `public_ctx`. A failed fetch hides the link, never offers a dead one.
+async fn pricing_published(st: &AppState) -> bool {
+    calls::pricing(&st.api)
+        .await
+        .map(|p| p.published())
+        .unwrap_or(false)
+}
+
 /// BUNYIP-255: 2FA challenge-token TTL aligned with the JWT exp set in
 /// `crates/bunyip-domain/src/services/jwt.rs::create_2fa_challenge_token`.
 /// Stays under that exp so the cookie never outlives the token it carries.
@@ -100,7 +111,21 @@ use crate::views::ui::{button_class, error_box};
 use crate::web::{html, html_cookies, redirect, redirect_cookies, AppState};
 
 fn field(id: &str, label: &str, ty: &str, placeholder: &str, autocomplete: &str) -> Markup {
-    field_with_value(id, label, ty, placeholder, autocomplete, "")
+    field_with_value(id, label, ty, placeholder, autocomplete, "", false)
+}
+
+/// BUNYIP-486: `field` for the FIRST editable field of a single-purpose auth
+/// card, which takes keyboard focus on load so the user can type without
+/// tabbing past the site nav. Native `autofocus`, so it works with JS off.
+/// Only ever one per rendered page.
+fn field_autofocus(
+    id: &str,
+    label: &str,
+    ty: &str,
+    placeholder: &str,
+    autocomplete: &str,
+) -> Markup {
+    field_with_value(id, label, ty, placeholder, autocomplete, "", true)
 }
 
 /// BUNYIP-240: like `field`, but preserves a pre-filled `value` across
@@ -115,11 +140,12 @@ fn field_with_value(
     placeholder: &str,
     autocomplete: &str,
     value: &str,
+    autofocus: bool,
 ) -> Markup {
     html! {
         div class="space-y-2" {
             label for=(id) class="text-sm font-medium leading-none" { (label) }
-            input id=(id) name=(id) type=(ty) placeholder=(placeholder) autocomplete=(autocomplete) value=(value) class=(dashboard_input());
+            input id=(id) name=(id) type=(ty) placeholder=(placeholder) autocomplete=(autocomplete) value=(value) autofocus[autofocus] class=(dashboard_input());
         }
     }
 }
@@ -274,13 +300,14 @@ fn login_content(error: Option<&str>, redirect: &str) -> Markup {
             @if let Some(e) = error { (error_box(e)) }
             div class="space-y-2" {
                 label for="email" class="text-sm font-medium leading-none" { "Email" }
+                // BUNYIP-486: first editable field of the card takes focus on load.
                 input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="email"
-                    class=(dashboard_input());
+                    autofocus class=(dashboard_input());
             }
             div class="space-y-2" {
                 div class="flex items-center justify-between" {
                     label for="password" class="text-sm font-medium leading-none" { "Password" }
-                    a href="/password-reset" class="text-sm text-primary hover:underline" { "Forgot password?" }
+                    a href="/password-reset" class="text-sm text-primary-text hover:underline" { "Forgot password?" }
                 }
                 input id="password" name="password" type="password" autocomplete="current-password"
                     class=(dashboard_input());
@@ -302,7 +329,7 @@ fn login_content(error: Option<&str>, redirect: &str) -> Markup {
         }
         p class="mt-6 text-center text-sm text-muted-foreground" {
             "Don't have an account? "
-            a href="/register" class="text-primary hover:underline" { "Sign up" }
+            a href="/register" class="text-primary-text hover:underline" { "Sign up" }
         }
     };
     auth_card_plain("Welcome back", "Sign in to your account to continue", body)
@@ -331,7 +358,14 @@ pub async fn login_get(
         .await
         .unwrap_or_default();
     let content = login_content(None, q.redirect.as_deref().unwrap_or("/dashboard"));
-    let body = public_shell(&st.cfg, None, &apps, false, content);
+    let body = public_shell(
+        &st.cfg,
+        None,
+        &apps,
+        pricing_published(&st).await,
+        false,
+        content,
+    );
     html(document("Sign in · Bunyip", body))
 }
 
@@ -375,7 +409,14 @@ pub async fn login_post(
         Err(e) => {
             let apps = calls::applications(&st.api, None).await.unwrap_or_default();
             let content = login_content(Some(&e.user_message()), &target);
-            let body = public_shell(&st.cfg, None, &apps, false, content);
+            let body = public_shell(
+                &st.cfg,
+                None,
+                &apps,
+                pricing_published(&st).await,
+                false,
+                content,
+            );
             html(document("Sign in · Bunyip", body))
         }
     }
@@ -480,7 +521,7 @@ fn password_reentry_hint() -> Markup {
 fn register_card(errors: &RegisterErrors, email: &str, signup_token: &str) -> Markup {
     auth_card(
         "shield",
-        "bg-primary/10 text-primary",
+        "bg-primary/10 text-primary-text",
         "Create your account",
         "Get access to all tools for $3/month",
         html! {
@@ -505,7 +546,7 @@ fn register_card(errors: &RegisterErrors, email: &str, signup_token: &str) -> Ma
                 // autofill safety, and re-rendering with a server-known password
                 // would round-trip plaintext through HTML history).
                 div {
-                    (field_with_value("email", "Email", "email", "you@example.com", "email", email))
+                    (field_with_value("email", "Email", "email", "you@example.com", "email", email, true))
                     // BUNYIP-271: surface an invalid-email rule next to the input.
                     @if let Some(e) = errors.email.as_deref() { (field_error_msg(e)) }
                 }
@@ -532,7 +573,7 @@ fn register_card(errors: &RegisterErrors, email: &str, signup_token: &str) -> Ma
                 a href="/magic-link" class=(button_class("outline", "default", "w-full")) { "Sign up with Magic Link" }
             }
             p class="mt-6 text-center text-sm text-muted-foreground" {
-                "Already have an account? " a href="/login" class="text-primary hover:underline" { "Sign in" }
+                "Already have an account? " a href="/login" class="text-primary-text hover:underline" { "Sign in" }
             }
             p class="mt-4 text-center text-xs text-muted-foreground" {
                 "By creating an account, you agree to our "
@@ -656,18 +697,18 @@ fn magic_form(error: Option<&str>, success: bool) -> Markup {
     }
     auth_card(
         "mail",
-        "bg-primary/10 text-primary",
+        "bg-primary/10 text-primary-text",
         "Sign in with Magic Link",
         "We'll email you a link to sign in - no password needed.",
         html! {
             form method="post" action="/magic-link" class="space-y-4" {
                 @if let Some(e) = error { (error_box(e)) }
-                (field("email", "Email", "email", "you@example.com", "email"))
+                (field_autofocus("email", "Email", "email", "you@example.com", "email"))
                 (submit_btn("Send Magic Link"))
             }
             p class="mt-6 text-center text-sm text-muted-foreground" {
-                a href="/login" class="text-primary hover:underline" { "Sign in with password" } " · "
-                a href="/register" class="text-primary hover:underline" { "Sign up" }
+                a href="/login" class="text-primary-text hover:underline" { "Sign in with password" } " · "
+                a href="/register" class="text-primary-text hover:underline" { "Sign up" }
             }
         },
     )
@@ -739,17 +780,17 @@ fn reset_form(error: Option<&str>, success: bool) -> Markup {
     }
     auth_card(
         "key",
-        "bg-primary/10 text-primary",
+        "bg-primary/10 text-primary-text",
         "Reset your password",
         "Enter your email and we'll send you a reset link.",
         html! {
             form method="post" action="/password-reset" class="space-y-4" {
                 @if let Some(e) = error { (error_box(e)) }
-                (field("email", "Email", "email", "you@example.com", "email"))
+                (field_autofocus("email", "Email", "email", "you@example.com", "email"))
                 (submit_btn("Send Reset Link"))
             }
             p class="mt-6 text-center text-sm text-muted-foreground" {
-                "Remember your password? " a href="/login" class="text-primary hover:underline" { "Sign in" }
+                "Remember your password? " a href="/login" class="text-primary-text hover:underline" { "Sign in" }
             }
         },
     )
@@ -791,14 +832,14 @@ pub struct ResetConfirmForm {
 fn reset_confirm_card(token: &str, error: Option<&str>) -> Markup {
     auth_card(
         "key",
-        "bg-primary/10 text-primary",
+        "bg-primary/10 text-primary-text",
         "Set new password",
         "Choose a strong password for your account.",
         html! {
             form method="post" action="/password-reset/confirm" class="space-y-4" {
                 input type="hidden" name="token" value=(token);
                 @if let Some(e) = error { (error_box(e)) }
-                (field("password", "New Password", "password", "", "new-password"))
+                (field_autofocus("password", "New Password", "password", "", "new-password"))
                 (pw_reqs())
                 (field("confirm", "Confirm Password", "password", "", "new-password"))
                 (submit_btn("Reset Password"))
@@ -890,7 +931,7 @@ fn twofa_card(error: Option<&str>, redirect: Option<&str>) -> Markup {
     let redirect = redirect.unwrap_or_default();
     auth_card(
         "shield",
-        "bg-primary/10 text-primary",
+        "bg-primary/10 text-primary-text",
         "Two-Factor Authentication",
         "Enter the 6-digit code from your authenticator app",
         html! {
@@ -910,7 +951,10 @@ fn twofa_card(error: Option<&str>, redirect: Option<&str>) -> Markup {
                     // (services::totp::verify_code). BUNYIP-331:
                     // data-otp-autosubmit submits the form once the code is
                     // a complete six digits (typed / pasted / autofilled).
-                    input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000 000" autocomplete="one-time-code" data-otp-autosubmit class={ (dashboard_input()) " text-center text-lg tracking-widest" };
+                    // BUNYIP-486: autofocus so the whole screen is "type six
+                    // digits" - the autosubmit fires on input, not on focus,
+                    // so focusing alone submits nothing.
+                    input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000 000" autocomplete="one-time-code" autofocus data-otp-autosubmit class={ (dashboard_input()) " text-center text-lg tracking-widest" };
                 }
                 (submit_btn("Verify"))
             }
@@ -929,7 +973,7 @@ pub async fn twofa_verify_get(
     if cookie_value(&headers, "bunyip_2fa").is_none() {
         let card = auth_card(
             "shield",
-            "bg-primary/10 text-primary",
+            "bg-primary/10 text-primary-text",
             "No pending verification",
             "Please log in first.",
             html! {
@@ -988,14 +1032,14 @@ pub struct InviteForm {
 fn invite_password_card(token: &str, email: &str, error: Option<&str>) -> Markup {
     auth_card(
         "shield",
-        "bg-primary/10 text-primary",
+        "bg-primary/10 text-primary-text",
         "Create your account",
         &format!("Set a password for {email} to complete your account setup."),
         html! {
             form method="post" action="/invite/accept" class="space-y-4" {
                 input type="hidden" name="token" value=(token);
                 @if let Some(e) = error { (error_box(e)) }
-                (field("password", "Password", "password", "At least 12 characters", "new-password"))
+                (field_autofocus("password", "Password", "password", "At least 12 characters", "new-password"))
                 (field("confirm", "Confirm Password", "password", "Re-enter your password", "new-password"))
                 (pw_reqs())
                 (submit_btn("Sign up"))
@@ -1233,7 +1277,14 @@ pub async fn verify_email(
         let apps = calls::applications(&st.api, session_cookie.as_deref())
             .await
             .unwrap_or_default();
-        let body = public_shell(&st.cfg, None, &apps, false, card);
+        let body = public_shell(
+            &st.cfg,
+            None,
+            &apps,
+            pricing_published(&st).await,
+            false,
+            card,
+        );
         html_cookies(document("Verify email · Bunyip", body), &rotated_cookies)
     }
 }
@@ -1306,7 +1357,6 @@ mod logout_clear_tests {
             api_public_origin: api_public.into(),
             oidc_issuer: api_public.into(),
             app_domain: app_domain.into(),
-            show_business_pricing: false,
             community_url: String::new(),
             trusted_proxies: Vec::new(),
         }
@@ -1496,5 +1546,112 @@ mod register_card_tests {
             !html.to_lowercase().contains("re-enter your password"),
             "clean render must not nag about re-entry: {html}"
         );
+    }
+}
+
+#[cfg(test)]
+mod autofocus_tests {
+    //! BUNYIP-486: every single-purpose auth card focuses its first editable
+    //! field on load, exactly once. Cards whose only control is a link keep the
+    //! default document focus.
+
+    use super::{
+        invite_password_card, login_content, magic_form, register_card, reset_confirm_card,
+        reset_form, twofa_card, RegisterErrors,
+    };
+
+    fn autofocus_count(html: &str) -> usize {
+        html.matches("autofocus").count()
+    }
+
+    /// The autofocused input must be the one named `name`, so the attribute
+    /// cannot drift onto a later field.
+    fn assert_focuses(html: &str, name: &str) {
+        assert_eq!(
+            autofocus_count(html),
+            1,
+            "expected exactly one autofocus: {html}"
+        );
+        let at = html.find("autofocus").expect("autofocus present");
+        let lt = html[..at].rfind('<').expect("input opens with <");
+        let gt = html[lt..].find('>').expect("input closes with >") + lt;
+        let tag = &html[lt..=gt];
+        assert!(
+            tag.contains(&format!("name=\"{name}\"")),
+            "autofocus landed on the wrong input, expected name={name}: {tag}"
+        );
+    }
+
+    #[test]
+    fn every_auth_card_focuses_its_first_field() {
+        assert_focuses(&login_content(None, "/dashboard").into_string(), "email");
+        assert_focuses(
+            &register_card(&RegisterErrors::default(), "", "").into_string(),
+            "email",
+        );
+        assert_focuses(&magic_form(None, false).into_string(), "email");
+        assert_focuses(&reset_form(None, false).into_string(), "email");
+        assert_focuses(&reset_confirm_card("tok", None).into_string(), "password");
+        assert_focuses(&twofa_card(None, None).into_string(), "code");
+        assert_focuses(
+            &invite_password_card("tok", "user@example.com", None).into_string(),
+            "password",
+        );
+    }
+
+    #[test]
+    fn error_rerenders_still_focus_the_first_field() {
+        // The wrong-code retry is a full page load of the same card, so the
+        // attribute has to survive the error path too.
+        assert_focuses(
+            &twofa_card(Some("Invalid code."), None).into_string(),
+            "code",
+        );
+        assert_focuses(
+            &login_content(Some("Bad login."), "/").into_string(),
+            "email",
+        );
+        assert_focuses(
+            &register_card(
+                &RegisterErrors {
+                    email: Some("Enter a valid email address.".into()),
+                    ..Default::default()
+                },
+                "user@example.com",
+                "",
+            )
+            .into_string(),
+            "email",
+        );
+        assert_focuses(
+            &magic_form(Some("Try again."), false).into_string(),
+            "email",
+        );
+        assert_focuses(
+            &reset_form(Some("Try again."), false).into_string(),
+            "email",
+        );
+        assert_focuses(
+            &reset_confirm_card("tok", Some("Try again.")).into_string(),
+            "password",
+        );
+        assert_focuses(
+            &invite_password_card("tok", "user@example.com", Some("Try again.")).into_string(),
+            "password",
+        );
+    }
+
+    #[test]
+    fn link_only_confirmation_cards_do_not_steal_focus() {
+        for html in [
+            magic_form(None, true).into_string(),
+            reset_form(None, true).into_string(),
+        ] {
+            assert_eq!(
+                autofocus_count(&html),
+                0,
+                "a card with no form field must not autofocus: {html}"
+            );
+        }
     }
 }

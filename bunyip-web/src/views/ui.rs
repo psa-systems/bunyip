@@ -163,7 +163,7 @@ fn variant_classes(variant: &str) -> &'static str {
         }
         "secondary" => "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         "ghost" => "hover:bg-accent hover:text-accent-foreground",
-        "link" => "text-primary underline-offset-4 hover:underline",
+        "link" => "text-primary-text underline-offset-4 hover:underline",
         _ => "bg-primary text-primary-foreground hover:bg-primary/90",
     }
 }
@@ -329,6 +329,71 @@ pub fn assert_no_truncating_flex_container(html: &str) {
     }
 }
 
+/// BUNYIP-367 regression guard, shared by the dashboard page tests. Sibling
+/// cards are separated by the page's 24px rhythm - `gap-6` on a card grid,
+/// `space-y-6` on a card stack. A container that lays its cards out with no
+/// spacing utility leaves their 1px borders touching, which reads as cards
+/// overlapping by a pixel or two instead of being spaced; a negative margin on
+/// a card overlaps it with its neighbour outright. Panics naming the offending
+/// class attribute.
+#[cfg(test)]
+pub fn assert_cards_are_spaced(html: &str) {
+    // Tags that never have a closing tag, so they never open a frame.
+    const VOID: [&str; 9] = [
+        "area", "br", "col", "hr", "img", "input", "link", "meta", "source",
+    ];
+
+    let is =
+        |t: &str, util: &str| t == util || t.strip_suffix(util).is_some_and(|p| p.ends_with(':'));
+    // (class attribute of the open element, how many direct card children it has)
+    let mut stack: Vec<(String, usize)> = Vec::new();
+    let mut rest = html;
+    while let Some(lt) = rest.find('<') {
+        let Some(gt) = rest[lt..].find('>') else {
+            break;
+        };
+        let tag = &rest[lt + 1..lt + gt];
+        rest = &rest[lt + gt + 1..];
+        if tag.starts_with('!') {
+            continue; // <!DOCTYPE html>
+        }
+        if tag.starts_with('/') {
+            if let Some((classes, cards)) = stack.pop() {
+                assert!(
+                    cards < 2
+                        || classes
+                            .split_whitespace()
+                            .any(|t| is(t, "gap-6") || is(t, "space-y-6")),
+                    "a container of {cards} sibling cards must space them on the page's \
+                     24px rhythm (gap-6 / space-y-6), else their borders touch and the \
+                     cards read as overlapping (BUNYIP-367): class=\"{classes}\""
+                );
+            }
+            continue;
+        }
+        let name = tag.split([' ', '\t', '\n', '/']).next().unwrap_or("");
+        let classes = tag
+            .split_once("class=\"")
+            .and_then(|(_, a)| a.split('"').next())
+            .unwrap_or("");
+        if classes.split_whitespace().any(|t| t == "bg-card") {
+            assert!(
+                !classes
+                    .split_whitespace()
+                    .any(|t| t.starts_with("-m") || t.contains(":-m")),
+                "a negative margin on a card pulls it over its neighbour \
+                 (BUNYIP-367): class=\"{classes}\""
+            );
+            if let Some((_, cards)) = stack.last_mut() {
+                *cards += 1;
+            }
+        }
+        if !tag.ends_with('/') && !VOID.contains(&name) {
+            stack.push((classes.to_string(), 0));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{clamp_msg, empty_state, error_box, icon, success_box, toggle_switch};
@@ -429,5 +494,161 @@ mod tests {
         let long = "z".repeat(10_000);
         assert!(success_box(&long).into_string().matches('z').count() <= 256);
         assert!(error_box(&long).into_string().matches('z').count() <= 256);
+    }
+
+    // -- BUNYIP-485: primary-as-foreground contrast --------------------------
+    //
+    // `--primary` is the button FILL. Used as text it measured 1.6:1 on the
+    // dark card, so every foreground use moved to `--primary-text` (the same
+    // split `--destructive` / `--destructive-text` already uses).
+
+    /// Body of the first `selector` block in `input.css` that defines
+    /// `--primary-text` (skips the later same-selector blocks that only carry
+    /// the static `--color-*` overrides).
+    fn theme_block<'a>(css: &'a str, selector: &str) -> &'a str {
+        let mut rest = css;
+        loop {
+            let at = rest
+                .find(selector)
+                .unwrap_or_else(|| panic!("input.css has no `{selector}` block"));
+            let start = at + selector.len();
+            let end = start
+                + rest[start..]
+                    .find("\n}")
+                    .unwrap_or_else(|| panic!("unterminated `{selector}` block"));
+            if rest[start..end].contains("--primary-text:") {
+                return &rest[start..end];
+            }
+            rest = &rest[end..];
+        }
+    }
+
+    /// sRGB components (0..1) of an `H S% L%` token declared in `block`.
+    fn token(block: &str, name: &str) -> [f64; 3] {
+        let prefix = format!("{name}:");
+        let line = block
+            .lines()
+            .find(|l| l.trim_start().starts_with(&prefix))
+            .unwrap_or_else(|| panic!("`{name}` missing from theme block"));
+        let mut parts = line
+            .rsplit(':')
+            .next()
+            .expect("token value")
+            .trim()
+            .trim_end_matches(';')
+            .split_whitespace()
+            .map(|p| {
+                p.trim_end_matches('%')
+                    .parse::<f64>()
+                    .expect("numeric HSL component")
+            });
+        let (h, s, l) = (
+            parts.next().expect("hue"),
+            parts.next().expect("saturation") / 100.0,
+            parts.next().expect("lightness") / 100.0,
+        );
+        let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+        let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+        let m = l - c / 2.0;
+        let (r, g, b) = match (h / 60.0) as u32 % 6 {
+            0 => (c, x, 0.0),
+            1 => (x, c, 0.0),
+            2 => (0.0, c, x),
+            3 => (0.0, x, c),
+            4 => (x, 0.0, c),
+            _ => (c, 0.0, x),
+        };
+        [r + m, g + m, b + m]
+    }
+
+    /// `fg` painted over `bg` at `alpha` (what `bg-primary/10` composites to).
+    fn mix(fg: [f64; 3], bg: [f64; 3], alpha: f64) -> [f64; 3] {
+        std::array::from_fn(|i| fg[i] * alpha + bg[i] * (1.0 - alpha))
+    }
+
+    fn contrast(a: [f64; 3], b: [f64; 3]) -> f64 {
+        let luminance = |c: [f64; 3]| {
+            let f = |v: f64| {
+                if v <= 0.03928 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2])
+        };
+        let (x, y) = (luminance(a), luminance(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// WCAG 2.1 AA for normal text against every surface `text-primary-text`
+    /// can land on, in all four theme blocks, including the `bg-primary/10`
+    /// icon bubbles (the fill composited onto the surface).
+    #[test]
+    fn primary_text_token_meets_aa_on_every_surface() {
+        let css = include_str!("../../input.css");
+        for (selector, theme) in [
+            (":root {", "light"),
+            ("\n.dark {", "dark"),
+            ("\n.high-contrast {", "high-contrast"),
+            (".dark.high-contrast {", "dark.high-contrast"),
+        ] {
+            let block = theme_block(css, selector);
+            let text = token(block, "--primary-text");
+            let fill = token(block, "--primary");
+            for surface in ["--card", "--background", "--muted"] {
+                let bg = token(block, surface);
+                // 0 is the bare surface; the rest are every `*-primary/<n>`
+                // wash the views paint over it (bubbles, gradients, panels).
+                for wash in [0, 5, 10, 18, 20] {
+                    let against = mix(fill, bg, f64::from(wash) / 100.0);
+                    let ratio = contrast(text, against);
+                    assert!(
+                        ratio >= 4.5,
+                        "{theme}: --primary-text on {surface} under a {wash}% \
+                         --primary wash is {ratio:.2}:1, below AA 4.5:1"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The suffix-less spelling of the utility paints the fill colour, so
+    /// `text-primary-text` is the only correct foreground in any view.
+    #[test]
+    fn no_view_uses_the_fill_colour_as_a_foreground() {
+        // Split so this file's own source does not match the scan.
+        let needle = concat!("text-", "primary");
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        let mut stack = vec![src];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("readable source dir") {
+                let path = entry.expect("readable dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let body = std::fs::read_to_string(&path).expect("readable source file");
+                    if body
+                        .match_indices(needle)
+                        .any(|(i, _)| !body[i + needle.len()..].starts_with('-'))
+                    {
+                        offenders.push(path);
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "`{needle}` is the fill colour and fails AA in dark mode; \
+             use `{needle}-text`: {offenders:?}"
+        );
+    }
+
+    /// Fixing the `link` variant at the source fixes every `button_class`
+    /// caller, so no caller has to remember the token.
+    #[test]
+    fn link_variant_uses_the_foreground_token() {
+        assert!(super::variant_classes("link").contains("text-primary-text"));
     }
 }

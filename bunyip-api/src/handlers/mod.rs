@@ -173,6 +173,7 @@ pub mod download;
 pub mod events;
 pub mod feedback;
 pub mod membership;
+pub mod pricing;
 pub mod totp;
 pub mod user;
 pub mod webhook;
@@ -204,6 +205,7 @@ pub use membership::{
     billing_portal, cancel_membership, cancel_membership_immediate, create_checkout,
     get_membership, get_payment_history, reactivate_membership,
 };
+pub use pricing::{public_pricing, PricingCache, PRICING_CACHE_TTL_SECS};
 pub use totp::{
     begin_rekey, confirm_2fa, confirm_rekey, disable_2fa, get_2fa_status,
     regenerate_recovery_codes, setup_2fa, verify_2fa,

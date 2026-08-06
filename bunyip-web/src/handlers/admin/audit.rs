@@ -82,7 +82,7 @@ pub async fn audit_logs(
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" {
                     div class="flex items-center justify-between" {
-                        div class="flex items-center gap-3" { (icon("file-text", "h-5 w-5 text-primary")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Recent Activity" } }
+                        div class="flex items-center gap-3" { (icon("file-text", "h-5 w-5 text-primary-text")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Recent Activity" } }
                         div class="flex items-center gap-2 text-sm" {
                             @if admin_only { a href="/admin/audit-logs" class=(button_class("secondary", "sm", "")) { "Showing: Admin only" } }
                             @else { a href="/admin/audit-logs?admin_only=true" class=(button_class("outline", "sm", "")) { "Admin actions only" } }

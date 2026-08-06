@@ -2727,6 +2727,8 @@ pub struct UpdateTierConfigRequest {
     pub lifetime_product_id: Option<String>,
     pub early_adopter_product_id: Option<String>,
     pub standard_product_id: Option<String>,
+    /// BUNYIP-487: publish switch for the public `/pricing` page.
+    pub pricing_enabled: Option<bool>,
 }
 
 /// GET /v1/admin/tier-config
@@ -2736,7 +2738,7 @@ pub async fn get_tier_config(
     pool: web::Data<PgPool>,
 ) -> Result<HttpResponse, AppError> {
     use crate::config::TierConfig;
-    use crate::models::tier::TierConfigResponse;
+    use crate::models::tier::{TierConfigResponse, TierConfigWithPricing};
     use crate::repositories::TierConfigRepository;
 
     let request_id = get_request_id(&req);
@@ -2753,22 +2755,25 @@ pub async fn get_tier_config(
         UserRepository::count_tier_assignments(pool.get_ref()).await?;
 
     Ok(success(
-        TierConfigResponse {
-            lifetime_slots: resolved.lifetime_slots,
-            early_adopter_slots: resolved.early_adopter_slots,
-            early_adopter_trial_days: resolved.early_adopter_trial_days,
-            standard_trial_days: resolved.standard_trial_days,
-            free_price_id: resolved.free_price_id,
-            early_adopter_price_id: resolved.early_adopter_price_id,
-            standard_price_id: resolved.standard_price_id,
-            lifetime_product_id: resolved.lifetime_product_id,
-            early_adopter_product_id: resolved.early_adopter_product_id,
-            standard_product_id: resolved.standard_product_id,
-            source,
-            lifetime_slots_used: lifetime_used,
-            early_adopter_slots_used: early_adopter_used,
-            updated_at: row.updated_at,
-            updated_by: row.updated_by,
+        TierConfigWithPricing {
+            pricing_enabled: resolved.pricing_enabled,
+            config: TierConfigResponse {
+                lifetime_slots: resolved.lifetime_slots,
+                early_adopter_slots: resolved.early_adopter_slots,
+                early_adopter_trial_days: resolved.early_adopter_trial_days,
+                standard_trial_days: resolved.standard_trial_days,
+                free_price_id: resolved.free_price_id,
+                early_adopter_price_id: resolved.early_adopter_price_id,
+                standard_price_id: resolved.standard_price_id,
+                lifetime_product_id: resolved.lifetime_product_id,
+                early_adopter_product_id: resolved.early_adopter_product_id,
+                standard_product_id: resolved.standard_product_id,
+                source,
+                lifetime_slots_used: lifetime_used,
+                early_adopter_slots_used: early_adopter_used,
+                updated_at: row.updated_at,
+                updated_by: row.updated_by,
+            },
         },
         request_id,
     ))
@@ -2780,10 +2785,11 @@ pub async fn update_tier_config(
     admin: AdminUser,
     pool: web::Data<PgPool>,
     auth_service: web::Data<Arc<AuthService>>,
+    pricing_cache: web::Data<Arc<crate::handlers::PricingCache>>,
     body: web::Json<UpdateTierConfigRequest>,
 ) -> Result<HttpResponse, AppError> {
     use crate::config::TierConfig;
-    use crate::models::tier::TierConfigResponse;
+    use crate::models::tier::{TierConfigResponse, TierConfigWithPricing};
     use crate::repositories::TierConfigRepository;
 
     let request_id = get_request_id(&req);
@@ -2834,6 +2840,7 @@ pub async fn update_tier_config(
         body.lifetime_product_id.clone(),
         body.early_adopter_product_id.clone(),
         body.standard_product_id.clone(),
+        body.pricing_enabled,
         admin.0.sub,
     )
     .await?;
@@ -2841,6 +2848,9 @@ pub async fn update_tier_config(
     // Hot-reload the AuthService with the new tier config
     let resolved = TierConfig::from_db_row(&row);
     auth_service.reload_tier_config(resolved.clone());
+    // BUNYIP-487: the public /pricing payload is derived from exactly this row
+    // plus the Stripe price it maps to, so a save must not wait out the TTL.
+    pricing_cache.invalidate();
     tracing::info!(?resolved, "Tier config updated and hot-reloaded");
 
     let (lifetime_used, early_adopter_used) =
@@ -2862,27 +2872,31 @@ pub async fn update_tier_config(
                 "lifetime_product_id": body.lifetime_product_id,
                 "early_adopter_product_id": body.early_adopter_product_id,
                 "standard_product_id": body.standard_product_id,
+                "pricing_enabled": body.pricing_enabled,
             })),
     )
     .await?;
 
     Ok(success(
-        TierConfigResponse {
-            lifetime_slots: resolved.lifetime_slots,
-            early_adopter_slots: resolved.early_adopter_slots,
-            early_adopter_trial_days: resolved.early_adopter_trial_days,
-            standard_trial_days: resolved.standard_trial_days,
-            free_price_id: resolved.free_price_id,
-            early_adopter_price_id: resolved.early_adopter_price_id,
-            standard_price_id: resolved.standard_price_id,
-            lifetime_product_id: resolved.lifetime_product_id,
-            early_adopter_product_id: resolved.early_adopter_product_id,
-            standard_product_id: resolved.standard_product_id,
-            source: "database",
-            lifetime_slots_used: lifetime_used,
-            early_adopter_slots_used: early_adopter_used,
-            updated_at: row.updated_at,
-            updated_by: row.updated_by,
+        TierConfigWithPricing {
+            pricing_enabled: resolved.pricing_enabled,
+            config: TierConfigResponse {
+                lifetime_slots: resolved.lifetime_slots,
+                early_adopter_slots: resolved.early_adopter_slots,
+                early_adopter_trial_days: resolved.early_adopter_trial_days,
+                standard_trial_days: resolved.standard_trial_days,
+                free_price_id: resolved.free_price_id,
+                early_adopter_price_id: resolved.early_adopter_price_id,
+                standard_price_id: resolved.standard_price_id,
+                lifetime_product_id: resolved.lifetime_product_id,
+                early_adopter_product_id: resolved.early_adopter_product_id,
+                standard_product_id: resolved.standard_product_id,
+                source: "database",
+                lifetime_slots_used: lifetime_used,
+                early_adopter_slots_used: early_adopter_used,
+                updated_at: row.updated_at,
+                updated_by: row.updated_by,
+            },
         },
         request_id,
     ))
