@@ -482,6 +482,12 @@ async fn main() -> anyhow::Result<()> {
         .clone()
         .map(|c| Arc::new(ReleaseCache::new(c, config.download.release_cache_ttl_secs)));
 
+    // BUNYIP-487: keeps the public /v1/pricing page off Stripe's API on every
+    // visit. Invalidated whenever an admin saves tier config.
+    let pricing_cache = Arc::new(bunyip_api::handlers::PricingCache::new(
+        bunyip_api::handlers::PRICING_CACHE_TTL_SECS,
+    ));
+
     let download_cache: Option<Arc<AppDownloadCache>> = forgejo_client.clone().map(|c| {
         let store = Arc::new(DownloadCacheRepository::new(pool.clone()));
         Arc::new(AppDownloadCache::new(
@@ -1018,6 +1024,7 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::Data::new(oidc_provider.clone()))
             .app_data(web::Data::new(backchannel_http_client.clone()))
             .app_data(web::Data::new(tier_config.clone()))
+            .app_data(web::Data::new(pricing_cache.clone()))
             // Update checker for the root-level /version endpoint
             .app_data(web::Data::new(update_checker.clone()))
             .app_data(web::Data::new(ip_enrich.clone()))

@@ -474,6 +474,9 @@ pub struct TierConfig {
     pub early_adopter_product_id: Option<String>,
     /// Stripe Product ID that maps to the Standard tier.
     pub standard_product_id: Option<String>,
+    /// BUNYIP-487: whether the public `/pricing` page is published. DB only
+    /// (admin Pricing tiers page); false until an admin turns it on.
+    pub pricing_enabled: bool,
 }
 
 impl TierConfig {
@@ -503,6 +506,8 @@ impl TierConfig {
             lifetime_product_id: None,
             early_adopter_product_id: None,
             standard_product_id: None,
+            // BUNYIP-487: no env source; the admin Pricing tiers page writes it.
+            pricing_enabled: false,
         }
     }
 
@@ -524,12 +529,19 @@ impl TierConfig {
             lifetime_product_id: row.lifetime_product_id.clone(),
             early_adopter_product_id: row.early_adopter_product_id.clone(),
             standard_product_id: row.standard_product_id.clone(),
+            pricing_enabled: row.pricing_enabled,
         }
     }
 
     /// Returns `true` if the DB row has at least one non-NULL override.
+    ///
+    /// BUNYIP-487: `pricing_enabled` is `NOT NULL`, so "overridden" means "set
+    /// to true". Without it, enabling pricing and changing nothing else would
+    /// send startup down the env-fallback branch and silently unpublish the
+    /// page on the next restart.
     pub fn has_db_overrides(row: &crate::models::tier::TierConfigRow) -> bool {
-        row.lifetime_slots.is_some()
+        row.pricing_enabled
+            || row.lifetime_slots.is_some()
             || row.early_adopter_slots.is_some()
             || row.early_adopter_trial_days.is_some()
             || row.standard_trial_days.is_some()

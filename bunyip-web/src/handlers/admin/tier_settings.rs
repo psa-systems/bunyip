@@ -1,4 +1,4 @@
-//! Admin panel: Tier settings.
+//! Admin panel: Pricing tiers (route stays /admin/tier-settings).
 
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -10,6 +10,7 @@ use serde_json::json;
 
 use crate::api::admin as admin_api;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
+use crate::util::format_stripe_amount;
 use crate::views::layout::admin_block;
 use crate::views::ui::{button_class, error_box, icon};
 use crate::web::{redirect_cookies, AppState};
@@ -36,6 +37,9 @@ pub(super) struct TierFormValues {
     pub(super) lifetime_product_id: String,
     pub(super) early_adopter_product_id: String,
     pub(super) standard_product_id: String,
+    /// BUNYIP-487: the Enable Pricing switch. A bool, not a string: a checkbox
+    /// cannot submit junk that fails to parse.
+    pub(super) pricing_enabled: bool,
 }
 
 impl TierFormValues {
@@ -51,6 +55,57 @@ impl TierFormValues {
             lifetime_product_id: c.lifetime_product_id.clone().unwrap_or_default(),
             early_adopter_product_id: c.early_adopter_product_id.clone().unwrap_or_default(),
             standard_product_id: c.standard_product_id.clone().unwrap_or_default(),
+            pricing_enabled: c.pricing_enabled,
+        }
+    }
+}
+
+/// Resolved amount for one tier's mapped Stripe price, read-only. `None` means
+/// no price id is mapped; `Some(None)` means one is mapped but did not resolve
+/// (archived, deleted, or Stripe is unreachable), which is also what makes the
+/// public page 404.
+fn resolved_price<'a>(
+    price_id: Option<&str>,
+    prices: &'a [crate::api::types::StripePrice],
+) -> Option<Option<&'a crate::api::types::StripePrice>> {
+    let id = price_id.filter(|s| !s.is_empty())?;
+    Some(prices.iter().find(|p| p.id == id))
+}
+
+/// The read-only "what /pricing will advertise" block: one row per tier,
+/// resolved from the Stripe price that tier maps to. BUNYIP-487: the advertised
+/// amount is derived, never typed, so it cannot drift from the charged amount.
+fn resolved_pricing_block(
+    cfg: &crate::api::types::TierConfigResponse,
+    prices: &[crate::api::types::StripePrice],
+) -> Markup {
+    let rows: Vec<(&str, Option<&str>)> = vec![
+        ("Lifetime", cfg.free_price_id.as_deref()),
+        ("Early Adopter", cfg.early_adopter_price_id.as_deref()),
+        ("Standard", cfg.standard_price_id.as_deref()),
+    ];
+    html! {
+        div class="space-y-3" {
+            @for (label, price_id) in &rows {
+                div class="flex items-center justify-between gap-4 border-b border-border/50 pb-2 last:border-0" {
+                    div {
+                        p class="text-sm font-medium" { (label) }
+                        p class="text-xs text-muted-foreground font-mono truncate" { (price_id.unwrap_or("not mapped")) }
+                    }
+                    div class="text-right" {
+                        @match resolved_price(*price_id, prices) {
+                            None => span class="text-sm text-muted-foreground" { "--" },
+                            Some(None) => span class="text-sm text-destructive" { "price not found in Stripe" },
+                            Some(Some(pr)) => span class="text-sm font-semibold" {
+                                (format_stripe_amount(pr.unit_amount, &pr.currency))
+                                span class="ml-1 text-xs font-normal text-muted-foreground" {
+                                    (pr.recurring_interval.clone().map(|i| format!("/{i}")).unwrap_or_else(|| " one-time".into()))
+                                }
+                            },
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -73,17 +128,18 @@ fn parse_tier_field(raw: &str, label: &str, max: i64) -> Result<i64, String> {
 
 pub(super) fn tier_settings_content(
     cfg: Option<&crate::api::types::TierConfigResponse>,
+    prices: &[crate::api::types::StripePrice],
     values: &TierFormValues,
     error: Option<&str>,
 ) -> Markup {
     html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Tier Settings" } p class="mt-2 text-muted-foreground" { "Trial lengths and membership slot limits. Stripe price / product mapping now lives on the " a href="/admin/stripe" class="text-primary-text hover:underline" { "Stripe" } " page." } }
+            div { h1 class="text-3xl font-bold" { "Pricing tiers" } p class="mt-2 text-muted-foreground" { "Trial lengths, membership slot limits, and whether the public pricing page is published. Stripe price / product mapping lives on the " a href="/admin/stripe" class="text-primary-text hover:underline" { "Stripe" } " page." } }
             @match cfg {
                 None => (error_box("Could not load tier config.")),
                 // BUNYIP-417: the Stripe catalog price/product mappings moved to
                 // the Stripe page to consolidate all Stripe config under one nav
-                // entry. Tier Settings keeps only its non-Stripe concerns (slots
+                // entry. Pricing tiers keeps only its non-Stripe concerns (slots
                 // + trial lengths).
                 Some(c) => form method="post" action="/admin/tier-settings" class="space-y-6" {
                     @if let Some(e) = error { (error_box(e)) }
@@ -96,6 +152,26 @@ pub(super) fn tier_settings_content(
                                 div class="space-y-2" { label for="early_adopter_slots" class="text-sm font-medium" { "Early-adopter slots" } input id="early_adopter_slots" name="early_adopter_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.early_adopter_slots) class=(dashboard_input()); }
                                 div class="space-y-2" { label for="early_adopter_trial_days" class="text-sm font-medium" { "Early-adopter trial days" } input id="early_adopter_trial_days" name="early_adopter_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.early_adopter_trial_days) class=(dashboard_input()); }
                                 div class="space-y-2" { label for="standard_trial_days" class="text-sm font-medium" { "Standard trial days" } input id="standard_trial_days" name="standard_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.standard_trial_days) class=(dashboard_input()); }
+                            }
+                        },
+                    ))
+                    // BUNYIP-487: the publish switch plus the amounts it will
+                    // advertise, side by side, so an admin turning pricing on
+                    // sees exactly what the public page will say.
+                    (admin_block(
+                        "Public pricing page",
+                        Some("Off by default. /pricing returns 404 (and every link to it is hidden) while this is off, or while no tier resolves to a usable Stripe price."),
+                        html! {
+                            div class="space-y-6" {
+                                label class="flex items-center gap-3 text-sm font-medium" {
+                                    input id="pricing_enabled" name="pricing_enabled" type="checkbox" value="true" checked[values.pricing_enabled] class="h-4 w-4 rounded border-input";
+                                    "Enable Pricing"
+                                }
+                                div {
+                                    p class="text-sm font-medium" { "Resolved from Stripe" }
+                                    p class="mb-3 text-xs text-muted-foreground" { "Read-only: the advertised amount is the mapped Stripe price, so it cannot disagree with what is charged." }
+                                    (resolved_pricing_block(c, prices))
+                                }
                             }
                         },
                     ))
@@ -114,6 +190,9 @@ pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Re
     let cfg = admin_api::tier_config(&st.api, c.forward.as_deref())
         .await
         .ok();
+    let prices = admin_api::list_stripe_prices(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
     let values = cfg
         .as_ref()
         .map(TierFormValues::from_config)
@@ -128,13 +207,14 @@ pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Re
             lifetime_product_id: String::new(),
             early_adopter_product_id: String::new(),
             standard_product_id: String::new(),
+            pricing_enabled: false,
         });
-    let content = tier_settings_content(cfg.as_ref(), &values, None);
+    let content = tier_settings_content(cfg.as_ref(), &prices, &values, None);
     admin_response(
         &c,
         &user,
         "/admin/tier-settings",
-        "Tier Settings · Bunyip",
+        "Pricing tiers · Bunyip",
         content,
     )
 }
@@ -168,6 +248,11 @@ pub struct TierForm {
     pub early_adopter_product_id: String,
     #[serde(default)]
     pub standard_product_id: String,
+    // BUNYIP-487: an unchecked checkbox submits no field at all, so absence is
+    // "off". That is why the switch is always sent to the API (never omitted):
+    // omission means "leave unchanged" there, which could never turn it off.
+    #[serde(default)]
+    pub pricing_enabled: Option<String>,
 }
 pub async fn tier_settings_save(
     State(st): State<AppState>,
@@ -191,6 +276,7 @@ pub async fn tier_settings_save(
         lifetime_product_id: f.lifetime_product_id.trim().to_string(),
         early_adopter_product_id: f.early_adopter_product_id.trim().to_string(),
         standard_product_id: f.standard_product_id.trim().to_string(),
+        pricing_enabled: f.pricing_enabled.is_some(),
     };
 
     // Validate the numeric fields and build the request body before calling the
@@ -246,6 +332,7 @@ pub async fn tier_settings_save(
                 body.insert(k.into(), json!(t));
             }
         }
+        body.insert("pricing_enabled".into(), json!(f.pricing_enabled.is_some()));
         Ok::<_, String>(serde_json::Value::Object(body))
     })();
 
@@ -263,12 +350,15 @@ pub async fn tier_settings_save(
     let cfg = admin_api::tier_config(&st.api, c.forward.as_deref())
         .await
         .ok();
-    let content = tier_settings_content(cfg.as_ref(), &values, Some(&error));
+    let prices = admin_api::list_stripe_prices(&st.api, c.forward.as_deref())
+        .await
+        .unwrap_or_default();
+    let content = tier_settings_content(cfg.as_ref(), &prices, &values, Some(&error));
     admin_response(
         &c,
         &user,
         "/admin/tier-settings",
-        "Tier Settings · Bunyip",
+        "Pricing tiers · Bunyip",
         content,
     )
 }

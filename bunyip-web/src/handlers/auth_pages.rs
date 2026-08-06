@@ -15,6 +15,17 @@ use crate::handlers::{auth_page, cookie_of, cookie_value, ctx, dashboard_input, 
 use crate::views::common::{auth_card, auth_card_plain};
 use crate::views::layout::{document, public_shell};
 
+/// BUNYIP-487: whether the header and footer should carry a Pricing link. The
+/// auth cards render the public shell directly (they need to attach their own
+/// cookies), so they resolve the flag themselves rather than through
+/// `public_ctx`. A failed fetch hides the link, never offers a dead one.
+async fn pricing_published(st: &AppState) -> bool {
+    calls::pricing(&st.api)
+        .await
+        .map(|p| p.published())
+        .unwrap_or(false)
+}
+
 /// BUNYIP-255: 2FA challenge-token TTL aligned with the JWT exp set in
 /// `crates/bunyip-domain/src/services/jwt.rs::create_2fa_challenge_token`.
 /// Stays under that exp so the cookie never outlives the token it carries.
@@ -347,7 +358,14 @@ pub async fn login_get(
         .await
         .unwrap_or_default();
     let content = login_content(None, q.redirect.as_deref().unwrap_or("/dashboard"));
-    let body = public_shell(&st.cfg, None, &apps, false, content);
+    let body = public_shell(
+        &st.cfg,
+        None,
+        &apps,
+        pricing_published(&st).await,
+        false,
+        content,
+    );
     html(document("Sign in · Bunyip", body))
 }
 
@@ -391,7 +409,14 @@ pub async fn login_post(
         Err(e) => {
             let apps = calls::applications(&st.api, None).await.unwrap_or_default();
             let content = login_content(Some(&e.user_message()), &target);
-            let body = public_shell(&st.cfg, None, &apps, false, content);
+            let body = public_shell(
+                &st.cfg,
+                None,
+                &apps,
+                pricing_published(&st).await,
+                false,
+                content,
+            );
             html(document("Sign in · Bunyip", body))
         }
     }
@@ -1252,7 +1277,14 @@ pub async fn verify_email(
         let apps = calls::applications(&st.api, session_cookie.as_deref())
             .await
             .unwrap_or_default();
-        let body = public_shell(&st.cfg, None, &apps, false, card);
+        let body = public_shell(
+            &st.cfg,
+            None,
+            &apps,
+            pricing_published(&st).await,
+            false,
+            card,
+        );
         html_cookies(document("Verify email · Bunyip", body), &rotated_cookies)
     }
 }
@@ -1325,7 +1357,6 @@ mod logout_clear_tests {
             api_public_origin: api_public.into(),
             oidc_issuer: api_public.into(),
             app_domain: app_domain.into(),
-            show_business_pricing: false,
             community_url: String::new(),
             trusted_proxies: Vec::new(),
         }
