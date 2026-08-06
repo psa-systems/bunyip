@@ -8,7 +8,9 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use tokio;
 
+use crate::config::TierConfig;
 use crate::errors::AppError;
+use crate::handlers::live_free_price_id;
 use crate::middleware::{extract_client_ip, AuthCookies, AuthenticatedUser};
 use crate::models::{
     Application, AuditAction, CreateAuditLog, SubscriptionTier, TrustedDeviceInfo, UserResponse,
@@ -256,6 +258,7 @@ pub async fn update_current_user_profile(
     pool: web::Data<PgPool>,
     auth_service: web::Data<Arc<AuthService>>,
     stripe: web::Data<Arc<StripeService>>,
+    tier_config: web::Data<Arc<std::sync::RwLock<TierConfig>>>,
     body: web::Json<UpdateProfileRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -311,7 +314,13 @@ pub async fn update_current_user_profile(
     // Mirror the lifetime $0-subscription side-effect that `confirm_email_verification`
     // does so the side that closes the gate produces the same end state.
     if granted == Some(SubscriptionTier::Lifetime) {
-        maybe_create_lifetime_subscription(&pool, &stripe, user.0.sub).await;
+        maybe_create_lifetime_subscription(
+            &pool,
+            &stripe,
+            live_free_price_id(&tier_config),
+            user.0.sub,
+        )
+        .await;
     }
 
     Ok(success(UserResponse::from(updated), request_id))
@@ -322,8 +331,21 @@ pub async fn update_current_user_profile(
 /// block in `confirm_email_verification`; lifted out so both grant call
 /// sites stay in sync. Best-effort: a failure logs but does not propagate
 /// (the user is already a lifetime member at the DB level).
-async fn maybe_create_lifetime_subscription(pool: &PgPool, stripe: &StripeService, user_id: Uuid) {
-    let Some(free_price_id) = stripe.free_price_id() else {
+///
+/// BUNYIP-482: `free_price_id` comes from the live `TierConfig`
+/// (`tier_config.free_price_id`, admin tier-settings page). `None` means no $0
+/// price is configured, so the subscription is skipped.
+async fn maybe_create_lifetime_subscription(
+    pool: &PgPool,
+    stripe: &StripeService,
+    free_price_id: Option<String>,
+    user_id: Uuid,
+) {
+    let Some(free_price_id) = free_price_id else {
+        tracing::info!(
+            user_id = %user_id,
+            "No tier_config.free_price_id configured; skipping the $0 lifetime subscription"
+        );
         return;
     };
     let user = match UserRepository::find_by_id(pool, user_id).await {
@@ -664,6 +686,7 @@ pub async fn confirm_email_verification(
     auth_service: web::Data<Arc<AuthService>>,
     pool: web::Data<PgPool>,
     stripe: web::Data<Arc<StripeService>>,
+    tier_config: web::Data<Arc<std::sync::RwLock<TierConfig>>>,
     body: web::Json<ConfirmEmailVerificationBody>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -688,7 +711,13 @@ pub async fn confirm_email_verification(
     // side-effect fires from `update_current_user_profile` when the name
     // save is the closer instead.
     if tier == Some(SubscriptionTier::Lifetime) {
-        maybe_create_lifetime_subscription(pool.get_ref(), stripe.get_ref(), user_id).await;
+        maybe_create_lifetime_subscription(
+            pool.get_ref(),
+            stripe.get_ref(),
+            live_free_price_id(&tier_config),
+            user_id,
+        )
+        .await;
     }
 
     Ok(success(

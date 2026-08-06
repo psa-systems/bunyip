@@ -42,7 +42,7 @@ pre-commit: ensure-env
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-migrations check-workflows check-runners check-security check-build check-clippy check-fmt check-docker
+check: check-migrations check-workflows check-runners check-security check-stripe-env check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -67,6 +67,12 @@ check-runners:
 [group: 'checks']
 check-security:
     ./scripts/check-security-invariants.sh
+
+# Gate that Stripe config stays DB-only: no STRIPE_* env surface outside the
+# at-rest encryption-key family and the e2e harness (BUNYIP-482).
+[group: 'checks']
+check-stripe-env:
+    ./scripts/check-no-stripe-env.sh
 
 # Build every target in the workspace.
 [group: 'checks']

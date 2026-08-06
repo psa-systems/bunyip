@@ -26,9 +26,9 @@ use bunyip_api::{
     },
     routes,
     services::{
-        stripe_config_from_db_model, stripe_config_from_env, AppBackupAdapter, AppDownloadCache,
-        AuthService, BackupService, DownloadLimiter, EmailService, EncryptionKeySet,
-        ForgejoAssetClient, GeoIpService, IpEnrichService, JwtConfig, JwtService,
+        stripe_config_from_db_model, unconfigured_stripe_config, AppBackupAdapter,
+        AppDownloadCache, AuthService, BackupService, DownloadLimiter, EmailService,
+        EncryptionKeySet, ForgejoAssetClient, GeoIpService, IpEnrichService, JwtConfig, JwtService,
         MokoshBackupAdapter, PasswordService, ReleaseCache, StripeService, TotpService,
         WebhookService,
     },
@@ -426,7 +426,8 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Auth service initialized");
 
-    // Initialize Stripe service — prefer DB config (set via admin UI), fall back to env vars
+    // BUNYIP-482: the `stripe_config` DB row (admin Stripe page) is the only
+    // source. No row, or an undecryptable one, boots with Stripe disabled.
     let stripe_config = {
         use bunyip_api::repositories::StripeConfigRepository;
         match StripeConfigRepository::get(&pool).await {
@@ -437,12 +438,15 @@ async fn main() -> anyhow::Result<()> {
                         cfg
                     }
                     Err(e) => {
-                        tracing::warn!(error = %e, "Failed to decrypt DB Stripe config, falling back to env vars");
-                        stripe_config_from_env()?
+                        tracing::warn!(error = %e, "Failed to decrypt the saved Stripe config; starting with Stripe disabled. Re-enter the keys on the admin Stripe page.");
+                        unconfigured_stripe_config()
                     }
                 }
             }
-            _ => stripe_config_from_env()?,
+            _ => {
+                info!("No Stripe config saved; starting with Stripe disabled (configure it on the admin Stripe page)");
+                unconfigured_stripe_config()
+            }
         }
     };
     let stripe_service = Arc::new(StripeService::new(stripe_config));
@@ -451,13 +455,14 @@ async fn main() -> anyhow::Result<()> {
 
     // BUNYIP-203: warn loudly when Stripe is wired (real secret key) but no
     // webhook signing secret is configured. The webhook handler fails closed
-    // in this state, so events will be rejected until a real
-    // STRIPE_WEBHOOK_SECRET is supplied.
+    // in this state, so events will be rejected until a real webhook signing
+    // secret is saved.
     if stripe_service.is_configured() && !stripe_service.webhook_secret_configured() {
         tracing::warn!(
-            "Stripe secret key is configured but STRIPE_WEBHOOK_SECRET is unset or the \
+            "Stripe secret key is configured but the webhook signing secret is unset or the \
              placeholder; the Stripe webhook endpoint will REJECT all events until a real \
-             webhook signing secret is set. Forged-event protection is fail-closed (BUNYIP-203)."
+             webhook signing secret is saved on the admin Stripe page. Forged-event protection \
+             is fail-closed (BUNYIP-203)."
         );
     }
 

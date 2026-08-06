@@ -181,9 +181,11 @@ fi
 secret_from_env_or_empty "${SECRETS_DIR}/setup_default_admin"  SETUP_DEFAULT_ADMIN
 secret_from_env_or_empty "${SECRETS_DIR}/forgejo_api_token"    FORGEJO_API_TOKEN
 secret_from_env_or_empty "${SECRETS_DIR}/smtp_password"        SMTP_PASSWORD
-secret_from_env_or_empty "${SECRETS_DIR}/stripe_secret_key"    STRIPE_SECRET_KEY
-secret_from_env_or_empty "${SECRETS_DIR}/stripe_webhook_secret" STRIPE_WEBHOOK_SECRET
 secret_from_env_or_empty "${SECRETS_DIR}/update_check_token"   BUNYIP_UPDATE_CHECK_TOKEN
+
+# BUNYIP-482: no stripe_secret_key / stripe_webhook_secret files. The Stripe API
+# keys live only in the stripe_config DB row (admin Stripe page), encrypted with
+# stripe_encryption_key above.
 
 # ---------------------------------------------------------------------------
 # OIDC signing keys

@@ -29,8 +29,8 @@ pub struct StripeConfig {
     /// Application tag used to filter products/prices in shared Stripe accounts.
     pub app_tag: Option<String>,
     /// BUNYIP-351: checkout redirect URLs + trial length. NULL falls back to the
-    /// env defaults (`STRIPE_SUCCESS_URL` / `STRIPE_CANCEL_URL` /
-    /// `BUNYIP_BILLING_TRIAL_PERIOD_DAYS`) in `StripeConfig::from_db_model`.
+    /// derived defaults (URLs from `CORS_ORIGIN`, trial from
+    /// `BUNYIP_BILLING_TRIAL_PERIOD_DAYS`) in `stripe_config_from_db_model`.
     pub success_url: Option<String>,
     pub cancel_url: Option<String>,
     pub trial_period_days: Option<i32>,
@@ -91,13 +91,14 @@ pub struct StripeConfigResponse {
     pub has_secret_key: bool,
     pub has_webhook_secret: bool,
     pub app_tag: String,
-    /// BUNYIP-351: resolved (DB-over-env) checkout knobs, surfaced so the admin
-    /// Stripe page can render + edit them.
+    /// BUNYIP-351: resolved (DB-over-default) checkout knobs, surfaced so the
+    /// admin Stripe page can render + edit them.
     pub success_url: String,
     pub cancel_url: String,
     pub trial_period_days: u32,
     pub updated_at: Option<DateTime<Utc>>,
-    /// "database" or "environment" — indicates where the config came from
+    /// "database" or "unconfigured" - indicates where the config came from
+    /// (BUNYIP-482: env is no longer a source).
     pub source: String,
 }
 
@@ -124,15 +125,15 @@ impl StripeConfigResponse {
             has_secret_key: config.secret_key.is_some(),
             has_webhook_secret: config.webhook_secret.is_some(),
             app_tag,
-            // BUNYIP-351: resolved (DB-over-env) checkout knobs.
+            // BUNYIP-351: resolved (DB-over-default) checkout knobs.
             success_url: config
                 .success_url
                 .clone()
-                .unwrap_or_else(crate::services::stripe::success_url_from_env),
+                .unwrap_or_else(crate::services::stripe::default_success_url),
             cancel_url: config
                 .cancel_url
                 .clone()
-                .unwrap_or_else(crate::services::stripe::cancel_url_from_env),
+                .unwrap_or_else(crate::services::stripe::default_cancel_url),
             trial_period_days: config
                 .trial_period_days
                 .and_then(|v| u32::try_from(v).ok())
@@ -142,33 +143,26 @@ impl StripeConfigResponse {
         })
     }
 
-    /// Reads env vars and returns a response showing what's currently configured there.
-    /// Used as a fallback when no DB config has been saved yet.
-    pub fn from_env() -> Self {
-        // secret_env supports the {NAME}_FILE compose-secret convention,
-        // falling back to the plain env var.
-        let secret_key = crate::config::secret_env("STRIPE_SECRET_KEY");
-        let webhook_secret = crate::config::secret_env("STRIPE_WEBHOOK_SECRET");
-
+    /// BUNYIP-482: the admin read model for a deployment with nothing saved in
+    /// `stripe_config`. No secret is set and the checkout knobs show the derived
+    /// defaults the runtime would use.
+    pub fn unconfigured() -> Self {
         Self {
-            secret_key_masked: secret_key.as_deref().map(mask_secret),
-            webhook_secret_masked: webhook_secret.as_deref().map(mask_secret),
-            has_secret_key: secret_key.is_some(),
-            has_webhook_secret: webhook_secret.is_some(),
+            secret_key_masked: None,
+            webhook_secret_masked: None,
+            has_secret_key: false,
+            has_webhook_secret: false,
             app_tag: Self::default_app_tag(),
-            success_url: crate::services::stripe::success_url_from_env(),
-            cancel_url: crate::services::stripe::cancel_url_from_env(),
+            success_url: crate::services::stripe::default_success_url(),
+            cancel_url: crate::services::stripe::default_cancel_url(),
             trial_period_days: crate::services::stripe::trial_period_days_from_env(),
             updated_at: None,
-            source: "environment".to_string(),
+            source: "unconfigured".to_string(),
         }
     }
 
     fn default_app_tag() -> String {
-        std::env::var("STRIPE_APP_TAG")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "bunyip".to_string())
+        crate::services::stripe::DEFAULT_APP_TAG.to_string()
     }
 }
 

@@ -1165,8 +1165,8 @@ fn humanise_checkout_error(raw: &str) -> String {
     if trimmed.contains("No active price configured") {
         return "Stripe checkout is not configured. An admin must create at least one tagged product and recurring price before subscriptions can be opened. See docs/stripe-test-mode.md.".to_string();
     }
-    if trimmed.contains("Stripe is not configured") || trimmed.contains("STRIPE_SECRET_KEY") {
-        return "Stripe is not configured on this deployment. Set the Stripe keys in the admin Stripe page (or via env) before subscribing.".to_string();
+    if trimmed.contains("Stripe is not configured") {
+        return "Stripe is not configured on this deployment. Save the Stripe keys on the admin Stripe page before subscribing.".to_string();
     }
     // BUNYIP-191: dunite-core maps every `AppError::InternalError` /
     // `AppError::DatabaseError` to this single user-facing string,

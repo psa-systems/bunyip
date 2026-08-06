@@ -80,19 +80,12 @@ services:
       RUST_LOG: ${RUST_LOG:-info,bunyip_api=debug,bunyip_core=info}
       JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-at-least-32-characters-long-000000}
       TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:-}
+      # At-rest AES-256-GCM key for the secrets stored in stripe_config /
+      # email_config. NOT Stripe API configuration (BUNYIP-482).
       STRIPE_ENCRYPTION_KEY: ${STRIPE_ENCRYPTION_KEY:-}
-      # Test-mode Stripe keys for local subscription testing (BUNYIP-175). The
-      # webhook secret is the whsec_ printed by `stripe listen`. Empty by default
-      # keeps payment disabled. See docs/stripe-test-mode.md.
-      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
-      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
-      # Checkout redirect URLs. Empty default lets the api derive them from
-      # CORS_ORIGIN (correct on plain `just dev`, where CORS_ORIGIN is the single
-      # localhost origin). On dev-sso CORS_ORIGIN is a comma-list of RP origins,
-      # which would produce a malformed success_url, so set these explicitly in
-      # .env to a single bunyip origin (BUNYIP-175).
-      STRIPE_SUCCESS_URL: ${STRIPE_SUCCESS_URL:-}
-      STRIPE_CANCEL_URL: ${STRIPE_CANCEL_URL:-}
+      # BUNYIP-482: Stripe API keys and checkout URLs live ONLY in the
+      # stripe_config DB row; enter them on the admin Stripe page. The checkout
+      # URLs default to the first CORS_ORIGIN entry. See docs/stripe-test-mode.md.
       SETUP_DEFAULT_ADMIN: ${SETUP_DEFAULT_ADMIN:-}
       # BUNYIP-290: bootstrap the first admin from an email (no password in env).
       # Promotes on sign-up / sign-in while zero admins exist; inert afterwards.
