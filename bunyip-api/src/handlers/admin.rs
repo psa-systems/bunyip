@@ -1788,7 +1788,7 @@ pub struct HealthStatus {
 }
 
 /// One offline dataset's freshness (BUNYIP-474). The `.BIN` is provisioned and
-/// refreshed outside the app (see `scripts/refresh-ip2-datasets.sh`); this only
+/// refreshed outside the app (see `scripts/refresh-ip2-datasets.nu`); this only
 /// reports what is on disk so a stale or missing file surfaces in admin.
 #[derive(Debug, Serialize)]
 pub struct DatasetHealth {
@@ -1974,7 +1974,7 @@ pub async fn get_system_health(
     };
 
     // BUNYIP-474: dataset freshness. Read-only (the .BIN is refreshed out of
-    // band by scripts/refresh-ip2-datasets.sh); this just reports the on-disk age.
+    // band by scripts/refresh-ip2-datasets.nu); this just reports the on-disk age.
     let datasets = vec![
         dataset_health(
             "IP2Location (login country)",

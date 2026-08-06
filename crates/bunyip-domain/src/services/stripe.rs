@@ -215,7 +215,7 @@ mod tests {
 
     /// BUNYIP-482: an empty DB row resolves to placeholder secrets (so
     /// `is_configured()` stays false) and derived checkout URLs, identically to
-    /// the unconfigured constructor. `scripts/check-no-stripe-env.sh` is the
+    /// the unconfigured constructor. `scripts/check-no-stripe-env.nu` is the
     /// gate that keeps env out of this path; this asserts the resulting state.
     #[test]
     fn empty_db_row_resolves_to_the_unconfigured_state() {

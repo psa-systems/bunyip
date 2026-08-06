@@ -231,7 +231,7 @@ configuration; compose.yml, .env.example, and the dev-sso runbook point here.
   `FORGEJO_API_TOKEN` var (unchanged). File-based secrets never appear in
   `docker inspect` output or `/proc/<pid>/environ`, unlike plain environment
   variables (BUNYIP-38).
-- Upgrading a pre-BUNYIP-38 deployment: run `./scripts/init-secrets.sh` before
+- Upgrading a pre-BUNYIP-38 deployment: run `./scripts/init-secrets.nu` before
   `docker compose up`. It migrates the secret values from your existing `.env`
   into the `./secrets/*` files (including `forgejo_api_token`).
 - Cache volumes: mount NAMED volumes at `/var/cache/bunyip-oci` and

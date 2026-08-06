@@ -42,43 +42,49 @@ pre-commit: ensure-env
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-migrations check-workflows check-runners check-security check-stripe-env check-key-env check-build check-clippy check-fmt check-docker
+check: check-migrations check-workflows check-runners check-security check-stripe-env check-key-env check-no-bash check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
 check-migrations:
-    ./scripts/check-migration-versions.sh
+    ./scripts/check-migration-versions.nu
 
 # Gate the secret scope of pull_request-triggered workflows (BUNYIP-425).
 [group: 'checks']
 check-workflows:
-    ./scripts/check-workflow-secrets.sh
+    ./scripts/check-workflow-secrets.nu
 
 # Gate the runner labels: the native cargo job stays on the dev image, every
 # label carries its reason, no workflow installs at run time what the image
 # provides (C toolchain, BUNYIP-444; browser system libraries, BUNYIP-446).
 [group: 'checks']
 check-runners:
-    ./scripts/check-runner-labels.sh
+    ./scripts/check-runner-labels.nu
 
 # Gate the security shapes the BUNYIP-426 audit sweep removed (transport-derived
 # cookie Secure, rev-pinned dunite, no signup enumeration oracle, digest-pinned
 # base images). Grep-only, so it runs without a toolchain.
 [group: 'checks']
 check-security:
-    ./scripts/check-security-invariants.sh
+    ./scripts/check-security-invariants.nu
 
 # Gate that Stripe config stays DB-only: no STRIPE_* env surface outside the
 # e2e harness (BUNYIP-482).
 [group: 'checks']
 check-stripe-env:
-    ./scripts/check-no-stripe-env.sh
+    ./scripts/check-no-stripe-env.nu
 
 # Gate the single at-rest key: no retired per-consumer encryption-key env names
 # (BUNYIP-483).
 [group: 'checks']
 check-key-env:
-    ./scripts/check-no-legacy-key-env.sh
+    ./scripts/check-no-legacy-key-env.nu
+
+# Gate that scripts/ stays Nushell: no .sh file and no POSIX-shell shebang
+# (BUNYIP-490).
+[group: 'checks']
+check-no-bash:
+    ./scripts/check-no-bash.nu
 
 # Build every target in the workspace.
 [group: 'checks']
@@ -205,10 +211,10 @@ ensure-oidc-keys:
     print "Generated secrets/oidc/dev-2026.pem (Ed25519 OIDC signing key, kid dev-2026)."
 
 # Create/migrate the production secret files under ./secrets (BUNYIP-38).
-# Idempotent wrapper around scripts/init-secrets.sh; see compose.yml quick start.
+# Idempotent wrapper around scripts/init-secrets.nu; see compose.yml quick start.
 [group: 'dev']
 init-secrets:
-    ./scripts/init-secrets.sh
+    ./scripts/init-secrets.nu
 
 # Start the full dev stack (postgres + api + web) in the foreground.
 [group: 'dev']

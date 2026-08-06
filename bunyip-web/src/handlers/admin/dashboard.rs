@@ -50,7 +50,7 @@ pub(super) fn datasets_card(datasets: &[DatasetHealth]) -> maud::Markup {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
             div class="flex flex-col space-y-1.5 p-6" {
                 h3 class="text-2xl font-semibold leading-none tracking-tight" { "Datasets" }
-                p class="text-sm text-muted-foreground" { "Offline IP intelligence for login-location and abuse enrichment. Refreshed out of band (see scripts/refresh-ip2-datasets.sh); a stale file keeps working but its data drifts." }
+                p class="text-sm text-muted-foreground" { "Offline IP intelligence for login-location and abuse enrichment. Refreshed out of band (see scripts/refresh-ip2-datasets.nu); a stale file keeps working but its data drifts." }
             }
             div class="p-6 pt-0" {
                 div class="divide-y" { @for d in datasets { (dataset_row(d)) } }

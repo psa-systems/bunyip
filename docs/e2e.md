@@ -430,7 +430,7 @@ of it unreviewed. Every secret in scope for that job is readable by anyone who
 can push a branch, so the PR job declares only `E2E_STAGING_BASE_URL` and
 `OIDC_ISSUER_STAGING` (which authenticate nothing) and every `npm ci` in
 `.forgejo/workflows/` runs `--ignore-scripts`.
-`scripts/check-workflow-secrets.sh` enforces both in the `Check` workflow, so
+`scripts/check-workflow-secrets.nu` enforces both in the `Check` workflow, so
 the split cannot regress silently.
 
 **Production safety gate.** Production runs ONLY via manual dispatch. On top of

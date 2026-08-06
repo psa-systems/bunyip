@@ -17,7 +17,7 @@ harmless to sqlx - the full timestamps differ - but it misleads anyone reading
 migration order at a glance.
 
 To stop a genuine collision (two files sqlx would treat as the **same**
-migration) from ever merging, CI runs `scripts/check-migration-versions.sh`,
+migration) from ever merging, CI runs `scripts/check-migration-versions.nu`,
 which fails if any two migrations share a version or are out of order. The
 trailing index is left as-is; renumbering already-applied files would diverge
 `_sqlx_migrations` on live databases, so we gate future additions instead of
