@@ -34,8 +34,6 @@ pub struct Config {
     pub oidc_issuer: String,
     /// Apex domain child apps live under (e.g. `example.com`).
     pub app_domain: String,
-    /// Show the business pricing tier on the pricing page.
-    pub show_business_pricing: bool,
     /// BUNYIP-329: URL of the team Let's Chat ("Community") instance the
     /// authenticated Community button opens. Empty disables the feature (the
     /// button is hidden and `/community` sends the user back to the dashboard),
@@ -95,9 +93,6 @@ impl Config {
             api_url,
             api_public_origin,
             app_domain: var("BUNYIP_APP_DOMAIN").unwrap_or_default(),
-            show_business_pricing: var("BUNYIP_SHOW_BUSINESS_PRICING")
-                .map(|v| v == "true")
-                .unwrap_or(false),
             community_url: var("BUNYIP_COMMUNITY_URL").unwrap_or_default(),
             // BUNYIP-311: the reverse proxies (Traefik) allowed to set the
             // inbound X-Forwarded-For the BFF trusts when resolving the

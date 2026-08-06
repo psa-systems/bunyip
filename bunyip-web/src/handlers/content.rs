@@ -8,9 +8,10 @@ use serde::Deserialize;
 
 use crate::api::auth as auth_api;
 use crate::api::calls::{self, FeedbackAttachment, FeedbackInput};
-use crate::api::types::SubscriptionTier;
+use crate::api::types::PricingResponse;
 use crate::handlers::dashboard::tier_name;
 use crate::handlers::{dashboard_input, public_ctx, public_response};
+use crate::util::format_stripe_amount;
 use crate::views::ui::{button_class, empty_state, error_box, icon, success_box};
 use crate::web::AppState;
 
@@ -22,26 +23,29 @@ const POLICY_LAST_UPDATED: &str = "June 2026";
 
 // --- pricing ----------------------------------------------------------------
 
-const PERSONAL: [&str; 6] = [
+// BUNYIP-487: "Up to 5 members per org" is gone. There is no orgs table and no
+// membership cap in the product, so the bullet advertised something that does
+// not exist.
+const PERSONAL: [&str; 5] = [
     "Single sign-on into Mokosh",
     "Stripe-backed billing and trials",
-    "Up to 5 members per org",
     "MFA, magic links, password reset",
     "In-app feedback widget",
     "Cancel anytime",
 ];
-// First bullet phrasing is intentionally tier-name-agnostic ("the personal
-// plan" instead of "Starter") so a rename of `SubscriptionTier::Standard`
-// via the canonical `tier_name` helper does not desync this feature list
-// from the card heading above it.
-const BUSINESS: [&str; 6] = [
-    "Everything in the personal plan",
-    "Unlimited members and orgs",
-    "Org switching and role management",
-    "Admin console and audit logs",
-    "Priority support",
-    "Invoice billing",
-];
+
+/// Trial length sentence fragment, from `tier_config.standard_trial_days`.
+/// BUNYIP-487: the page used to say "14 days" while the configured default was
+/// 30, so the marketing copy advertised a trial the application did not honour.
+/// `0` means the length is unknown (the API did not answer), so the copy drops
+/// the number rather than inventing one.
+pub(super) fn trial_phrase(days: i64) -> String {
+    if days > 0 {
+        format!("free for {days} days")
+    } else {
+        "free".to_string()
+    }
+}
 
 fn pricing_card(
     title: &str,
@@ -82,59 +86,90 @@ fn pricing_card(
                         button type="button" disabled title="Payment is not configured" class=(button_class("default", "lg", "w-full")) { (cta_label) }
                     }
                 }
+                // Policy constant, not tier configuration: it matches the Terms
+                // of Service text further down this module.
                 p class="mt-4 text-center text-sm text-muted-foreground" { "30-day grace period if payment fails" }
             }
         }
     }
 }
 
-pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (c, apps) = public_ctx(&st, &headers).await;
-    let stripe = auth_api::setup_status(&st.api)
-        .await
-        .map(|s| s.stripe_enabled)
-        .unwrap_or(true);
-    let show_business = st.cfg.show_business_pricing;
-    let signed_in = c.is_signed_in();
+/// The pricing page body. Split out from the handler so the rendering is unit
+/// testable against a `PricingResponse` without an API round trip.
+pub(super) fn pricing_content(pricing: &PricingResponse, stripe: bool, signed_in: bool) -> Markup {
     let (cta_href, cta_label) = if signed_in {
         ("/membership", "Go to Membership")
     } else {
         ("/register", "Sign up")
     };
-    let grid = if show_business {
+    let grid = if pricing.tiers.len() > 1 {
         "md:grid-cols-2 max-w-4xl"
     } else {
         "max-w-md"
     };
-
-    let content = html! {
+    html! {
         div class="py-20" {
             div class="container" {
                 div class="text-center" {
                     h1 class="text-4xl font-bold" { "Simple, transparent pricing" }
-                    p class="mt-4 text-lg text-muted-foreground" { "The business layer for your PSA. Start free for 14 days, no credit card required." }
+                    p class="mt-4 text-lg text-muted-foreground" {
+                        "The business layer for your PSA. Start " (trial_phrase(pricing.trial_days)) ", no credit card required."
+                    }
                 }
                 div class={ "mt-16 grid gap-8 mx-auto " (grid) } {
-                    // Route the personal-tier title through tier_name so this
-                    // marketing page and the in-app Membership / Settings
-                    // labels are byte-identical. Renaming the tier (e.g.
-                    // "Standard" -> "Starter") is a one-line change in
-                    // `handlers::dashboard::tier_name`.
-                    (pricing_card(tier_name(&SubscriptionTier::Standard), "For a single team getting set up", "$3", &PERSONAL, false, stripe, cta_href, cta_label))
-                    @if show_business {
-                        (pricing_card("Business", "For MSPs running multiple orgs", "$15", &BUSINESS, true, stripe, cta_href, cta_label))
+                    @for t in &pricing.tiers {
+                        // Route the tier title through tier_name so this
+                        // marketing page and the in-app Membership / Settings
+                        // labels are byte-identical. Renaming the tier (e.g.
+                        // "Standard" -> "Starter") is a one-line change in
+                        // `handlers::dashboard::tier_name`.
+                        (pricing_card(
+                            tier_name(&t.tier),
+                            "Everything around the product, nothing in it",
+                            &format_stripe_amount(Some(t.amount), &t.currency),
+                            &PERSONAL,
+                            false,
+                            stripe,
+                            cta_href,
+                            cta_label,
+                        ))
                     }
                 }
             }
         }
-    };
-    public_response(&st, &c, &apps, "Pricing · Bunyip", true, content)
+    }
+}
+
+/// BUNYIP-487: 404 unless an admin published pricing AND a tier resolves to a
+/// usable Stripe price. A pricing page with no pricing has nothing to say, and
+/// the nav / footer / hero links are hidden on exactly the same condition.
+pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (c, apps, pricing) = public_ctx(&st, &headers).await;
+    if !pricing.published() {
+        let mut resp = public_response(
+            &st,
+            &c,
+            &apps,
+            &pricing,
+            "Not found · Bunyip",
+            false,
+            crate::handlers::public::not_found_content(),
+        );
+        *resp.status_mut() = axum::http::StatusCode::NOT_FOUND;
+        return resp;
+    }
+    let stripe = auth_api::setup_status(&st.api)
+        .await
+        .map(|s| s.stripe_enabled)
+        .unwrap_or(true);
+    let content = pricing_content(&pricing, stripe, c.is_signed_in());
+    public_response(&st, &c, &apps, &pricing, "Pricing · Bunyip", true, content)
 }
 
 // --- our story --------------------------------------------------------------
 
 pub async fn our_story(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (c, apps) = public_ctx(&st, &headers).await;
+    let (c, apps, pricing) = public_ctx(&st, &headers).await;
     let content = html! {
         div class="container max-w-4xl py-12" {
             h1 class="text-4xl font-bold mb-8" { "Our Story" }
@@ -143,28 +178,36 @@ pub async fn our_story(State(st): State<AppState>, headers: HeaderMap) -> Respon
                     h2 class="text-2xl font-semibold mb-4" { "Why Bunyip?" }
                     div class="space-y-4 text-muted-foreground" {
                         p { "Mokosh is a focused PSA: the product your MSP actually uses to run service delivery. But every product needs a business layer around it - signup, billing, members, invitations, single sign-on - and that layer is the same boring infrastructure everyone reinvents." }
-                        p { "We pulled that layer out into its own surface so the PSA never has to carry it. Bunyip owns identity, subscriptions, and orgs; Mokosh owns the work. Each does one thing well." }
+                        p { "We pulled that layer out into its own surface so the PSA never has to carry it. Bunyip owns identity, subscriptions, and memberships; Mokosh owns the work. Each does one thing well." }
                         p { "The name is the lake cryptid that surfaces what matters. That is the job: lift the business-y bits up out of the product and keep them out of the way." }
                     }
                 }
                 section {
                     h2 class="text-2xl font-semibold mb-4" { "The business shell" }
                     div class="space-y-4 text-muted-foreground" {
-                        p { "Bunyip is the business shell that wraps Mokosh. It is the OIDC entry point, the Stripe-backed billing engine, the org and membership directory, and the admin console - everything around the product, nothing in it." }
+                        p { "Bunyip is the business shell that wraps Mokosh. It is the OIDC entry point, the Stripe-backed billing engine, the membership and entitlement directory, and the admin console - everything around the product, nothing in it." }
                         p { "Your team logs in once through Bunyip and lands in Mokosh. Billing, trials, dunning, MFA, magic links, and trusted devices come out of the box, so the PSA stays focused on what makes your MSP tick." }
                     }
                 }
             }
         }
     };
-    public_response(&st, &c, &apps, "Our Story · Bunyip", true, content)
+    public_response(
+        &st,
+        &c,
+        &apps,
+        &pricing,
+        "Our Story · Bunyip",
+        true,
+        content,
+    )
 }
 
 // --- roadmap ----------------------------------------------------------------
 
 // Seed roadmap items, grouped by status bucket. Each entry is a (title,
 // one-line description) pair. Editing the page is a one-line change here,
-// the same shape as PERSONAL / BUSINESS above. Placeholder content until a
+// the same shape as PERSONAL above. Placeholder content until a
 // data-backed source lands (see BUNYIP-136); keep copy in American English
 // with no em-dashes.
 const ROADMAP_SHIPPING_SOON: [(&str, &str); 2] = [
@@ -221,7 +264,7 @@ fn roadmap_section(title: &str, blurb: &str, items: &[(&str, &str)]) -> Markup {
 }
 
 pub async fn roadmap(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (c, apps) = public_ctx(&st, &headers).await;
+    let (c, apps, pricing) = public_ctx(&st, &headers).await;
     let content = html! {
         div class="container max-w-4xl py-12" {
             div class="mb-12" {
@@ -235,7 +278,7 @@ pub async fn roadmap(State(st): State<AppState>, headers: HeaderMap) -> Response
             }
         }
     };
-    public_response(&st, &c, &apps, "Roadmap · Bunyip", true, content)
+    public_response(&st, &c, &apps, &pricing, "Roadmap · Bunyip", true, content)
 }
 
 // --- legal ------------------------------------------------------------------
@@ -253,7 +296,7 @@ fn legal_ul(title: &str, items: &[&str]) -> Markup {
 }
 
 pub async fn terms(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (c, apps) = public_ctx(&st, &headers).await;
+    let (c, apps, pricing) = public_ctx(&st, &headers).await;
     let d = st.cfg.domain_or_localhost();
     let content = html! {
         div class="container max-w-4xl py-12" {
@@ -282,11 +325,19 @@ pub async fn terms(State(st): State<AppState>, headers: HeaderMap) -> Response {
             }
         }
     };
-    public_response(&st, &c, &apps, "Terms of Service · Bunyip", true, content)
+    public_response(
+        &st,
+        &c,
+        &apps,
+        &pricing,
+        "Terms of Service · Bunyip",
+        true,
+        content,
+    )
 }
 
 pub async fn privacy(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (c, apps) = public_ctx(&st, &headers).await;
+    let (c, apps, pricing) = public_ctx(&st, &headers).await;
     let d = st.cfg.domain_or_localhost();
     let content = html! {
         div class="container max-w-4xl py-12" {
@@ -318,7 +369,15 @@ pub async fn privacy(State(st): State<AppState>, headers: HeaderMap) -> Response
             }
         }
     };
-    public_response(&st, &c, &apps, "Privacy Policy · Bunyip", true, content)
+    public_response(
+        &st,
+        &c,
+        &apps,
+        &pricing,
+        "Privacy Policy · Bunyip",
+        true,
+        content,
+    )
 }
 
 // --- feedback ---------------------------------------------------------------
@@ -445,12 +504,13 @@ pub async fn feedback_get(
     headers: HeaderMap,
     Query(q): Query<FeedbackQuery>,
 ) -> Response {
-    let (c, apps) = public_ctx(&st, &headers).await;
+    let (c, apps, pricing) = public_ctx(&st, &headers).await;
     let from = q.from.as_deref().and_then(sanitize_page_path);
     public_response(
         &st,
         &c,
         &apps,
+        &pricing,
         "Feedback · Bunyip",
         false,
         feedback_form(false, None, from.as_deref()),
@@ -561,7 +621,7 @@ pub async fn feedback_post(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Response {
-    let (c, apps) = public_ctx(&st, &headers).await;
+    let (c, apps, pricing) = public_ctx(&st, &headers).await;
     let cookie = c.forward.clone();
     let parsed = read_feedback_multipart(&mut multipart).await;
     let (submitted, error, render_path) = match parsed {
@@ -619,6 +679,7 @@ pub async fn feedback_post(
         &st,
         &c,
         &apps,
+        &pricing,
         "Feedback · Bunyip",
         false,
         feedback_form(submitted, error.as_deref(), render_path.as_deref()),
@@ -716,7 +777,7 @@ fn personalize_docs(html: &str, username: &str) -> String {
 
 /// `GET /docs` - index of the embedded docs. Public (BUNYIP-385).
 pub async fn docs_index(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (c, apps) = public_ctx(&st, &headers).await;
+    let (c, apps, pricing) = public_ctx(&st, &headers).await;
     let content = html! {
         div class="container max-w-4xl py-12" {
             h1 class="text-4xl font-bold mb-4" { "Documentation" }
@@ -730,7 +791,7 @@ pub async fn docs_index(State(st): State<AppState>, headers: HeaderMap) -> Respo
             }
         }
     };
-    public_response(&st, &c, &apps, "Docs · Bunyip", true, content)
+    public_response(&st, &c, &apps, &pricing, "Docs · Bunyip", true, content)
 }
 
 /// `GET /docs/{slug}` - render one embedded doc. Public (BUNYIP-385).
@@ -740,7 +801,7 @@ pub async fn docs_page(
     Path(slug): Path<String>,
     Query(q): Query<DocQuery>,
 ) -> Response {
-    let (c, apps) = public_ctx(&st, &headers).await;
+    let (c, apps, pricing) = public_ctx(&st, &headers).await;
     let Some(&(_, title, md)) = DOCS.iter().find(|&&(s, _, _)| s == slug.as_str()) else {
         let content = html! {
             div class="container max-w-4xl py-12" {
@@ -750,7 +811,7 @@ pub async fn docs_page(
                 }
             }
         };
-        let mut resp = public_response(&st, &c, &apps, "Docs · Bunyip", true, content);
+        let mut resp = public_response(&st, &c, &apps, &pricing, "Docs · Bunyip", true, content);
         *resp.status_mut() = axum::http::StatusCode::NOT_FOUND;
         return resp;
     };
@@ -789,6 +850,7 @@ pub async fn docs_page(
         &st,
         &c,
         &apps,
+        &pricing,
         &format!("{title} · Docs · Bunyip"),
         true,
         content,
@@ -802,7 +864,7 @@ pub async fn app_docs_index(
     headers: HeaderMap,
     Path(slug): Path<String>,
 ) -> Response {
-    let (c, apps) = public_ctx(&st, &headers).await;
+    let (c, apps, pricing) = public_ctx(&st, &headers).await;
     let app_name = apps
         .iter()
         .find(|a| a.slug == slug)
@@ -829,6 +891,7 @@ pub async fn app_docs_index(
         &st,
         &c,
         &apps,
+        &pricing,
         &format!("{app_name} docs · Bunyip"),
         true,
         content,
@@ -841,7 +904,7 @@ pub async fn app_docs_page(
     headers: HeaderMap,
     Path((slug, doc_slug)): Path<(String, String)>,
 ) -> Response {
-    let (c, apps) = public_ctx(&st, &headers).await;
+    let (c, apps, pricing) = public_ctx(&st, &headers).await;
     let app_name = apps
         .iter()
         .find(|a| a.slug == slug)
@@ -860,7 +923,8 @@ pub async fn app_docs_page(
                     }
                 }
             };
-            let mut resp = public_response(&st, &c, &apps, "Docs · Bunyip", true, content);
+            let mut resp =
+                public_response(&st, &c, &apps, &pricing, "Docs · Bunyip", true, content);
             *resp.status_mut() = axum::http::StatusCode::NOT_FOUND;
             return resp;
         }
@@ -878,10 +942,106 @@ pub async fn app_docs_page(
         &st,
         &c,
         &apps,
+        &pricing,
         &format!("{} · {app_name} docs · Bunyip", doc.title),
         true,
         content,
     )
+}
+
+#[cfg(test)]
+mod pricing_tests {
+    use super::{pricing_content, trial_phrase, PERSONAL};
+    use crate::api::types::{PricingResponse, PricingTier, SubscriptionTier};
+
+    fn standard(amount: i64, trial_days: i64) -> PricingResponse {
+        PricingResponse {
+            enabled: true,
+            trial_days,
+            tiers: vec![PricingTier {
+                tier: SubscriptionTier::Standard,
+                amount,
+                currency: "usd".into(),
+                interval: Some("month".into()),
+                trial_days,
+            }],
+        }
+    }
+
+    /// BUNYIP-487: the advertised amount is whatever the mapped Stripe price
+    /// says, so changing the mapping changes the page with no redeploy.
+    #[test]
+    fn amount_comes_from_the_resolved_stripe_price() {
+        let html = pricing_content(&standard(300, 30), true, false).into_string();
+        assert!(html.contains("$3.00"), "amount rendered from the price");
+        assert!(!html.contains("$15"), "the hardcoded Business card is gone");
+
+        let html = pricing_content(&standard(1250, 30), true, false).into_string();
+        assert!(
+            html.contains("$12.50"),
+            "a different mapped price renders a different amount"
+        );
+    }
+
+    /// The trial length comes from `tier_config.standard_trial_days`, so the
+    /// page can no longer advertise a trial the application does not honour.
+    #[test]
+    fn trial_length_comes_from_config() {
+        let html = pricing_content(&standard(300, 30), true, false).into_string();
+        assert!(html.contains("free for 30 days"));
+        let html = pricing_content(&standard(300, 7), true, false).into_string();
+        assert!(html.contains("free for 7 days"));
+        // Unknown length drops the number rather than inventing one.
+        assert_eq!(trial_phrase(0), "free");
+    }
+
+    /// A pricing page that renders is a page with something to show: exactly
+    /// the condition `published()` gates the route and every link on.
+    #[test]
+    fn unpublished_payloads_are_never_publishable() {
+        let mut off = standard(300, 30);
+        off.enabled = false;
+        assert!(!off.published(), "switch off is not publishable");
+
+        let mut empty = standard(300, 30);
+        empty.tiers.clear();
+        assert!(
+            !empty.published(),
+            "enabled with no resolvable price is not publishable"
+        );
+        assert!(standard(300, 30).published());
+        assert!(!PricingResponse::default().published());
+    }
+
+    /// BUNYIP-487: the page must not advertise organizations.
+    #[test]
+    fn no_org_claims_in_the_rendered_page() {
+        // Whole words, not substrings: class names and product names contain
+        // "org" as a fragment.
+        const BANNED_WORDS: &[&str] = &[
+            "org",
+            "orgs",
+            "organisation",
+            "organisations",
+            "organization",
+            "organizations",
+            "teammate",
+            "teammates",
+        ];
+        let html = pricing_content(&standard(300, 30), true, false)
+            .into_string()
+            .to_lowercase();
+        for word in html.split(|c: char| !c.is_ascii_alphanumeric()) {
+            assert!(
+                !BANNED_WORDS.contains(&word),
+                "the pricing page must not advertise {word:?}: it does not exist"
+            );
+        }
+        assert!(
+            !PERSONAL.iter().any(|f| f.to_lowercase().contains("org")),
+            "feature bullets carry no org claim"
+        );
+    }
 }
 
 #[cfg(test)]
