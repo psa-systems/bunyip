@@ -466,14 +466,18 @@ fn sidebar(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup
         dashboard_items(is_member)
     };
     html! {
-        aside class="hidden md:flex w-64 flex-col border-r border-border/50 bg-gradient-to-b from-background via-background to-indigo-950/5 dark:to-indigo-950/20" {
-            div class="flex h-16 items-center border-b border-border/50 px-6" {
+        // BUNYIP-368: the sidebar is its own scroll container. It fills the
+        // viewport-locked shell (`h-full`), keeps the brand row pinned
+        // (`shrink-0`), and scrolls only the nav, so a long nav never drags the
+        // page body with it. `shrink-0` on the column holds the w-64 width.
+        aside class="hidden md:flex h-full w-64 shrink-0 flex-col overflow-hidden border-r border-border/50 bg-gradient-to-b from-background via-background to-indigo-950/5 dark:to-indigo-950/20" {
+            div class="flex h-16 shrink-0 items-center border-b border-border/50 px-6" {
                 (brand())
                 @if admin {
                     span class="ml-2 rounded bg-gradient-to-r from-indigo-500/20 to-teal-500/20 px-2 py-0.5 text-xs font-medium text-indigo-600 dark:text-indigo-400" { "Admin" }
                 }
             }
-            nav class="flex-1 space-y-1 p-4" {
+            nav class="flex-1 space-y-1 overflow-y-auto p-4" {
                 // BUNYIP-417: the user/admin dashboard switch is a top-level,
                 // frequently-used control, so it sits at the TOP of the nav
                 // (above the section items) rather than buried at the bottom.
@@ -586,6 +590,17 @@ fn app_topbar(title: &str, user: &User) -> Markup {
     }
 }
 
+/// BUNYIP-368: the authenticated shells pin themselves to the viewport from the
+/// `md` breakpoint up (the breakpoint at which the sidebar is rendered at all),
+/// so the sidebar and `<main>` are each their own scroll container and neither
+/// drags the document with it. Below `md` there is no sidebar, so the page keeps
+/// its natural full-document scroll (`min-h-screen`).
+const APP_SHELL_CLASS: &str = "flex min-h-screen md:h-screen md:overflow-hidden";
+/// The content column next to the sidebar: the topbar stays put and only
+/// `<main>` inside it scrolls.
+const APP_COLUMN_CLASS: &str = "flex flex-1 flex-col overflow-hidden";
+const APP_MAIN_CLASS: &str = "relative flex-1 overflow-y-auto p-6";
+
 /// `topbar_title` is the heading rendered in the top bar (NOT the browser
 /// `<title>`). `dashboard_response` derives it from the page-title argument by
 /// stripping the ` · Bunyip` brand suffix - that suffix is redundant in the
@@ -596,11 +611,11 @@ pub fn dashboard_shell(user: &User, active: &str, topbar_title: &str, content: M
     let is_member = crate::util::has_active_membership(Some(user));
     let sse = sse_subscriber_script();
     html! {
-        div class="flex min-h-screen" {
+        div class=(APP_SHELL_CLASS) {
             (sidebar(false, is_admin, active, is_member))
-            div class="flex flex-1 flex-col" {
+            div class=(APP_COLUMN_CLASS) {
                 (app_topbar(topbar_title, user))
-                main class="relative flex-1 overflow-auto p-6" {
+                main class=(APP_MAIN_CLASS) {
                     div class="pointer-events-none absolute inset-0 bg-gradient-to-br from-indigo-500/[0.02] via-transparent to-teal-500/[0.02]" {}
                     div class="relative" { (content) }
                 }
@@ -614,11 +629,11 @@ pub fn dashboard_shell(user: &User, active: &str, topbar_title: &str, content: M
 pub fn admin_shell(user: &User, active: &str, topbar_title: &str, content: Markup) -> Markup {
     let sse = sse_subscriber_script();
     html! {
-        div class="flex min-h-screen" {
+        div class=(APP_SHELL_CLASS) {
             (sidebar(true, true, active, true))
-            div class="flex flex-1 flex-col" {
+            div class=(APP_COLUMN_CLASS) {
                 (app_topbar(topbar_title, user))
-                main class="relative flex-1 overflow-auto p-6" {
+                main class=(APP_MAIN_CLASS) {
                     div class="relative" { (content) }
                 }
             }
@@ -689,6 +704,67 @@ mod tests {
             phone: None,
             avatar_updated_at: None,
             is_super_admin: false,
+        }
+    }
+
+    /// Attributes of the first `<tag ...>` in `html`.
+    fn first_tag<'a>(html: &'a str, tag: &str) -> &'a str {
+        let rest = html
+            .split_once(&format!("<{tag}"))
+            .unwrap_or_else(|| panic!("markup contains a <{tag}>"))
+            .1;
+        rest.split_once('>').expect("the tag closes").0
+    }
+
+    /// BUNYIP-368: scrolling the sidebar used to scroll the whole document,
+    /// because the shell was `min-h-screen` (free to grow past the viewport)
+    /// and nothing inside the sidebar was a scroll container. The contract:
+    /// wherever the sidebar is rendered (md and up) the shell is viewport-
+    /// height with the overflow clipped, and the nav and `<main>` each scroll
+    /// themselves. Every authenticated shell is checked, so a new one that
+    /// re-introduces a document-scrolling layout fails here.
+    #[test]
+    fn every_authenticated_shell_scrolls_its_sidebar_independently() {
+        let admin = test_user(UserRole::Admin);
+        let member = test_user(UserRole::Subscriber);
+        let shells = [
+            (
+                "admin_shell",
+                admin_shell(&admin, "/admin", "Admin", html! {}).into_string(),
+            ),
+            (
+                "dashboard_shell",
+                dashboard_shell(&member, "/dashboard", "Dashboard", html! {}).into_string(),
+            ),
+        ];
+        for (name, markup) in shells {
+            let shell = first_tag(&markup, "div");
+            assert!(
+                shell.contains("md:h-screen") && shell.contains("md:overflow-hidden"),
+                "{name}'s shell must be viewport-height where the sidebar exists, \
+                 else the document scrolls instead of the panes: {shell}"
+            );
+
+            let aside = first_tag(&markup, "aside");
+            assert!(
+                aside.contains("h-full") && aside.contains("overflow-hidden"),
+                "{name}'s sidebar must fill the shell and clip its own overflow: {aside}"
+            );
+
+            let (sidebar_markup, _) = markup
+                .split_once("</aside>")
+                .expect("the sidebar element closes");
+            let nav = first_tag(sidebar_markup, "nav");
+            assert!(
+                nav.contains("overflow-y-auto") && nav.contains("flex-1"),
+                "{name}'s sidebar nav must be the scroll container: {nav}"
+            );
+
+            let main = first_tag(&markup, "main");
+            assert!(
+                main.contains("overflow-y-auto"),
+                "{name}'s content pane must scroll on its own: {main}"
+            );
         }
     }
 
