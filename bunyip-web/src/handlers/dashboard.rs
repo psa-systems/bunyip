@@ -102,43 +102,52 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                     }
                     h2 class="text-xl font-semibold tracking-tight" { "Your Applications" }
                 }
-                div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
-                    @for (i, app) in apps.iter().enumerate() {
-                        @let subdomain = app.subdomain.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| app.slug.clone());
-                        @let app_url = format!("{subdomain}.{base_domain}");
-                        div class="rounded-lg border bg-card text-card-foreground shadow-sm flex h-full flex-col border-border/50 transition-all hover:shadow-lg hover:shadow-indigo-500/5" {
-                            div class="flex flex-col space-y-1.5 p-6" {
-                                div class="flex items-center justify-between" {
-                                    h3 class="text-2xl font-semibold leading-none tracking-tight" { (app.display_name) }
-                                    @if app.maintenance_mode { (badge("warning", "Maintenance")) }
-                                    @else if app.is_accessible { (badge("success", "Active")) }
-                                    @else { (badge("secondary", "Locked")) }
+                (dashboard_apps_grid(&apps, &base_domain, is_member))
+            }
+        }
+    };
+
+    dashboard_response(&c, &user, "/dashboard", "Dashboard · Bunyip", content)
+}
+
+/// The "Your Applications" card grid on /dashboard. Pure so the card container
+/// is unit-testable (BUNYIP-367): `gap-6` is the same 24px rhythm the rest of
+/// the authenticated shells stack their cards on.
+fn dashboard_apps_grid(apps: &[Application], base_domain: &str, is_member: bool) -> Markup {
+    html! {
+        div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
+            @for (i, app) in apps.iter().enumerate() {
+                @let subdomain = app.subdomain.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| app.slug.clone());
+                @let app_url = format!("{subdomain}.{base_domain}");
+                div class="rounded-lg border bg-card text-card-foreground shadow-sm flex h-full flex-col border-border/50 transition-all hover:shadow-lg hover:shadow-indigo-500/5" {
+                    div class="flex flex-col space-y-1.5 p-6" {
+                        div class="flex items-center justify-between" {
+                            h3 class="text-2xl font-semibold leading-none tracking-tight" { (app.display_name) }
+                            @if app.maintenance_mode { (badge("warning", "Maintenance")) }
+                            @else if app.is_accessible { (badge("success", "Active")) }
+                            @else { (badge("secondary", "Locked")) }
+                        }
+                        p class="text-sm text-muted-foreground" { (app.description.clone().unwrap_or_default()) }
+                    }
+                    div class="p-6 pt-0 mt-auto" {
+                        @if app.is_accessible {
+                            a href=(format!("https://{app_url}/dashboard")) target="_blank" rel="noopener noreferrer" {
+                                span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md shadow-indigo-500/15 hover:shadow-lg hover:shadow-indigo-500/25 transition-shadow", app_gradient(i)))) {
+                                    "Open " (app.display_name) (icon("external-link", "ml-2 h-4 w-4"))
                                 }
-                                p class="text-sm text-muted-foreground" { (app.description.clone().unwrap_or_default()) }
                             }
-                            div class="p-6 pt-0 mt-auto" {
-                                @if app.is_accessible {
-                                    a href=(format!("https://{app_url}/dashboard")) target="_blank" rel="noopener noreferrer" {
-                                        span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md shadow-indigo-500/15 hover:shadow-lg hover:shadow-indigo-500/25 transition-shadow", app_gradient(i)))) {
-                                            "Open " (app.display_name) (icon("external-link", "ml-2 h-4 w-4"))
-                                        }
-                                    }
-                                } @else {
-                                    button type="button" disabled class=(button_class("default", "default", "w-full")) {
-                                        @if !is_member { "Membership Required" }
-                                        @else if app.maintenance_mode { "Under Maintenance" }
-                                        @else { "Not Available" }
-                                    }
-                                }
+                        } @else {
+                            button type="button" disabled class=(button_class("default", "default", "w-full")) {
+                                @if !is_member { "Membership Required" }
+                                @else if app.maintenance_mode { "Under Maintenance" }
+                                @else { "Not Available" }
                             }
                         }
                     }
                 }
             }
         }
-    };
-
-    dashboard_response(&c, &user, "/dashboard", "Dashboard · Bunyip", content)
+    }
 }
 
 /// BUNYIP-329: decide where `/community` sends the caller. A member with a
@@ -2644,5 +2653,59 @@ mod session_row_clipping_tests {
             html.contains(r#"<span class="truncate">Mozilla/5.0"#),
             "the device string, not the row, is what truncates: {html}"
         );
+    }
+}
+
+/// BUNYIP-367: the /dashboard application cards are the container the bug was
+/// reported against - adjacent cards read as overlapping by a pixel or two
+/// rather than being spaced.
+#[cfg(test)]
+mod card_spacing_tests {
+    use crate::api::types::Application;
+    use crate::views::ui::assert_cards_are_spaced;
+
+    fn app(slug: &str) -> Application {
+        Application {
+            id: slug.into(),
+            slug: slug.into(),
+            display_name: slug.into(),
+            description: Some("An app.".into()),
+            icon_url: None,
+            version: None,
+            source_code_url: None,
+            release_notes_url: None,
+            subdomain: None,
+            is_accessible: true,
+            maintenance_mode: false,
+            maintenance_message: None,
+            group_id: None,
+        }
+    }
+
+    #[test]
+    fn dashboard_application_cards_are_spaced() {
+        let apps = [app("mokosh"), app("backup"), app("chat")];
+        let html = super::dashboard_apps_grid(&apps, "example.com", true).into_string();
+        assert_cards_are_spaced(&html);
+        assert!(html.contains("grid gap-6"), "24px rhythm: {html}");
+    }
+
+    /// The guard has to actually fail on the reported shape, else the two
+    /// assertions above prove nothing.
+    #[test]
+    #[should_panic(expected = "read as overlapping")]
+    fn the_guard_rejects_an_unspaced_card_container() {
+        assert_cards_are_spaced(
+            r#"<div class="grid md:grid-cols-2">
+                 <div class="rounded-lg border bg-card"></div>
+                 <div class="rounded-lg border bg-card"></div>
+               </div>"#,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "negative margin on a card")]
+    fn the_guard_rejects_a_card_pulled_over_its_neighbour() {
+        assert_cards_are_spaced(r#"<div class="rounded-lg border bg-card -mt-px"></div>"#);
     }
 }
