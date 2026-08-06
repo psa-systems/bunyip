@@ -461,7 +461,8 @@ pub struct TierConfig {
     pub early_adopter_trial_days: i64,
     /// Trial duration in days for standard tier
     pub standard_trial_days: i64,
-    /// Stripe Price ID for lifetime members ($0 recurring). Falls back to STRIPE_FREE_PRICE_ID env var.
+    /// Stripe Price ID for lifetime members ($0 recurring). BUNYIP-482: the
+    /// `tier_config` DB row (admin tier-settings page) is the only source.
     pub free_price_id: Option<String>,
     /// Stripe Price ID unlocked after early adopter trial ends.
     pub early_adopter_price_id: Option<String>,
@@ -473,16 +474,6 @@ pub struct TierConfig {
     pub early_adopter_product_id: Option<String>,
     /// Stripe Product ID that maps to the Standard tier.
     pub standard_product_id: Option<String>,
-}
-
-/// Single source for the `$0` Stripe price id read from the environment.
-/// Both `TierConfig` and the Stripe service's `StripeConfig` read through this
-/// so the env-derived value can never diverge between them (empty string is
-/// treated as unset).
-pub fn free_price_id_from_env() -> Option<String> {
-    env::var("STRIPE_FREE_PRICE_ID")
-        .ok()
-        .filter(|s| !s.is_empty())
 }
 
 impl TierConfig {
@@ -505,7 +496,8 @@ impl TierConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(30),
-            free_price_id: free_price_id_from_env(),
+            // BUNYIP-482: no env source; the admin tier-settings page writes it.
+            free_price_id: None,
             early_adopter_price_id: None,
             standard_price_id: None,
             lifetime_product_id: None,
@@ -525,8 +517,8 @@ impl TierConfig {
                 .early_adopter_trial_days
                 .unwrap_or(env.early_adopter_trial_days),
             standard_trial_days: row.standard_trial_days.unwrap_or(env.standard_trial_days),
-            // free_price_id: DB value takes precedence; fall back to STRIPE_FREE_PRICE_ID env var
-            free_price_id: row.free_price_id.clone().or(env.free_price_id),
+            // BUNYIP-482: DB only; NULL means no $0 price is configured.
+            free_price_id: row.free_price_id.clone(),
             early_adopter_price_id: row.early_adopter_price_id.clone(),
             standard_price_id: row.standard_price_id.clone(),
             lifetime_product_id: row.lifetime_product_id.clone(),

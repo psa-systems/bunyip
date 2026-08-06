@@ -57,8 +57,8 @@ pub use geoip::GeoIpService;
 pub use ip_enrich::{IpEnrichService, IpEnrichment, NetworkCategory, VpnLikelihood};
 pub use jwt::{AccessTokenClaims, JwtService, RefreshTokenClaims, TwoFactorChallengeClaims};
 pub use stripe::{
-    stripe_config_from_db_model, stripe_config_from_env, stripe_err, StripeConfig, StripeService,
-    StripeServiceError,
+    stripe_config_from_db_model, stripe_err, unconfigured_stripe_config, StripeConfig,
+    StripeService, StripeServiceError,
 };
 pub use totp::TotpService;
 pub use webhook::WebhookService;

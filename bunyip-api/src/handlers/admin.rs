@@ -10,8 +10,8 @@ use tokio;
 
 use chrono::{Duration, Utc};
 
-use super::check_rate_limit;
-use crate::config::Config;
+use super::{check_rate_limit, live_free_price_id};
+use crate::config::{Config, TierConfig};
 use crate::errors::AppError;
 use crate::middleware::AdminUser;
 use crate::models::stripe::encrypt_secret;
@@ -540,6 +540,7 @@ pub async fn grant_membership(
     admin: AdminUser,
     pool: web::Data<PgPool>,
     stripe: web::Data<Arc<StripeService>>,
+    tier_config: web::Data<Arc<std::sync::RwLock<TierConfig>>>,
     bus: web::Data<Arc<EventBus>>,
     body: web::Json<GrantMembershipRequest>,
 ) -> Result<HttpResponse, AppError> {
@@ -549,8 +550,9 @@ pub async fn grant_membership(
     let user =
         UserRepository::grant_free_membership(pool.get_ref(), body.user_id, admin.0.sub).await?;
 
-    // Create $0 Stripe subscription for invoice generation
-    if let Some(free_price_id) = stripe.free_price_id() {
+    // Create $0 Stripe subscription for invoice generation (BUNYIP-482: the
+    // price id comes from the live tier config, not from env).
+    if let Some(free_price_id) = live_free_price_id(&tier_config) {
         let customer_id = match user.stripe_customer_id {
             Some(id) => id,
             None => {
@@ -2022,8 +2024,9 @@ pub struct UpdateStripeConfigRequest {
 }
 
 /// GET /v1/admin/stripe
-/// Returns the current Stripe config with secrets masked.
-/// Falls back to env vars if no DB config has been saved yet.
+/// Returns the current Stripe config with secrets masked. BUNYIP-482: the DB
+/// row is the only source; with nothing saved it reports the unconfigured
+/// state plus the derived checkout defaults.
 pub async fn get_stripe_config(
     req: HttpRequest,
     _admin: AdminUser,
@@ -2043,11 +2046,11 @@ pub async fn get_stripe_config(
                      Clearing stale encrypted secrets from database."
                 );
                 StripeConfigRepository::clear_secrets(&pool).await?;
-                StripeConfigResponse::from_env()
+                StripeConfigResponse::unconfigured()
             }
         }
     } else {
-        StripeConfigResponse::from_env()
+        StripeConfigResponse::unconfigured()
     };
 
     Ok(success(response, request_id))
@@ -2199,6 +2202,7 @@ pub async fn grant_lifetime_membership(
     admin: AdminUser,
     pool: web::Data<PgPool>,
     stripe: web::Data<Arc<StripeService>>,
+    tier_config: web::Data<Arc<std::sync::RwLock<TierConfig>>>,
     bus: web::Data<Arc<EventBus>>,
     path: web::Path<uuid::Uuid>,
 ) -> Result<HttpResponse, AppError> {
@@ -2207,8 +2211,9 @@ pub async fn grant_lifetime_membership(
 
     let user = UserRepository::grant_lifetime_membership(&pool, user_id, admin.0.sub).await?;
 
-    // Create $0 Stripe subscription for invoice generation
-    if let Some(free_price_id) = stripe.free_price_id() {
+    // Create $0 Stripe subscription for invoice generation (BUNYIP-482: the
+    // price id comes from the live tier config, not from env).
+    if let Some(free_price_id) = live_free_price_id(&tier_config) {
         let customer_id = match user.stripe_customer_id.clone() {
             Some(id) => id,
             None => {
@@ -2399,8 +2404,10 @@ pub async fn set_user_tier(
 
     // Moving TO lifetime mirrors grant_lifetime_membership: mint the $0 invoice
     // subscription so the member keeps receiving invoices.
+    // BUNYIP-482: the $0 price id comes from the tier settings resolved above
+    // (freshly read from the DB), not from env.
     if plan.create_lifetime_invoice {
-        if let Some(free_price_id) = stripe.free_price_id() {
+        if let Some(free_price_id) = tier_config.free_price_id.clone() {
             let customer_id = match user.stripe_customer_id.clone() {
                 Some(id) => id,
                 None => {
