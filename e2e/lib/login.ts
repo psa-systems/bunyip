@@ -299,10 +299,28 @@ async function fillTotpStep(page: Page): Promise<void> {
     }
 
     // Still on the 2FA step. No error box means a navigation race, not a
-    // rejection - stop. Otherwise the code was rejected (most often a consumed
-    // same-step code on a second login); wait out the step so the next attempt
-    // reads a fresh, unconsumed code.
-    if ((await readLoginError(page)) === null) return;
+    // rejection - stop.
+    const loginError = await readLoginError(page);
+    if (loginError === null) return;
+
+    // Distinguish a real code rejection from a server 5xx (BUNYIP-496):
+    // bunyip-web renders the SAME error box for both, but retrying a fresh code
+    // cannot fix a server error and would burn the 2fa_verify budget. The 5xx
+    // copy is the stable generic message (BUNYIP-477); anything else is a
+    // genuine rejection.
+    if (/unexpected error|try again later/i.test(loginError)) {
+      throw new Error(
+        `2FA verify returned a server error, not a code rejection: "${loginError}". ` +
+          'The code submitted fine; bunyip-api 5xx-ed on POST /v1/auth/2fa/verify. ' +
+          'Check the server error-log - most likely user_totp cannot be decrypted ' +
+          '(APP_ENCRYPTION_KEY rotated with an empty APP_ENCRYPTION_KEY_PREV, or a ' +
+          'missed reencrypt-secrets).',
+      );
+    }
+
+    // A genuine "Invalid verification code" (most often a consumed same-step
+    // code on a second login): wait out the step so the next attempt reads a
+    // fresh, unconsumed code.
     await page.waitForTimeout((authenticator.timeRemaining() + 1) * 1_000);
   }
   throw new Error(
