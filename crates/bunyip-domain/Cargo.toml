@@ -60,6 +60,9 @@ dunite-ipenrich = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c
 # dunite-core graph rev.
 dunite-hibp = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
 dunite-webhook = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
+# DEV-528: the in-process event bus + SSE framing (generic over the event type),
+# extracted from services/event_bus.rs + handlers/events.rs. Leaf crate.
+dunite-events = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "1f536a2fa32b4db3df95945c444ee3ad7530fc57" }
 async-trait = "0.1"
 
 # Web framework + multipart.
