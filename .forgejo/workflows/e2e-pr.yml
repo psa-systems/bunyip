@@ -48,7 +48,7 @@ jobs:
 
     # The complete credential surface of this job. Adding any other secret here
     # hands it to unreviewed PR code; put the step in e2e.yml instead.
-    # scripts/check-workflow-secrets.sh enforces this.
+    # scripts/check-workflow-secrets.nu enforces this.
     env:
       E2E_BASE_URL: ${{ secrets.E2E_STAGING_BASE_URL }}
       E2E_OP_BASE_URL: ${{ secrets.OIDC_ISSUER_STAGING }}
