@@ -768,6 +768,20 @@ mod tests {
         }
     }
 
+    /// BUNYIP-367: `admin_block_grid` is the shared multi-card container of the
+    /// admin screens, so it is where a dropped `gap-*` would silently push
+    /// every block's border against its neighbour's.
+    #[test]
+    fn admin_blocks_are_spaced_from_each_other() {
+        let blocks = vec![
+            admin_block("Identity", None, html! { p { "a" } }),
+            admin_block("Details", Some("sub"), html! { p { "b" } }),
+            admin_block("Distribution", None, html! { p { "c" } }),
+        ];
+        let html = admin_block_grid(blocks).into_string();
+        crate::views::ui::assert_cards_are_spaced(&html);
+    }
+
     /// BUNYIP-370: the feedback entry point belongs on EVERY authenticated
     /// surface, not just the user dashboard. This is the guard for the
     /// invariant: adding a new authenticated shell that forgets the launcher

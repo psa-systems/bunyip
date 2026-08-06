@@ -329,6 +329,71 @@ pub fn assert_no_truncating_flex_container(html: &str) {
     }
 }
 
+/// BUNYIP-367 regression guard, shared by the dashboard page tests. Sibling
+/// cards are separated by the page's 24px rhythm - `gap-6` on a card grid,
+/// `space-y-6` on a card stack. A container that lays its cards out with no
+/// spacing utility leaves their 1px borders touching, which reads as cards
+/// overlapping by a pixel or two instead of being spaced; a negative margin on
+/// a card overlaps it with its neighbour outright. Panics naming the offending
+/// class attribute.
+#[cfg(test)]
+pub fn assert_cards_are_spaced(html: &str) {
+    // Tags that never have a closing tag, so they never open a frame.
+    const VOID: [&str; 9] = [
+        "area", "br", "col", "hr", "img", "input", "link", "meta", "source",
+    ];
+
+    let is =
+        |t: &str, util: &str| t == util || t.strip_suffix(util).is_some_and(|p| p.ends_with(':'));
+    // (class attribute of the open element, how many direct card children it has)
+    let mut stack: Vec<(String, usize)> = Vec::new();
+    let mut rest = html;
+    while let Some(lt) = rest.find('<') {
+        let Some(gt) = rest[lt..].find('>') else {
+            break;
+        };
+        let tag = &rest[lt + 1..lt + gt];
+        rest = &rest[lt + gt + 1..];
+        if tag.starts_with('!') {
+            continue; // <!DOCTYPE html>
+        }
+        if tag.starts_with('/') {
+            if let Some((classes, cards)) = stack.pop() {
+                assert!(
+                    cards < 2
+                        || classes
+                            .split_whitespace()
+                            .any(|t| is(t, "gap-6") || is(t, "space-y-6")),
+                    "a container of {cards} sibling cards must space them on the page's \
+                     24px rhythm (gap-6 / space-y-6), else their borders touch and the \
+                     cards read as overlapping (BUNYIP-367): class=\"{classes}\""
+                );
+            }
+            continue;
+        }
+        let name = tag.split([' ', '\t', '\n', '/']).next().unwrap_or("");
+        let classes = tag
+            .split_once("class=\"")
+            .and_then(|(_, a)| a.split('"').next())
+            .unwrap_or("");
+        if classes.split_whitespace().any(|t| t == "bg-card") {
+            assert!(
+                !classes
+                    .split_whitespace()
+                    .any(|t| t.starts_with("-m") || t.contains(":-m")),
+                "a negative margin on a card pulls it over its neighbour \
+                 (BUNYIP-367): class=\"{classes}\""
+            );
+            if let Some((_, cards)) = stack.last_mut() {
+                *cards += 1;
+            }
+        }
+        if !tag.ends_with('/') && !VOID.contains(&name) {
+            stack.push((classes.to_string(), 0));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{clamp_msg, empty_state, error_box, icon, success_box, toggle_switch};

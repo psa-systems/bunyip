@@ -6,7 +6,7 @@ use axum::response::Response;
 use maud::html;
 
 use crate::api::admin as admin_api;
-use crate::api::types::DatasetHealth;
+use crate::api::types::{AdminStatsResponse, DatasetHealth};
 use crate::handlers::{admin_guard, admin_response};
 use crate::util::rel_time;
 use crate::views::ui::{badge, button_class, empty_state, error_box, icon};
@@ -59,6 +59,31 @@ pub(super) fn datasets_card(datasets: &[DatasetHealth]) -> maud::Markup {
     }
 }
 
+/// The four platform-stat tiles. Pure so the card container is unit-testable
+/// (like `datasets_card` above). BUNYIP-367: the grid was `gap-4` while every
+/// other card grid in the authenticated shells is `gap-6`, so the tiles sat a
+/// third closer together than the cards below them.
+pub(super) fn stats_grid(s: &AdminStatsResponse) -> maud::Markup {
+    let stat = |label: &str, value: String, sub: &str, ic: &str| {
+        html! {
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6 flex-row items-center justify-between pb-2" {
+                    h3 class="text-sm font-medium" { (label) } (icon(ic, "h-4 w-4 text-muted-foreground"))
+                }
+                div class="p-6 pt-0" { div class="text-2xl font-bold" { (value) } p class="text-xs text-muted-foreground" { (sub) } }
+            }
+        }
+    };
+    html! {
+        div class="grid gap-6 md:grid-cols-2 lg:grid-cols-4" {
+            (stat("Total Users", s.total_users.to_string(), "Registered accounts", "users"))
+            (stat("Active Memberships", s.active_members.to_string(), "Paying customers", "credit-card"))
+            (stat("Active Apps", format!("{}/{}", s.active_applications, s.total_applications), "Applications online", "trending-up"))
+            (stat("Past Due", s.past_due_members.to_string(), "In grace period", "alert-triangle"))
+        }
+    }
+}
+
 pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
@@ -82,17 +107,6 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
         .map(|s| s.total_applications == 0)
         .unwrap_or(false);
 
-    let stat = |label: &str, value: String, sub: &str, ic: &str| {
-        html! {
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                div class="flex flex-col space-y-1.5 p-6 flex-row items-center justify-between pb-2" {
-                    h3 class="text-sm font-medium" { (label) } (icon(ic, "h-4 w-4 text-muted-foreground"))
-                }
-                div class="p-6 pt-0" { div class="text-2xl font-bold" { (value) } p class="text-xs text-muted-foreground" { (sub) } }
-            }
-        }
-    };
-
     let content = html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Admin Dashboard" } p class="mt-2 text-muted-foreground" { "Overview of your platform." } }
@@ -108,15 +122,10 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                     }
                 }
             }
-            @if stats.is_none() {
-                (error_box("Could not reach the API."))
+            @if let Some(s) = &stats {
+                (stats_grid(s))
             } @else {
-                div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4" {
-                    (stat("Total Users", stats.as_ref().map(|s| s.total_users.to_string()).unwrap_or_else(|| "0".into()), "Registered accounts", "users"))
-                    (stat("Active Memberships", stats.as_ref().map(|s| s.active_members.to_string()).unwrap_or_else(|| "0".into()), "Paying customers", "credit-card"))
-                    (stat("Active Apps", stats.as_ref().map(|s| format!("{}/{}", s.active_applications, s.total_applications)).unwrap_or_else(|| "0/0".into()), "Applications online", "trending-up"))
-                    (stat("Past Due", stats.as_ref().map(|s| s.past_due_members.to_string()).unwrap_or_else(|| "0".into()), "In grace period", "alert-triangle"))
-                }
+                (error_box("Could not reach the API."))
             }
             @if !datasets.is_empty() { (datasets_card(&datasets)) }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
@@ -178,6 +187,26 @@ mod dataset_card_tests {
         assert!(html.contains(">Stale<"), "stale badge");
         assert!(html.contains(">Missing<"), "configured-but-missing badge");
         assert!(html.contains(">Not configured<"), "unconfigured badge");
+    }
+
+    /// BUNYIP-367: the stat tiles are cards, so their grid carries the same
+    /// 24px rhythm as every other card container in the admin shell.
+    #[test]
+    fn stat_tiles_are_spaced_on_the_page_rhythm() {
+        let html = stats_grid(&AdminStatsResponse {
+            total_users: 12,
+            active_members: 7,
+            past_due_members: 1,
+            grace_period_members: 0,
+            total_applications: 4,
+            active_applications: 3,
+        })
+        .into_string();
+        crate::views::ui::assert_cards_are_spaced(&html);
+        assert!(
+            html.contains("grid gap-6"),
+            "24px rhythm, not gap-4: {html}"
+        );
     }
 
     #[test]
