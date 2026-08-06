@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 bunyip-domain = { path = "../bunyip-domain" }
 # Generic read-through OCI registry engine (consumer provides store traits + HTTP wiring).
-dunite-oci = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
+dunite-oci = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "90a828f31836ffe2634e61577ba54e76a2f6d636" }
 
 actix-web = "4"
 async-trait = "0.1"

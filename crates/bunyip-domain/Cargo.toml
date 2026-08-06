@@ -15,10 +15,14 @@ workspace = true
 # Pinned by rev, not branch, so a dunite bump is an explicit reviewable diff
 # instead of whatever `main` happened to point at when the lock was refreshed
 # (BUNYIP-426 F6). dunite publishes no tags; switch to `tag` when it does.
-dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
+# DEV-526: dunite-core and its dependents (download/oci/oidc) are at 90a828f for
+# the Origin/Referer CSRF guard now in dunite-core::middleware; they move as one
+# rev to keep a single dunite-core. The leaf crates below (stripe*, feedback,
+# user-core, geoip, ipenrich) are independent and stay at ae62c27.
+dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "90a828f31836ffe2634e61577ba54e76a2f6d636" }
 # Generic Forgejo binary-distribution engine (artifact metadata, asset cache,
 # rate limiting). Bunyip implements its store traits over Postgres.
-dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
+dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "90a828f31836ffe2634e61577ba54e76a2f6d636" }
 # Shared Stripe primitives (DEV-495 / DEV-514): the constant-time webhook
 # signature verifier, shared with a8n-tools and mokosh. Pinned to the branch rev
 # that introduced the crate; the dunite-core/download pins stay at c5730bc since
