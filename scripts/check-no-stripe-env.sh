@@ -21,7 +21,8 @@
 #                           them; an edit stops a deployed DB from booting), so
 #                           historical SQL comments naming removed vars stay.
 #   e2e/                    the Playwright harness (see the E2E allowance above).
-#   scripts/check-no-stripe-env.sh  this file names the vars it forbids.
+#   scripts/check-no-*-env.sh  the env-name gates themselves, which have to
+#                              spell out the variables they forbid.
 #
 # Usage: scripts/check-no-stripe-env.sh
 set -euo pipefail
@@ -29,7 +30,7 @@ set -euo pipefail
 failed=0
 while IFS= read -r file; do
     case "$file" in
-        bunyip-api/migrations/* | e2e/* | scripts/check-no-stripe-env.sh) continue ;;
+        bunyip-api/migrations/* | e2e/* | scripts/check-no-*-env.sh) continue ;;
     esac
     while IFS=: read -r line name; do
         # E2E_* names (in any position) are the test harness, not app config.

@@ -13,6 +13,9 @@
 //! wraps it here and accepts a LIST of previous keys
 //! (`APP_ENCRYPTION_KEY_PREV`, comma-separated). Encryption still uses the
 //! kernel's AES-256-GCM path, so ciphertexts are unchanged.
+//!
+//! The list is the only transitional part: once every deployment has run
+//! `reencrypt-secrets`, BUNYIP-491 drops this wrapper for the kernel type.
 
 use crate::errors::AppError;
 use crate::services::encryption::{decrypt_with_key, EncryptionKeySet};
@@ -25,8 +28,8 @@ pub struct AppKeySet {
     /// Version stamped on rows written under `current`.
     pub current_version: i16,
     /// Keys retired but still in use by rows that have not been re-encrypted:
-    /// the two legacy key families during the consolidation window, and the
-    /// prior key during an ordinary rotation.
+    /// the two legacy key families during the consolidation window (BUNYIP-491
+    /// removes that case), and the prior key during an ordinary rotation.
     pub previous: Vec<[u8; 32]>,
 }
 
@@ -104,8 +107,10 @@ impl AppKeySet {
 mod tests {
     use super::*;
 
+    // The two retired key families: the TOTP one, and the one that guarded
+    // `stripe_config` and `email_config` alike despite its Stripe-only name.
     const LEGACY_TOTP_KEY: [u8; 32] = [0xA1; 32];
-    const LEGACY_STRIPE_KEY: [u8; 32] = [0xB2; 32];
+    const LEGACY_CONFIG_KEY: [u8; 32] = [0xB2; 32];
     const APP_KEY: [u8; 32] = [0xC3; 32];
 
     fn legacy(key: [u8; 32]) -> AppKeySet {
@@ -122,7 +127,7 @@ mod tests {
         AppKeySet {
             current: APP_KEY,
             current_version: 2,
-            previous: vec![LEGACY_TOTP_KEY, LEGACY_STRIPE_KEY],
+            previous: vec![LEGACY_TOTP_KEY, LEGACY_CONFIG_KEY],
         }
     }
 
@@ -141,9 +146,9 @@ mod tests {
         // Written by the old TotpService, under the retired TOTP key.
         let (totp_ct, totp_nonce, totp_ver) =
             legacy(LEGACY_TOTP_KEY).encrypt(b"totp-secret").unwrap();
-        // Written by the old Stripe/email path, under the retired Stripe key.
+        // Written by the old Stripe/email path, under the retired config key.
         let (stripe_ct, stripe_nonce, stripe_ver) =
-            legacy(LEGACY_STRIPE_KEY).encrypt(b"sk_live_abc").unwrap();
+            legacy(LEGACY_CONFIG_KEY).encrypt(b"sk_live_abc").unwrap();
 
         let app = transitional();
         assert_eq!(
@@ -177,7 +182,7 @@ mod tests {
     #[test]
     fn rewrite_is_idempotent() {
         let app = transitional();
-        let (ct, nonce, ver) = legacy(LEGACY_STRIPE_KEY).encrypt(b"whsec_xyz").unwrap();
+        let (ct, nonce, ver) = legacy(LEGACY_CONFIG_KEY).encrypt(b"whsec_xyz").unwrap();
 
         let (new_ct, new_nonce, new_ver) = app.rewrite(&ct, &nonce, ver).unwrap().unwrap();
         assert_eq!(new_ver, app.current_version);
@@ -201,11 +206,11 @@ mod tests {
 
     #[test]
     fn ordinary_rotation_still_reads_the_single_previous_key() {
-        let (ct, nonce, _) = legacy(LEGACY_STRIPE_KEY).encrypt(b"rotating").unwrap();
+        let (ct, nonce, _) = legacy(LEGACY_CONFIG_KEY).encrypt(b"rotating").unwrap();
         let rotated = AppKeySet {
             current: APP_KEY,
             current_version: 2,
-            previous: vec![LEGACY_STRIPE_KEY],
+            previous: vec![LEGACY_CONFIG_KEY],
         };
         assert_eq!(rotated.decrypt(&ct, &nonce, 1).unwrap(), b"rotating");
     }

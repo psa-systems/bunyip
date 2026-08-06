@@ -13,7 +13,8 @@
 #   bunyip-api/migrations/  committed migrations are immutable (sqlx checksums
 #                           them; an edit stops a deployed DB from booting), so
 #                           historical SQL comments naming removed vars stay.
-#   scripts/check-no-legacy-key-env.sh  this file names the vars it forbids.
+#   scripts/check-no-*-env.sh  the env-name gates themselves, which have to
+#                              spell out the variables they forbid.
 #
 # Usage: scripts/check-no-legacy-key-env.sh
 set -euo pipefail
@@ -23,7 +24,7 @@ pattern='(TOTP|STRIPE)_(ENCRYPTION_KEY(_PREV|_FILE)?|KEY_VERSION)'
 failed=0
 while IFS= read -r file; do
     case "$file" in
-        bunyip-api/migrations/* | scripts/check-no-legacy-key-env.sh) continue ;;
+        bunyip-api/migrations/* | scripts/check-no-*-env.sh) continue ;;
     esac
     while IFS=: read -r line name; do
         echo "error: $file:$line: '$name' - the at-rest key is APP_ENCRYPTION_KEY (BUNYIP-483)." >&2

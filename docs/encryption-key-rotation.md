@@ -74,3 +74,6 @@ Do not drop the retired keys from `APP_ENCRYPTION_KEY_PREV` before step 5
 succeeds with no undecryptable values: their rows would become unreadable, which
 means users locked out of 2FA and Stripe/SMTP credentials that have to be
 re-entered.
+
+Accepting more than one previous key exists only for this migration. Dropping it
+(and this section) once every deployment has completed step 5 is BUNYIP-491.
