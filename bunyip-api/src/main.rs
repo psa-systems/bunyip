@@ -769,7 +769,17 @@ async fn main() -> anyhow::Result<()> {
 
     // The CSRF guard (BUNYIP-423) reuses the same allow-list: an origin trusted
     // to read responses is the same set trusted to originate a cookie write.
-    let csrf_guard = bunyip_api::csrf::OriginGuard::new(&cors_origins);
+    // The guard itself lives in dunite-core (DEV-526); bunyip supplies its
+    // app-specific exempt prefixes and ambient-cookie names. /oauth2/* and
+    // /.well-known/* are cross-origin OIDC surfaces gated by PKCE + state +
+    // nonce; /v1/webhooks/stripe is HMAC-authenticated by Stripe.
+    const CSRF_EXEMPT_PREFIXES: [&str; 3] = ["/oauth2/", "/.well-known/", "/v1/webhooks/stripe"];
+    const CSRF_AMBIENT_COOKIES: [&str; 2] = ["access_token", "refresh_token"];
+    let csrf_guard = dunite_core::middleware::OriginGuard::new(
+        &cors_origins,
+        &CSRF_EXEMPT_PREFIXES,
+        &CSRF_AMBIENT_COOKIES,
+    );
 
     let config_data = config.clone();
 

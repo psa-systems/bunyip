@@ -696,6 +696,7 @@ dependencies = [
  "chrono",
  "data-encoding",
  "dotenvy",
+ "dunite-core",
  "dunite-image-upload",
  "futures-util",
  "imagesize",
@@ -1401,7 +1402,7 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 [[package]]
 name = "dunite-core"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=ae62c276ab187852578daad1c4b9c823579b194a#ae62c276ab187852578daad1c4b9c823579b194a"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=90a828f31836ffe2634e61577ba54e76a2f6d636#90a828f31836ffe2634e61577ba54e76a2f6d636"
 dependencies = [
  "actix-web",
  "aes-gcm",
@@ -1424,7 +1425,7 @@ dependencies = [
 [[package]]
 name = "dunite-download"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=ae62c276ab187852578daad1c4b9c823579b194a#ae62c276ab187852578daad1c4b9c823579b194a"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=90a828f31836ffe2634e61577ba54e76a2f6d636#90a828f31836ffe2634e61577ba54e76a2f6d636"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1486,7 +1487,7 @@ dependencies = [
 [[package]]
 name = "dunite-oci"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=ae62c276ab187852578daad1c4b9c823579b194a#ae62c276ab187852578daad1c4b9c823579b194a"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=90a828f31836ffe2634e61577ba54e76a2f6d636#90a828f31836ffe2634e61577ba54e76a2f6d636"
 dependencies = [
  "actix-web",
  "async-trait",
@@ -1513,7 +1514,7 @@ dependencies = [
 [[package]]
 name = "dunite-oidc"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=ae62c276ab187852578daad1c4b9c823579b194a#ae62c276ab187852578daad1c4b9c823579b194a"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=90a828f31836ffe2634e61577ba54e76a2f6d636#90a828f31836ffe2634e61577ba54e76a2f6d636"
 dependencies = [
  "base64 0.21.7",
  "dunite-core",
