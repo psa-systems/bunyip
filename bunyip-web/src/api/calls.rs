@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use super::types::{
     AppDoc, AppDocSummary, AppDownloadGroup, Application, ApplicationGroup, ApplicationGroupList,
     ApplicationList, CheckoutSessionResponse, DownloadGroups, Membership, PaginatedResponse,
-    SessionInfo, StripeInvoice, StripePaymentResponse,
+    PricingResponse, SessionInfo, StripeInvoice, StripePaymentResponse,
 };
 use super::{ok_data, parse, Api, ApiError};
 
@@ -45,6 +45,14 @@ pub async fn revoke_other_sessions(api: &Api, cookie: Option<&str>) -> Result<()
         .await?;
     ok_data(&r)?;
     Ok(())
+}
+
+// --- pricing ----------------------------------------------------------------
+
+/// BUNYIP-487: the public pricing payload. Unauthenticated: it is what the
+/// marketing pages render, and the admin Pricing tiers page is its only source.
+pub async fn pricing(api: &Api) -> Result<PricingResponse, ApiError> {
+    parse(api.get("/pricing", None).await?)
 }
 
 // --- applications -----------------------------------------------------------

@@ -204,13 +204,12 @@ PR gate is a separate workflow that declares only the two base URLs (see
   bunyip running Stripe in TEST mode. Operator provisioning:
   1. In a Stripe TEST-mode account, create the membership product + a recurring
      price; note the price id.
-  2. Configure the staging bunyip-api with the test-mode `STRIPE_SECRET_KEY`
-     (`sk_test_...`), `STRIPE_WEBHOOK_SECRET` (`whsec_...`), and the price id -
-     either via the admin UI (`/admin/stripe`, stored encrypted in the DB) or via
-     env (`crates/bunyip-domain/src/services/stripe.rs::from_env`; secrets live in
-     the SOPS `compose-secrets.yml`). Point a Stripe test-mode webhook endpoint at
-     `https://api.a8n.systems/v1/webhook` (or wherever the webhook route is) using
-     that `whsec_`.
+  2. Configure the staging bunyip-api with the test-mode secret key
+     (`sk_test_...`), the webhook signing secret (`whsec_...`), and the price id
+     on the admin UI (`/admin/stripe`, stored encrypted in the DB). BUNYIP-482:
+     that page is the only source; there is no env fallback. Point a Stripe
+     test-mode webhook endpoint at `https://api.a8n.systems/v1/webhook` (or
+     wherever the webhook route is) using that `whsec_`.
   3. Record the same `sk_test_...` as the Forgejo Actions secret
      `E2E_STAGING_STRIPE_SECRET_KEY`. The suite exposes it as `E2E_STRIPE_SECRET_KEY`,
      which both feeds teardown (cancels test-mode subscriptions) AND gates the
@@ -283,7 +282,7 @@ first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODU
    bootstrap enroll a PRESET secret so it survives re-seeds without rotating the
    Forgejo secret. Choose a base32 secret, then in the api container run
    `BUNYIP_E2E_TOTP_SECRET=<base32> just e2e-bootstrap --enable-2fa` (needs the
-   same `TOTP_ENCRYPTION_KEY` the API uses, which the container already has); set
+   same `APP_ENCRYPTION_KEY` the API uses, which the container already has); set
    `E2E_STAGING_TOTP_SECRET` to that same base32. Manual alternative: log into the
    staging hub as the E2E user, go to `/settings/2fa/setup`, capture the base32
    secret shown at enrollment, verify a code, and record it - but this mints a NEW

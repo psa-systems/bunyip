@@ -42,7 +42,7 @@ pre-commit: ensure-env
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-migrations check-workflows check-runners check-security check-build check-clippy check-fmt check-docker
+check: check-migrations check-workflows check-runners check-security check-stripe-env check-key-env check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -67,6 +67,18 @@ check-runners:
 [group: 'checks']
 check-security:
     ./scripts/check-security-invariants.sh
+
+# Gate that Stripe config stays DB-only: no STRIPE_* env surface outside the
+# e2e harness (BUNYIP-482).
+[group: 'checks']
+check-stripe-env:
+    ./scripts/check-no-stripe-env.sh
+
+# Gate the single at-rest key: no retired per-consumer encryption-key env names
+# (BUNYIP-483).
+[group: 'checks']
+check-key-env:
+    ./scripts/check-no-legacy-key-env.sh
 
 # Build every target in the workspace.
 [group: 'checks']
@@ -161,14 +173,13 @@ ensure-env:
     | where ($it | is-not-empty)
     | parse '{name}={value}'
     | transpose --header-row --as-record
-    | update TOTP_ENCRYPTION_KEY (random binary 32 | encode hex --lower)
-    | update STRIPE_ENCRYPTION_KEY (random binary 32 | encode hex --lower)
+    | update APP_ENCRYPTION_KEY (random binary 32 | encode hex --lower)
     | update JWT_SECRET (random binary 32 | encode hex --lower)
     | items {|name, value| $"($name)=($value)" }
     | str join "\n"
     | $"($in)\n"
     | save .env
-    print "Wrote .env (generated TOTP_ENCRYPTION_KEY, STRIPE_ENCRYPTION_KEY, JWT_SECRET)."
+    print "Wrote .env (generated APP_ENCRYPTION_KEY, JWT_SECRET)."
 
 # Generate the dev OIDC signing keypair (Ed25519, kid dev-2026) into ./secrets/oidc
 # if missing. bunyip-api IS the OIDC issuer and loads these at startup

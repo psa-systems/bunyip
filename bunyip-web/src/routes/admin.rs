@@ -206,7 +206,7 @@ pub fn routes() -> Router<AppState> {
             "/admin/stripe/webhooks/:id/delete",
             post(admin::stripe_webhook_delete),
         )
-        // BUNYIP-417: tier -> Stripe price/product mapping moved from Tier Settings.
+        // BUNYIP-417: tier -> Stripe price/product mapping moved from the Pricing tiers page.
         .route("/admin/stripe/catalog", post(admin::stripe_catalog_save))
         // BUNYIP-353: account backup & restore, reached from the Backup add-on
         // tile on /applications.

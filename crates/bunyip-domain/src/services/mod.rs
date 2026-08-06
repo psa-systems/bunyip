@@ -6,6 +6,7 @@
 //! release/asset caches, download limiter) comes from dunite-download. Both
 //! are re-exported below.
 
+pub mod app_key;
 pub mod auth;
 pub mod backup;
 pub mod email;
@@ -17,6 +18,10 @@ pub mod password_breach;
 pub mod stripe;
 pub mod totp;
 pub mod webhook;
+
+// BUNYIP-483: the one at-rest key set (APP_ENCRYPTION_KEY). Wraps the kernel's
+// `EncryptionKeySet` to accept several previous keys.
+pub use app_key::AppKeySet;
 
 // Generic kernel services (re-exported from dunite-core).
 pub use dunite_core::services::{EncryptionKeySet, JwtConfig, PasswordService};
@@ -57,8 +62,8 @@ pub use geoip::GeoIpService;
 pub use ip_enrich::{IpEnrichService, IpEnrichment, NetworkCategory, VpnLikelihood};
 pub use jwt::{AccessTokenClaims, JwtService, RefreshTokenClaims, TwoFactorChallengeClaims};
 pub use stripe::{
-    stripe_config_from_db_model, stripe_config_from_env, stripe_err, StripeConfig, StripeService,
-    StripeServiceError,
+    stripe_config_from_db_model, stripe_err, unconfigured_stripe_config, StripeConfig,
+    StripeService, StripeServiceError,
 };
 pub use totp::TotpService;
 pub use webhook::WebhookService;

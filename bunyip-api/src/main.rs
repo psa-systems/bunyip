@@ -26,8 +26,8 @@ use bunyip_api::{
     },
     routes,
     services::{
-        stripe_config_from_db_model, stripe_config_from_env, AppBackupAdapter, AppDownloadCache,
-        AuthService, BackupService, DownloadLimiter, EmailService, EncryptionKeySet,
+        stripe_config_from_db_model, unconfigured_stripe_config, AppBackupAdapter,
+        AppDownloadCache, AuthService, BackupService, DownloadLimiter, EmailService,
         ForgejoAssetClient, GeoIpService, IpEnrichService, JwtConfig, JwtService,
         MokoshBackupAdapter, PasswordService, ReleaseCache, StripeService, TotpService,
         WebhookService,
@@ -97,6 +97,15 @@ async fn main() -> anyhow::Result<()> {
         })?;
 
     info!("Database connection pool established");
+
+    // BUNYIP-483: `bunyip-api reencrypt-secrets` rewrites every at-rest secret
+    // under the current APP_ENCRYPTION_KEY and exits, so an operator decides
+    // when the pass runs and can take a database backup first. Migrations stay
+    // owned by the server path below, so the subcommand runs against the schema
+    // a running deployment already has.
+    if let Some(subcommand) = std::env::args().nth(1) {
+        return run_subcommand(&subcommand, &pool, &config).await;
+    }
 
     // BUNYIP-79: heal the in-place-edited migration checksums before the
     // migrator's immutability check would abort on databases that applied the
@@ -324,29 +333,22 @@ async fn main() -> anyhow::Result<()> {
     };
     let tier_config = Arc::new(std::sync::RwLock::new(tier_config));
 
-    // Build encryption key sets for key rotation support
-    let totp_key_set = EncryptionKeySet {
-        current: config.totp_encryption_key,
-        current_version: config.totp_key_version,
-        previous: config.totp_encryption_key_prev,
-    };
-    let stripe_key_set = EncryptionKeySet {
-        current: config.stripe_encryption_key,
-        current_version: config.stripe_key_version,
-        previous: config.stripe_encryption_key_prev,
-    };
+    // BUNYIP-483: ONE at-rest key set (APP_ENCRYPTION_KEY, plus any
+    // APP_ENCRYPTION_KEY_PREV entries for the rotation / consolidation window)
+    // guards the TOTP secrets, the Stripe secrets and the SMTP password.
+    let app_key_set = config.app_key_set();
 
     // Initialize Email service — prefer DB config (admin UI), fall back to env
-    // vars (BUNYIP-351). The SMTP password is decrypted with the same key set
-    // as the Stripe secrets, so this must run after `stripe_key_set` is built.
-    // The auth service (built below) also holds the email service for BUNYIP-366
-    // login-location alerts, so email is now wired ahead of auth.
+    // vars (BUNYIP-351). The SMTP password is decrypted with the application
+    // key set, so this must run after `app_key_set` is built. The auth service
+    // (built below) also holds the email service for BUNYIP-366 login-location
+    // alerts, so email is now wired ahead of auth.
     let email_config = {
         use bunyip_api::repositories::EmailConfigRepository;
         match EmailConfigRepository::get(&pool).await {
             Ok(row) if EmailConfig::has_db_overrides(&row) => {
                 info!("Email config initialized from database");
-                EmailConfig::from_db_row(&row, &stripe_key_set, config.is_production())
+                EmailConfig::from_db_row(&row, &app_key_set, config.is_production())
             }
             _ => {
                 info!("Email config initialized from environment variables");
@@ -426,23 +428,27 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Auth service initialized");
 
-    // Initialize Stripe service — prefer DB config (set via admin UI), fall back to env vars
+    // BUNYIP-482: the `stripe_config` DB row (admin Stripe page) is the only
+    // source. No row, or an undecryptable one, boots with Stripe disabled.
     let stripe_config = {
         use bunyip_api::repositories::StripeConfigRepository;
         match StripeConfigRepository::get(&pool).await {
             Ok(db_config) if db_config.secret_key.is_some() => {
-                match stripe_config_from_db_model(&db_config, &stripe_key_set) {
+                match stripe_config_from_db_model(&db_config, &app_key_set) {
                     Ok(cfg) => {
                         info!("Stripe service initialized from database config");
                         cfg
                     }
                     Err(e) => {
-                        tracing::warn!(error = %e, "Failed to decrypt DB Stripe config, falling back to env vars");
-                        stripe_config_from_env()?
+                        tracing::warn!(error = %e, "Failed to decrypt the saved Stripe config; starting with Stripe disabled. Re-enter the keys on the admin Stripe page.");
+                        unconfigured_stripe_config()
                     }
                 }
             }
-            _ => stripe_config_from_env()?,
+            _ => {
+                info!("No Stripe config saved; starting with Stripe disabled (configure it on the admin Stripe page)");
+                unconfigured_stripe_config()
+            }
         }
     };
     let stripe_service = Arc::new(StripeService::new(stripe_config));
@@ -451,13 +457,14 @@ async fn main() -> anyhow::Result<()> {
 
     // BUNYIP-203: warn loudly when Stripe is wired (real secret key) but no
     // webhook signing secret is configured. The webhook handler fails closed
-    // in this state, so events will be rejected until a real
-    // STRIPE_WEBHOOK_SECRET is supplied.
+    // in this state, so events will be rejected until a real webhook signing
+    // secret is saved.
     if stripe_service.is_configured() && !stripe_service.webhook_secret_configured() {
         tracing::warn!(
-            "Stripe secret key is configured but STRIPE_WEBHOOK_SECRET is unset or the \
+            "Stripe secret key is configured but the webhook signing secret is unset or the \
              placeholder; the Stripe webhook endpoint will REJECT all events until a real \
-             webhook signing secret is set. Forged-event protection is fail-closed (BUNYIP-203)."
+             webhook signing secret is saved on the admin Stripe page. Forged-event protection \
+             is fail-closed (BUNYIP-203)."
         );
     }
 
@@ -476,6 +483,12 @@ async fn main() -> anyhow::Result<()> {
     let release_cache = forgejo_client
         .clone()
         .map(|c| Arc::new(ReleaseCache::new(c, config.download.release_cache_ttl_secs)));
+
+    // BUNYIP-487: keeps the public /v1/pricing page off Stripe's API on every
+    // visit. Invalidated whenever an admin saves tier config.
+    let pricing_cache = Arc::new(bunyip_api::handlers::PricingCache::new(
+        bunyip_api::handlers::PRICING_CACHE_TTL_SECS,
+    ));
 
     let download_cache: Option<Arc<AppDownloadCache>> = forgejo_client.clone().map(|c| {
         let store = Arc::new(DownloadCacheRepository::new(pool.clone()));
@@ -565,7 +578,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize TOTP service
     let totp_service = Arc::new(TotpService::new(
-        totp_key_set,
+        app_key_set.clone(),
         config.app_name.clone(),
         pool.clone(),
     ));
@@ -956,8 +969,14 @@ async fn main() -> anyhow::Result<()> {
             ))
             // Auto-ban runs outermost — rejects banned IPs before CORS processing
             .wrap(AutoBanMiddleware::new(auto_ban_service.clone()))
-            // Explicit JSON body size limit (32 KB)
-            .app_data(web::JsonConfig::default().limit(32_768))
+            // Generic extractor errors (BUNYIP-481): malformed body / path /
+            // query / form parameters return the AppError envelope with a
+            // generic message instead of actix's raw parse text. JSON keeps its
+            // 32 KB limit.
+            .app_data(bunyip_api::extractors::json_config())
+            .app_data(bunyip_api::extractors::path_config())
+            .app_data(bunyip_api::extractors::query_config())
+            .app_data(bunyip_api::extractors::form_config())
             // Add database pool to app state
             .app_data(web::Data::new(pool.clone()))
             // Self-service NOBYPASSRLS pool for per-user RLS reads (BUNYIP-344).
@@ -991,7 +1010,7 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::Data::new(webhook_service.clone()))
             .app_data(web::Data::new(backup_service.clone()))
             .app_data(web::Data::new(event_bus.clone()))
-            .app_data(web::Data::new(stripe_key_set.clone()))
+            .app_data(web::Data::new(app_key_set.clone()))
             .app_data(web::Data::new(config_data.clone()))
             .app_data(web::Data::new(download_limiter.clone()))
             .app_data(web::Data::new(download_counter.clone()))
@@ -1007,6 +1026,7 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::Data::new(oidc_provider.clone()))
             .app_data(web::Data::new(backchannel_http_client.clone()))
             .app_data(web::Data::new(tier_config.clone()))
+            .app_data(web::Data::new(pricing_cache.clone()))
             // Update checker for the root-level /version endpoint
             .app_data(web::Data::new(update_checker.clone()))
             .app_data(web::Data::new(ip_enrich.clone()))
@@ -1098,6 +1118,34 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Maintenance subcommands (BUNYIP-483). Anything but a known subcommand is an
+/// error rather than a silently-ignored argument.
+async fn run_subcommand(
+    subcommand: &str,
+    pool: &sqlx::PgPool,
+    config: &Config,
+) -> anyhow::Result<()> {
+    match subcommand {
+        "reencrypt-secrets" => {
+            let summary = bunyip_api::reencrypt::reencrypt_all(pool, &config.app_key_set()).await?;
+            info!(%summary, "reencrypt-secrets finished");
+            println!("reencrypt-secrets: {summary}");
+            for item in &summary.undecryptable {
+                println!("  undecryptable, left untouched: {item}");
+            }
+            if !summary.undecryptable.is_empty() {
+                anyhow::bail!(
+                    "{} value(s) decrypt with neither APP_ENCRYPTION_KEY nor any \
+                     APP_ENCRYPTION_KEY_PREV entry; add the missing key and re-run",
+                    summary.undecryptable.len()
+                );
+            }
+            Ok(())
+        }
+        other => anyhow::bail!("unknown subcommand {other:?} (known: reencrypt-secrets)"),
+    }
 }
 
 /// Env-driven, idempotent upsert of a browser SPA OIDC client (BUNYIP-57).

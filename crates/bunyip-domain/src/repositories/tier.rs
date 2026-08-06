@@ -29,6 +29,7 @@ impl TierConfigRepository {
         lifetime_product_id: Option<String>,
         early_adopter_product_id: Option<String>,
         standard_product_id: Option<String>,
+        pricing_enabled: Option<bool>,
         updated_by: Uuid,
     ) -> Result<TierConfigRow, AppError> {
         let row = sqlx::query_as::<_, TierConfigRow>(
@@ -45,8 +46,9 @@ impl TierConfigRepository {
                 lifetime_product_id      = COALESCE($8,  lifetime_product_id),
                 early_adopter_product_id = COALESCE($9,  early_adopter_product_id),
                 standard_product_id      = COALESCE($10, standard_product_id),
+                pricing_enabled          = COALESCE($11, pricing_enabled),
                 updated_at               = NOW(),
-                updated_by               = $11
+                updated_by               = $12
             WHERE id = 1
             RETURNING *
             "#,
@@ -61,6 +63,7 @@ impl TierConfigRepository {
         .bind(lifetime_product_id)
         .bind(early_adopter_product_id)
         .bind(standard_product_id)
+        .bind(pricing_enabled)
         .bind(updated_by)
         .fetch_one(pool)
         .await?;

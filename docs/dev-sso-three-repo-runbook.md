@@ -260,7 +260,7 @@ folded into `fix/dev-sso-nebula-secure-list`.
 ### 6.9 Register page "error sending request ... /v1/auth/register"
 Symptom: web SSR could not reach `api:4401`. Cause: the api **crash-looped on
 config** - the `.env` was the **old-architecture** one (missing ~20 new keys), so
-`TOTP_ENCRYPTION_KEY`/`STRIPE_ENCRYPTION_KEY` were empty (must be 32-byte hex) and
+`APP_ENCRYPTION_KEY` was empty (must be 32-byte hex) and
 the api panicked; plus `secrets/oidc/` had no Ed25519 OIDC keys. Fix: regenerate `.env`
 from the new template (generated secret keys, kept the registered client_id + uid),
 generate `secrets/oidc/dev-2026.pem`, recreate the api. Durable fix: `ensure-oidc-keys`

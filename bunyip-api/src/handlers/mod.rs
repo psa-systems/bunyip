@@ -6,10 +6,31 @@ use std::sync::Arc;
 
 use sqlx::PgPool;
 
+use crate::config::TierConfig;
 use crate::errors::AppError;
 use crate::models::RateLimitConfig;
 use crate::repositories::{RateLimitConfigRepository, RateLimitRepository, TotpRepository};
 use crate::services::TotpService;
+
+/// BUNYIP-482: the `$0` Stripe price id, read from the LIVE tier config rather
+/// than the startup-baked `StripeConfig`, so an admin edit on the tier-settings
+/// page takes effect without a restart. `None` means no price is configured and
+/// the caller skips the $0 subscription.
+///
+/// `RwLock::read()` errs only on poisoning (a writer panicked while holding the
+/// lock). The data is structurally intact, so this read path recovers through
+/// `PoisonError::into_inner` and logs, mirroring the webhook handler.
+pub(crate) fn live_free_price_id(tier_config: &std::sync::RwLock<TierConfig>) -> Option<String> {
+    match tier_config.read() {
+        Ok(guard) => guard.free_price_id.clone(),
+        Err(poison) => {
+            tracing::error!(
+                "TierConfig read lock was poisoned by a previous panic; recovering through poison"
+            );
+            poison.into_inner().free_price_id.clone()
+        }
+    }
+}
 
 /// Check a rate limit and return `RateLimited` when the window is exceeded.
 ///
@@ -152,6 +173,7 @@ pub mod download;
 pub mod events;
 pub mod feedback;
 pub mod membership;
+pub mod pricing;
 pub mod totp;
 pub mod user;
 pub mod webhook;
@@ -183,6 +205,7 @@ pub use membership::{
     billing_portal, cancel_membership, cancel_membership_immediate, create_checkout,
     get_membership, get_payment_history, reactivate_membership,
 };
+pub use pricing::{public_pricing, PricingCache, PRICING_CACHE_TTL_SECS};
 pub use totp::{
     begin_rekey, confirm_2fa, confirm_rekey, disable_2fa, get_2fa_status,
     regenerate_recovery_codes, setup_2fa, verify_2fa,

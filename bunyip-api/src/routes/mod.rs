@@ -12,6 +12,7 @@ pub mod events;
 pub mod feedback;
 pub mod health;
 pub mod membership;
+pub mod pricing;
 pub mod user;
 pub mod version;
 pub mod webhook;
@@ -33,6 +34,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .configure(billing::configure)
             .configure(feedback::configure)
             .configure(membership::configure)
+            .configure(pricing::configure)
             .configure(webhook::configure)
             .configure(admin::configure),
     );

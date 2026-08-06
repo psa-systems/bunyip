@@ -660,7 +660,7 @@ pub(super) fn feedback_detail_view(f: &AdminFeedbackDetail, tab: FeedbackTab) ->
                         div {
                             h3 class="text-sm font-semibold" { "IP address" }
                             p class="text-sm" {
-                                a href=(format!("/admin/ip-bans?ip={}", urlenc(ip))) class="font-mono text-primary underline-offset-4 hover:underline" title="Ban or look up this address" { (ip) }
+                                a href=(format!("/admin/ip-bans?ip={}", urlenc(ip))) class="font-mono text-primary-text underline-offset-4 hover:underline" title="Ban or look up this address" { (ip) }
                             }
                         }
                     }

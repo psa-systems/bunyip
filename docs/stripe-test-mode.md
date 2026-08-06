@@ -12,7 +12,7 @@ browser checkout ──card 4242...──> Stripe (test mode)
                                       │  fires webhook events
                                       ▼
 stripe CLI (stripe listen) ──forward──> bunyip-api POST /v1/webhooks/stripe (:4401)
-                                      │  Stripe-Signature verified vs STRIPE_WEBHOOK_SECRET
+                                      │  Stripe-Signature verified vs the saved webhook secret
                                       │  deduped on event.id (stripe_webhook_events)
                                       └──> membership status / entitlements / emails
 ```
@@ -36,18 +36,20 @@ api listens on `APP_PORT=4401`. Handled event types:
 
 ## Step 1 - load test-mode keys
 
-Keys can be loaded two ways; the DB value wins per-field when set, otherwise the
-env var is used. Both honour the `{NAME}_FILE` compose-secret convention.
+BUNYIP-482: the **admin Stripe page is the only place keys are entered**. There
+is no Stripe env var; the `stripe_config` DB row is the single source, and a
+save applies immediately (`StripeService::reload()`), with no restart.
 
-- **Env (simplest for `just dev`).** In the Stripe Dashboard switch to Test mode, open Developers -> API keys, copy the **Secret key** (`sk_test_...`), and set it in `.env`:
+In the Stripe Dashboard switch to Test mode, open Developers -> API keys, copy
+the **Secret key** (`sk_test_...`), and paste it into the in-app admin Stripe
+settings, which writes the encrypted value to the `stripe_config` table
+(`bunyip-api/src/handlers/admin_stripe.rs`). The webhook secret is filled in
+step 2 on the same page.
 
-  ```
-  STRIPE_SECRET_KEY=sk_test_...
-  ```
-
-  Also set `STRIPE_ENCRYPTION_KEY` to any 32-byte hex value (`openssl rand -hex 32`); it encrypts secrets at rest. `STRIPE_WEBHOOK_SECRET` is filled in step 2.
-
-- **Admin Stripe UI.** Alternatively, paste the same `sk_test_...` key into the in-app admin Stripe settings, which writes the encrypted value to the `stripe_config` table (`bunyip-api/src/handlers/admin_stripe.rs`). This overrides the env var.
+Set `APP_ENCRYPTION_KEY` in `.env` to any 32-byte hex value
+(`openssl rand -hex 32`) before saving: it is the one at-rest key that encrypts
+every DB-stored secret (TOTP, Stripe, SMTP), not Stripe configuration.
+`just ensure-env` generates one for you.
 
 Until a secret key is present the dashboard renders the disabled "Payment is not
 configured" button (`bunyip-web/src/handlers/dashboard.rs`).
@@ -67,23 +69,18 @@ On startup it prints a signing secret:
 ```
 
 This `whsec_...` is specific to the `stripe listen` session and differs from a
-dashboard endpoint secret. Set it as the webhook secret and restart the api so
-it picks up the value:
-
-```
-STRIPE_WEBHOOK_SECRET=whsec_...
-```
-
-(or paste it into the admin Stripe UI). Leave `stripe listen` running for the
-rest of the session; it relays every test-mode event to the local endpoint.
+dashboard endpoint secret. Paste it into the admin Stripe page as the webhook
+signing secret; the save hot-swaps the running config, so no restart is needed.
+Leave `stripe listen` running for the rest of the session; it relays every
+test-mode event to the local endpoint.
 
 ## Step 3 - create a membership product + price (REQUIRED for checkout)
 
 Checkout will not work until at least one **app-tagged** product with an active
 recurring price exists. When the Subscribe button posts to
 `POST /v1/memberships/checkout` with no explicit price, the api selects the first
-active price whose **product carries the metadata `app=<STRIPE_APP_TAG>`**
-(default `app=bunyip`); see `list_prices` / `list_products` in
+active price whose **product carries the metadata `app=<app tag>`** (the app tag
+from the admin Stripe page, default `app=bunyip`); see `list_prices` / `list_products` in
 `crates/bunyip-domain/src/services/stripe.rs`. Untagged products are filtered
 out, so a brand-new test account (or one whose products predate the tag) fails
 checkout with `400 price_id: No active price configured`, and the web silently
@@ -91,7 +88,7 @@ redirects back to `/membership` with no error.
 
 Create the tagged product + price either way:
 
-- **Admin Stripe UI (preferred).** Use the in-app admin product CRUD; the api's `create_product` auto-injects `metadata.app = STRIPE_APP_TAG`, so anything created there is tagged correctly.
+- **Admin Stripe UI (preferred).** Use the in-app admin product CRUD; the api's `create_product` auto-injects `metadata.app = <the configured app tag>`, so anything created there is tagged correctly.
 - **Stripe CLI.** Tag the product explicitly, then add a recurring price:
 
   ```nu
@@ -134,10 +131,10 @@ to a single plan and removes the tiers, so this step may be retired.
 ## Step 5 - drive the lifecycle
 
 - **Subscribe (happy path).** In the app's checkout, pay with the canonical test card below. The subscription activates through `checkout.session.completed` + `customer.subscription.created`; the dashboard shows the membership as Active.
-- **Failure / grace path.** A bare `stripe trigger invoice.payment_failed` will NOT exercise a real member: the fixture invents its own customer, so the handler logs `User not found for failed payment` and does nothing. To drive the grace cycle for an existing subscriber, send an event scoped to that customer. The simplest deterministic way is a locally-signed event (the signature is real - HMAC-SHA256 over `<timestamp>.<payload>` with `STRIPE_WEBHOOK_SECRET`):
+- **Failure / grace path.** A bare `stripe trigger invoice.payment_failed` will NOT exercise a real member: the fixture invents its own customer, so the handler logs `User not found for failed payment` and does nothing. To drive the grace cycle for an existing subscriber, send an event scoped to that customer. The simplest deterministic way is a locally-signed event (the signature is real - HMAC-SHA256 over `<timestamp>.<payload>` with the webhook signing secret saved on the admin Stripe page):
 
   ```nu
-  let secret = (^docker exec dev-bunyip-api-($env.USER) printenv STRIPE_WEBHOOK_SECRET | str trim)
+  let secret = "whsec_..."                  # the value `stripe listen` printed
   let cus = "cus_..."                       # the member's stripe_customer_id
   let ts = (date now | format date "%s")
   let payload = $'{"id":"evt_local_fail","object":"event","type":"invoice.payment_failed","data":{"object":{"object":"invoice","customer":"($cus)","amount_due":300}}}'
@@ -163,7 +160,7 @@ There is no "all 9s" success card; the 9s appear in the decline cards above.
 
 ## Cleanup
 
-- Stop the listener with `Ctrl-C`; the `whsec_...` it issued is invalidated, so clear `STRIPE_WEBHOOK_SECRET` (a stale value makes every delivery fail signature verification).
+- Stop the listener with `Ctrl-C`; the `whsec_...` it issued is invalidated, so clear the webhook signing secret on the admin Stripe page (a stale value makes every delivery fail signature verification).
 - Test-mode data (customers, subscriptions, events) lives only in Test mode and never touches live data; delete test customers from the dashboard if you want a clean slate.
 
 ## Verification status (BUNYIP-175)

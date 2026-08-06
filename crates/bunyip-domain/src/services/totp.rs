@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::errors::AppError;
 use crate::repositories::TotpRepository;
-use crate::services::encryption::EncryptionKeySet;
+use crate::services::AppKeySet;
 
 /// RFC 6238 time step, in seconds. Also the size of the backward tolerance
 /// `match_step` applies.
@@ -27,13 +27,13 @@ pub struct TotpSetupInfo {
 
 /// TOTP service for managing two-factor authentication
 pub struct TotpService {
-    key_set: EncryptionKeySet,
+    key_set: AppKeySet,
     issuer: String,
     pool: PgPool,
 }
 
 impl TotpService {
-    pub fn new(key_set: EncryptionKeySet, issuer: String, pool: PgPool) -> Self {
+    pub fn new(key_set: AppKeySet, issuer: String, pool: PgPool) -> Self {
         Self {
             key_set,
             issuer,
@@ -42,7 +42,7 @@ impl TotpService {
     }
 
     /// Returns a reference to the encryption key set (used by admin rotation endpoints).
-    pub fn key_set(&self) -> &EncryptionKeySet {
+    pub fn key_set(&self) -> &AppKeySet {
         &self.key_set
     }
 
@@ -457,16 +457,16 @@ impl TotpService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::encryption::EncryptionKeySet;
+    use crate::services::AppKeySet;
 
-    fn test_key_set() -> EncryptionKeySet {
+    fn test_key_set() -> AppKeySet {
         let mut key = [0u8; 32];
         key[..16].copy_from_slice(b"test-encrypt-key");
         key[16..].copy_from_slice(b"0123456789abcdef");
-        EncryptionKeySet {
+        AppKeySet {
             current: key,
             current_version: 1,
-            previous: None,
+            previous: Vec::new(),
         }
     }
 
@@ -620,10 +620,10 @@ mod tests {
         let ks = test_key_set();
         let (encrypted, nonce, _) = ks.encrypt(b"secret-data").unwrap();
 
-        let wrong_ks = EncryptionKeySet {
+        let wrong_ks = AppKeySet {
             current: [0xFFu8; 32],
             current_version: 1,
-            previous: None,
+            previous: Vec::new(),
         };
         assert!(wrong_ks.decrypt(&encrypted, &nonce, 1).is_err());
     }
@@ -711,10 +711,10 @@ mod tests {
         let (ct, nonce, _) = ks_v1.encrypt(totp_secret).unwrap();
 
         // Rotate: new key is current, old key is previous
-        let ks_v2 = EncryptionKeySet {
+        let ks_v2 = AppKeySet {
             current: rotated_key(),
             current_version: 2,
-            previous: Some(ks_v1.current),
+            previous: vec![ks_v1.current],
         };
 
         // Should decrypt via fallback to previous key
@@ -731,10 +731,10 @@ mod tests {
         let (ct_old, nonce_old, _) = ks_v1.encrypt(totp_secret).unwrap();
 
         // Rotate to v2
-        let ks_v2 = EncryptionKeySet {
+        let ks_v2 = AppKeySet {
             current: rotated_key(),
             current_version: 2,
-            previous: Some(ks_v1.current),
+            previous: vec![ks_v1.current],
         };
 
         // Simulate re-encryption: decrypt old, encrypt new
@@ -743,10 +743,10 @@ mod tests {
         assert_eq!(ver_new, 2);
 
         // After removing old key, new ciphertext still decrypts
-        let ks_v2_only = EncryptionKeySet {
+        let ks_v2_only = AppKeySet {
             current: rotated_key(),
             current_version: 2,
-            previous: None,
+            previous: Vec::new(),
         };
         let final_plain = ks_v2_only.decrypt(&ct_new, &nonce_new, 2).unwrap();
         assert_eq!(final_plain, totp_secret);
@@ -755,10 +755,10 @@ mod tests {
     #[test]
     fn new_totp_setup_uses_current_version() {
         // After rotation, new encryptions should use the current version
-        let ks_v2 = EncryptionKeySet {
+        let ks_v2 = AppKeySet {
             current: rotated_key(),
             current_version: 2,
-            previous: Some(test_key_set().current),
+            previous: vec![test_key_set().current],
         };
 
         let (_, _, version) = ks_v2.encrypt(b"new-totp-secret").unwrap();
@@ -769,12 +769,16 @@ mod tests {
     fn key_set_accessor_returns_reference() {
         // Verify TotpService.key_set() is accessible for rotation endpoints.
         // We can't construct a full TotpService without PgPool, but we can
-        // verify the EncryptionKeySet type is correct through the test helpers.
+        // verify the AppKeySet type is correct through the test helpers.
         let ks = test_key_set();
         assert_eq!(ks.current_version, 1);
-        assert!(ks.previous.is_none());
-        assert!(!ks.needs_reencrypt(1));
-        assert!(ks.needs_reencrypt(0));
+        assert!(ks.previous.is_empty());
+
+        // A value on the current key/version needs no re-encryption; the same
+        // value read as an older version does (BUNYIP-483).
+        let (ct, nonce, version) = ks.encrypt(b"totp-secret").unwrap();
+        assert!(ks.is_current(&ct, &nonce, version));
+        assert!(!ks.is_current(&ct, &nonce, 0));
     }
 
     // -- argon2 recovery code hashing --

@@ -53,20 +53,19 @@ secrets:
     file: ./secrets/app_database_url
   jwt_secret:
     file: ./secrets/jwt_secret
-  totp_encryption_key:
-    file: ./secrets/totp_encryption_key
-  stripe_encryption_key:
-    file: ./secrets/stripe_encryption_key
+  # BUNYIP-483: the ONE at-rest AES-256-GCM key, protecting the TOTP secrets
+  # (user_totp), the Stripe credentials (stripe_config) and the SMTP password
+  # (email_config). The Stripe API keys themselves are NOT secret files: they
+  # live only in the stripe_config DB row, entered on the admin Stripe page
+  # (BUNYIP-482).
+  app_encryption_key:
+    file: ./secrets/app_encryption_key
   setup_default_admin:
     file: ./secrets/setup_default_admin
   forgejo_api_token:
     file: ./secrets/forgejo_api_token
   smtp_password:
     file: ./secrets/smtp_password
-  stripe_secret_key:
-    file: ./secrets/stripe_secret_key
-  stripe_webhook_secret:
-    file: ./secrets/stripe_webhook_secret
   update_check_token:
     file: ./secrets/update_check_token
 
@@ -131,13 +130,15 @@ services:
       BUNYIP_APP_PASSWORD_FILE: /run/secrets/bunyip_app_password
       APP_DATABASE_URL_FILE: /run/secrets/app_database_url
       JWT_SECRET_FILE: /run/secrets/jwt_secret
-      TOTP_ENCRYPTION_KEY_FILE: /run/secrets/totp_encryption_key
-      STRIPE_ENCRYPTION_KEY_FILE: /run/secrets/stripe_encryption_key
+      APP_ENCRYPTION_KEY_FILE: /run/secrets/app_encryption_key
+      # Comma-separated hex keys still needed to read rows written under an
+      # earlier key (rotation, or the BUNYIP-483 consolidation window). Empty
+      # once `bunyip-api reencrypt-secrets` has run. Honours the _FILE
+      # convention too, if the list is kept in a secret file.
+      APP_ENCRYPTION_KEY_PREV: ${APP_ENCRYPTION_KEY_PREV:-}
       SETUP_DEFAULT_ADMIN_FILE: /run/secrets/setup_default_admin
       FORGEJO_API_TOKEN_FILE: /run/secrets/forgejo_api_token
       SMTP_PASSWORD_FILE: /run/secrets/smtp_password
-      STRIPE_SECRET_KEY_FILE: /run/secrets/stripe_secret_key
-      STRIPE_WEBHOOK_SECRET_FILE: /run/secrets/stripe_webhook_secret
       BUNYIP_UPDATE_CHECK_TOKEN_FILE: /run/secrets/update_check_token
       HOST_IP: 0.0.0.0
       APP_PORT: "4401"
@@ -224,13 +225,10 @@ services:
       - bunyip_app_password
       - app_database_url
       - jwt_secret
-      - totp_encryption_key
-      - stripe_encryption_key
+      - app_encryption_key
       - setup_default_admin
       - forgejo_api_token
       - smtp_password
-      - stripe_secret_key
-      - stripe_webhook_secret
       - update_check_token
     volumes:
       # OIDC signing keys only (a dedicated subdir, NOT the whole ./secrets
@@ -263,7 +261,6 @@ services:
       BUNYIP_API_URL: ${BUNYIP_API_URL:-http://api:4401}
       BUNYIP_OIDC_ISSUER: ${BUNYIP_OIDC_ISSUER:-}
       BUNYIP_APP_DOMAIN: ${BUNYIP_APP_DOMAIN:-}
-      BUNYIP_SHOW_BUSINESS_PRICING: ${BUNYIP_SHOW_BUSINESS_PRICING:-false}
       BUNYIP_COMMUNITY_URL: ${BUNYIP_COMMUNITY_URL:-}
       # BUNYIP-311 / BUNYIP-409: trusted-proxy CIDRs for the FIRST hop of the
       # client-IP trust chain (Traefik -> bunyip-web). bunyip-web reads the

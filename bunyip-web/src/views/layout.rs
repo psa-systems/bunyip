@@ -179,9 +179,12 @@ fn theme_controls(icon_class: &str) -> Markup {
 }
 
 /// Floating "open feedback" launcher pinned to the bottom-right of the
-/// viewport. Mounted by `dashboard_shell` (always on for authenticated
-/// users) and by `public_shell` (gated by `show_feedback`, kept off on
-/// the login / register flow). Pages whose primary action lands in the
+/// viewport. BUNYIP-370: mounted by EVERY authenticated shell -
+/// `dashboard_shell` and `admin_shell` - so feedback can be sent from any
+/// app surface, not just the user dashboard. `public_shell` mounts it too,
+/// gated by `show_feedback` (kept off on the login / register / consent flow,
+/// where the chrome is deliberately minimal, and off on `/feedback` itself).
+/// Pages whose primary action lands in the
 /// bottom-right (currently `/downloads`) add their own `pb-24` so the
 /// launcher does not occlude content; see the wrapper in the Downloads
 /// handler.
@@ -199,7 +202,7 @@ fn feedback_launcher() -> Markup {
     html! {
         div class="pointer-events-none fixed bottom-4 right-4 z-40 sm:bottom-6 sm:right-6" {
             a href="/feedback" aria-label="Open feedback page" data-feedback-link
-              class="pointer-events-auto group flex h-14 w-[60px] items-center overflow-hidden rounded-2xl border border-border/70 bg-background/85 text-primary shadow-xl shadow-primary/10 backdrop-blur-md transition-all duration-300 hover:w-[204px] hover:border-primary/50 hover:bg-background dark:bg-card/90 sm:h-16 sm:w-16 sm:hover:w-[214px]" {
+              class="pointer-events-auto group flex h-14 w-[60px] items-center overflow-hidden rounded-2xl border border-border/70 bg-background/85 text-primary-text shadow-xl shadow-primary/10 backdrop-blur-md transition-all duration-300 hover:w-[204px] hover:border-primary/50 hover:bg-background dark:bg-card/90 sm:h-16 sm:w-16 sm:hover:w-[214px]" {
                 span class="relative inline-flex h-14 w-[60px] shrink-0 items-center justify-center rounded-2xl sm:h-16 sm:w-16" {
                     span class="absolute inset-0 rounded-2xl bg-gradient-to-br from-primary/18 via-indigo-500/12 to-teal-500/18 opacity-80" {}
                     (icon("smile-plus", "feedback-launcher__icon-bounce relative z-10 h-7 w-7 sm:h-8 sm:w-8"))
@@ -215,7 +218,7 @@ fn feedback_launcher() -> Markup {
 /// affordance (the launcher lives below the page content, mounted by the
 /// shell). Parameter is kept so call sites do not change; the underscore
 /// silences the unused-arg lint.
-fn header(user: Option<&User>, _show_feedback: bool) -> Markup {
+fn header(user: Option<&User>, pricing: bool, _show_feedback: bool) -> Markup {
     let is_admin = user.map(|u| u.role == UserRole::Admin).unwrap_or(false);
     html! {
         header class="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60" {
@@ -223,7 +226,10 @@ fn header(user: Option<&User>, _show_feedback: bool) -> Markup {
                 div class="flex items-center gap-6" {
                     (brand())
                     nav class="hidden md:flex items-center gap-6" {
-                        a href="/pricing" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Pricing" }
+                        // BUNYIP-487: /pricing 404s unless an admin enabled it
+                        // and a tier resolves to a Stripe price, so the link
+                        // exists only when the page does.
+                        @if pricing { a href="/pricing" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Pricing" } }
                         a href="/our-story" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Our Story" }
                         a href="/roadmap" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Roadmap" }
                     }
@@ -247,7 +253,7 @@ fn header(user: Option<&User>, _show_feedback: bool) -> Markup {
     }
 }
 
-fn footer(cfg: &Config, apps: &[Application]) -> Markup {
+fn footer(cfg: &Config, apps: &[Application], pricing: bool) -> Markup {
     let year = chrono::Utc::now().format("%Y").to_string();
     html! {
         footer class="border-t border-border/50 bg-gradient-to-b from-background to-indigo-950/5 dark:to-indigo-950/30" {
@@ -261,7 +267,7 @@ fn footer(cfg: &Config, apps: &[Application]) -> Markup {
                     div {
                         h3 class="text-sm font-semibold" { "Product" }
                         ul class="mt-4 space-y-3 text-sm" {
-                            li { a href="/pricing" class="text-muted-foreground hover:text-foreground transition-colors" { "Pricing" } }
+                            @if pricing { li { a href="/pricing" class="text-muted-foreground hover:text-foreground transition-colors" { "Pricing" } } }
                             li { a href="/our-story" class="text-muted-foreground hover:text-foreground transition-colors" { "Our Story" } }
                             li { a href="/roadmap" class="text-muted-foreground hover:text-foreground transition-colors" { "Roadmap" } }
                             @for app in apps {
@@ -302,14 +308,15 @@ pub fn public_shell(
     cfg: &Config,
     user: Option<&User>,
     apps: &[Application],
+    pricing: bool,
     show_feedback: bool,
     content: Markup,
 ) -> Markup {
     html! {
         div class="flex min-h-screen flex-col" {
-            (header(user, show_feedback))
+            (header(user, pricing, show_feedback))
             main class="flex-1" { (content) }
-            (footer(cfg, apps))
+            (footer(cfg, apps, pricing))
             @if show_feedback { (feedback_launcher()) }
         }
     }
@@ -404,7 +411,9 @@ fn admin_items() -> Vec<NavItem> {
             icon: "banknote",
         },
         NavItem {
-            title: "Tier Settings",
+            // BUNYIP-487: label only. The route stays /admin/tier-settings so
+            // existing admin bookmarks keep working.
+            title: "Pricing tiers",
             href: "/admin/tier-settings",
             icon: "settings",
         },
@@ -457,14 +466,18 @@ fn sidebar(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup
         dashboard_items(is_member)
     };
     html! {
-        aside class="hidden md:flex w-64 flex-col border-r border-border/50 bg-gradient-to-b from-background via-background to-indigo-950/5 dark:to-indigo-950/20" {
-            div class="flex h-16 items-center border-b border-border/50 px-6" {
+        // BUNYIP-368: the sidebar is its own scroll container. It fills the
+        // viewport-locked shell (`h-full`), keeps the brand row pinned
+        // (`shrink-0`), and scrolls only the nav, so a long nav never drags the
+        // page body with it. `shrink-0` on the column holds the w-64 width.
+        aside class="hidden md:flex h-full w-64 shrink-0 flex-col overflow-hidden border-r border-border/50 bg-gradient-to-b from-background via-background to-indigo-950/5 dark:to-indigo-950/20" {
+            div class="flex h-16 shrink-0 items-center border-b border-border/50 px-6" {
                 (brand())
                 @if admin {
                     span class="ml-2 rounded bg-gradient-to-r from-indigo-500/20 to-teal-500/20 px-2 py-0.5 text-xs font-medium text-indigo-600 dark:text-indigo-400" { "Admin" }
                 }
             }
-            nav class="flex-1 space-y-1 p-4" {
+            nav class="flex-1 space-y-1 overflow-y-auto p-4" {
                 // BUNYIP-417: the user/admin dashboard switch is a top-level,
                 // frequently-used control, so it sits at the TOP of the nav
                 // (above the section items) rather than buried at the bottom.
@@ -577,6 +590,17 @@ fn app_topbar(title: &str, user: &User) -> Markup {
     }
 }
 
+/// BUNYIP-368: the authenticated shells pin themselves to the viewport from the
+/// `md` breakpoint up (the breakpoint at which the sidebar is rendered at all),
+/// so the sidebar and `<main>` are each their own scroll container and neither
+/// drags the document with it. Below `md` there is no sidebar, so the page keeps
+/// its natural full-document scroll (`min-h-screen`).
+const APP_SHELL_CLASS: &str = "flex min-h-screen md:h-screen md:overflow-hidden";
+/// The content column next to the sidebar: the topbar stays put and only
+/// `<main>` inside it scrolls.
+const APP_COLUMN_CLASS: &str = "flex flex-1 flex-col overflow-hidden";
+const APP_MAIN_CLASS: &str = "relative flex-1 overflow-y-auto p-6";
+
 /// `topbar_title` is the heading rendered in the top bar (NOT the browser
 /// `<title>`). `dashboard_response` derives it from the page-title argument by
 /// stripping the ` · Bunyip` brand suffix - that suffix is redundant in the
@@ -587,11 +611,11 @@ pub fn dashboard_shell(user: &User, active: &str, topbar_title: &str, content: M
     let is_member = crate::util::has_active_membership(Some(user));
     let sse = sse_subscriber_script();
     html! {
-        div class="flex min-h-screen" {
+        div class=(APP_SHELL_CLASS) {
             (sidebar(false, is_admin, active, is_member))
-            div class="flex flex-1 flex-col" {
+            div class=(APP_COLUMN_CLASS) {
                 (app_topbar(topbar_title, user))
-                main class="relative flex-1 overflow-auto p-6" {
+                main class=(APP_MAIN_CLASS) {
                     div class="pointer-events-none absolute inset-0 bg-gradient-to-br from-indigo-500/[0.02] via-transparent to-teal-500/[0.02]" {}
                     div class="relative" { (content) }
                 }
@@ -605,14 +629,17 @@ pub fn dashboard_shell(user: &User, active: &str, topbar_title: &str, content: M
 pub fn admin_shell(user: &User, active: &str, topbar_title: &str, content: Markup) -> Markup {
     let sse = sse_subscriber_script();
     html! {
-        div class="flex min-h-screen" {
+        div class=(APP_SHELL_CLASS) {
             (sidebar(true, true, active, true))
-            div class="flex flex-1 flex-col" {
+            div class=(APP_COLUMN_CLASS) {
                 (app_topbar(topbar_title, user))
-                main class="relative flex-1 overflow-auto p-6" {
+                main class=(APP_MAIN_CLASS) {
                     div class="relative" { (content) }
                 }
             }
+            // BUNYIP-370: same launcher the user dashboard carries, so an admin
+            // can report from the panel they are looking at.
+            (feedback_launcher())
         }
         (sse)
     }
@@ -654,6 +681,162 @@ pub fn admin_block_grid(blocks: Vec<Markup>) -> Markup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::types::{MembershipStatus, SubscriptionTier};
+
+    fn test_user(role: UserRole) -> User {
+        User {
+            id: "u1".into(),
+            email: "u@example.com".into(),
+            role,
+            email_verified: true,
+            two_factor_enabled: true,
+            membership_status: MembershipStatus::None,
+            price_locked: false,
+            locked_price_id: None,
+            locked_price_amount: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+            subscription_tier: SubscriptionTier::Free,
+            trial_ends_at: None,
+            lifetime_member: false,
+            first_name: Some("Ada".into()),
+            last_name: Some("Lovelace".into()),
+            phone: None,
+            avatar_updated_at: None,
+            is_super_admin: false,
+        }
+    }
+
+    /// Attributes of the first `<tag ...>` in `html`.
+    fn first_tag<'a>(html: &'a str, tag: &str) -> &'a str {
+        let rest = html
+            .split_once(&format!("<{tag}"))
+            .unwrap_or_else(|| panic!("markup contains a <{tag}>"))
+            .1;
+        rest.split_once('>').expect("the tag closes").0
+    }
+
+    /// BUNYIP-368: scrolling the sidebar used to scroll the whole document,
+    /// because the shell was `min-h-screen` (free to grow past the viewport)
+    /// and nothing inside the sidebar was a scroll container. The contract:
+    /// wherever the sidebar is rendered (md and up) the shell is viewport-
+    /// height with the overflow clipped, and the nav and `<main>` each scroll
+    /// themselves. Every authenticated shell is checked, so a new one that
+    /// re-introduces a document-scrolling layout fails here.
+    #[test]
+    fn every_authenticated_shell_scrolls_its_sidebar_independently() {
+        let admin = test_user(UserRole::Admin);
+        let member = test_user(UserRole::Subscriber);
+        let shells = [
+            (
+                "admin_shell",
+                admin_shell(&admin, "/admin", "Admin", html! {}).into_string(),
+            ),
+            (
+                "dashboard_shell",
+                dashboard_shell(&member, "/dashboard", "Dashboard", html! {}).into_string(),
+            ),
+        ];
+        for (name, markup) in shells {
+            let shell = first_tag(&markup, "div");
+            assert!(
+                shell.contains("md:h-screen") && shell.contains("md:overflow-hidden"),
+                "{name}'s shell must be viewport-height where the sidebar exists, \
+                 else the document scrolls instead of the panes: {shell}"
+            );
+
+            let aside = first_tag(&markup, "aside");
+            assert!(
+                aside.contains("h-full") && aside.contains("overflow-hidden"),
+                "{name}'s sidebar must fill the shell and clip its own overflow: {aside}"
+            );
+
+            let (sidebar_markup, _) = markup
+                .split_once("</aside>")
+                .expect("the sidebar element closes");
+            let nav = first_tag(sidebar_markup, "nav");
+            assert!(
+                nav.contains("overflow-y-auto") && nav.contains("flex-1"),
+                "{name}'s sidebar nav must be the scroll container: {nav}"
+            );
+
+            let main = first_tag(&markup, "main");
+            assert!(
+                main.contains("overflow-y-auto"),
+                "{name}'s content pane must scroll on its own: {main}"
+            );
+        }
+    }
+
+    /// BUNYIP-367: `admin_block_grid` is the shared multi-card container of the
+    /// admin screens, so it is where a dropped `gap-*` would silently push
+    /// every block's border against its neighbour's.
+    #[test]
+    fn admin_blocks_are_spaced_from_each_other() {
+        let blocks = vec![
+            admin_block("Identity", None, html! { p { "a" } }),
+            admin_block("Details", Some("sub"), html! { p { "b" } }),
+            admin_block("Distribution", None, html! { p { "c" } }),
+        ];
+        let html = admin_block_grid(blocks).into_string();
+        crate::views::ui::assert_cards_are_spaced(&html);
+    }
+
+    /// BUNYIP-370: the feedback entry point belongs on EVERY authenticated
+    /// surface, not just the user dashboard. This is the guard for the
+    /// invariant: adding a new authenticated shell that forgets the launcher
+    /// (as `admin_shell` did) fails here.
+    #[test]
+    fn every_authenticated_shell_mounts_the_feedback_launcher() {
+        let admin = test_user(UserRole::Admin);
+        let member = test_user(UserRole::Subscriber);
+        let shells = [
+            (
+                "admin_shell",
+                admin_shell(&admin, "/admin", "Admin", html! {}).into_string(),
+            ),
+            (
+                "dashboard_shell",
+                dashboard_shell(&member, "/dashboard", "Dashboard", html! {}).into_string(),
+            ),
+        ];
+        for (name, markup) in shells {
+            assert!(
+                markup.contains("data-feedback-link"),
+                "{name} must mount the feedback launcher"
+            );
+            assert!(
+                markup.contains(r#"href="/feedback""#),
+                "{name}'s launcher must point at the existing /feedback route"
+            );
+            assert!(
+                markup.contains("Have feedback?"),
+                "{name}'s launcher must render its label"
+            );
+        }
+    }
+
+    /// The admin panel's own "review submitted feedback" page is a different
+    /// thing from the "send feedback" launcher; the panel carries both and the
+    /// launcher must not be mistaken for the nav entry (BUNYIP-370).
+    #[test]
+    fn admin_panel_has_both_the_review_page_and_the_send_launcher() {
+        let markup = admin_shell(
+            &test_user(UserRole::Admin),
+            "/admin/users",
+            "Users",
+            html! {},
+        )
+        .into_string();
+        assert!(
+            markup.contains(r#"href="/admin/feedback""#),
+            "admin nav keeps the feedback review page"
+        );
+        assert!(
+            markup.contains(r#"aria-label="Open feedback page""#),
+            "admin shell also carries the submit-feedback launcher"
+        );
+    }
 
     /// BUNYIP-424 (render-level guard, paired with
     /// `security::tests::no_inline_script_or_event_handlers_in_views`): the
@@ -681,6 +864,40 @@ mod tests {
                 "script with an inline body: <script{attrs}>"
             );
         }
+    }
+
+    /// BUNYIP-487: `/pricing` 404s unless an admin published it, so the nav and
+    /// footer links exist on exactly that condition. A link to a 404 and a live
+    /// route with no link are both half-finished.
+    #[test]
+    fn pricing_links_track_whether_the_page_exists() {
+        let cfg = Config::from_env();
+        let shown = public_shell(&cfg, None, &[], true, false, html! {}).into_string();
+        assert_eq!(
+            shown.matches(r#"href="/pricing""#).count(),
+            2,
+            "nav link + footer link when the page is published"
+        );
+
+        let hidden = public_shell(&cfg, None, &[], false, false, html! {}).into_string();
+        assert!(
+            !hidden.contains("/pricing"),
+            "no rendered page links to a 404 pricing route"
+        );
+        // The rest of the chrome is untouched by the switch.
+        assert!(hidden.contains(r#"href="/our-story""#));
+        assert!(hidden.contains(r#"href="/roadmap""#));
+    }
+
+    /// The admin nav reads "Pricing tiers" while the route stays put, so
+    /// existing bookmarks keep working (BUNYIP-487).
+    #[test]
+    fn admin_nav_renames_tier_settings_without_moving_it() {
+        let item = admin_items()
+            .into_iter()
+            .find(|i| i.href == "/admin/tier-settings")
+            .expect("the tier-settings entry is still mounted at its old route");
+        assert_eq!(item.title, "Pricing tiers");
     }
 
     /// The SSE subscriber takes its origin as passive markup, never as
