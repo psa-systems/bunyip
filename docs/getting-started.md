@@ -6,7 +6,7 @@ This guide covers the developer fast path: clone, run, sign in, click around. Se
 
 - Docker + Docker Compose v2 (the modern `docker compose` plugin, not the legacy `docker-compose` binary).
 - [`just`](https://github.com/casey/just) for the task runner.
-- [Nushell `0.112.2`](https://www.nushell.sh/) (used by several `just` recipes).
+- [Nushell `0.112.2`](https://www.nushell.sh/) (used by several `just` recipes, by `scripts/check-workflow-shell.nu`, and by every `run:` step in `.forgejo/workflows/`).
 - No host-side Rust toolchain. All cargo work happens inside the dev container.
 - A copy of `.env.example` -> `.env` if you're going to run the SSO overlay (`just dev-sso`). The plain `just dev` recipe does not require a real mokosh-server.
 
