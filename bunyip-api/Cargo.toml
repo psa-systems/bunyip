@@ -113,7 +113,7 @@ dunite-image-upload = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a
 # DEV-526: bunyip-api consumes dunite-core directly for the Origin/Referer CSRF
 # guard (`dunite_core::middleware::OriginGuard`), wired in main.rs. Same rev as
 # the dunite-core graph in bunyip-domain/oci/oidc.
-dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "90a828f31836ffe2634e61577ba54e76a2f6d636" }
+dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
 # Still direct for the feedback-attachment path (BUNYIP-90), whose allowlist
 # admits non-images (text/plain) and so does not fit `ImagePolicy`. Folding that
 # surface into the shared crate is a separate decision, not a side effect of
