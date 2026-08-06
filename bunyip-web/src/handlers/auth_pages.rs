@@ -296,7 +296,7 @@ fn login_content(error: Option<&str>, redirect: &str) -> Markup {
             div class="space-y-2" {
                 div class="flex items-center justify-between" {
                     label for="password" class="text-sm font-medium leading-none" { "Password" }
-                    a href="/password-reset" class="text-sm text-primary hover:underline" { "Forgot password?" }
+                    a href="/password-reset" class="text-sm text-primary-text hover:underline" { "Forgot password?" }
                 }
                 input id="password" name="password" type="password" autocomplete="current-password"
                     class=(dashboard_input());
@@ -318,7 +318,7 @@ fn login_content(error: Option<&str>, redirect: &str) -> Markup {
         }
         p class="mt-6 text-center text-sm text-muted-foreground" {
             "Don't have an account? "
-            a href="/register" class="text-primary hover:underline" { "Sign up" }
+            a href="/register" class="text-primary-text hover:underline" { "Sign up" }
         }
     };
     auth_card_plain("Welcome back", "Sign in to your account to continue", body)
@@ -496,7 +496,7 @@ fn password_reentry_hint() -> Markup {
 fn register_card(errors: &RegisterErrors, email: &str, signup_token: &str) -> Markup {
     auth_card(
         "shield",
-        "bg-primary/10 text-primary",
+        "bg-primary/10 text-primary-text",
         "Create your account",
         "Get access to all tools for $3/month",
         html! {
@@ -548,7 +548,7 @@ fn register_card(errors: &RegisterErrors, email: &str, signup_token: &str) -> Ma
                 a href="/magic-link" class=(button_class("outline", "default", "w-full")) { "Sign up with Magic Link" }
             }
             p class="mt-6 text-center text-sm text-muted-foreground" {
-                "Already have an account? " a href="/login" class="text-primary hover:underline" { "Sign in" }
+                "Already have an account? " a href="/login" class="text-primary-text hover:underline" { "Sign in" }
             }
             p class="mt-4 text-center text-xs text-muted-foreground" {
                 "By creating an account, you agree to our "
@@ -672,7 +672,7 @@ fn magic_form(error: Option<&str>, success: bool) -> Markup {
     }
     auth_card(
         "mail",
-        "bg-primary/10 text-primary",
+        "bg-primary/10 text-primary-text",
         "Sign in with Magic Link",
         "We'll email you a link to sign in - no password needed.",
         html! {
@@ -682,8 +682,8 @@ fn magic_form(error: Option<&str>, success: bool) -> Markup {
                 (submit_btn("Send Magic Link"))
             }
             p class="mt-6 text-center text-sm text-muted-foreground" {
-                a href="/login" class="text-primary hover:underline" { "Sign in with password" } " · "
-                a href="/register" class="text-primary hover:underline" { "Sign up" }
+                a href="/login" class="text-primary-text hover:underline" { "Sign in with password" } " · "
+                a href="/register" class="text-primary-text hover:underline" { "Sign up" }
             }
         },
     )
@@ -755,7 +755,7 @@ fn reset_form(error: Option<&str>, success: bool) -> Markup {
     }
     auth_card(
         "key",
-        "bg-primary/10 text-primary",
+        "bg-primary/10 text-primary-text",
         "Reset your password",
         "Enter your email and we'll send you a reset link.",
         html! {
@@ -765,7 +765,7 @@ fn reset_form(error: Option<&str>, success: bool) -> Markup {
                 (submit_btn("Send Reset Link"))
             }
             p class="mt-6 text-center text-sm text-muted-foreground" {
-                "Remember your password? " a href="/login" class="text-primary hover:underline" { "Sign in" }
+                "Remember your password? " a href="/login" class="text-primary-text hover:underline" { "Sign in" }
             }
         },
     )
@@ -807,7 +807,7 @@ pub struct ResetConfirmForm {
 fn reset_confirm_card(token: &str, error: Option<&str>) -> Markup {
     auth_card(
         "key",
-        "bg-primary/10 text-primary",
+        "bg-primary/10 text-primary-text",
         "Set new password",
         "Choose a strong password for your account.",
         html! {
@@ -906,7 +906,7 @@ fn twofa_card(error: Option<&str>, redirect: Option<&str>) -> Markup {
     let redirect = redirect.unwrap_or_default();
     auth_card(
         "shield",
-        "bg-primary/10 text-primary",
+        "bg-primary/10 text-primary-text",
         "Two-Factor Authentication",
         "Enter the 6-digit code from your authenticator app",
         html! {
@@ -948,7 +948,7 @@ pub async fn twofa_verify_get(
     if cookie_value(&headers, "bunyip_2fa").is_none() {
         let card = auth_card(
             "shield",
-            "bg-primary/10 text-primary",
+            "bg-primary/10 text-primary-text",
             "No pending verification",
             "Please log in first.",
             html! {
@@ -1007,7 +1007,7 @@ pub struct InviteForm {
 fn invite_password_card(token: &str, email: &str, error: Option<&str>) -> Markup {
     auth_card(
         "shield",
-        "bg-primary/10 text-primary",
+        "bg-primary/10 text-primary-text",
         "Create your account",
         &format!("Set a password for {email} to complete your account setup."),
         html! {

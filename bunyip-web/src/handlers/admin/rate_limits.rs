@@ -153,7 +153,7 @@ pub(super) fn rate_limit_config_card(
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
             div class="flex flex-col space-y-1.5 p-6" {
-                div class="flex items-center gap-3" { (icon("sliders-horizontal", "h-5 w-5 text-primary")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Limit Configuration" } }
+                div class="flex items-center gap-3" { (icon("sliders-horizontal", "h-5 w-5 text-primary-text")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Limit Configuration" } }
                 p class="text-sm text-muted-foreground" {
                     @if editable {
                         "The cap and window enforced for each action. A saved value takes effect on the next request; Revert restores the built-in default."
@@ -203,7 +203,7 @@ pub async fn rate_limits(
             div { h1 class="text-3xl font-bold" { "Rate Limits" } p class="mt-2 text-muted-foreground" { "Entities currently throttled by a rate limit. Resetting a throttle lets the affected user or IP act again immediately." } }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" {
-                    div class="flex items-center gap-3" { (icon("gauge", "h-5 w-5 text-primary")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Active Throttles" } }
+                    div class="flex items-center gap-3" { (icon("gauge", "h-5 w-5 text-primary-text")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Active Throttles" } }
                     @if reachable { p class="text-sm text-muted-foreground" { (total) " active." } }
                 }
                 div class="p-6 pt-0" {

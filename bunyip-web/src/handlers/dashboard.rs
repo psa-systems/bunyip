@@ -670,7 +670,7 @@ fn download_only_card(g: &AppDownloadGroup, is_member: bool) -> Markup {
 /// Membership-gate link shown in place of download/pull actions.
 fn upgrade_link() -> Markup {
     html! {
-        a href="/membership" class="text-sm text-primary underline" { "Upgrade to access" }
+        a href="/membership" class="text-sm text-primary-text underline" { "Upgrade to access" }
     }
 }
 
@@ -800,7 +800,7 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
                     div class="p-6 pt-8 pb-8 text-center space-y-6" {
                         div class="flex justify-center" {
                             div class="rounded-full bg-gradient-to-br from-primary/20 to-primary/5 p-4" {
-                                (icon("loader", "h-12 w-12 text-primary animate-spin"))
+                                (icon("loader", "h-12 w-12 text-primary-text animate-spin"))
                             }
                         }
                         div class="space-y-2" {
@@ -839,7 +839,7 @@ pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap)
         div class="flex min-h-[60vh] items-center justify-center px-4" {
             div class="rounded-lg border bg-card text-card-foreground shadow-sm w-full max-w-md" {
                 div class="flex flex-col space-y-1.5 p-6 text-center" {
-                    div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10" { (icon("credit-card", "h-8 w-8 text-primary")) }
+                    div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10" { (icon("credit-card", "h-8 w-8 text-primary-text")) }
                     h3 class="text-2xl font-semibold leading-none tracking-tight" { "Membership Required" }
                     p class="text-sm text-muted-foreground" { "You need an active membership to access this content." }
                 }
@@ -963,7 +963,7 @@ pub async fn membership(
             @if !lifetime {
                 @if let Some(days) = user.trial_ends_at.as_deref().and_then(days_until) {
                     div class="rounded-lg border border-primary/40 bg-primary/5 p-4 text-sm flex items-center gap-2" {
-                        (icon("credit-card", "h-4 w-4 text-primary"))
+                        (icon("credit-card", "h-4 w-4 text-primary-text"))
                         span { b { (tier_name(&tier)) " trial" } " - " (days) " day" @if days != 1 { "s" } " remaining." }
                     }
                 }

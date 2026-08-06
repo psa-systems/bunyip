@@ -287,7 +287,7 @@ fn filter_dropdown(prefix: &str, current: &str, options: &[(String, String, bool
                 @for (href, label, selected) in options {
                     a href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
                       class={ "flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground transition-colors " (if *selected { "font-medium text-foreground" } else { "text-muted-foreground" }) } {
-                        span class="inline-flex w-4 shrink-0" { @if *selected { (icon("check", "h-4 w-4 text-primary")) } }
+                        span class="inline-flex w-4 shrink-0" { @if *selected { (icon("check", "h-4 w-4 text-primary-text")) } }
                         (label)
                     }
                 }
@@ -460,7 +460,7 @@ fn filter_chips(uq: &UsersQ) -> Markup {
             @if !chips.is_empty() {
                 @let href = cleared.href();
                 a href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
-                  class="text-xs font-medium text-primary hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" { "Clear all" }
+                  class="text-xs font-medium text-primary-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" { "Clear all" }
             }
         }
     }
@@ -1025,7 +1025,7 @@ pub async fn user_detail(
                 html! {
                     div class="rounded-lg border bg-card text-card-foreground shadow-sm p-6" {
                         p { "Could not load user " (id) "." }
-                        p class="mt-2" { a href="/admin/users" class="text-primary hover:underline" { "Back to users" } }
+                        p class="mt-2" { a href="/admin/users" class="text-primary-text hover:underline" { "Back to users" } }
                     }
                 },
             )

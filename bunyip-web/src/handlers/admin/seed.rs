@@ -57,7 +57,7 @@ pub async fn seed_data(
             @if let Some(e) = &q.error { (error_box(e)) }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" {
-                    div class="flex items-center gap-3" { (icon("layers", "h-5 w-5 text-primary")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Set up this environment" } }
+                    div class="flex items-center gap-3" { (icon("layers", "h-5 w-5 text-primary-text")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Set up this environment" } }
                 }
                 div class="p-6 pt-0 space-y-4" {
                     p class="text-sm text-muted-foreground" { "Start empty and add your own data, or load a starter template below. Loading is idempotent and scoped to the reserved demo domain, so it only ever adds or refreshes demo rows." }
