@@ -698,6 +698,7 @@ dependencies = [
  "dotenvy",
  "dunite-core",
  "dunite-image-upload",
+ "dunite-update-check",
  "futures-util",
  "imagesize",
  "infer 0.16.0",
@@ -1565,6 +1566,17 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dunite-update-check"
+version = "0.1.0"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=1f536a2fa32b4db3df95945c444ee3ad7530fc57#1f536a2fa32b4db3df95945c444ee3ad7530fc57"
+dependencies = [
+ "chrono",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

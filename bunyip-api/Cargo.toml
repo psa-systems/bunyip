@@ -114,6 +114,9 @@ dunite-image-upload = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a
 # guard (`dunite_core::middleware::OriginGuard`), wired in main.rs. Same rev as
 # the dunite-core graph in bunyip-domain/oci/oidc.
 dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
+# DEV-530: the self-hosted update checker (polls Forgejo releases/latest, semver
+# compare, TTL cache), extracted from version.rs. Leaf crate, pins independently.
+dunite-update-check = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "1f536a2fa32b4db3df95945c444ee3ad7530fc57" }
 # Still direct for the feedback-attachment path (BUNYIP-90), whose allowlist
 # admits non-images (text/plain) and so does not fit `ImagePolicy`. Folding that
 # surface into the shared crate is a separate decision, not a side effect of
