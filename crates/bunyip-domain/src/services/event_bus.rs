@@ -2,7 +2,7 @@
 //!
 //! The bus is the server-side half of bunyip-web's "no hard refresh anywhere"
 //! UX. When an admin grants lifetime to a user, when the user edits their
-//! profile, when a Stripe webhook flips subscription_status - any mutation
+//! profile, when a Stripe webhook flips membership_status - any mutation
 //! that affects the user's open SPA tab - the mutation handler `publish()`s
 //! a typed event. A long-lived `GET /v1/events` Server-Sent Events handler
 //! reads from this bus, fans the event out to every connected tab of the
@@ -49,7 +49,7 @@ const BROADCAST_CAPACITY: usize = 100;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BunyipEvent {
     /// The user's JWT-feeding claims changed (role, lifetime_member,
-    /// subscription_status, etc.). SPA reaction: call /v1/auth/refresh, then
+    /// membership_status, etc.). SPA reaction: call /v1/auth/refresh, then
     /// /v1/auth/me, then update the in-memory CurrentUser signal. The
     /// downstream page render reads CurrentUser, so per-app gates
     /// (dashboard tile state) re-evaluate without a hard refresh.

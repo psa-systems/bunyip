@@ -279,7 +279,7 @@ pub async fn set_user_tier(
 // The grant / revoke override actions below stay - they remain reachable via
 // `/admin/memberships/{id}/grant|revoke`, which now redirect to the user detail.
 
-/// Grant an admin-override membership (free tier, `subscription_override_by` set
+/// Grant an admin-override membership (free tier, `membership_override_by` set
 /// to the acting admin). Wraps POST /admin/memberships/grant. BUNYIP-118.
 pub async fn grant_membership(
     api: &Api,
@@ -297,7 +297,7 @@ pub async fn grant_membership(
 }
 
 /// Revoke an admin-override membership: cancels status, resets tier to standard
-/// and clears `subscription_override_by`. Wraps POST /admin/memberships/revoke.
+/// and clears `membership_override_by`. Wraps POST /admin/memberships/revoke.
 /// BUNYIP-118.
 pub async fn revoke_membership(
     api: &Api,

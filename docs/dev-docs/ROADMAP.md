@@ -25,7 +25,7 @@ Legend: `[x]` done · `[~]` done but condensed (see notes) · `[ ]` not started.
 ## 1. Foundation
 
 - [x] Native Axum crate (`Cargo.toml`): axum, tokio, tower-http (static + gzip), maud, reqwest (rustls), qrcode, tracing
-- [x] `src/config.rs` - env config (`BUNYIP_BIND_ADDR`, `BUNYIP_API_URL`, `BUNYIP_APP_DOMAIN`, `BUNYIP_SHOW_BUSINESS_PRICING`)
+- [x] `src/config.rs` - env config (`BUNYIP_BIND_ADDR`, `BUNYIP_API_URL`, `BUNYIP_APP_DOMAIN`)
 - [x] `src/api/` - BFF client (`mod.rs` cookie-forward + Set-Cookie capture + envelope), `auth.rs`, `calls.rs`, `admin.rs`, `types.rs`
 - [x] `src/auth.rs` - `authenticate()` (me -> refresh-on-401 -> me, cookie merge + relay), cookie helpers
 - [x] `src/web.rs` - `AppState`, response builders (`html`, `redirect`, `*_cookies`, `hx_redirect`)

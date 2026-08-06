@@ -6,7 +6,7 @@ use sqlx::{PgPool, QueryBuilder};
 use uuid::Uuid;
 
 use crate::errors::AppError;
-use crate::models::{normalize_email, CreateUser, MembershipStatus, SubscriptionTier, User};
+use crate::models::{normalize_email, CreateUser, MembershipStatus, MembershipTier, User};
 
 pub struct UserRepository;
 
@@ -256,7 +256,7 @@ impl UserRepository {
         sqlx::query(
             r#"
             UPDATE users
-            SET subscription_status = $1, updated_at = NOW()
+            SET membership_status = $1, updated_at = NOW()
             WHERE id = $2
             "#,
         )
@@ -290,12 +290,12 @@ impl UserRepository {
         Ok(())
     }
 
-    /// Activate membership (set subscription_status to 'active')
+    /// Activate membership (set membership_status to 'active')
     pub async fn activate_membership(pool: &PgPool, user_id: Uuid) -> Result<User, AppError> {
         let user = sqlx::query_as::<_, User>(
             r#"
             UPDATE users
-            SET subscription_status = 'active',
+            SET membership_status = 'active',
                 updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL
             RETURNING *
@@ -407,17 +407,17 @@ impl UserRepository {
 
     /// Reset subscription tier to standard when a membership is revoked/canceled.
     /// This frees the lifetime or early_adopter slot so it can be assigned to the next user.
-    pub async fn reset_subscription_tier<'e, E>(executor: E, user_id: Uuid) -> Result<(), AppError>
+    pub async fn reset_membership_tier<'e, E>(executor: E, user_id: Uuid) -> Result<(), AppError>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
     {
         sqlx::query(
             r#"
             UPDATE users
-            SET subscription_tier = 'standard',
+            SET membership_tier = 'standard',
                 lifetime_member = FALSE,
                 trial_ends_at = NULL,
-                subscription_override_by = NULL,
+                membership_override_by = NULL,
                 updated_at = NOW()
             WHERE id = $1
             "#,
@@ -430,20 +430,20 @@ impl UserRepository {
     }
 
     /// Set subscription tier from a Stripe subscription event.
-    /// Clears trial_ends_at (user is now a paid subscriber) but does not touch subscription_status.
-    pub async fn upgrade_subscription_tier<'e, E>(
+    /// Clears trial_ends_at (user is now a paid subscriber) but does not touch membership_status.
+    pub async fn upgrade_membership_tier<'e, E>(
         executor: E,
         user_id: Uuid,
-        tier: &SubscriptionTier,
+        tier: &MembershipTier,
     ) -> Result<(), AppError>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
     {
-        let lifetime_member = matches!(tier, SubscriptionTier::Lifetime | SubscriptionTier::Free);
+        let lifetime_member = matches!(tier, MembershipTier::Lifetime | MembershipTier::Free);
         sqlx::query(
             r#"
             UPDATE users
-            SET subscription_tier = $1,
+            SET membership_tier = $1,
                 lifetime_member   = $2,
                 trial_ends_at     = NULL,
                 updated_at        = NOW()
@@ -678,7 +678,7 @@ impl UserRepository {
     /// STILL OUT OF SCOPE: the admin actor `*_by` columns
     /// (`oidc_clients.created_by`, `admin_invites.invited_by`,
     /// `stripe_config.updated_by`, `tier_config.updated_by`,
-    /// `feedback.responded_by`, `subscription_override_by`,
+    /// `feedback.responded_by`, `membership_override_by`,
     /// `oauth_client_user_tenants.created_by`, `oidc_sessions_and_codes`
     /// `granted_by`) are populated ONLY by admin actions a subscriber disposable
     /// cannot perform, so nothing clears them. If an admin-disposable spec ever
@@ -739,7 +739,7 @@ impl UserRepository {
     /// lifetime, price-lock, and trial end. This is NOT a production membership
     /// path - real changes go through the dedicated setters
     /// ([`update_membership_status`](Self::update_membership_status),
-    /// [`assign_subscription_tier`](Self::assign_subscription_tier),
+    /// [`assign_membership_tier`](Self::assign_membership_tier),
     /// [`grant_lifetime_membership`](Self::grant_lifetime_membership),
     /// [`lock_price`](Self::lock_price)); this single-statement shortcut lets a
     /// seed template express an arbitrary membership snapshot for demo data.
@@ -747,7 +747,7 @@ impl UserRepository {
         pool: &PgPool,
         user_id: Uuid,
         status: MembershipStatus,
-        tier: &SubscriptionTier,
+        tier: &MembershipTier,
         lifetime: bool,
         price_locked: bool,
         locked_price_amount: Option<i32>,
@@ -756,8 +756,8 @@ impl UserRepository {
         sqlx::query(
             r#"
             UPDATE users SET
-                subscription_status = $2,
-                subscription_tier   = $3,
+                membership_status = $2,
+                membership_tier   = $3,
                 lifetime_member     = $4,
                 price_locked        = $5,
                 locked_price_amount = $6,
@@ -926,7 +926,7 @@ impl UserRepository {
         status_filter: Option<MembershipStatus>,
         active: Option<bool>,
         // BUNYIP-410: consolidated users+memberships admin list filters. `tier`
-        // matches `COALESCE(subscription_tier,'standard')` (rows may predate the
+        // matches `COALESCE(membership_tier,'standard')` (rows may predate the
         // tier column); `verified` filters on `email_verified`. Both `None` =
         // unfiltered, preserving the pre-410 behaviour.
         tier: Option<&str>,
@@ -965,19 +965,19 @@ impl UserRepository {
 
         if let Some(status) = &status_filter {
             query
-                .push(" AND subscription_status = ")
+                .push(" AND membership_status = ")
                 .push_bind(status.as_str());
             count_query
-                .push(" AND subscription_status = ")
+                .push(" AND membership_status = ")
                 .push_bind(status.as_str());
         }
 
         if let Some(tier) = tier {
             query
-                .push(" AND COALESCE(subscription_tier, 'standard') = ")
+                .push(" AND COALESCE(membership_tier, 'standard') = ")
                 .push_bind(tier);
             count_query
-                .push(" AND COALESCE(subscription_tier, 'standard') = ")
+                .push(" AND COALESCE(membership_tier, 'standard') = ")
                 .push_bind(tier);
         }
 
@@ -994,7 +994,7 @@ impl UserRepository {
         // date. `id` is the stable tiebreak.
         let sort_expr = match sort_by {
             Some("email") => "LOWER(email)",
-            Some("tier") => "COALESCE(subscription_tier, 'standard')",
+            Some("tier") => "COALESCE(membership_tier, 'standard')",
             Some("verified") => "email_verified",
             Some("joined") => "created_at",
             _ => "created_at",
@@ -1017,10 +1017,10 @@ impl UserRepository {
     /// Must be called inside a transaction that holds a `pg_advisory_xact_lock`
     /// to prevent concurrent verifications from racing on the same slot count.
     /// Returns the tier that was assigned.
-    pub async fn assign_subscription_tier<'e, E>(
+    pub async fn assign_membership_tier<'e, E>(
         executor: E,
         user_id: Uuid,
-        tier: &SubscriptionTier,
+        tier: &MembershipTier,
         early_adopter_trial_days: i64,
         standard_trial_days: i64,
     ) -> Result<(), AppError>
@@ -1032,15 +1032,15 @@ impl UserRepository {
         let trial_ends_at = tier
             .trial_days(early_adopter_trial_days, standard_trial_days)
             .map(|days| chrono::Utc::now() + chrono::Duration::days(days));
-        let lifetime_member = matches!(tier, SubscriptionTier::Lifetime | SubscriptionTier::Free);
+        let lifetime_member = matches!(tier, MembershipTier::Lifetime | MembershipTier::Free);
 
         sqlx::query(
             r#"
             UPDATE users
-            SET subscription_tier = $1,
+            SET membership_tier = $1,
                 lifetime_member = $2,
                 trial_ends_at = $3,
-                subscription_status = 'active',
+                membership_status = 'active',
                 updated_at = NOW()
             WHERE id = $4
             "#,
@@ -1056,19 +1056,19 @@ impl UserRepository {
     }
 
     /// BUNYIP-431: move a user to an arbitrary tier as an admin override, in a
-    /// single UPDATE. Tier slot usage is a live COUNT over `subscription_tier`
+    /// single UPDATE. Tier slot usage is a live COUNT over `membership_tier`
     /// (see [`Self::count_tier_assignments`]), so this one statement debits the
     /// source tier and credits the destination atomically - there is no separate
     /// counter to keep in sync. Marks the row as an admin override
-    /// (`subscription_override_by`, so it counts toward caps and shows in Tier
+    /// (`membership_override_by`, so it counts toward caps and shows in Tier
     /// Settings per BUNYIP-96), sets `lifetime_member` for lifetime/free, and
     /// computes the trial window for early_adopter/standard from the configured
     /// trial days. The caller performs any Stripe-side work (the $0 invoice
     /// subscription when moving to lifetime) and session revocation.
-    pub async fn admin_set_subscription_tier(
+    pub async fn admin_set_membership_tier(
         pool: &PgPool,
         user_id: Uuid,
-        tier: &SubscriptionTier,
+        tier: &MembershipTier,
         granted_by: Uuid,
         early_adopter_trial_days: i64,
         standard_trial_days: i64,
@@ -1076,16 +1076,16 @@ impl UserRepository {
         let trial_ends_at = tier
             .trial_days(early_adopter_trial_days, standard_trial_days)
             .map(|days| Utc::now() + chrono::Duration::days(days));
-        let lifetime_member = matches!(tier, SubscriptionTier::Lifetime | SubscriptionTier::Free);
+        let lifetime_member = matches!(tier, MembershipTier::Lifetime | MembershipTier::Free);
 
         let user = sqlx::query_as::<_, User>(
             r#"
             UPDATE users
-            SET subscription_tier = $1,
+            SET membership_tier = $1,
                 lifetime_member = $2,
                 trial_ends_at = $3,
-                subscription_override_by = $4,
-                subscription_status = 'active',
+                membership_override_by = $4,
+                membership_status = 'active',
                 updated_at = NOW()
             WHERE id = $5 AND deleted_at IS NULL
             RETURNING *
@@ -1110,7 +1110,7 @@ impl UserRepository {
     /// not total verified users. This ensures tier slots are filled correctly even
     /// if users existed before the tier system was introduced.
     ///
-    /// Admin-granted lifetimes (`subscription_override_by IS NOT NULL`) are counted
+    /// Admin-granted lifetimes (`membership_override_by IS NOT NULL`) are counted
     /// the same as organically-claimed ones: they occupy a real lifetime slot, so they
     /// must count against the configured cap and be reflected in the admin slot-usage
     /// display. Excluding them let the count read 0 while active lifetimes existed,
@@ -1137,8 +1137,8 @@ impl UserRepository {
     /// dropped without needing a live database.
     const COUNT_TIER_ASSIGNMENTS_SQL: &'static str = r#"
             SELECT
-                COUNT(*) FILTER (WHERE subscription_tier = 'lifetime') AS lifetime_count,
-                COUNT(*) FILTER (WHERE subscription_tier = 'early_adopter') AS early_adopter_count
+                COUNT(*) FILTER (WHERE membership_tier = 'lifetime') AS lifetime_count,
+                COUNT(*) FILTER (WHERE membership_tier = 'early_adopter') AS early_adopter_count
             FROM users
             WHERE deleted_at IS NULL
             "#;
@@ -1152,11 +1152,11 @@ impl UserRepository {
         let user = sqlx::query_as::<_, User>(
             r#"
             UPDATE users
-            SET subscription_tier = 'lifetime',
+            SET membership_tier = 'lifetime',
                 lifetime_member = TRUE,
                 trial_ends_at = NULL,
-                subscription_override_by = $2,
-                subscription_status = 'active',
+                membership_override_by = $2,
+                membership_status = 'active',
                 updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL
             RETURNING *
@@ -1182,11 +1182,11 @@ impl UserRepository {
         let user = sqlx::query_as::<_, User>(
             r#"
             UPDATE users
-            SET subscription_tier = 'standard',
+            SET membership_tier = 'standard',
                 lifetime_member = FALSE,
                 trial_ends_at = NULL,
-                subscription_override_by = NULL,
-                subscription_status = 'none',
+                membership_override_by = NULL,
+                membership_status = 'none',
                 updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL AND lifetime_member = TRUE
             RETURNING *
@@ -1209,11 +1209,11 @@ impl UserRepository {
         let user = sqlx::query_as::<_, User>(
             r#"
             UPDATE users
-            SET subscription_tier = 'free',
+            SET membership_tier = 'free',
                 lifetime_member = TRUE,
                 trial_ends_at = NULL,
-                subscription_override_by = $2,
-                subscription_status = 'active',
+                membership_override_by = $2,
+                membership_status = 'active',
                 updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL
             RETURNING *
@@ -1258,7 +1258,7 @@ impl UserRepository {
         let users = sqlx::query_as::<_, User>(
             r#"
             SELECT * FROM users
-            WHERE subscription_status = 'grace_period'
+            WHERE membership_status = 'grace_period'
             AND grace_period_end IS NOT NULL
             AND deleted_at IS NULL
             ORDER BY grace_period_end ASC

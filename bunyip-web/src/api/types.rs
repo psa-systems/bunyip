@@ -29,7 +29,7 @@ pub enum MembershipStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SubscriptionTier {
+pub enum MembershipTier {
     Lifetime,
     Free,
     EarlyAdopter,
@@ -75,7 +75,7 @@ pub struct User {
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
-    pub subscription_tier: SubscriptionTier,
+    pub membership_tier: MembershipTier,
     pub trial_ends_at: Option<String>,
     pub lifetime_member: bool,
     /// BUNYIP-139: optional profile fields surfaced for the Settings page
@@ -406,7 +406,7 @@ pub struct AdminUser {
     pub email_verified: bool,
     pub two_factor_enabled: bool,
     pub membership_status: MembershipStatus,
-    pub subscription_tier: SubscriptionTier,
+    pub membership_tier: MembershipTier,
     pub lifetime_member: bool,
     pub created_at: String,
     pub last_login_at: Option<String>,
@@ -950,7 +950,7 @@ mod tests {
             "membership_status": "none",
             "price_locked": false,
             "created_at": "2026-01-01T00:00:00Z",
-            "subscription_tier": "standard",
+            "membership_tier": "standard",
             "lifetime_member": false,
             "first_name": first_name,
             "avatar_updated_at": avatar_updated_at,

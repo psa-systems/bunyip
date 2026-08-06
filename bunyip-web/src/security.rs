@@ -128,7 +128,6 @@ mod tests {
             api_public_origin: "https://api.example.com".into(),
             oidc_issuer: "http://localhost:4401".into(),
             app_domain: String::new(),
-            show_business_pricing: false,
             community_url: String::new(),
             trusted_proxies: Vec::new(),
         }

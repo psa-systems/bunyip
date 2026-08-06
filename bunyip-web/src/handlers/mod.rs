@@ -271,7 +271,7 @@ fn topbar_title(title: &str) -> &str {
 #[cfg(test)]
 mod onboarding_gate_tests {
     use super::{names_present, onboarding_allowed};
-    use crate::api::types::{MembershipStatus, SubscriptionTier, User, UserRole};
+    use crate::api::types::{MembershipStatus, MembershipTier, User, UserRole};
 
     fn user(first: Option<&str>, last: Option<&str>) -> User {
         User {
@@ -286,7 +286,7 @@ mod onboarding_gate_tests {
             locked_price_amount: None,
             created_at: String::new(),
             updated_at: String::new(),
-            subscription_tier: SubscriptionTier::Free,
+            membership_tier: MembershipTier::Free,
             trial_ends_at: None,
             lifetime_member: false,
             first_name: first.map(str::to_string),

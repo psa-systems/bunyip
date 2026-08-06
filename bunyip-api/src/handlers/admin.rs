@@ -18,8 +18,8 @@ use crate::models::stripe::encrypt_secret;
 use crate::models::{
     AuditAction, CreateApplication, CreateApplicationGroup, CreateAuditLog,
     CreatePasswordResetToken, CreateRefreshToken, DeleteApplicationRequest, MembershipStatus,
-    RateLimitConfig, ReorderApplicationsRequest, SetApplicationGroupRequest, StripeConfigResponse,
-    SubscriptionTier, UpdateApplication, UpdateApplicationGroup, UserResponse,
+    MembershipTier, RateLimitConfig, ReorderApplicationsRequest, SetApplicationGroupRequest,
+    StripeConfigResponse, UpdateApplication, UpdateApplicationGroup, UserResponse,
 };
 use crate::repositories::{
     ApplicationGroupRepository, ApplicationRepository, AuditLogRepository, InviteRepository,
@@ -546,7 +546,7 @@ pub async fn grant_membership(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
-    // Grant free tier — sets lifetime_member=true and subscription_status='active'
+    // Grant free tier — sets lifetime_member=true and membership_status='active'
     let user =
         UserRepository::grant_free_membership(pool.get_ref(), body.user_id, admin.0.sub).await?;
 
@@ -584,7 +584,7 @@ pub async fn grant_membership(
     }
 
     // BUNYIP-144: `grant_free_membership` sets `lifetime_member=true` and
-    // `subscription_status=active`. Both are inputs to `has_member_access`
+    // `membership_status=active`. Both are inputs to `has_member_access`
     // (the dashboard's per-app gate), so existing tokens minted before the
     // grant carry stale claims. Force re-login so the next request mints
     // fresh tokens with the new state.
@@ -625,7 +625,7 @@ pub async fn revoke_membership(
     .await?;
 
     // Reset tier to standard so the slot opens back up for the next user
-    UserRepository::reset_subscription_tier(pool.get_ref(), body.user_id).await?;
+    UserRepository::reset_membership_tier(pool.get_ref(), body.user_id).await?;
 
     // Clear any grace period
     UserRepository::clear_grace_period(pool.get_ref(), body.user_id).await?;
@@ -670,12 +670,12 @@ pub struct ListMembershipsQuery {
 /// without a live database.
 const MEMBERS_BY_TIER_SQL: &str = r#"
             SELECT id AS user_id, email AS user_email, stripe_customer_id,
-                   subscription_status AS status,
-                   COALESCE(subscription_tier, 'standard') AS subscription_tier,
-                   subscription_override_by,
+                   membership_status AS status,
+                   COALESCE(membership_tier, 'standard') AS membership_tier,
+                   membership_override_by,
                    created_at
             FROM users
-            WHERE COALESCE(subscription_tier, 'standard') = $3 AND deleted_at IS NULL
+            WHERE COALESCE(membership_tier, 'standard') = $3 AND deleted_at IS NULL
             ORDER BY created_at ASC
             LIMIT $1 OFFSET $2
             "#;
@@ -705,7 +705,7 @@ pub async fn list_memberships(
             .await?;
 
         let total: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM users WHERE COALESCE(subscription_tier, 'standard') = $1 AND deleted_at IS NULL",
+            "SELECT COUNT(*) FROM users WHERE COALESCE(membership_tier, 'standard') = $1 AND deleted_at IS NULL",
         )
         .bind(tier)
         .fetch_one(pool.get_ref())
@@ -716,12 +716,12 @@ pub async fn list_memberships(
         let rows = sqlx::query_as::<_, crate::models::AdminMembershipResponse>(
             r#"
             SELECT id AS user_id, email AS user_email, stripe_customer_id,
-                   subscription_status AS status,
-                   COALESCE(subscription_tier, 'standard') AS subscription_tier,
-                   subscription_override_by,
+                   membership_status AS status,
+                   COALESCE(membership_tier, 'standard') AS membership_tier,
+                   membership_override_by,
                    created_at
             FROM users
-            WHERE subscription_status = $3 AND deleted_at IS NULL
+            WHERE membership_status = $3 AND deleted_at IS NULL
             ORDER BY created_at DESC
             LIMIT $1 OFFSET $2
             "#,
@@ -733,7 +733,7 @@ pub async fn list_memberships(
         .await?;
 
         let total: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM users WHERE subscription_status = $1 AND deleted_at IS NULL",
+            "SELECT COUNT(*) FROM users WHERE membership_status = $1 AND deleted_at IS NULL",
         )
         .bind(status)
         .fetch_one(pool.get_ref())
@@ -744,12 +744,12 @@ pub async fn list_memberships(
         let rows = sqlx::query_as::<_, crate::models::AdminMembershipResponse>(
             r#"
             SELECT id AS user_id, email AS user_email, stripe_customer_id,
-                   subscription_status AS status,
-                   COALESCE(subscription_tier, 'standard') AS subscription_tier,
-                   subscription_override_by,
+                   membership_status AS status,
+                   COALESCE(membership_tier, 'standard') AS membership_tier,
+                   membership_override_by,
                    created_at
             FROM users
-            WHERE subscription_status != 'none' AND deleted_at IS NULL
+            WHERE membership_status != 'none' AND deleted_at IS NULL
             ORDER BY created_at DESC
             LIMIT $1 OFFSET $2
             "#,
@@ -760,7 +760,7 @@ pub async fn list_memberships(
         .await?;
 
         let total: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM users WHERE subscription_status != 'none' AND deleted_at IS NULL",
+            "SELECT COUNT(*) FROM users WHERE membership_status != 'none' AND deleted_at IS NULL",
         )
         .fetch_one(pool.get_ref())
         .await?;
@@ -1493,19 +1493,19 @@ async fn collect_dashboard_stats(pool: &PgPool) -> Result<DashboardStats, AppErr
         .await?;
 
     let active_members: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM users WHERE subscription_status = 'active' AND deleted_at IS NULL",
+        "SELECT COUNT(*) FROM users WHERE membership_status = 'active' AND deleted_at IS NULL",
     )
     .fetch_one(pool)
     .await?;
 
     let past_due_members: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM users WHERE subscription_status = 'past_due' AND deleted_at IS NULL",
+        "SELECT COUNT(*) FROM users WHERE membership_status = 'past_due' AND deleted_at IS NULL",
     )
     .fetch_one(pool)
     .await?;
 
     let grace_period_members: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM users WHERE subscription_status = 'grace_period' AND deleted_at IS NULL",
+        "SELECT COUNT(*) FROM users WHERE membership_status = 'grace_period' AND deleted_at IS NULL",
     )
     .fetch_one(pool)
     .await?;
@@ -2312,15 +2312,15 @@ pub struct SetUserTierRequest {
     pub totp_code: String,
 }
 
-/// Strictly parse a destination tier. Unlike `SubscriptionTier::from(&str)`
+/// Strictly parse a destination tier. Unlike `MembershipTier::from(&str)`
 /// (which defaults anything unknown to `Standard`), an unrecognised value is a
 /// client error here so a typo can never silently downgrade a member.
-fn parse_admin_tier(raw: &str) -> Result<SubscriptionTier, AppError> {
+fn parse_admin_tier(raw: &str) -> Result<MembershipTier, AppError> {
     match raw.trim() {
-        "lifetime" => Ok(SubscriptionTier::Lifetime),
-        "free" => Ok(SubscriptionTier::Free),
-        "early_adopter" => Ok(SubscriptionTier::EarlyAdopter),
-        "standard" => Ok(SubscriptionTier::Standard),
+        "lifetime" => Ok(MembershipTier::Lifetime),
+        "free" => Ok(MembershipTier::Free),
+        "early_adopter" => Ok(MembershipTier::EarlyAdopter),
+        "standard" => Ok(MembershipTier::Standard),
         _ => Err(AppError::validation("tier", "Unknown subscription tier")),
     }
 }
@@ -2340,23 +2340,23 @@ struct TierMovePlan {
 
 fn plan_admin_tier_move(
     totp_valid: bool,
-    from: &SubscriptionTier,
-    to: &SubscriptionTier,
+    from: &MembershipTier,
+    to: &MembershipTier,
 ) -> Result<TierMovePlan, AppError> {
     if !totp_valid {
         return Err(AppError::validation("totp_code", "Invalid 2FA code"));
     }
     Ok(TierMovePlan {
-        create_lifetime_invoice: matches!(to, SubscriptionTier::Lifetime)
-            && !matches!(from, SubscriptionTier::Lifetime),
+        create_lifetime_invoice: matches!(to, MembershipTier::Lifetime)
+            && !matches!(from, MembershipTier::Lifetime),
         revoke_sessions: from != to,
     })
 }
 
 /// POST /v1/admin/users/{user_id}/tier (BUNYIP-431)
 /// Move any member to any configured tier, gated on the acting admin's 2FA code.
-/// Slot usage is a live COUNT over `subscription_tier`, so the single UPDATE in
-/// `admin_set_subscription_tier` debits the source tier and credits the
+/// Slot usage is a live COUNT over `membership_tier`, so the single UPDATE in
+/// `admin_set_membership_tier` debits the source tier and credits the
 /// destination; no separate counter is touched.
 pub async fn set_user_tier(
     req: HttpRequest,
@@ -2378,7 +2378,7 @@ pub async fn set_user_tier(
     let before = UserRepository::find_by_id(&pool, user_id)
         .await?
         .ok_or_else(|| AppError::not_found("User"))?;
-    let from_tier = SubscriptionTier::from(before.subscription_tier.as_str());
+    let from_tier = MembershipTier::from(before.membership_tier.as_str());
 
     // 2FA gate. A missing/invalid code yields Err here, BEFORE any mutation, so
     // a cancelled or wrong code leaves the tier and every slot count unchanged.
@@ -2392,7 +2392,7 @@ pub async fn set_user_tier(
     let tier_config =
         crate::config::TierConfig::from_db_row(&TierConfigRepository::get(&pool).await?);
 
-    let user = UserRepository::admin_set_subscription_tier(
+    let user = UserRepository::admin_set_membership_tier(
         &pool,
         user_id,
         &to_tier,
@@ -3510,16 +3510,16 @@ mod tests {
     fn parse_admin_tier_accepts_every_tier_and_rejects_unknown() {
         assert_eq!(
             parse_admin_tier("lifetime").unwrap(),
-            SubscriptionTier::Lifetime
+            MembershipTier::Lifetime
         );
-        assert_eq!(parse_admin_tier("free").unwrap(), SubscriptionTier::Free);
+        assert_eq!(parse_admin_tier("free").unwrap(), MembershipTier::Free);
         assert_eq!(
             parse_admin_tier("early_adopter").unwrap(),
-            SubscriptionTier::EarlyAdopter
+            MembershipTier::EarlyAdopter
         );
         assert_eq!(
             parse_admin_tier(" standard ").unwrap(),
-            SubscriptionTier::Standard
+            MembershipTier::Standard
         );
         assert!(
             parse_admin_tier("gold").is_err(),
@@ -3532,28 +3532,20 @@ mod tests {
     fn cancelled_2fa_plans_no_change() {
         // AC6: a failed 2FA code yields Err before any mutation, so the tier and
         // every slot count stay put.
-        assert!(plan_admin_tier_move(
-            false,
-            &SubscriptionTier::Standard,
-            &SubscriptionTier::Lifetime
-        )
-        .is_err());
-        assert!(plan_admin_tier_move(
-            false,
-            &SubscriptionTier::Lifetime,
-            &SubscriptionTier::Standard
-        )
-        .is_err());
+        assert!(
+            plan_admin_tier_move(false, &MembershipTier::Standard, &MembershipTier::Lifetime)
+                .is_err()
+        );
+        assert!(
+            plan_admin_tier_move(false, &MembershipTier::Lifetime, &MembershipTier::Standard)
+                .is_err()
+        );
     }
 
     #[test]
     fn upgrade_to_lifetime_mints_invoice_and_revokes_sessions() {
-        let plan = plan_admin_tier_move(
-            true,
-            &SubscriptionTier::Standard,
-            &SubscriptionTier::Lifetime,
-        )
-        .unwrap();
+        let plan = plan_admin_tier_move(true, &MembershipTier::Standard, &MembershipTier::Lifetime)
+            .unwrap();
         assert_eq!(
             plan,
             TierMovePlan {
@@ -3567,8 +3559,8 @@ mod tests {
     fn upgrade_between_non_lifetime_tiers_revokes_sessions_without_invoice() {
         let plan = plan_admin_tier_move(
             true,
-            &SubscriptionTier::Standard,
-            &SubscriptionTier::EarlyAdopter,
+            &MembershipTier::Standard,
+            &MembershipTier::EarlyAdopter,
         )
         .unwrap();
         assert_eq!(
@@ -3582,12 +3574,8 @@ mod tests {
 
     #[test]
     fn downgrade_from_lifetime_revokes_sessions_without_new_invoice() {
-        let plan = plan_admin_tier_move(
-            true,
-            &SubscriptionTier::Lifetime,
-            &SubscriptionTier::Standard,
-        )
-        .unwrap();
+        let plan = plan_admin_tier_move(true, &MembershipTier::Lifetime, &MembershipTier::Standard)
+            .unwrap();
         assert_eq!(
             plan,
             TierMovePlan {
@@ -3601,8 +3589,8 @@ mod tests {
     fn same_tier_move_touches_no_sessions_and_no_invoice() {
         let plan = plan_admin_tier_move(
             true,
-            &SubscriptionTier::EarlyAdopter,
-            &SubscriptionTier::EarlyAdopter,
+            &MembershipTier::EarlyAdopter,
+            &MembershipTier::EarlyAdopter,
         )
         .unwrap();
         assert_eq!(
@@ -3621,7 +3609,7 @@ mod tests {
         // early-adopter slot occupancy reads in the order slots were claimed.
         let sql = MEMBERS_BY_TIER_SQL;
         assert!(
-            sql.contains("subscription_tier, 'standard') = $3"),
+            sql.contains("membership_tier, 'standard') = $3"),
             "must filter on the (coalesced) tier bind"
         );
         assert!(

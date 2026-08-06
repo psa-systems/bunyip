@@ -20,10 +20,10 @@ struct Feature {
 
 const FEATURES: [Feature; 6] = [
     Feature { icon: "fa-solid fa-key", title: "Single sign-on", desc: "Bunyip is the OIDC entry point. Your team logs in once and lands in Mokosh." },
-    Feature { icon: "fa-solid fa-credit-card", title: "Stripe-ready billing", desc: "Multi-tier subscriptions, trials, dunning, and an admin override for the cases that don't fit." },
+    Feature { icon: "fa-solid fa-credit-card", title: "Stripe-ready billing", desc: "Multi-tier memberships, trials, dunning, and an admin override for the cases that don't fit." },
     Feature { icon: "fa-solid fa-users", title: "Orgs and members", desc: "Invite teammates, manage roles, switch between orgs without leaving the dashboard." },
     Feature { icon: "fa-solid fa-shield", title: "MFA, magic links, trusted devices", desc: "All the SSO niceties out of the box - TOTP, recovery codes, password reset, magic links." },
-    Feature { icon: "fa-solid fa-chart-line", title: "Admin console", desc: "Audit logs, rate limits, tier config, manual subscription overrides. The bits you only need but really need." },
+    Feature { icon: "fa-solid fa-chart-line", title: "Admin console", desc: "Audit logs, rate limits, tier config, manual membership overrides. The bits you only need but really need." },
     Feature { icon: "fa-solid fa-comment-dots", title: "In-app feedback", desc: "A floating widget lets your team report bugs and ideas without leaving the app. Optionally pipes to Forgejo." },
 ];
 

@@ -1325,7 +1325,6 @@ mod logout_clear_tests {
             api_public_origin: api_public.into(),
             oidc_issuer: api_public.into(),
             app_domain: app_domain.into(),
-            show_business_pricing: false,
             community_url: String::new(),
             trusted_proxies: Vec::new(),
         }

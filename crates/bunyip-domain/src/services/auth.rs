@@ -15,8 +15,8 @@ use crate::errors::AppError;
 use crate::models::{
     AuditAction, CreateAdminInvite, CreateAuditLog, CreateEmailChangeRequest,
     CreateEmailVerificationToken, CreateLoginApprovalCode, CreateMagicLinkToken,
-    CreatePasswordResetToken, CreateRefreshToken, CreateTrustedDevice, CreateUser,
-    SubscriptionTier, User, UserResponse, UserRole,
+    CreatePasswordResetToken, CreateRefreshToken, CreateTrustedDevice, CreateUser, MembershipTier,
+    User, UserResponse, UserRole,
 };
 use crate::repositories::{
     AuditLogRepository, InviteRepository, TokenRepository, TotpRepository, TrustedDeviceRepository,
@@ -1898,7 +1898,7 @@ impl AuthService {
 
     /// Confirm email verification using token.
     ///
-    /// Returns `(user_id, email, Option<SubscriptionTier>)`. The tier is
+    /// Returns `(user_id, email, Option<MembershipTier>)`. The tier is
     /// returned as `Some(...)` only when the verify also crossed the BUNYIP-221
     /// dual-condition threshold (email verified AND first / last name
     /// present), i.e. when this verify is the side that actually unlocks the
@@ -1909,7 +1909,7 @@ impl AuthService {
         &self,
         token: String,
         ip_address: Option<IpAddr>,
-    ) -> Result<(Uuid, String, Option<SubscriptionTier>), AppError> {
+    ) -> Result<(Uuid, String, Option<MembershipTier>), AppError> {
         let ip = ip_address.map(IpNetwork::from);
         let token_hash = self.jwt.hash_token(&token);
 
@@ -1969,7 +1969,7 @@ impl AuthService {
         Ok((user.id, user.email, granted))
     }
 
-    /// BUNYIP-221: grant the initial subscription tier (Lifetime / EarlyAdopter
+    /// BUNYIP-221: grant the initial membership tier (Lifetime / EarlyAdopter
     /// / Standard) when, and only when, both gate conditions are true:
     ///
     /// 1. `email_verified = true`.
@@ -1989,7 +1989,7 @@ impl AuthService {
         user_id: Uuid,
         ip_address: Option<IpAddr>,
         trigger: TierGrantTrigger,
-    ) -> Result<Option<SubscriptionTier>, AppError> {
+    ) -> Result<Option<MembershipTier>, AppError> {
         let ip = ip_address.map(IpNetwork::from);
         let user = UserRepository::find_by_id(&self.pool, user_id)
             .await?
@@ -2005,14 +2005,14 @@ impl AuthService {
             return Ok(None);
         }
         // Idempotency: any signal that a prior grant happened means skip.
-        // The "never granted" sentinel is exactly: `subscription_tier =
+        // The "never granted" sentinel is exactly: `membership_tier =
         // 'standard'` AND `trial_ends_at IS NULL` AND `lifetime_member =
         // false`. Anything else is "granted" (by this method, by the
         // pre-BUNYIP-221 verify-only path, or by an admin grant of `free` /
         // `lifetime`).
         if user.lifetime_member
             || user.trial_ends_at.is_some()
-            || user.subscription_tier != "standard"
+            || user.membership_tier != "standard"
         {
             return Ok(None);
         }
@@ -2040,7 +2040,7 @@ impl AuthService {
         .ok_or(AppError::not_found("User"))?;
         if locked.lifetime_member
             || locked.trial_ends_at.is_some()
-            || locked.subscription_tier != "standard"
+            || locked.membership_tier != "standard"
         {
             tx.commit().await?;
             return Ok(None);
@@ -2055,14 +2055,14 @@ impl AuthService {
             .expect("TierConfig lock poisoned")
             .clone();
 
-        let tier = SubscriptionTier::select(
+        let tier = MembershipTier::select(
             lifetime_count,
             early_adopter_count,
             tc.lifetime_slots,
             tc.early_adopter_slots,
         );
 
-        UserRepository::assign_subscription_tier(
+        UserRepository::assign_membership_tier(
             &mut *tx,
             user_id,
             &tier,
@@ -2080,7 +2080,7 @@ impl AuthService {
                 .with_ip(ip)
                 .with_metadata(serde_json::json!({
                     "trigger": trigger.as_str(),
-                    "subscription_tier": tier.as_str(),
+                    "membership_tier": tier.as_str(),
                     // BUNYIP-291 AC2: record the applied trial explicitly so the
                     // early-adopter (90-day) vs standard (30-day) grant is
                     // labeled at signup rather than inferred from the tier.

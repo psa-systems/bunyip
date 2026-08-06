@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use crate::api::auth as auth_api;
 use crate::api::calls::{self, FeedbackAttachment, FeedbackInput};
-use crate::api::types::SubscriptionTier;
+use crate::api::types::MembershipTier;
 use crate::handlers::dashboard::tier_name;
 use crate::handlers::{dashboard_input, public_ctx, public_response};
 use crate::views::ui::{button_class, empty_state, error_box, icon, success_box};
@@ -22,25 +22,15 @@ const POLICY_LAST_UPDATED: &str = "June 2026";
 
 // --- pricing ----------------------------------------------------------------
 
-const PERSONAL: [&str; 6] = [
+// BUNYIP-488: one instance, one tier axis. Business vs personal is an instance
+// boundary (PSA Systems vs a8n Tools), never a tier, so there is one feature list.
+const STANDARD_FEATURES: [&str; 6] = [
     "Single sign-on into Mokosh",
     "Stripe-backed billing and trials",
     "Up to 5 members per org",
     "MFA, magic links, password reset",
     "In-app feedback widget",
     "Cancel anytime",
-];
-// First bullet phrasing is intentionally tier-name-agnostic ("the personal
-// plan" instead of "Starter") so a rename of `SubscriptionTier::Standard`
-// via the canonical `tier_name` helper does not desync this feature list
-// from the card heading above it.
-const BUSINESS: [&str; 6] = [
-    "Everything in the personal plan",
-    "Unlimited members and orgs",
-    "Org switching and role management",
-    "Admin console and audit logs",
-    "Priority support",
-    "Invoice billing",
 ];
 
 fn pricing_card(
@@ -94,17 +84,11 @@ pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response
         .await
         .map(|s| s.stripe_enabled)
         .unwrap_or(true);
-    let show_business = st.cfg.show_business_pricing;
     let signed_in = c.is_signed_in();
     let (cta_href, cta_label) = if signed_in {
         ("/membership", "Go to Membership")
     } else {
         ("/register", "Sign up")
-    };
-    let grid = if show_business {
-        "md:grid-cols-2 max-w-4xl"
-    } else {
-        "max-w-md"
     };
 
     let content = html! {
@@ -114,16 +98,13 @@ pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response
                     h1 class="text-4xl font-bold" { "Simple, transparent pricing" }
                     p class="mt-4 text-lg text-muted-foreground" { "The business layer for your PSA. Start free for 14 days, no credit card required." }
                 }
-                div class={ "mt-16 grid gap-8 mx-auto " (grid) } {
+                div class="mt-16 grid gap-8 mx-auto max-w-md" {
                     // Route the personal-tier title through tier_name so this
                     // marketing page and the in-app Membership / Settings
                     // labels are byte-identical. Renaming the tier (e.g.
                     // "Standard" -> "Starter") is a one-line change in
                     // `handlers::dashboard::tier_name`.
-                    (pricing_card(tier_name(&SubscriptionTier::Standard), "For a single team getting set up", "$3", &PERSONAL, false, stripe, cta_href, cta_label))
-                    @if show_business {
-                        (pricing_card("Business", "For MSPs running multiple orgs", "$15", &BUSINESS, true, stripe, cta_href, cta_label))
-                    }
+                    (pricing_card(tier_name(&MembershipTier::Standard), "For a single team getting set up", "$3", &STANDARD_FEATURES, false, stripe, cta_href, cta_label))
                 }
             }
         }
@@ -143,7 +124,7 @@ pub async fn our_story(State(st): State<AppState>, headers: HeaderMap) -> Respon
                     h2 class="text-2xl font-semibold mb-4" { "Why Bunyip?" }
                     div class="space-y-4 text-muted-foreground" {
                         p { "Mokosh is a focused PSA: the product your MSP actually uses to run service delivery. But every product needs a business layer around it - signup, billing, members, invitations, single sign-on - and that layer is the same boring infrastructure everyone reinvents." }
-                        p { "We pulled that layer out into its own surface so the PSA never has to carry it. Bunyip owns identity, subscriptions, and orgs; Mokosh owns the work. Each does one thing well." }
+                        p { "We pulled that layer out into its own surface so the PSA never has to carry it. Bunyip owns identity, memberships, and orgs; Mokosh owns the work. Each does one thing well." }
                         p { "The name is the lake cryptid that surfaces what matters. That is the job: lift the business-y bits up out of the product and keep them out of the way." }
                     }
                 }
@@ -164,7 +145,7 @@ pub async fn our_story(State(st): State<AppState>, headers: HeaderMap) -> Respon
 
 // Seed roadmap items, grouped by status bucket. Each entry is a (title,
 // one-line description) pair. Editing the page is a one-line change here,
-// the same shape as PERSONAL / BUSINESS above. Placeholder content until a
+// the same shape as STANDARD_FEATURES above. Placeholder content until a
 // data-backed source lands (see BUNYIP-136); keep copy in American English
 // with no em-dashes.
 const ROADMAP_SHIPPING_SOON: [(&str, &str); 2] = [

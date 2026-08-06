@@ -218,7 +218,7 @@ pub async fn cancel_membership(
             crate::models::MembershipStatus::Canceled,
         )
         .await?;
-        UserRepository::reset_subscription_tier(pool.get_ref(), user.0.sub).await?;
+        UserRepository::reset_membership_tier(pool.get_ref(), user.0.sub).await?;
     }
 
     // Fetch updated user
@@ -298,7 +298,7 @@ pub async fn cancel_membership_immediate(
         crate::models::MembershipStatus::Canceled,
     )
     .await?;
-    UserRepository::reset_subscription_tier(pool.get_ref(), user.0.sub).await?;
+    UserRepository::reset_membership_tier(pool.get_ref(), user.0.sub).await?;
 
     let updated_user = UserRepository::find_by_id(&pool, user.0.sub)
         .await?

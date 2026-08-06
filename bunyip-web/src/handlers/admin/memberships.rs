@@ -32,7 +32,7 @@ pub async fn memberships(Query(q): Query<PageQuery>) -> Response {
 }
 
 /// POST /admin/memberships/{user_id}/grant - grant a free admin-override
-/// membership (sets `subscription_override_by`). Forwards to the existing API
+/// membership (sets `membership_override_by`). Forwards to the existing API
 /// endpoint; redirects back to the listing. BUNYIP-118.
 pub async fn membership_grant(
     State(st): State<AppState>,
@@ -50,7 +50,7 @@ pub async fn membership_grant(
 }
 
 /// POST /admin/memberships/{user_id}/revoke - revoke an admin-override
-/// membership (resets tier to standard, clears `subscription_override_by`).
+/// membership (resets tier to standard, clears `membership_override_by`).
 /// BUNYIP-118.
 pub async fn membership_revoke(
     State(st): State<AppState>,

@@ -146,7 +146,7 @@ mod tests {
             "membership_status": "none",
             "price_locked": false,
             "created_at": "2026-01-01T00:00:00Z",
-            "subscription_tier": "standard",
+            "membership_tier": "standard",
             "lifetime_member": false,
             "first_name": "Ada",
             "avatar_updated_at": avatar,
