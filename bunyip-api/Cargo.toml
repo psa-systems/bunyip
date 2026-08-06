@@ -117,6 +117,8 @@ dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96
 # DEV-530: the self-hosted update checker (polls Forgejo releases/latest, semver
 # compare, TTL cache), extracted from version.rs. Leaf crate, pins independently.
 dunite-update-check = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "1f536a2fa32b4db3df95945c444ee3ad7530fc57" }
+# DEV-528: the actix SSE adapter (sse_response) consumed by handlers/events.rs.
+dunite-events = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "1f536a2fa32b4db3df95945c444ee3ad7530fc57" }
 # Still direct for the feedback-attachment path (BUNYIP-90), whose allowlist
 # admits non-images (text/plain) and so does not fit `ImagePolicy`. Folding that
 # surface into the shared crate is a separate decision, not a side effect of
