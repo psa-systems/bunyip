@@ -950,6 +950,88 @@ pub async fn app_docs_page(
 }
 
 #[cfg(test)]
+mod feedback_tests {
+    use super::{feedback_form, read_feedback_multipart, sanitize_page_path};
+    use axum::body::Body;
+    use axum::extract::{FromRequest, Multipart};
+    use axum::http::Request;
+
+    const BOUNDARY: &str = "bunyip370boundary";
+
+    /// Build a multipart body the way the browser posts the feedback form.
+    fn multipart_body(fields: &[(&str, &str)]) -> String {
+        let mut out = String::new();
+        for (name, value) in fields {
+            out.push_str(&format!(
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            ));
+        }
+        out.push_str(&format!("--{BOUNDARY}--\r\n"));
+        out
+    }
+
+    async fn parse(fields: &[(&str, &str)]) -> super::FeedbackInput {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/feedback")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={BOUNDARY}"),
+            )
+            .body(Body::from(multipart_body(fields)))
+            .expect("request builds");
+        let mut multipart = Multipart::from_request(req, &())
+            .await
+            .expect("multipart extractor");
+        read_feedback_multipart(&mut multipart)
+            .await
+            .expect("form parses")
+    }
+
+    /// BUNYIP-370: feedback opened from an admin screen submits through the
+    /// same `/feedback` form and carries the admin path it came from, so an
+    /// admin-originated report is captured through the existing path with its
+    /// context intact.
+    #[tokio::test]
+    async fn admin_panel_submission_goes_through_the_existing_feedback_path() {
+        let input = parse(&[
+            ("name", "Ada"),
+            ("email", "ada@example.com"),
+            ("subject", "Users table"),
+            ("message", "The tier filter drops the search term."),
+            ("tags", "Bug"),
+            ("page_path", "/admin/users"),
+            ("website", ""),
+        ])
+        .await;
+
+        assert_eq!(input.page_path, "/admin/users");
+        assert_eq!(input.message, "The tier filter drops the search term.");
+        assert_eq!(input.tags, vec!["Bug".to_string()]);
+        assert_eq!(input.email, "ada@example.com");
+    }
+
+    /// The launcher's `?from=` value for an admin screen survives sanitization
+    /// and round-trips into the hidden `page_path` input the POST reads back.
+    #[test]
+    fn admin_paths_round_trip_through_the_form() {
+        for path in ["/admin", "/admin/users", "/admin/feedback?from=spam"] {
+            let sanitized = sanitize_page_path(path).expect("admin path is accepted");
+            assert_eq!(sanitized, path);
+            let html = feedback_form(false, None, Some(&sanitized)).into_string();
+            assert!(
+                html.contains(&format!(r#"name="page_path" value="{path}""#)),
+                "the hidden page_path input carries {path}"
+            );
+            assert!(
+                html.contains(r#"action="/feedback""#),
+                "the admin-originated form posts to the existing endpoint"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod pricing_tests {
     use super::{pricing_content, trial_phrase, PERSONAL};
     use crate::api::types::{PricingResponse, PricingTier, SubscriptionTier};
