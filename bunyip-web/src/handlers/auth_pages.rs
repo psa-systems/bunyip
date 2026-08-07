@@ -366,7 +366,7 @@ pub async fn login_get(
         false,
         content,
     );
-    html(document("Sign in · Bunyip", body))
+    html(document("Sign in", body))
 }
 
 #[derive(Deserialize)]
@@ -417,7 +417,7 @@ pub async fn login_post(
                 false,
                 content,
             );
-            html(document("Sign in · Bunyip", body))
+            html(document("Sign in", body))
         }
     }
 }
@@ -601,7 +601,7 @@ pub async fn register_get(State(st): State<AppState>, headers: HeaderMap) -> Res
     auth_page(
         &st,
         &headers,
-        "Sign up · Bunyip",
+        "Sign up",
         register_card(&RegisterErrors::default(), "", &signup_token),
     )
     .await
@@ -631,7 +631,7 @@ pub async fn register_post(
         return auth_page(
             &st,
             &headers,
-            "Sign up · Bunyip",
+            "Sign up",
             register_card(&errs, f.email.trim(), &f.signup_token),
         )
         .await;
@@ -660,7 +660,7 @@ pub async fn register_post(
             auth_page(
                 &st,
                 &headers,
-                "Sign up · Bunyip",
+                "Sign up",
                 register_card(&errs, f.email.trim(), &f.signup_token),
             )
             .await
@@ -736,17 +736,11 @@ pub async fn magic_link_get(
                         a href="/magic-link" class=(button_class("default", "default", "w-full")) { "Request New Magic Link" }
                     },
                 );
-                auth_page(&st, &headers, "Magic link · Bunyip", card).await
+                auth_page(&st, &headers, "Magic link", card).await
             }
         };
     }
-    auth_page(
-        &st,
-        &headers,
-        "Magic link · Bunyip",
-        magic_form(None, false),
-    )
-    .await
+    auth_page(&st, &headers, "Magic link", magic_form(None, false)).await
 }
 
 pub async fn magic_link_post(
@@ -758,7 +752,7 @@ pub async fn magic_link_post(
         Ok(()) => magic_form(None, true),
         Err(e) => magic_form(Some(&e.user_message()), false),
     };
-    auth_page(&st, &headers, "Magic link · Bunyip", card).await
+    auth_page(&st, &headers, "Magic link", card).await
 }
 
 // ===========================================================================
@@ -797,13 +791,7 @@ fn reset_form(error: Option<&str>, success: bool) -> Markup {
 }
 
 pub async fn password_reset_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    auth_page(
-        &st,
-        &headers,
-        "Reset password · Bunyip",
-        reset_form(None, false),
-    )
-    .await
+    auth_page(&st, &headers, "Reset password", reset_form(None, false)).await
 }
 
 pub async fn password_reset_post(
@@ -815,7 +803,7 @@ pub async fn password_reset_post(
         Ok(()) => reset_form(None, true),
         Err(e) => reset_form(Some(&e.user_message()), false),
     };
-    auth_page(&st, &headers, "Reset password · Bunyip", card).await
+    auth_page(&st, &headers, "Reset password", card).await
 }
 
 // ===========================================================================
@@ -862,7 +850,7 @@ pub async fn password_reset_confirm_get(
             auth_page(
                 &st,
                 &headers,
-                "Reset password · Bunyip",
+                "Reset password",
                 reset_confirm_card(&token, None),
             )
             .await
@@ -877,7 +865,7 @@ pub async fn password_reset_confirm_get(
                     a href="/password-reset" class=(button_class("default", "default", "w-full")) { "Request New Reset Link" }
                 },
             );
-            auth_page(&st, &headers, "Reset password · Bunyip", card).await
+            auth_page(&st, &headers, "Reset password", card).await
         }
     }
 }
@@ -898,7 +886,7 @@ pub async fn password_reset_confirm_post(
         return auth_page(
             &st,
             &headers,
-            "Reset password · Bunyip",
+            "Reset password",
             reset_confirm_card(&f.token, Some(&e)),
         )
         .await;
@@ -909,7 +897,7 @@ pub async fn password_reset_confirm_post(
             auth_page(
                 &st,
                 &headers,
-                "Reset password · Bunyip",
+                "Reset password",
                 reset_confirm_card(&f.token, Some(&e.user_message())),
             )
             .await
@@ -980,12 +968,12 @@ pub async fn twofa_verify_get(
                 a href="/login" class=(button_class("default", "default", "w-full")) { "Back to sign in" }
             },
         );
-        return auth_page(&st, &headers, "Two-factor · Bunyip", card).await;
+        return auth_page(&st, &headers, "Two-factor", card).await;
     }
     auth_page(
         &st,
         &headers,
-        "Two-factor · Bunyip",
+        "Two-factor",
         twofa_card(None, q.redirect.as_deref()),
     )
     .await
@@ -1010,7 +998,7 @@ pub async fn twofa_verify_post(
             auth_page(
                 &st,
                 &headers,
-                "Two-factor · Bunyip",
+                "Two-factor",
                 twofa_card(Some(&e.user_message()), f.redirect.as_deref()),
             )
             .await
@@ -1063,14 +1051,14 @@ pub async fn invite_accept_get(
                 a href="/login" class=(button_class("default", "default", "w-full")) { "Back to sign in" }
             },
         );
-        return auth_page(&st, &headers, "Accept invite · Bunyip", card).await;
+        return auth_page(&st, &headers, "Accept invite", card).await;
     };
     match auth_api::accept_invite(&st.api, &token, None).await {
         Ok((Some(email), _, _)) => {
             auth_page(
                 &st,
                 &headers,
-                "Accept invite · Bunyip",
+                "Accept invite",
                 invite_password_card(&token, &email, None),
             )
             .await
@@ -1080,7 +1068,7 @@ pub async fn invite_accept_get(
             auth_page(
                 &st,
                 &headers,
-                "Accept invite · Bunyip",
+                "Accept invite",
                 invite_password_card(&token, "your account", None),
             )
             .await
@@ -1095,7 +1083,7 @@ pub async fn invite_accept_get(
                     a href="/login" class=(button_class("default", "default", "w-full")) { "Back to sign in" }
                 },
             );
-            auth_page(&st, &headers, "Accept invite · Bunyip", card).await
+            auth_page(&st, &headers, "Accept invite", card).await
         }
     }
 }
@@ -1114,7 +1102,7 @@ pub async fn invite_accept_post(
         return auth_page(
             &st,
             &headers,
-            "Accept invite · Bunyip",
+            "Accept invite",
             invite_password_card(&f.token, "your account", Some(e)),
         )
         .await;
@@ -1125,7 +1113,7 @@ pub async fn invite_accept_post(
             auth_page(
                 &st,
                 &headers,
-                "Accept invite · Bunyip",
+                "Accept invite",
                 invite_password_card(&f.token, "your account", Some("Failed to accept invite")),
             )
             .await
@@ -1134,7 +1122,7 @@ pub async fn invite_accept_post(
             auth_page(
                 &st,
                 &headers,
-                "Accept invite · Bunyip",
+                "Accept invite",
                 invite_password_card(&f.token, "your account", Some(&e.user_message())),
             )
             .await
@@ -1187,7 +1175,7 @@ pub async fn confirm_email(
             ),
         },
     };
-    auth_page(&st, &headers, "Confirm email · Bunyip", card).await
+    auth_page(&st, &headers, "Confirm email", card).await
 }
 
 pub async fn verify_email(
@@ -1267,7 +1255,7 @@ pub async fn verify_email(
         },
     };
     if rotated_cookies.is_empty() {
-        auth_page(&st, &headers, "Verify email · Bunyip", card).await
+        auth_page(&st, &headers, "Verify email", card).await
     } else {
         // The celebration card needs to ride out on a response that carries
         // the rotated `Set-Cookie` headers; `auth_page`'s shell doesn't
@@ -1285,7 +1273,7 @@ pub async fn verify_email(
             false,
             card,
         );
-        html_cookies(document("Verify email · Bunyip", body), &rotated_cookies)
+        html_cookies(document("Verify email", body), &rotated_cookies)
     }
 }
 
@@ -1360,6 +1348,7 @@ mod logout_clear_tests {
             community_url: String::new(),
             trusted_proxies: Vec::new(),
             theme_css: None,
+            app_name: "Bunyip".into(),
         }
     }
 

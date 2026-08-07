@@ -5,12 +5,17 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-// The account vocabulary (roles, membership status, subscription tier) lives in
+// The account vocabulary (roles, membership status, membership tier) lives in
 // the shared `dunite-user-core` crate (DEV-517) and is re-exported here, so
 // `crate::models::user::*` paths are unchanged and a8n-tools and bunyip cannot
 // drift on the string values or on the tier-selection boundary. The `User` row
 // struct below stays bunyip-side: it carries columns a8n's schema does not have.
-pub use dunite_user_core::{MembershipStatus, SubscriptionTier, UserRole};
+pub use dunite_user_core::{MembershipStatus, UserRole};
+
+// BUNYIP-488: dunite still names the enum `SubscriptionTier`; DUNITE-7 renames it.
+// Bridge here so bunyip reads `MembershipTier` now, and delete this alias when the
+// dunite `rev` is bumped.
+pub use dunite_user_core::SubscriptionTier as MembershipTier;
 
 /// User database model
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -23,8 +28,6 @@ pub struct User {
     pub role: String,
     pub stripe_customer_id: Option<String>,
     pub stripe_payment_method_id: Option<String>,
-    #[sqlx(rename = "subscription_status")]
-    #[serde(rename = "membership_status")]
     pub membership_status: String,
     pub price_locked: bool,
     pub locked_price_id: Option<String>,
@@ -44,14 +47,14 @@ pub struct User {
     pub login_location_alerts: bool,
     pub deleted_at: Option<DateTime<Utc>>,
     /// Tier assigned at email verification: 'lifetime', 'early_adopter', 'standard'
-    pub subscription_tier: String,
+    pub membership_tier: String,
     /// Null for lifetime members; set for trial members
     pub trial_ends_at: Option<DateTime<Utc>>,
     /// True for the first `lifetime_slots` verified users (the `TIER_LIFETIME_SLOTS`
     /// config, default 5) and admin-granted lifetime members
     pub lifetime_member: bool,
     /// Set when an admin manually granted lifetime membership
-    pub subscription_override_by: Option<Uuid>,
+    pub membership_override_by: Option<Uuid>,
     /// BUNYIP-139: optional given name. Nullable in the DB (legacy rows have no
     /// source). Flowed as the OIDC `given_name` claim under the `profile` scope
     /// by BUNYIP-140.
@@ -108,9 +111,9 @@ impl User {
         self.deleted_at.is_some()
     }
 
-    /// Get the user's subscription tier as enum
-    pub fn subscription_tier_enum(&self) -> SubscriptionTier {
-        SubscriptionTier::from(self.subscription_tier.as_str())
+    /// Get the user's membership tier as enum
+    pub fn membership_tier_enum(&self) -> MembershipTier {
+        MembershipTier::from(self.membership_tier.as_str())
     }
 
     /// Whether a new checkout should carry the one-time signup free trial
@@ -127,7 +130,7 @@ impl User {
     /// - User is an admin (admins bypass all access checks)
     /// - User is a lifetime member
     /// - User's trial has not yet expired
-    /// - User has an active/grace-period Stripe subscription
+    /// - User has an active/grace-period membership
     pub fn is_access_allowed(&self) -> bool {
         if self.is_admin() {
             return true;
@@ -185,7 +188,7 @@ pub struct UserResponse {
     pub grace_period_end: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub last_login_at: Option<DateTime<Utc>>,
-    pub subscription_tier: String,
+    pub membership_tier: String,
     pub trial_ends_at: Option<DateTime<Utc>>,
     pub lifetime_member: bool,
     /// BUNYIP-139: see [`User::first_name`].
@@ -221,7 +224,7 @@ impl From<User> for UserResponse {
             grace_period_end: user.grace_period_end,
             created_at: user.created_at,
             last_login_at: user.last_login_at,
-            subscription_tier: user.subscription_tier,
+            membership_tier: user.membership_tier,
             trial_ends_at: user.trial_ends_at,
             lifetime_member: user.lifetime_member,
             first_name: user.first_name,
@@ -296,10 +299,10 @@ mod tests {
             last_login_country: None,
             login_location_alerts: true,
             deleted_at: None,
-            subscription_tier: "standard".to_string(),
+            membership_tier: "standard".to_string(),
             trial_ends_at: None,
             lifetime_member: false,
-            subscription_override_by: None,
+            membership_override_by: None,
             first_name: None,
             last_name: None,
             phone: None,
@@ -375,18 +378,18 @@ mod tests {
         assert_eq!(response.role, "subscriber");
     }
 
-    // -- SubscriptionTier --
+    // -- MembershipTier --
 
     fn user_with_tier(
         lifetime_member: bool,
         trial_ends_at: Option<DateTime<Utc>>,
-        subscription_tier: &str,
+        membership_tier: &str,
     ) -> User {
         let mut user = test_user();
         user.membership_status = "none".to_string();
         user.lifetime_member = lifetime_member;
         user.trial_ends_at = trial_ends_at;
-        user.subscription_tier = subscription_tier.to_string();
+        user.membership_tier = membership_tier.to_string();
         user
     }
 
@@ -429,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn access_allowed_for_active_stripe_subscription() {
+    fn access_allowed_for_active_membership() {
         let mut user = user_with_tier(false, None, "standard");
         user.membership_status = "active".to_string();
         assert!(user.is_access_allowed());
@@ -450,13 +453,13 @@ mod tests {
         early_adopter_count: i64,
         lifetime_slots: i64,
         early_adopter_slots: i64,
-    ) -> SubscriptionTier {
+    ) -> MembershipTier {
         if lifetime_count < lifetime_slots {
-            SubscriptionTier::Lifetime
+            MembershipTier::Lifetime
         } else if early_adopter_count < early_adopter_slots {
-            SubscriptionTier::EarlyAdopter
+            MembershipTier::EarlyAdopter
         } else {
-            SubscriptionTier::Standard
+            MembershipTier::Standard
         }
     }
 
@@ -465,39 +468,39 @@ mod tests {
     #[test]
     fn tier_assignment_lifetime_slots_available() {
         // 4 lifetime assigned, slot still open
-        assert_eq!(tier_for_counts(4, 0, 5, 5), SubscriptionTier::Lifetime);
+        assert_eq!(tier_for_counts(4, 0, 5, 5), MembershipTier::Lifetime);
     }
 
     #[test]
     fn tier_assignment_lifetime_slots_full() {
         // 5 lifetime assigned, falls through to early adopter
-        assert_eq!(tier_for_counts(5, 0, 5, 5), SubscriptionTier::EarlyAdopter);
+        assert_eq!(tier_for_counts(5, 0, 5, 5), MembershipTier::EarlyAdopter);
     }
 
     #[test]
     fn tier_assignment_early_adopter_slots_filling() {
         // lifetime full, 4 early adopter assigned
-        assert_eq!(tier_for_counts(5, 4, 5, 5), SubscriptionTier::EarlyAdopter);
+        assert_eq!(tier_for_counts(5, 4, 5, 5), MembershipTier::EarlyAdopter);
     }
 
     #[test]
     fn tier_assignment_all_slots_full() {
         // both tiers full
-        assert_eq!(tier_for_counts(5, 5, 5, 5), SubscriptionTier::Standard);
+        assert_eq!(tier_for_counts(5, 5, 5, 5), MembershipTier::Standard);
     }
 
     #[test]
     fn tier_assignment_custom_thresholds() {
         // 3 lifetime slots, 7 early adopter slots
-        assert_eq!(tier_for_counts(2, 0, 3, 7), SubscriptionTier::Lifetime);
-        assert_eq!(tier_for_counts(3, 0, 3, 7), SubscriptionTier::EarlyAdopter);
-        assert_eq!(tier_for_counts(3, 6, 3, 7), SubscriptionTier::EarlyAdopter);
-        assert_eq!(tier_for_counts(3, 7, 3, 7), SubscriptionTier::Standard);
+        assert_eq!(tier_for_counts(2, 0, 3, 7), MembershipTier::Lifetime);
+        assert_eq!(tier_for_counts(3, 0, 3, 7), MembershipTier::EarlyAdopter);
+        assert_eq!(tier_for_counts(3, 6, 3, 7), MembershipTier::EarlyAdopter);
+        assert_eq!(tier_for_counts(3, 7, 3, 7), MembershipTier::Standard);
     }
 
     #[test]
     fn tier_assignment_existing_users_dont_consume_slots() {
         // 100 standard users exist but 0 lifetime assigned — lifetime still available
-        assert_eq!(tier_for_counts(0, 0, 5, 5), SubscriptionTier::Lifetime);
+        assert_eq!(tier_for_counts(0, 0, 5, 5), MembershipTier::Lifetime);
     }
 }

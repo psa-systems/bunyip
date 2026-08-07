@@ -59,6 +59,11 @@ pub struct Config {
     /// ramp the `@theme` tokens fall back to. `BRAND_THEME_CSS`; `None` (default)
     /// emits nothing, so the default (Bunyip) palette is unchanged.
     pub theme_css: Option<String>,
+    /// BUNYIP-499: app/brand name rendered in the nav brand mark and the
+    /// browser-title suffix. `APP_NAME`, default `"Bunyip"` so output is
+    /// unchanged until a skin overrides it. Mirrors the email subsystem's
+    /// config-driven `APP_NAME`.
+    pub app_name: String,
 }
 
 /// BUNYIP-311: parse a comma-separated list of CIDR ranges into trusted-proxy
@@ -105,6 +110,7 @@ impl Config {
             // end-user IP. Same comma-separated CIDR form bunyip-api parses.
             trusted_proxies: parse_trusted_proxies(&var("TRUSTED_PROXY_CIDR").unwrap_or_default()),
             theme_css: var("BRAND_THEME_CSS"),
+            app_name: var("APP_NAME").unwrap_or_else(|| "Bunyip".into()),
         }
     }
 

@@ -28,7 +28,7 @@ pub type EventBus = dunite_events::EventBus<BunyipEvent>;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BunyipEvent {
     /// The user's JWT-feeding claims changed (role, lifetime_member,
-    /// subscription_status, etc.). SPA reaction: call /v1/auth/refresh, then
+    /// membership_status, etc.). SPA reaction: call /v1/auth/refresh, then
     /// /v1/auth/me, then update the in-memory CurrentUser signal.
     ClaimsChanged { user_id: Uuid },
 

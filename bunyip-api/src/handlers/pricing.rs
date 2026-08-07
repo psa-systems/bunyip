@@ -30,7 +30,7 @@ pub const PRICING_CACHE_TTL_SECS: u64 = 60;
 /// One publicly advertised tier.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct PublicPricingTier {
-    /// The `SubscriptionTier` key (snake_case). The display name stays with the
+    /// The `MembershipTier` key (snake_case). The display name stays with the
     /// consumer so the marketing card and the in-app labels keep coming from
     /// one place rather than two.
     pub tier: &'static str,

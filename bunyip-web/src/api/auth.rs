@@ -389,7 +389,7 @@ pub async fn confirm_email_change(api: &Api, token: &str) -> Result<(), ApiError
     ok_data(&r).map(|_| ())
 }
 
-/// Returns the granted subscription tier string.
+/// Returns the granted membership tier string.
 pub async fn confirm_email_verification(api: &Api, token: &str) -> Result<String, ApiError> {
     let r = api
         .post(
@@ -400,7 +400,7 @@ pub async fn confirm_email_verification(api: &Api, token: &str) -> Result<String
         .await?;
     let data = ok_data(&r)?;
     Ok(data
-        .get("subscription_tier")
+        .get("membership_tier")
         .and_then(|t| t.as_str())
         .unwrap_or_default()
         .to_string())

@@ -125,7 +125,7 @@ pub async fn backup_settings(State(st): State<AppState>, headers: HeaderMap) -> 
         &c,
         &user,
         "/integrations/backup",
-        "Backup & Restore · Bunyip",
+        "Backup & Restore",
         content,
     )
 }
@@ -234,7 +234,7 @@ pub async fn backup_restore(
         &c,
         &user,
         "/integrations/backup",
-        "Backup & Restore · Bunyip",
+        "Backup & Restore",
         content,
     )
 }

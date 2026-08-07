@@ -66,5 +66,5 @@ pub use token::{
 };
 pub use totp::{RecoveryCode, UserTotp};
 pub use user::{
-    normalize_email, CreateUser, MembershipStatus, SubscriptionTier, User, UserResponse, UserRole,
+    normalize_email, CreateUser, MembershipStatus, MembershipTier, User, UserResponse, UserRole,
 };

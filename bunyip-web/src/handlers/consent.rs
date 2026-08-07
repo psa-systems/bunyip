@@ -183,7 +183,7 @@ pub async fn consent_get(
     // buttons in the corner). `auth_page` owns its own cookie / context
     // round-trip so the `c` we got from `guard` is intentionally dropped.
     let _ = c;
-    auth_page(&st, &headers, "Approve access · Bunyip", card).await
+    auth_page(&st, &headers, "Approve access", card).await
 }
 
 /// POST /oauth2/consent

@@ -98,13 +98,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
             }
         }
     };
-    admin_response(
-        &c,
-        &user,
-        "/admin/applications",
-        "Applications · Bunyip",
-        content,
-    )
+    admin_response(&c, &user, "/admin/applications", "Applications", content)
 }
 
 #[derive(Deserialize)]
@@ -523,7 +517,7 @@ pub async fn application_edit(
                 &c,
                 &user,
                 "/admin/applications",
-                "Edit application · Bunyip",
+                "Edit application",
                 content,
             );
         }
@@ -585,7 +579,7 @@ pub async fn application_edit(
         &c,
         &user,
         "/admin/applications",
-        "Edit application · Bunyip",
+        "Edit application",
         content,
     )
 }
@@ -644,7 +638,7 @@ pub async fn application_distribution_save(
                 &c,
                 &user,
                 "/admin/applications",
-                "Edit application · Bunyip",
+                "Edit application",
                 content,
             )
         }
@@ -862,13 +856,7 @@ pub async fn application_new(State(st): State<AppState>, headers: HeaderMap) -> 
         None,
         None,
     );
-    admin_response(
-        &c,
-        &user,
-        "/admin/applications",
-        "New application · Bunyip",
-        content,
-    )
+    admin_response(&c, &user, "/admin/applications", "New application", content)
 }
 
 /// POST /admin/applications
@@ -920,13 +908,7 @@ pub async fn application_create(
             None,
             Some(err),
         );
-        admin_response(
-            &c,
-            &user,
-            "/admin/applications",
-            "New application · Bunyip",
-            content,
-        )
+        admin_response(&c, &user, "/admin/applications", "New application", content)
     };
     let body = match create_app_body(&f) {
         Ok(b) => b,
@@ -979,7 +961,7 @@ pub async fn application_docs(
                 &c,
                 &user,
                 "/admin/applications",
-                "Manage documentation · Bunyip",
+                "Manage documentation",
                 content,
             );
         }
@@ -1033,7 +1015,7 @@ pub async fn application_docs(
         &c,
         &user,
         "/admin/applications",
-        "Manage documentation · Bunyip",
+        "Manage documentation",
         content,
     )
 }

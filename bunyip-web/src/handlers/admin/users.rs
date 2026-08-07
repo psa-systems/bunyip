@@ -53,8 +53,8 @@ pub(super) fn parse_verified_filter(s: &str) -> Option<bool> {
 }
 
 /// Human-readable label for a membership tier badge.
-pub(super) fn tier_label(tier: &crate::api::types::SubscriptionTier) -> &'static str {
-    use crate::api::types::SubscriptionTier::*;
+pub(super) fn tier_label(tier: &crate::api::types::MembershipTier) -> &'static str {
+    use crate::api::types::MembershipTier::*;
     match tier {
         Lifetime => "Lifetime",
         Free => "Free",
@@ -256,7 +256,7 @@ pub async fn users(
         style { (maud::PreEscaped(USERS_FILTER_CSS)) }
         script src="/assets/js/admin-users.js" defer {}
     };
-    admin_response(&c, &user, "/admin/users", "Users · Bunyip", content)
+    admin_response(&c, &user, "/admin/users", "Users", content)
 }
 
 /// Friendly label for a tier slug (for chips).
@@ -385,7 +385,7 @@ pub(super) fn user_grid_row(u: &crate::api::types::AdminUser) -> Markup {
             }
         }
     };
-    let tier = html! { (badge("secondary", tier_label(&u.subscription_tier))) };
+    let tier = html! { (badge("secondary", tier_label(&u.membership_tier))) };
     let joined = html! {
         span class="text-xs text-muted-foreground" { "Joined " (rel_time(&u.created_at)) }
     };
@@ -959,24 +959,24 @@ pub(super) fn user_actions_card(target: &AdminUser, is_admin_target: bool) -> Ma
 /// records the before/after tiers in the audit log; the slot counts in Tier
 /// Settings stay correct because usage is counted live from the tier column.
 pub(super) fn tier_change_card(target: &AdminUser) -> Markup {
-    use crate::api::types::SubscriptionTier::*;
+    use crate::api::types::MembershipTier::*;
     let options = [
         (
             "lifetime",
             "Lifetime",
-            matches!(target.subscription_tier, Lifetime),
+            matches!(target.membership_tier, Lifetime),
         ),
         (
             "early_adopter",
             "Early Adopter",
-            matches!(target.subscription_tier, EarlyAdopter),
+            matches!(target.membership_tier, EarlyAdopter),
         ),
         (
             "standard",
             "Standard",
-            matches!(target.subscription_tier, Standard),
+            matches!(target.membership_tier, Standard),
         ),
-        ("free", "Free", matches!(target.subscription_tier, Free)),
+        ("free", "Free", matches!(target.membership_tier, Free)),
     ];
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
@@ -1078,7 +1078,7 @@ pub async fn user_detail(
                     div { span class="text-muted-foreground" { "Email verified: " } @if target.email_verified { "Yes" } @else { "No" } }
                     div { span class="text-muted-foreground" { "Two-factor: " } @if target.two_factor_enabled { "Enabled" } @else { "Disabled" } }
                     div { span class="text-muted-foreground" { "Membership: " } (format!("{:?}", target.membership_status)) }
-                    div { span class="text-muted-foreground" { "Tier: " } (format!("{:?}", target.subscription_tier)) }
+                    div { span class="text-muted-foreground" { "Tier: " } (format!("{:?}", target.membership_tier)) }
                     @if target.lifetime_member { div { span class="text-muted-foreground" { "Lifetime: " } "Yes" } }
                     @if let Some(grace) = target.grace_period_end.as_deref() {
                         div { span class="text-muted-foreground" { "Grace ends: " } (rel_time(grace)) }
@@ -1146,5 +1146,5 @@ pub async fn user_detail(
             (tier_change_card(&target))
         }
     };
-    admin_response(&c, &user, "/admin/users", "User · Bunyip", content)
+    admin_response(&c, &user, "/admin/users", "User", content)
 }

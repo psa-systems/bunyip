@@ -410,7 +410,7 @@ mod rate_limit_tests {
             "email_verified": verified,
             "two_factor_enabled": false,
             "membership_status": "none",
-            "subscription_tier": "standard",
+            "membership_tier": "standard",
             "lifetime_member": false,
             "created_at": "2026-01-01T00:00:00Z",
             "last_login_at": null,
@@ -576,7 +576,7 @@ mod rate_limit_tests {
 
     #[test]
     fn tier_label_maps_every_tier() {
-        use crate::api::types::SubscriptionTier::*;
+        use crate::api::types::MembershipTier::*;
         assert_eq!(super::tier_label(&Lifetime), "Lifetime");
         assert_eq!(super::tier_label(&Free), "Free");
         assert_eq!(super::tier_label(&EarlyAdopter), "Early Adopter");
@@ -1297,7 +1297,7 @@ mod stripe_admin_tests {
 /// clipping the role/status badges that sit beside it.
 #[cfg(test)]
 mod identity_cell_clipping_tests {
-    use crate::api::types::{AdminUser, MembershipStatus, SubscriptionTier, UserRole};
+    use crate::api::types::{AdminUser, MembershipStatus, MembershipTier, UserRole};
     use crate::views::ui::assert_no_truncating_flex_container;
 
     fn user(role: UserRole, suspended: bool) -> AdminUser {
@@ -1308,7 +1308,7 @@ mod identity_cell_clipping_tests {
             email_verified: true,
             two_factor_enabled: false,
             membership_status: MembershipStatus::Active,
-            subscription_tier: SubscriptionTier::EarlyAdopter,
+            membership_tier: MembershipTier::EarlyAdopter,
             lifetime_member: false,
             created_at: "2026-03-04T10:00:00Z".into(),
             last_login_at: None,
@@ -1347,7 +1347,7 @@ mod admin_action_confirm_tests {
     //! on submit and cancels the POST when the admin declines), and each prompt
     //! names the action and the specific user (by email) it affects.
     use super::user_actions_card;
-    use crate::api::types::{AdminUser, MembershipStatus, SubscriptionTier, UserRole};
+    use crate::api::types::{AdminUser, MembershipStatus, MembershipTier, UserRole};
 
     const UID: &str = "22222222-2222-2222-2222-222222222222";
 
@@ -1359,7 +1359,7 @@ mod admin_action_confirm_tests {
             email_verified: true,
             two_factor_enabled: false,
             membership_status: MembershipStatus::None,
-            subscription_tier: SubscriptionTier::Free,
+            membership_tier: MembershipTier::Free,
             lifetime_member,
             created_at: String::new(),
             last_login_at: None,
@@ -1416,11 +1416,11 @@ mod tier_change_tests {
     //! the member's current tier (any-to-any), and applying a change requires
     //! the acting admin's 2FA code.
     use super::tier_change_card;
-    use crate::api::types::{AdminUser, MembershipStatus, SubscriptionTier, UserRole};
+    use crate::api::types::{AdminUser, MembershipStatus, MembershipTier, UserRole};
 
     const UID: &str = "33333333-3333-3333-3333-333333333333";
 
-    fn target(tier: SubscriptionTier) -> AdminUser {
+    fn target(tier: MembershipTier) -> AdminUser {
         AdminUser {
             id: UID.into(),
             email: "jane@example.com".into(),
@@ -1428,7 +1428,7 @@ mod tier_change_tests {
             email_verified: true,
             two_factor_enabled: false,
             membership_status: MembershipStatus::None,
-            subscription_tier: tier,
+            membership_tier: tier,
             lifetime_member: false,
             created_at: String::new(),
             last_login_at: None,
@@ -1442,10 +1442,10 @@ mod tier_change_tests {
         // AC3: the options do not vary with the member's current tier - whatever
         // they hold, all four destinations are offered (including downgrades).
         for current in [
-            SubscriptionTier::Lifetime,
-            SubscriptionTier::EarlyAdopter,
-            SubscriptionTier::Standard,
-            SubscriptionTier::Free,
+            MembershipTier::Lifetime,
+            MembershipTier::EarlyAdopter,
+            MembershipTier::Standard,
+            MembershipTier::Free,
         ] {
             let html = tier_change_card(&target(current)).into_string();
             for value in ["lifetime", "early_adopter", "standard", "free"] {
@@ -1459,7 +1459,7 @@ mod tier_change_tests {
 
     #[test]
     fn requires_a_2fa_code_and_posts_to_the_tier_route() {
-        let html = tier_change_card(&target(SubscriptionTier::Standard)).into_string();
+        let html = tier_change_card(&target(MembershipTier::Standard)).into_string();
         assert!(html.contains(&format!(r#"action="/admin/users/{UID}/tier""#)));
         assert!(
             html.contains(r#"name="totp_code""#) && html.contains("required"),
@@ -1469,7 +1469,7 @@ mod tier_change_tests {
 
     #[test]
     fn preselects_the_current_tier() {
-        let html = tier_change_card(&target(SubscriptionTier::EarlyAdopter)).into_string();
+        let html = tier_change_card(&target(MembershipTier::EarlyAdopter)).into_string();
         assert!(
             html.contains(r#"value="early_adopter" selected"#),
             "the member's current tier is preselected: {html}"

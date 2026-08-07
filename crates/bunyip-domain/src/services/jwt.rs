@@ -43,7 +43,7 @@ impl AccessTokenClaims {
     /// - User is an admin
     /// - User is a lifetime member
     /// - User has an active trial (trial_ends_at in the future)
-    /// - User has an active or grace_period subscription
+    /// - User has an active or grace_period membership
     pub fn has_member_access(&self) -> bool {
         Self::has_member_access_static(
             &self.role,
@@ -392,10 +392,10 @@ mod tests {
             last_login_country: None,
             login_location_alerts: true,
             deleted_at: None,
-            subscription_tier: "standard".to_string(),
+            membership_tier: "standard".to_string(),
             trial_ends_at: None,
             lifetime_member: false,
-            subscription_override_by: None,
+            membership_override_by: None,
             first_name: None,
             last_name: None,
             phone: None,
@@ -474,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn has_member_access_active_subscription() {
+    fn has_member_access_active_membership() {
         let claims = test_claims("active", false, None, "subscriber");
         assert!(claims.has_member_access());
     }

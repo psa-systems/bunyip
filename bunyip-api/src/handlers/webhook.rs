@@ -10,9 +10,7 @@ use std::sync::Arc;
 use crate::config::TierConfig;
 use crate::errors::AppError;
 use crate::models::entitlement::entitlement_source;
-use crate::models::{
-    AuditAction, AuditSeverity, CreateAuditLog, MembershipStatus, SubscriptionTier,
-};
+use crate::models::{AuditAction, AuditSeverity, CreateAuditLog, MembershipStatus, MembershipTier};
 use crate::repositories::{AuditLogRepository, EntitlementRepository, UserRepository};
 use crate::services::{stripe_err, EmailService, StripeService};
 
@@ -475,7 +473,7 @@ async fn handle_subscription_created(
     let mut tx = pool.begin().await?;
     UserRepository::update_membership_status(&mut *tx, user.id, MembershipStatus::Active).await?;
     if let Some(ref tier) = resolved_tier {
-        UserRepository::upgrade_subscription_tier(&mut *tx, user.id, tier).await?;
+        UserRepository::upgrade_membership_tier(&mut *tx, user.id, tier).await?;
     }
     tx.commit().await?;
 
@@ -555,7 +553,7 @@ async fn handle_subscription_updated(
         let mut tx = pool.begin().await?;
         UserRepository::update_membership_status(&mut *tx, user.id, user_status).await?;
         if let Some(ref tier) = resolved_tier {
-            UserRepository::upgrade_subscription_tier(&mut *tx, user.id, tier).await?;
+            UserRepository::upgrade_membership_tier(&mut *tx, user.id, tier).await?;
         }
         tx.commit().await?;
 
@@ -673,7 +671,7 @@ async fn handle_subscription_deleted(
         let mut tx = pool.begin().await?;
         UserRepository::update_membership_status(&mut *tx, user.id, MembershipStatus::Canceled)
             .await?;
-        UserRepository::reset_subscription_tier(&mut *tx, user.id).await?;
+        UserRepository::reset_membership_tier(&mut *tx, user.id).await?;
         UserRepository::clear_grace_period(&mut *tx, user.id).await?;
         tx.commit().await?;
 
@@ -870,18 +868,18 @@ async fn handle_payment_failed(
     Ok(())
 }
 
-/// Map a Stripe product ID to its corresponding `SubscriptionTier` using the current tier config.
+/// Map a Stripe product ID to its corresponding `MembershipTier` using the current tier config.
 /// Returns `None` if the product ID does not match any configured mapping, meaning tier is left
-/// unchanged and only `subscription_status` is updated by the caller.
-fn resolve_tier_for_product(product_id: &str, tc: &TierConfig) -> Option<SubscriptionTier> {
+/// unchanged and only `membership_status` is updated by the caller.
+fn resolve_tier_for_product(product_id: &str, tc: &TierConfig) -> Option<MembershipTier> {
     if tc.lifetime_product_id.as_deref() == Some(product_id) {
-        return Some(SubscriptionTier::Lifetime);
+        return Some(MembershipTier::Lifetime);
     }
     if tc.early_adopter_product_id.as_deref() == Some(product_id) {
-        return Some(SubscriptionTier::EarlyAdopter);
+        return Some(MembershipTier::EarlyAdopter);
     }
     if tc.standard_product_id.as_deref() == Some(product_id) {
-        return Some(SubscriptionTier::Standard);
+        return Some(MembershipTier::Standard);
     }
     None
 }

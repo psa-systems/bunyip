@@ -73,6 +73,22 @@ fn skin_theme_css() -> Option<&'static str> {
     SKIN_THEME_CSS.get().and_then(Option::as_deref)
 }
 
+/// BUNYIP-499: the app/brand name for the nav brand mark and the browser-title
+/// suffix. Set once from `main` out of `Config::app_name` (same `OnceLock`
+/// pattern as [`SSE_API_ORIGIN`]). Defaults to `"Bunyip"` so output is
+/// unchanged until a skin sets `APP_NAME`.
+static APP_NAME: OnceLock<String> = OnceLock::new();
+
+/// Install the app/brand name. Called once from `main` before serving.
+/// Idempotent (the underlying `OnceLock` ignores subsequent sets).
+pub fn install_app_name(name: impl Into<String>) {
+    let _ = APP_NAME.set(name.into());
+}
+
+fn app_name() -> &'static str {
+    APP_NAME.get().map(String::as_str).unwrap_or("Bunyip")
+}
+
 /// BUNYIP-145 / BUNYIP-424: the browser-facing origin the dashboard's
 /// `EventSource` connects to, handed to `assets/js/sse.js` as a `data-` attribute
 /// on its own `<script>` tag. Server values reach the client as passive markup,
@@ -93,7 +109,7 @@ pub fn document(title: &str, body: Markup) -> Markup {
                 meta name="description" content="Bunyip - the SaaS layer for your PSA. Auth, billing, members, and identity for Mokosh.";
                 meta name="theme-color" media="(prefers-color-scheme: light)" content="#2f4e2e";
                 meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161a16";
-                title { (title) }
+                title { (title) " · " (app_name()) }
                 // BUNYIP-339: favicon set derived from the Bunyip hero art
                 // (face crop, rounded corners). Served from /assets via ServeDir.
                 link rel="icon" href="/assets/favicon.ico" sizes="any";
@@ -184,7 +200,7 @@ fn brand() -> Markup {
     html! {
         a href="/" class="flex items-center gap-2 group" {
             (brand_mark())
-            span class="text-2xl font-semibold tracking-tight text-brand-primary-900 dark:text-brand-primary-50 group-hover:text-brand-primary-700 dark:group-hover:text-brand-primary-200 transition-colors" { "Bunyip" }
+            span class="text-2xl font-semibold tracking-tight text-brand-primary-900 dark:text-brand-primary-50 group-hover:text-brand-primary-700 dark:group-hover:text-brand-primary-200 transition-colors" { (app_name()) }
         }
     }
 }
@@ -627,10 +643,9 @@ const APP_COLUMN_CLASS: &str = "flex flex-1 flex-col overflow-hidden";
 const APP_MAIN_CLASS: &str = "relative flex-1 overflow-y-auto p-6";
 
 /// `topbar_title` is the heading rendered in the top bar (NOT the browser
-/// `<title>`). `dashboard_response` derives it from the page-title argument by
-/// stripping the ` · Bunyip` brand suffix - that suffix is redundant in the
-/// visual header but is still expected on the browser tab. Pre-stripped here
-/// so every handler keeps its existing `dashboard_response(...)` call shape.
+/// `<title>`). BUNYIP-499: it is the bare page title; the browser tab's
+/// " · {app_name}" suffix is appended separately in `document()`, so the header
+/// and the tab title no longer diverge by a hardcoded brand string.
 pub fn dashboard_shell(user: &User, active: &str, topbar_title: &str, content: Markup) -> Markup {
     let is_admin = user.role == UserRole::Admin;
     let is_member = crate::util::has_active_membership(Some(user));
@@ -706,7 +721,7 @@ pub fn admin_block_grid(blocks: Vec<Markup>) -> Markup {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::types::{MembershipStatus, SubscriptionTier};
+    use crate::api::types::{MembershipStatus, MembershipTier};
 
     fn test_user(role: UserRole) -> User {
         User {
@@ -721,7 +736,7 @@ mod tests {
             locked_price_amount: None,
             created_at: String::new(),
             updated_at: String::new(),
-            subscription_tier: SubscriptionTier::Free,
+            membership_tier: MembershipTier::Free,
             trial_ends_at: None,
             lifetime_member: false,
             first_name: Some("Ada".into()),

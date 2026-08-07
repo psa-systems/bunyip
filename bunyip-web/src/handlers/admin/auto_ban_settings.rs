@@ -128,7 +128,7 @@ pub async fn auto_ban_settings(State(st): State<AppState>, headers: HeaderMap) -
         &c,
         &user,
         "/admin/auto-ban-settings",
-        "Auto-ban Settings · Bunyip",
+        "Auto-ban Settings",
         content,
     )
 }
@@ -219,7 +219,7 @@ pub async fn auto_ban_settings_save(
         &c,
         &user,
         "/admin/auto-ban-settings",
-        "Auto-ban Settings · Bunyip",
+        "Auto-ban Settings",
         content,
     )
 }

@@ -148,7 +148,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
             }
         }
     };
-    admin_response(&c, &user, "/admin", "Admin · Bunyip", content)
+    admin_response(&c, &user, "/admin", "Admin", content)
 }
 
 #[cfg(test)]

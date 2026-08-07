@@ -175,7 +175,7 @@ pub async fn application_groups(State(st): State<AppState>, headers: HeaderMap) 
         &c,
         &user,
         "/admin/application-groups",
-        "Application Groups · Bunyip",
+        "Application Groups",
         content,
     )
 }
@@ -187,13 +187,7 @@ pub async fn application_group_new(State(st): State<AppState>, headers: HeaderMa
         Err(r) => return r,
     };
     let content = group_form("/admin/application-groups", "New group", None, None);
-    admin_response(
-        &c,
-        &user,
-        "/admin/application-groups",
-        "New group · Bunyip",
-        content,
-    )
+    admin_response(&c, &user, "/admin/application-groups", "New group", content)
 }
 
 /// POST /admin/application-groups
@@ -210,13 +204,7 @@ pub async fn application_group_create(
         Ok(b) => b,
         Err(msg) => {
             let content = group_form("/admin/application-groups", "New group", None, Some(&msg));
-            return admin_response(
-                &c,
-                &user,
-                "/admin/application-groups",
-                "New group · Bunyip",
-                content,
-            );
+            return admin_response(&c, &user, "/admin/application-groups", "New group", content);
         }
     };
     match admin_api::create_application_group(&st.api, c.forward.as_deref(), body).await {
@@ -228,13 +216,7 @@ pub async fn application_group_create(
                 None,
                 Some(&e.user_message()),
             );
-            admin_response(
-                &c,
-                &user,
-                "/admin/application-groups",
-                "New group · Bunyip",
-                content,
-            )
+            admin_response(&c, &user, "/admin/application-groups", "New group", content)
         }
     }
 }
@@ -273,7 +255,7 @@ pub async fn application_group_edit(
         &c,
         &user,
         "/admin/application-groups",
-        "Edit group · Bunyip",
+        "Edit group",
         content,
     )
 }
@@ -302,7 +284,7 @@ pub async fn application_group_save(
                 &c,
                 &user,
                 "/admin/application-groups",
-                "Edit group · Bunyip",
+                "Edit group",
                 content,
             );
         }
@@ -320,7 +302,7 @@ pub async fn application_group_save(
                 &c,
                 &user,
                 "/admin/application-groups",
-                "Edit group · Bunyip",
+                "Edit group",
                 content,
             )
         }
