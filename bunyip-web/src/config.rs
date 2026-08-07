@@ -64,6 +64,10 @@ pub struct Config {
     /// unchanged until a skin overrides it. Mirrors the email subsystem's
     /// config-driven `APP_NAME`.
     pub app_name: String,
+    /// BUNYIP-501: the `<meta name="description">` copy. Skin marketing text, so
+    /// it is config-driven rather than a framework literal. `BRAND_DESCRIPTION`;
+    /// defaults to bunyip's copy so output is unchanged until a skin overrides it.
+    pub brand_description: String,
 }
 
 /// BUNYIP-311: parse a comma-separated list of CIDR ranges into trusted-proxy
@@ -111,6 +115,9 @@ impl Config {
             trusted_proxies: parse_trusted_proxies(&var("TRUSTED_PROXY_CIDR").unwrap_or_default()),
             theme_css: var("BRAND_THEME_CSS"),
             app_name: var("APP_NAME").unwrap_or_else(|| "Bunyip".into()),
+            brand_description: var("BRAND_DESCRIPTION").unwrap_or_else(|| {
+                "Bunyip - the SaaS layer for your PSA. Auth, billing, members, and identity for Mokosh.".into()
+            }),
         }
     }
 

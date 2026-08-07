@@ -132,6 +132,7 @@ mod tests {
             trusted_proxies: Vec::new(),
             theme_css: None,
             app_name: "Bunyip".into(),
+            brand_description: String::new(),
         }
     }
 
