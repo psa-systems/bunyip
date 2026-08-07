@@ -1359,6 +1359,7 @@ mod logout_clear_tests {
             app_domain: app_domain.into(),
             community_url: String::new(),
             trusted_proxies: Vec::new(),
+            theme_css: None,
         }
     }
 

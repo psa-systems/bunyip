@@ -53,6 +53,12 @@ pub struct Config {
     /// `TRUSTED_PROXY_CIDR` (comma-separated), analogous to bunyip-api's own
     /// `TRUSTED_PROXY_CIDR`. Empty = trust no forwarding headers.
     pub trusted_proxies: Vec<ipnetwork::IpNetwork>,
+    /// BUNYIP-500: optional per-skin theme override. Raw CSS custom-property
+    /// declarations (e.g. `--skin-primary-500: #123456; ...`) emitted into a
+    /// `:root { ... }` block in the document head, overriding the default brand
+    /// ramp the `@theme` tokens fall back to. `BRAND_THEME_CSS`; `None` (default)
+    /// emits nothing, so the default (Bunyip) palette is unchanged.
+    pub theme_css: Option<String>,
 }
 
 /// BUNYIP-311: parse a comma-separated list of CIDR ranges into trusted-proxy
@@ -98,6 +104,7 @@ impl Config {
             // inbound X-Forwarded-For the BFF trusts when resolving the
             // end-user IP. Same comma-separated CIDR form bunyip-api parses.
             trusted_proxies: parse_trusted_proxies(&var("TRUSTED_PROXY_CIDR").unwrap_or_default()),
+            theme_css: var("BRAND_THEME_CSS"),
         }
     }
 

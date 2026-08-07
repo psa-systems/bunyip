@@ -14,7 +14,7 @@
    `hsl(var(--token))` in the @theme inline block below, so toggling the
    class on <html> reskins every semantic utility at runtime.
 
-   HSL conversions of the Bunyip hex scale (see @theme bunyip-reed-* / water-*):
+   HSL conversions of the default hex scale (see @theme brand-primary-* / brand-accent-*):
      reed-50  #f3f7f3 -> 120 21% 96%   reed-600 #3c6438 -> 116 28% 31%
      reed-100 #e3ecde -> 95 26% 90%    reed-700 #2f4e2e -> 117 26% 24%
      reed-200 #c6d8bd -> 95 30% 79%    reed-900 #1f311f -> 120 22% 16%
@@ -193,25 +193,25 @@
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
 
-  /* Bunyip reed (primary green) scale. Verbatim from the original input.css. */
-  --color-bunyip-reed-50: #f3f7f3;
-  --color-bunyip-reed-100: #e3ecde;
-  --color-bunyip-reed-200: #c6d8bd;
-  --color-bunyip-reed-300: #99bb8e;
-  --color-bunyip-reed-400: #6e9c64;
-  --color-bunyip-reed-500: #4f7e48;
-  --color-bunyip-reed-600: #3c6438;
-  --color-bunyip-reed-700: #2f4e2e;
-  --color-bunyip-reed-800: #283e27;
-  --color-bunyip-reed-900: #1f311f;
+  /* Primary scale. Default (reed/green) hexes; a skin overrides via --skin-primary-* on :root. */
+  --color-brand-primary-50: var(--skin-primary-50, #f3f7f3);
+  --color-brand-primary-100: var(--skin-primary-100, #e3ecde);
+  --color-brand-primary-200: var(--skin-primary-200, #c6d8bd);
+  --color-brand-primary-300: var(--skin-primary-300, #99bb8e);
+  --color-brand-primary-400: var(--skin-primary-400, #6e9c64);
+  --color-brand-primary-500: var(--skin-primary-500, #4f7e48);
+  --color-brand-primary-600: var(--skin-primary-600, #3c6438);
+  --color-brand-primary-700: var(--skin-primary-700, #2f4e2e);
+  --color-brand-primary-800: var(--skin-primary-800, #283e27);
+  --color-brand-primary-900: var(--skin-primary-900, #1f311f);
 
-  /* Bunyip water (accent teal) scale. */
-  --color-bunyip-water-50: #eaf3f4;
-  --color-bunyip-water-100: #cce0e3;
-  --color-bunyip-water-300: #84afb6;
-  --color-bunyip-water-500: #2b6273;
-  --color-bunyip-water-700: #1d4351;
-  --color-bunyip-water-900: #0e2730;
+  /* Accent scale. Default (water/teal) hexes; a skin overrides via --skin-accent-* on :root. */
+  --color-brand-accent-50: var(--skin-accent-50, #eaf3f4);
+  --color-brand-accent-100: var(--skin-accent-100, #cce0e3);
+  --color-brand-accent-300: var(--skin-accent-300, #84afb6);
+  --color-brand-accent-500: var(--skin-accent-500, #2b6273);
+  --color-brand-accent-700: var(--skin-accent-700, #1d4351);
+  --color-brand-accent-900: var(--skin-accent-900, #0e2730);
 
   /* Semantic surface tokens (flip in dark mode below). */
   --color-surface: #ffffff;
@@ -295,7 +295,7 @@
     Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
-/* Dark mode: invert the semantic surface tokens (bunyip-reed/water utilities
+/* Dark mode: invert the semantic surface tokens (brand-primary/water utilities
    are static; only `surface`/`text` flip). */
 .dark {
   --color-surface: #161a16;
@@ -324,19 +324,19 @@
   }
 
   *:focus-visible {
-    outline: 2px solid var(--color-bunyip-reed-600);
+    outline: 2px solid var(--color-brand-primary-600);
     outline-offset: 2px;
     border-radius: 4px;
   }
 
   ::selection {
-    background-color: var(--color-bunyip-reed-200);
-    color: var(--color-bunyip-reed-900);
+    background-color: var(--color-brand-primary-200);
+    color: var(--color-brand-primary-900);
   }
 
   .dark ::selection {
-    background-color: var(--color-bunyip-reed-700);
-    color: var(--color-bunyip-reed-50);
+    background-color: var(--color-brand-primary-700);
+    color: var(--color-brand-primary-50);
   }
 }
 

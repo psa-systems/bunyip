@@ -47,6 +47,9 @@ async fn main() {
     // BUNYIP-329: gate the Community nav entry on whether a Let's Chat instance
     // is configured (BUNYIP_COMMUNITY_URL).
     views::layout::install_community_enabled(cfg.community_enabled());
+    // BUNYIP-500: per-skin brand theme override (BRAND_THEME_CSS); None keeps
+    // the default palette.
+    views::layout::install_skin_theme_css(cfg.theme_css.clone());
     // BUNYIP-243: while bunyip-api is unreachable, poll its /health on an
     // interval and clear the app-wide "service unavailable" banner on recovery.
     // Idle (no network) while healthy; detection itself is reactive in

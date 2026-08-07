@@ -130,6 +130,7 @@ mod tests {
             app_domain: String::new(),
             community_url: String::new(),
             trusted_proxies: Vec::new(),
+            theme_css: None,
         }
     }
 
