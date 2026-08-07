@@ -153,7 +153,7 @@ pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response
             &pricing,
             "Not found",
             false,
-            crate::handlers::public::not_found_content(),
+            crate::skin::public::not_found_content(),
         );
         *resp.status_mut() = axum::http::StatusCode::NOT_FOUND;
         return resp;
@@ -678,17 +678,17 @@ const DOCS: &[(&str, &str, &str)] = &[
     (
         "getting-started",
         "Getting Started",
-        include_str!("../docs/getting-started.md"),
+        include_str!("docs/getting-started.md"),
     ),
     (
         "downloading-apps",
         "Downloading Apps",
-        include_str!("../docs/downloading-apps.md"),
+        include_str!("docs/downloading-apps.md"),
     ),
     (
         "membership",
         "Membership & Access",
-        include_str!("../docs/membership.md"),
+        include_str!("docs/membership.md"),
     ),
 ];
 
