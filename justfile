@@ -42,7 +42,7 @@ pre-commit: ensure-env
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-migrations check-workflows check-runners check-security check-stripe-env check-key-env check-no-bash check-build check-clippy check-fmt check-docker
+check: check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-no-bash check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -53,6 +53,13 @@ check-migrations:
 [group: 'checks']
 check-workflows:
     ./scripts/check-workflow-secrets.nu
+
+# Gate that every workflow step runs under Nushell: each job declares the
+# Nushell shell under `defaults.run` and no step opts out (BUNYIP-489).
+[group: 'checks']
+check-workflow-shell:
+    ./scripts/check-workflow-shell.nu --self-test
+    ./scripts/check-workflow-shell.nu
 
 # Gate the runner labels: the native cargo job stays on the dev image, every
 # label carries its reason, no workflow installs at run time what the image

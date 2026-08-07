@@ -45,8 +45,12 @@ jobs:
     # libraries that put e2e.yml on the dev label (BUNYIP-446).
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
 
+    # Every run: step in this repo executes under Nushell (BUNYIP-489).
+    # Declared once per job so a new step cannot silently inherit Bash;
+    # scripts/check-workflow-shell.nu gates it.
     defaults:
       run:
+        shell: nu {0}
         working-directory: e2e
 
     # The complete credential surface of this job. Adding any other secret here

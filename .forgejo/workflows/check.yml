@@ -56,6 +56,14 @@ jobs:
       # surrounding context.
       CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
       CARGO_INCREMENTAL: "0"
+
+    # Every run: step in this repo executes under Nushell (BUNYIP-489).
+    # Declared once per job so a new step cannot silently inherit Bash;
+    # scripts/check-workflow-shell.nu gates it.
+    defaults:
+      run:
+        shell: nu {0}
+
     steps:
       - name: Clone the repository
         uses: https://code.forgejo.org/actions/checkout@v5
@@ -81,6 +89,15 @@ jobs:
         # branch. Keeps the E2E suite off pull_request and the PR gate down to
         # the two base URLs (BUNYIP-425).
         run: ./scripts/check-workflow-secrets.nu
+
+      - name: Check every workflow step runs under Nushell
+        # Every job declares `defaults.run.shell: nu {0}` and no step opts back
+        # into another shell, so a new step cannot silently inherit Bash
+        # (BUNYIP-489). --self-test first, so a gate that stopped detecting
+        # anything fails the build instead of passing vacuously.
+        run: |
+          ./scripts/check-workflow-shell.nu --self-test
+          ./scripts/check-workflow-shell.nu
 
       - name: Check runner labels
         # Keep the native cargo job on the dev image (the only one with a C
@@ -113,7 +130,7 @@ jobs:
 
       - name: Cap build parallelism
         # nproc/2 cap: never claim more than half the host (see CI.md "Concurrency cap").
-        run: echo "CARGO_BUILD_JOBS=$(($(nproc) / 2))" >> "$GITHUB_ENV"
+        run: $"CARGO_BUILD_JOBS=((sys cpu | length) / 2 | into int)\n" | save --append $env.GITHUB_ENV
 
       - name: Check formatting
         run: cargo fmt --all --check
@@ -138,8 +155,9 @@ jobs:
         # cheaply, mirroring `just check-docker`. The runner reuses its image
         # store between jobs, and buildkit's exporter refuses to overwrite an
         # existing tag ("image ... already exists", BUNYIP-231). Drop any
-        # builder image a prior run left behind so the rebuild can re-tag; the
-        # `|| true` keeps the first run (tag absent) green, matching the
+        # builder image a prior run left behind so the rebuild can re-tag;
+        # piping through `complete` captures the exit code and stderr instead
+        # of raising, so the first run (tag absent) stays green, matching the
         # `docker image rm` cleanup in the justfile's `dev-clean-all` recipe.
         #
         # BUNYIP-241: buildkit's default-on provenance / SBOM attestation makes
@@ -149,11 +167,9 @@ jobs:
         # check step does not consume the resulting image (it only validates
         # that the build succeeds), so `--provenance=false` collapses the
         # export to one manifest with no observable downside.
+        #
+        # Nushell has no backslash line continuation, so the build stays on one
+        # line.
         run: |
-          docker image rm bunyip-api-builder:check 2>/dev/null || true
-          docker build \
-            --provenance=false \
-            --file bunyip-api/oci-build/Dockerfile \
-            --target builder \
-            --tag bunyip-api-builder:check \
-            .
+          ^docker image rm bunyip-api-builder:check | complete | ignore
+          ^docker build --provenance=false --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .
