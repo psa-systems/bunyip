@@ -29,7 +29,7 @@ use crate::errors::AppError;
 use crate::models::entitlement::entitlement_source;
 use crate::models::{
     CreateApplication, CreateApplicationGroup, CreateFeedback, CreateUser, MembershipStatus,
-    SubscriptionTier, UserRole,
+    MembershipTier, UserRole,
 };
 use crate::repositories::{
     ApplicationGroupRepository, ApplicationRepository, EntitlementRepository, FeedbackRepository,
@@ -51,7 +51,7 @@ pub const SEED_EMAIL_DOMAIN: &str = "demo.psa-systems.test";
 /// rejects anything outside these sets so a template typo (`amdin`, `actve`)
 /// fails loudly instead of silently seeding wrong-but-valid data - the loader's
 /// string -> enum mapping otherwise falls back to a default. Kept in lock-step
-/// with `UserRole`, `MembershipStatus`, and `SubscriptionTier`.
+/// with `UserRole`, `MembershipStatus`, and `MembershipTier`.
 const VALID_ROLES: [&str; 2] = ["subscriber", "admin"];
 const VALID_STATUSES: [&str; 5] = ["none", "active", "past_due", "canceled", "grace_period"];
 const VALID_TIERS: [&str; 4] = ["free", "standard", "early_adopter", "lifetime"];
@@ -409,7 +409,7 @@ impl SeedFile {
             if let Some(tier) = &u.membership.tier {
                 if !VALID_TIERS.contains(&tier.to_ascii_lowercase().as_str()) {
                     errs.push(format!(
-                        "user '{}' has unknown subscription tier '{}' (expected one of {VALID_TIERS:?})",
+                        "user '{}' has unknown membership tier '{}' (expected one of {VALID_TIERS:?})",
                         u.email, tier
                     ));
                 }
@@ -591,17 +591,17 @@ fn parse_role(role: &str) -> UserRole {
     }
 }
 
-/// Map a template tier string to a [`SubscriptionTier`]. `lifetime = true`
+/// Map a template tier string to a [`MembershipTier`]. `lifetime = true`
 /// forces `Lifetime`; an unknown/absent tier falls back to `Free`.
-fn parse_tier(tier: Option<&str>, lifetime: bool) -> SubscriptionTier {
+fn parse_tier(tier: Option<&str>, lifetime: bool) -> MembershipTier {
     if lifetime {
-        return SubscriptionTier::Lifetime;
+        return MembershipTier::Lifetime;
     }
     match tier.map(str::to_ascii_lowercase).as_deref() {
-        Some("lifetime") => SubscriptionTier::Lifetime,
-        Some("early_adopter") => SubscriptionTier::EarlyAdopter,
-        Some("standard") => SubscriptionTier::Standard,
-        _ => SubscriptionTier::Free,
+        Some("lifetime") => MembershipTier::Lifetime,
+        Some("early_adopter") => MembershipTier::EarlyAdopter,
+        Some("standard") => MembershipTier::Standard,
+        _ => MembershipTier::Free,
     }
 }
 
@@ -945,7 +945,7 @@ pub async fn export(pool: &PgPool, domain: &str) -> Result<SeedFile, LoadError> 
             password_env: None,
             membership: SeedMembership {
                 status: Some(u.membership_status.clone()),
-                tier: Some(u.subscription_tier.clone()),
+                tier: Some(u.membership_tier.clone()),
                 lifetime: u.lifetime_member,
                 price_locked: u.price_locked,
                 locked_price_amount: u.locked_price_amount,
@@ -1175,7 +1175,7 @@ mod tests {
                     .any(|e| e.contains("unknown membership status 'actve'")));
                 assert!(errs
                     .iter()
-                    .any(|e| e.contains("unknown subscription tier 'anual'")));
+                    .any(|e| e.contains("unknown membership tier 'anual'")));
             }
             other => panic!("expected Validation, got {other:?}"),
         }

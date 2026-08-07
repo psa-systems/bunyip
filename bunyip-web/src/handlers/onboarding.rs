@@ -228,7 +228,7 @@ fn step_card(icon_name: &str, gradient: &str, title: &str, done: bool, body: Mar
 #[cfg(test)]
 mod tests {
     use super::onboarding_content;
-    use crate::api::types::{MembershipStatus, SubscriptionTier, User, UserRole};
+    use crate::api::types::{MembershipStatus, MembershipTier, User, UserRole};
 
     /// A named-but-unverified user: the state in which the onboarding page shows
     /// the "Resend verification email" control whose feedback BUNYIP-324 routes
@@ -246,7 +246,7 @@ mod tests {
             locked_price_amount: None,
             created_at: String::new(),
             updated_at: String::new(),
-            subscription_tier: SubscriptionTier::Free,
+            membership_tier: MembershipTier::Free,
             trial_ends_at: None,
             lifetime_member: false,
             first_name: Some("Ada".into()),

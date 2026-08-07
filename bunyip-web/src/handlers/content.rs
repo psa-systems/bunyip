@@ -178,7 +178,7 @@ pub async fn our_story(State(st): State<AppState>, headers: HeaderMap) -> Respon
                     h2 class="text-2xl font-semibold mb-4" { "Why Bunyip?" }
                     div class="space-y-4 text-muted-foreground" {
                         p { "Mokosh is a focused PSA: the product your MSP actually uses to run service delivery. But every product needs a business layer around it - signup, billing, members, invitations, single sign-on - and that layer is the same boring infrastructure everyone reinvents." }
-                        p { "We pulled that layer out into its own surface so the PSA never has to carry it. Bunyip owns identity, subscriptions, and memberships; Mokosh owns the work. Each does one thing well." }
+                        p { "We pulled that layer out into its own surface so the PSA never has to carry it. Bunyip owns identity, billing, and memberships; Mokosh owns the work. Each does one thing well." }
                         p { "The name is the lake cryptid that surfaces what matters. That is the job: lift the business-y bits up out of the product and keep them out of the way." }
                     }
                 }
@@ -1034,14 +1034,14 @@ mod feedback_tests {
 #[cfg(test)]
 mod pricing_tests {
     use super::{pricing_content, trial_phrase, PERSONAL};
-    use crate::api::types::{PricingResponse, PricingTier, SubscriptionTier};
+    use crate::api::types::{MembershipTier, PricingResponse, PricingTier};
 
     fn standard(amount: i64, trial_days: i64) -> PricingResponse {
         PricingResponse {
             enabled: true,
             trial_days,
             tiers: vec![PricingTier {
-                tier: SubscriptionTier::Standard,
+                tier: MembershipTier::Standard,
                 amount,
                 currency: "usd".into(),
                 interval: Some("month".into()),

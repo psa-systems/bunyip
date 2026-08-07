@@ -46,12 +46,12 @@ pub enum AuditAction {
     TwoFactorRekeyed,
     EmailVerificationRequested,
     EmailVerified,
-    /// BUNYIP-221: the initial subscription tier was assigned (one of Lifetime
+    /// BUNYIP-221: the initial membership tier was assigned (one of Lifetime
     /// / EarlyAdopter / Standard, with `trial_ends_at` set per the tier). Fires
     /// once per user the moment BOTH email is verified AND first / last name
     /// are present, regardless of which side crosses the threshold last.
     /// Metadata: `{ "trigger": "email_verified" | "profile_completed",
-    /// "subscription_tier": "<tier>" }`.
+    /// "membership_tier": "<tier>" }`.
     InitialTierGranted,
     FeedbackSubmitted,
     FeedbackResponded,
@@ -82,7 +82,7 @@ pub enum AuditAction {
     AdminInviteRevoked,
     AdminStripeConfigUpdated,
     AdminTierConfigUpdated,
-    /// BUNYIP-431: an admin moved a member to a different subscription tier.
+    /// BUNYIP-431: an admin moved a member to a different membership tier.
     /// Metadata carries `from_tier`, `to_tier`, the target email, and how many
     /// sessions were revoked. Gated on the acting admin's 2FA code.
     AdminTierChanged,

@@ -54,7 +54,7 @@ impl EntitlementRepository {
               AND (
                     u.lifetime_member = TRUE
                     OR (u.trial_ends_at IS NOT NULL AND u.trial_ends_at > now())
-                    OR u.subscription_status IN ('active', 'grace_period')
+                    OR u.membership_status IN ('active', 'grace_period')
               )
             ON CONFLICT (user_id, application_id) DO NOTHING
             "#,

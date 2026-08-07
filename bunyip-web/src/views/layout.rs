@@ -681,7 +681,7 @@ pub fn admin_block_grid(blocks: Vec<Markup>) -> Markup {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::types::{MembershipStatus, SubscriptionTier};
+    use crate::api::types::{MembershipStatus, MembershipTier};
 
     fn test_user(role: UserRole) -> User {
         User {
@@ -696,7 +696,7 @@ mod tests {
             locked_price_amount: None,
             created_at: String::new(),
             updated_at: String::new(),
-            subscription_tier: SubscriptionTier::Free,
+            membership_tier: MembershipTier::Free,
             trial_ends_at: None,
             lifetime_member: false,
             first_name: Some("Ada".into()),

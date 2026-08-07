@@ -13,7 +13,7 @@ use crate::errors::AppError;
 use crate::handlers::live_free_price_id;
 use crate::middleware::{extract_client_ip, AuthCookies, AuthenticatedUser};
 use crate::models::{
-    Application, AuditAction, CreateAuditLog, SubscriptionTier, TrustedDeviceInfo, UserResponse,
+    Application, AuditAction, CreateAuditLog, MembershipTier, TrustedDeviceInfo, UserResponse,
 };
 use crate::repositories::{
     AccountDeleteDispatchFailureRepository, ApplicationRepository, AuditLogRepository,
@@ -313,7 +313,7 @@ pub async fn update_current_user_profile(
 
     // Mirror the lifetime $0-subscription side-effect that `confirm_email_verification`
     // does so the side that closes the gate produces the same end state.
-    if granted == Some(SubscriptionTier::Lifetime) {
+    if granted == Some(MembershipTier::Lifetime) {
         maybe_create_lifetime_subscription(
             &pool,
             &stripe,
@@ -698,7 +698,7 @@ pub async fn confirm_email_verification(
 
     match &tier {
         Some(t) => {
-            tracing::info!(email = %email, subscription_tier = %t.as_str(), "Email verified, initial tier granted")
+            tracing::info!(email = %email, membership_tier = %t.as_str(), "Email verified, initial tier granted")
         }
         None => {
             tracing::info!(email = %email, "Email verified; tier grant pending name save (BUNYIP-221)")
@@ -710,7 +710,7 @@ pub async fn confirm_email_verification(
     // the BUNYIP-221 dual gate AND the grant landed on Lifetime; the same
     // side-effect fires from `update_current_user_profile` when the name
     // save is the closer instead.
-    if tier == Some(SubscriptionTier::Lifetime) {
+    if tier == Some(MembershipTier::Lifetime) {
         maybe_create_lifetime_subscription(
             pool.get_ref(),
             stripe.get_ref(),
@@ -726,7 +726,7 @@ pub async fn confirm_email_verification(
             // Empty string when the gate is still open on the name side; the
             // bunyip-web verify-email page falls through to a neutral message
             // in that case (handlers/auth_pages.rs::verify_email).
-            "subscription_tier": tier.as_ref().map(|t| t.as_str()).unwrap_or(""),
+            "membership_tier": tier.as_ref().map(|t| t.as_str()).unwrap_or(""),
         }),
         request_id,
     ))

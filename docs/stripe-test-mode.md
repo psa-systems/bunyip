@@ -167,7 +167,7 @@ There is no "all 9s" success card; the 9s appear in the decline cards above.
 
 Verified end to end on the dev-sso stack with provisioned test-mode keys:
 
-- A `4242` checkout activates membership (`subscription_status=active`, `price_locked=true`) via `checkout.session.completed` + `customer.subscription.created`.
+- A `4242` checkout activates membership (`membership_status=active`, `price_locked=true`) via `checkout.session.completed` + `customer.subscription.created`.
 - The grace cycle works: a customer-scoped `invoice.payment_failed` moves the member to `grace_period` (30-day window), and `invoice.payment_succeeded` clears it back to `active`.
 
 Outstanding: tier resolution from a mapped product (Step 4) is intentionally not

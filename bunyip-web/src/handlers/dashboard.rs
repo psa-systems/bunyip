@@ -13,7 +13,7 @@ use serde::Deserialize;
 use crate::api::auth as auth_api;
 use crate::api::calls;
 use crate::api::types::{
-    AppDownloadGroup, Application, Membership, MembershipStatus, OciImage, SubscriptionTier,
+    AppDownloadGroup, Application, Membership, MembershipStatus, MembershipTier, OciImage,
     TwoFactorSetupResponse, User,
 };
 use crate::handlers::{dashboard_response, guard, needs_onboarding, password_ok, rotating_index};
@@ -73,7 +73,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                 div class="p-6 pt-0" {
                     @if is_member {
                         div class="flex items-center justify-between" {
-                            div { (subscription_status(&user)) }
+                            div { (membership_status(&user)) }
                             a href="/membership" class=(button_class("outline", "sm", "border-indigo-300/30 text-indigo-600 hover:bg-indigo-500/10 dark:border-indigo-500/30 dark:text-indigo-400")) { "Manage" }
                         }
                     } @else {
@@ -212,7 +212,7 @@ fn membership_prompt(user: &User) -> Markup {
     }
 }
 
-fn subscription_status(user: &User) -> Markup {
+fn membership_status(user: &User) -> Markup {
     if user.lifetime_member {
         return html! { p class="text-sm font-medium text-teal-600 dark:text-teal-400" { "Lifetime member 🎉" } };
     }
@@ -750,13 +750,13 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
         Err(r) => return r,
     };
     // BUNYIP-225: gate the "Welcome aboard" success copy on the user's
-    // actual subscription_status, not just the tier string. The tier was
+    // actual membership_status, not just the tier string. The tier was
     // set at signup and stays "standard" forever for most users, so the
     // page used to confidently render success even when the webhook had
     // not flipped status to Active (e.g. signature-mismatch dropping the
     // delivery, or a 5-second race between the Stripe redirect and the
     // webhook landing). Read the live status; if it is not yet Active,
-    // render a "Finalizing your subscription..." card that auto-refreshes
+    // render a "Finalizing your membership..." card that auto-refreshes
     // until the webhook lands. Lifetime members and any user already
     // Active see the celebration unchanged.
     let fwd = c.forward.as_deref();
@@ -766,7 +766,7 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
             .as_ref()
             .map(|m| matches!(m.status, MembershipStatus::Active))
             .unwrap_or(false);
-    let tier = tier_name(&user.subscription_tier);
+    let tier = tier_name(&user.membership_tier);
     let content = if is_active {
         html! {
             div class="flex items-center justify-center min-h-[70vh]" {
@@ -793,7 +793,7 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
         }
     } else {
         // Stripe Checkout has redirected the user here, but the webhook that
-        // flips subscription_status to Active has not landed yet. Two normal
+        // flips membership_status to Active has not landed yet. Two normal
         // causes: (a) network delay between the Stripe redirect and Stripe
         // firing the `checkout.session.completed` event (typically <5s); (b)
         // bunyip-api is rejecting Stripe deliveries (signature mismatch,
@@ -813,7 +813,7 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
                             }
                         }
                         div class="space-y-2" {
-                            h1 class="text-3xl font-bold" { "Finalizing your subscription" }
+                            h1 class="text-3xl font-bold" { "Finalizing your membership" }
                             p class="text-muted-foreground text-lg" {
                                 "Stripe is confirming your payment. This page refreshes automatically."
                             }
@@ -822,7 +822,7 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
                             "Still here after 30 seconds? Reload, or contact support if it persists."
                         }
                         // Refresh every 3s. As soon as the webhook lands and
-                        // subscription_status flips to Active, the next
+                        // membership_status flips to Active, the next
                         // refresh renders the success branch above.
                         // BUNYIP-424: `data-reload-after` is read by
                         // `assets/js/app.js`; no inline script.
@@ -881,12 +881,12 @@ pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap)
 /// is a one-line change here that updates every consumer. Closes audit
 /// finding 1 (plan name inconsistency). See
 /// `docs/bunyip-upgrade/01-membership-plan-data.md`.
-pub fn tier_name(t: &SubscriptionTier) -> &'static str {
+pub fn tier_name(t: &MembershipTier) -> &'static str {
     match t {
-        SubscriptionTier::Lifetime => "Lifetime",
-        SubscriptionTier::Free => "Free",
-        SubscriptionTier::EarlyAdopter => "Early Adopter",
-        SubscriptionTier::Standard => "Standard",
+        MembershipTier::Lifetime => "Lifetime",
+        MembershipTier::Free => "Free",
+        MembershipTier::EarlyAdopter => "Early Adopter",
+        MembershipTier::Standard => "Standard",
     }
 }
 fn status_label(s: &MembershipStatus) -> &'static str {
@@ -932,7 +932,7 @@ pub async fn membership(
         .await
         .map(|s| s.stripe_enabled)
         .unwrap_or(true);
-    let tier = user.subscription_tier.clone();
+    let tier = user.membership_tier.clone();
     let status = current.as_ref().map(|m| m.status.clone());
     // Lifetime members get a stripped-down card: plan name + an explanatory
     // line, NO price, NO next-billing field, NO cancel buttons. Subscribers
@@ -1304,7 +1304,7 @@ pub async fn settings(
                 div class="p-6 pt-0 space-y-4" {
                     div class="grid gap-4 md:grid-cols-2" {
                         div { p class="text-sm text-muted-foreground" { "Email" } p class="font-medium" { (user.email) } }
-                        div { p class="text-sm text-muted-foreground" { "Account Type" } p class="font-medium flex items-center gap-2" { @if is_admin { "admin" (badge("default", "Admin")) } @else { (tier_name(&user.subscription_tier)) } } }
+                        div { p class="text-sm text-muted-foreground" { "Account Type" } p class="font-medium flex items-center gap-2" { @if is_admin { "admin" (badge("default", "Admin")) } @else { (tier_name(&user.membership_tier)) } } }
                         div { p class="text-sm text-muted-foreground" { "Email Verified" } p class="font-medium flex items-center gap-2" { @if user.email_verified { (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400")) "Verified" } @else { (icon("alert-circle", "h-4 w-4 text-amber-700 dark:text-amber-400")) "Not Verified" } } @if !user.email_verified { form method="post" action="/settings/verify-email/resend" class="mt-2" { button type="submit" class=(button_class("outline", "sm", "")) { (icon("mail", "mr-2 h-4 w-4")) "Resend verification email" } } } }
                         div { p class="text-sm text-muted-foreground" { "Membership Status" } p class="font-medium" { (status_label(&user.membership_status)) } }
                     }
@@ -2403,7 +2403,7 @@ pub async fn twofa_rekey_confirm_post(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::types::{MembershipStatus, SubscriptionTier, User, UserRole};
+    use crate::api::types::{MembershipStatus, MembershipTier, User, UserRole};
 
     fn user(role: UserRole, status: MembershipStatus) -> User {
         User {
@@ -2418,7 +2418,7 @@ mod tests {
             locked_price_amount: None,
             created_at: String::new(),
             updated_at: String::new(),
-            subscription_tier: SubscriptionTier::Free,
+            membership_tier: MembershipTier::Free,
             trial_ends_at: None,
             lifetime_member: false,
             first_name: None,
