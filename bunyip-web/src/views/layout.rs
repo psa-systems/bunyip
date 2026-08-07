@@ -56,6 +56,23 @@ fn community_enabled() -> bool {
     *COMMUNITY_ENABLED.get().unwrap_or(&false)
 }
 
+/// BUNYIP-500: optional per-skin theme override (raw CSS custom-property
+/// declarations for the brand ramp, `Config::theme_css`). Set once from `main`
+/// (same `OnceLock` pattern as [`SSE_API_ORIGIN`]); emitted into a `:root`
+/// block in the document head. Unset (the default) emits nothing, so the
+/// `@theme` tokens fall back to the default palette.
+static SKIN_THEME_CSS: OnceLock<Option<String>> = OnceLock::new();
+
+/// Install the per-skin theme override. Called once from `main` before serving.
+/// Idempotent (the underlying `OnceLock` ignores subsequent sets).
+pub fn install_skin_theme_css(css: Option<String>) {
+    let _ = SKIN_THEME_CSS.set(css);
+}
+
+fn skin_theme_css() -> Option<&'static str> {
+    SKIN_THEME_CSS.get().and_then(Option::as_deref)
+}
+
 /// BUNYIP-499: the app/brand name for the nav brand mark and the browser-title
 /// suffix. Set once from `main` out of `Config::app_name` (same `OnceLock`
 /// pattern as [`SSE_API_ORIGIN`]). Defaults to `"Bunyip"` so output is
@@ -114,6 +131,14 @@ pub fn document(title: &str, body: Markup) -> Markup {
                 link rel="stylesheet" href="/assets/vendor/fontawesome-6.7.2/css/solid.min.css";
                 link rel="stylesheet" href="/assets/vendor/fontawesome-6.7.2/css/regular.min.css";
                 link rel="stylesheet" href="/assets/styles.css";
+                // BUNYIP-500: per-skin theme override. The brand `@theme` tokens
+                // read `var(--skin-*, <default>)`, so a skin recolors the UI by
+                // setting `--skin-*` here. Config-supplied (trusted), and CSP
+                // already allows `style-src 'unsafe-inline'`. Unset -> no block ->
+                // the default palette.
+                @if let Some(css) = skin_theme_css() {
+                    style { ":root{" (PreEscaped(css)) "}" }
+                }
                 // BUNYIP-294: `defer` so no script blocks HTML parsing. A
                 // render-blocking `<script src>` in `<head>` gated page-ready
                 // timing on network latency, which raced the automated credential
@@ -163,7 +188,7 @@ pub fn document(title: &str, body: Markup) -> Markup {
 /// Reed-and-eyes brand mark, ported from the Dioxus `BrandMark` component.
 fn brand_mark() -> Markup {
     html! {
-        svg class="w-7 h-7 text-bunyip-reed-700 dark:text-bunyip-reed-200" viewBox="0 0 32 32" fill="none" {
+        svg class="w-7 h-7 text-brand-primary-700 dark:text-brand-primary-200" viewBox="0 0 32 32" fill="none" {
             path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M8 28 V14 M16 28 V8 M24 28 V14" {}
             circle cx="12.5" cy="18" r="2" fill="currentColor" {}
             circle cx="19.5" cy="18" r="2" fill="currentColor" {}
@@ -175,7 +200,7 @@ fn brand() -> Markup {
     html! {
         a href="/" class="flex items-center gap-2 group" {
             (brand_mark())
-            span class="text-2xl font-semibold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50 group-hover:text-bunyip-reed-700 dark:group-hover:text-bunyip-reed-200 transition-colors" { (app_name()) }
+            span class="text-2xl font-semibold tracking-tight text-brand-primary-900 dark:text-brand-primary-50 group-hover:text-brand-primary-700 dark:group-hover:text-brand-primary-200 transition-colors" { (app_name()) }
         }
     }
 }

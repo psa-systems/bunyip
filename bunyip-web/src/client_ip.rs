@@ -219,6 +219,7 @@ mod tests {
             app_domain: String::new(),
             community_url: String::new(),
             trusted_proxies: trusted,
+            theme_css: None,
             app_name: "Bunyip".into(),
         })
     }

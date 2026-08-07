@@ -41,9 +41,9 @@ pub const AVATAR_PICKER_CSS: &str = r#".avatar-slot__img{position:absolute;inset
 .avatar-picker__circle [data-avatar-initial]{user-select:none;-webkit-user-select:none}
 .avatar-picker__overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;border-radius:9999px;color:#fff;background:rgba(0,0,0,.55);font-size:.7rem;font-weight:600;opacity:0;transition:opacity .15s ease;pointer-events:none}
 .avatar-picker__trigger:hover .avatar-picker__overlay,.avatar-picker__trigger:focus-within .avatar-picker__overlay,.avatar-picker.is-dragging .avatar-picker__overlay,.avatar-picker.is-uploading .avatar-picker__overlay{opacity:1}
-.avatar-picker__trigger:focus-within .avatar-picker__circle{outline:2px solid var(--color-bunyip-reed-600);outline-offset:2px}
-.avatar-picker.is-dragging .avatar-picker__circle{outline:2px dashed var(--color-bunyip-reed-500);outline-offset:2px;border-color:var(--color-bunyip-reed-500)}
-.avatar-picker__progress{position:absolute;inset:-3px;border-radius:9999px;opacity:0;transition:opacity .15s ease;background:conic-gradient(var(--color-bunyip-reed-500) calc(var(--avatar-progress,0)*1%),transparent 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 3px));mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 3px));pointer-events:none}
+.avatar-picker__trigger:focus-within .avatar-picker__circle{outline:2px solid var(--color-brand-primary-600);outline-offset:2px}
+.avatar-picker.is-dragging .avatar-picker__circle{outline:2px dashed var(--color-brand-primary-500);outline-offset:2px;border-color:var(--color-brand-primary-500)}
+.avatar-picker__progress{position:absolute;inset:-3px;border-radius:9999px;opacity:0;transition:opacity .15s ease;background:conic-gradient(var(--color-brand-primary-500) calc(var(--avatar-progress,0)*1%),transparent 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 3px));mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 3px));pointer-events:none}
 .avatar-picker.is-uploading .avatar-picker__progress{opacity:1}
 .avatar-picker.is-uploading .avatar-picker__trigger{pointer-events:none;cursor:default}
 .avatar-picker__side{display:flex;flex-direction:column;gap:.25rem;min-width:0}

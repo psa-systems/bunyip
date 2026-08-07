@@ -51,7 +51,7 @@ fn bunyip_mascot() -> maud::Markup {
             img src="/assets/bunyip-hero.png"
                 alt="The Bunyip: a shaggy creature with wide, friendly eyes peering through the reeds over a pond"
                 class="relative w-full h-full object-contain drop-shadow-2xl" {}
-            p class="absolute bottom-16 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-white dark:bg-bunyip-reed-800 border border-bunyip-reed-100 dark:border-bunyip-reed-700 text-xs italic text-bunyip-reed-700 dark:text-bunyip-reed-200 shadow-lg whitespace-nowrap" {
+            p class="absolute bottom-16 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-white dark:bg-brand-primary-800 border border-brand-primary-100 dark:border-brand-primary-700 text-xs italic text-brand-primary-700 dark:text-brand-primary-200 shadow-lg whitespace-nowrap" {
                 "\"Surfaces what matters.\""
             }
         }
@@ -76,23 +76,23 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
             section class="relative overflow-hidden py-20 md:py-32" {
                 div class="container relative grid items-center gap-12 md:grid-cols-2" {
                   div class="flex flex-col items-center text-center md:items-start md:text-left" {
-                    span class="mb-6 inline-flex items-center gap-2 rounded-full bg-bunyip-reed-100 dark:bg-bunyip-reed-800 px-3 py-1 text-xs font-medium uppercase tracking-wide text-bunyip-reed-800 dark:text-bunyip-reed-100 hero-fade-up" {
-                        span class="h-1.5 w-1.5 rounded-full bg-bunyip-reed-600 dark:bg-bunyip-reed-300" {}
+                    span class="mb-6 inline-flex items-center gap-2 rounded-full bg-brand-primary-100 dark:bg-brand-primary-800 px-3 py-1 text-xs font-medium uppercase tracking-wide text-brand-primary-800 dark:text-brand-primary-100 hero-fade-up" {
+                        span class="h-1.5 w-1.5 rounded-full bg-brand-primary-600 dark:bg-brand-primary-300" {}
                         "Now in early access"
                     }
-                    h1 class="mt-2 text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl text-bunyip-reed-900 dark:text-bunyip-reed-50 leading-[1.05] hero-fade-up-1" {
+                    h1 class="mt-2 text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl text-brand-primary-900 dark:text-brand-primary-50 leading-[1.05] hero-fade-up-1" {
                         "The SaaS layer for your "
                         span class="relative inline-block" {
-                            span class="relative z-10 text-bunyip-water-700 dark:text-bunyip-water-100" { "PSA" }
-                            span class="absolute left-0 right-0 bottom-1 h-3 -z-0 bg-bunyip-water-100 dark:bg-bunyip-water-700/60" {}
+                            span class="relative z-10 text-brand-accent-700 dark:text-brand-accent-100" { "PSA" }
+                            span class="absolute left-0 right-0 bottom-1 h-3 -z-0 bg-brand-accent-100 dark:bg-brand-accent-700/60" {}
                         }
                         "."
                     }
-                    p class="mt-6 max-w-2xl text-lg text-bunyip-reed-700 dark:text-bunyip-reed-200 leading-relaxed hero-fade-up-2" {
+                    p class="mt-6 max-w-2xl text-lg text-brand-primary-700 dark:text-brand-primary-200 leading-relaxed hero-fade-up-2" {
                         "Bunyip handles the business-y bits - signup, billing, members, invitations - so Mokosh can focus on what makes your MSP tick."
                     }
                     div class="mt-10 flex flex-col gap-4 sm:flex-row hero-fade-up-3" {
-                        a href=(cta_href) class=(button_class("default", "lg", "w-full sm:w-auto gap-2 bg-bunyip-reed-700 hover:bg-bunyip-reed-800 border-0 text-white shadow-lg shadow-primary/25")) {
+                        a href=(cta_href) class=(button_class("default", "lg", "w-full sm:w-auto gap-2 bg-brand-primary-700 hover:bg-brand-primary-800 border-0 text-white shadow-lg shadow-primary/25")) {
                             (cta_label) " " i class="fa-solid fa-arrow-right text-[1rem]" {}
                         }
                         // BUNYIP-487: /pricing 404s when pricing is unpublished,
@@ -100,9 +100,9 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                         // nav and footer links.
                         @if pricing.published() { a href="/pricing" class=(button_class("outline", "lg", "w-full sm:w-auto")) { "See pricing" } }
                     }
-                    div class="mt-10 flex flex-wrap items-center justify-center md:justify-start gap-x-8 gap-y-2 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-300" {
+                    div class="mt-10 flex flex-wrap items-center justify-center md:justify-start gap-x-8 gap-y-2 text-sm text-brand-primary-700 dark:text-brand-primary-300" {
                         @for t in ["No credit card required".to_string(), trial_chip(trial_days), "Cancel anytime".to_string()] {
-                            span class="flex items-center gap-2" { (icon("check", "h-4 w-4 text-bunyip-reed-600 dark:text-bunyip-reed-300")) (t) }
+                            span class="flex items-center gap-2" { (icon("check", "h-4 w-4 text-brand-primary-600 dark:text-brand-primary-300")) (t) }
                         }
                     }
                   }
@@ -113,18 +113,18 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
             section class="relative border-t border-border/50 py-20" {
                 div class="container relative scroll-fade-up in-view" {
                     div class="max-w-2xl" {
-                        p class="text-sm uppercase tracking-wide font-semibold text-bunyip-reed-600 dark:text-bunyip-reed-300" { "What you get" }
-                        h2 class="mt-2 text-3xl md:text-4xl font-bold tracking-tight text-bunyip-reed-900 dark:text-bunyip-reed-50" { "Everything around the product. Nothing in it." }
+                        p class="text-sm uppercase tracking-wide font-semibold text-brand-primary-600 dark:text-brand-primary-300" { "What you get" }
+                        h2 class="mt-2 text-3xl md:text-4xl font-bold tracking-tight text-brand-primary-900 dark:text-brand-primary-50" { "Everything around the product. Nothing in it." }
                         p class="mt-4 text-muted-foreground" { "Bunyip is the business shell that wraps Mokosh. We do the boring infrastructure so you can ship the PSA." }
                     }
                     div class="mt-12 grid gap-6 md:grid-cols-3 auto-rows-fr scroll-fade-up-child in-view" {
                         @for f in &FEATURES {
-                            div class="h-full flex flex-col rounded-xl border border-bunyip-reed-100 dark:border-bunyip-reed-700 bg-bunyip-reed-50 dark:bg-bunyip-reed-900 p-6 transition-colors hover:border-bunyip-reed-300 dark:hover:border-bunyip-reed-500 hover:bg-white dark:hover:bg-bunyip-reed-800" {
-                                div class="flex h-10 w-10 items-center justify-center rounded-lg border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-white dark:bg-bunyip-reed-800 text-bunyip-reed-700 dark:text-bunyip-reed-100" {
+                            div class="h-full flex flex-col rounded-xl border border-brand-primary-100 dark:border-brand-primary-700 bg-brand-primary-50 dark:bg-brand-primary-900 p-6 transition-colors hover:border-brand-primary-300 dark:hover:border-brand-primary-500 hover:bg-white dark:hover:bg-brand-primary-800" {
+                                div class="flex h-10 w-10 items-center justify-center rounded-lg border border-brand-primary-200 dark:border-brand-primary-700 bg-white dark:bg-brand-primary-800 text-brand-primary-700 dark:text-brand-primary-100" {
                                     i class={ (f.icon) " text-base" } {}
                                 }
-                                h3 class="mt-4 text-lg font-semibold text-bunyip-reed-900 dark:text-bunyip-reed-50" { (f.title) }
-                                p class="mt-2 text-sm leading-relaxed text-bunyip-reed-700 dark:text-bunyip-reed-200" { (f.desc) }
+                                h3 class="mt-4 text-lg font-semibold text-brand-primary-900 dark:text-brand-primary-50" { (f.title) }
+                                p class="mt-2 text-sm leading-relaxed text-brand-primary-700 dark:text-brand-primary-200" { (f.desc) }
                             }
                         }
                     }
@@ -134,7 +134,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
             @if !apps.is_empty() {
                 section class="relative py-20" {
                     div class="container relative scroll-fade-up in-view" {
-                        h2 class="text-center text-3xl font-bold text-bunyip-reed-900 dark:text-bunyip-reed-50" { "Wired into your stack" }
+                        h2 class="text-center text-3xl font-bold text-brand-primary-900 dark:text-brand-primary-50" { "Wired into your stack" }
                         p class="mx-auto mt-4 max-w-2xl text-center text-muted-foreground" { "Bunyip is the front door to the products your team already runs." }
                         div class="mt-12 grid gap-8 md:grid-cols-2 max-w-3xl mx-auto scroll-fade-up-child in-view" {
                             @for (i, app) in apps.iter().enumerate() {
@@ -151,7 +151,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                                     div class="p-6 pt-0" {
                                         p class="text-base text-muted-foreground" { (app.description.clone().unwrap_or_default()) }
                                         a href=(app_link(app, &st.cfg.app_domain)) target="_blank" rel="noopener noreferrer"
-                                          class="mt-4 inline-flex items-center gap-1 text-sm font-medium text-bunyip-reed-700 dark:text-bunyip-reed-200 hover:underline" {
+                                          class="mt-4 inline-flex items-center gap-1 text-sm font-medium text-brand-primary-700 dark:text-brand-primary-200 hover:underline" {
                                             "Learn more " i class="fa-solid fa-arrow-right text-xs" {}
                                         }
                                     }
@@ -164,13 +164,13 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
             // CTA
             section class="relative overflow-hidden border-t border-border/50 py-20" {
                 div class="container relative" {
-                    div class="mx-auto max-w-4xl rounded-2xl border border-bunyip-reed-200 dark:border-bunyip-reed-700 bg-gradient-to-br from-bunyip-reed-700 to-bunyip-water-700 p-10 md:p-12 text-white shadow-lg" {
+                    div class="mx-auto max-w-4xl rounded-2xl border border-brand-primary-200 dark:border-brand-primary-700 bg-gradient-to-br from-brand-primary-700 to-brand-accent-700 p-10 md:p-12 text-white shadow-lg" {
                         div class="flex flex-col gap-6 md:flex-row md:items-center md:justify-between" {
                             div {
                                 h3 class="text-2xl md:text-3xl font-bold tracking-tight" { "Ready to wire up your business layer?" }
-                                p class="mt-2 text-bunyip-reed-100" { "Try Bunyip " (crate::handlers::content::trial_phrase(trial_days)) ". Bring your team along." }
+                                p class="mt-2 text-brand-primary-100" { "Try Bunyip " (crate::handlers::content::trial_phrase(trial_days)) ". Bring your team along." }
                             }
-                            a href=(cta_href) class="whitespace-nowrap rounded-lg bg-white px-6 py-3 font-medium text-bunyip-reed-800 shadow-sm transition-shadow hover:shadow-md" {
+                            a href=(cta_href) class="whitespace-nowrap rounded-lg bg-white px-6 py-3 font-medium text-brand-primary-800 shadow-sm transition-shadow hover:shadow-md" {
                                 (if signed_in { "Go to Membership" } else { "Create your account" }) " →"
                             }
                         }

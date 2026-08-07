@@ -410,11 +410,11 @@ fn feedback_form(submitted: bool, error: Option<&str>, page_path: Option<&str>) 
         div class="relative overflow-hidden py-20" {
             div class="container relative" {
                 div class="mx-auto max-w-3xl text-center" {
-                    div class="inline-flex items-center gap-2 rounded-full bg-bunyip-reed-100 dark:bg-bunyip-reed-800 px-4 py-1.5 text-sm font-medium text-bunyip-reed-800 dark:text-bunyip-reed-100" {
+                    div class="inline-flex items-center gap-2 rounded-full bg-brand-primary-100 dark:bg-brand-primary-800 px-4 py-1.5 text-sm font-medium text-brand-primary-800 dark:text-brand-primary-100" {
                         (icon("smile-plus", "h-4 w-4")) "Help shape what ships next"
                     }
                     h1 class="mt-6 text-4xl font-bold tracking-tight sm:text-5xl" {
-                        "Tell us what would make " span class="text-bunyip-reed-900 dark:text-bunyip-reed-50" { "Bunyip" } " better."
+                        "Tell us what would make " span class="text-brand-primary-900 dark:text-brand-primary-50" { "Bunyip" } " better."
                     }
                     p class="mx-auto mt-4 max-w-2xl text-lg text-muted-foreground" { "Share bugs, missing features, rough edges, or ideas. We read everything." }
                 }
