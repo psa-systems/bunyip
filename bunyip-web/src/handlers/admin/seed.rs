@@ -99,7 +99,7 @@ pub async fn seed_data(
             ]))
         }
     };
-    admin_response(&c, &user, "/admin/seed", "Seed Data · Bunyip", content)
+    admin_response(&c, &user, "/admin/seed", "Seed Data", content)
 }
 
 /// Stream the API's seed export straight to the browser as a file download

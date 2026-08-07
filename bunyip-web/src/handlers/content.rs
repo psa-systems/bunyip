@@ -151,7 +151,7 @@ pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response
             &c,
             &apps,
             &pricing,
-            "Not found · Bunyip",
+            "Not found",
             false,
             crate::handlers::public::not_found_content(),
         );
@@ -163,7 +163,7 @@ pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response
         .map(|s| s.stripe_enabled)
         .unwrap_or(true);
     let content = pricing_content(&pricing, stripe, c.is_signed_in());
-    public_response(&st, &c, &apps, &pricing, "Pricing · Bunyip", true, content)
+    public_response(&st, &c, &apps, &pricing, "Pricing", true, content)
 }
 
 // --- our story --------------------------------------------------------------
@@ -192,15 +192,7 @@ pub async fn our_story(State(st): State<AppState>, headers: HeaderMap) -> Respon
             }
         }
     };
-    public_response(
-        &st,
-        &c,
-        &apps,
-        &pricing,
-        "Our Story · Bunyip",
-        true,
-        content,
-    )
+    public_response(&st, &c, &apps, &pricing, "Our Story", true, content)
 }
 
 // --- roadmap ----------------------------------------------------------------
@@ -278,7 +270,7 @@ pub async fn roadmap(State(st): State<AppState>, headers: HeaderMap) -> Response
             }
         }
     };
-    public_response(&st, &c, &apps, &pricing, "Roadmap · Bunyip", true, content)
+    public_response(&st, &c, &apps, &pricing, "Roadmap", true, content)
 }
 
 // --- legal ------------------------------------------------------------------
@@ -325,15 +317,7 @@ pub async fn terms(State(st): State<AppState>, headers: HeaderMap) -> Response {
             }
         }
     };
-    public_response(
-        &st,
-        &c,
-        &apps,
-        &pricing,
-        "Terms of Service · Bunyip",
-        true,
-        content,
-    )
+    public_response(&st, &c, &apps, &pricing, "Terms of Service", true, content)
 }
 
 pub async fn privacy(State(st): State<AppState>, headers: HeaderMap) -> Response {
@@ -369,15 +353,7 @@ pub async fn privacy(State(st): State<AppState>, headers: HeaderMap) -> Response
             }
         }
     };
-    public_response(
-        &st,
-        &c,
-        &apps,
-        &pricing,
-        "Privacy Policy · Bunyip",
-        true,
-        content,
-    )
+    public_response(&st, &c, &apps, &pricing, "Privacy Policy", true, content)
 }
 
 // --- feedback ---------------------------------------------------------------
@@ -511,7 +487,7 @@ pub async fn feedback_get(
         &c,
         &apps,
         &pricing,
-        "Feedback · Bunyip",
+        "Feedback",
         false,
         feedback_form(false, None, from.as_deref()),
     )
@@ -680,7 +656,7 @@ pub async fn feedback_post(
         &c,
         &apps,
         &pricing,
-        "Feedback · Bunyip",
+        "Feedback",
         false,
         feedback_form(submitted, error.as_deref(), render_path.as_deref()),
     )
@@ -791,7 +767,7 @@ pub async fn docs_index(State(st): State<AppState>, headers: HeaderMap) -> Respo
             }
         }
     };
-    public_response(&st, &c, &apps, &pricing, "Docs · Bunyip", true, content)
+    public_response(&st, &c, &apps, &pricing, "Docs", true, content)
 }
 
 /// `GET /docs/{slug}` - render one embedded doc. Public (BUNYIP-385).
@@ -811,7 +787,7 @@ pub async fn docs_page(
                 }
             }
         };
-        let mut resp = public_response(&st, &c, &apps, &pricing, "Docs · Bunyip", true, content);
+        let mut resp = public_response(&st, &c, &apps, &pricing, "Docs", true, content);
         *resp.status_mut() = axum::http::StatusCode::NOT_FOUND;
         return resp;
     };
@@ -851,7 +827,7 @@ pub async fn docs_page(
         &c,
         &apps,
         &pricing,
-        &format!("{title} · Docs · Bunyip"),
+        &format!("{title} · Docs"),
         true,
         content,
     )
@@ -892,7 +868,7 @@ pub async fn app_docs_index(
         &c,
         &apps,
         &pricing,
-        &format!("{app_name} docs · Bunyip"),
+        &format!("{app_name} docs"),
         true,
         content,
     )
@@ -923,8 +899,7 @@ pub async fn app_docs_page(
                     }
                 }
             };
-            let mut resp =
-                public_response(&st, &c, &apps, &pricing, "Docs · Bunyip", true, content);
+            let mut resp = public_response(&st, &c, &apps, &pricing, "Docs", true, content);
             *resp.status_mut() = axum::http::StatusCode::NOT_FOUND;
             return resp;
         }
@@ -943,7 +918,7 @@ pub async fn app_docs_page(
         &c,
         &apps,
         &pricing,
-        &format!("{} · {app_name} docs · Bunyip", doc.title),
+        &format!("{} · {app_name} docs", doc.title),
         true,
         content,
     )

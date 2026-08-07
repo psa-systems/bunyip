@@ -53,6 +53,11 @@ pub struct Config {
     /// `TRUSTED_PROXY_CIDR` (comma-separated), analogous to bunyip-api's own
     /// `TRUSTED_PROXY_CIDR`. Empty = trust no forwarding headers.
     pub trusted_proxies: Vec<ipnetwork::IpNetwork>,
+    /// BUNYIP-499: app/brand name rendered in the nav brand mark and the
+    /// browser-title suffix. `APP_NAME`, default `"Bunyip"` so output is
+    /// unchanged until a skin overrides it. Mirrors the email subsystem's
+    /// config-driven `APP_NAME`.
+    pub app_name: String,
 }
 
 /// BUNYIP-311: parse a comma-separated list of CIDR ranges into trusted-proxy
@@ -98,6 +103,7 @@ impl Config {
             // inbound X-Forwarded-For the BFF trusts when resolving the
             // end-user IP. Same comma-separated CIDR form bunyip-api parses.
             trusted_proxies: parse_trusted_proxies(&var("TRUSTED_PROXY_CIDR").unwrap_or_default()),
+            app_name: var("APP_NAME").unwrap_or_else(|| "Bunyip".into()),
         }
     }
 

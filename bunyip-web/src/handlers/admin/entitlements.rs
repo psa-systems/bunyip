@@ -55,13 +55,7 @@ pub async fn entitlements(State(st): State<AppState>, headers: HeaderMap) -> Res
             }
         }
     };
-    admin_response(
-        &c,
-        &user,
-        "/admin/entitlements",
-        "Entitlements · Bunyip",
-        content,
-    )
+    admin_response(&c, &user, "/admin/entitlements", "Entitlements", content)
 }
 
 #[derive(Deserialize)]
@@ -169,13 +163,7 @@ pub async fn user_entitlements(
             }
         }
     };
-    admin_response(
-        &c,
-        &user,
-        "/admin/users",
-        "User Entitlements · Bunyip",
-        content,
-    )
+    admin_response(&c, &user, "/admin/users", "User Entitlements", content)
 }
 
 #[derive(Deserialize)]

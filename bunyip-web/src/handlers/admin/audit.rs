@@ -98,11 +98,5 @@ pub async fn audit_logs(
             }
         }
     };
-    admin_response(
-        &c,
-        &user,
-        "/admin/audit-logs",
-        "Audit Logs · Bunyip",
-        content,
-    )
+    admin_response(&c, &user, "/admin/audit-logs", "Audit Logs", content)
 }

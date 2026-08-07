@@ -102,7 +102,7 @@ pub async fn onboarding_get(
         q.error.as_deref().or(send_error.as_deref()),
         q.ok.as_deref(),
     );
-    dashboard_response(&c, &user, "/onboarding", "Welcome · Bunyip", content)
+    dashboard_response(&c, &user, "/onboarding", "Welcome", content)
 }
 
 pub async fn onboarding_post(

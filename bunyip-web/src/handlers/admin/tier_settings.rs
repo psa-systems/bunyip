@@ -210,13 +210,7 @@ pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Re
             pricing_enabled: false,
         });
     let content = tier_settings_content(cfg.as_ref(), &prices, &values, None);
-    admin_response(
-        &c,
-        &user,
-        "/admin/tier-settings",
-        "Pricing tiers · Bunyip",
-        content,
-    )
+    admin_response(&c, &user, "/admin/tier-settings", "Pricing tiers", content)
 }
 
 #[derive(Deserialize)]
@@ -354,11 +348,5 @@ pub async fn tier_settings_save(
         .await
         .unwrap_or_default();
     let content = tier_settings_content(cfg.as_ref(), &prices, &values, Some(&error));
-    admin_response(
-        &c,
-        &user,
-        "/admin/tier-settings",
-        "Pricing tiers · Bunyip",
-        content,
-    )
+    admin_response(&c, &user, "/admin/tier-settings", "Pricing tiers", content)
 }

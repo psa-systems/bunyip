@@ -203,7 +203,7 @@ pub async fn ip_bans(
             }
         }
     };
-    admin_response(&c, &user, "/admin/ip-bans", "IP Bans · Bunyip", content)
+    admin_response(&c, &user, "/admin/ip-bans", "IP Bans", content)
 }
 
 /// Form body for the add-ban action (BUNYIP-413). `duration_secs` is a string
