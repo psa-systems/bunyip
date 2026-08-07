@@ -46,10 +46,10 @@ settings, which writes the encrypted value to the `stripe_config` table
 (`bunyip-api/src/handlers/admin_stripe.rs`). The webhook secret is filled in
 step 2 on the same page.
 
-Set `STRIPE_ENCRYPTION_KEY` in `.env` to any 32-byte hex value
-(`openssl rand -hex 32`) before saving: it is the at-rest key that encrypts
-those DB-stored secrets, not Stripe configuration. `just ensure-env` generates
-one for you.
+Set `APP_ENCRYPTION_KEY` in `.env` to any 32-byte hex value
+(`openssl rand -hex 32`) before saving: it is the one at-rest key that encrypts
+every DB-stored secret (TOTP, Stripe, SMTP), not Stripe configuration.
+`just ensure-env` generates one for you.
 
 Until a secret key is present the dashboard renders the disabled "Payment is not
 configured" button (`bunyip-web/src/handlers/dashboard.rs`).

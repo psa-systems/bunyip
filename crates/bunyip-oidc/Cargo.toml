@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 bunyip-domain = { path = "../bunyip-domain" }
 # Generic OIDC key/JWKS helpers (Ed25519 PEM loading + JWKS publishing).
-dunite-oidc = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
+dunite-oidc = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
 
 actix-web = "4"
 async-trait = "0.1"

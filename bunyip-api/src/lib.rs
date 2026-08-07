@@ -11,7 +11,6 @@ pub use bunyip_domain::{
 };
 
 pub mod access_log;
-pub mod csrf;
 pub mod db;
 pub mod error_log;
 pub mod extractors;
@@ -19,6 +18,7 @@ pub mod handlers;
 pub mod migrate_reconcile;
 pub mod mokosh_backup;
 pub mod rate_limit_floor;
+pub mod reencrypt;
 pub mod root_span;
 pub mod routes;
 pub mod seed;

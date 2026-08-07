@@ -12,16 +12,16 @@
 //! defaults shared with the admin read model.
 //!
 //! BUNYIP-482: the `stripe_config` DB row is the ONLY source of Stripe
-//! configuration. No `STRIPE_*` environment variable is read here; the
-//! encryption key family (`STRIPE_ENCRYPTION_KEY*`, `STRIPE_KEY_VERSION`) is
-//! at-rest key material for that row, lives in `config.rs`, and is out of scope.
+//! configuration. No Stripe-prefixed environment variable is read here; the
+//! at-rest key material for that row is the application key set
+//! (`APP_ENCRYPTION_KEY`, BUNYIP-483) and lives in `config.rs`.
 
 pub use dunite_stripe::{StripeConfig, StripeService, StripeServiceError};
 use dunite_stripe::{SECRET_KEY_PLACEHOLDER, WEBHOOK_SECRET_PLACEHOLDER};
 
 use crate::errors::AppError;
 use crate::models::stripe::decrypt_secret;
-use crate::services::encryption::EncryptionKeySet;
+use crate::services::AppKeySet;
 
 /// Map the shared crate's neutral [`StripeServiceError`] to bunyip's `AppError`.
 /// Used as `.map_err(stripe_err)?` at every `StripeService` call site: a blanket
@@ -109,10 +109,10 @@ pub fn unconfigured_stripe_config() -> StripeConfig {
 /// Build a runtime [`StripeConfig`] from the DB model, decrypting secrets and
 /// falling back to the derived defaults for any field that is NULL (was
 /// `StripeConfig::from_db_model`). Bunyip-side because it decrypts with bunyip's
-/// [`EncryptionKeySet`].
+/// [`AppKeySet`].
 pub fn stripe_config_from_db_model(
     db: &crate::models::stripe::StripeConfig,
-    key_set: &EncryptionKeySet,
+    key_set: &AppKeySet,
 ) -> Result<StripeConfig, AppError> {
     let defaults = unconfigured_stripe_config();
 
@@ -182,11 +182,11 @@ mod tests {
         }
     }
 
-    fn test_key_set() -> EncryptionKeySet {
-        EncryptionKeySet {
+    fn test_key_set() -> AppKeySet {
+        AppKeySet {
             current: [0u8; 32],
             current_version: 1,
-            previous: None,
+            previous: Vec::new(),
         }
     }
 
@@ -215,7 +215,7 @@ mod tests {
 
     /// BUNYIP-482: an empty DB row resolves to placeholder secrets (so
     /// `is_configured()` stays false) and derived checkout URLs, identically to
-    /// the unconfigured constructor. `scripts/check-no-stripe-env.sh` is the
+    /// the unconfigured constructor. `scripts/check-no-stripe-env.nu` is the
     /// gate that keeps env out of this path; this asserts the resulting state.
     #[test]
     fn empty_db_row_resolves_to_the_unconfigured_state() {

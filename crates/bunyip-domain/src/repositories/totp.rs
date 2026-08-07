@@ -60,6 +60,36 @@ impl TotpRepository {
         Ok(())
     }
 
+    /// Same for the BUNYIP-355 `pending_*` staging columns: an in-flight re-key
+    /// is encrypted under the same at-rest key, so a key rotation or the
+    /// BUNYIP-483 consolidation pass must rewrite it too or the pending secret
+    /// becomes unreadable when the old key is dropped.
+    pub async fn update_pending_encryption(
+        pool: &PgPool,
+        id: Uuid,
+        encrypted_secret: &[u8],
+        nonce: &[u8],
+        key_version: i16,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            UPDATE user_totp
+            SET pending_encrypted_secret = $2,
+                pending_nonce = $3,
+                pending_key_version = $4,
+                updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(encrypted_secret)
+        .bind(nonce)
+        .bind(key_version)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     /// BUNYIP-355: stage a re-keyed secret in the `pending_*` columns without
     /// touching the active secret or `verified`, so the current authenticator
     /// keeps working until the user confirms the new one. Overwrites any prior

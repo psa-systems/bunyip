@@ -67,18 +67,16 @@ pub struct Config {
     /// (comma-separated CIDRs); empty by default, meaning forwarding headers
     /// are never trusted.
     pub trusted_proxies: Vec<ipnetwork::IpNetwork>,
-    /// TOTP encryption key (32 bytes) for encrypting TOTP secrets at rest
-    pub totp_encryption_key: [u8; 32],
-    /// Previous TOTP encryption key for rotation (optional)
-    pub totp_encryption_key_prev: Option<[u8; 32]>,
-    /// Current TOTP key version (incremented on each rotation)
-    pub totp_key_version: i16,
-    /// Stripe encryption key (32 bytes) for encrypting Stripe secrets at rest
-    pub stripe_encryption_key: [u8; 32],
-    /// Previous Stripe encryption key for rotation (optional)
-    pub stripe_encryption_key_prev: Option<[u8; 32]>,
-    /// Current Stripe key version (incremented on each rotation)
-    pub stripe_key_version: i16,
+    /// BUNYIP-483: the one at-rest key (32 bytes) protecting every secret
+    /// bunyip encrypts in Postgres: TOTP secrets, Stripe credentials and the
+    /// SMTP password.
+    pub app_encryption_key: [u8; 32],
+    /// Previous at-rest keys, newest first, still needed to read rows written
+    /// before the current key (the two retired key families during the
+    /// consolidation window, or the prior key during an ordinary rotation).
+    pub app_encryption_key_prev: Vec<[u8; 32]>,
+    /// Version stamped on rows written under `app_encryption_key`.
+    pub app_key_version: i16,
     /// Membership tier thresholds
     pub tier: TierConfig,
     /// Download proxy configuration.
@@ -239,9 +237,12 @@ impl EmailConfig {
 
     /// Build an `EmailConfig` from the DB row, falling back to env defaults for
     /// any NULL column (BUNYIP-351). Mirrors [`TierConfig::from_db_row`]. The
-    /// SMTP password is decrypted with the shared `EncryptionKeySet` (the same
-    /// one guarding Stripe secrets); a decryption failure (e.g. a rotated key)
-    /// falls back to the env password rather than aborting startup.
+    /// SMTP password is decrypted with the application [`AppKeySet`]
+    /// (`APP_ENCRYPTION_KEY`, the same set guarding TOTP and Stripe secrets); a
+    /// decryption failure (e.g. a rotated key) falls back to the env password
+    /// rather than aborting startup.
+    ///
+    /// [`AppKeySet`]: crate::services::AppKeySet
     ///
     /// System-level fields (`base_url`, `app_name`) and the dev-only
     /// `log_tokens` gate stay env-derived: they are branding / bootstrap
@@ -249,7 +250,7 @@ impl EmailConfig {
     /// host so the BUNYIP-204 production semantics still hold against DB config.
     pub fn from_db_row(
         row: &crate::models::email::EmailConfigRow,
-        key_set: &crate::services::encryption::EncryptionKeySet,
+        key_set: &crate::services::AppKeySet,
         is_production: bool,
     ) -> Self {
         let env = Self::from_env(is_production);
@@ -918,17 +919,10 @@ impl Config {
         let trusted_proxies =
             parse_trusted_proxies(&env::var("TRUSTED_PROXY_CIDR").unwrap_or_default());
 
-        let totp_encryption_key = Self::load_totp_encryption_key(&environment);
-        let stripe_encryption_key = Self::load_stripe_encryption_key(&environment);
-        let totp_encryption_key_prev =
-            Self::load_optional_encryption_key("TOTP_ENCRYPTION_KEY_PREV");
-        let stripe_encryption_key_prev =
-            Self::load_optional_encryption_key("STRIPE_ENCRYPTION_KEY_PREV");
-        let totp_key_version: i16 = env::var("TOTP_KEY_VERSION")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(1);
-        let stripe_key_version: i16 = env::var("STRIPE_KEY_VERSION")
+        let app_encryption_key = Self::load_app_encryption_key(&environment);
+        let app_encryption_key_prev =
+            Self::load_previous_encryption_keys("APP_ENCRYPTION_KEY_PREV");
+        let app_key_version: i16 = env::var("APP_KEY_VERSION")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(1);
@@ -987,12 +981,9 @@ impl Config {
             cookie_shared_domain,
             auto_ban,
             trusted_proxies,
-            totp_encryption_key,
-            totp_encryption_key_prev,
-            totp_key_version,
-            stripe_encryption_key,
-            stripe_encryption_key_prev,
-            stripe_key_version,
+            app_encryption_key,
+            app_encryption_key_prev,
+            app_key_version,
             tier,
             download,
             oci,
@@ -1100,69 +1091,49 @@ impl Config {
         e2e_env_allows_purge(&self.environment) && allowed
     }
 
-    /// Load TOTP encryption key from TOTP_ENCRYPTION_KEY (env var or _FILE
-    /// secret, hex-encoded 32 bytes). In development, defaults to 32 zero bytes.
-    fn load_totp_encryption_key(environment: &str) -> [u8; 32] {
-        match secret_env("TOTP_ENCRYPTION_KEY") {
-            Some(hex_str) => {
-                let bytes =
-                    hex::decode(hex_str.trim()).expect("TOTP_ENCRYPTION_KEY must be valid hex");
-                let key: [u8; 32] = bytes
-                    .try_into()
-                    .expect("TOTP_ENCRYPTION_KEY must be exactly 32 bytes (64 hex chars)");
-                key
-            }
+    /// BUNYIP-483: the one at-rest key set, built from `APP_ENCRYPTION_KEY`,
+    /// `APP_ENCRYPTION_KEY_PREV` and `APP_KEY_VERSION`. Every consumer (TOTP,
+    /// Stripe, email) gets this same set.
+    pub fn app_key_set(&self) -> crate::services::AppKeySet {
+        crate::services::AppKeySet {
+            current: self.app_encryption_key,
+            current_version: self.app_key_version,
+            previous: self.app_encryption_key_prev.clone(),
+        }
+    }
+
+    /// Load the at-rest key from APP_ENCRYPTION_KEY (env var or _FILE secret,
+    /// hex-encoded 32 bytes). In development, defaults to 32 zero bytes.
+    fn load_app_encryption_key(environment: &str) -> [u8; 32] {
+        match secret_env("APP_ENCRYPTION_KEY") {
+            Some(hex_str) => parse_encryption_key("APP_ENCRYPTION_KEY", &hex_str),
             None => {
                 if environment == "production" {
-                    panic!("TOTP_ENCRYPTION_KEY must be set in production");
+                    panic!("APP_ENCRYPTION_KEY must be set in production");
                 }
                 // Loud, because data encrypted under the zero key is not
                 // protected and will fail to decrypt once a real key is set.
                 tracing::warn!(
-                    "TOTP_ENCRYPTION_KEY is not set; using the all-zero DEVELOPMENT key. \
-                     TOTP secrets encrypted with it are NOT protected."
+                    "APP_ENCRYPTION_KEY is not set; using the all-zero DEVELOPMENT key. \
+                     TOTP, Stripe and SMTP secrets encrypted with it are NOT protected."
                 );
                 [0u8; 32]
             }
         }
     }
 
-    /// Load Stripe encryption key from STRIPE_ENCRYPTION_KEY (env var or _FILE
-    /// secret, hex-encoded 32 bytes). In development, defaults to 32 zero bytes.
-    fn load_stripe_encryption_key(environment: &str) -> [u8; 32] {
-        match secret_env("STRIPE_ENCRYPTION_KEY") {
-            Some(hex_str) => {
-                let bytes =
-                    hex::decode(hex_str.trim()).expect("STRIPE_ENCRYPTION_KEY must be valid hex");
-                let key: [u8; 32] = bytes
-                    .try_into()
-                    .expect("STRIPE_ENCRYPTION_KEY must be exactly 32 bytes (64 hex chars)");
-                key
-            }
-            None => {
-                if environment == "production" {
-                    panic!("STRIPE_ENCRYPTION_KEY must be set in production");
-                }
-                tracing::warn!(
-                    "STRIPE_ENCRYPTION_KEY is not set; using the all-zero DEVELOPMENT key. \
-                     Stripe credentials encrypted with it are NOT protected."
-                );
-                [0u8; 32]
-            }
-        }
-    }
-
-    /// Load an optional encryption key (hex-encoded 32 bytes) from an env var
-    /// or its `_FILE` secret. Returns `None` if not set.
-    fn load_optional_encryption_key(env_var: &str) -> Option<[u8; 32]> {
-        secret_env(env_var).map(|hex_str| {
-            let bytes = hex::decode(hex_str.trim())
-                .unwrap_or_else(|_| panic!("{env_var} must be valid hex"));
-            let key: [u8; 32] = bytes
-                .try_into()
-                .unwrap_or_else(|_| panic!("{env_var} must be exactly 32 bytes (64 hex chars)"));
-            key
-        })
+    /// Load the previous at-rest keys (comma-separated hex, 32 bytes each) from
+    /// an env var or its `_FILE` secret. Empty when unset: nothing to fall back
+    /// to. A list rather than one key because the consolidation window has to
+    /// read rows written under BOTH retired key families (BUNYIP-483).
+    fn load_previous_encryption_keys(env_var: &str) -> Vec<[u8; 32]> {
+        secret_env(env_var)
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|hex_str| parse_encryption_key(env_var, hex_str))
+            .collect()
     }
 
     /// Get the server bind address
@@ -1186,6 +1157,17 @@ pub enum ConfigError {
          the disabled path would log single-use login/reset tokens instead of emailing them."
     )]
     EmailDisabledInProduction,
+}
+
+/// Decode one hex-encoded 32-byte at-rest key. Panics (at startup, before any
+/// request) on a malformed value rather than silently encrypting under a key the
+/// operator did not intend.
+fn parse_encryption_key(env_var: &str, hex_str: &str) -> [u8; 32] {
+    let bytes =
+        hex::decode(hex_str.trim()).unwrap_or_else(|_| panic!("{env_var} must be valid hex"));
+    bytes
+        .try_into()
+        .unwrap_or_else(|_| panic!("{env_var} must be exactly 32 bytes (64 hex chars)"))
 }
 
 /// Pure half of [`Config::e2e_purge_enabled`]: the environment must be a real
@@ -1225,6 +1207,43 @@ mod tests {
         }
     }
 
+    /// BUNYIP-483: unset outside production keeps the loud all-zero dev key.
+    #[test]
+    fn app_encryption_key_falls_back_to_the_dev_zero_key_outside_production() {
+        let _env = env_lock();
+        env::remove_var("APP_ENCRYPTION_KEY");
+        env::remove_var("APP_ENCRYPTION_KEY_FILE");
+        assert_eq!(Config::load_app_encryption_key("development"), [0u8; 32]);
+    }
+
+    /// BUNYIP-483: production still refuses to boot without the key.
+    #[test]
+    #[should_panic(expected = "APP_ENCRYPTION_KEY must be set in production")]
+    fn app_encryption_key_is_required_in_production() {
+        let _env = env_lock();
+        env::remove_var("APP_ENCRYPTION_KEY");
+        env::remove_var("APP_ENCRYPTION_KEY_FILE");
+        Config::load_app_encryption_key("production");
+    }
+
+    /// BUNYIP-483: the consolidation window lists BOTH retired keys, so the
+    /// previous-key var parses as a comma-separated list.
+    #[test]
+    fn previous_encryption_keys_parse_as_a_comma_separated_list() {
+        let _env = env_lock();
+        env::set_var(
+            "APP_ENCRYPTION_KEY_PREV",
+            format!("{},  {}", "a1".repeat(32), "b2".repeat(32)),
+        );
+        assert_eq!(
+            Config::load_previous_encryption_keys("APP_ENCRYPTION_KEY_PREV"),
+            vec![[0xA1u8; 32], [0xB2u8; 32]]
+        );
+
+        env::remove_var("APP_ENCRYPTION_KEY_PREV");
+        assert!(Config::load_previous_encryption_keys("APP_ENCRYPTION_KEY_PREV").is_empty());
+    }
+
     #[test]
     fn test_config_defaults() {
         let _env = env_lock();
@@ -1234,7 +1253,7 @@ mod tests {
         // code defaults asserted here. This keeps the test deterministic regardless
         // of the working tree's `.env` (BUNYIP-102).
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
-        // Use development to avoid requiring TOTP_ENCRYPTION_KEY
+        // Use development to avoid requiring APP_ENCRYPTION_KEY
         env::set_var("ENVIRONMENT", "development");
         env::set_var("HOST_IP", "0.0.0.0");
         env::set_var("APP_PORT", "4000");
@@ -1320,34 +1339,37 @@ mod tests {
     // ---- Key rotation config ----
 
     #[test]
-    fn test_load_optional_encryption_key_returns_none_when_unset() {
-        env::remove_var("TEST_OPTIONAL_KEY_UNSET");
-        let result = Config::load_optional_encryption_key("TEST_OPTIONAL_KEY_UNSET");
-        assert!(result.is_none());
+    fn test_previous_encryption_keys_empty_when_unset() {
+        let _env = env_lock();
+        env::remove_var("TEST_PREV_KEY_UNSET");
+        assert!(Config::load_previous_encryption_keys("TEST_PREV_KEY_UNSET").is_empty());
     }
 
     #[test]
-    fn test_load_optional_encryption_key_parses_hex() {
-        let hex_key = "aa".repeat(32); // 64 hex chars = 32 bytes
-        env::set_var("TEST_OPTIONAL_KEY_HEX", &hex_key);
-        let result = Config::load_optional_encryption_key("TEST_OPTIONAL_KEY_HEX");
-        assert!(result.is_some());
-        assert_eq!(result.unwrap(), [0xAA; 32]);
-        env::remove_var("TEST_OPTIONAL_KEY_HEX");
+    fn test_previous_encryption_keys_parse_hex() {
+        let _env = env_lock();
+        env::set_var("TEST_PREV_KEY_HEX", "aa".repeat(32)); // 64 hex chars = 32 bytes
+        assert_eq!(
+            Config::load_previous_encryption_keys("TEST_PREV_KEY_HEX"),
+            vec![[0xAAu8; 32]]
+        );
+        env::remove_var("TEST_PREV_KEY_HEX");
     }
 
     #[test]
     #[should_panic(expected = "must be valid hex")]
-    fn test_load_optional_encryption_key_panics_on_invalid_hex() {
-        env::set_var("TEST_OPTIONAL_KEY_BAD", "not-valid-hex!");
-        Config::load_optional_encryption_key("TEST_OPTIONAL_KEY_BAD");
+    fn test_previous_encryption_keys_panic_on_invalid_hex() {
+        let _env = env_lock();
+        env::set_var("TEST_PREV_KEY_BAD", "not-valid-hex!");
+        Config::load_previous_encryption_keys("TEST_PREV_KEY_BAD");
     }
 
     #[test]
     #[should_panic(expected = "must be exactly 32 bytes")]
-    fn test_load_optional_encryption_key_panics_on_wrong_length() {
-        env::set_var("TEST_OPTIONAL_KEY_SHORT", "aabb"); // only 2 bytes
-        Config::load_optional_encryption_key("TEST_OPTIONAL_KEY_SHORT");
+    fn test_previous_encryption_keys_panic_on_wrong_length() {
+        let _env = env_lock();
+        env::set_var("TEST_PREV_KEY_SHORT", "aabb"); // only 2 bytes
+        Config::load_previous_encryption_keys("TEST_PREV_KEY_SHORT");
     }
 
     // secret_env tests moved to dunite-core with the function (PSA-37).
@@ -1514,11 +1536,11 @@ mod tests {
 
     // ---- Email config DB-overrides-env merge (BUNYIP-351) ----
 
-    fn test_key_set() -> crate::services::encryption::EncryptionKeySet {
-        crate::services::encryption::EncryptionKeySet {
+    fn test_key_set() -> crate::services::AppKeySet {
+        crate::services::AppKeySet {
             current: [7u8; 32],
             current_version: 1,
-            previous: None,
+            previous: Vec::new(),
         }
     }
 

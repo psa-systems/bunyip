@@ -12,9 +12,8 @@
 #   1. every job sets `defaults.run.shell: nu {0}`;
 #   2. no step opts back out with a non-Nushell `shell:`.
 #
-# The `./scripts/check-*.sh` guards invoked from check.yml are external programs
-# with their own shebang, so the calling shell does not change their behaviour;
-# rewriting them in Nushell is tracked in BUNYIP-490.
+# The `./scripts/check-*.nu` guards invoked from check.yml are external programs
+# with their own shebang, so the calling shell does not change their behaviour.
 #
 # Usage: scripts/check-workflow-shell.nu [workflows_dir]
 #        scripts/check-workflow-shell.nu --self-test

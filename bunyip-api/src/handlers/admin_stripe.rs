@@ -14,7 +14,7 @@ use crate::middleware::AdminUser;
 use crate::models::stripe::encrypt_secret;
 use crate::repositories::StripeConfigRepository;
 use crate::responses::{get_request_id, success, success_no_data};
-use crate::services::{stripe_config_from_db_model, stripe_err, EncryptionKeySet, StripeService};
+use crate::services::{stripe_config_from_db_model, stripe_err, AppKeySet, StripeService};
 
 // =============================================================================
 // Request types
@@ -202,7 +202,7 @@ pub async fn create_stripe_webhook(
     req: HttpRequest,
     admin: AdminUser,
     stripe: web::Data<Arc<StripeService>>,
-    stripe_key_set: web::Data<EncryptionKeySet>,
+    app_key_set: web::Data<AppKeySet>,
     pool: web::Data<PgPool>,
     body: web::Json<CreateStripeWebhookRequest>,
 ) -> Result<HttpResponse, AppError> {
@@ -215,7 +215,7 @@ pub async fn create_stripe_webhook(
 
     // If the webhook creation returned a signing secret, persist it encrypted
     if let Some(ref secret) = webhook.secret {
-        let (ws_enc, ws_nonce, key_version) = encrypt_secret(&stripe_key_set, secret)?;
+        let (ws_enc, ws_nonce, key_version) = encrypt_secret(&app_key_set, secret)?;
 
         let updated = StripeConfigRepository::update(
             &pool,
@@ -233,7 +233,7 @@ pub async fn create_stripe_webhook(
         .await?;
 
         // Hot-reload the StripeService with the new webhook secret
-        match stripe_config_from_db_model(&updated, &stripe_key_set) {
+        match stripe_config_from_db_model(&updated, &app_key_set) {
             Ok(new_config) => {
                 stripe.reload(new_config);
                 tracing::info!("Stripe service reloaded with new webhook secret");
