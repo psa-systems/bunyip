@@ -68,6 +68,32 @@ pub struct Config {
     /// it is config-driven rather than a framework literal. `BRAND_DESCRIPTION`;
     /// defaults to bunyip's copy so output is unchanged until a skin overrides it.
     pub brand_description: String,
+    /// BUNYIP-503: cross-origin hosts a skin appends to the CSP.
+    pub csp: CspConfig,
+}
+
+/// BUNYIP-503: the CSP hosts a skin adds, so a deploy with different third-party
+/// integrations extends the allow-list without forking `security.rs`. Mirrors
+/// dunite-core's `CspConfig` shape (the web-edge modules unify on it in B4).
+/// Only `connect-src` and `form-action` are extensible; the `script-src 'self'`
+/// / `default-src` / `frame-ancestors 'none'` lockdown (BUNYIP-424) is never
+/// relaxed by config.
+#[derive(Debug, Clone, Default)]
+pub struct CspConfig {
+    /// Extra origins appended to `connect-src` (a skin's fetch / XHR / SSE hosts).
+    pub connect_src: Vec<String>,
+    /// Extra origins appended to `form-action` (a skin's cross-origin form posts,
+    /// e.g. a payment provider other than Stripe).
+    pub form_action: Vec<String>,
+}
+
+/// BUNYIP-503: parse a comma-separated CSP host list; blanks are dropped.
+fn parse_csp_hosts(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// BUNYIP-311: parse a comma-separated list of CIDR ranges into trusted-proxy
@@ -118,6 +144,10 @@ impl Config {
             brand_description: var("BRAND_DESCRIPTION").unwrap_or_else(|| {
                 "Bunyip - the SaaS layer for your PSA. Auth, billing, members, and identity for Mokosh.".into()
             }),
+            csp: CspConfig {
+                connect_src: parse_csp_hosts(&var("CSP_CONNECT_SRC").unwrap_or_default()),
+                form_action: parse_csp_hosts(&var("CSP_FORM_ACTION").unwrap_or_default()),
+            },
         }
     }
 

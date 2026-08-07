@@ -64,7 +64,7 @@ use axum::http::header::CONTENT_SECURITY_POLICY;
 use axum::http::HeaderValue;
 use tower_http::set_header::SetResponseHeaderLayer;
 
-use crate::config::Config;
+use crate::config::{Config, CspConfig};
 
 /// Build the Content-Security-Policy header value for the given config.
 ///
@@ -73,7 +73,7 @@ use crate::config::Config;
 /// dashboard `EventSource` is not blocked, and in `form-action` so the OIDC
 /// login redirect chain is not blocked. `app_domain` is the apex child apps live
 /// under; its `*.` wildcard covers the OIDC callback origins in `form-action`.
-fn policy(api_public_origin: &str, app_domain: &str) -> String {
+fn policy(api_public_origin: &str, app_domain: &str, csp: &CspConfig) -> String {
     // BUNYIP-249: form-action is checked against the WHOLE submission redirect
     // chain (CSP3), so the OIDC login forms need the authorize origin and the
     // child-app callback wildcard, not just 'self' (see the module docs).
@@ -85,18 +85,32 @@ fn policy(api_public_origin: &str, app_domain: &str) -> String {
     } else {
         format!(" https://*.{app_domain}")
     };
+    // BUNYIP-503: a skin appends its own hosts to connect-src / form-action only.
+    // script-src / default-src / frame-ancestors stay locked (BUNYIP-424).
+    let form_extra = appended(&csp.form_action);
+    let connect_extra = appended(&csp.connect_src);
     format!(
         "default-src 'self'; \
          base-uri 'self'; \
          object-src 'none'; \
          frame-ancestors 'none'; \
-         form-action 'self' {api_public_origin}{app_callbacks} https://checkout.stripe.com https://billing.stripe.com; \
+         form-action 'self' {api_public_origin}{app_callbacks} https://checkout.stripe.com https://billing.stripe.com{form_extra}; \
          img-src 'self' data: https:; \
          font-src 'self' https://fonts.gstatic.com; \
          style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
          script-src 'self'; \
-         connect-src 'self' {api_public_origin} https://api.pwnedpasswords.com"
+         connect-src 'self' {api_public_origin} https://api.pwnedpasswords.com{connect_extra}"
     )
+}
+
+/// BUNYIP-503: space-prefixed join of a skin's extra CSP hosts, or empty when
+/// there are none, so the default policy stays byte-identical.
+fn appended(hosts: &[String]) -> String {
+    if hosts.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", hosts.join(" "))
+    }
 }
 
 /// Tower layer that stamps the Content-Security-Policy onto every bunyip-web
@@ -107,7 +121,7 @@ fn policy(api_public_origin: &str, app_domain: &str) -> String {
 /// (`handlers::admin::with_attachment_hardening`), and this default policy must
 /// not clobber that hardening.
 pub fn csp_layer(cfg: &Config) -> SetResponseHeaderLayer<HeaderValue> {
-    let value = HeaderValue::from_str(&policy(&cfg.api_public_origin, &cfg.app_domain))
+    let value = HeaderValue::from_str(&policy(&cfg.api_public_origin, &cfg.app_domain, &cfg.csp))
         .expect("CSP policy is valid header value");
     SetResponseHeaderLayer::if_not_present(CONTENT_SECURITY_POLICY, value)
 }
@@ -133,12 +147,17 @@ mod tests {
             theme_css: None,
             app_name: "Bunyip".into(),
             brand_description: String::new(),
+            csp: crate::config::CspConfig::default(),
         }
     }
 
     #[test]
     fn policy_includes_required_directives() {
-        let p = policy("https://api.example.com", "example.com");
+        let p = policy(
+            "https://api.example.com",
+            "example.com",
+            &crate::config::CspConfig::default(),
+        );
         // Self-by-default, framing locked down, scripts first-party only, and
         // the inline styles the SSR pages actually emit still allowed.
         assert!(p.contains("default-src 'self'"));
@@ -162,7 +181,11 @@ mod tests {
     /// reflected-XSS bug in an SSR page) executed on the session origin.
     #[test]
     fn policy_script_src_is_self_only() {
-        let p = policy("https://api.example.com", "example.com");
+        let p = policy(
+            "https://api.example.com",
+            "example.com",
+            &crate::config::CspConfig::default(),
+        );
         let script_src = p
             .split("; ")
             .find(|d| d.trim_start().starts_with("script-src"))
@@ -194,6 +217,55 @@ mod tests {
             !p.contains("unpkg.com"),
             "no unpkg source anywhere in the policy; got: {p}"
         );
+    }
+
+    // BUNYIP-503: a skin's extra hosts append to connect-src / form-action only,
+    // never to the locked-down script-src (BUNYIP-424) or the other directives.
+    #[test]
+    fn policy_appends_skin_hosts_to_connect_and_form_only() {
+        let csp = crate::config::CspConfig {
+            connect_src: vec!["https://api.myskin.example".into()],
+            form_action: vec!["https://pay.myskin.example".into()],
+        };
+        let p = policy("https://api.example.com", "example.com", &csp);
+        let directive = |name: &str| {
+            p.split("; ")
+                .find(|d| d.trim_start().starts_with(name))
+                .unwrap_or_else(|| panic!("{name} directive present"))
+                .trim()
+                .to_string()
+        };
+        assert!(
+            directive("connect-src").ends_with("https://api.myskin.example"),
+            "skin connect-src host appended; got: {}",
+            directive("connect-src")
+        );
+        assert!(
+            directive("form-action").ends_with("https://pay.myskin.example"),
+            "skin form-action host appended; got: {}",
+            directive("form-action")
+        );
+        // The lockdown directives never carry the skin hosts.
+        assert_eq!(directive("script-src"), "script-src 'self'");
+        assert!(!directive("default-src").contains("myskin"));
+        assert!(!directive("img-src").contains("myskin"));
+    }
+
+    // BUNYIP-503: an empty CspConfig (no skin override) is byte-identical to the
+    // pre-config policy, so the default deploy is unchanged.
+    #[test]
+    fn policy_default_csp_config_is_byte_identical() {
+        let with_default = policy(
+            "https://api.example.com",
+            "example.com",
+            &crate::config::CspConfig::default(),
+        );
+        assert!(with_default.ends_with(
+            "connect-src 'self' https://api.example.com https://api.pwnedpasswords.com"
+        ));
+        assert!(with_default.contains(
+            "form-action 'self' https://api.example.com https://*.example.com https://checkout.stripe.com https://billing.stripe.com;"
+        ));
     }
 
     /// BUNYIP-424 guard: `script-src 'self'` only holds if the SSR pages stop
@@ -364,7 +436,11 @@ mod tests {
     fn form_action_omits_child_app_wildcard_without_app_domain() {
         // In dev `app_domain` is empty (loopback IS the public origin), so no
         // `*.` child-app source is emitted - only the api origin is added.
-        let p = policy("http://localhost:4401", "");
+        let p = policy(
+            "http://localhost:4401",
+            "",
+            &crate::config::CspConfig::default(),
+        );
         assert!(p.contains(
             "form-action 'self' http://localhost:4401 https://checkout.stripe.com https://billing.stripe.com"
         ));
@@ -381,7 +457,11 @@ mod tests {
         // an explicit connect-src allowance the browser blocks the
         // request and the breach indicator stays stuck pending. Pin the
         // substring so a future tightening surfaces in CI before it ships.
-        let p = policy("https://api.example.com", "example.com");
+        let p = policy(
+            "https://api.example.com",
+            "example.com",
+            &crate::config::CspConfig::default(),
+        );
         assert!(
             p.contains("https://api.pwnedpasswords.com"),
             "connect-src must allow the HIBP k-anonymity endpoint; got: {p}"
@@ -396,7 +476,11 @@ mod tests {
         // and per CSP3 the directive applies to redirect targets. Pinning the
         // substring here so a future tightening (dropping back to `'self'`)
         // surfaces in CI before it ships and breaks every Subscribe button.
-        let p = policy("https://api.example.com", "example.com");
+        let p = policy(
+            "https://api.example.com",
+            "example.com",
+            &crate::config::CspConfig::default(),
+        );
         assert!(
             p.contains("https://checkout.stripe.com https://billing.stripe.com"),
             "form-action must allow Stripe Checkout + billing portal redirects; got: {p}"
