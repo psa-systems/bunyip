@@ -86,8 +86,11 @@ The images live in the private `dev.a8n.run/psa-systems-private` registry, so au
 docker login dev.a8n.run
 cp .env.example .env
 # Edit .env: set BUNYIP_HOST, COOKIE_SECRET (64+ random chars), CADDY_ACME_EMAIL.
+just init-secrets            # or: just sync-secrets --env prod  (Infisical-backed hosts)
 docker compose up --detach
 ```
+
+Secrets are files, never environment variables: `compose.yml` mounts each one from `./secrets/<name>` at `/run/secrets/<name>` and the api reads it through the `{NAME}_FILE` convention, so `docker inspect` never shows a value. `just init-secrets` ([`scripts/init-secrets.nu`](scripts/init-secrets.nu)) generates them locally, which is the right choice for a self-host that keeps its own values. A deployment whose values live in Infisical runs `just sync-secrets` ([`scripts/sync-secrets.nu`](scripts/sync-secrets.nu)) instead: it renders the same files from the `/bunyip/app` folder, atomically and at mode 0400, and never becomes a runtime dependency of the containers. Setup, the key-to-file mapping, and the rotation flow are in [`docs/secrets-infisical.md`](docs/secrets-infisical.md).
 
 `BUNYIP_API_IMAGE` and `BUNYIP_WEB_IMAGE` are required (BUNYIP-237): compose refuses to start without them. Set both to a pinned release tag, e.g. `dev.a8n.run/psa-systems-private/bunyip-api:v0.4.1`. The previous `:latest` default could leave the LB serving two different builds during a rolling restart; pinning a release tag makes the deploy reproducible. Bump both vars on a deliberate operator action when promoting a new release.
 

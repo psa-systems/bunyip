@@ -12,6 +12,11 @@
 #      Creates every secret file under ./secrets/ (generating strong values
 #      where needed) plus the OIDC signing keys under ./secrets/oidc/. The
 #      script is idempotent and never overwrites existing values.
+#      Deployed hosts whose values live in Infisical use `just sync-secrets`
+#      (./scripts/sync-secrets.nu) instead, which renders the same files from
+#      the /bunyip/app folder; see docs/secrets-infisical.md. Either way the
+#      containers only ever read /run/secrets/*, so nothing at runtime talks to
+#      a secrets manager.
 #   3. docker login dev.a8n.run   (the images live in the private registry).
 #   4. docker compose up --detach
 #
@@ -36,8 +41,9 @@
 name: bunyip
 
 # File-based secrets, one value per file under ./secrets (gitignored).
-# ./scripts/init-secrets.nu creates all of them; see the header note above for
-# which ones may be left empty.
+# ./scripts/init-secrets.nu creates all of them (./scripts/sync-secrets.nu
+# renders them from Infisical instead); see the header note above for which ones
+# may be left empty.
 secrets:
   postgres_password:
     file: ./secrets/postgres_password
