@@ -1,12 +1,12 @@
 pub mod admin;
 pub mod auth_pages;
 pub mod consent;
-pub mod content;
 pub mod dashboard;
 pub mod health;
 /// BUNYIP-206: forced post-registration onboarding (name + verified email).
 pub mod onboarding;
-pub mod public;
+// BUNYIP-501: the public marketing / legal / docs / landing pages moved to
+// `crate::skin` (content.rs, public.rs). Only framework handlers live here now.
 /// BUNYIP-112/113/115/117: shared web-edge field validators that bound and
 /// shape user input before it hits the API. Replaces per-form ad-hoc trims
 /// and silent `unwrap_or(0)` numeric coercions.

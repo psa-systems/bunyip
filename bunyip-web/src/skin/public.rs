@@ -168,7 +168,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                         div class="flex flex-col gap-6 md:flex-row md:items-center md:justify-between" {
                             div {
                                 h3 class="text-2xl md:text-3xl font-bold tracking-tight" { "Ready to wire up your business layer?" }
-                                p class="mt-2 text-brand-primary-100" { "Try Bunyip " (crate::handlers::content::trial_phrase(trial_days)) ". Bring your team along." }
+                                p class="mt-2 text-brand-primary-100" { "Try Bunyip " (crate::skin::content::trial_phrase(trial_days)) ". Bring your team along." }
                             }
                             a href=(cta_href) class="whitespace-nowrap rounded-lg bg-white px-6 py-3 font-medium text-brand-primary-800 shadow-sm transition-shadow hover:shadow-md" {
                                 (if signed_in { "Go to Membership" } else { "Create your account" }) " →"

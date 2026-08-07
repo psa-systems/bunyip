@@ -7,6 +7,7 @@ mod handlers;
 mod routes;
 mod security;
 mod server_status;
+mod skin;
 mod util;
 mod views;
 mod web;
@@ -66,9 +67,9 @@ async fn main() {
         cfg: Arc::clone(&cfg),
     };
 
-    use handlers::{
-        auth_pages as ap, consent, content, dashboard as dash, health, onboarding, public,
-    };
+    use handlers::{auth_pages as ap, consent, dashboard as dash, health, onboarding};
+    // BUNYIP-501: the marketing / legal / docs / landing pages live in the skin.
+    use skin::{content, public};
 
     let app = Router::new()
         // Liveness for the e2e reachability gate + monitoring (BUNYIP-149).
