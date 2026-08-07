@@ -7,6 +7,7 @@ This guide covers the developer fast path: clone, run, sign in, click around. Se
 - Docker + Docker Compose v2 (the modern `docker compose` plugin, not the legacy `docker-compose` binary).
 - [`just`](https://github.com/casey/just) for the task runner.
 - [Nushell `0.112.2`](https://www.nushell.sh/) (used by several `just` recipes, by every script under `scripts/` including the CI guards, and by every `run:` step in `.forgejo/workflows/`).
+- The [`infisical` CLI](https://infisical.com/docs/cli/overview): optional for dev (`just init-secrets` generates local throwaway values), required on a deployed host, where `just sync-secrets` renders `./secrets/*` from Infisical (see [secrets from Infisical](secrets-infisical.md)).
 - No host-side Rust toolchain. All cargo work happens inside the dev container.
 - A copy of `.env.example` -> `.env` if you're going to run the SSO overlay (`just dev-sso`). The plain `just dev` recipe does not require a real mokosh-server.
 

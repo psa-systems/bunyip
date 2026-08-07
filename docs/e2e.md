@@ -259,9 +259,16 @@ first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODU
      to the bunyip project + `staging` env. It is NOT a directory on disk (it is
      unrelated to anything under `/srv/.../bunyip-api/`), so "the directory does
      not exist" is expected and irrelevant.
-   - **It is probably not provisioned yet.** bunyip's c-01 secrets currently live
-     in sops (`compose-secrets.yml`); Infisical wiring for bunyip is a future
-     item. The value is the shared password the bootstrap hashes onto BOTH
+   - **Nothing creates it for you.** bunyip's core application secrets are
+     rendered from the Infisical folder `/bunyip/app` by
+     `scripts/sync-secrets.nu` (`just sync-secrets`, see
+     [`secrets-infisical.md`](secrets-infisical.md)). This E2E password lives in
+     the sibling folder `/bunyip/e2e` and is deliberately outside that sync
+     table, so it is provisioned by hand. Moving the c-01 deployment's own secret
+     source off sops (`compose-secrets.yml`) and the Forgejo Actions CI secrets
+     onto Infisical is
+     [BUNYIP-505](https://niceguyit.myjetbrains.com/youtrack/issue/BUNYIP-505).
+     The value is the shared password the bootstrap hashes onto BOTH
      accounts, so you CHOOSE it: pick a strong password, seed with it, then store
      it (at that Infisical path and/or your team secret store) AND as the
      `E2E_STAGING_PASSWORD` CI secret in step 5, so the suite logs in with the
