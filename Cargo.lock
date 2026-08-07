@@ -696,7 +696,10 @@ dependencies = [
  "chrono",
  "data-encoding",
  "dotenvy",
+ "dunite-core",
+ "dunite-events",
  "dunite-image-upload",
+ "dunite-update-check",
  "futures-util",
  "imagesize",
  "infer 0.16.0",
@@ -743,12 +746,15 @@ dependencies = [
  "dotenvy",
  "dunite-core",
  "dunite-download",
+ "dunite-events",
  "dunite-feedback",
  "dunite-geoip",
+ "dunite-hibp",
  "dunite-ipenrich",
  "dunite-stripe",
  "dunite-stripe-core",
  "dunite-user-core",
+ "dunite-webhook",
  "futures-util",
  "hex",
  "hmac",
@@ -1401,13 +1407,14 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 [[package]]
 name = "dunite-core"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=ae62c276ab187852578daad1c4b9c823579b194a#ae62c276ab187852578daad1c4b9c823579b194a"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=82f9baa96c61e682269d9ff43c8042cb6882f5d1#82f9baa96c61e682269d9ff43c8042cb6882f5d1"
 dependencies = [
  "actix-web",
  "aes-gcm",
  "argon2",
  "async-trait",
  "chrono",
+ "ipnetwork",
  "jsonwebtoken",
  "rand 0.8.6",
  "serde",
@@ -1416,6 +1423,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "url",
  "uuid 1.23.1",
  "validator",
@@ -1424,7 +1432,7 @@ dependencies = [
 [[package]]
 name = "dunite-download"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=ae62c276ab187852578daad1c4b9c823579b194a#ae62c276ab187852578daad1c4b9c823579b194a"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=82f9baa96c61e682269d9ff43c8042cb6882f5d1#82f9baa96c61e682269d9ff43c8042cb6882f5d1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1443,6 +1451,20 @@ dependencies = [
  "tracing",
  "url",
  "urlencoding",
+ "uuid 1.23.1",
+]
+
+[[package]]
+name = "dunite-events"
+version = "0.1.0"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=1f536a2fa32b4db3df95945c444ee3ad7530fc57#1f536a2fa32b4db3df95945c444ee3ad7530fc57"
+dependencies = [
+ "actix-web",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
  "uuid 1.23.1",
 ]
 
@@ -1467,6 +1489,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dunite-hibp"
+version = "0.1.0"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=82f9baa96c61e682269d9ff43c8042cb6882f5d1#82f9baa96c61e682269d9ff43c8042cb6882f5d1"
+dependencies = [
+ "hex",
+ "reqwest 0.11.27",
+ "sha1 0.10.6",
+ "tracing",
+]
+
+[[package]]
 name = "dunite-image-upload"
 version = "0.1.0"
 source = "git+https://dev.a8n.run/psa-systems/dunite?rev=ae62c276ab187852578daad1c4b9c823579b194a#ae62c276ab187852578daad1c4b9c823579b194a"
@@ -1486,7 +1519,7 @@ dependencies = [
 [[package]]
 name = "dunite-oci"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=ae62c276ab187852578daad1c4b9c823579b194a#ae62c276ab187852578daad1c4b9c823579b194a"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=82f9baa96c61e682269d9ff43c8042cb6882f5d1#82f9baa96c61e682269d9ff43c8042cb6882f5d1"
 dependencies = [
  "actix-web",
  "async-trait",
@@ -1513,7 +1546,7 @@ dependencies = [
 [[package]]
 name = "dunite-oidc"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=ae62c276ab187852578daad1c4b9c823579b194a#ae62c276ab187852578daad1c4b9c823579b194a"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=82f9baa96c61e682269d9ff43c8042cb6882f5d1#82f9baa96c61e682269d9ff43c8042cb6882f5d1"
 dependencies = [
  "base64 0.21.7",
  "dunite-core",
@@ -1552,6 +1585,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dunite-update-check"
+version = "0.1.0"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=1f536a2fa32b4db3df95945c444ee3ad7530fc57#1f536a2fa32b4db3df95945c444ee3ad7530fc57"
+dependencies = [
+ "chrono",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dunite-user-core"
 version = "0.1.0"
 source = "git+https://dev.a8n.run/psa-systems/dunite?rev=ae62c276ab187852578daad1c4b9c823579b194a#ae62c276ab187852578daad1c4b9c823579b194a"
@@ -1559,6 +1603,20 @@ dependencies = [
  "chrono",
  "serde",
  "uuid 1.23.1",
+]
+
+[[package]]
+name = "dunite-webhook"
+version = "0.1.0"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=82f9baa96c61e682269d9ff43c8042cb6882f5d1#82f9baa96c61e682269d9ff43c8042cb6882f5d1"
+dependencies = [
+ "hex",
+ "hmac",
+ "reqwest 0.11.27",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

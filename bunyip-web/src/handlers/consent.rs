@@ -168,7 +168,7 @@ pub async fn consent_get(
 
     let card = auth_card(
         "shield",
-        "bg-primary/10 text-primary",
+        "bg-primary/10 text-primary-text",
         "Approve access",
         &consent_description(q.client_name.as_deref()),
         body,

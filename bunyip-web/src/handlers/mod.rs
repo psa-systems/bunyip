@@ -17,7 +17,7 @@ use axum::response::Response;
 use maud::Markup;
 
 use crate::api::calls;
-use crate::api::types::{Application, User, UserRole};
+use crate::api::types::{Application, PricingResponse, User, UserRole};
 use crate::auth::{self, AuthCtx};
 use crate::views::layout::{admin_shell, dashboard_shell, document, public_shell};
 use crate::web::{html_cookies, redirect_cookies, AppState};
@@ -44,13 +44,23 @@ pub fn rotating_index(len: usize) -> usize {
     (chrono::Utc::now().timestamp_subsec_nanos() as usize) % len
 }
 
-/// Authenticate (optional) and fetch the applications list (for header + footer).
-pub async fn public_ctx(st: &AppState, headers: &HeaderMap) -> (AuthCtx, Vec<Application>) {
+/// Authenticate (optional) and fetch the chrome's shared data: the applications
+/// list (header + footer) and the public pricing payload.
+///
+/// BUNYIP-487: the pricing payload rides along because the Pricing nav link and
+/// footer link must vanish whenever `/pricing` would 404. A failed fetch
+/// defaults to unpublished, so an API outage hides the link rather than
+/// offering a dead one.
+pub async fn public_ctx(
+    st: &AppState,
+    headers: &HeaderMap,
+) -> (AuthCtx, Vec<Application>, PricingResponse) {
     let (c, fwd) = ctx(st, headers).await;
     let apps = calls::applications(&st.api, fwd.as_deref())
         .await
         .unwrap_or_default();
-    (c, apps)
+    let pricing = calls::pricing(&st.api).await.unwrap_or_default();
+    (c, apps, pricing)
 }
 
 /// Wrap content in the public shell + document and relay any refreshed cookies.
@@ -58,11 +68,19 @@ pub fn public_response(
     st: &AppState,
     c: &AuthCtx,
     apps: &[Application],
+    pricing: &PricingResponse,
     title: &str,
     launcher: bool,
     content: Markup,
 ) -> Response {
-    let body = public_shell(&st.cfg, c.user.as_ref(), apps, launcher, content);
+    let body = public_shell(
+        &st.cfg,
+        c.user.as_ref(),
+        apps,
+        pricing.published(),
+        launcher,
+        content,
+    );
     html_cookies(document(title, body), &c.set_cookies)
 }
 
@@ -74,8 +92,8 @@ pub async fn auth_page(
     title: &str,
     content: Markup,
 ) -> Response {
-    let (c, apps) = public_ctx(st, headers).await;
-    public_response(st, &c, &apps, title, false, content)
+    let (c, apps, pricing) = public_ctx(st, headers).await;
+    public_response(st, &c, &apps, &pricing, title, false, content)
 }
 
 /// Read a single named cookie from the request.

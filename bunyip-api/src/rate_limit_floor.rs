@@ -182,6 +182,9 @@ mod tests {
         // The register POST stays floored even though its challenge is exempt.
         assert!(!is_exempt("/v1/auth/register", &Method::POST));
         assert!(!is_exempt("/v1/users/me", &Method::GET));
+        // BUNYIP-487: the public pricing endpoint is unauthenticated, so the
+        // floor is the only cap standing between it and an anonymous flood.
+        assert!(!is_exempt("/v1/pricing", &Method::GET));
         assert!(!is_exempt("/v1/auth/password-reset/verify", &Method::GET));
         // Near-misses must not fall through the exact-match list.
         assert!(!is_exempt("/v1/healthz", &Method::GET));

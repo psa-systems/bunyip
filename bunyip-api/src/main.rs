@@ -28,7 +28,7 @@ use bunyip_api::{
     services::{
         stripe_config_from_db_model, unconfigured_stripe_config, AppBackupAdapter,
         AppDownloadCache, AuthService, BackupService, DownloadLimiter, EmailService,
-        EncryptionKeySet, ForgejoAssetClient, GeoIpService, IpEnrichService, JwtConfig, JwtService,
+        ForgejoAssetClient, GeoIpService, IpEnrichService, JwtConfig, JwtService,
         MokoshBackupAdapter, PasswordService, ReleaseCache, StripeService, TotpService,
         WebhookService,
     },
@@ -97,6 +97,15 @@ async fn main() -> anyhow::Result<()> {
         })?;
 
     info!("Database connection pool established");
+
+    // BUNYIP-483: `bunyip-api reencrypt-secrets` rewrites every at-rest secret
+    // under the current APP_ENCRYPTION_KEY and exits, so an operator decides
+    // when the pass runs and can take a database backup first. Migrations stay
+    // owned by the server path below, so the subcommand runs against the schema
+    // a running deployment already has.
+    if let Some(subcommand) = std::env::args().nth(1) {
+        return run_subcommand(&subcommand, &pool, &config).await;
+    }
 
     // BUNYIP-79: heal the in-place-edited migration checksums before the
     // migrator's immutability check would abort on databases that applied the
@@ -324,29 +333,22 @@ async fn main() -> anyhow::Result<()> {
     };
     let tier_config = Arc::new(std::sync::RwLock::new(tier_config));
 
-    // Build encryption key sets for key rotation support
-    let totp_key_set = EncryptionKeySet {
-        current: config.totp_encryption_key,
-        current_version: config.totp_key_version,
-        previous: config.totp_encryption_key_prev,
-    };
-    let stripe_key_set = EncryptionKeySet {
-        current: config.stripe_encryption_key,
-        current_version: config.stripe_key_version,
-        previous: config.stripe_encryption_key_prev,
-    };
+    // BUNYIP-483: ONE at-rest key set (APP_ENCRYPTION_KEY, plus any
+    // APP_ENCRYPTION_KEY_PREV entries for the rotation / consolidation window)
+    // guards the TOTP secrets, the Stripe secrets and the SMTP password.
+    let app_key_set = config.app_key_set();
 
     // Initialize Email service — prefer DB config (admin UI), fall back to env
-    // vars (BUNYIP-351). The SMTP password is decrypted with the same key set
-    // as the Stripe secrets, so this must run after `stripe_key_set` is built.
-    // The auth service (built below) also holds the email service for BUNYIP-366
-    // login-location alerts, so email is now wired ahead of auth.
+    // vars (BUNYIP-351). The SMTP password is decrypted with the application
+    // key set, so this must run after `app_key_set` is built. The auth service
+    // (built below) also holds the email service for BUNYIP-366 login-location
+    // alerts, so email is now wired ahead of auth.
     let email_config = {
         use bunyip_api::repositories::EmailConfigRepository;
         match EmailConfigRepository::get(&pool).await {
             Ok(row) if EmailConfig::has_db_overrides(&row) => {
                 info!("Email config initialized from database");
-                EmailConfig::from_db_row(&row, &stripe_key_set, config.is_production())
+                EmailConfig::from_db_row(&row, &app_key_set, config.is_production())
             }
             _ => {
                 info!("Email config initialized from environment variables");
@@ -432,7 +434,7 @@ async fn main() -> anyhow::Result<()> {
         use bunyip_api::repositories::StripeConfigRepository;
         match StripeConfigRepository::get(&pool).await {
             Ok(db_config) if db_config.secret_key.is_some() => {
-                match stripe_config_from_db_model(&db_config, &stripe_key_set) {
+                match stripe_config_from_db_model(&db_config, &app_key_set) {
                     Ok(cfg) => {
                         info!("Stripe service initialized from database config");
                         cfg
@@ -481,6 +483,12 @@ async fn main() -> anyhow::Result<()> {
     let release_cache = forgejo_client
         .clone()
         .map(|c| Arc::new(ReleaseCache::new(c, config.download.release_cache_ttl_secs)));
+
+    // BUNYIP-487: keeps the public /v1/pricing page off Stripe's API on every
+    // visit. Invalidated whenever an admin saves tier config.
+    let pricing_cache = Arc::new(bunyip_api::handlers::PricingCache::new(
+        bunyip_api::handlers::PRICING_CACHE_TTL_SECS,
+    ));
 
     let download_cache: Option<Arc<AppDownloadCache>> = forgejo_client.clone().map(|c| {
         let store = Arc::new(DownloadCacheRepository::new(pool.clone()));
@@ -570,7 +578,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize TOTP service
     let totp_service = Arc::new(TotpService::new(
-        totp_key_set,
+        app_key_set.clone(),
         config.app_name.clone(),
         pool.clone(),
     ));
@@ -743,7 +751,12 @@ async fn main() -> anyhow::Result<()> {
         enabled = update_check_url.is_some(),
         "Update checker initialized"
     );
-    let update_checker = Arc::new(UpdateChecker::new(update_check_url, update_check_token));
+    let update_checker = Arc::new(UpdateChecker::new(
+        update_check_url,
+        update_check_token,
+        bunyip_api::version::current_version().to_string(),
+        concat!("bunyip-api/", env!("CARGO_PKG_VERSION")),
+    ));
 
     let server_addr = config.server_addr();
     // CORS_ORIGIN is a comma-separated allow-list once multiple RPs register
@@ -761,7 +774,17 @@ async fn main() -> anyhow::Result<()> {
 
     // The CSRF guard (BUNYIP-423) reuses the same allow-list: an origin trusted
     // to read responses is the same set trusted to originate a cookie write.
-    let csrf_guard = bunyip_api::csrf::OriginGuard::new(&cors_origins);
+    // The guard itself lives in dunite-core (DEV-526); bunyip supplies its
+    // app-specific exempt prefixes and ambient-cookie names. /oauth2/* and
+    // /.well-known/* are cross-origin OIDC surfaces gated by PKCE + state +
+    // nonce; /v1/webhooks/stripe is HMAC-authenticated by Stripe.
+    const CSRF_EXEMPT_PREFIXES: [&str; 3] = ["/oauth2/", "/.well-known/", "/v1/webhooks/stripe"];
+    const CSRF_AMBIENT_COOKIES: [&str; 2] = ["access_token", "refresh_token"];
+    let csrf_guard = dunite_core::middleware::OriginGuard::new(
+        &cors_origins,
+        &CSRF_EXEMPT_PREFIXES,
+        &CSRF_AMBIENT_COOKIES,
+    );
 
     let config_data = config.clone();
 
@@ -1002,7 +1025,7 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::Data::new(webhook_service.clone()))
             .app_data(web::Data::new(backup_service.clone()))
             .app_data(web::Data::new(event_bus.clone()))
-            .app_data(web::Data::new(stripe_key_set.clone()))
+            .app_data(web::Data::new(app_key_set.clone()))
             .app_data(web::Data::new(config_data.clone()))
             .app_data(web::Data::new(download_limiter.clone()))
             .app_data(web::Data::new(download_counter.clone()))
@@ -1018,6 +1041,7 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::Data::new(oidc_provider.clone()))
             .app_data(web::Data::new(backchannel_http_client.clone()))
             .app_data(web::Data::new(tier_config.clone()))
+            .app_data(web::Data::new(pricing_cache.clone()))
             // Update checker for the root-level /version endpoint
             .app_data(web::Data::new(update_checker.clone()))
             .app_data(web::Data::new(ip_enrich.clone()))
@@ -1109,6 +1133,34 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Maintenance subcommands (BUNYIP-483). Anything but a known subcommand is an
+/// error rather than a silently-ignored argument.
+async fn run_subcommand(
+    subcommand: &str,
+    pool: &sqlx::PgPool,
+    config: &Config,
+) -> anyhow::Result<()> {
+    match subcommand {
+        "reencrypt-secrets" => {
+            let summary = bunyip_api::reencrypt::reencrypt_all(pool, &config.app_key_set()).await?;
+            info!(%summary, "reencrypt-secrets finished");
+            println!("reencrypt-secrets: {summary}");
+            for item in &summary.undecryptable {
+                println!("  undecryptable, left untouched: {item}");
+            }
+            if !summary.undecryptable.is_empty() {
+                anyhow::bail!(
+                    "{} value(s) decrypt with neither APP_ENCRYPTION_KEY nor any \
+                     APP_ENCRYPTION_KEY_PREV entry; add the missing key and re-run",
+                    summary.undecryptable.len()
+                );
+            }
+            Ok(())
+        }
+        other => anyhow::bail!("unknown subcommand {other:?} (known: reencrypt-secrets)"),
+    }
 }
 
 /// Env-driven, idempotent upsert of a browser SPA OIDC client (BUNYIP-57).

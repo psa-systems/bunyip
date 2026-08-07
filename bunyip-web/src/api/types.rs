@@ -907,9 +907,47 @@ pub struct TierConfigResponse {
     pub source: String,
     pub lifetime_slots_used: i64,
     pub early_adopter_slots_used: i64,
+    /// BUNYIP-487: the Enable Pricing switch on the Pricing tiers page.
+    #[serde(default)]
+    pub pricing_enabled: bool,
     #[serde(default)]
     pub updated_at: String,
     pub updated_by: Option<String>,
+}
+
+/// BUNYIP-487: the public `/v1/pricing` payload. The admin Pricing tiers page
+/// is the only source: `enabled` is its switch and each tier's amount comes
+/// from the Stripe price that tier maps to, so the advertised price cannot
+/// disagree with the charged one.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct PricingResponse {
+    pub enabled: bool,
+    /// Standard-tier trial length. Reported even when nothing is published,
+    /// because the homepage CTA advertises the trial without the price.
+    #[serde(default)]
+    pub trial_days: i64,
+    #[serde(default)]
+    pub tiers: Vec<PricingTier>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct PricingTier {
+    /// Display name comes from `handlers::dashboard::tier_name`, not the wire,
+    /// so the marketing card and the in-app labels stay byte-identical.
+    pub tier: MembershipTier,
+    /// Smallest currency unit (cents), from the mapped Stripe price.
+    pub amount: i64,
+    pub currency: String,
+    pub interval: Option<String>,
+    pub trial_days: i64,
+}
+
+impl PricingResponse {
+    /// Whether `/pricing` has anything honest to show. `false` means the route
+    /// 404s and every link to it stays hidden.
+    pub fn published(&self) -> bool {
+        self.enabled && !self.tiers.is_empty()
+    }
 }
 
 /// A per-application documentation page (BUNYIP-388). `body` is markdown.

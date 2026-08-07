@@ -282,7 +282,7 @@ first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODU
    bootstrap enroll a PRESET secret so it survives re-seeds without rotating the
    Forgejo secret. Choose a base32 secret, then in the api container run
    `BUNYIP_E2E_TOTP_SECRET=<base32> just e2e-bootstrap --enable-2fa` (needs the
-   same `TOTP_ENCRYPTION_KEY` the API uses, which the container already has); set
+   same `APP_ENCRYPTION_KEY` the API uses, which the container already has); set
    `E2E_STAGING_TOTP_SECRET` to that same base32. Manual alternative: log into the
    staging hub as the E2E user, go to `/settings/2fa/setup`, capture the base32
    secret shown at enrollment, verify a code, and record it - but this mints a NEW
@@ -430,7 +430,7 @@ of it unreviewed. Every secret in scope for that job is readable by anyone who
 can push a branch, so the PR job declares only `E2E_STAGING_BASE_URL` and
 `OIDC_ISSUER_STAGING` (which authenticate nothing) and every `npm ci` in
 `.forgejo/workflows/` runs `--ignore-scripts`.
-`scripts/check-workflow-secrets.sh` enforces both in the `Check` workflow, so
+`scripts/check-workflow-secrets.nu` enforces both in the `Check` workflow, so
 the split cannot regress silently.
 
 **Production safety gate.** Production runs ONLY via manual dispatch. On top of

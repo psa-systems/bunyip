@@ -56,7 +56,7 @@ pub use stripe::{
     StripeProductResponse, StripeSubscriptionItemResponse, StripeSubscriptionResponse,
     StripeWebhookEndpointResponse,
 };
-pub use tier::{TierConfigResponse, TierConfigRow};
+pub use tier::{TierConfigResponse, TierConfigRow, TierConfigWithPricing};
 pub use token::{
     AdminInvite, CreateAdminInvite, CreateEmailChangeRequest, CreateEmailVerificationToken,
     CreateLoginApprovalCode, CreateMagicLinkToken, CreatePasswordResetToken, CreateRefreshToken,

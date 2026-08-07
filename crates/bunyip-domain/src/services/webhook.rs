@@ -1,13 +1,15 @@
-//! Webhook service for outbound notifications to child apps
+//! Webhook service for outbound notifications to child apps.
+//!
+//! DEV-527: the transport (HMAC-SHA256 signing, fire-and-forget delivery, and
+//! the bounded-retry account-delete dispatch) moved to the shared
+//! `dunite-webhook` crate. This wrapper keeps the bunyip-specific surface: it
+//! builds each event payload from an [`Application`] and pulls the destination
+//! from `app.webhook_url`, delegating the actual send to [`WebhookSender`].
 
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
-use tracing::{error, info};
+use dunite_webhook::WebhookSender;
 use uuid::Uuid;
 
 use crate::models::Application;
-
-type HmacSha256 = Hmac<Sha256>;
 
 /// Delivery attempts for an irreversible account-delete dispatch (BUNYIP-211):
 /// the first attempt plus two retries. An account delete cannot be replayed by
@@ -16,25 +18,19 @@ type HmacSha256 = Hmac<Sha256>;
 const ACCOUNT_DELETE_MAX_ATTEMPTS: u32 = 3;
 
 pub struct WebhookService {
-    client: reqwest::Client,
-    signing_secret: String,
+    sender: WebhookSender,
 }
 
 impl WebhookService {
     pub fn new(signing_secret: String) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .expect("Failed to build webhook HTTP client");
-
         Self {
-            client,
-            signing_secret,
+            sender: WebhookSender::new(signing_secret),
         }
     }
 
     /// Notify a child app that its maintenance mode has changed.
     pub async fn notify_maintenance_change(&self, app: &Application) {
+        let Some(url) = webhook_url(app) else { return };
         let payload = serde_json::json!({
             "event": "maintenance_mode_changed",
             "slug": app.slug,
@@ -42,207 +38,74 @@ impl WebhookService {
             "maintenance_message": app.maintenance_message,
             "timestamp": chrono::Utc::now().to_rfc3339(),
         });
-        self.send(app, payload).await;
+        self.sender.send(url, &payload).await;
     }
 
     /// Notify a child app that its active status has changed.
     pub async fn notify_active_change(&self, app: &Application) {
+        let Some(url) = webhook_url(app) else { return };
         let payload = serde_json::json!({
             "event": "active_changed",
             "slug": app.slug,
             "is_active": app.is_active,
             "timestamp": chrono::Utc::now().to_rfc3339(),
         });
-        self.send(app, payload).await;
-    }
-
-    /// Build the `account_deleted` webhook payload (BUNYIP-211). Shared by the
-    /// fire-and-forget notifier and the retrying dispatch so the wire shape -
-    /// and therefore the HMAC the receiver verifies - cannot drift between
-    /// the two paths.
-    fn account_deleted_payload(user_id: Uuid) -> serde_json::Value {
-        serde_json::json!({
-            "event": "account_deleted",
-            "user_id": user_id,
-            "timestamp": chrono::Utc::now().to_rfc3339(),
-        })
+        self.sender.send(url, &payload).await;
     }
 
     /// Notify a child app that a bunyip account was deleted (BUNYIP-211).
-    /// Fire-and-forget, mirroring the existing notifiers. The delete handler
-    /// uses [`Self::dispatch_account_deleted`] instead, which retries and
-    /// surfaces the outcome so an exhausted delivery can be persisted for
-    /// replay; this method exists for callers that only want best-effort
-    /// notification (e.g. the in-process replay of an already-recorded delete).
+    /// Fire-and-forget, mirroring the other notifiers. The delete handler uses
+    /// [`Self::dispatch_account_deleted`] instead, which retries and surfaces
+    /// the outcome so an exhausted delivery can be persisted for replay; this
+    /// method exists for callers that only want best-effort notification.
     pub async fn notify_account_deleted(&self, app: &Application, user_id: Uuid) {
-        self.send(app, Self::account_deleted_payload(user_id)).await;
+        let Some(url) = webhook_url(app) else { return };
+        self.sender
+            .send(url, &account_deleted_payload(user_id))
+            .await;
     }
 
     /// Deliver the `account_deleted` webhook to one app with bounded retries
-    /// and exponential backoff (BUNYIP-211). Returns `Ok(())` on the first 2xx
-    /// response, or `Err(last_error)` after [`ACCOUNT_DELETE_MAX_ATTEMPTS`]
-    /// failed attempts so the caller can persist a replayable failure row.
-    ///
-    /// An app with no `webhook_url` is a no-op success: there is nothing to
-    /// notify, which is not a delivery failure.
+    /// (BUNYIP-211). Returns `Ok(())` on the first 2xx response - or when the
+    /// app has no `webhook_url`, since there is nothing to notify - or
+    /// `Err(last_error)` after [`ACCOUNT_DELETE_MAX_ATTEMPTS`] failed attempts
+    /// so the caller can persist a replayable failure row.
     pub async fn dispatch_account_deleted(
         &self,
         app: &Application,
         user_id: Uuid,
     ) -> Result<(), String> {
-        let webhook_url = match &app.webhook_url {
-            Some(url) if !url.is_empty() => url.clone(),
-            _ => return Ok(()),
+        let Some(url) = webhook_url(app) else {
+            return Ok(());
         };
-
-        // Sign once: the payload (including its timestamp) is fixed for the
-        // whole retry sequence so every attempt carries an identical body and
-        // signature, and a downstream idempotency key stays stable.
-        let body =
-            serde_json::to_string(&Self::account_deleted_payload(user_id)).unwrap_or_default();
-        let signature = self.sign(&body);
-
-        let mut last_error = String::new();
-        for attempt in 1..=ACCOUNT_DELETE_MAX_ATTEMPTS {
-            match self
-                .client
-                .post(&webhook_url)
-                .header("Content-Type", "application/json")
-                .header("X-Webhook-Signature", &signature)
-                .body(body.clone())
-                .send()
-                .await
-            {
-                Ok(response) if response.status().is_success() => {
-                    info!(
-                        app_slug = %app.slug,
-                        webhook_url = %webhook_url,
-                        attempt,
-                        "account_deleted webhook delivered"
-                    );
-                    return Ok(());
-                }
-                Ok(response) => {
-                    last_error = format!("non-success status {}", response.status());
-                }
-                Err(e) => {
-                    last_error = e.to_string();
-                }
-            }
-
-            error!(
-                app_slug = %app.slug,
-                webhook_url = %webhook_url,
-                attempt,
-                error = %last_error,
-                "account_deleted webhook attempt failed"
-            );
-
-            // Backoff between attempts only (250ms, 500ms); no sleep after the
-            // final attempt since we are about to return the error.
-            if attempt < ACCOUNT_DELETE_MAX_ATTEMPTS {
-                let backoff_ms = 250u64 * 2u64.pow(attempt - 1);
-                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
-            }
-        }
-
-        Err(last_error)
-    }
-
-    /// Send a signed JSON payload to the app's webhook URL.
-    /// Fires and forgets — logs success/failure but never errors out.
-    async fn send(&self, app: &Application, payload: serde_json::Value) {
-        let webhook_url = match &app.webhook_url {
-            Some(url) if !url.is_empty() => url,
-            _ => return,
-        };
-
-        let body = serde_json::to_string(&payload).unwrap_or_default();
-        let signature = self.sign(&body);
-
-        match self
-            .client
-            .post(webhook_url)
-            .header("Content-Type", "application/json")
-            .header("X-Webhook-Signature", &signature)
-            .body(body)
-            .send()
+        // Serialize once so every retry attempt carries an identical body and
+        // signature (a stable downstream idempotency key).
+        let body = serde_json::to_string(&account_deleted_payload(user_id)).unwrap_or_default();
+        self.sender
+            .dispatch_with_retries(url, &body, ACCOUNT_DELETE_MAX_ATTEMPTS)
             .await
-        {
-            Ok(response) => {
-                let status = response.status();
-                if status.is_success() {
-                    info!(
-                        app_slug = %app.slug,
-                        webhook_url = %webhook_url,
-                        status = %status,
-                        "Webhook notification delivered"
-                    );
-                } else {
-                    error!(
-                        app_slug = %app.slug,
-                        webhook_url = %webhook_url,
-                        status = %status,
-                        "Webhook notification failed with non-success status"
-                    );
-                }
-            }
-            Err(e) => {
-                error!(
-                    app_slug = %app.slug,
-                    webhook_url = %webhook_url,
-                    error = %e,
-                    "Webhook notification delivery failed"
-                );
-            }
-        }
     }
+}
 
-    fn sign(&self, payload: &str) -> String {
-        let mut mac = HmacSha256::new_from_slice(self.signing_secret.as_bytes())
-            .expect("HMAC accepts any key size");
-        mac.update(payload.as_bytes());
-        let result = mac.finalize();
-        hex::encode(result.into_bytes())
-    }
+/// The app's webhook URL if it is set and non-empty; `None` is a no-op.
+fn webhook_url(app: &Application) -> Option<&str> {
+    app.webhook_url.as_deref().filter(|u| !u.is_empty())
+}
+
+/// Build the `account_deleted` webhook payload (BUNYIP-211). Shared by the
+/// fire-and-forget notifier and the retrying dispatch so the wire shape - and
+/// therefore the HMAC the receiver verifies - cannot drift between the two.
+fn account_deleted_payload(user_id: Uuid) -> serde_json::Value {
+    serde_json::json!({
+        "event": "account_deleted",
+        "user_id": user_id,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn sign_produces_deterministic_hex_output() {
-        let service = WebhookService::new("test-secret".to_string());
-        let sig1 = service.sign("{\"event\":\"test\"}");
-        let sig2 = service.sign("{\"event\":\"test\"}");
-
-        assert_eq!(sig1, sig2);
-        // SHA256 HMAC produces 64 hex characters
-        assert_eq!(sig1.len(), 64);
-        // Should be valid hex
-        assert!(sig1.chars().all(|c| c.is_ascii_hexdigit()));
-    }
-
-    #[test]
-    fn sign_different_payloads_produce_different_signatures() {
-        let service = WebhookService::new("test-secret".to_string());
-        let sig1 = service.sign("payload1");
-        let sig2 = service.sign("payload2");
-
-        assert_ne!(sig1, sig2);
-    }
-
-    #[test]
-    fn sign_different_secrets_produce_different_signatures() {
-        let service1 = WebhookService::new("secret-1".to_string());
-        let service2 = WebhookService::new("secret-2".to_string());
-        let sig1 = service1.sign("same payload");
-        let sig2 = service2.sign("same payload");
-
-        assert_ne!(sig1, sig2);
-    }
-
     use chrono::Utc;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -283,9 +146,12 @@ mod tests {
         }
     }
 
+    // The wrapper builds the documented `account_deleted` payload from the
+    // Application + user_id and delegates delivery. Signature correctness is
+    // dunite-webhook's tested responsibility; here we assert the payload shape
+    // and that the signed header is attached.
     #[tokio::test]
-    async fn dispatch_account_deleted_delivers_payload_with_valid_signature() {
-        // Stand in for the mokosh `/v1/webhooks/bunyip/account-deleted` receiver.
+    async fn dispatch_account_deleted_delivers_expected_payload() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/hook"))
@@ -297,34 +163,26 @@ mod tests {
         let app = app_with_webhook(Some(format!("{}/hook", server.uri())));
         let user_id = Uuid::new_v4();
 
-        let result = service.dispatch_account_deleted(&app, user_id).await;
-        assert!(result.is_ok(), "first 2xx should succeed: {result:?}");
+        assert!(service
+            .dispatch_account_deleted(&app, user_id)
+            .await
+            .is_ok());
 
         let requests = server.received_requests().await.expect("recorded requests");
         assert_eq!(requests.len(), 1, "one delivery on first success");
         let req = &requests[0];
-
-        // The receiver sees the documented event shape and user_id.
         let body: serde_json::Value = serde_json::from_slice(&req.body).expect("json body");
         assert_eq!(body["event"], "account_deleted");
         assert_eq!(body["user_id"], serde_json::json!(user_id));
         assert!(body["timestamp"].is_string());
-
-        // The X-Webhook-Signature is a valid HMAC over the exact bytes sent,
-        // so the receiver verifying against the shared secret accepts it.
-        let sig = req
-            .headers
-            .get("X-Webhook-Signature")
-            .expect("signature header")
-            .to_str()
-            .unwrap();
-        let body_str = std::str::from_utf8(&req.body).unwrap();
-        assert_eq!(sig, service.sign(body_str), "signature matches body HMAC");
+        assert!(
+            req.headers.get("X-Webhook-Signature").is_some(),
+            "signed header attached"
+        );
     }
 
     #[tokio::test]
     async fn dispatch_account_deleted_retries_then_reports_exhaustion() {
-        // Receiver is permanently down: every attempt 500s.
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(500))
@@ -338,9 +196,6 @@ mod tests {
         let result = service.dispatch_account_deleted(&app, Uuid::new_v4()).await;
         assert!(result.is_err(), "exhausted dispatch returns the last error");
         assert!(result.unwrap_err().contains("500"));
-
-        // `expect(3)` is asserted on drop: exactly ACCOUNT_DELETE_MAX_ATTEMPTS
-        // deliveries were made.
         drop(server);
     }
 

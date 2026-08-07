@@ -52,7 +52,7 @@ Legend: `[x]` done · `[~]` done but condensed (see notes) · `[ ]` not started.
 
 - [x] Dashboard (stats + recent activity), Audit logs (query-param pagination + admin-only filter)
 - [x] Users (search, pagination, role toggle, delete), Memberships (list)
-- [x] Feedback (status transitions), Tier settings (read + save)
+- [x] Feedback (status transitions), Pricing tiers (read + save)
 - [x] Applications (active/maintenance toggles), Stripe (key + webhook + app-tag config)
 
 ## 5. Tooling / delivery

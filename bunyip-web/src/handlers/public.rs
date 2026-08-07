@@ -5,12 +5,21 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use maud::html;
 
-use crate::api::calls;
-use crate::handlers::ctx;
+use crate::handlers::public_ctx;
 use crate::util::{app_gradient, app_link};
 use crate::views::layout::{document, public_shell};
 use crate::views::ui::{button_class, icon};
 use crate::web::{html_cookies, html_status, AppState};
+
+/// Hero trust-chip for the trial length, from `tier_config.standard_trial_days`.
+/// Drops the number when the length is unknown rather than printing "0-day".
+fn trial_chip(days: i64) -> String {
+    if days > 0 {
+        format!("{days}-day trial")
+    } else {
+        "Free trial".to_string()
+    }
+}
 
 struct Feature {
     icon: &'static str,
@@ -21,7 +30,10 @@ struct Feature {
 const FEATURES: [Feature; 6] = [
     Feature { icon: "fa-solid fa-key", title: "Single sign-on", desc: "Bunyip is the OIDC entry point. Your team logs in once and lands in Mokosh." },
     Feature { icon: "fa-solid fa-credit-card", title: "Stripe-ready billing", desc: "Multi-tier memberships, trials, dunning, and an admin override for the cases that don't fit." },
-    Feature { icon: "fa-solid fa-users", title: "Orgs and members", desc: "Invite teammates, manage roles, switch between orgs without leaving the dashboard." },
+    // BUNYIP-487: replaced the "Orgs and members" card. The product has no
+    // orgs table, no invitations, and no role switching, so the old copy
+    // advertised three features that do not exist.
+    Feature { icon: "fa-solid fa-users", title: "Membership and entitlements", desc: "Tier, trial, and per-application entitlements resolved in one place and honored everywhere Bunyip signs you in." },
     Feature { icon: "fa-solid fa-shield", title: "MFA, magic links, trusted devices", desc: "All the SSO niceties out of the box - TOTP, recovery codes, password reset, magic links." },
     Feature { icon: "fa-solid fa-chart-line", title: "Admin console", desc: "Audit logs, rate limits, tier config, manual membership overrides. The bits you only need but really need." },
     Feature { icon: "fa-solid fa-comment-dots", title: "In-app feedback", desc: "A floating widget lets your team report bugs and ideas without leaving the app. Optionally pipes to Forgejo." },
@@ -47,11 +59,11 @@ fn bunyip_mascot() -> maud::Markup {
 }
 
 pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (c, fwd) = ctx(&st, &headers).await;
-    let apps = calls::applications(&st.api, fwd.as_deref())
-        .await
-        .unwrap_or_default();
+    let (c, apps, pricing) = public_ctx(&st, &headers).await;
     let signed_in = c.is_signed_in();
+    // BUNYIP-487: the advertised trial length comes from
+    // `tier_config.standard_trial_days`, never a literal.
+    let trial_days = pricing.trial_days;
     let (cta_href, cta_label) = if signed_in {
         ("/membership", "Go to Membership")
     } else {
@@ -83,10 +95,13 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                         a href=(cta_href) class=(button_class("default", "lg", "w-full sm:w-auto gap-2 bg-bunyip-reed-700 hover:bg-bunyip-reed-800 border-0 text-white shadow-lg shadow-primary/25")) {
                             (cta_label) " " i class="fa-solid fa-arrow-right text-[1rem]" {}
                         }
-                        a href="/pricing" class=(button_class("outline", "lg", "w-full sm:w-auto")) { "See pricing" }
+                        // BUNYIP-487: /pricing 404s when pricing is unpublished,
+                        // so the hero button follows the same condition as the
+                        // nav and footer links.
+                        @if pricing.published() { a href="/pricing" class=(button_class("outline", "lg", "w-full sm:w-auto")) { "See pricing" } }
                     }
                     div class="mt-10 flex flex-wrap items-center justify-center md:justify-start gap-x-8 gap-y-2 text-sm text-bunyip-reed-700 dark:text-bunyip-reed-300" {
-                        @for t in ["No credit card required", "14-day trial", "Cancel anytime"] {
+                        @for t in ["No credit card required".to_string(), trial_chip(trial_days), "Cancel anytime".to_string()] {
                             span class="flex items-center gap-2" { (icon("check", "h-4 w-4 text-bunyip-reed-600 dark:text-bunyip-reed-300")) (t) }
                         }
                     }
@@ -153,7 +168,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                         div class="flex flex-col gap-6 md:flex-row md:items-center md:justify-between" {
                             div {
                                 h3 class="text-2xl md:text-3xl font-bold tracking-tight" { "Ready to wire up your business layer?" }
-                                p class="mt-2 text-bunyip-reed-100" { "Try Bunyip free for 14 days. Bring your team along." }
+                                p class="mt-2 text-bunyip-reed-100" { "Try Bunyip " (crate::handlers::content::trial_phrase(trial_days)) ". Bring your team along." }
                             }
                             a href=(cta_href) class="whitespace-nowrap rounded-lg bg-white px-6 py-3 font-medium text-bunyip-reed-800 shadow-sm transition-shadow hover:shadow-md" {
                                 (if signed_in { "Go to Membership" } else { "Create your account" }) " →"
@@ -165,27 +180,93 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
         }
     };
 
-    let body = public_shell(&st.cfg, c.user.as_ref(), &apps, true, content);
+    let body = public_shell(
+        &st.cfg,
+        c.user.as_ref(),
+        &apps,
+        pricing.published(),
+        true,
+        content,
+    );
     html_cookies(
         document("Surfaces what matters. · Bunyip", body),
         &c.set_cookies,
     )
 }
 
-pub async fn not_found(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (c, fwd) = ctx(&st, &headers).await;
-    let apps = calls::applications(&st.api, fwd.as_deref())
-        .await
-        .unwrap_or_default();
-    let content = html! {
+/// The branded 404 body. Shared so a route that decides it has nothing to serve
+/// (BUNYIP-487: `/pricing` when pricing is unpublished) renders the same page as
+/// the router fallback rather than a bespoke near-miss.
+pub fn not_found_content() -> maud::Markup {
+    html! {
         div class="flex min-h-[60vh] flex-col items-center justify-center text-center px-6" {
             p class="text-6xl font-bold text-gradient bg-gradient-to-r from-primary to-indigo-500" { "404" }
             h1 class="mt-4 text-2xl font-semibold" { "Page not found" }
             a href="/" class=(button_class("default", "default", "mt-8")) { "Back home" }
         }
-    };
-    let body = public_shell(&st.cfg, c.user.as_ref(), &apps, false, content);
+    }
+}
+
+pub async fn not_found(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (c, apps, pricing) = public_ctx(&st, &headers).await;
+    let body = public_shell(
+        &st.cfg,
+        c.user.as_ref(),
+        &apps,
+        pricing.published(),
+        false,
+        not_found_content(),
+    );
     // BUNYIP-186: a real 404, not a soft-404 200, while still rendering the
     // branded page.
     html_status(document("Not found · Bunyip", body), StatusCode::NOT_FOUND)
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::{trial_chip, FEATURES};
+
+    /// BUNYIP-487: the homepage no longer advertises org switching, role
+    /// management, or inviting teammates. None of the three exist.
+    #[test]
+    fn no_feature_card_claims_orgs_or_invitations() {
+        // Whole words, not substrings: "Forgejo" contains "org".
+        const BANNED_WORDS: &[&str] = &[
+            "org",
+            "orgs",
+            "organisation",
+            "organisations",
+            "organization",
+            "organizations",
+            "teammate",
+            "teammates",
+            "invite",
+            "inviting",
+            "invitations",
+        ];
+        for f in &FEATURES {
+            let text = format!("{} {}", f.title, f.desc).to_lowercase();
+            for word in text.split(|c: char| !c.is_ascii_alphanumeric()) {
+                assert!(
+                    !BANNED_WORDS.contains(&word),
+                    "feature card {:?} claims {word:?}, which the product does not do",
+                    f.title
+                );
+            }
+            assert!(
+                !text.contains("switch between"),
+                "feature card {:?} claims switching, which the product does not do",
+                f.title
+            );
+        }
+    }
+
+    /// The hero trust-chip reads its length from `tier_config`, and says
+    /// nothing specific when the length is unknown.
+    #[test]
+    fn trial_chip_reads_the_configured_length() {
+        assert_eq!(trial_chip(30), "30-day trial");
+        assert_eq!(trial_chip(7), "7-day trial");
+        assert_eq!(trial_chip(0), "Free trial");
+    }
 }

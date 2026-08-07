@@ -8,7 +8,7 @@
 # Quick start:
 #   1. cp .env.example .env  and fill in the production values (CORS_ORIGIN,
 #      BUNYIP_API_URL, OIDC_ISSUER, etc. - non-secret config only).
-#   2. ./scripts/init-secrets.sh
+#   2. ./scripts/init-secrets.nu
 #      Creates every secret file under ./secrets/ (generating strong values
 #      where needed) plus the OIDC signing keys under ./secrets/oidc/. The
 #      script is idempotent and never overwrites existing values.
@@ -16,7 +16,7 @@
 #   4. docker compose up --detach
 #
 # Upgrading an EXISTING deployment that used .env-based secrets (pre-BUNYIP-38):
-#   run ./scripts/init-secrets.sh BEFORE `docker compose up`. It migrates the
+#   run ./scripts/init-secrets.nu BEFORE `docker compose up`. It migrates the
 #   secret values out of your existing .env into the secret files; without
 #   this step compose aborts because the secret files do not exist.
 #
@@ -36,7 +36,7 @@
 name: bunyip
 
 # File-based secrets, one value per file under ./secrets (gitignored).
-# ./scripts/init-secrets.sh creates all of them; see the header note above for
+# ./scripts/init-secrets.nu creates all of them; see the header note above for
 # which ones may be left empty.
 secrets:
   postgres_password:
@@ -53,14 +53,13 @@ secrets:
     file: ./secrets/app_database_url
   jwt_secret:
     file: ./secrets/jwt_secret
-  totp_encryption_key:
-    file: ./secrets/totp_encryption_key
-  # At-rest AES-256-GCM key for the secrets stored in stripe_config /
-  # email_config. The Stripe API keys themselves are NOT secret files: they live
-  # only in the stripe_config DB row, entered on the admin Stripe page
+  # BUNYIP-483: the ONE at-rest AES-256-GCM key, protecting the TOTP secrets
+  # (user_totp), the Stripe credentials (stripe_config) and the SMTP password
+  # (email_config). The Stripe API keys themselves are NOT secret files: they
+  # live only in the stripe_config DB row, entered on the admin Stripe page
   # (BUNYIP-482).
-  stripe_encryption_key:
-    file: ./secrets/stripe_encryption_key
+  app_encryption_key:
+    file: ./secrets/app_encryption_key
   setup_default_admin:
     file: ./secrets/setup_default_admin
   forgejo_api_token:
@@ -131,8 +130,12 @@ services:
       BUNYIP_APP_PASSWORD_FILE: /run/secrets/bunyip_app_password
       APP_DATABASE_URL_FILE: /run/secrets/app_database_url
       JWT_SECRET_FILE: /run/secrets/jwt_secret
-      TOTP_ENCRYPTION_KEY_FILE: /run/secrets/totp_encryption_key
-      STRIPE_ENCRYPTION_KEY_FILE: /run/secrets/stripe_encryption_key
+      APP_ENCRYPTION_KEY_FILE: /run/secrets/app_encryption_key
+      # Comma-separated hex keys still needed to read rows written under an
+      # earlier key (rotation, or the BUNYIP-483 consolidation window). Empty
+      # once `bunyip-api reencrypt-secrets` has run. Honours the _FILE
+      # convention too, if the list is kept in a secret file.
+      APP_ENCRYPTION_KEY_PREV: ${APP_ENCRYPTION_KEY_PREV:-}
       SETUP_DEFAULT_ADMIN_FILE: /run/secrets/setup_default_admin
       FORGEJO_API_TOKEN_FILE: /run/secrets/forgejo_api_token
       SMTP_PASSWORD_FILE: /run/secrets/smtp_password
@@ -222,8 +225,7 @@ services:
       - bunyip_app_password
       - app_database_url
       - jwt_secret
-      - totp_encryption_key
-      - stripe_encryption_key
+      - app_encryption_key
       - setup_default_admin
       - forgejo_api_token
       - smtp_password

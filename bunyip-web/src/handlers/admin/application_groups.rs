@@ -73,7 +73,7 @@ pub(super) fn group_form(
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { (heading) } p class="mt-2 text-muted-foreground" { "Group related applications under one heading on the Applications page." } }
             // BUNYIP-435: two-column block layout (Identity | Presentation),
-            // matching Email/Tier Settings, inside one form so a single Save
+            // matching Email/Pricing tiers, inside one form so a single Save
             // persists everything.
             form method="post" action=(action) class="space-y-6" {
                 @if let Some(err) = error { (error_box(err)) }

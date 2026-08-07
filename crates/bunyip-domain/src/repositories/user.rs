@@ -1114,12 +1114,12 @@ impl UserRepository {
     /// the same as organically-claimed ones: they occupy a real lifetime slot, so they
     /// must count against the configured cap and be reflected in the admin slot-usage
     /// display. Excluding them let the count read 0 while active lifetimes existed,
-    /// defeating the cap and misleading the Tier Settings page (BUNYIP-96).
+    /// defeating the cap and misleading the Pricing tiers page (BUNYIP-96).
     ///
     /// Email verification is deliberately NOT a filter: an active `lifetime` /
     /// `early_adopter` subscription occupies a slot whether or not the holder has
     /// verified their email. Gating on `email_verified = true` let unverified
-    /// lifetimes read as 0, so they bypassed the cap and the Tier Settings page
+    /// lifetimes read as 0, so they bypassed the cap and the Pricing tiers page
     /// under-reported usage (BUNYIP-105). Only soft-deleted users (`deleted_at`)
     /// are excluded.
     pub async fn count_tier_assignments<'e, E>(executor: E) -> Result<(i64, i64), AppError>
@@ -1279,7 +1279,7 @@ mod tests {
     ///
     /// The bug was a `WHERE email_verified = true` predicate that dropped
     /// unverified `lifetime` / `early_adopter` users from the count, letting them
-    /// bypass the cap and read as 0 on the Tier Settings page. The count query
+    /// bypass the cap and read as 0 on the Pricing tiers page. The count query
     /// must NOT filter on `email_verified`, so an unverified active lifetime still
     /// occupies its slot. Soft-deleted users (`deleted_at`) stay excluded.
     #[test]

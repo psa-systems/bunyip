@@ -5,6 +5,28 @@ use maud::{html, Markup};
 
 use crate::api::types::{Application, MembershipStatus, User, UserRole};
 
+/// Format a Stripe price amount for display. A zero-amount lifetime price is
+/// `Some(0)` -> "$0.00" (not "--"); a null amount -> "--".
+///
+/// BUNYIP-487: shared, because the public pricing page now renders the same
+/// resolved amount the admin Stripe / Pricing tiers pages show. One formatter
+/// means the marketing price and the admin price cannot be formatted apart.
+pub fn format_stripe_amount(unit_amount: Option<i64>, currency: &str) -> String {
+    match unit_amount {
+        None => "--".to_string(),
+        Some(cents) => {
+            let whole = cents / 100;
+            let frac = (cents % 100).abs();
+            match currency.to_ascii_lowercase().as_str() {
+                "usd" => format!("${whole}.{frac:02}"),
+                "eur" => format!("€{whole}.{frac:02}"),
+                "gbp" => format!("£{whole}.{frac:02}"),
+                _ => format!("{whole}.{frac:02} {}", currency.to_uppercase()),
+            }
+        }
+    }
+}
+
 /// External URL for an app: `https://{subdomain|slug}.{domain}`, or `#` when no
 /// apex domain is configured. Mirrors the `getAppUrl` helpers in LandingPage /
 /// Footer.

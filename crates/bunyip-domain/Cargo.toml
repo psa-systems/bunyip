@@ -15,10 +15,15 @@ workspace = true
 # Pinned by rev, not branch, so a dunite bump is an explicit reviewable diff
 # instead of whatever `main` happened to point at when the lock was refreshed
 # (BUNYIP-426 F6). dunite publishes no tags; switch to `tag` when it does.
-dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
+# DEV-526/529: dunite-core and its dependents (download/oci/oidc) are at 82f9baa
+# for the CSRF guard, the error-log ring, and the trusted-proxy client-IP
+# resolver in dunite-core; they move as one rev to keep a single dunite-core.
+# The leaf crates below (stripe*, feedback, user-core, geoip, ipenrich, and
+# hibp/webhook) are independent and pin separately.
+dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
 # Generic Forgejo binary-distribution engine (artifact metadata, asset cache,
 # rate limiting). Bunyip implements its store traits over Postgres.
-dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
+dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
 # Shared Stripe primitives (DEV-495 / DEV-514): the constant-time webhook
 # signature verifier, shared with a8n-tools and mokosh. Pinned to the branch rev
 # that introduced the crate; the dunite-core/download pins stay at c5730bc since
@@ -49,6 +54,15 @@ dunite-geoip = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276
 # likelihood); advisory only, never a spam verdict. Same offline, leaf, owns-its-
 # error contract as dunite-geoip.
 dunite-ipenrich = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
+# DEV-527: the HIBP k-anonymity password-breach check and the outbound
+# HMAC-signed webhook sender, extracted from this crate's services. Leaf crates
+# (own their types, no dunite-core dep), so they pin independently of the
+# dunite-core graph rev.
+dunite-hibp = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
+dunite-webhook = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
+# DEV-528: the in-process event bus + SSE framing (generic over the event type),
+# extracted from services/event_bus.rs + handlers/events.rs. Leaf crate.
+dunite-events = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "1f536a2fa32b4db3df95945c444ee3ad7530fc57" }
 async-trait = "0.1"
 
 # Web framework + multipart.

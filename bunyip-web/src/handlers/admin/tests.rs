@@ -869,12 +869,8 @@ mod two_column_layout_tests {
         .unwrap()
     }
 
-    #[test]
-    fn tier_settings_shows_slots_and_no_stripe_catalog() {
-        // BUNYIP-417: the Stripe catalog mapping moved to the Stripe page, so
-        // Tier Settings keeps only slots + trial days and carries none of the
-        // price/product-ID fields.
-        let vals = TierFormValues {
+    fn tier_vals(pricing_enabled: bool) -> TierFormValues {
+        TierFormValues {
             lifetime_slots: "5".into(),
             early_adopter_slots: "5".into(),
             early_adopter_trial_days: "90".into(),
@@ -885,8 +881,29 @@ mod two_column_layout_tests {
             lifetime_product_id: String::new(),
             early_adopter_product_id: String::new(),
             standard_product_id: String::new(),
-        };
-        let html = tier_settings_content(Some(&tier_cfg()), &vals, None).into_string();
+            pricing_enabled,
+        }
+    }
+
+    #[test]
+    fn tier_settings_shows_slots_and_no_stripe_catalog() {
+        // BUNYIP-417: the Stripe catalog mapping moved to the Stripe page, so
+        // the Pricing tiers page keeps only slots + trial days and carries none of the
+        // price/product-ID fields.
+        let vals = tier_vals(false);
+        let html = tier_settings_content(Some(&tier_cfg()), &[], &vals, None).into_string();
+        // BUNYIP-487: the page is labelled "Pricing tiers" and carries the
+        // Enable Pricing switch; the route is unchanged.
+        assert!(html.contains("Pricing tiers"), "renamed heading");
+        assert!(!html.contains("Tier Settings"), "old heading is gone");
+        assert!(
+            html.contains(r#"name="pricing_enabled""#),
+            "Enable Pricing checkbox present"
+        );
+        assert!(
+            html.contains(r#"action="/admin/tier-settings""#),
+            "route unchanged so admin bookmarks keep working"
+        );
         for f in [
             "lifetime_slots",
             "early_adopter_slots",
@@ -905,11 +922,62 @@ mod two_column_layout_tests {
         ] {
             assert!(
                 !html.contains(f),
-                "catalog field {f} no longer on Tier Settings"
+                "catalog field {f} no longer on the Pricing tiers page"
             );
         }
         // It links to where the mapping now lives.
         assert!(html.contains(r#"href="/admin/stripe""#));
+    }
+
+    #[test]
+    fn enable_pricing_checkbox_reflects_the_saved_switch() {
+        // BUNYIP-487: the switch must survive save + reload, which on a
+        // checkbox means the `checked` attribute is driven by the loaded value.
+        let off =
+            tier_settings_content(Some(&tier_cfg()), &[], &tier_vals(false), None).into_string();
+        let on =
+            tier_settings_content(Some(&tier_cfg()), &[], &tier_vals(true), None).into_string();
+        assert!(!off.contains("checked"), "unchecked when the switch is off");
+        assert!(on.contains("checked"), "checked when the switch is on");
+    }
+
+    #[test]
+    fn pricing_tiers_shows_the_resolved_stripe_amount() {
+        // BUNYIP-487: the advertised amount is derived from the mapped Stripe
+        // price, read-only, formatted exactly like the Stripe page.
+        let cfg: crate::api::types::TierConfigResponse = serde_json::from_value(json!({
+            "lifetime_slots": 5, "early_adopter_slots": 5, "early_adopter_trial_days": 90,
+            "standard_trial_days": 30, "free_price_id": "price_free",
+            "early_adopter_price_id": "price_gone", "standard_price_id": "price_std",
+            "source": "database", "lifetime_slots_used": 0, "early_adopter_slots_used": 0
+        }))
+        .unwrap();
+        let stripe_price = |id: &str, amount: i64| crate::api::types::StripePrice {
+            id: id.into(),
+            product_id: "prod_x".into(),
+            unit_amount: Some(amount),
+            currency: "usd".into(),
+            recurring_interval: Some("month".into()),
+            active: true,
+        };
+        let prices = vec![
+            stripe_price("price_std", 300),
+            stripe_price("price_free", 0),
+        ];
+        let html = tier_settings_content(Some(&cfg), &prices, &tier_vals(true), None).into_string();
+        assert!(html.contains("$3.00"), "standard amount resolved");
+        assert!(
+            html.contains("$0.00"),
+            "a zero lifetime price is a real price"
+        );
+        assert!(
+            html.contains("price not found in Stripe"),
+            "a mapped-but-unresolvable price is called out, not silently blank"
+        );
+        assert!(
+            !html.contains(r#"name="standard_amount""#),
+            "the amount is derived, never an editable field"
+        );
     }
 
     // BUNYIP-435: the remaining single-narrow-column settings screens adopt the
@@ -1109,10 +1177,9 @@ mod stripe_admin_tests {
     // integration tests (this port calls those existing endpoints); here we
     // cover the rendering + the dollars->cents parsing, including the $0.00
     // lifetime-price case that must render as a real price, not "--".
-    use super::{
-        format_stripe_amount, parse_price_cents, stripe_prices_block, stripe_products_block,
-    };
+    use super::{parse_price_cents, stripe_prices_block, stripe_products_block};
     use crate::api::types::{StripePrice, StripeProduct};
+    use crate::util::format_stripe_amount;
 
     fn product(id: &str, name: &str, active: bool) -> StripeProduct {
         StripeProduct {

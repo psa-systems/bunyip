@@ -297,6 +297,66 @@ mod tests {
         }
     }
 
+    /// BUNYIP-487 guard: the removals in this issue must stay removed. The
+    /// hardcoded Business tier and its env flag are gone (tiers are defined on
+    /// the admin Pricing tiers page), and so is every string that advertised
+    /// organizations, which the product does not have. Each needle below was a
+    /// real line in `content.rs` / `public.rs` / `config.rs`; reintroducing any
+    /// of them fails the build rather than shipping a false claim again.
+    #[test]
+    fn removed_business_tier_and_org_copy_stay_removed() {
+        const BANNED: &[&str] = &[
+            // The dead Business tier and the env flag that gated it.
+            "show_business_pricing",
+            "BUNYIP_SHOW_BUSINESS_PRICING",
+            // Copy that claimed orgs, memberships-per-org, or org switching.
+            "members per org",
+            "Unlimited members and orgs",
+            "Org switching and role management",
+            "For MSPs running multiple orgs",
+            "subscriptions, and orgs",
+            "org and membership directory",
+            "Orgs and members",
+            "switch between orgs without leaving",
+            // The trial lengths that were hardcoded instead of read from
+            // `tier_config.standard_trial_days`.
+            "Start free for 14 days",
+            "free for 14 days",
+            "14-day trial",
+        ];
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut sources = Vec::new();
+        collect_rs(&root, &mut sources);
+        let mut offences = Vec::new();
+        for path in &sources {
+            let text = std::fs::read_to_string(path).expect("source file is readable");
+            let rel = path
+                .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                .unwrap_or(path)
+                .display()
+                .to_string();
+            for (n, line) in text.lines().enumerate() {
+                // This test lists the needles by name; skip itself. Comments
+                // elsewhere explain what was removed and why, which is the
+                // point: only code and copy are scanned.
+                if rel.ends_with("security.rs") || line.trim_start().starts_with("//") {
+                    continue;
+                }
+                for needle in BANNED {
+                    if line.contains(needle) {
+                        offences.push(format!("{rel}:{}: {needle}", n + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            offences.is_empty(),
+            "BUNYIP-487 removed these; they must not come back:\n{}",
+            offences.join("\n")
+        );
+    }
+
     #[test]
     fn form_action_omits_child_app_wildcard_without_app_domain() {
         // In dev `app_domain` is empty (loopback IS the public origin), so no

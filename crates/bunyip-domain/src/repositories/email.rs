@@ -34,6 +34,33 @@ impl EmailConfigRepository {
         Ok(())
     }
 
+    /// Rewrite the stored SMTP password ciphertext under a new key version,
+    /// touching nothing else (BUNYIP-483 re-encrypt pass). `updated_by` is left
+    /// alone: re-encryption is not an operator edit of the configuration.
+    pub async fn update_password_encryption(
+        pool: &PgPool,
+        smtp_password: &[u8],
+        smtp_password_nonce: &[u8],
+        key_version: i16,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            UPDATE email_config
+            SET smtp_password = $1,
+                smtp_password_nonce = $2,
+                key_version = $3,
+                updated_at = NOW()
+            WHERE id = 1
+            "#,
+        )
+        .bind(smtp_password)
+        .bind(smtp_password_nonce)
+        .bind(key_version)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     /// Updates only the fields that are `Some`. `None` leaves the existing DB
     /// value unchanged (COALESCE). The SMTP password is passed as a
     /// pre-encrypted (ciphertext, nonce) pair; when present, `key_version` is
