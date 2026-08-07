@@ -89,6 +89,23 @@ fn app_name() -> &'static str {
     APP_NAME.get().map(String::as_str).unwrap_or("Bunyip")
 }
 
+/// BUNYIP-501: the `<meta name="description">` copy, from `Config::brand_description`.
+/// Skin marketing text; set once from `main` (same `OnceLock` pattern as
+/// [`SSE_API_ORIGIN`]) so the framework `document()` carries no hardcoded copy.
+static BRAND_DESCRIPTION: OnceLock<String> = OnceLock::new();
+
+/// Install the meta-description copy. Called once from `main` before serving.
+/// Idempotent (the underlying `OnceLock` ignores subsequent sets).
+pub fn install_brand_description(description: impl Into<String>) {
+    let _ = BRAND_DESCRIPTION.set(description.into());
+}
+
+fn brand_description() -> &'static str {
+    BRAND_DESCRIPTION.get().map(String::as_str).unwrap_or(
+        "Bunyip - the SaaS layer for your PSA. Auth, billing, members, and identity for Mokosh.",
+    )
+}
+
 /// BUNYIP-145 / BUNYIP-424: the browser-facing origin the dashboard's
 /// `EventSource` connects to, handed to `assets/js/sse.js` as a `data-` attribute
 /// on its own `<script>` tag. Server values reach the client as passive markup,
@@ -106,7 +123,7 @@ pub fn document(title: &str, body: Markup) -> Markup {
             head {
                 meta charset="UTF-8";
                 meta name="viewport" content="width=device-width, initial-scale=1.0";
-                meta name="description" content="Bunyip - the SaaS layer for your PSA. Auth, billing, members, and identity for Mokosh.";
+                meta name="description" content=(brand_description());
                 meta name="theme-color" media="(prefers-color-scheme: light)" content="#2f4e2e";
                 meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161a16";
                 title { (title) " · " (app_name()) }
@@ -303,7 +320,7 @@ fn footer(cfg: &Config, apps: &[Application], pricing: bool) -> Markup {
                     div class="col-span-2 md:col-span-1" {
                         (brand())
                         p class="mt-4 text-sm text-muted-foreground" { "Surfaces what matters." }
-                        p class="mt-1 text-xs text-muted-foreground" { "Bunyip · " (cfg.domain_or_localhost()) }
+                        p class="mt-1 text-xs text-muted-foreground" { (app_name()) " · " (cfg.domain_or_localhost()) }
                     }
                     div {
                         h3 class="text-sm font-semibold" { "Product" }

@@ -53,6 +53,8 @@ async fn main() {
     // BUNYIP-499: brand name for the nav brand mark and the browser-title suffix
     // (APP_NAME; defaults to "Bunyip").
     views::layout::install_app_name(cfg.app_name.clone());
+    // BUNYIP-501: meta-description copy (BRAND_DESCRIPTION); defaults to bunyip's.
+    views::layout::install_brand_description(cfg.brand_description.clone());
     // BUNYIP-243: while bunyip-api is unreachable, poll its /health on an
     // interval and clear the app-wide "service unavailable" banner on recovery.
     // Idle (no network) while healthy; detection itself is reactive in
