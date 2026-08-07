@@ -102,5 +102,5 @@ pub async fn logs(
             }
         }
     };
-    admin_response(&c, &user, "/admin/logs", "Error Logs · Bunyip", content)
+    admin_response(&c, &user, "/admin/logs", "Error Logs", content)
 }

@@ -321,7 +321,7 @@ pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response 
             }
         }
     };
-    admin_response(&c, &user, "/admin/stripe", "Stripe · Bunyip", content)
+    admin_response(&c, &user, "/admin/stripe", "Stripe", content)
 }
 
 #[derive(Deserialize)]
@@ -439,13 +439,7 @@ pub async fn stripe_webhook_create(
                     ))
                 }
             };
-            admin_response(
-                &c,
-                &user,
-                "/admin/stripe",
-                "Webhook created · Bunyip",
-                content,
-            )
+            admin_response(&c, &user, "/admin/stripe", "Webhook created", content)
         }
         Err(e) => redirect_cookies(
             &format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
@@ -710,5 +704,5 @@ fn stripe_error_page(c: &AuthCtx, user: &User, err: &str) -> Response {
             a href="/admin/stripe" class=(button_class("default", "default", "")) { "Back to Stripe" }
         }
     };
-    admin_response(c, user, "/admin/stripe", "Stripe · Bunyip", content)
+    admin_response(c, user, "/admin/stripe", "Stripe", content)
 }

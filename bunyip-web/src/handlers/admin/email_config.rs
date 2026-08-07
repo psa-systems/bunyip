@@ -96,7 +96,7 @@ pub async fn email(State(st): State<AppState>, headers: HeaderMap) -> Response {
         .await
         .ok();
     let content = email_settings_content(cfg.as_ref());
-    admin_response(&c, &user, "/admin/email", "Email · Bunyip", content)
+    admin_response(&c, &user, "/admin/email", "Email", content)
 }
 
 #[derive(Deserialize)]
@@ -194,7 +194,7 @@ pub async fn email_save(
         (error_box(&error))
         (email_settings_content(cfg.as_ref()))
     };
-    admin_response(&c, &user, "/admin/email", "Email · Bunyip", content)
+    admin_response(&c, &user, "/admin/email", "Email", content)
 }
 
 /// POST /admin/email/test - BUNYIP-433. Run the SMTP "Test connection" probe
@@ -224,5 +224,5 @@ pub async fn email_test(State(st): State<AppState>, headers: HeaderMap) -> Respo
         (banner)
         (email_settings_content(cfg.as_ref()))
     };
-    admin_response(&c, &user, "/admin/email", "Email · Bunyip", content)
+    admin_response(&c, &user, "/admin/email", "Email", content)
 }

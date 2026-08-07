@@ -107,7 +107,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
         }
     };
 
-    dashboard_response(&c, &user, "/dashboard", "Dashboard · Bunyip", content)
+    dashboard_response(&c, &user, "/dashboard", "Dashboard", content)
 }
 
 /// The "Your Applications" card grid on /dashboard. Pure so the card container
@@ -425,7 +425,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
             }
         }
     };
-    dashboard_response(&c, &user, "/applications", "Applications · Bunyip", content)
+    dashboard_response(&c, &user, "/applications", "Applications", content)
 }
 
 // ===========================================================================
@@ -832,7 +832,7 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
             }
         }
     };
-    dashboard_response(&c, &user, "/membership", "Welcome · Bunyip", content)
+    dashboard_response(&c, &user, "/membership", "Welcome", content)
 }
 
 // ===========================================================================
@@ -862,13 +862,7 @@ pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap)
             }
         }
     };
-    dashboard_response(
-        &c,
-        &user,
-        "/dashboard",
-        "Membership Required · Bunyip",
-        content,
-    )
+    dashboard_response(&c, &user, "/dashboard", "Membership Required", content)
 }
 
 // ===========================================================================
@@ -1119,13 +1113,7 @@ pub async fn membership(
             }
         }
     };
-    dashboard_response(
-        &c,
-        &user,
-        "/membership",
-        "Membership & Billing · Bunyip",
-        content,
-    )
+    dashboard_response(&c, &user, "/membership", "Membership & Billing", content)
 }
 
 pub async fn membership_subscribe(State(st): State<AppState>, headers: HeaderMap) -> Response {
@@ -1430,7 +1418,7 @@ pub async fn settings(
             }
         }
     };
-    dashboard_response(&c, &user, "/settings", "Settings · Bunyip", content)
+    dashboard_response(&c, &user, "/settings", "Settings", content)
 }
 
 fn settings_card(icon_name: &str, gradient: &str, title: &str, body: Markup) -> Markup {
@@ -2129,7 +2117,7 @@ pub async fn twofa_setup_get(State(st): State<AppState>, headers: HeaderMap) -> 
         ),
         Err(e) => html! { div class="mx-auto max-w-lg" { (error_box(&e.user_message())) } },
     };
-    dashboard_response(&c, &user, "/settings", "Two-factor setup · Bunyip", content)
+    dashboard_response(&c, &user, "/settings", "Two-factor setup", content)
 }
 
 #[derive(Deserialize)]
@@ -2189,7 +2177,7 @@ pub async fn twofa_setup_post(
             }
         }
     };
-    dashboard_response(&c, &user, "/settings", "Two-factor setup · Bunyip", content)
+    dashboard_response(&c, &user, "/settings", "Two-factor setup", content)
 }
 
 /// Password-confirm form for regenerating recovery codes (BUNYIP-355). Mirrors
@@ -2243,7 +2231,7 @@ pub async fn twofa_recovery_get(State(st): State<AppState>, headers: HeaderMap) 
         &c,
         &user,
         "/settings",
-        "Recovery codes · Bunyip",
+        "Recovery codes",
         twofa_recovery_form(None),
     )
 }
@@ -2270,7 +2258,7 @@ pub async fn twofa_recovery_post(
             Ok(codes) => twofa_recovery_result(&codes.codes),
             Err(e) => twofa_recovery_form(Some(&e.user_message())),
         };
-    dashboard_response(&c, &user, "/settings", "Recovery codes · Bunyip", content)
+    dashboard_response(&c, &user, "/settings", "Recovery codes", content)
 }
 
 /// Step-up form that starts an authenticator re-key (BUNYIP-355): password + a
@@ -2326,7 +2314,7 @@ pub async fn twofa_rekey_get(State(st): State<AppState>, headers: HeaderMap) -> 
         &c,
         &user,
         "/settings",
-        "Reset authenticator · Bunyip",
+        "Reset authenticator",
         twofa_rekey_stepup_form(None),
     )
 }
@@ -2366,13 +2354,7 @@ pub async fn twofa_rekey_post(
         ),
         Err(e) => twofa_rekey_stepup_form(Some(&e.user_message())),
     };
-    dashboard_response(
-        &c,
-        &user,
-        "/settings",
-        "Reset authenticator · Bunyip",
-        content,
-    )
+    dashboard_response(&c, &user, "/settings", "Reset authenticator", content)
 }
 
 /// POST /settings/2fa/rekey/confirm - verify a code from the new authenticator,
@@ -2391,13 +2373,7 @@ pub async fn twofa_rekey_confirm_post(
         Ok(codes) => twofa_recovery_result(&codes.codes),
         Err(e) => twofa_rekey_code_form(Some(&e.user_message())),
     };
-    dashboard_response(
-        &c,
-        &user,
-        "/settings",
-        "Reset authenticator · Bunyip",
-        content,
-    )
+    dashboard_response(&c, &user, "/settings", "Reset authenticator", content)
 }
 
 #[cfg(test)]

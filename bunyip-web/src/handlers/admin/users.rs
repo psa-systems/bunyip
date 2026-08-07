@@ -256,7 +256,7 @@ pub async fn users(
         style { (maud::PreEscaped(USERS_FILTER_CSS)) }
         script src="/assets/js/admin-users.js" defer {}
     };
-    admin_response(&c, &user, "/admin/users", "Users · Bunyip", content)
+    admin_response(&c, &user, "/admin/users", "Users", content)
 }
 
 /// Friendly label for a tier slug (for chips).
@@ -1146,5 +1146,5 @@ pub async fn user_detail(
             (tier_change_card(&target))
         }
     };
-    admin_response(&c, &user, "/admin/users", "User · Bunyip", content)
+    admin_response(&c, &user, "/admin/users", "User", content)
 }

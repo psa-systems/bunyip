@@ -178,7 +178,7 @@ async fn render_feedback_list(
             }
         }
     };
-    admin_response(&c, &user, "/admin/feedback", "Feedback · Bunyip", content)
+    admin_response(&c, &user, "/admin/feedback", "Feedback", content)
 }
 
 /// Inline status chip for a feedback row / detail header, mirroring the
@@ -570,7 +570,7 @@ pub async fn feedback_detail(
         Err(_) => return redirect_cookies(tab.path(), &c.set_cookies),
     };
     let content = feedback_detail_view(&detail, tab);
-    admin_response(&c, &user, "/admin/feedback", "Feedback · Bunyip", content)
+    admin_response(&c, &user, "/admin/feedback", "Feedback", content)
 }
 
 /// Query for the feedback detail page. `from` names the list tab the admin
@@ -840,7 +840,7 @@ pub async fn feedback_archive(
             }
         }
     };
-    admin_response(&c, &user, "/admin/feedback", "Feedback · Bunyip", content)
+    admin_response(&c, &user, "/admin/feedback", "Feedback", content)
 }
 
 /// Render the attachments block on the feedback detail page. Image

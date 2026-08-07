@@ -188,10 +188,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
         true,
         content,
     );
-    html_cookies(
-        document("Surfaces what matters. · Bunyip", body),
-        &c.set_cookies,
-    )
+    html_cookies(document("Surfaces what matters.", body), &c.set_cookies)
 }
 
 /// The branded 404 body. Shared so a route that decides it has nothing to serve
@@ -219,7 +216,7 @@ pub async fn not_found(State(st): State<AppState>, headers: HeaderMap) -> Respon
     );
     // BUNYIP-186: a real 404, not a soft-404 200, while still rendering the
     // branded page.
-    html_status(document("Not found · Bunyip", body), StatusCode::NOT_FOUND)
+    html_status(document("Not found", body), StatusCode::NOT_FOUND)
 }
 
 #[cfg(test)]

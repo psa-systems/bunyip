@@ -223,13 +223,7 @@ pub async fn rate_limits(
             (rate_limit_config_card(&configs, configs_reachable, user.is_super_admin))
         }
     };
-    admin_response(
-        &c,
-        &user,
-        "/admin/rate-limits",
-        "Rate Limits · Bunyip",
-        content,
-    )
+    admin_response(&c, &user, "/admin/rate-limits", "Rate Limits", content)
 }
 
 /// Form body for the reset action: the `(action, key)` identifying the throttle,
