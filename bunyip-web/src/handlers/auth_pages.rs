@@ -1634,6 +1634,28 @@ mod autofocus_tests {
     }
 
     #[test]
+    fn twofa_error_box_never_shows_serde_internals() {
+        // BUNYIP-506: the outage rendered a raw serde string ("missing field
+        // `subscription_tier`") in this box while the user was typing a TOTP
+        // code. A decode failure now renders one fixed line, nothing else.
+        let e = crate::api::decode_error::<crate::api::types::AuthResponse>(
+            "/auth/2fa/verify",
+            &serde_json::from_str::<crate::api::types::AuthResponse>("{}").unwrap_err(),
+        );
+        let html = twofa_card(Some(&e.user_message()), None).into_string();
+        assert!(
+            html.contains("We could not read the response from the server."),
+            "expected the fixed decode message: {html}"
+        );
+        for leak in ["missing field", "AuthResponse", "`user`", "line 1 column"] {
+            assert!(
+                !html.contains(leak),
+                "decode internals leaked into the 2FA error box ({leak}): {html}"
+            );
+        }
+    }
+
+    #[test]
     fn link_only_confirmation_cards_do_not_steal_focus() {
         for html in [
             magic_form(None, true).into_string(),

@@ -881,17 +881,13 @@ pub fn tier_name(t: &MembershipTier) -> &'static str {
         MembershipTier::Free => "Free",
         MembershipTier::EarlyAdopter => "Early Adopter",
         MembershipTier::Standard => "Standard",
+        // BUNYIP-506: a tier this build does not know renders neutrally rather
+        // than failing the response it arrived in.
+        MembershipTier::Unknown => "Unknown",
     }
 }
 fn status_label(s: &MembershipStatus) -> &'static str {
-    match s {
-        MembershipStatus::None => "none",
-        MembershipStatus::Active => "active",
-        MembershipStatus::PastDue => "past_due",
-        MembershipStatus::Canceled => "canceled",
-        MembershipStatus::Incomplete => "incomplete",
-        MembershipStatus::GracePeriod => "grace_period",
-    }
+    s.as_str()
 }
 
 /// BUNYIP-187: flash-banner query for the membership page. Mirrors

@@ -1,39 +1,92 @@
 //! Data model ported from `src/types/index.ts`.
 //!
 //! Field names match the backend JSON exactly (snake_case), so these structs
-//! deserialize straight off the `data` envelope. Enums use
-//! `rename_all = "snake_case"` to match the string discriminants. Date/time
-//! fields are kept as `String` (ISO-8601) to mirror the TS `string` typing;
-//! pages parse them with `chrono` where they need arithmetic.
+//! deserialize straight off the `data` envelope. Enums decode through `String`
+//! via [`wire_enum`], so an unrecognised discriminant becomes `Unknown` instead
+//! of failing the response. Date/time fields are kept as `String` (ISO-8601) to
+//! mirror the TS `string` typing; pages parse them with `chrono` where they
+//! need arithmetic.
+//!
+//! BUNYIP-506 wire-compatibility rule: every field here carries
+//! `#[serde(default)]` unless it is listed in `ESSENTIAL_FIELDS` in
+//! `scripts/check-serde-compat.nu`, which gates the rule in CI. A one-release
+//! skew between bunyip-web and bunyip-api then degrades (an unknown value
+//! renders neutrally) instead of breaking the whole decode.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UserRole {
-    Subscriber,
-    Admin,
+/// BUNYIP-506: declare a wire string enum that tolerates a value this build does
+/// not know. Deserialization goes through `String`, so a variant a newer
+/// bunyip-api added decodes as `Unknown` instead of failing the whole response
+/// with "unknown variant". `#[serde(other)]` cannot do this: serde only allows
+/// it on internally or adjacently tagged enums.
+macro_rules! wire_enum {
+    ($(#[$attr:meta])* $name:ident { $($variant:ident = $wire:literal),+ $(,)? }) => {
+        $(#[$attr])*
+        #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+        #[serde(from = "String", into = "String")]
+        pub enum $name {
+            $($variant,)+
+            /// A wire value this build does not recognise. Renders as a neutral
+            /// label and gates nothing open.
+            #[default]
+            Unknown,
+        }
+
+        impl $name {
+            /// The snake_case wire value, matching what bunyip-api emits.
+            /// Single source for the string the BFF sends back to the API.
+            pub fn as_str(&self) -> &'static str {
+                match self {
+                    $(Self::$variant => $wire,)+
+                    Self::Unknown => "unknown",
+                }
+            }
+        }
+
+        impl From<String> for $name {
+            fn from(s: String) -> Self {
+                match s.as_str() {
+                    $($wire => Self::$variant,)+
+                    _ => Self::Unknown,
+                }
+            }
+        }
+
+        impl From<$name> for String {
+            fn from(v: $name) -> Self {
+                v.as_str().to_string()
+            }
+        }
+    };
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MembershipStatus {
-    None,
-    Active,
-    PastDue,
-    Canceled,
-    Incomplete,
-    GracePeriod,
+wire_enum! {
+    UserRole {
+        Subscriber = "subscriber",
+        Admin = "admin",
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MembershipTier {
-    Lifetime,
-    Free,
-    EarlyAdopter,
-    Standard,
+wire_enum! {
+    MembershipStatus {
+        None = "none",
+        Active = "active",
+        PastDue = "past_due",
+        Canceled = "canceled",
+        Incomplete = "incomplete",
+        GracePeriod = "grace_period",
+    }
+}
+
+wire_enum! {
+    MembershipTier {
+        Lifetime = "lifetime",
+        Free = "free",
+        EarlyAdopter = "early_adopter",
+        Standard = "standard",
+    }
 }
 
 /// One active session in the user's session list (BUNYIP-137). Mirrors the
@@ -42,9 +95,13 @@ pub enum MembershipTier {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
+    #[serde(default)]
     pub device_info: Option<String>,
+    #[serde(default)]
     pub ip_address: Option<String>,
+    #[serde(default)]
     pub created_at: String,
+    #[serde(default)]
     pub last_used_at: Option<String>,
     #[serde(default)]
     pub current: bool,
@@ -54,13 +111,24 @@ pub struct SessionInfo {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TrustedDeviceInfo {
     pub id: String,
+    #[serde(default)]
     pub label: Option<String>,
+    #[serde(default)]
     pub ip_address: Option<String>,
+    #[serde(default)]
     pub created_at: String,
+    #[serde(default)]
     pub last_used_at: Option<String>,
+    #[serde(default)]
     pub expires_at: String,
 }
 
+/// BUNYIP-506: only identity and security carry the auth flow. Everything a
+/// login or a 2FA verify does not need (billing, presentation, profile) is
+/// `#[serde(default)]` with a least-privileged default, so a membership field
+/// renamed or added by a newer bunyip-api cannot abort the decode and block
+/// sign-in. Authorization is enforced server-side regardless, so a defaulted
+/// tier or status is a presentation degradation, never a widened grant.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct User {
     pub id: String,
@@ -68,15 +136,26 @@ pub struct User {
     pub role: UserRole,
     pub email_verified: bool,
     pub two_factor_enabled: bool,
+    #[serde(default = "membership_status_none")]
     pub membership_status: MembershipStatus,
+    #[serde(default)]
     pub price_locked: bool,
+    #[serde(default)]
     pub locked_price_id: Option<String>,
+    #[serde(default)]
     pub locked_price_amount: Option<i64>,
+    #[serde(default)]
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
+    /// v0.13.0 renamed `subscription_tier` to `membership_tier`. The alias
+    /// parses a not-yet-restarted API during a rolling deploy; drop it in
+    /// v0.15.0 (the contract half of the expand/contract rename).
+    #[serde(default, alias = "subscription_tier")]
     pub membership_tier: MembershipTier,
+    #[serde(default)]
     pub trial_ends_at: Option<String>,
+    #[serde(default)]
     pub lifetime_member: bool,
     /// BUNYIP-139: optional profile fields surfaced for the Settings page
     /// Profile panel and the dashboard "fill in your name" banner.
@@ -154,7 +233,9 @@ pub struct AuthResponse {
 /// with the first-admin setup wizard.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetupStatus {
+    #[serde(default)]
     pub email_enabled: bool,
+    #[serde(default)]
     pub stripe_enabled: bool,
 }
 
@@ -162,18 +243,27 @@ pub struct SetupStatus {
 pub struct Application {
     pub id: String,
     pub slug: String,
+    #[serde(default)]
     pub display_name: String,
+    #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
     pub icon_url: Option<String>,
+    #[serde(default)]
     pub version: Option<String>,
+    #[serde(default)]
     pub source_code_url: Option<String>,
     /// Release-notes URL (BUNYIP-343): the admin-set link to this app's release
     /// notes. `None` when unset; the card omits the link then.
     #[serde(default)]
     pub release_notes_url: Option<String>,
+    #[serde(default)]
     pub subdomain: Option<String>,
+    #[serde(default)]
     pub is_accessible: bool,
+    #[serde(default)]
     pub maintenance_mode: bool,
+    #[serde(default)]
     pub maintenance_message: Option<String>,
     /// Group membership (BUNYIP-100); `None` = ungrouped. Used to group the
     /// applications page under group headings.
@@ -183,21 +273,34 @@ pub struct Application {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Membership {
+    #[serde(default)]
     pub status: MembershipStatus,
+    #[serde(default)]
     pub price_locked: bool,
+    #[serde(default)]
     pub locked_price_amount: Option<i64>,
+    #[serde(default)]
     pub current_period_end: Option<String>,
+    #[serde(default)]
     pub cancel_at_period_end: bool,
+    #[serde(default)]
     pub grace_period_end: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PaginatedResponse<T> {
+    // `default = "Vec::new"` rather than a bare `default`: the bare form makes
+    // serde add a `T: Default` bound to the generated impl, which every item
+    // type would then have to satisfy.
+    #[serde(default = "Vec::new")]
     pub items: Vec<T>,
+    #[serde(default)]
     pub total: i64,
+    #[serde(default)]
     pub page: i64,
     #[serde(default)]
     pub page_size: Option<i64>,
+    #[serde(default)]
     pub total_pages: i64,
 }
 
@@ -205,6 +308,7 @@ pub struct PaginatedResponse<T> {
 /// envelope (see `src/api/applications.ts`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApplicationList {
+    #[serde(default)]
     pub applications: Vec<Application>,
 }
 
@@ -215,6 +319,7 @@ pub struct ApplicationList {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CheckoutSessionResponse {
     pub checkout_url: String,
+    #[serde(default)]
     pub session_id: String,
 }
 
@@ -222,10 +327,15 @@ pub struct CheckoutSessionResponse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StripePaymentResponse {
     pub id: String,
+    #[serde(default)]
     pub amount: i64,
+    #[serde(default)]
     pub currency: String,
+    #[serde(default)]
     pub status: Option<String>,
+    #[serde(default)]
     pub created: i64,
+    #[serde(default)]
     pub invoice_pdf: Option<String>,
 }
 
@@ -233,13 +343,21 @@ pub struct StripePaymentResponse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StripeInvoice {
     pub id: String,
+    #[serde(default)]
     pub amount_paid: i64,
+    #[serde(default)]
     pub currency: String,
+    #[serde(default)]
     pub status: Option<String>,
+    #[serde(default)]
     pub invoice_pdf: Option<String>,
+    #[serde(default)]
     pub hosted_invoice_url: Option<String>,
+    #[serde(default)]
     pub created: i64,
+    #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
     pub number: Option<String>,
 }
 
@@ -247,25 +365,12 @@ pub struct StripeInvoice {
 // Feedback
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FeedbackStatus {
-    New,
-    Reviewed,
-    Responded,
-    Closed,
-}
-
-impl FeedbackStatus {
-    /// snake_case wire value, matching the serde discriminant. Single source
-    /// for the status string the BFF sends to bunyip-api.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            FeedbackStatus::New => "new",
-            FeedbackStatus::Reviewed => "reviewed",
-            FeedbackStatus::Responded => "responded",
-            FeedbackStatus::Closed => "closed",
-        }
+wire_enum! {
+    FeedbackStatus {
+        New = "new",
+        Reviewed = "reviewed",
+        Responded = "responded",
+        Closed = "closed",
     }
 }
 
@@ -292,7 +397,9 @@ pub struct RecoveryCodesResponse {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TwoFactorStatusResponse {
+    #[serde(default)]
     pub enabled: bool,
+    #[serde(default)]
     pub recovery_codes_remaining: i64,
 }
 
@@ -302,8 +409,11 @@ pub struct TwoFactorStatusResponse {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DownloadAsset {
+    #[serde(default)]
     pub asset_name: String,
+    #[serde(default)]
     pub size_bytes: i64,
+    #[serde(default)]
     pub content_type: String,
     pub download_url: String,
 }
@@ -312,10 +422,13 @@ pub struct DownloadAsset {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OciImage {
     /// Public registry hostname for `docker login`.
+    #[serde(default)]
     pub registry: String,
     /// Repository inside the registry (the application slug).
+    #[serde(default)]
     pub repository: String,
     /// The pinned image tag (the only tag the registry serves).
+    #[serde(default)]
     pub tag: String,
     /// Full pull reference: `{registry}/{repository}:{tag}`.
     pub reference: String,
@@ -324,12 +437,16 @@ pub struct OciImage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppDownloadGroup {
     pub app_slug: String,
+    #[serde(default)]
     pub app_display_name: String,
+    #[serde(default)]
     pub icon_url: Option<String>,
     /// Version of the binary assets; EMPTY for OCI-only products. Kept a
     /// plain string (not `Option`) to match the API's wire format, which
     /// stays a required string for compatibility with older clients.
+    #[serde(default)]
     pub release_tag: String,
+    #[serde(default)]
     pub assets: Vec<DownloadAsset>,
     /// OCI pull info, when the product has a pullable container image.
     /// `default` so this client also parses responses from an older API
@@ -352,6 +469,7 @@ pub struct AppDownloadGroup {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DownloadGroups {
+    #[serde(default)]
     pub groups: Vec<AppDownloadGroup>,
 }
 
@@ -361,11 +479,17 @@ pub struct DownloadGroups {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminStatsResponse {
+    #[serde(default)]
     pub total_users: i64,
+    #[serde(default)]
     pub active_members: i64,
+    #[serde(default)]
     pub past_due_members: i64,
+    #[serde(default)]
     pub grace_period_members: i64,
+    #[serde(default)]
     pub total_applications: i64,
+    #[serde(default)]
     pub active_applications: i64,
 }
 
@@ -376,11 +500,17 @@ pub struct AdminStatsResponse {
 /// it", "path set but file missing", and "deployed but overdue for a refresh".
 #[derive(Debug, Clone, Deserialize)]
 pub struct DatasetHealth {
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub env_var: String,
+    #[serde(default)]
     pub configured: bool,
+    #[serde(default)]
     pub present: bool,
+    #[serde(default)]
     pub age_days: Option<i64>,
+    #[serde(default)]
     pub stale: bool,
 }
 
@@ -401,15 +531,28 @@ pub struct SystemHealthResponse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminUser {
     pub id: String,
+    #[serde(default)]
     pub email: String,
+    #[serde(default)]
     pub role: UserRole,
+    #[serde(default)]
     pub email_verified: bool,
+    #[serde(default)]
     pub two_factor_enabled: bool,
+    #[serde(default = "membership_status_none")]
     pub membership_status: MembershipStatus,
+    /// v0.13.0 renamed `subscription_tier` to `membership_tier`. The alias
+    /// parses a not-yet-restarted API during a rolling deploy; drop it in
+    /// v0.15.0 (the contract half of the expand/contract rename).
+    #[serde(default, alias = "subscription_tier")]
     pub membership_tier: MembershipTier,
+    #[serde(default)]
     pub lifetime_member: bool,
+    #[serde(default)]
     pub created_at: String,
+    #[serde(default)]
     pub last_login_at: Option<String>,
+    #[serde(default)]
     pub grace_period_end: Option<String>,
     /// BUNYIP-410 overhaul: soft-deleted (suspended) flag, so the users list can
     /// tell active from suspended rows on the combined "All" view. `default`
@@ -421,12 +564,19 @@ pub struct AdminUser {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminAuditLog {
     pub id: String,
+    #[serde(default)]
     pub actor_id: Option<String>,
+    #[serde(default)]
     pub actor_email: Option<String>,
+    #[serde(default)]
     pub actor_role: Option<String>,
+    #[serde(default)]
     pub actor_ip_address: Option<String>,
+    #[serde(default)]
     pub action: String,
+    #[serde(default)]
     pub resource_type: Option<String>,
+    #[serde(default)]
     pub resource_id: Option<String>,
     #[serde(default)]
     pub old_values: Option<Value>,
@@ -434,8 +584,11 @@ pub struct AdminAuditLog {
     pub new_values: Option<Value>,
     #[serde(default)]
     pub metadata: Option<Value>,
+    #[serde(default)]
     pub is_admin_action: bool,
+    #[serde(default)]
     pub severity: String,
+    #[serde(default)]
     pub created_at: String,
 }
 
@@ -443,9 +596,13 @@ pub struct AdminAuditLog {
 /// (BUNYIP-327). Mirrors `bunyip_api::error_log::ErrorLogEntry`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AdminErrorLog {
+    #[serde(default)]
     pub timestamp: String,
+    #[serde(default)]
     pub level: String,
+    #[serde(default)]
     pub target: String,
+    #[serde(default)]
     pub message: String,
     #[serde(default)]
     pub category: Option<String>,
@@ -462,19 +619,28 @@ pub struct AdminErrorLog {
 /// plus buffer occupancy so the view can report rotation.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ErrorLogsResponse {
+    #[serde(default)]
     pub entries: Vec<AdminErrorLog>,
+    #[serde(default)]
     pub matched: i64,
+    #[serde(default)]
     pub buffered: i64,
+    #[serde(default)]
     pub capacity: i64,
 }
 
 /// Per-section counts returned by `POST /v1/admin/seed/import` (PSA-52).
 #[derive(Debug, Clone, Deserialize)]
 pub struct ImportSummary {
+    #[serde(default)]
     pub groups: i64,
+    #[serde(default)]
     pub applications: i64,
+    #[serde(default)]
     pub users: i64,
+    #[serde(default)]
     pub entitlements: i64,
+    #[serde(default)]
     pub feedback: i64,
 }
 
@@ -483,11 +649,17 @@ pub struct ImportSummary {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SeedTemplateInfo {
     pub name: String,
+    #[serde(default)]
     pub description: String,
+    #[serde(default)]
     pub groups: i64,
+    #[serde(default)]
     pub applications: i64,
+    #[serde(default)]
     pub users: i64,
+    #[serde(default)]
     pub entitlements: i64,
+    #[serde(default)]
     pub feedback: i64,
 }
 
@@ -497,9 +669,13 @@ pub struct SeedTemplateInfo {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AdminIpBan {
     pub ip: String,
+    #[serde(default)]
     pub reason: String,
+    #[serde(default)]
     pub strikes: u32,
+    #[serde(default)]
     pub banned_at: String,
+    #[serde(default)]
     pub expires_at: String,
 }
 
@@ -513,16 +689,27 @@ pub struct AdminIpBan {
 /// it to `Option<IpEnrichment>`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct IpEnrichment {
+    #[serde(default)]
     pub ip: String,
+    #[serde(default)]
     pub asn: Option<String>,
+    #[serde(default)]
     pub organization: Option<String>,
+    #[serde(default)]
     pub isp: Option<String>,
+    #[serde(default)]
     pub category: String,
+    #[serde(default)]
     pub vpn: String,
+    #[serde(default)]
     pub is_anonymizing: bool,
+    #[serde(default)]
     pub proxy_type: Option<String>,
+    #[serde(default)]
     pub provider: Option<String>,
+    #[serde(default)]
     pub threat: Option<String>,
+    #[serde(default)]
     pub advisory: bool,
 }
 
@@ -536,12 +723,19 @@ pub struct IpEnrichment {
 pub struct AdminRateLimit {
     pub action: String,
     pub key: String,
+    #[serde(default)]
     pub user_id: Option<String>,
+    #[serde(default)]
     pub user_email: Option<String>,
+    #[serde(default)]
     pub ip: Option<String>,
+    #[serde(default)]
     pub count: i64,
+    #[serde(default)]
     pub max_requests: i32,
+    #[serde(default)]
     pub window_start: String,
+    #[serde(default)]
     pub retry_after: u64,
 }
 
@@ -554,10 +748,15 @@ pub struct AdminRateLimit {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AdminRateLimitConfig {
     pub action: String,
+    #[serde(default)]
     pub max_requests: i32,
+    #[serde(default)]
     pub window_seconds: i64,
+    #[serde(default)]
     pub default_max_requests: i32,
+    #[serde(default)]
     pub default_window_seconds: i64,
+    #[serde(default)]
     pub overridden: bool,
     #[serde(default)]
     pub updated_at: Option<String>,
@@ -567,24 +766,44 @@ fn default_true() -> bool {
     true
 }
 
+/// BUNYIP-506: least-privileged default for a membership status - "no
+/// membership", never a grant inferred from a field the API did not send.
+fn membership_status_none() -> MembershipStatus {
+    MembershipStatus::None
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminApplication {
     pub id: String,
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub slug: String,
+    #[serde(default)]
     pub display_name: String,
+    #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
     pub icon_url: Option<String>,
+    #[serde(default)]
     pub is_active: bool,
+    #[serde(default)]
     pub maintenance_mode: bool,
+    #[serde(default)]
     pub maintenance_message: Option<String>,
+    #[serde(default)]
     pub subdomain: Option<String>,
+    #[serde(default)]
     pub container_name: String,
+    #[serde(default)]
     pub version: Option<String>,
+    #[serde(default)]
     pub source_code_url: Option<String>,
     #[serde(default)]
     pub release_notes_url: Option<String>,
+    #[serde(default)]
     pub sort_order: i64,
+    #[serde(default)]
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
@@ -621,16 +840,21 @@ pub struct AdminApplication {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct UserEntitlement {
     pub application_id: String,
+    #[serde(default)]
     pub slug: String,
+    #[serde(default)]
     pub display_name: String,
     #[serde(default)]
     pub requires_entitlement: bool,
+    #[serde(default)]
     pub granted_at: String,
+    #[serde(default)]
     pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminApplicationList {
+    #[serde(default)]
     pub applications: Vec<AdminApplication>,
 }
 
@@ -639,8 +863,11 @@ pub struct AdminApplicationList {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApplicationGroup {
     pub id: String,
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub slug: String,
+    #[serde(default)]
     pub display_name: String,
     #[serde(default)]
     pub description: Option<String>,
@@ -652,17 +879,22 @@ pub struct ApplicationGroup {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApplicationGroupList {
+    #[serde(default)]
     pub groups: Vec<ApplicationGroup>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminFeedbackSummary {
     pub id: String,
+    #[serde(default)]
     pub name: Option<String>,
+    #[serde(default)]
     pub email_masked: Option<String>,
+    #[serde(default)]
     pub subject: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
     pub message_excerpt: String,
     /// Mirrors the bunyip-api summary field added in BUNYIP-84 so the admin
     /// row can show the captured `?from=` path. `#[serde(default)]` keeps
@@ -670,15 +902,20 @@ pub struct AdminFeedbackSummary {
     /// field deserializes as `None`.
     #[serde(default)]
     pub page_path: Option<String>,
+    #[serde(default)]
     pub status: FeedbackStatus,
+    #[serde(default)]
     pub created_at: String,
+    #[serde(default)]
     pub responded_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminFeedbackDetail {
     pub id: String,
+    #[serde(default)]
     pub name: Option<String>,
+    #[serde(default)]
     pub email: Option<String>,
     /// BUNYIP-94: the API also emits a masked form (e.g.
     /// `y***@niceguyit.biz`) alongside the raw email. The detail view
@@ -688,13 +925,19 @@ pub struct AdminFeedbackDetail {
     /// API that does not emit the field deserialize-compatible.
     #[serde(default)]
     pub email_masked: Option<String>,
+    #[serde(default)]
     pub subject: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
     pub message: String,
+    #[serde(default)]
     pub page_path: Option<String>,
+    #[serde(default)]
     pub status: FeedbackStatus,
+    #[serde(default)]
     pub admin_response: Option<String>,
+    #[serde(default)]
     pub created_at: String,
     /// Wall-clock timestamp the admin replied at, populated by the API on
     /// successful respond. `#[serde(default)]` keeps an older API that
@@ -721,8 +964,11 @@ pub struct AdminFeedbackDetail {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FeedbackAttachmentMeta {
     pub id: String,
+    #[serde(default)]
     pub filename: String,
+    #[serde(default)]
     pub mime_type: String,
+    #[serde(default)]
     pub size_bytes: i64,
 }
 
@@ -731,26 +977,38 @@ pub struct FeedbackAttachmentMeta {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArchivedFeedback {
     pub id: String,
+    #[serde(default)]
     pub archived_at: String,
+    #[serde(default)]
     pub name: Option<String>,
     /// API returns the unmasked email here. Admins can already see it on
     /// the active list once they open the detail page, so exposing it on
     /// the archive list is consistent.
+    #[serde(default)]
     pub email: Option<String>,
+    #[serde(default)]
     pub subject: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
     pub message_excerpt: String,
+    #[serde(default)]
     pub original_status: Option<String>,
+    #[serde(default)]
     pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StripeConfigResponse {
+    #[serde(default)]
     pub secret_key_masked: Option<String>,
+    #[serde(default)]
     pub webhook_secret_masked: Option<String>,
+    #[serde(default)]
     pub has_secret_key: bool,
+    #[serde(default)]
     pub has_webhook_secret: bool,
+    #[serde(default)]
     pub app_tag: String,
     // BUNYIP-351: resolved checkout knobs, editable from the Stripe page.
     #[serde(default)]
@@ -759,7 +1017,9 @@ pub struct StripeConfigResponse {
     pub cancel_url: String,
     #[serde(default)]
     pub trial_period_days: u32,
+    #[serde(default)]
     pub updated_at: Option<String>,
+    #[serde(default)]
     pub source: String,
 }
 
@@ -769,9 +1029,11 @@ pub struct StripeConfigResponse {
 #[derive(Debug, Clone, Deserialize)]
 pub struct StripeProduct {
     pub id: String,
+    #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
     pub active: bool,
     #[serde(default)]
     pub created: i64,
@@ -786,9 +1048,11 @@ pub struct StripePrice {
     pub product_id: String,
     #[serde(default)]
     pub unit_amount: Option<i64>,
+    #[serde(default)]
     pub currency: String,
     #[serde(default)]
     pub recurring_interval: Option<String>,
+    #[serde(default)]
     pub active: bool,
 }
 
@@ -800,9 +1064,11 @@ pub struct StripePrice {
 #[derive(Debug, Clone, Deserialize)]
 pub struct StripeWebhookEndpoint {
     pub id: String,
+    #[serde(default)]
     pub url: String,
     #[serde(default)]
     pub enabled_events: Vec<String>,
+    #[serde(default)]
     pub status: String,
     #[serde(default)]
     pub secret: Option<String>,
@@ -813,22 +1079,33 @@ pub struct StripeWebhookEndpoint {
 /// returned in plaintext (only a masked hint + `has_smtp_password`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EmailConfigResponse {
+    #[serde(default)]
     pub enabled: bool,
+    #[serde(default)]
     pub smtp_host: String,
+    #[serde(default)]
     pub smtp_port: i32,
+    #[serde(default)]
     pub smtp_tls: String,
+    #[serde(default)]
     pub smtp_username: String,
     /// BUNYIP-432: whether a password is stored - a boolean fact only. The API
     /// no longer sends the password or any masked/truncated form of it (the
     /// field is write-only), so the settings page renders a fixed-length mask
     /// from this flag and never receives the secret.
+    #[serde(default)]
     pub has_smtp_password: bool,
+    #[serde(default)]
     pub from_email: String,
+    #[serde(default)]
     pub from_name: String,
+    #[serde(default)]
     pub admin_notification_emails: Vec<String>,
+    #[serde(default)]
     pub source: String,
     #[serde(default)]
     pub updated_at: Option<String>,
+    #[serde(default)]
     pub updated_by: Option<String>,
 }
 
@@ -837,8 +1114,11 @@ pub struct EmailConfigResponse {
 /// `message` is the admin-facing reason.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SmtpTestResult {
+    #[serde(default)]
     pub ok: bool,
+    #[serde(default)]
     pub stage: String,
+    #[serde(default)]
     pub message: String,
 }
 
@@ -846,13 +1126,19 @@ pub struct SmtpTestResult {
 /// Mirrors `bunyip-api`'s `AutoBanConfigResponse`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoBanConfigResponse {
+    #[serde(default)]
     pub enabled: bool,
+    #[serde(default)]
     pub threshold: i64,
+    #[serde(default)]
     pub window_secs: i64,
+    #[serde(default)]
     pub ban_duration_secs: i64,
+    #[serde(default)]
     pub source: String,
     #[serde(default)]
     pub updated_at: String,
+    #[serde(default)]
     pub updated_by: Option<String>,
 }
 
@@ -860,14 +1146,18 @@ pub struct AutoBanConfigResponse {
 /// admin. Mirrors `bunyip-domain`'s `RestoreReport`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RestoreReport {
+    #[serde(default)]
     pub profile_restored: bool,
+    #[serde(default)]
     pub entitlements_granted: Vec<String>,
+    #[serde(default)]
     pub apps: Vec<AppRestoreOutcome>,
 }
 
 /// One app's restore outcome inside a [`RestoreReport`].
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppRestoreOutcome {
+    #[serde(default)]
     pub slug: String,
     pub status: AppRestoreStatus,
 }
@@ -883,12 +1173,19 @@ pub enum AppRestoreStatus {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TierConfigResponse {
+    #[serde(default)]
     pub lifetime_slots: i64,
+    #[serde(default)]
     pub early_adopter_slots: i64,
+    #[serde(default)]
     pub early_adopter_trial_days: i64,
+    #[serde(default)]
     pub standard_trial_days: i64,
+    #[serde(default)]
     pub free_price_id: Option<String>,
+    #[serde(default)]
     pub early_adopter_price_id: Option<String>,
+    #[serde(default)]
     pub standard_price_id: Option<String>,
     // BUNYIP-122: surface the Stripe product IDs that match the price IDs
     // above so the admin tier-settings form can read + render them. The
@@ -904,14 +1201,18 @@ pub struct TierConfigResponse {
     pub early_adopter_product_id: Option<String>,
     #[serde(default)]
     pub standard_product_id: Option<String>,
+    #[serde(default)]
     pub source: String,
+    #[serde(default)]
     pub lifetime_slots_used: i64,
+    #[serde(default)]
     pub early_adopter_slots_used: i64,
     /// BUNYIP-487: the Enable Pricing switch on the Pricing tiers page.
     #[serde(default)]
     pub pricing_enabled: bool,
     #[serde(default)]
     pub updated_at: String,
+    #[serde(default)]
     pub updated_by: Option<String>,
 }
 
@@ -921,6 +1222,7 @@ pub struct TierConfigResponse {
 /// disagree with the charged one.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct PricingResponse {
+    #[serde(default)]
     pub enabled: bool,
     /// Standard-tier trial length. Reported even when nothing is published,
     /// because the homepage CTA advertises the trial without the price.
@@ -934,11 +1236,15 @@ pub struct PricingResponse {
 pub struct PricingTier {
     /// Display name comes from `handlers::dashboard::tier_name`, not the wire,
     /// so the marketing card and the in-app labels stay byte-identical.
+    #[serde(default)]
     pub tier: MembershipTier,
     /// Smallest currency unit (cents), from the mapped Stripe price.
     pub amount: i64,
+    #[serde(default)]
     pub currency: String,
+    #[serde(default)]
     pub interval: Option<String>,
+    #[serde(default)]
     pub trial_days: i64,
 }
 
@@ -956,6 +1262,7 @@ pub struct AppDoc {
     #[serde(default)]
     pub id: String,
     pub slug: String,
+    #[serde(default)]
     pub title: String,
     #[serde(default)]
     pub body: String,
@@ -967,6 +1274,7 @@ pub struct AppDoc {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppDocSummary {
     pub slug: String,
+    #[serde(default)]
     pub title: String,
     #[serde(default)]
     pub sort_order: i32,
@@ -974,7 +1282,7 @@ pub struct AppDocSummary {
 
 #[cfg(test)]
 mod tests {
-    use super::User;
+    use super::{AuthResponse, MembershipStatus, MembershipTier, User, UserRole};
 
     /// Build a minimal web `User` from JSON so the many required fields don't
     /// have to be spelled out in every test.
@@ -1041,5 +1349,71 @@ mod tests {
         assert!(src.starts_with("/me/avatar?v="));
         // The ISO-8601 `:` are percent-encoded so the query value is well-formed.
         assert!(src.contains("2026-07-28T10%3A00%3A00Z"));
+    }
+
+    // --- BUNYIP-506: wire compatibility ------------------------------------
+
+    #[test]
+    fn v0_12_0_shaped_user_still_decodes() {
+        // The exact payload that broke production: the v0.12.0 wire shape, with
+        // `subscription_tier` and none of the fields added since. It must decode
+        // through the alias instead of failing on a missing `membership_tier`.
+        let u: User = serde_json::from_value(serde_json::json!({
+            "id": "00000000-0000-0000-0000-000000000001",
+            "email": "ada@example.com",
+            "role": "subscriber",
+            "email_verified": true,
+            "two_factor_enabled": true,
+            "membership_status": "active",
+            "price_locked": false,
+            "created_at": "2026-01-01T00:00:00Z",
+            "subscription_tier": "early_adopter",
+            "lifetime_member": false,
+        }))
+        .expect("a v0.12.0-shaped user must still decode");
+        assert_eq!(u.membership_tier, MembershipTier::EarlyAdopter);
+        // Fields added since v0.12.0 fall back to their least-privileged default.
+        assert!(!u.is_super_admin);
+        assert_eq!(u.avatar_updated_at, None);
+    }
+
+    #[test]
+    fn auth_response_needs_only_the_five_essential_fields() {
+        // The 2FA path decodes an AuthResponse; nothing about membership,
+        // billing or profile may be load-bearing for it.
+        let auth: AuthResponse = serde_json::from_value(serde_json::json!({
+            "user": {
+                "id": "00000000-0000-0000-0000-000000000001",
+                "email": "ada@example.com",
+                "role": "subscriber",
+                "email_verified": true,
+                "two_factor_enabled": true,
+            }
+        }))
+        .expect("a five-field user must decode as an AuthResponse");
+        assert_eq!(auth.user.role, UserRole::Subscriber);
+        // Least-privileged defaults: no membership, no tier, no price lock.
+        assert_eq!(auth.user.membership_status, MembershipStatus::None);
+        assert_eq!(auth.user.membership_tier, MembershipTier::Unknown);
+        assert!(!auth.user.lifetime_member);
+        assert!(!auth.user.price_locked);
+        assert_eq!(auth.user.created_at, "");
+    }
+
+    #[test]
+    fn unrecognised_wire_values_decode_to_unknown() {
+        let tier: MembershipTier =
+            serde_json::from_value(serde_json::json!("platinum")).expect("unknown tier decodes");
+        assert_eq!(tier, MembershipTier::Unknown);
+        // An unknown role must never land on Admin.
+        let role: UserRole =
+            serde_json::from_value(serde_json::json!("root")).expect("unknown role decodes");
+        assert_eq!(role, UserRole::Unknown);
+        assert_ne!(role, UserRole::Admin);
+        // Round-trip: Unknown serializes to a value that decodes back to Unknown.
+        assert_eq!(
+            serde_json::to_value(UserRole::Unknown).expect("serialize"),
+            serde_json::json!("unknown")
+        );
     }
 }

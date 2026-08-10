@@ -150,11 +150,12 @@ fn cookie_value_from_header(header: &str, name: &str) -> Option<String> {
 /// role, false otherwise (including for an unknown JWT string, so the
 /// mismatch path treats "we cannot make sense of this claim" as "rotate").
 fn role_matches(user_role: &UserRole, jwt_role: &str) -> bool {
-    let user_str: &str = match user_role {
-        UserRole::Admin => "admin",
-        UserRole::Subscriber => "subscriber",
-    };
-    user_str == jwt_role
+    // BUNYIP-506: a role this build does not recognise matches nothing, so the
+    // caller treats it as a mismatch and rotates rather than trusting it.
+    if matches!(user_role, UserRole::Unknown) {
+        return false;
+    }
+    user_role.as_str() == jwt_role
 }
 
 fn cookie_name_value(set_cookie: &str) -> Option<(String, String)> {
