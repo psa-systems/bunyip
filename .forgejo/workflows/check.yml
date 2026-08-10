@@ -99,6 +99,16 @@ jobs:
           ./scripts/check-workflow-shell.nu --self-test
           ./scripts/check-workflow-shell.nu
 
+      - name: Check the API response models stay skew-tolerant
+        # Every field of a Deserialize struct in bunyip-web/src/api/types.rs
+        # defaults unless it is in the guard's ESSENTIAL_FIELDS table, so a
+        # field renamed or added by a newer bunyip-api degrades instead of
+        # breaking the decode (BUNYIP-506). --self-test first, so a gate that
+        # stopped detecting anything fails the build instead of passing vacuously.
+        run: |
+          ./scripts/check-serde-compat.nu --self-test
+          ./scripts/check-serde-compat.nu
+
       - name: Check runner labels
         # Keep the native cargo job on the dev image (the only one with a C
         # toolchain), keep every label annotated, and keep the run-time

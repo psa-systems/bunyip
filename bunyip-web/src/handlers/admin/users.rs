@@ -60,6 +60,8 @@ pub(super) fn tier_label(tier: &crate::api::types::MembershipTier) -> &'static s
         Free => "Free",
         EarlyAdopter => "Early Adopter",
         Standard => "Standard",
+        // BUNYIP-506: a tier this build does not know renders neutrally.
+        Unknown => "Unknown",
     }
 }
 

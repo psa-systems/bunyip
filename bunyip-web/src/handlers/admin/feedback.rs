@@ -194,6 +194,8 @@ fn feedback_status_chip(status: &FeedbackStatus) -> Markup {
         ),
         FeedbackStatus::Responded => ("text-teal-600 dark:text-teal-400", "mail", "Responded"),
         FeedbackStatus::Closed => ("text-muted-foreground", "check", "Closed"),
+        // BUNYIP-506: a status this build does not know renders neutrally.
+        FeedbackStatus::Unknown => ("text-muted-foreground", "help-circle", "Unknown"),
     };
     html! {
         span class={ "inline-flex items-center gap-1 text-xs font-medium " (classes) } {
@@ -372,6 +374,8 @@ pub async fn feedback_status(
         FeedbackStatus::Reviewed => "Marked reviewed",
         FeedbackStatus::New => "Re-opened",
         FeedbackStatus::Responded => "Marked responded",
+        // Unreachable: the parse above maps anything unrecognised to `New`.
+        FeedbackStatus::Unknown => "Updated",
     };
     let target =
         match admin_api::update_feedback_status(&st.api, c.forward.as_deref(), &id, status).await {

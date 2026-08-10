@@ -8,7 +8,7 @@ use super::types::{
     AuthResponse, PaginatedResponse, RecoveryCodesResponse, SetupStatus, TrustedDeviceInfo,
     TwoFactorSetupResponse, TwoFactorStatusResponse, User,
 };
-use super::{ok_data, parse, Api, ApiError};
+use super::{decode_error, ok_data, parse, Api, ApiError};
 
 /// A page of the signed-in user's trusted devices (BUNYIP-138 / BUNYIP-177).
 /// The API returns a `PaginatedResponse<TrustedDeviceInfo>` inside the envelope.
@@ -51,7 +51,7 @@ pub enum LoginOutcome {
     TwoFactorRequired { challenge_token: String },
 }
 
-fn parse_login(value: Value) -> Result<LoginOutcome, ApiError> {
+fn parse_login(path: &str, value: Value) -> Result<LoginOutcome, ApiError> {
     if value
         .get("requires_2fa")
         .and_then(|v| v.as_bool())
@@ -64,12 +64,8 @@ fn parse_login(value: Value) -> Result<LoginOutcome, ApiError> {
             .to_string();
         return Ok(LoginOutcome::TwoFactorRequired { challenge_token });
     }
-    let auth: AuthResponse = serde_json::from_value(value).map_err(|e| ApiError {
-        status: 0,
-        code: "DECODE_ERROR".into(),
-        message: e.to_string(),
-        retry_after: None,
-    })?;
+    let auth: AuthResponse =
+        serde_json::from_value(value).map_err(|e| decode_error::<AuthResponse>(path, &e))?;
     Ok(LoginOutcome::SignedIn(auth.user))
 }
 
@@ -116,7 +112,7 @@ pub async fn login(
         .await?;
     let cookies = r.set_cookies.clone();
     let data = ok_data(&r)?.clone();
-    Ok((parse_login(data)?, cookies))
+    Ok((parse_login("/auth/login", data)?, cookies))
 }
 
 pub async fn verify_2fa(
@@ -137,12 +133,8 @@ pub async fn verify_2fa(
         .await?;
     let cookies = r.set_cookies.clone();
     let data = ok_data(&r)?.clone();
-    let auth: AuthResponse = serde_json::from_value(data).map_err(|e| ApiError {
-        status: 0,
-        code: "DECODE_ERROR".into(),
-        message: e.to_string(),
-        retry_after: None,
-    })?;
+    let auth: AuthResponse = serde_json::from_value(data)
+        .map_err(|e| decode_error::<AuthResponse>("/auth/2fa/verify", &e))?;
     Ok((auth.user, cookies))
 }
 
@@ -166,7 +158,7 @@ pub async fn verify_magic_link(
         .await?;
     let cookies = r.set_cookies.clone();
     let data = ok_data(&r)?.clone();
-    Ok((parse_login(data)?, cookies))
+    Ok((parse_login("/auth/magic-link/verify", data)?, cookies))
 }
 
 pub async fn request_password_reset(api: &Api, email: &str) -> Result<(), ApiError> {
@@ -262,12 +254,8 @@ pub async fn accept_invite(
             .to_string();
         return Ok((Some(email), None, cookies));
     }
-    let auth: AuthResponse = serde_json::from_value(data).map_err(|e| ApiError {
-        status: 0,
-        code: "DECODE_ERROR".into(),
-        message: e.to_string(),
-        retry_after: None,
-    })?;
+    let auth: AuthResponse = serde_json::from_value(data)
+        .map_err(|e| decode_error::<AuthResponse>("/auth/invite/accept", &e))?;
     Ok((None, Some(auth.user), cookies))
 }
 

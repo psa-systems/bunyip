@@ -178,6 +178,28 @@ pub struct LoginRequest {
     pub device_id: Option<String>,
 }
 
+#[cfg(test)]
+mod request_shape_tests {
+    use super::LoginRequest;
+
+    /// BUNYIP-506: the wire-compatibility rule is asymmetric by direction.
+    /// Response models in bunyip-web default every non-essential field, but a
+    /// request body keeps its required inputs required, so a malformed request
+    /// still fails (actix turns this deserialize error into a 400) instead of
+    /// authenticating against an empty password.
+    #[test]
+    fn login_request_without_a_password_is_rejected() {
+        let e = serde_json::from_value::<LoginRequest>(serde_json::json!({
+            "email": "ada@example.com",
+        }))
+        .expect_err("a login body with no password must be rejected");
+        assert!(
+            e.to_string().contains("password"),
+            "expected the missing required input to be named: {e}"
+        );
+    }
+}
+
 /// Request body for magic link request
 #[derive(Debug, Deserialize)]
 pub struct MagicLinkRequest {

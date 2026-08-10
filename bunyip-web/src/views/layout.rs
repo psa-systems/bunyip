@@ -873,6 +873,38 @@ mod tests {
         }
     }
 
+    /// BUNYIP-506: a role string this build does not recognise decodes to
+    /// `UserRole::Unknown`, which must gate nothing open. The dashboard shell
+    /// is the render-level guard: an Unknown role gets the member sidebar, with
+    /// no admin entry point.
+    #[test]
+    fn an_unknown_role_gets_no_admin_surface() {
+        let markup = dashboard_shell(
+            &test_user(UserRole::Unknown),
+            "/dashboard",
+            "Dashboard",
+            html! {},
+        )
+        .into_string();
+        assert!(
+            !markup.contains(r#"href="/admin"#),
+            "an unrecognised role must not reach any admin link: {markup}"
+        );
+        // Sanity: the same shell for a real admin does carry one, so the
+        // assertion above is not passing vacuously.
+        let admin = dashboard_shell(
+            &test_user(UserRole::Admin),
+            "/dashboard",
+            "Dashboard",
+            html! {},
+        )
+        .into_string();
+        assert!(
+            admin.contains(r#"href="/admin"#),
+            "admin keeps the panel link"
+        );
+    }
+
     /// The admin panel's own "review submitted feedback" page is a different
     /// thing from the "send feedback" launcher; the panel carries both and the
     /// launcher must not be mistaken for the nav entry (BUNYIP-370).

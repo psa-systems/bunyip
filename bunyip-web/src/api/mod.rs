@@ -25,6 +25,9 @@ pub struct Api {
 /// One API response: status, parsed JSON body, and any `Set-Cookie` headers to
 /// relay to the browser.
 pub struct Resp {
+    /// The `/v1`-relative path the request went to, carried so a decode failure
+    /// can name the endpoint in the operator log (BUNYIP-506).
+    pub path: String,
     pub status: u16,
     pub body: Value,
     pub set_cookies: Vec<String>,
@@ -75,6 +78,11 @@ impl ApiError {
     }
 
     pub fn user_message(&self) -> String {
+        // BUNYIP-506: a decode failure gets its own fixed line. The serde
+        // message names internal fields and types and never reaches the page.
+        if self.code == DECODE_ERROR_CODE {
+            return DECODE_ERROR_MESSAGE.to_string();
+        }
         if self.status == 429 {
             if let Some(secs) = self.retry_after {
                 return format!(
@@ -167,6 +175,7 @@ impl Api {
             serde_json::from_str(&text).unwrap_or(Value::Null)
         };
         Ok(Resp {
+            path: path.to_string(),
             status,
             body,
             set_cookies,
@@ -269,6 +278,7 @@ impl Api {
         let text = resp.text().await.unwrap_or_default();
         let body = serde_json::from_str(&text).unwrap_or(Value::Null);
         Ok(Resp {
+            path: path.to_string(),
             status,
             body,
             set_cookies,
@@ -349,21 +359,38 @@ pub fn ok_data(resp: &Resp) -> Result<&Value, ApiError> {
     }
 }
 
+/// The `code` every decode failure carries; the views branch on it.
+pub const DECODE_ERROR_CODE: &str = "DECODE_ERROR";
+
+/// BUNYIP-506: the one user-facing line for a decode failure. The serde message
+/// names internal fields and types, so it stays in the operator log.
+pub const DECODE_ERROR_MESSAGE: &str =
+    "We could not read the response from the server. Please try again.";
+
+/// Build the `DECODE_ERROR` for a 2xx body that did not match `T`, logging the
+/// endpoint, the target type and the serde message first (BUNYIP-506). A 2xx the
+/// client cannot read is a deployment defect (a bunyip-web / bunyip-api version
+/// skew), not a routine event, so it logs at `error`.
+pub fn decode_error<T>(path: &str, e: &serde_json::Error) -> ApiError {
+    tracing::error!(
+        endpoint = %path,
+        target_type = %std::any::type_name::<T>(),
+        error = %e,
+        "failed to decode bunyip-api response body"
+    );
+    ApiError {
+        status: 0,
+        code: DECODE_ERROR_CODE.into(),
+        message: DECODE_ERROR_MESSAGE.into(),
+        retry_after: None,
+    }
+}
+
 /// Deserialize `resp.body["data"]` into `T` (or the error envelope).
 pub fn parse<T: DeserializeOwned>(resp: Resp) -> Result<T, ApiError> {
     if resp.ok() {
         let data = resp.body.get("data").cloned().unwrap_or(Value::Null);
-        serde_json::from_value(data).map_err(|e| {
-            // BUNYIP-477: the user sees a generic message; log the decode detail
-            // (a 2xx body that did not match the expected shape) for operators.
-            tracing::warn!(error = %e, "failed to decode bunyip-api response body");
-            ApiError {
-                status: 0,
-                code: "DECODE_ERROR".into(),
-                message: e.to_string(),
-                retry_after: None,
-            }
-        })
+        serde_json::from_value(data).map_err(|e| decode_error::<T>(&resp.path, &e))
     } else {
         Err(error_from(&resp))
     }
@@ -407,6 +434,7 @@ mod tests {
 
     fn err_resp(status: u16, retry_after_header: Option<u64>, body: Value) -> Resp {
         Resp {
+            path: "/test".to_string(),
             status,
             body,
             set_cookies: vec![],
