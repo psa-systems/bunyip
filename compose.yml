@@ -176,6 +176,9 @@ services:
       SMTP_PORT: ${SMTP_PORT:-465}
       SMTP_TLS: ${SMTP_TLS:-implicit}
       SMTP_USERNAME: ${SMTP_USERNAME:-}
+      # EHLO/HELO name announced to the relay. Unset falls back to APP_URL's
+      # host, then the SMTP_FROM domain, never the container id (BUNYIP-507).
+      SMTP_EHLO_NAME: ${SMTP_EHLO_NAME:-}
       SMTP_FROM: ${SMTP_FROM:-}
       ADMIN_NOTIFICATION_EMAILS: ${ADMIN_NOTIFICATION_EMAILS:-}
       # ── Update checker (operator-facing). Token via update_check_token secret. ──

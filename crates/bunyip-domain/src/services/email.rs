@@ -10,7 +10,6 @@ use lettre::{
 // report the specific stage that failed instead of a generic send error.
 use lettre::transport::smtp::authentication::Mechanism;
 use lettre::transport::smtp::client::{AsyncSmtpConnection, TlsParameters};
-use lettre::transport::smtp::extension::ClientId;
 use std::time::Duration;
 use tera::{Context, Tera};
 
@@ -81,11 +80,19 @@ impl EmailService {
 
         let creds = Credentials::new(config.smtp_username.clone(), config.smtp_password.clone());
 
+        // BUNYIP-507: announce the operator-controlled name, not lettre's
+        // default (the OS hostname = the container id). Logged here so the
+        // operator sees it on start and on every reload without reading the
+        // relay's log.
+        let hello = config.ehlo_name();
+        tracing::info!(ehlo_name = %hello, "SMTP transport built");
+
         let transport = match config.smtp_tls {
             SmtpTls::Implicit => AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp_host)
                 .map_err(|e| AppError::internal(format!("SMTP connection error: {}", e)))?
                 .port(config.smtp_port)
                 .credentials(creds)
+                .hello_name(hello)
                 .tls(lettre::transport::smtp::client::Tls::Wrapper(
                     lettre::transport::smtp::client::TlsParameters::new(config.smtp_host.clone())
                         .map_err(|e| AppError::internal(format!("TLS error: {}", e)))?,
@@ -95,6 +102,7 @@ impl EmailService {
                 .map_err(|e| AppError::internal(format!("SMTP connection error: {}", e)))?
                 .port(config.smtp_port)
                 .credentials(creds)
+                .hello_name(hello)
                 .build(),
         };
 
@@ -150,7 +158,7 @@ impl EmailService {
             Ok(Ok(stream)) => drop(stream),
         }
 
-        let hello = ClientId::default();
+        let hello = config.ehlo_name();
         let tls_params = TlsParameters::new(host.to_string()).map_err(|e| SmtpTestError {
             stage: SmtpTestStage::Tls,
             message: format!("Could not build TLS parameters for {host}: {e}"),
@@ -507,6 +515,7 @@ impl EmailService {
             smtp_tls: SmtpTls::Starttls,
             smtp_username: String::new(),
             smtp_password: String::new(),
+            smtp_ehlo_name: None,
             from_email: "noreply@localhost".to_string(),
             from_name: "localhost".to_string(),
             base_url: "http://localhost:5173".to_string(),
@@ -1164,6 +1173,7 @@ mod tests {
             smtp_tls: SmtpTls::Starttls,
             smtp_username: String::new(),
             smtp_password: String::new(),
+            smtp_ehlo_name: None,
             from_email: from_email.to_string(),
             from_name: "PSA Staging".to_string(),
             base_url: "http://localhost:5173".to_string(),
@@ -1263,6 +1273,7 @@ mod tests {
             smtp_tls: SmtpTls::Starttls,
             smtp_username: String::new(),
             smtp_password: String::new(),
+            smtp_ehlo_name: None,
             from_email: "reset@a8n.run".to_string(),
             from_name: "PSA Staging".to_string(),
             base_url: "http://localhost:5173".to_string(),
@@ -1313,6 +1324,7 @@ mod tests {
             smtp_tls: tls,
             smtp_username: "user@example.com".to_string(),
             smtp_password: "pw".to_string(),
+            smtp_ehlo_name: None,
             from_email: "noreply@a8n.run".to_string(),
             from_name: "PSA".to_string(),
             base_url: "http://localhost".to_string(),
@@ -1326,12 +1338,16 @@ mod tests {
     /// Minimal in-process SMTP relay: greets, answers EHLO with an AUTH
     /// advertisement, then accepts (235) or rejects (535) the first AUTH
     /// command before QUIT. Plaintext, so the tests exercise the AUTH
-    /// classification in `authenticate` without standing up TLS.
-    async fn spawn_mock_smtp(accept_auth: bool) -> std::net::SocketAddr {
+    /// classification in `authenticate` without standing up TLS. The receiver
+    /// yields the EHLO command line as the relay saw it (BUNYIP-507).
+    async fn spawn_mock_smtp(
+        accept_auth: bool,
+    ) -> (std::net::SocketAddr, tokio::sync::oneshot::Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind mock smtp");
         let addr = listener.local_addr().expect("mock smtp addr");
+        let (ehlo_tx, ehlo_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let (socket, _) = listener.accept().await.expect("accept mock smtp");
             let (read_half, mut write_half) = socket.into_split();
@@ -1345,6 +1361,8 @@ mod tests {
 
             // EHLO -> multiline 250 advertising AUTH.
             reader.read_line(&mut line).await.unwrap();
+            // Best-effort: the test may have dropped the receiver.
+            let _ = ehlo_tx.send(line.trim().to_string());
             write_half
                 .write_all(b"250-mock.local greets you\r\n250 AUTH PLAIN LOGIN\r\n")
                 .await
@@ -1365,7 +1383,7 @@ mod tests {
             let _ = reader.read_line(&mut line).await;
             let _ = write_half.write_all(b"221 2.0.0 Bye\r\n").await;
         });
-        addr
+        (addr, ehlo_rx)
     }
 
     #[test]
@@ -1403,8 +1421,9 @@ mod tests {
     /// AC: "A correct configuration reports success." The relay accepts AUTH.
     #[tokio::test]
     async fn authenticate_succeeds_when_relay_accepts() {
-        let addr = spawn_mock_smtp(true).await;
-        let hello = ClientId::default();
+        let (addr, _ehlo) = spawn_mock_smtp(true).await;
+        let hello =
+            config_with_smtp(&addr.ip().to_string(), addr.port(), SmtpTls::Starttls).ehlo_name();
         let mut conn = AsyncSmtpConnection::connect_tokio1(
             addr,
             Some(Duration::from_secs(5)),
@@ -1422,8 +1441,9 @@ mod tests {
     /// AC: "A wrong password reports an authentication failure specifically."
     #[tokio::test]
     async fn authenticate_reports_auth_stage_when_relay_rejects() {
-        let addr = spawn_mock_smtp(false).await;
-        let hello = ClientId::default();
+        let (addr, _ehlo) = spawn_mock_smtp(false).await;
+        let hello =
+            config_with_smtp(&addr.ip().to_string(), addr.port(), SmtpTls::Starttls).ehlo_name();
         let mut conn = AsyncSmtpConnection::connect_tokio1(
             addr,
             Some(Duration::from_secs(5)),
@@ -1442,6 +1462,54 @@ mod tests {
             err.message.contains("Authentication failed"),
             "{}",
             err.message
+        );
+    }
+
+    /// BUNYIP-507: the configured name reaches the relay on the wire, rather
+    /// than the container hostname lettre would pick by default.
+    #[tokio::test]
+    async fn ehlo_announces_the_configured_name_on_the_wire() {
+        let (addr, ehlo) = spawn_mock_smtp(true).await;
+        let mut config = config_with_smtp(&addr.ip().to_string(), addr.port(), SmtpTls::Starttls);
+        config.smtp_ehlo_name = Some("mail.example.com".to_string());
+
+        let hello = config.ehlo_name();
+        let mut conn = AsyncSmtpConnection::connect_tokio1(
+            addr,
+            Some(Duration::from_secs(5)),
+            &hello,
+            None,
+            None,
+        )
+        .await
+        .expect("connect to mock relay");
+        let _ = conn.quit().await;
+
+        let line = ehlo.await.expect("mock relay recorded the EHLO command");
+        assert_eq!(line, "EHLO mail.example.com");
+    }
+
+    /// BUNYIP-507 regression guard: every SMTP session this file opens
+    /// announces the resolved [`EmailConfig::ehlo_name`]. lettre's default
+    /// client id is the OS hostname (the container id inside a container), so
+    /// it belongs only in that resolver's last fallback, never here.
+    #[test]
+    fn no_smtp_session_falls_back_to_the_container_hostname() {
+        let src = include_str!("email.rs");
+        // Split so this assertion cannot match its own needle.
+        let needle = concat!("ClientId", "::default()");
+        assert!(
+            !src.contains(needle),
+            "{needle} reappeared in email.rs: use EmailConfig::ehlo_name() instead"
+        );
+
+        // Both transport arms announce it, so every relay builder is covered.
+        // Each needle also matches itself once here, which keeps the counts
+        // balanced.
+        assert_eq!(
+            src.matches(".hello_name(").count(),
+            src.matches("::relay(").count(),
+            "every SMTP relay builder must announce the resolved EHLO name"
         );
     }
 }

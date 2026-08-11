@@ -1,5 +1,7 @@
+use lettre::transport::smtp::extension::ClientId;
 use std::env;
 use tracing::info;
+use url::Url;
 
 /// The file-or-env secret reader now lives in dunite-core (PSA-37), shared by
 /// every dunite consumer. Re-exported here so existing `secret_env(...)` and
@@ -147,6 +149,9 @@ pub struct EmailConfig {
     pub smtp_username: String,
     /// SMTP password
     pub smtp_password: String,
+    /// EHLO/HELO name announced to the relay (`SMTP_EHLO_NAME`), when the
+    /// operator pins one. Empty/whitespace is treated as unset (BUNYIP-507).
+    pub smtp_ehlo_name: Option<String>,
     /// From email address
     pub from_email: String,
     /// From name
@@ -213,6 +218,10 @@ impl EmailConfig {
             // SMTP_PASSWORD is a secret: supports the SMTP_PASSWORD_FILE
             // compose-secret convention.
             smtp_password: secret_env("SMTP_PASSWORD").unwrap_or_default(),
+            smtp_ehlo_name: env::var("SMTP_EHLO_NAME")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty()),
             from_email: parse_smtp_from_email(
                 &env::var("SMTP_FROM").unwrap_or_else(|_| "noreply@localhost".to_string()),
             ),
@@ -244,7 +253,7 @@ impl EmailConfig {
     ///
     /// [`AppKeySet`]: crate::services::AppKeySet
     ///
-    /// System-level fields (`base_url`, `app_name`) and the dev-only
+    /// System-level fields (`base_url`, `app_name`, `smtp_ehlo_name`) and the dev-only
     /// `log_tokens` gate stay env-derived: they are branding / bootstrap
     /// concerns, not SMTP tuning. `enabled` is recomputed from the resolved
     /// host so the BUNYIP-204 production semantics still hold against DB config.
@@ -314,6 +323,9 @@ impl EmailConfig {
             smtp_tls,
             smtp_username,
             smtp_password,
+            // Deployment/network identity, not a per-tenant email setting, so
+            // it stays env-derived like `base_url` (BUNYIP-507).
+            smtp_ehlo_name: env.smtp_ehlo_name,
             from_email,
             from_name,
             base_url: env.base_url,
@@ -321,6 +333,42 @@ impl EmailConfig {
             log_tokens: env.log_tokens,
             app_name: env.app_name,
             admin_notification_emails,
+        }
+    }
+
+    /// Resolve the EHLO/HELO name announced on every SMTP session (BUNYIP-507).
+    ///
+    /// Order: `SMTP_EHLO_NAME`, else the host of `base_url` (`APP_URL`), else
+    /// the domain of `from_email`, else lettre's default. The fallback chain
+    /// makes this a no-config fix: lettre's default is the OS hostname, which
+    /// inside a container is the container id - not a FQDN, so relays that
+    /// enforce `reject-non-fqdn` on EHLO reject or penalise the mail.
+    pub fn ehlo_name(&self) -> ClientId {
+        if let Some(name) = self
+            .smtp_ehlo_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            return client_id_from_host(name);
+        }
+
+        if let Some(host) = Url::parse(&self.base_url)
+            .ok()
+            .and_then(|url| url.host_str().map(ToOwned::to_owned))
+            .filter(|host| !host.is_empty())
+        {
+            return client_id_from_host(&host);
+        }
+
+        match self
+            .from_email
+            .rsplit_once('@')
+            .map(|(_, domain)| domain.trim())
+            .filter(|domain| !domain.is_empty())
+        {
+            Some(domain) => client_id_from_host(domain),
+            None => ClientId::default(),
         }
     }
 
@@ -335,6 +383,18 @@ impl EmailConfig {
             || row.from_email.is_some()
             || row.from_name.is_some()
             || row.admin_notification_emails.is_some()
+    }
+}
+
+/// Wrap a host in the right `ClientId` variant: an IP literal must go on the
+/// wire as an address literal (`[10.0.0.1]`), per RFC 5321 4.1.3.
+fn client_id_from_host(host: &str) -> ClientId {
+    // `Url::host_str` strips the brackets from an IPv6 literal; accept both.
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    match bare.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(addr)) => ClientId::Ipv4(addr),
+        Ok(std::net::IpAddr::V6(addr)) => ClientId::Ipv6(addr),
+        Err(_) => ClientId::Domain(host.to_string()),
     }
 }
 
@@ -1570,12 +1630,126 @@ mod tests {
             "SMTP_TLS",
             "SMTP_USERNAME",
             "SMTP_PASSWORD",
+            "SMTP_EHLO_NAME",
             "SMTP_FROM",
             "EMAIL_ENABLED",
             "ADMIN_NOTIFICATION_EMAILS",
         ] {
             env::remove_var(var);
         }
+    }
+
+    /// BUNYIP-507: an `EmailConfig` carrying only the fields the EHLO
+    /// resolution reads; everything else is inert filler.
+    fn ehlo_config(ehlo: Option<&str>, base_url: &str, from_email: &str) -> EmailConfig {
+        EmailConfig {
+            smtp_host: "smtp.example.com".to_string(),
+            smtp_port: 465,
+            smtp_tls: SmtpTls::Implicit,
+            smtp_username: String::new(),
+            smtp_password: String::new(),
+            smtp_ehlo_name: ehlo.map(ToOwned::to_owned),
+            from_email: from_email.to_string(),
+            from_name: "PSA".to_string(),
+            base_url: base_url.to_string(),
+            enabled: false,
+            log_tokens: false,
+            app_name: "PSA".to_string(),
+            admin_notification_emails: Vec::new(),
+        }
+    }
+
+    /// BUNYIP-507: an explicit `SMTP_EHLO_NAME` beats both fallbacks.
+    #[test]
+    fn ehlo_name_prefers_the_explicit_override() {
+        let cfg = ehlo_config(
+            Some("  mail.example.com  "),
+            "https://app.example.org",
+            "noreply@from.example.net",
+        );
+        assert_eq!(
+            cfg.ehlo_name(),
+            ClientId::Domain("mail.example.com".to_string())
+        );
+    }
+
+    /// BUNYIP-507: with no override, `APP_URL`'s host is announced (port and
+    /// path excluded), which is what fixes existing deployments on upgrade.
+    #[test]
+    fn ehlo_name_falls_back_to_the_app_url_host() {
+        let cfg = ehlo_config(
+            None,
+            "https://app.example.org:4400/x",
+            "noreply@from.example.net",
+        );
+        assert_eq!(
+            cfg.ehlo_name(),
+            ClientId::Domain("app.example.org".to_string())
+        );
+    }
+
+    /// BUNYIP-507: an empty/whitespace override falls through rather than
+    /// announcing an empty name.
+    #[test]
+    fn ehlo_name_treats_an_empty_override_as_unset() {
+        for override_value in ["", "   "] {
+            let cfg = ehlo_config(
+                Some(override_value),
+                "https://app.example.org",
+                "noreply@from.example.net",
+            );
+            assert_eq!(
+                cfg.ehlo_name(),
+                ClientId::Domain("app.example.org".to_string()),
+                "override {override_value:?} must fall through"
+            );
+        }
+    }
+
+    /// BUNYIP-507: with no override and an unusable `APP_URL`, the `from_email`
+    /// domain is announced.
+    #[test]
+    fn ehlo_name_falls_back_to_the_from_email_domain() {
+        let cfg = ehlo_config(None, "not a url", "noreply@from.example.net");
+        assert_eq!(
+            cfg.ehlo_name(),
+            ClientId::Domain("from.example.net".to_string())
+        );
+    }
+
+    /// BUNYIP-507: with every source unusable, lettre's default stands (the
+    /// pre-BUNYIP-507 behaviour), never an empty EHLO name.
+    #[test]
+    fn ehlo_name_falls_back_to_the_lettre_default() {
+        let cfg = ehlo_config(None, "not a url", "noreply-without-a-domain");
+        assert_eq!(cfg.ehlo_name(), ClientId::default());
+    }
+
+    /// BUNYIP-507: an IP-literal source goes on the wire as an address literal
+    /// (`EHLO [10.1.2.3]`), which is what RFC 5321 requires.
+    #[test]
+    fn ehlo_name_wraps_an_ip_literal_as_an_address_literal() {
+        let cfg = ehlo_config(None, "http://10.1.2.3:4400", "noreply@from.example.net");
+        assert_eq!(cfg.ehlo_name().to_string(), "[10.1.2.3]");
+    }
+
+    /// BUNYIP-507: `SMTP_EHLO_NAME` reaches the config, and an all-whitespace
+    /// value is read as unset.
+    #[test]
+    fn smtp_ehlo_name_env_is_trimmed_and_empty_means_unset() {
+        let _env = env_lock();
+        clear_email_env();
+
+        env::set_var("SMTP_EHLO_NAME", "  mail.example.com  ");
+        assert_eq!(
+            EmailConfig::from_env(false).smtp_ehlo_name.as_deref(),
+            Some("mail.example.com")
+        );
+
+        env::set_var("SMTP_EHLO_NAME", "   ");
+        assert_eq!(EmailConfig::from_env(false).smtp_ehlo_name, None);
+
+        clear_email_env();
     }
 
     #[test]
