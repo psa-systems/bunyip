@@ -268,6 +268,11 @@ services:
     environment:
       BUNYIP_BIND_ADDR: 0.0.0.0:4400
       BUNYIP_API_URL: ${BUNYIP_API_URL:-http://api:4401}
+      # BUNYIP-192 / BUNYIP-510: the browser-facing origin of bunyip-api. Used
+      # for the dashboard SSE subscriber and for the Stripe webhook URL the
+      # admin page prefills. Unset falls back to the internal BUNYIP_API_URL,
+      # which no browser and no Stripe delivery can reach.
+      BUNYIP_API_PUBLIC_ORIGIN: ${BUNYIP_API_PUBLIC_ORIGIN:-}
       BUNYIP_OIDC_ISSUER: ${BUNYIP_OIDC_ISSUER:-}
       BUNYIP_APP_DOMAIN: ${BUNYIP_APP_DOMAIN:-}
       BUNYIP_COMMUNITY_URL: ${BUNYIP_COMMUNITY_URL:-}

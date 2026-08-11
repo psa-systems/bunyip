@@ -74,6 +74,24 @@ signing secret; the save hot-swaps the running config, so no restart is needed.
 Leave `stripe listen` running for the rest of the session; it relays every
 test-mode event to the local endpoint.
 
+### Step 2b - a real (non-CLI) endpoint, deployed or dashboard-created
+
+A deployment that is not fronted by `stripe listen` registers a real endpoint
+instead. The URL is always `{BUNYIP_API_PUBLIC_ORIGIN}/v1/webhooks/stripe`: the
+`/webhooks/stripe` route is mounted inside the `/v1` scope
+(`bunyip-api/src/routes/mod.rs`), so a registration without `/v1` 404s in Stripe
+and every subscription and payment event is silently lost. Set
+`BUNYIP_API_PUBLIC_ORIGIN` to the browser-facing origin of bunyip-api;
+bunyip-web falls back to the internal `BUNYIP_API_URL` (a Docker hostname) when
+it is unset, and the admin page flags that value instead of presenting it as
+correct (BUNYIP-510).
+
+- **Created from the Webhook endpoints block on `/admin/stripe`** (preferred): the URL field is prefilled with the derived value, and `create_stripe_webhook` (`bunyip-api/src/handlers/admin_stripe.rs`) encrypts the signing secret Stripe returns, stores it, and hot-reloads `StripeService`. There is nothing to paste; the secret is shown once as a record.
+- **Created in the Stripe dashboard**: Stripe never hands the secret to bunyip, so copy it from the dashboard into **Webhook secret** on `/admin/stripe` and Save.
+
+Until a real signing secret is stored, `stripe_webhook` rejects every delivery
+(BUNYIP-203) and the admin page says so on the Webhook endpoints block.
+
 ## Step 3 - create a membership product + price (REQUIRED for checkout)
 
 Checkout will not work until at least one **app-tagged** product with an active

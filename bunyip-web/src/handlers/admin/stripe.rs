@@ -14,7 +14,7 @@ use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{format_stripe_amount, urlenc};
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, empty_state, error_box, icon};
+use crate::views::ui::{badge, button_class, empty_state, error_box, icon, success_box};
 use crate::web::{redirect_cookies, AppState};
 
 /// Setup guidance ported from the a8n-tools Stripe admin panel (BUNYIP-416):
@@ -171,18 +171,71 @@ const RECOMMENDED_WEBHOOK_EVENTS: &[&str] = &[
     "invoice.payment_failed",
 ];
 
+/// BUNYIP-510: the webhook URL an admin must register in Stripe.
+/// `webhook::configure` mounts `/webhooks/stripe` INSIDE the `/v1` scope
+/// (`bunyip-api/src/routes/mod.rs`), so the path is `/v1/webhooks/stripe`; a
+/// registration without `/v1` 404s in Stripe and every event is lost.
+pub(super) fn stripe_webhook_url(api_public_origin: &str) -> String {
+    format!(
+        "{}/v1/webhooks/stripe",
+        api_public_origin.trim_end_matches('/')
+    )
+}
+
+/// BUNYIP-510: whether the derived origin is one Stripe can actually reach.
+/// `Config::api_public_origin` falls back to the internal `api_url` when
+/// `BUNYIP_API_PUBLIC_ORIGIN` is unset, which prefills an unreachable Docker
+/// hostname; the caption warns instead of presenting that value as correct.
+pub(super) fn is_public_https_origin(origin: &str) -> bool {
+    let Some(rest) = origin.strip_prefix("https://") else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or("");
+    let host = match authority.rsplit_once(':') {
+        Some((h, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => h,
+        _ => authority,
+    };
+    !host.is_empty() && !matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+}
+
 /// DEV-518: the Webhook Endpoints block - a create form (endpoint URL + enabled
 /// events, pre-filled with the events bunyip processes) plus the list of
 /// registered endpoints, each with a Delete action. Fills the admin-UI gap the
 /// backend already had (list / create / delete_webhook_endpoint); the a8n-tools
 /// React admin already exposed this.
-fn stripe_webhooks_block(webhooks: Option<&[crate::api::types::StripeWebhookEndpoint]>) -> Markup {
+/// BUNYIP-510: the URL is prefilled from the deployment's public API origin and
+/// the block states whether processing is live (`has_webhook_secret`).
+pub(super) fn stripe_webhooks_block(
+    webhooks: Option<&[crate::api::types::StripeWebhookEndpoint]>,
+    api_public_origin: &str,
+    has_webhook_secret: bool,
+) -> Markup {
+    let url = stripe_webhook_url(api_public_origin);
+    let origin_ok = is_public_https_origin(api_public_origin);
     admin_block(
         "Webhook endpoints",
-        Some("Stripe posts subscription + payment events here. Create one, then copy its signing secret into the Webhook secret field above."),
+        Some("Receives information from Stripe about checkout, subscription, and payment events. bunyip uses it to activate a membership after checkout, keep subscription status and tier in step with the subscription, grant or revoke product entitlements, and send payment receipt and failure emails. Create the endpoint here and bunyip saves its signing secret for you."),
         html! {
+            // BUNYIP-510 / BUNYIP-203: `stripe_webhook` rejects every delivery
+            // until a real signing secret is stored, so say so on the page
+            // rather than only in the api log.
+            div class="mb-4" {
+                @if has_webhook_secret {
+                    (success_box("Webhook processing is active: a signing secret is saved, so bunyip verifies and processes incoming Stripe events."))
+                } @else {
+                    (error_box("Webhook processing is not active: bunyip rejects every incoming Stripe event until a signing secret is saved. Creating an endpoint below saves one automatically."))
+                }
+            }
             form method="post" action="/admin/stripe/webhooks" class="space-y-3 mb-4" {
-                div class="space-y-1" { label for="url" class="text-xs font-medium" { "Endpoint URL" } input id="url" name="url" type="url" required placeholder="https://api.example.com/webhooks/stripe" class=(dashboard_input()); }
+                div class="space-y-1" {
+                    label for="url" class="text-xs font-medium" { "Endpoint URL" }
+                    input id="url" name="url" type="url" required value=(url) placeholder="https://api.example.com/v1/webhooks/stripe" class=(dashboard_input());
+                    @if origin_ok {
+                        p class="text-xs text-muted-foreground" { "Built from BUNYIP_API_PUBLIC_ORIGIN. Edit it if bunyip-api is published on a different public path." }
+                    } @else {
+                        p class="text-xs text-destructive-text" { "Built from BUNYIP_API_PUBLIC_ORIGIN, which is not set to a public https:// origin, so Stripe cannot reach this address. Set BUNYIP_API_PUBLIC_ORIGIN to the browser-facing origin of bunyip-api, or enter the public URL here." }
+                    }
+                }
                 div class="space-y-1" {
                     label for="enabled_events" class="text-xs font-medium" { "Enabled events" }
                     textarea id="enabled_events" name="enabled_events" rows="2" class=(dashboard_input()) { (RECOMMENDED_WEBHOOK_EVENTS.join(", ")) }
@@ -192,7 +245,7 @@ fn stripe_webhooks_block(webhooks: Option<&[crate::api::types::StripeWebhookEndp
             }
             @match webhooks {
                 None => (error_box("Could not load webhook endpoints from Stripe. Add a valid API key above and save, then reload.")),
-                Some([]) => (empty_state("link-2", "No webhook endpoints yet. Create one to receive Stripe events.", None)),
+                Some([]) => (empty_state("link-2", "No webhook endpoints yet. Create one so Stripe can send checkout, subscription, and payment events to bunyip.", None)),
                 Some(list) => div class="divide-y" {
                     @for w in list {
                         div class="py-3 flex items-center justify-between gap-4" {
@@ -315,7 +368,7 @@ pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response 
                     }
                     (stripe_products_block(products.as_deref()))
                     (stripe_prices_block(prices.as_deref(), products.as_deref().unwrap_or(&[])))
-                    (stripe_webhooks_block(webhooks.as_deref()))
+                    (stripe_webhooks_block(webhooks.as_deref(), &st.cfg.api_public_origin, s.has_webhook_secret))
                     (stripe_catalog_section(tier.as_ref()))
                 },
             }
@@ -420,31 +473,46 @@ pub async fn stripe_webhook_create(
     let body = json!({ "url": url, "enabled_events": events });
     match admin_api::create_stripe_webhook(&st.api, c.forward.as_deref(), body).await {
         Ok(w) => {
-            let content = html! {
-                div class="space-y-6 max-w-2xl" {
-                    div { h1 class="text-3xl font-bold" { "Webhook endpoint created" } p class="mt-2 text-muted-foreground" { "Copy the signing secret below into the Webhook secret field on the Stripe page - Stripe shows it only once." } }
-                    (admin_block(
-                        "Signing secret",
-                        Some(&format!("Endpoint: {}", w.url)),
-                        html! {
-                            @match w.secret.as_deref() {
-                                Some(secret) => div class="space-y-2" {
-                                    code class="block break-all rounded bg-muted p-3 font-mono text-sm" { (secret) }
-                                    p class="text-xs text-muted-foreground" { "Paste this into Stripe · Webhook secret, then Save." }
-                                },
-                                None => p class="text-sm text-muted-foreground" { "Stripe did not return a signing secret; retrieve it from the Stripe dashboard for this endpoint." },
-                            }
-                            div class="mt-4" { a href="/admin/stripe" class=(button_class("default", "default", "")) { "Back to Stripe" } }
-                        },
-                    ))
-                }
-            };
+            let content = webhook_created_page(&w);
             admin_response(&c, &user, "/admin/stripe", "Webhook created", content)
         }
         Err(e) => redirect_cookies(
             &format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
             &c.set_cookies,
         ),
+    }
+}
+
+/// BUNYIP-510: the post-create confirmation page. `create_stripe_webhook`
+/// (`bunyip-api/src/handlers/admin_stripe.rs`) already encrypts and stores the
+/// signing secret Stripe returns and hot-reloads `StripeService`, so the
+/// success branch records the value instead of asking for a paste. Only the
+/// `secret == None` branch (nothing was saved) keeps a manual instruction.
+pub(super) fn webhook_created_page(w: &crate::api::types::StripeWebhookEndpoint) -> Markup {
+    html! {
+        div class="space-y-6 max-w-2xl" {
+            div {
+                h1 class="text-3xl font-bold" { "Webhook endpoint created" }
+                @match w.secret {
+                    Some(_) => p class="mt-2 text-muted-foreground" { "bunyip saved the signing secret automatically, so webhook processing is now active. Stripe shows the secret only once - keep the value below for your own records." },
+                    None => p class="mt-2 text-muted-foreground" { "Stripe did not return a signing secret, so none was saved." },
+                }
+            }
+            (admin_block(
+                "Signing secret",
+                Some(&format!("Endpoint: {}", w.url)),
+                html! {
+                    @match w.secret.as_deref() {
+                        Some(secret) => div class="space-y-2" {
+                            code class="block break-all rounded bg-muted p-3 font-mono text-sm" { (secret) }
+                            p class="text-xs text-muted-foreground" { "Saved automatically - there is nothing to enter by hand." }
+                        },
+                        None => p class="text-sm text-muted-foreground" { "Stripe did not return a signing secret. bunyip rejects every incoming Stripe event until one is saved: retrieve the secret from the Stripe dashboard for this endpoint, paste it into Webhook secret on the Stripe page, then Save." },
+                    }
+                    div class="mt-4" { a href="/admin/stripe" class=(button_class("default", "default", "")) { "Back to Stripe" } }
+                },
+            ))
+        }
     }
 }
 
