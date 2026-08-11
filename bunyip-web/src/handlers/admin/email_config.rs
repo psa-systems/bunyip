@@ -81,6 +81,13 @@ pub(super) fn email_settings_content(
                         button type="submit" class=(button_class("outline", "default", "")) { (icon("mail", "mr-2 h-4 w-4")) "Test connection" }
                         p class="text-xs text-muted-foreground" { "Opens a connection to the saved SMTP server and signs in, without sending an email. Save changes first to test them." }
                     }
+                    // BUNYIP-508: proving delivery needs a real send. Its own
+                    // form for the same reason: it submits no fields, so it
+                    // always uses the SAVED settings.
+                    form method="post" action="/admin/email/test-send" class="flex flex-wrap items-center gap-3" {
+                        button type="submit" class=(button_class("outline", "default", "")) { (icon("mail", "mr-2 h-4 w-4")) "Test email" }
+                        p class="text-xs text-muted-foreground" { "Sends a real test message to your own address using the saved SMTP settings. Save changes first." }
+                    }
                 },
             }
         }
@@ -216,6 +223,41 @@ pub async fn email_test(State(st): State<AppState>, headers: HeaderMap) -> Respo
         // Transport / rate-limit (429) error before the probe could report.
         Err(e) => error_box(&e.user_message()),
     };
+
+    let cfg = admin_api::email_config(&st.api, c.forward.as_deref())
+        .await
+        .ok();
+    let content = html! {
+        (banner)
+        (email_settings_content(cfg.as_ref()))
+    };
+    admin_response(&c, &user, "/admin/email", "Email", content)
+}
+
+/// BUNYIP-508: the banner for a "Test email" attempt. Pure so both outcomes
+/// (including a failed send arriving as a 200 with `ok: false`) are testable
+/// without an API. A rate-limit (429) or transport error arrives as `Err` and
+/// renders through `ApiError::user_message`.
+pub(super) fn test_send_banner(
+    result: Result<crate::api::types::TestEmailResult, crate::api::ApiError>,
+) -> Markup {
+    match result {
+        Ok(r) if r.ok => success_box(&r.message),
+        Ok(r) => error_box(&format!("Test email failed to send. {}", r.message)),
+        Err(e) => error_box(&e.user_message()),
+    }
+}
+
+/// POST /admin/email/test-send - BUNYIP-508. Send a real test message to the
+/// signed-in admin's own address through the saved SMTP settings and re-render
+/// the email page with a banner naming the outcome.
+pub async fn email_test_send(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (user, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+
+    let banner = test_send_banner(admin_api::send_test_email(&st.api, c.forward.as_deref()).await);
 
     let cfg = admin_api::email_config(&st.api, c.forward.as_deref())
         .await

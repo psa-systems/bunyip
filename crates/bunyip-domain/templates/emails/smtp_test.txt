@@ -1,0 +1,10 @@
+{% extends "base.txt" %}
+{% block content %}
+SMTP test message
+
+This is a test message from {{ app_name }}, sent because an administrator used the "Test email" button on the admin Email page.
+
+Sent through {{ smtp_host }} at {{ sent_at }}.
+
+Its arrival confirms that mail leaves {{ app_name }} and reaches this address. No action is needed.
+{% endblock %}

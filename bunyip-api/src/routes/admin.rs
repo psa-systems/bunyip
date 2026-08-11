@@ -262,8 +262,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/feedback/{feedback_id}",
                 web::delete().to(handlers::delete_feedback),
             )
-            // Test email
-            .route("/test-email", web::post().to(handlers::send_test_email))
             // OIDC per-RP user-tenant assignments (BUNYIP-61).
             .route(
                 "/oauth-clients/{client_id}/user-tenants",
@@ -291,6 +289,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/email", web::get().to(handlers::get_email_config))
             .route("/email", web::put().to(handlers::update_email_config))
             .route("/email/test", web::post().to(handlers::test_email_config))
+            // BUNYIP-508: real send to the signed-in admin's own address.
+            .route(
+                "/email/test-send",
+                web::post().to(handlers::send_test_email_message),
+            )
             // Auto-ban config (BUNYIP-351)
             .route(
                 "/auto-ban-config",
@@ -369,4 +372,44 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 web::post().to(handlers::reencrypt_key),
             ),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    /// BUNYIP-508: `/admin/test-email` was an orphan send endpoint with no
+    /// caller, no rate limit and no audit row, mailing the *welcome* template
+    /// with a hardcoded price so the "test" told the admin they were charged
+    /// $3.00. It was replaced by `/admin/email/test-send`. Scan the sources so
+    /// the route (and the handler behind it) cannot be reintroduced by a merge.
+    /// The needles are assembled at run time so this test's own text does not
+    /// match itself.
+    #[test]
+    fn the_orphan_test_email_route_stays_removed() {
+        let routes = include_str!("admin.rs");
+        let handlers = include_str!("../handlers/admin.rs");
+        let exports = include_str!("../handlers/mod.rs");
+
+        let route_path = format!("\"/{}\"", "test-email");
+        assert!(
+            !routes.contains(&route_path),
+            "the orphan {route_path} route must stay removed; use /email/test-send"
+        );
+
+        // `send_test_email_message` is the replacement, so match the old name
+        // only where it is not followed by that suffix.
+        let old_fn = format!("send_test_{}", "email");
+        for (name, src) in [
+            ("routes/admin.rs", routes),
+            ("handlers/admin.rs", handlers),
+            ("handlers/mod.rs", exports),
+        ] {
+            let stale = src
+                .match_indices(&old_fn)
+                .any(|(i, _)| !src[i..].starts_with(&format!("{old_fn}_message")));
+            assert!(
+                !stale,
+                "{name} still references the removed {old_fn} handler"
+            );
+        }
+    }
 }

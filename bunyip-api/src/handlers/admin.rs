@@ -1743,26 +1743,6 @@ pub async fn mark_all_notifications_read(
 }
 
 // =============================================================================
-// Test Email
-// =============================================================================
-
-/// POST /v1/admin/test-email
-/// Send a test welcome email to the authenticated user
-pub async fn send_test_email(
-    req: HttpRequest,
-    admin: AdminUser,
-    email_service: web::Data<Arc<EmailService>>,
-) -> Result<HttpResponse, AppError> {
-    let request_id = get_request_id(&req);
-
-    email_service.send_welcome(&admin.0.email, 300).await?;
-
-    tracing::info!(email = %admin.0.email, "Test email sent");
-
-    Ok(success_no_data(request_id))
-}
-
-// =============================================================================
 // System Health
 // =============================================================================
 
@@ -2707,6 +2687,100 @@ pub async fn test_email_config(
 
     Ok(success(
         serde_json::json!({ "ok": ok, "stage": stage, "message": message }),
+        request_id,
+    ))
+}
+
+/// BUNYIP-508: shape a test-send outcome into the `{ ok, message }` body. The
+/// generic `Internal error: ` wrapper is stripped so the banner leads with the
+/// relay's own reason. Pure, so the failure path (200 carrying the relay text,
+/// never a 5xx) is unit-testable without a relay or a database.
+fn test_send_outcome(outcome: &Result<(), AppError>) -> (bool, String) {
+    match outcome {
+        Ok(()) => (
+            true,
+            "Test message sent to your address. Check your inbox.".to_string(),
+        ),
+        Err(e) => {
+            let text = e.to_string();
+            (
+                false,
+                text.strip_prefix("Internal error: ")
+                    .unwrap_or(&text)
+                    .to_string(),
+            )
+        }
+    }
+}
+
+/// POST /v1/admin/email/test-send
+///
+/// BUNYIP-508: send a real test message through the *saved* SMTP settings so an
+/// admin can prove end-to-end delivery, not just that the relay authenticates
+/// (which is all `test_email_config` proves: a relay can accept AUTH and still
+/// refuse or drop mail).
+///
+/// The recipient is the signed-in admin's own address from the verified claims.
+/// There is deliberately no request body and no recipient parameter, so the
+/// endpoint cannot be pointed at a third party and turned into a relay for
+/// arbitrary mail.
+///
+/// Shares `RateLimitConfig::SMTP_TEST` with the connection probe (both hammer
+/// the same relay). Always returns 200 with `{ ok, message }`: a 5xx would be
+/// collapsed to a generic line by `ApiError::user_message` (BUNYIP-477), hiding
+/// the one thing the admin clicked the button to see. The failure is still
+/// loud: it is logged at `error`, `ok: false` is not a value a successful send
+/// can produce, and the page renders a red banner.
+pub async fn send_test_email_message(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    app_key_set: web::Data<AppKeySet>,
+    email_service: web::Data<Arc<EmailService>>,
+) -> Result<HttpResponse, AppError> {
+    use crate::config::EmailConfig;
+    use crate::repositories::EmailConfigRepository;
+
+    let request_id = get_request_id(&req);
+
+    check_rate_limit(&pool, &admin.0.sub.to_string(), &RateLimitConfig::SMTP_TEST).await?;
+
+    // Send with the SAVED config, not unsaved form values: the point is to
+    // prove the settings email actually sends with. Hot-reloaded into the live
+    // service so the transport matches what was persisted.
+    let row = EmailConfigRepository::get(&pool).await?;
+    let resolved = EmailConfig::from_db_row(&row, &app_key_set, config.is_production());
+
+    // A transport that will not even build is the same class of news as a relay
+    // that refuses the message, so it reports through the same banner instead
+    // of a 5xx the admin would only see as "an unexpected error occurred".
+    let outcome = match email_service.reload(resolved.clone()) {
+        Ok(()) => email_service.send_test_message(&admin.0.email).await,
+        Err(e) => Err(e),
+    };
+    let (ok, message) = test_send_outcome(&outcome);
+
+    if let Err(e) = &outcome {
+        tracing::error!(error = %e, smtp_host = %resolved.smtp_host, "Admin test email failed to send");
+    }
+
+    AuditLogRepository::create(
+        &pool,
+        CreateAuditLog::new(AuditAction::AdminTestEmailSent)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+            // BUNYIP-265: never the recipient address, only the relay facts.
+            .with_metadata(serde_json::json!({
+                "smtp_host": resolved.smtp_host,
+                "smtp_port": resolved.smtp_port,
+                "smtp_tls": resolved.smtp_tls.as_str(),
+                "ok": ok,
+            })),
+    )
+    .await?;
+
+    Ok(success(
+        serde_json::json!({ "ok": ok, "message": message }),
         request_id,
     ))
 }
@@ -3827,5 +3901,104 @@ mod key_health_tests {
         assert_eq!(json["status"], "unhealthy");
         assert_eq!(json["has_data"], true);
         assert_eq!(json["message"], "Decryption failed");
+    }
+
+    // -- BUNYIP-508: admin "Test email" send ----------------------------------
+
+    /// A failed send is a diagnostic result, not an API error: it stays a 200
+    /// carrying `ok: false` plus the relay's own text, because a 5xx would be
+    /// collapsed to a generic line before the admin ever sees it (BUNYIP-477).
+    #[test]
+    fn test_send_failure_reports_the_relay_reason_not_a_server_error() {
+        let (ok, message) = test_send_outcome(&Ok(()));
+        assert!(ok, "a completed send reports ok");
+        assert!(!message.is_empty(), "success still names what happened");
+
+        let failed: Result<(), AppError> =
+            Err(AppError::internal("Email send error: connection refused"));
+        let (ok, message) = test_send_outcome(&failed);
+        assert!(!ok, "a failed send is never reported as ok");
+        assert_eq!(
+            message, "Email send error: connection refused",
+            "the relay's own reason reaches the admin, without the internal wrapper"
+        );
+    }
+
+    fn test_user(role: &str) -> crate::models::User {
+        crate::models::User {
+            id: uuid::Uuid::new_v4(),
+            email: "probe@example.test".to_string(),
+            email_verified: true,
+            password_hash: None,
+            role: role.to_string(),
+            stripe_customer_id: None,
+            stripe_payment_method_id: None,
+            membership_status: "active".to_string(),
+            price_locked: false,
+            locked_price_id: None,
+            locked_price_amount: None,
+            grace_period_start: None,
+            grace_period_end: None,
+            two_factor_enabled: false,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_login_at: None,
+            last_login_country: None,
+            login_location_alerts: true,
+            deleted_at: None,
+            membership_tier: "standard".to_string(),
+            trial_ends_at: None,
+            lifetime_member: false,
+            membership_override_by: None,
+            first_name: None,
+            last_name: None,
+            phone: None,
+            has_used_trial: false,
+            avatar_updated_at: None,
+            is_super_admin: false,
+        }
+    }
+
+    /// The `AdminUser` extractor is the whole admin restriction on the send
+    /// endpoint: no token is a 401 and a non-admin token is a 403, both before
+    /// the handler (and therefore the relay) is ever reached.
+    #[actix_rt::test]
+    async fn test_send_endpoint_is_admin_only() {
+        use crate::services::{JwtConfig, JwtService};
+        use actix_web::{test, App};
+
+        let jwt = Arc::new(JwtService::new(JwtConfig::from_secret(
+            "bunyip-508-test-secret-at-least-32-bytes-long",
+            "bunyip-test",
+        )));
+        let token = jwt
+            .create_access_token(&test_user("subscriber"))
+            .expect("mint access token");
+
+        let app = test::init_service(
+            App::new()
+                .app_data(jwt.clone())
+                .route("/email/test-send", web::post().to(send_test_email_message)),
+        )
+        .await;
+
+        let anon = test::TestRequest::post()
+            .uri("/email/test-send")
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, anon).await.status().as_u16(),
+            401,
+            "unauthenticated callers cannot send"
+        );
+
+        let subscriber = test::TestRequest::post()
+            .uri("/email/test-send")
+            .insert_header(("Authorization", format!("Bearer {token}")))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, subscriber).await.status().as_u16(),
+            403,
+            "a non-admin token cannot send"
+        );
     }
 }

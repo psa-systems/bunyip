@@ -91,6 +91,10 @@ pub enum AuditAction {
     /// carries host/port/tls, the `ok` result, and the failing `stage` (never
     /// the password).
     AdminEmailConnectionTested,
+    /// BUNYIP-508: an admin sent the SMTP test message to their own address.
+    /// Metadata carries host/port/tls and the `ok` result, never the recipient
+    /// address (BUNYIP-265: no raw email addresses in logs).
+    AdminTestEmailSent,
     AdminAutoBanConfigUpdated,
     AdminKeyRotation,
     /// BUNYIP-353: an account admin downloaded an account backup bundle.
@@ -239,6 +243,7 @@ impl AuditAction {
             AuditAction::AdminTierChanged => "admin_tier_changed",
             AuditAction::AdminEmailConfigUpdated => "admin_email_config_updated",
             AuditAction::AdminEmailConnectionTested => "admin_email_connection_tested",
+            AuditAction::AdminTestEmailSent => "admin_test_email_sent",
             AuditAction::AdminAutoBanConfigUpdated => "admin_auto_ban_config_updated",
             AuditAction::AccountBackupCreated => "account_backup_created",
             AuditAction::AccountRestored => "account_restored",
@@ -313,6 +318,7 @@ impl AuditAction {
                 | AuditAction::AdminTierChanged
                 | AuditAction::AdminEmailConfigUpdated
                 | AuditAction::AdminEmailConnectionTested
+                | AuditAction::AdminTestEmailSent
                 | AuditAction::AdminAutoBanConfigUpdated
                 | AuditAction::AccountBackupCreated
                 | AuditAction::AccountRestored

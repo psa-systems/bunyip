@@ -9,7 +9,7 @@ use super::types::{
     AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary,
     IpEnrichment, PaginatedResponse, RestoreReport, SeedTemplateInfo, SmtpTestResult,
     StripeConfigResponse, StripePrice, StripeProduct, StripeWebhookEndpoint, SystemHealth,
-    SystemHealthResponse, TierConfigResponse, UserEntitlement,
+    SystemHealthResponse, TestEmailResult, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -974,6 +974,14 @@ pub async fn test_email_config(
     cookie: Option<&str>,
 ) -> Result<SmtpTestResult, ApiError> {
     parse(api.post("/admin/email/test", cookie, None).await?)
+}
+
+/// BUNYIP-508: send a real test message through the saved SMTP settings to the
+/// signed-in admin's own address. The API returns 200 with `{ ok, message }`
+/// for an attempted send (pass or fail); a non-2xx (e.g. 429 rate limit)
+/// becomes an `ApiError`. No body: the recipient is never client-supplied.
+pub async fn send_test_email(api: &Api, cookie: Option<&str>) -> Result<TestEmailResult, ApiError> {
+    parse(api.post("/admin/email/test-send", cookie, None).await?)
 }
 
 /// BUNYIP-353: POST an uploaded account backup bundle to the restore endpoint

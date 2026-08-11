@@ -839,6 +839,76 @@ mod two_column_layout_tests {
         );
     }
 
+    /// BUNYIP-508: a second, separate form sends a real message to the admin's
+    /// own address, immediately below Test connection.
+    #[test]
+    fn email_screen_has_test_email_button() {
+        let html = email_settings_content(Some(&email_cfg())).into_string();
+        assert!(
+            html.contains(r#"action="/admin/email/test-send""#),
+            "Test email posts to /admin/email/test-send"
+        );
+        assert!(html.contains("Test email"), "button label present");
+        assert!(
+            html.contains("Sends a real test message to your own address"),
+            "helper copy names what actually happens"
+        );
+        // Below Test connection, and its own form so it submits no fields.
+        let probe = html
+            .find(r#"action="/admin/email/test""#)
+            .expect("probe form");
+        let send = html
+            .find(r#"action="/admin/email/test-send""#)
+            .expect("send form");
+        assert!(probe < send, "Test email sits below Test connection");
+        assert!(
+            html.matches("<form").count() >= 3,
+            "send control is its own form"
+        );
+    }
+
+    /// BUNYIP-508: a failed send arrives as a 200 with `ok: false`; the page
+    /// must show the relay's reason in a red banner, never a green one. A 429
+    /// arrives as an `Err` and renders through `ApiError::user_message`.
+    #[test]
+    fn test_email_failure_renders_the_error_banner() {
+        let failed = crate::api::types::TestEmailResult {
+            ok: false,
+            message: "Email send error: 550 relay denied".into(),
+        };
+        let html = test_send_banner(Ok(failed)).into_string();
+        assert!(
+            html.contains("550 relay denied"),
+            "the relay's reason reaches the page: {html}"
+        );
+        assert!(
+            html.contains("destructive"),
+            "rendered as an error banner: {html}"
+        );
+
+        let sent = crate::api::types::TestEmailResult {
+            ok: true,
+            message: "Test message sent to your address. Check your inbox.".into(),
+        };
+        let ok_html = test_send_banner(Ok(sent)).into_string();
+        assert!(
+            !ok_html.contains("destructive"),
+            "a completed send renders the success banner: {ok_html}"
+        );
+
+        let throttled = crate::api::ApiError {
+            status: 429,
+            code: "RATE_LIMITED".into(),
+            message: String::new(),
+            retry_after: Some(120),
+        };
+        let throttled_html = test_send_banner(Err(throttled)).into_string();
+        assert!(
+            throttled_html.contains("Too many attempts") && throttled_html.contains("destructive"),
+            "a throttled click is surfaced, not swallowed: {throttled_html}"
+        );
+    }
+
     fn auto_ban_cfg() -> crate::api::types::AutoBanConfigResponse {
         serde_json::from_value(json!({
             "enabled": true, "threshold": 10, "window_secs": 60,
