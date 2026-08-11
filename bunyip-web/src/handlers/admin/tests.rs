@@ -1361,6 +1361,133 @@ mod stripe_admin_tests {
             .into_string()
             .contains("Could not load the tier catalog mapping"));
     }
+
+    // BUNYIP-510: the webhook block must show the real endpoint URL (the route
+    // is mounted under /v1), say which way the data flows, say whether
+    // processing is live, and stop instructing a paste the api already did.
+    use super::{
+        is_public_https_origin, stripe_webhook_url, stripe_webhooks_block, webhook_created_page,
+    };
+    use crate::api::types::StripeWebhookEndpoint;
+
+    fn endpoint(secret: Option<&str>) -> StripeWebhookEndpoint {
+        StripeWebhookEndpoint {
+            id: "we_123".into(),
+            url: "https://api.example.com/v1/webhooks/stripe".into(),
+            enabled_events: vec!["checkout.session.completed".into()],
+            status: "enabled".into(),
+            secret: secret.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn webhook_url_is_the_v1_path_and_never_doubles_the_slash() {
+        assert_eq!(
+            stripe_webhook_url("https://api.example.com"),
+            "https://api.example.com/v1/webhooks/stripe"
+        );
+        assert_eq!(
+            stripe_webhook_url("https://api.example.com/"),
+            "https://api.example.com/v1/webhooks/stripe"
+        );
+        assert!(stripe_webhook_url("http://api:4401").ends_with("/v1/webhooks/stripe"));
+        assert!(!stripe_webhook_url("https://api.example.com//").contains("com//"));
+    }
+
+    #[test]
+    fn only_a_public_https_origin_passes_the_caption_check() {
+        assert!(is_public_https_origin("https://api.example.com"));
+        assert!(is_public_https_origin("https://api.example.com:8443"));
+        // The `api_url` fallback shapes: internal Docker host, plain http, loopback.
+        assert!(!is_public_https_origin("http://api:4401"));
+        assert!(!is_public_https_origin("http://localhost:4401"));
+        assert!(!is_public_https_origin("https://localhost:4401"));
+        assert!(!is_public_https_origin("https://127.0.0.1"));
+        assert!(!is_public_https_origin("https://[::1]:4401"));
+        assert!(!is_public_https_origin(""));
+    }
+
+    #[test]
+    fn webhooks_block_prefills_the_derived_url_and_names_its_source() {
+        let html = stripe_webhooks_block(Some(&[]), "https://api.example.com", true).into_string();
+        assert!(
+            html.contains(r#"value="https://api.example.com/v1/webhooks/stripe""#),
+            "endpoint URL prefilled with the real path"
+        );
+        assert!(
+            html.contains(r#"placeholder="https://api.example.com/v1/webhooks/stripe""#),
+            "placeholder carries /v1 too"
+        );
+        assert!(html.contains("BUNYIP_API_PUBLIC_ORIGIN"), "source named");
+        assert!(
+            !html.contains("text-destructive-text"),
+            "a public https origin renders the plain caption, not the warning"
+        );
+        // Direction + purpose are explicit, and the empty state matches.
+        assert!(html.contains("Receives information from Stripe"));
+        assert!(html.contains("grant or revoke product entitlements"));
+        assert!(html.contains("so Stripe can send checkout, subscription, and payment events"));
+    }
+
+    #[test]
+    fn webhooks_block_warns_when_the_origin_is_not_public() {
+        let html = stripe_webhooks_block(Some(&[]), "http://api:4401", true).into_string();
+        assert!(
+            html.contains(r#"value="http://api:4401/v1/webhooks/stripe""#),
+            "still prefilled, but flagged"
+        );
+        assert!(
+            html.contains("text-destructive-text") && html.contains("Set BUNYIP_API_PUBLIC_ORIGIN"),
+            "caption warns and names the variable to set"
+        );
+    }
+
+    #[test]
+    fn webhooks_block_states_whether_processing_is_active() {
+        let live = stripe_webhooks_block(Some(&[]), "https://api.example.com", true).into_string();
+        assert!(live.contains("Webhook processing is active"));
+        assert!(!live.contains("rejects every incoming Stripe event"));
+
+        let off = stripe_webhooks_block(Some(&[]), "https://api.example.com", false).into_string();
+        assert!(off.contains("Webhook processing is not active"));
+        assert!(
+            off.contains("rejects every incoming Stripe event until a signing secret is saved"),
+            "matches what stripe_webhook actually does (BUNYIP-203)"
+        );
+    }
+
+    #[test]
+    fn webhooks_block_never_asks_for_a_manual_paste() {
+        let html = stripe_webhooks_block(Some(&[]), "https://api.example.com", false).into_string();
+        let lower = html.to_lowercase();
+        assert!(
+            !lower.contains("paste") && !lower.contains("copy"),
+            "the api saves the signing secret itself; no manual step to advertise"
+        );
+    }
+
+    #[test]
+    fn created_page_reports_the_auto_save_and_only_the_none_branch_asks_for_a_paste() {
+        let saved = webhook_created_page(&endpoint(Some("whsec_abc123"))).into_string();
+        assert!(saved.contains("whsec_abc123"), "secret still shown once");
+        assert!(saved.contains("saved the signing secret automatically"));
+        let lower = saved.to_lowercase();
+        assert!(
+            !lower.contains("paste") && !lower.contains("copy"),
+            "success branch instructs no manual step"
+        );
+
+        let missing = webhook_created_page(&endpoint(None)).into_string();
+        assert!(missing.contains("Stripe did not return a signing secret"));
+        assert!(
+            missing.contains("rejects every incoming Stripe event until one is saved"),
+            "None branch states the consequence"
+        );
+        assert!(
+            missing.contains("paste it into Webhook secret"),
+            "None branch keeps the manual instruction"
+        );
+    }
 }
 
 /// BUNYIP-421: the users-list identity cell must ellipsise a long email without
