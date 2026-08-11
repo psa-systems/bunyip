@@ -138,6 +138,16 @@ jobs:
         # contributor adding a .sh back, so gate the extension and the shebang.
         run: ./scripts/check-no-bash.nu
 
+      - name: Check scrollbars stay visible
+        # No scrollbar-hiding or `thin` rule in bunyip-web/input.css or the built
+        # styles.css, and the always-visible styling still present in both, so a
+        # vendor-CSS paste cannot re-hide every scroll container (BUNYIP-509).
+        # --self-test first, so a gate that stopped detecting anything fails the
+        # build instead of passing vacuously.
+        run: |
+          ./scripts/check-scrollbars.nu --self-test
+          ./scripts/check-scrollbars.nu
+
       - name: Check the Infisical secret map
         # Re-derives the sync table from compose.yml and exercises the write
         # rules (0400, atomic, no-op re-run, no value ever printed), so a new

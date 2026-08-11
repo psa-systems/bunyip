@@ -42,7 +42,7 @@ pre-commit: ensure-env
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-no-bash check-build check-clippy check-fmt check-docker
+check: check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-no-bash check-scrollbars check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -92,6 +92,13 @@ check-key-env:
 [group: 'checks']
 check-no-bash:
     ./scripts/check-no-bash.nu
+
+# Gate always-visible scrollbars: no hiding or `thin` rule in the authored or
+# built CSS, and the visible styling still present in both (BUNYIP-509).
+[group: 'checks']
+check-scrollbars:
+    ./scripts/check-scrollbars.nu --self-test
+    ./scripts/check-scrollbars.nu
 
 # Build every target in the workspace.
 [group: 'checks']

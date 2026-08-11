@@ -492,9 +492,50 @@
   transition-delay: 0.5s;
 }
 
-::-webkit-scrollbar {
-  display: none;
-}
+/* Always-visible scrollbars (BUNYIP-509). These rules replace a global
+   `::-webkit-scrollbar { display: none }` + `* { scrollbar-width: none }` pair
+   that hid the bar on every scroll container in the app. Colours come from the
+   theme tokens so light / dark / high-contrast all track; `auto` (never `thin`)
+   and an explicit 14px keep the thumb a grabbable drag target and opt Chromium
+   and Safari out of the fading OS overlay bar. Do not reintroduce any
+   auto-hide, fade, or hover-to-reveal behaviour: scripts/check-scrollbars.nu
+   fails the build if a hiding or `thin` rule comes back. */
 * {
-  scrollbar-width: none;
+  scrollbar-width: auto;
+  scrollbar-color: hsl(var(--muted-foreground)) hsl(var(--muted));
+}
+
+/* Reserve the track on vertical scroll containers so a pane gaining or losing
+   its scrollbar does not shift the content beside it. Horizontal-only wrappers
+   are left alone: their bar sits on the block edge, so there is nothing to
+   reserve on the inline edge but dead space. */
+html,
+[class*="overflow-auto"],
+[class*="overflow-y-auto"],
+[class*="overflow-scroll"],
+[class*="overflow-y-scroll"] {
+  scrollbar-gutter: stable;
+}
+
+::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+
+::-webkit-scrollbar-track {
+  background-color: hsl(var(--muted));
+}
+
+/* Full-width thumb (no inset border) so the grab target is the whole 14px. */
+::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--muted-foreground));
+  border-radius: 7px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--foreground));
+}
+
+::-webkit-scrollbar-corner {
+  background-color: hsl(var(--muted));
 }
