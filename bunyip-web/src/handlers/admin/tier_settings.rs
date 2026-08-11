@@ -12,7 +12,7 @@ use crate::api::admin as admin_api;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::format_stripe_amount;
 use crate::views::layout::admin_block;
-use crate::views::ui::{button_class, error_box, icon};
+use crate::views::ui::{button_class, error_box, icon, success_box};
 use crate::web::{redirect_cookies, AppState};
 
 /// Upper bounds for tier-settings fields. Slots and trial days are i64 with no
@@ -110,6 +110,40 @@ fn resolved_pricing_block(
     }
 }
 
+/// BUNYIP-515: what `/pricing` is doing right now, in plain words, above the
+/// form that controls it. Published tiers in a success box; every reason it is
+/// not publishing in its own error box, quoting the tier, the price id and (for
+/// the app-tag filter) the fix. Without this the admin has five different
+/// causes that all look like a 404.
+fn pricing_status_block(status: Result<&crate::api::types::PricingStatus, &str>) -> Markup {
+    let s = match status {
+        Err(msg) => {
+            return error_box(&format!(
+                "Could not load the pricing status, so this page cannot say what /pricing is \
+                 serving: {msg}"
+            ))
+        }
+        Ok(s) => s,
+    };
+    let names = s
+        .tiers
+        .iter()
+        .map(|t| crate::handlers::dashboard::tier_name(&t.tier))
+        .collect::<Vec<_>>()
+        .join(", ");
+    html! {
+        div class="space-y-2" {
+            @if s.published {
+                (success_box(&format!("/pricing is live and advertising: {names}.")))
+            }
+            @for r in &s.reasons { (error_box(&r.message)) }
+            @if !s.published && s.reasons.is_empty() {
+                (error_box("/pricing returns 404 and the API gave no reason. Check the bunyip-api logs."))
+            }
+        }
+    }
+}
+
 /// Parse one tier-settings field: require a base-10 integer in `[0, max]`.
 /// Returns a user-facing message naming the field on failure.
 fn parse_tier_field(raw: &str, label: &str, max: i64) -> Result<i64, String> {
@@ -129,6 +163,7 @@ fn parse_tier_field(raw: &str, label: &str, max: i64) -> Result<i64, String> {
 pub(super) fn tier_settings_content(
     cfg: Option<&crate::api::types::TierConfigResponse>,
     prices: &[crate::api::types::StripePrice],
+    status: Result<&crate::api::types::PricingStatus, &str>,
     values: &TierFormValues,
     error: Option<&str>,
 ) -> Markup {
@@ -163,6 +198,10 @@ pub(super) fn tier_settings_content(
                         Some("Off by default. /pricing returns 404 (and every link to it is hidden) while this is off, or while no tier resolves to a usable Stripe price."),
                         html! {
                             div class="space-y-6" {
+                                // BUNYIP-515: the live answer first, so a
+                                // misconfiguration is legible here rather than
+                                // in the server log.
+                                (pricing_status_block(status))
                                 label class="flex items-center gap-3 text-sm font-medium" {
                                     input id="pricing_enabled" name="pricing_enabled" type="checkbox" value="true" checked[values.pricing_enabled] class="h-4 w-4 rounded border-input";
                                     "Enable Pricing"
@@ -182,17 +221,70 @@ pub(super) fn tier_settings_content(
     }
 }
 
+/// Tier config for the page. `None` renders "Could not load tier config.", so
+/// the admin sees the failure; the log is what names its cause.
+async fn tier_config(
+    st: &AppState,
+    cookie: Option<&str>,
+) -> Option<crate::api::types::TierConfigResponse> {
+    match admin_api::tier_config(&st.api, cookie).await {
+        Ok(c) => Some(c),
+        Err(e) => {
+            tracing::warn!(
+                endpoint = "/v1/admin/tier-config",
+                error = %e.message,
+                code = %e.code,
+                "tier config unavailable on the Pricing tiers page"
+            );
+            None
+        }
+    }
+}
+
+/// Stripe prices for the resolved-amount rows. An unreachable Stripe reads as
+/// "price not found in Stripe" on every row, so the real cause is logged.
+async fn stripe_prices(st: &AppState, cookie: Option<&str>) -> Vec<crate::api::types::StripePrice> {
+    admin_api::list_stripe_prices(&st.api, cookie)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                endpoint = "/v1/admin/stripe/prices",
+                error = %e.message,
+                code = %e.code,
+                "Stripe price list unavailable on the Pricing tiers page"
+            );
+            Vec::new()
+        })
+}
+
+/// Fetch the pricing status for the page. A failed fetch is reported to the
+/// admin (and logged): this page's whole job is saying why /pricing looks the
+/// way it does, so "no answer" must not read as "nothing to report".
+async fn pricing_status(
+    st: &AppState,
+    cookie: Option<&str>,
+) -> Result<crate::api::types::PricingStatus, String> {
+    admin_api::pricing_status(&st.api, cookie)
+        .await
+        .map_err(|e| {
+            tracing::warn!(
+                endpoint = "/v1/admin/pricing/status",
+                error = %e.message,
+                code = %e.code,
+                "pricing status unavailable on the Pricing tiers page"
+            );
+            e.user_message()
+        })
+}
+
 pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let cfg = admin_api::tier_config(&st.api, c.forward.as_deref())
-        .await
-        .ok();
-    let prices = admin_api::list_stripe_prices(&st.api, c.forward.as_deref())
-        .await
-        .unwrap_or_default();
+    let cfg = tier_config(&st, c.forward.as_deref()).await;
+    let prices = stripe_prices(&st, c.forward.as_deref()).await;
+    let status = pricing_status(&st, c.forward.as_deref()).await;
     let values = cfg
         .as_ref()
         .map(TierFormValues::from_config)
@@ -209,7 +301,13 @@ pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Re
             standard_product_id: String::new(),
             pricing_enabled: false,
         });
-    let content = tier_settings_content(cfg.as_ref(), &prices, &values, None);
+    let content = tier_settings_content(
+        cfg.as_ref(),
+        &prices,
+        status.as_ref().map_err(String::as_str),
+        &values,
+        None,
+    );
     admin_response(&c, &user, "/admin/tier-settings", "Pricing tiers", content)
 }
 
@@ -341,12 +439,15 @@ pub async fn tier_settings_save(
     };
 
     // Re-render the form inline with the error and the submitted values.
-    let cfg = admin_api::tier_config(&st.api, c.forward.as_deref())
-        .await
-        .ok();
-    let prices = admin_api::list_stripe_prices(&st.api, c.forward.as_deref())
-        .await
-        .unwrap_or_default();
-    let content = tier_settings_content(cfg.as_ref(), &prices, &values, Some(&error));
+    let cfg = tier_config(&st, c.forward.as_deref()).await;
+    let prices = stripe_prices(&st, c.forward.as_deref()).await;
+    let status = pricing_status(&st, c.forward.as_deref()).await;
+    let content = tier_settings_content(
+        cfg.as_ref(),
+        &prices,
+        status.as_ref().map_err(String::as_str),
+        &values,
+        Some(&error),
+    );
     admin_response(&c, &user, "/admin/tier-settings", "Pricing tiers", content)
 }

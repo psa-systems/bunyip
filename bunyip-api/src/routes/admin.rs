@@ -282,6 +282,12 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/invites/{invite_id}",
                 web::delete().to(handlers::revoke_admin_invite),
             )
+            // BUNYIP-515: why /pricing publishes what it publishes. Admin-only
+            // (it names price ids and configuration state) and cache-bypassing.
+            .route(
+                "/pricing/status",
+                web::get().to(handlers::admin_pricing_status),
+            )
             // Tier config
             .route("/tier-config", web::get().to(handlers::get_tier_config))
             .route("/tier-config", web::put().to(handlers::update_tier_config))

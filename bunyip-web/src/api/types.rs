@@ -1268,6 +1268,35 @@ impl PricingResponse {
     }
 }
 
+/// BUNYIP-515: the admin-only diagnosis behind the public payload
+/// (`GET /v1/admin/pricing/status`). Built from the same resolve the public
+/// page runs, so what it reports cannot drift from what visitors get.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct PricingStatus {
+    #[serde(default)]
+    pub published: bool,
+    #[serde(default)]
+    pub tiers: Vec<PricingTier>,
+    #[serde(default)]
+    pub reasons: Vec<PricingReason>,
+}
+
+/// One reason `/pricing` is not publishing something.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct PricingReason {
+    /// Stable machine key (`switch_off`, `price_unresolved`, ...).
+    #[serde(default)]
+    pub code: String,
+    #[serde(default)]
+    pub tier: Option<String>,
+    #[serde(default)]
+    pub price_id: Option<String>,
+    /// The admin-facing sentence. Rendered by bunyip-api, which is the side
+    /// that knows the app tag and the mapped price ids, and shown verbatim.
+    #[serde(default)]
+    pub message: String,
+}
+
 /// A per-application documentation page (BUNYIP-388). `body` is markdown.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppDoc {

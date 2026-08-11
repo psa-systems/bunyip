@@ -961,7 +961,8 @@ mod two_column_layout_tests {
         // the Pricing tiers page keeps only slots + trial days and carries none of the
         // price/product-ID fields.
         let vals = tier_vals(false);
-        let html = tier_settings_content(Some(&tier_cfg()), &[], &vals, None).into_string();
+        let html = tier_settings_content(Some(&tier_cfg()), &[], Err("unavailable"), &vals, None)
+            .into_string();
         // BUNYIP-487: the page is labelled "Pricing tiers" and carries the
         // Enable Pricing switch; the route is unchanged.
         assert!(html.contains("Pricing tiers"), "renamed heading");
@@ -1003,10 +1004,22 @@ mod two_column_layout_tests {
     fn enable_pricing_checkbox_reflects_the_saved_switch() {
         // BUNYIP-487: the switch must survive save + reload, which on a
         // checkbox means the `checked` attribute is driven by the loaded value.
-        let off =
-            tier_settings_content(Some(&tier_cfg()), &[], &tier_vals(false), None).into_string();
-        let on =
-            tier_settings_content(Some(&tier_cfg()), &[], &tier_vals(true), None).into_string();
+        let off = tier_settings_content(
+            Some(&tier_cfg()),
+            &[],
+            Err("unavailable"),
+            &tier_vals(false),
+            None,
+        )
+        .into_string();
+        let on = tier_settings_content(
+            Some(&tier_cfg()),
+            &[],
+            Err("unavailable"),
+            &tier_vals(true),
+            None,
+        )
+        .into_string();
         assert!(!off.contains("checked"), "unchecked when the switch is off");
         assert!(on.contains("checked"), "checked when the switch is on");
     }
@@ -1034,7 +1047,14 @@ mod two_column_layout_tests {
             stripe_price("price_std", 300),
             stripe_price("price_free", 0),
         ];
-        let html = tier_settings_content(Some(&cfg), &prices, &tier_vals(true), None).into_string();
+        let html = tier_settings_content(
+            Some(&cfg),
+            &prices,
+            Err("unavailable"),
+            &tier_vals(true),
+            None,
+        )
+        .into_string();
         assert!(html.contains("$3.00"), "standard amount resolved");
         assert!(
             html.contains("$0.00"),
@@ -1047,6 +1067,78 @@ mod two_column_layout_tests {
         assert!(
             !html.contains(r#"name="standard_amount""#),
             "the amount is derived, never an editable field"
+        );
+    }
+
+    // BUNYIP-515: the Pricing tiers page says what /pricing is serving and, when
+    // it is serving nothing, which check failed. Five causes used to render as
+    // one silent 404.
+
+    fn pricing_status(v: serde_json::Value) -> crate::api::types::PricingStatus {
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn pricing_tiers_names_the_published_tiers() {
+        let status = pricing_status(json!({
+            "published": true,
+            "tiers": [
+                { "tier": "lifetime", "amount": 0, "currency": "usd", "interval": "month", "trial_days": 0 },
+                { "tier": "standard", "amount": 300, "currency": "usd", "interval": "month", "trial_days": 30 },
+            ],
+            "reasons": [],
+        }));
+        let html =
+            tier_settings_content(Some(&tier_cfg()), &[], Ok(&status), &tier_vals(true), None)
+                .into_string();
+        assert!(html.contains("/pricing is live and advertising: Lifetime, Standard."));
+    }
+
+    #[test]
+    fn pricing_tiers_lists_every_reason_it_is_unpublished() {
+        let status = pricing_status(json!({
+            "published": false,
+            "tiers": [],
+            "reasons": [
+                { "code": "price_unresolved", "tier": "standard", "price_id": "price_1U33Rl",
+                  "message": "Standard: price_1U33Rl is not visible under app tag `bunyip`. Check the id, or set that product's app_tag metadata in Stripe." },
+                { "code": "price_unresolved", "tier": "early_adopter", "price_id": "price_old",
+                  "message": "Early Adopter: price_old is archived in Stripe. Map an active price." },
+            ],
+        }));
+        let html =
+            tier_settings_content(Some(&tier_cfg()), &[], Ok(&status), &tier_vals(true), None)
+                .into_string();
+        assert!(
+            html.contains("app tag `bunyip`"),
+            "the app-tag cause is named verbatim, tag included"
+        );
+        assert!(
+            html.contains("price_old is archived in Stripe"),
+            "each reason gets its own line, not a collapsed summary"
+        );
+        assert!(
+            !html.contains("/pricing is live"),
+            "nothing published means no success box"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_pricing_status_says_so() {
+        // The page's whole job is explaining /pricing, so "no answer" must not
+        // render as "nothing to report".
+        let html = tier_settings_content(
+            Some(&tier_cfg()),
+            &[],
+            Err("Could not reach the server."),
+            &tier_vals(true),
+            None,
+        )
+        .into_string();
+        assert!(html.contains("Could not load the pricing status"));
+        assert!(
+            html.contains("Could not reach the server."),
+            "the underlying cause rides along"
         );
     }
 

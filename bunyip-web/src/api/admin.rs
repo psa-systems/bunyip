@@ -7,9 +7,9 @@ use super::types::{
     AdminFeedbackSummary, AdminIpBan, AdminRateLimit, AdminRateLimitConfig, AdminStatsResponse,
     AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList, ArchivedFeedback,
     AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary,
-    IpEnrichment, PaginatedResponse, RestoreReport, SeedTemplateInfo, SmtpTestResult,
-    StripeConfigResponse, StripePrice, StripeProduct, StripeWebhookEndpoint, SystemHealth,
-    SystemHealthResponse, TestEmailResult, TierConfigResponse, UserEntitlement,
+    IpEnrichment, PaginatedResponse, PricingStatus, RestoreReport, SeedTemplateInfo,
+    SmtpTestResult, StripeConfigResponse, StripePrice, StripeProduct, StripeWebhookEndpoint,
+    SystemHealth, SystemHealthResponse, TestEmailResult, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -997,6 +997,13 @@ pub async fn restore_account(
 
 pub async fn tier_config(api: &Api, cookie: Option<&str>) -> Result<TierConfigResponse, ApiError> {
     parse(api.get("/admin/tier-config", cookie).await?)
+}
+
+/// BUNYIP-515: what the public `/pricing` resolve produced, and why anything is
+/// missing. Bypasses the pricing cache on the API side, so it answers for the
+/// mapping as it stands now.
+pub async fn pricing_status(api: &Api, cookie: Option<&str>) -> Result<PricingStatus, ApiError> {
+    parse(api.get("/admin/pricing/status", cookie).await?)
 }
 
 pub async fn update_tier_config(

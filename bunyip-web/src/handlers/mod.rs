@@ -48,9 +48,14 @@ pub fn rotating_index(len: usize) -> usize {
 /// list (header + footer) and the public pricing payload.
 ///
 /// BUNYIP-487: the pricing payload rides along because the Pricing nav link and
-/// footer link must vanish whenever `/pricing` would 404. A failed fetch
-/// defaults to unpublished, so an API outage hides the link rather than
-/// offering a dead one.
+/// footer link must vanish whenever `/pricing` would 404.
+///
+/// BUNYIP-515: both fetches still degrade to an empty value, because a dead nav
+/// link is worse for a visitor than a missing one, but neither degrades
+/// silently. The failure is logged at `error` with the endpoint first: a public
+/// page rendering without its pricing or its app list is a deployment fault, and
+/// the operator has no other witness (the visitor sees a page that merely looks
+/// thin, and the admin sees /pricing 404 with nothing to explain it).
 pub async fn public_ctx(
     st: &AppState,
     headers: &HeaderMap,
@@ -58,8 +63,25 @@ pub async fn public_ctx(
     let (c, fwd) = ctx(st, headers).await;
     let apps = calls::applications(&st.api, fwd.as_deref())
         .await
-        .unwrap_or_default();
-    let pricing = calls::pricing(&st.api).await.unwrap_or_default();
+        .unwrap_or_else(|e| {
+            tracing::error!(
+                endpoint = "/v1/applications",
+                error = %e.message,
+                code = %e.code,
+                "public chrome falling back to an empty application list"
+            );
+            Vec::new()
+        });
+    let pricing = calls::pricing(&st.api).await.unwrap_or_else(|e| {
+        tracing::error!(
+            endpoint = "/v1/pricing",
+            error = %e.message,
+            code = %e.code,
+            "public chrome falling back to unpublished pricing; /pricing will 404 \
+             and every link to it is hidden until this call succeeds"
+        );
+        PricingResponse::default()
+    });
     (c, apps, pricing)
 }
 
@@ -164,10 +186,22 @@ pub async fn needs_onboarding(st: &AppState, user: &User) -> bool {
     if !names_present(user) || user.email_verified || is_admin {
         return onboarding_needed(names_present(user), user.email_verified, is_admin, false);
     }
-    let email_enabled = crate::api::auth::setup_status(&st.api)
-        .await
-        .map(|s| s.email_enabled)
-        .unwrap_or(false);
+    // BUNYIP-515: "could not evaluate" defaulted to "email is off" with nothing
+    // logged, which is the same answer as a genuinely mail-less deployment. The
+    // default stays (it keeps the user off a verification wall they cannot
+    // clear), but the failure is now named.
+    let email_enabled = match crate::api::auth::setup_status(&st.api).await {
+        Ok(s) => s.email_enabled,
+        Err(e) => {
+            tracing::warn!(
+                endpoint = "/v1/auth/setup/status",
+                error = %e.message,
+                code = %e.code,
+                "onboarding gate assuming email delivery is unavailable"
+            );
+            false
+        }
+    };
     onboarding_needed(true, false, false, email_enabled)
 }
 

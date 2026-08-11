@@ -2045,6 +2045,7 @@ pub async fn update_stripe_config(
     pool: web::Data<PgPool>,
     app_key_set: web::Data<AppKeySet>,
     stripe_service: web::Data<Arc<StripeService>>,
+    pricing_cache: web::Data<Arc<crate::handlers::PricingCache>>,
     body: web::Json<UpdateStripeConfigRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -2120,6 +2121,11 @@ pub async fn update_stripe_config(
             tracing::error!(error = %e, "Failed to reload Stripe service after config update");
         }
     }
+
+    // BUNYIP-515: the secret key and the app tag both decide which prices
+    // /pricing can see, so a save takes effect on the next load rather than
+    // after the TTL.
+    pricing_cache.invalidate();
 
     // BUNYIP-189: bootstrap a default app-tagged product + recurring
     // price when no app-tagged price exists yet. Closes the silent-400
