@@ -1122,6 +1122,18 @@ pub struct SmtpTestResult {
     pub message: String,
 }
 
+/// BUNYIP-508: result of the admin "Test email" send. `ok` is the headline
+/// pass/fail; `message` is the admin-facing reason (the relay's own text on a
+/// failure). Both default: a body that decodes without them reads as a failed
+/// send with an empty reason, never as a silent success.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TestEmailResult {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub message: String,
+}
+
 /// BUNYIP-351: auto-ban configuration surfaced to the admin settings form.
 /// Mirrors `bunyip-api`'s `AutoBanConfigResponse`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -501,6 +501,22 @@ impl EmailService {
             )
             .map_err(|e| AppError::internal(format!("Template error: {}", e)))?;
 
+        // BUNYIP-508: the admin "Test email" probe. Deliberately its own
+        // template: reusing `welcome` would state a price and account status
+        // that are fabricated for the test.
+        templates
+            .add_raw_template(
+                "smtp_test.html",
+                include_str!("../../templates/emails/smtp_test.html"),
+            )
+            .map_err(|e| AppError::internal(format!("Template error: {}", e)))?;
+        templates
+            .add_raw_template(
+                "smtp_test.txt",
+                include_str!("../../templates/emails/smtp_test.txt"),
+            )
+            .map_err(|e| AppError::internal(format!("Template error: {}", e)))?;
+
         Ok(Self {
             runtime: std::sync::RwLock::new(EmailRuntime { transport, config }),
             templates,
@@ -1149,6 +1165,38 @@ impl EmailService {
                 "You've been invited to join {} as an admin",
                 config.app_name
             ),
+            html,
+            text,
+        )
+        .await
+    }
+
+    /// BUNYIP-508: send the admin "Test email" probe to `to` (always the
+    /// signed-in admin's own address) through the live transport.
+    ///
+    /// Unlike every other sender, a disabled email service is an error here
+    /// rather than a silent no-op: the operator clicked this to learn whether
+    /// mail actually leaves, so "nothing was sent" must never read as success.
+    pub async fn send_test_message(&self, to: &str) -> Result<(), AppError> {
+        let config = self.config();
+        if !config.enabled || self.transport().is_none() {
+            return Err(AppError::internal(
+                "Email sending is disabled, so no test message was sent.",
+            ));
+        }
+
+        let mut context = self.base_context(&config);
+        context.insert("smtp_host", &config.smtp_host);
+        context.insert(
+            "sent_at",
+            &Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+        );
+
+        let (html, text) = self.render_template("smtp_test", &context)?;
+        self.send_email(
+            &config,
+            to,
+            &format!("{} SMTP test message", config.app_name),
             html,
             text,
         )

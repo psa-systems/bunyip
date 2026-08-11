@@ -184,6 +184,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/admin/email", get(admin::email).post(admin::email_save))
         .route("/admin/email/test", post(admin::email_test))
+        .route("/admin/email/test-send", post(admin::email_test_send))
         .route(
             "/admin/auto-ban-settings",
             get(admin::auto_ban_settings).post(admin::auto_ban_settings_save),
