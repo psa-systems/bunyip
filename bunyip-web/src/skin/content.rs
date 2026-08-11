@@ -102,10 +102,12 @@ pub(super) fn pricing_content(pricing: &PricingResponse, stripe: bool, signed_in
     } else {
         ("/register", "Sign up")
     };
-    let grid = if pricing.tiers.len() > 1 {
-        "md:grid-cols-2 max-w-4xl"
-    } else {
-        "max-w-md"
+    // BUNYIP-515: all three tiers can publish now, so the grid widens to match
+    // rather than wrapping the third card under a two-column layout.
+    let grid = match pricing.tiers.len() {
+        0 | 1 => "max-w-md",
+        2 => "md:grid-cols-2 max-w-4xl",
+        _ => "md:grid-cols-3 max-w-4xl",
     };
     html! {
         div class="py-20" {
@@ -158,10 +160,21 @@ pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response
         *resp.status_mut() = axum::http::StatusCode::NOT_FOUND;
         return resp;
     }
-    let stripe = auth_api::setup_status(&st.api)
-        .await
-        .map(|s| s.stripe_enabled)
-        .unwrap_or(true);
+    // BUNYIP-515: an unreadable setup status defaults to "payment configured"
+    // so a working Stripe account is never hidden behind a disabled button, but
+    // it says so first: without the log the CTA silently flips behaviour.
+    let stripe = match auth_api::setup_status(&st.api).await {
+        Ok(s) => s.stripe_enabled,
+        Err(e) => {
+            tracing::warn!(
+                endpoint = "/v1/auth/setup/status",
+                error = %e.message,
+                code = %e.code,
+                "pricing page assuming payment is configured"
+            );
+            true
+        }
+    };
     let content = pricing_content(&pricing, stripe, c.is_signed_in());
     public_response(&st, &c, &apps, &pricing, "Pricing", true, content)
 }
@@ -846,7 +859,19 @@ pub async fn app_docs_index(
         .find(|a| a.slug == slug)
         .map(|a| a.display_name.clone())
         .unwrap_or_else(|| slug.clone());
-    let docs = calls::app_docs(&st.api, &slug).await.unwrap_or_default();
+    // BUNYIP-515: an empty docs list and an unreadable one render the same
+    // empty state, so the failure has to be legible somewhere: log it, then
+    // fall back (a docs index that 500s helps nobody).
+    let docs = calls::app_docs(&st.api, &slug).await.unwrap_or_else(|e| {
+        tracing::error!(
+            endpoint = "/v1/applications/{slug}/docs",
+            slug = %slug,
+            error = %e.message,
+            code = %e.code,
+            "docs index falling back to an empty list"
+        );
+        Vec::new()
+    });
     let content = html! {
         div class="container max-w-4xl py-12" {
             h1 class="text-4xl font-bold mb-4" { (app_name) " documentation" }
@@ -888,7 +913,17 @@ pub async fn app_docs_page(
         .unwrap_or_else(|| slug.clone());
     let doc = match calls::app_doc(&st.api, &slug, &doc_slug).await {
         Ok(d) => d,
-        Err(_) => {
+        Err(e) => {
+            // BUNYIP-515: a missing page and an unreachable API both render the
+            // same 404 to the reader, so the cause is named in the log.
+            tracing::warn!(
+                endpoint = "/v1/applications/{slug}/docs/{doc_slug}",
+                slug = %slug,
+                doc_slug = %doc_slug,
+                error = %e.message,
+                code = %e.code,
+                "rendering the docs not-found page"
+            );
             let content = html! {
                 div class="container max-w-4xl py-12" {
                     h1 class="text-4xl font-bold mb-4" { "Document not found" }
@@ -1037,6 +1072,40 @@ mod pricing_tests {
         assert!(
             html.contains("$12.50"),
             "a different mapped price renders a different amount"
+        );
+    }
+
+    /// BUNYIP-515: every tier the API publishes gets its own card. The page
+    /// used to be able to show only Standard, because that was the only tier
+    /// the API would ever resolve.
+    #[test]
+    fn every_published_tier_gets_a_card() {
+        let tier = |t: MembershipTier, amount: i64| PricingTier {
+            tier: t,
+            amount,
+            currency: "usd".into(),
+            interval: Some("month".into()),
+            trial_days: 30,
+        };
+        let payload = PricingResponse {
+            enabled: true,
+            trial_days: 30,
+            tiers: vec![
+                tier(MembershipTier::Lifetime, 0),
+                tier(MembershipTier::EarlyAdopter, 200),
+                tier(MembershipTier::Standard, 300),
+            ],
+        };
+        let html = pricing_content(&payload, true, false).into_string();
+        for name in ["Lifetime", "Early Adopter", "Standard"] {
+            assert!(html.contains(name), "{name} card rendered");
+        }
+        for amount in ["$0.00", "$2.00", "$3.00"] {
+            assert!(html.contains(amount), "{amount} rendered");
+        }
+        assert!(
+            html.contains("md:grid-cols-3"),
+            "three cards get a three-column grid, not a wrapped two-column one"
         );
     }
 

@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::errors::AppError;
+use crate::handlers::PricingCache;
 use crate::middleware::AdminUser;
 use crate::models::stripe::encrypt_secret;
 use crate::repositories::StripeConfigRepository;
@@ -151,6 +152,7 @@ pub async fn create_stripe_price(
     req: HttpRequest,
     _admin: AdminUser,
     stripe: web::Data<Arc<StripeService>>,
+    pricing_cache: web::Data<Arc<PricingCache>>,
     body: web::Json<CreateStripePriceRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -163,6 +165,9 @@ pub async fn create_stripe_price(
         )
         .await
         .map_err(stripe_err)?;
+    // BUNYIP-515: the new price can be the one a tier maps to, so the public
+    // payload must not stay stale for up to the TTL after an admin fixes it.
+    pricing_cache.invalidate();
     Ok(success(price, request_id))
 }
 
@@ -171,11 +176,15 @@ pub async fn archive_stripe_price(
     req: HttpRequest,
     _admin: AdminUser,
     stripe: web::Data<Arc<StripeService>>,
+    pricing_cache: web::Data<Arc<PricingCache>>,
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let price_id = path.into_inner();
     stripe.archive_price(&price_id).await.map_err(stripe_err)?;
+    // BUNYIP-515: archiving the mapped price unpublishes its tier at once
+    // rather than advertising a price nobody can buy for another TTL.
+    pricing_cache.invalidate();
     Ok(success_no_data(request_id))
 }
 
@@ -261,4 +270,36 @@ pub async fn delete_stripe_webhook(
         .await
         .map_err(stripe_err)?;
     Ok(success_no_data(request_id))
+}
+
+#[cfg(test)]
+mod tests {
+    /// BUNYIP-515: every handler here that MUTATES a Stripe price can change
+    /// what `/pricing` resolves, so each must drop the pricing cache. Scanning
+    /// the source (rather than listing today's handlers) is what makes the next
+    /// price mutation - the BUNYIP-511 replace endpoint, say - fail the build
+    /// instead of silently serving a stale payload for up to the TTL.
+    #[test]
+    fn every_price_mutating_handler_invalidates_the_pricing_cache() {
+        let src = include_str!("admin_stripe.rs");
+        let mut checked = 0;
+        for chunk in src.split("\npub async fn ").skip(1) {
+            let (name, rest) = chunk.split_once('(').expect("handler signature");
+            // Bound the body at the closing brace in column 0 so one handler's
+            // invalidate cannot vouch for the handler above it.
+            let body = rest.split("\n}").next().unwrap_or(rest);
+            let mutates = ["create", "update", "archive", "delete", "replace"]
+                .iter()
+                .any(|verb| name.starts_with(verb));
+            if !name.contains("price") || !mutates {
+                continue;
+            }
+            checked += 1;
+            assert!(
+                body.contains("pricing_cache.invalidate()"),
+                "{name} mutates a Stripe price but does not invalidate PricingCache"
+            );
+        }
+        assert!(checked >= 2, "the scan matched the price handlers");
+    }
 }

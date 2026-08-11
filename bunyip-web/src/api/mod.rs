@@ -396,6 +396,21 @@ pub fn parse<T: DeserializeOwned>(resp: Resp) -> Result<T, ApiError> {
     }
 }
 
+/// Deserialize the WHOLE 2xx body into `T` (or the error envelope).
+///
+/// BUNYIP-515: `GET /v1/pricing` answers with a bare payload rather than the
+/// `{success, data, meta}` envelope every other endpoint uses, so [`parse`]
+/// looked up an absent `data` key and every response failed to decode - which
+/// `unwrap_or_default` in the caller then turned into "pricing is unpublished".
+/// The public body shape is contractual, so the client bends, not the endpoint.
+pub fn parse_bare<T: DeserializeOwned>(resp: Resp) -> Result<T, ApiError> {
+    if resp.ok() {
+        serde_json::from_value(resp.body.clone()).map_err(|e| decode_error::<T>(&resp.path, &e))
+    } else {
+        Err(error_from(&resp))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,6 +548,31 @@ mod tests {
         assert_eq!(
             tmsg,
             "Couldn't reach the server. Please try again in a moment."
+        );
+    }
+
+    /// BUNYIP-515: `/v1/pricing` answers unenveloped. `parse` cannot read it
+    /// (there is no `data` key), and the caller's fallback turned that decode
+    /// failure into a permanently unpublished pricing page.
+    #[test]
+    fn a_bare_body_decodes_with_parse_bare_and_not_with_parse() {
+        let body = json!({
+            "enabled": true,
+            "trial_days": 30,
+            "tiers": [{ "tier": "standard", "amount": 300, "currency": "usd",
+                        "interval": "month", "trial_days": 30 }],
+        });
+        let got: crate::api::types::PricingResponse =
+            parse_bare(err_resp(200, None, body.clone())).expect("bare body decodes");
+        assert!(got.published());
+        assert_eq!(got.tiers.len(), 1);
+
+        let envelope_reader: Result<crate::api::types::PricingResponse, _> =
+            parse(err_resp(200, None, body));
+        assert_eq!(
+            envelope_reader.unwrap_err().code,
+            DECODE_ERROR_CODE,
+            "the envelope reader is what silently unpublished the page"
         );
     }
 

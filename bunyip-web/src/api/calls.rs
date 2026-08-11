@@ -7,7 +7,7 @@ use super::types::{
     ApplicationList, CheckoutSessionResponse, DownloadGroups, Membership, PaginatedResponse,
     PricingResponse, SessionInfo, StripeInvoice, StripePaymentResponse,
 };
-use super::{ok_data, parse, Api, ApiError};
+use super::{ok_data, parse, parse_bare, Api, ApiError};
 
 // --- sessions ---------------------------------------------------------------
 
@@ -51,8 +51,11 @@ pub async fn revoke_other_sessions(api: &Api, cookie: Option<&str>) -> Result<()
 
 /// BUNYIP-487: the public pricing payload. Unauthenticated: it is what the
 /// marketing pages render, and the admin Pricing tiers page is its only source.
+/// BUNYIP-515: the one endpoint that answers with a bare body, hence
+/// `parse_bare` - `parse` looked for a `data` key that is never there and
+/// failed every decode.
 pub async fn pricing(api: &Api) -> Result<PricingResponse, ApiError> {
-    parse(api.get("/pricing", None).await?)
+    parse_bare(api.get("/pricing", None).await?)
 }
 
 // --- applications -----------------------------------------------------------
