@@ -1232,6 +1232,14 @@ pub struct TierConfigResponse {
     /// BUNYIP-487: the Enable Pricing switch on the Pricing tiers page.
     #[serde(default)]
     pub pricing_enabled: bool,
+    /// BUNYIP-527: per-tier visibility on the public `/pricing` page. Default
+    /// true so an older API (without the fields) keeps every mapped tier visible.
+    #[serde(default = "default_true")]
+    pub lifetime_visible: bool,
+    #[serde(default = "default_true")]
+    pub early_adopter_visible: bool,
+    #[serde(default = "default_true")]
+    pub standard_visible: bool,
     #[serde(default)]
     pub updated_at: String,
     #[serde(default)]

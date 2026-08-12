@@ -946,12 +946,7 @@ mod two_column_layout_tests {
             early_adopter_slots: "5".into(),
             early_adopter_trial_days: "90".into(),
             standard_trial_days: "30".into(),
-            free_price_id: String::new(),
-            early_adopter_price_id: String::new(),
-            standard_price_id: String::new(),
-            lifetime_product_id: String::new(),
-            early_adopter_product_id: String::new(),
-            standard_product_id: String::new(),
+            trial_period_days: "14".into(),
         }
     }
 
@@ -968,26 +963,15 @@ mod two_column_layout_tests {
     }
 
     #[test]
-    fn tier_settings_shows_slots_and_no_stripe_catalog() {
-        // BUNYIP-417: the Stripe catalog mapping moved to the Stripe page, so
-        // the Pricing tiers page keeps only slots + trial days and carries none of the
-        // price/product-ID fields.
+    fn tier_settings_hosts_slots_trials_checkout_trial_and_catalog() {
+        // BUNYIP-527: the tier catalog mapping (and the publish switch) moved back
+        // here, and the checkout trial length moved here from the Stripe page. The
+        // page now carries slots, per-tier trials, the checkout trial, the price
+        // mapping (its own form) and the publish switch.
         let vals = tier_vals();
-        let html = tier_settings_content(Some(&tier_cfg()), &vals, None).into_string();
-        // BUNYIP-487: the page is labelled "Pricing tiers"; the route is
-        // unchanged.
-        assert!(html.contains("Pricing tiers"), "renamed heading");
-        assert!(!html.contains("Tier Settings"), "old heading is gone");
-        // BUNYIP-524: the publish switch moved to the Stripe catalog mapping, so
-        // it is no longer on this page.
-        assert!(
-            !html.contains(r#"name="pricing_enabled""#),
-            "Enable Pricing checkbox moved to the Stripe page"
-        );
-        assert!(
-            html.contains(r#"action="/admin/tier-settings""#),
-            "route unchanged so admin bookmarks keep working"
-        );
+        let html = tier_settings_content(Some(&tier_cfg()), None, Err("unavailable"), &vals, None)
+            .into_string();
+        assert!(html.contains("Pricing tiers"), "heading present");
         for f in [
             "lifetime_slots",
             "early_adopter_slots",
@@ -995,35 +979,49 @@ mod two_column_layout_tests {
         ] {
             assert!(html.contains(f), "slots/trials field {f} present");
         }
+        // BUNYIP-527: the relocated checkout trial field.
         assert!(
-            !html.contains("Stripe catalog"),
-            "catalog blocks moved to the Stripe page"
+            html.contains(r#"name="trial_period_days""#),
+            "checkout trial field moved here"
         );
-        for f in [
-            "free_price_id",
-            "standard_product_id",
-            "early_adopter_price_id",
-        ] {
-            assert!(
-                !html.contains(f),
-                "catalog field {f} no longer on the Pricing tiers page"
-            );
-        }
-        // It links to where the mapping now lives.
-        assert!(html.contains(r#"href="/admin/stripe""#));
+        // BUNYIP-527: the catalog mapping is back, with its publish switch, its
+        // own form posting to the tier-settings catalog route.
+        assert!(
+            html.contains(r#"name="pricing_enabled""#),
+            "publish switch is back on this page"
+        );
+        assert!(
+            html.contains(r#"action="/admin/tier-settings/catalog""#),
+            "catalog form posts to the tier-settings catalog route"
+        );
+        assert!(
+            html.contains(r#"name="free_price_id""#),
+            "the tier price mapping renders here"
+        );
+        // The Tiers & Slots form still posts to the page's own route.
+        assert!(html.contains(r#"action="/admin/tier-settings""#));
     }
 
     #[test]
     fn catalog_publish_switch_reflects_the_saved_state() {
-        // BUNYIP-524: the publish switch lives in the Stripe catalog mapping and
-        // its `checked` attribute is driven by the saved `pricing_enabled`, so
-        // it survives save + reload.
+        // BUNYIP-524: the publish switch's `checked` attribute is driven by the
+        // saved `pricing_enabled`, so it survives save + reload. BUNYIP-527: the
+        // per-tier visibility boxes also render `checked`, so build the tiers with
+        // visibility off to isolate the publish switch as the only checkbox.
+        let cfg = |pricing_enabled: bool| -> crate::api::types::TierConfigResponse {
+            serde_json::from_value(serde_json::json!({
+                "lifetime_slots": 5, "early_adopter_slots": 5, "early_adopter_trial_days": 90,
+                "standard_trial_days": 30, "source": "database",
+                "lifetime_slots_used": 0, "early_adopter_slots_used": 0,
+                "pricing_enabled": pricing_enabled,
+                "lifetime_visible": false, "early_adopter_visible": false, "standard_visible": false
+            }))
+            .unwrap()
+        };
         let on =
-            super::stripe_catalog_section(Ok(&tier_cfg_pricing(true)), None, Err("unavailable"))
-                .into_string();
+            super::stripe_catalog_section(Ok(&cfg(true)), None, Err("unavailable")).into_string();
         let off =
-            super::stripe_catalog_section(Ok(&tier_cfg_pricing(false)), None, Err("unavailable"))
-                .into_string();
+            super::stripe_catalog_section(Ok(&cfg(false)), None, Err("unavailable")).into_string();
         assert!(
             on.contains(r#"name="pricing_enabled""#),
             "publish switch present in the catalog mapping"
@@ -1661,7 +1659,7 @@ mod stripe_admin_tests {
         let html = super::stripe_catalog_section(Ok(&tier), Some(&prices), Err("unavailable"))
             .into_string();
         assert!(
-            html.contains(r#"action="/admin/stripe/catalog""#),
+            html.contains(r#"action="/admin/tier-settings/catalog""#),
             "catalog form present"
         );
         // Price fields are present as selects; product id inputs are gone.
@@ -1718,6 +1716,67 @@ mod stripe_admin_tests {
         assert!(
             html.contains("prod_STALE"),
             "the stale stored product is named"
+        );
+    }
+
+    // -- BUNYIP-527: clear-on-(none), per-tier visibility --
+
+    #[test]
+    fn catalog_save_body_always_sends_prices_and_flags() {
+        // The price fields are ALWAYS sent (so "" clears a mapping instead of a
+        // silent keep), and the switch + per-tier visibility are always sent
+        // (absent checkbox = off/hidden).
+        let form = super::StripeCatalogForm {
+            free_price_id: "price_free".into(),
+            early_adopter_price_id: "".into(), // "(none)" -> explicit clear
+            standard_price_id: "price_std".into(),
+            pricing_enabled: Some("true".into()),
+            lifetime_visible: Some("true".into()),
+            early_adopter_visible: None, // unchecked -> hidden
+            standard_visible: Some("true".into()),
+        };
+        let body = super::catalog_save_body(&form);
+        assert_eq!(body["free_price_id"], serde_json::json!("price_free"));
+        assert_eq!(
+            body["early_adopter_price_id"],
+            serde_json::json!(""),
+            "an empty select is sent as \"\" so the API clears the mapping"
+        );
+        assert_eq!(body["standard_price_id"], serde_json::json!("price_std"));
+        assert_eq!(body["pricing_enabled"], serde_json::json!(true));
+        assert_eq!(body["lifetime_visible"], serde_json::json!(true));
+        assert_eq!(
+            body["early_adopter_visible"],
+            serde_json::json!(false),
+            "an unchecked visibility box hides the tier"
+        );
+        assert_eq!(body["standard_visible"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn catalog_section_renders_per_tier_visibility_toggles() {
+        let tier: crate::api::types::TierConfigResponse =
+            serde_json::from_value(serde_json::json!({
+                "lifetime_slots": 5, "early_adopter_slots": 5, "early_adopter_trial_days": 90,
+                "standard_trial_days": 30, "source": "database",
+                "lifetime_slots_used": 0, "early_adopter_slots_used": 0,
+                "lifetime_visible": true, "early_adopter_visible": false, "standard_visible": true
+            }))
+            .unwrap();
+        let html = super::stripe_catalog_section(Ok(&tier), None, Err("unavailable")).into_string();
+        for name in [
+            "lifetime_visible",
+            "early_adopter_visible",
+            "standard_visible",
+        ] {
+            assert!(
+                html.contains(&format!(r#"name="{name}""#)),
+                "{name} toggle rendered"
+            );
+        }
+        assert!(
+            html.contains("Show this tier on the pricing page"),
+            "the visibility control is labelled"
         );
     }
 

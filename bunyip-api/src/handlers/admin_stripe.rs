@@ -643,6 +643,10 @@ pub async fn replace_stripe_price(
             None,
             None,
             None,
+            // BUNYIP-527: visibility flags unchanged by a price replace.
+            None,
+            None,
+            None,
             admin.0.sub,
         )
         .await
@@ -834,6 +838,9 @@ mod tests {
             early_adopter_product_id: Some("prod_ea".into()),
             standard_product_id: Some("prod_std".into()),
             pricing_enabled: true,
+            lifetime_visible: true,
+            early_adopter_visible: true,
+            standard_visible: true,
             updated_at: chrono::Utc::now(),
             updated_by: None,
         }

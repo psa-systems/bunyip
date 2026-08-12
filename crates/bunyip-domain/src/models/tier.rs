@@ -21,6 +21,12 @@ pub struct TierConfigRow {
     /// with a `false` default, so unlike the nullable columns above it has no
     /// env fallback.
     pub pricing_enabled: bool,
+    /// BUNYIP-527: per-tier visibility on the public `/pricing` page. `NOT NULL`
+    /// with a `true` default, so a mapped tier shows until an admin hides it.
+    /// Filtered under `pricing_enabled` (a hidden tier never advertises).
+    pub lifetime_visible: bool,
+    pub early_adopter_visible: bool,
+    pub standard_visible: bool,
     pub updated_at: DateTime<Utc>,
     pub updated_by: Option<Uuid>,
 }
@@ -38,4 +44,10 @@ pub struct TierConfigWithPricing {
     #[serde(flatten)]
     pub config: TierConfigResponse,
     pub pricing_enabled: bool,
+    /// BUNYIP-527: per-tier visibility flags, added alongside `pricing_enabled`
+    /// rather than in the shared `dunite-user-core` response (a8n does not have
+    /// them), so the wire shape stays the shared one with these fields appended.
+    pub lifetime_visible: bool,
+    pub early_adopter_visible: bool,
+    pub standard_visible: bool,
 }
