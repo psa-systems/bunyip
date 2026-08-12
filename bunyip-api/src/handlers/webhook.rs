@@ -942,4 +942,30 @@ mod tests {
         // practice, but the decision must still favour Owned).
         assert_eq!(classify_claim(true, Some("done")), EventClaim::Owned);
     }
+
+    /// BUNYIP-517: the webhook tier classification is a pure database read over
+    /// the stored `*_product_id` columns, unchanged by deriving those columns
+    /// from the mapped price on save. A product id matches exactly one tier, and
+    /// an unmapped product resolves to no tier.
+    #[test]
+    fn resolve_tier_for_product_matches_the_stored_product_ids() {
+        let mut tc = TierConfig::from_env();
+        tc.lifetime_product_id = Some("prod_life".into());
+        tc.early_adopter_product_id = Some("prod_ea".into());
+        tc.standard_product_id = Some("prod_std".into());
+
+        assert_eq!(
+            resolve_tier_for_product("prod_life", &tc),
+            Some(MembershipTier::Lifetime)
+        );
+        assert_eq!(
+            resolve_tier_for_product("prod_ea", &tc),
+            Some(MembershipTier::EarlyAdopter)
+        );
+        assert_eq!(
+            resolve_tier_for_product("prod_std", &tc),
+            Some(MembershipTier::Standard)
+        );
+        assert_eq!(resolve_tier_for_product("prod_unmapped", &tc), None);
+    }
 }

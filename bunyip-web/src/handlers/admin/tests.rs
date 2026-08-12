@@ -1513,10 +1513,10 @@ mod stripe_admin_tests {
     }
 
     #[test]
-    fn catalog_section_renders_mapping_fields_prefilled() {
-        // BUNYIP-417: the tier -> Stripe catalog mapping now lives on the Stripe
-        // page, its own form posting to /admin/stripe/catalog, prefilled from the
-        // tier config.
+    fn catalog_section_asks_for_price_only_and_shows_derived_product() {
+        // BUNYIP-517: the catalog form asks for a price per tier (as a select)
+        // and no longer asks for a product id; the product is shown read-only,
+        // derived from the mapped price.
         let tier: crate::api::types::TierConfigResponse =
             serde_json::from_value(serde_json::json!({
                 "lifetime_slots": 5, "early_adopter_slots": 5, "early_adopter_trial_days": 90,
@@ -1526,20 +1526,66 @@ mod stripe_admin_tests {
                 "source": "database", "lifetime_slots_used": 0, "early_adopter_slots_used": 0
             }))
             .unwrap();
-        let html = super::stripe_catalog_section(Some(&tier)).into_string();
+        // The mapped free price resolves to the same product that is stored, so
+        // no disagreement flag.
+        let prices = [price("price_free123", "prod_life123", Some(0), true)];
+        let html = super::stripe_catalog_section(Some(&tier), Some(&prices)).into_string();
         assert!(
             html.contains(r#"action="/admin/stripe/catalog""#),
             "catalog form present"
         );
-        for f in ["free_price_id", "lifetime_product_id", "standard_price_id"] {
-            assert!(html.contains(f), "mapping field {f} present");
+        // Price fields are present as selects; product id inputs are gone.
+        for f in [
+            "free_price_id",
+            "early_adopter_price_id",
+            "standard_price_id",
+        ] {
+            assert!(html.contains(f), "price field {f} present");
         }
-        // Existing values are prefilled.
-        assert!(html.contains("price_free123") && html.contains("prod_life123"));
+        for gone in [
+            r#"name="lifetime_product_id""#,
+            r#"name="standard_product_id""#,
+            r#"name="early_adopter_product_id""#,
+        ] {
+            assert!(!html.contains(gone), "product id input {gone} must be gone");
+        }
+        // The stored price is preselected and its derived product shown.
+        assert!(html.contains("price_free123"), "current price preselected");
+        assert!(html.contains("prod_life123"), "derived product shown");
+        assert!(
+            !html.contains("Stored product differs"),
+            "no disagreement when stored product matches the price's product"
+        );
         // Load-error state when the tier config is unavailable.
-        assert!(super::stripe_catalog_section(None)
+        assert!(super::stripe_catalog_section(None, None)
             .into_string()
             .contains("Could not load the tier catalog mapping"));
+    }
+
+    #[test]
+    fn catalog_section_flags_a_stored_product_that_disagrees_with_the_price() {
+        // BUNYIP-517: a stored product id that no longer matches the mapped
+        // price's product is flagged, not silently rewritten.
+        let tier: crate::api::types::TierConfigResponse =
+            serde_json::from_value(serde_json::json!({
+                "lifetime_slots": 5, "early_adopter_slots": 5, "early_adopter_trial_days": 90,
+                "standard_trial_days": 30,
+                "free_price_id": null, "early_adopter_price_id": null,
+                "standard_price_id": "price_std", "standard_product_id": "prod_STALE",
+                "source": "database", "lifetime_slots_used": 0, "early_adopter_slots_used": 0
+            }))
+            .unwrap();
+        // The mapped standard price actually belongs to a different product.
+        let prices = [price("price_std", "prod_REAL", Some(300), true)];
+        let html = super::stripe_catalog_section(Some(&tier), Some(&prices)).into_string();
+        assert!(
+            html.contains("Stored product differs"),
+            "disagreement is flagged"
+        );
+        assert!(
+            html.contains("prod_STALE"),
+            "the stale stored product is named"
+        );
     }
 
     // BUNYIP-510: the webhook block must show the real endpoint URL (the route
