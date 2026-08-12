@@ -93,6 +93,13 @@ pub enum AuditAction {
     /// `product_id` or `price_id`. Not member-guarded: restoring withdraws
     /// nothing.
     AdminStripePlanUnarchived,
+    /// BUNYIP-511: an admin changed what a plan costs by replacing a Stripe
+    /// price. A price is immutable in Stripe, so this creates a new price on the
+    /// same product, archives the old one, and repoints bunyip's own references
+    /// (`tier_config` columns + `stripe_price_entitlements`). Metadata carries
+    /// the old and new price ids, the product id, the new amount / currency /
+    /// interval, and the list of repointed references.
+    AdminStripePriceReplaced,
     AdminTierConfigUpdated,
     /// BUNYIP-431: an admin moved a member to a different membership tier.
     /// Metadata carries `from_tier`, `to_tier`, the target email, and how many
@@ -253,6 +260,7 @@ impl AuditAction {
             AuditAction::AdminStripeConfigUpdated => "admin_stripe_config_updated",
             AuditAction::AdminStripePlanArchived => "admin_stripe_plan_archived",
             AuditAction::AdminStripePlanUnarchived => "admin_stripe_plan_unarchived",
+            AuditAction::AdminStripePriceReplaced => "admin_stripe_price_replaced",
             AuditAction::AdminTierConfigUpdated => "admin_tier_config_updated",
             AuditAction::AdminTierChanged => "admin_tier_changed",
             AuditAction::AdminEmailConfigUpdated => "admin_email_config_updated",
@@ -330,6 +338,7 @@ impl AuditAction {
                 | AuditAction::AdminStripeConfigUpdated
                 | AuditAction::AdminStripePlanArchived
                 | AuditAction::AdminStripePlanUnarchived
+                | AuditAction::AdminStripePriceReplaced
                 | AuditAction::AdminTierConfigUpdated
                 | AuditAction::AdminTierChanged
                 | AuditAction::AdminEmailConfigUpdated

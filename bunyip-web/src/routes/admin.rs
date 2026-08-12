@@ -193,6 +193,11 @@ pub fn routes() -> Router<AppState> {
         // BUNYIP-416: Stripe product + price management (create + archive).
         // BUNYIP-513: plus the reverse (unarchive) for both.
         .route("/admin/stripe/products", post(admin::stripe_product_create))
+        // BUNYIP-511: edit a product's name/description in place.
+        .route(
+            "/admin/stripe/products/:id",
+            post(admin::stripe_product_edit),
+        )
         .route(
             "/admin/stripe/products/:id/archive",
             post(admin::stripe_product_archive),
@@ -202,6 +207,11 @@ pub fn routes() -> Router<AppState> {
             post(admin::stripe_product_unarchive),
         )
         .route("/admin/stripe/prices", post(admin::stripe_price_create))
+        // BUNYIP-511: replace a price (create new + repoint refs + archive old).
+        .route(
+            "/admin/stripe/prices/:id/replace",
+            post(admin::stripe_price_replace),
+        )
         .route(
             "/admin/stripe/prices/:id/archive",
             post(admin::stripe_price_archive),

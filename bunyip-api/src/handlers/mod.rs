@@ -251,5 +251,6 @@ pub use admin_rate_limits::{
 pub use admin_stripe::{
     archive_stripe_price, archive_stripe_product, create_stripe_price, create_stripe_product,
     create_stripe_webhook, delete_stripe_webhook, list_stripe_prices, list_stripe_products,
-    list_stripe_webhooks, unarchive_stripe_price, unarchive_stripe_product, update_stripe_product,
+    list_stripe_webhooks, replace_stripe_price, unarchive_stripe_price, unarchive_stripe_product,
+    update_stripe_product,
 };

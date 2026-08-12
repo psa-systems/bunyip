@@ -1547,6 +1547,100 @@ mod stripe_admin_tests {
         );
     }
 
+    // -- BUNYIP-511: edit products, replace prices --
+
+    #[test]
+    fn products_block_offers_an_edit_control_prefilled() {
+        let list = [product("prod_x", "Personal Plan", true)];
+        let html = stripe_products_block(Ok(&list), Ok(&[])).into_string();
+        assert!(
+            html.contains(r#"action="/admin/stripe/products/prod_x""#),
+            "each product row posts an edit to /admin/stripe/products/{{id}}"
+        );
+        assert!(html.contains("Edit"), "an Edit control is rendered");
+        assert!(
+            html.contains(r#"value="Personal Plan""#),
+            "the edit form is prefilled with the current name"
+        );
+        assert!(
+            html.contains(r#"value="desc""#),
+            "the edit form is prefilled with the current description"
+        );
+    }
+
+    #[test]
+    fn product_edit_body_carries_name_and_description_only() {
+        // BUNYIP-511 AC: the edit request never sends `active` (lifecycle is
+        // archive/unarchive) nor `metadata` (Stripe would replace the whole map
+        // and drop the app_tag). A blank description is sent as "" to clear it.
+        let body = super::product_edit_body("New Name", "");
+        let obj = body.as_object().expect("object body");
+        assert!(!obj.contains_key("active"), "must not send active");
+        assert!(!obj.contains_key("metadata"), "must not send metadata");
+        assert_eq!(body["name"].as_str(), Some("New Name"));
+        assert_eq!(
+            body["description"].as_str(),
+            Some(""),
+            "a blank description is sent as \"\" so Stripe clears it"
+        );
+    }
+
+    #[test]
+    fn validate_product_name_requires_a_non_blank_bounded_name() {
+        assert!(
+            super::validate_product_name("   ").is_err(),
+            "blank rejected"
+        );
+        assert!(
+            super::validate_product_name(&"x".repeat(251)).is_err(),
+            "over 250 chars rejected"
+        );
+        assert_eq!(
+            super::validate_product_name("  Personal Plan  ").unwrap(),
+            "Personal Plan",
+            "a valid name is trimmed"
+        );
+    }
+
+    #[test]
+    fn prices_block_offers_a_replace_control_for_active_prices_only() {
+        let products = [product("prod_x", "X", true)];
+        let prices = [
+            price("price_live", "prod_x", Some(900), true),
+            price("price_gone", "prod_x", Some(900), false),
+        ];
+        let html = stripe_prices_block(Ok(&prices), Ok(&products)).into_string();
+        assert!(
+            html.contains(r#"action="/admin/stripe/prices/price_live/replace""#),
+            "an active price has a Replace control"
+        );
+        assert!(
+            !html.contains("price_gone/replace"),
+            "an archived price has no Replace control"
+        );
+        assert!(html.contains("Replace"), "a Replace control is rendered");
+        assert!(
+            html.contains(r#"value="9.00""#),
+            "the replace form is prefilled with the current amount in dollars"
+        );
+        // The block copy no longer claims prices cannot be edited.
+        assert!(
+            html.contains("Replace creates a new price"),
+            "the caption describes replacement"
+        );
+    }
+
+    #[test]
+    fn price_replace_body_reuses_parse_price_cents() {
+        // BUNYIP-511 AC: the replace amount goes through the same dollars->cents
+        // parse as create.
+        let cents = super::parse_price_cents("9.00").unwrap();
+        let body = super::price_replace_body(cents, "usd", "month");
+        assert_eq!(body["unit_amount"], serde_json::json!(900));
+        assert_eq!(body["currency"], serde_json::json!("usd"));
+        assert_eq!(body["interval"], serde_json::json!("month"));
+    }
+
     #[test]
     fn catalog_section_asks_for_price_only_and_shows_derived_product() {
         // BUNYIP-517: the catalog form asks for a price per tier (as a select)

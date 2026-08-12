@@ -16,7 +16,8 @@ use crate::models::stripe::encrypt_secret;
 use crate::models::tier::TierConfigRow;
 use crate::models::{AuditAction, CreateAuditLog, StripePriceResponse, StripeProductResponse};
 use crate::repositories::{
-    AuditLogRepository, StripeConfigRepository, TierConfigRepository, UserRepository,
+    AuditLogRepository, EntitlementRepository, StripeConfigRepository, TierConfigRepository,
+    UserRepository,
 };
 use crate::responses::{get_request_id, success, success_no_data};
 use crate::services::{
@@ -165,6 +166,16 @@ pub struct ListStripePricesQuery {
 #[derive(Debug, Deserialize)]
 pub struct CreateStripePriceRequest {
     pub product_id: String,
+    pub unit_amount: i64,
+    pub currency: String,
+    pub interval: String,
+}
+
+/// BUNYIP-511: the body of a price replace. Only the three fields Stripe will
+/// not let you change on an existing price (amount, currency, interval), which is
+/// exactly why a change to any of them is a create-plus-archive.
+#[derive(Debug, Deserialize)]
+pub struct ReplaceStripePriceRequest {
     pub unit_amount: i64,
     pub currency: String,
     pub interval: String,
@@ -519,6 +530,164 @@ pub async fn unarchive_stripe_price(
 
     pricing_cache.invalidate();
     Ok(success_no_data(request_id))
+}
+
+/// POST /v1/admin/stripe/prices/{id}/replace
+///
+/// BUNYIP-511: change what a plan costs. A Stripe price is immutable in amount,
+/// currency and interval, so "edit price" is a REPLACE: create a new price on the
+/// same product, repoint bunyip's own references, then archive the old price.
+///
+/// The order is deliberate. bunyip's references (the `tier_config` price columns
+/// and the `stripe_price_entitlements` rows) are repointed to the new price
+/// BEFORE the old one is archived, so no failure can strand a reference on an
+/// archived price: if the final archive fails, checkout already runs on the new
+/// (active) price and the old price is only a harmless still-active duplicate.
+/// The old price is archived with `StripeService::archive_price` DIRECTLY,
+/// bypassing the member guard on `archive_stripe_price` on purpose (BUNYIP-512):
+/// a replace does not withdraw the plan, so it must succeed even with members.
+///
+/// `users.locked_price_id` (grandfathered pricing) and
+/// `subscriptions.stripe_price_id` (a live Stripe subscription keeps billing on
+/// its price until migrated in Stripe) are deliberately left untouched.
+///
+/// A partial failure never reports success: any step after the new price is
+/// created returns an error naming the new price id and the step that failed,
+/// logged at `error`, so the admin can finish the job by hand.
+pub async fn replace_stripe_price(
+    req: HttpRequest,
+    admin: AdminUser,
+    stripe: web::Data<Arc<StripeService>>,
+    pool: web::Data<PgPool>,
+    pricing_cache: web::Data<Arc<PricingCache>>,
+    path: web::Path<String>,
+    body: web::Json<ReplaceStripePriceRequest>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let old_price_id = path.into_inner();
+
+    // Recover the product the old price sits on. `list_prices(None)` returns only
+    // app-tagged prices, so a price bunyip did not create is a 404 here.
+    let all = stripe
+        .list_prices(None)
+        .await
+        .map_err(stripe_err_for(StripePermission::Prices))?;
+    let old = all
+        .iter()
+        .find(|p| p.id == old_price_id)
+        .ok_or_else(|| AppError::not_found("Stripe price"))?;
+    let product_id = old.product_id.clone();
+
+    // 1. Create the replacement on the same product.
+    let new_price = stripe
+        .create_price(
+            &product_id,
+            body.unit_amount,
+            &body.currency,
+            &body.interval,
+        )
+        .await
+        .map_err(stripe_err_for(StripePermission::Prices))?;
+    let new_price_id = new_price.id.clone();
+
+    // From here on the new price EXISTS; every later failure must name it so the
+    // admin is never left with a silent half-applied replace.
+    let incomplete = |step: &str, err: String| -> AppError {
+        tracing::error!(
+            old_price_id = %old_price_id,
+            new_price_id = %new_price_id,
+            product_id = %product_id,
+            failed_step = step,
+            error = %err,
+            "BUNYIP-511: price replace incomplete after creating the new price"
+        );
+        AppError::internal(format!(
+            "Price replace incomplete: created the new price {new_price_id}, but {step} failed: {err}. \
+             The new price exists in Stripe; retry the replace or finish it by hand. Old price: {old_price_id}."
+        ))
+    };
+
+    // 2. Repoint bunyip's references to the new price BEFORE archiving the old
+    //    one. Only the tier columns that actually equal the old price id are
+    //    passed as `Some`; `None` leaves a column unchanged.
+    let tier = TierConfigRepository::get(&pool)
+        .await
+        .map_err(|e| incomplete("reading the tier config", e.to_string()))?;
+    let repoint = |col: &Option<String>| -> Option<String> {
+        (col.as_deref() == Some(old_price_id.as_str())).then(|| new_price_id.clone())
+    };
+    let free = repoint(&tier.free_price_id);
+    let early_adopter = repoint(&tier.early_adopter_price_id);
+    let standard = repoint(&tier.standard_price_id);
+    let mut repointed_columns: Vec<&str> = Vec::new();
+    if free.is_some() {
+        repointed_columns.push("free_price_id");
+    }
+    if early_adopter.is_some() {
+        repointed_columns.push("early_adopter_price_id");
+    }
+    if standard.is_some() {
+        repointed_columns.push("standard_price_id");
+    }
+    if !repointed_columns.is_empty() {
+        TierConfigRepository::update(
+            &pool,
+            None,
+            None,
+            None,
+            None,
+            free,
+            early_adopter,
+            standard,
+            None,
+            None,
+            None,
+            None,
+            admin.0.sub,
+        )
+        .await
+        .map_err(|e| incomplete("repointing the tier catalog mapping", e.to_string()))?;
+    }
+
+    // Move every application entitlement mapped to the old price onto the new
+    // price (add the new mapping, then drop the old).
+    let apps = EntitlementRepository::applications_for_price(&pool, &old_price_id)
+        .await
+        .map_err(|e| incomplete("reading the price entitlements", e.to_string()))?;
+    for app_id in &apps {
+        EntitlementRepository::add_price_mapping(&pool, &new_price_id, *app_id)
+            .await
+            .map_err(|e| incomplete("adding the new price entitlement", e.to_string()))?;
+        EntitlementRepository::remove_price_mapping(&pool, &old_price_id, *app_id)
+            .await
+            .map_err(|e| incomplete("removing the old price entitlement", e.to_string()))?;
+    }
+
+    // 3. Archive the old price DIRECTLY (not via `archive_stripe_price`, so the
+    //    member guard cannot block a legitimate price change).
+    if let Err(e) = stripe.archive_price(&old_price_id).await {
+        let mapped = stripe_err_for(StripePermission::Prices)(e);
+        return Err(incomplete("archiving the old price", mapped.to_string()));
+    }
+
+    let audit = CreateAuditLog::new(AuditAction::AdminStripePriceReplaced)
+        .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+        .with_metadata(serde_json::json!({
+            "old_price_id": old_price_id.clone(),
+            "new_price_id": new_price_id.clone(),
+            "product_id": product_id.clone(),
+            "unit_amount": body.unit_amount,
+            "currency": body.currency.clone(),
+            "interval": body.interval.clone(),
+            "repointed_tier_columns": repointed_columns,
+            "repointed_application_ids": apps,
+        }));
+    AuditLogRepository::create(&pool, audit).await?;
+
+    // The mapped tier now resolves to the new price, so drop the public payload
+    // rather than keep advertising the old amount for another TTL.
+    pricing_cache.invalidate();
+    Ok(success(new_price, request_id))
 }
 
 // =============================================================================
