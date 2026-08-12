@@ -33,6 +33,17 @@ pub fn stripe_err(e: StripeServiceError) -> AppError {
         StripeServiceError::Validation { field, message } => AppError::validation(field, message),
         StripeServiceError::NotFound(resource) => AppError::not_found(resource),
         StripeServiceError::Unauthorized => AppError::Unauthorized,
+        // DUNITE-10: the classified Stripe-call failure. When Stripe said the
+        // object does not exist, surface bunyip's own 404 (e.g. unarchiving a
+        // price id Stripe no longer knows) rather than a blanket 500; any other
+        // classification keeps the neutral 500 the plain message carried before.
+        StripeServiceError::Stripe { message, details } => {
+            if details.is_resource_missing() {
+                AppError::not_found("Stripe resource")
+            } else {
+                AppError::internal(message)
+            }
+        }
     }
 }
 
@@ -307,6 +318,31 @@ mod tests {
         assert!(matches!(
             stripe_err(StripeServiceError::Unauthorized),
             AppError::Unauthorized
+        ));
+    }
+
+    /// DUNITE-10: the classified Stripe-call failure maps to a 404 when Stripe
+    /// said the object is missing, and to a 500 otherwise.
+    #[test]
+    fn stripe_err_maps_the_classified_stripe_variant() {
+        use dunite_stripe::StripeErrorDetails;
+
+        let missing = StripeErrorDetails {
+            code: Some("resource_missing".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            stripe_err(StripeServiceError::stripe("gone", missing)),
+            AppError::NotFound { .. }
+        ));
+
+        let other = StripeErrorDetails {
+            http_status: Some(402),
+            ..Default::default()
+        };
+        assert!(matches!(
+            stripe_err(StripeServiceError::stripe("declined", other)),
+            AppError::InternalError { .. }
         ));
     }
 }

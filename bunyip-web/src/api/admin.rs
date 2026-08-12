@@ -890,6 +890,22 @@ pub async fn archive_stripe_product(
     ok_data(&r).map(|_| ())
 }
 
+/// BUNYIP-513: restore an archived product (`active = true`). POST, no body.
+pub async fn unarchive_stripe_product(
+    api: &Api,
+    cookie: Option<&str>,
+    id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            &format!("/admin/stripe/products/{id}/unarchive"),
+            cookie,
+            None,
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
 pub async fn list_stripe_prices(
     api: &Api,
     cookie: Option<&str>,
@@ -913,6 +929,22 @@ pub async fn archive_stripe_price(
 ) -> Result<(), ApiError> {
     let r = api
         .delete(&format!("/admin/stripe/prices/{id}"), cookie, None)
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-513: restore an archived price (`active = true`). POST, no body.
+pub async fn unarchive_stripe_price(
+    api: &Api,
+    cookie: Option<&str>,
+    id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            &format!("/admin/stripe/prices/{id}/unarchive"),
+            cookie,
+            None,
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }

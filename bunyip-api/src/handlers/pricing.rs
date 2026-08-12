@@ -525,6 +525,9 @@ mod tests {
             unit_amount: amount,
             currency: "usd".into(),
             recurring_interval: Some("month".into()),
+            // DUNITE-9: added to the shared DTO by the dunite-stripe bump; a
+            // plain monthly test price bills every 1 interval.
+            recurring_interval_count: Some(1),
             active,
         }
     }

@@ -191,15 +191,24 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/admin/stripe", get(admin::stripe).post(admin::stripe_save))
         // BUNYIP-416: Stripe product + price management (create + archive).
+        // BUNYIP-513: plus the reverse (unarchive) for both.
         .route("/admin/stripe/products", post(admin::stripe_product_create))
         .route(
             "/admin/stripe/products/:id/archive",
             post(admin::stripe_product_archive),
         )
+        .route(
+            "/admin/stripe/products/:id/unarchive",
+            post(admin::stripe_product_unarchive),
+        )
         .route("/admin/stripe/prices", post(admin::stripe_price_create))
         .route(
             "/admin/stripe/prices/:id/archive",
             post(admin::stripe_price_archive),
+        )
+        .route(
+            "/admin/stripe/prices/:id/unarchive",
+            post(admin::stripe_price_unarchive),
         )
         // DEV-518: Stripe webhook-endpoint management (backend already existed).
         .route("/admin/stripe/webhooks", post(admin::stripe_webhook_create))
