@@ -1,5 +1,14 @@
 # Application secrets from Infisical
 
+bunyip sources secrets from Infisical in two tiers. **Group-1** startup secrets
+are rendered to files before the container starts (sync, not fetch); **Group-2**
+integration secrets are fetched by the app itself at runtime. This document
+covers both: the Group-1 sync path first, then the
+[Group-2 runtime fetch](#group-2-runtime-fetch). `CLAUDE.md`'s "Secret sourcing
+(two tiers)" bullet is the one-paragraph summary of the same split.
+
+## Group-1: file secrets (sync)
+
 bunyip's core application secrets are file-based: `compose.yml` mounts each one
 from `./secrets/<name>` at `/run/secrets/<name>`, and the api reads it through
 the `{NAME}_FILE` convention so no value ever enters the process environment
@@ -8,42 +17,34 @@ the `{NAME}_FILE` convention so no value ever enters the process environment
 
 The model is **sync, not fetch**. Infisical writes the files; the containers keep
 reading `/run/secrets/*`. A bunyip-api restart therefore never depends on
-Infisical being reachable, and no Rust code knows Infisical exists.
-
-That statement describes the **Group-1** tier only: the startup secrets the app
-must have to boot (postgres, `DATABASE_URL`, `APP_ENCRYPTION_KEY`, `JWT_SECRET`,
-...), which stay file/SOPS-based as above. There is a **Group-2** tier for
-post-startup integration secrets (SMTP first): the app fetches those from
-Infisical at runtime, in Rust, via `crates/bunyip-domain/src/services/infisical.rs`
-(BUNYIP-525) with a Universal Auth machine identity, reading the folder
-`/bunyip/runtime`. This is a deliberate, David-directed exception to "no Rust
-code knows Infisical": the fetch is graceful (any failure leaves the Group-2
-feature off and logs a warning), so the app still starts without Infisical and
-Infisical is still never a boot dependency. Everything below this section is the
-Group-1 file-secret path.
+Infisical being reachable, and no Rust code knows a Group-1 secret came from
+Infisical.
 
 `scripts/init-secrets.nu` remains the dev-box path: it generates throwaway values
 locally. The two scripts do not collide - `init-secrets.nu` never overwrites a
 non-empty file, and `sync-secrets.nu` writes only what Infisical says.
 
-## Prerequisites
+### Prerequisites
 
 - The [`infisical` CLI](https://infisical.com/docs/cli/overview) on the host that
-  runs the sync (not needed on dev boxes, not needed by the containers).
+  runs the sync (not needed on dev boxes, not needed by the containers). The CLI
+  is a Group-1 sync tool only; the Group-2 fetch uses no CLI.
 - A machine identity in the bunyip Infisical project with Universal Auth enabled
   and read access to `/bunyip/app` in the environments you sync.
 
-## Folder layout
+### Folder layout
 
 One folder, one key per secret, per environment:
 
 ```
 bunyip (project)
 ├── staging
-│   └── /bunyip/app      <- this document
+│   ├── /bunyip/app      <- Group-1 file secrets (this section)
+│   ├── /bunyip/runtime  <- Group-2 runtime fetch (see below)
 │   └── /bunyip/e2e      <- the E2E account password (docs/e2e.md)
 └── prod
-    └── /bunyip/app
+    ├── /bunyip/app
+    └── /bunyip/runtime
 ```
 
 The Infisical key is the environment variable name the api reads, i.e. the
@@ -67,10 +68,14 @@ re-derives it from the `compose.yml` `secrets:` block and the `{NAME}_FILE`
 service environment, and CI runs that self-test, so adding a compose secret
 without mapping it here fails the build.
 
+`SMTP_PASSWORD` appears here **and** as a Group-2 key in `/bunyip/runtime`; the
+two are reconciled by [source precedence](#source-precedence). A host that wants
+SMTP sourced from the Group-2 fetch omits `SMTP_PASSWORD` here.
+
 `./secrets/oidc/*.pem` is **out of scope**. The OIDC signing keys are generated
 out of band and the sync never touches them.
 
-## Running the sync
+### Running the sync
 
 ```nu
 $env.INFISICAL_CLIENT_ID = "<machine identity client id>"
@@ -107,7 +112,7 @@ Behaviour worth knowing:
 - **Scoped.** Only the keys in the table are read; anything else in
   `/bunyip/app` is left untouched.
 
-## Rotating a secret
+### Rotating a Group-1 secret
 
 1. Change the value in Infisical (`/bunyip/app`, the target environment).
 2. `just sync-secrets --env <env>` on the host.
@@ -131,7 +136,79 @@ Two rotations need more than that:
   `APP_KEY_VERSION` and the admin key-health endpoints, is in
   [`encryption-key-rotation.md`](encryption-key-rotation.md).
 
+## Group-2: runtime fetch
+
+The Group-1 path above renders files before the container starts. Group-2 is the
+opposite: bunyip-api itself fetches the secret from Infisical at boot, in Rust
+(`crates/bunyip-domain/src/services/infisical.rs`, BUNYIP-525), using a Universal
+Auth machine identity and reading the `/bunyip/runtime` folder. There is no CLI
+and no sidecar. Today the only Group-2 secret is `SMTP_PASSWORD`; more
+post-startup integration secrets can follow the same path.
+
+The fetch is **graceful**: any failure (Infisical unreachable, bad credentials,
+missing key) leaves the secret unset and logs a warning, so the app always
+starts. Infisical is never a boot dependency, which is why SMTP (a post-startup
+integration, not needed to boot) is Group-2 and postgres/JWT/encryption keys stay
+Group-1.
+
+### Configuration
+
+bunyip splits these across the deployment files: the non-secret keys are plain
+env (in the docker repo, `server/<host>/bunyip-api/compose-variables.yml`), and
+the two credentials live in the SOPS `compose-secrets.yml`.
+
+| Env var                   | Secret? | How read     | Default | Meaning                                                   |
+| ------------------------- | ------- | ------------ | ------- | --------------------------------------------------------- |
+| `INFISICAL_ENABLED`       | no      | plain env    | `false` | master switch; the fetch runs only when `true`            |
+| `INFISICAL_ADDRESS`       | no      | plain env    | `""`    | Infisical base URL (e.g. `https://infisical.a8n.systems`) |
+| `INFISICAL_PROJECT_ID`    | no      | plain env    | `""`    | the Infisical project (workspace) id                      |
+| `INFISICAL_ENV`           | no      | plain env    | `""`    | the environment slug (`staging` / `prod`)                 |
+| `INFISICAL_SECRET_PATH`   | no      | plain env    | `/`     | the folder to read (`/bunyip/runtime`)                    |
+| `INFISICAL_CLIENT_ID`     | yes     | `secret_env` | `""`    | Universal Auth machine-identity client id                 |
+| `INFISICAL_CLIENT_SECRET` | yes     | `secret_env` | `""`    | Universal Auth machine-identity client secret             |
+
+The two credentials go through `secret_env`, so they honour the `{NAME}_FILE`
+convention and can themselves be Group-1 file secrets. If either credential is
+empty the client is not built and the fetch is skipped (fail-open). The machine
+identity needs Universal Auth and read access to `INFISICAL_SECRET_PATH`
+(`/bunyip/runtime`) in the target environment - a separate grant from the sync
+identity's read on `/bunyip/app`.
+
+### Source precedence
+
+For a Group-2 secret that also has a config slot (`SMTP_PASSWORD` is the current
+example), the value the app uses is resolved in this order, highest first:
+
+1. The **database row**, when the feature stores one (`email_config.smtp_password`,
+   set from the admin UI). This wins outright.
+2. The **env/file value**: `secret_env("SMTP_PASSWORD")` - the Group-1 file secret
+   (`/run/secrets/smtp_password`) or a plain `SMTP_PASSWORD` env var (for example
+   from the SOPS `compose-secrets.yml`).
+3. The **Group-2 Infisical fetch**.
+
+The fetch fills the slot **only when it is empty** (`bunyip-api/src/main.rs` gates
+it on `config.infisical.enabled && config.email.smtp_password.is_empty()`). So
+Infisical is the *effective* source of `SMTP_PASSWORD` on a host only when there
+is no `email_config` DB row **and** no Group-1 value. To move a host onto
+Infisical for SMTP, remove `SMTP_PASSWORD` from that host's Group-1 secrets (drop
+it from the `/bunyip/app` sync mapping, and from the SOPS `compose-secrets.yml`
+on docker-repo deployments); otherwise the fetch stays enabled but inert.
+
+### Validating a fetch
+
+With `INFISICAL_ENABLED=true`, the credentials set, and no Group-1/DB value, the
+boot log shows:
+
+```
+Fetched SMTP_PASSWORD from Infisical (BUNYIP-525 Group-2 runtime secret)
+```
+
+Its absence, with the feature enabled, means the slot was already filled: look
+for a lingering Group-1 `SMTP_PASSWORD` or a DB `email_config` row.
+
 ## Troubleshooting
+
+### Group-1 sync
 
 | Message | Cause |
 | --- | --- |
@@ -140,3 +217,12 @@ Two rotations need more than that:
 | `key X is absent from Infisical /bunyip/app` | The key is missing, or the identity cannot read that folder/environment. Nothing was written. |
 | `key X is empty in Infisical` | The key exists but is blank and the table above forbids empty for it. |
 | `unknown environment '...'` | `--env` must be `staging` or `prod`. |
+
+### Group-2 fetch
+
+| Symptom | Cause |
+| --- | --- |
+| Boot warn, `infisical login failed` | Wrong `INFISICAL_CLIENT_ID` / `_CLIENT_SECRET`, or the identity lacks Universal Auth on `INFISICAL_ADDRESS`. Graceful: the app still starts. |
+| Boot warn on the secret read, HTTP 404 | The v3 raw endpoint is absent on that Infisical version, or the key/path/env is wrong. The client uses `GET /api/v3/secrets/raw/{name}`; a v4 alternative is noted in `infisical.rs`. |
+| Feature enabled but no "Fetched ..." log line | The slot was already non-empty; a Group-1 `SMTP_PASSWORD` or a DB `email_config` row won. Remove the Group-1 value to use Infisical. |
+| App starts, email off, boot warn about Infisical | Infisical unreachable or the key absent in `/bunyip/runtime`. Graceful by design; the app boots and email stays off until the fetch succeeds on a later restart. |
