@@ -263,7 +263,7 @@ first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODU
      are rendered from the Infisical folder `/bunyip/app` by
      `scripts/sync-secrets.nu` (`just sync-secrets`, see
      [`secrets-infisical.md`](secrets-infisical.md)); the Group-2 runtime-fetch
-     secrets live in a third sibling folder `/bunyip/runtime`. This E2E password
+     secrets live in the sibling folder `/runtime`. This E2E password
      lives in the folder `/bunyip/e2e` and is deliberately outside the sync
      table, so it is provisioned by hand. Moving the c-01 deployment's own secret
      source off sops (`compose-secrets.yml`) and the Forgejo Actions CI secrets

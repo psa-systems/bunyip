@@ -136,7 +136,7 @@ pub struct InfisicalSettings {
     pub project_id: String,
     /// Infisical environment slug (`INFISICAL_ENV`), e.g. `staging` / `prod`.
     pub environment: String,
-    /// Secret folder path (`INFISICAL_SECRET_PATH`), e.g. `/bunyip/runtime`.
+    /// Secret folder path (`INFISICAL_SECRET_PATH`), e.g. `/runtime` (project-relative).
     pub secret_path: String,
     /// Universal Auth machine-identity client id (`INFISICAL_CLIENT_ID`).
     pub client_id: String,
