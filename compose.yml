@@ -15,8 +15,10 @@
 #      Deployed hosts whose values live in Infisical use `just sync-secrets`
 #      (./scripts/sync-secrets.nu) instead, which renders the same files from
 #      the /bunyip/app folder; see docs/secrets-infisical.md. Either way the
-#      containers only ever read /run/secrets/*, so nothing at runtime talks to
-#      a secrets manager.
+#      containers read these Group-1 secrets only from /run/secrets/*, so no
+#      Group-1 secret is fetched at runtime. Group-2 integration secrets (SMTP)
+#      are the exception: the app fetches them from Infisical at runtime,
+#      gracefully, so Infisical is never a boot dependency.
 #   3. docker login dev.a8n.run   (the images live in the private registry).
 #   4. docker compose up --detach
 #
