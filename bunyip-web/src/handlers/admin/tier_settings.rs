@@ -1,4 +1,11 @@
 //! Admin panel: Pricing tiers (route stays /admin/tier-settings).
+//!
+//! BUNYIP-527: this page owns everything about bunyip's own tiers - slot limits,
+//! trial lengths, the checkout trial actually applied, the tier -> Stripe price
+//! catalog mapping (with per-tier visibility), and the public pricing publish
+//! switch. The Stripe page keeps only raw Stripe (connection, products, prices,
+//! webhooks). The catalog mapping is its own form (posting to
+//! `/admin/tier-settings/catalog`, handled by `stripe_catalog_save`).
 
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -9,6 +16,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::api::admin as admin_api;
+use crate::api::types::{PricingStatus, StripePrice, TierConfigResponse};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::views::layout::admin_block;
 use crate::views::ui::{button_class, error_box, icon};
@@ -20,37 +28,36 @@ use crate::web::{redirect_cookies, AppState};
 const MAX_TIER_SLOTS: i64 = 1_000_000;
 const MAX_TRIAL_DAYS: i64 = 3_650;
 
-/// Field values shown in the tier-settings form. Kept as strings so a failed
-/// save can echo back exactly what the admin typed, including junk that did not
-/// parse as an integer.
+/// Field values shown in the Tiers & Slots form. Kept as strings so a failed save
+/// can echo back exactly what the admin typed, including junk that did not parse.
 pub(super) struct TierFormValues {
     pub(super) lifetime_slots: String,
     pub(super) early_adopter_slots: String,
     pub(super) early_adopter_trial_days: String,
     pub(super) standard_trial_days: String,
-    // BUNYIP-122: Stripe catalog IDs echoed back on a failed save so the admin
-    // does not lose what they typed when a numeric field fails validation.
-    pub(super) free_price_id: String,
-    pub(super) early_adopter_price_id: String,
-    pub(super) standard_price_id: String,
-    pub(super) lifetime_product_id: String,
-    pub(super) early_adopter_product_id: String,
-    pub(super) standard_product_id: String,
+    /// BUNYIP-527: the single trial Stripe actually grants at checkout, relocated
+    /// here from the Stripe page. It persists to `stripe_config`, not tier config.
+    pub(super) trial_period_days: String,
 }
 
 impl TierFormValues {
-    pub(super) fn from_config(c: &crate::api::types::TierConfigResponse) -> Self {
+    pub(super) fn from_config(c: &TierConfigResponse, trial_period_days: &str) -> Self {
         TierFormValues {
             lifetime_slots: c.lifetime_slots.to_string(),
             early_adopter_slots: c.early_adopter_slots.to_string(),
             early_adopter_trial_days: c.early_adopter_trial_days.to_string(),
             standard_trial_days: c.standard_trial_days.to_string(),
-            free_price_id: c.free_price_id.clone().unwrap_or_default(),
-            early_adopter_price_id: c.early_adopter_price_id.clone().unwrap_or_default(),
-            standard_price_id: c.standard_price_id.clone().unwrap_or_default(),
-            lifetime_product_id: c.lifetime_product_id.clone().unwrap_or_default(),
-            early_adopter_product_id: c.early_adopter_product_id.clone().unwrap_or_default(),
-            standard_product_id: c.standard_product_id.clone().unwrap_or_default(),
+            trial_period_days: trial_period_days.to_string(),
+        }
+    }
+
+    fn empty() -> Self {
+        TierFormValues {
+            lifetime_slots: String::new(),
+            early_adopter_slots: String::new(),
+            early_adopter_trial_days: String::new(),
+            standard_trial_days: String::new(),
+            trial_period_days: String::new(),
         }
     }
 }
@@ -72,35 +79,52 @@ fn parse_tier_field(raw: &str, label: &str, max: i64) -> Result<i64, String> {
 }
 
 pub(super) fn tier_settings_content(
-    cfg: Option<&crate::api::types::TierConfigResponse>,
+    cfg: Option<&TierConfigResponse>,
+    prices: Option<&[StripePrice]>,
+    status: Result<&PricingStatus, &str>,
     values: &TierFormValues,
     error: Option<&str>,
 ) -> Markup {
     html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Pricing tiers" } p class="mt-2 text-muted-foreground" { "Trial lengths and membership slot limits. The public pricing page (its publish switch and status) and the Stripe price / product mapping live on the " a href="/admin/stripe" class="text-primary-text hover:underline" { "Stripe" } " page." } }
+            div { h1 class="text-3xl font-bold" { "Pricing tiers" } p class="mt-2 text-muted-foreground" { "Slot limits, trial lengths, the tier -> Stripe price mapping, and the public pricing switch. Raw Stripe products, prices and webhooks live on the " a href="/admin/stripe" class="text-primary-text hover:underline" { "Stripe" } " page." } }
             @match cfg {
                 None => (error_box("Could not load tier config.")),
-                // BUNYIP-417: the Stripe catalog price/product mappings moved to
-                // the Stripe page to consolidate all Stripe config under one nav
-                // entry. Pricing tiers keeps only its non-Stripe concerns (slots
-                // + trial lengths).
-                Some(c) => form method="post" action="/admin/tier-settings" class="space-y-6" {
-                    @if let Some(e) = error { (error_box(e)) }
-                    (admin_block(
-                        "Tiers & Slots",
-                        Some(&format!("{} lifetime and {} early-adopter slots used.", c.lifetime_slots_used, c.early_adopter_slots_used)),
-                        html! {
-                            div class="space-y-4 max-w-md" {
-                                div class="space-y-2" { label for="lifetime_slots" class="text-sm font-medium" { "Lifetime slots" } input id="lifetime_slots" name="lifetime_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.lifetime_slots) class=(dashboard_input()); }
-                                div class="space-y-2" { label for="early_adopter_slots" class="text-sm font-medium" { "Early-adopter slots" } input id="early_adopter_slots" name="early_adopter_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.early_adopter_slots) class=(dashboard_input()); }
-                                div class="space-y-2" { label for="early_adopter_trial_days" class="text-sm font-medium" { "Early-adopter trial days" } input id="early_adopter_trial_days" name="early_adopter_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.early_adopter_trial_days) class=(dashboard_input()); }
-                                div class="space-y-2" { label for="standard_trial_days" class="text-sm font-medium" { "Standard trial days" } input id="standard_trial_days" name="standard_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.standard_trial_days) class=(dashboard_input()); }
-                            }
-                        },
-                    ))
-                    button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
-                },
+                Some(c) => {
+                    form method="post" action="/admin/tier-settings" class="space-y-6" {
+                        @if let Some(e) = error { (error_box(e)) }
+                        (admin_block(
+                            "Tiers & Slots",
+                            Some(&format!("{} lifetime and {} early-adopter slots used.", c.lifetime_slots_used, c.early_adopter_slots_used)),
+                            html! {
+                                div class="space-y-4 max-w-md" {
+                                    div class="space-y-2" { label for="lifetime_slots" class="text-sm font-medium" { "Lifetime slots" } input id="lifetime_slots" name="lifetime_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.lifetime_slots) class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="early_adopter_slots" class="text-sm font-medium" { "Early-adopter slots" } input id="early_adopter_slots" name="early_adopter_slots" type="number" min="0" max=(MAX_TIER_SLOTS) value=(values.early_adopter_slots) class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="early_adopter_trial_days" class="text-sm font-medium" { "Early-adopter trial days" } input id="early_adopter_trial_days" name="early_adopter_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.early_adopter_trial_days) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Advertised on /pricing for this tier." } }
+                                    div class="space-y-2" { label for="standard_trial_days" class="text-sm font-medium" { "Standard trial days" } input id="standard_trial_days" name="standard_trial_days" type="number" min="0" max=(MAX_TRIAL_DAYS) value=(values.standard_trial_days) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Advertised on /pricing for this tier." } }
+                                }
+                            },
+                        ))
+                        // BUNYIP-527: the ONE trial Stripe grants at checkout, moved here
+                        // from the Stripe page and labelled to say what it does versus the
+                        // per-tier advertised lengths above.
+                        (admin_block(
+                            "Trial applied at checkout",
+                            Some("The single trial length Stripe grants a new subscription at checkout, for every tier. The per-tier trial days above are what /pricing advertises; making checkout honour them per tier is tracked separately."),
+                            html! {
+                                div class="space-y-2 max-w-md" {
+                                    label for="trial_period_days" class="text-sm font-medium" { "Checkout trial (days)" }
+                                    input id="trial_period_days" name="trial_period_days" type="number" min="0" max="365" value=(values.trial_period_days) class=(dashboard_input());
+                                }
+                            },
+                        ))
+                        button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
+                    }
+                    // BUNYIP-527: the catalog mapping (price selects + per-tier
+                    // visibility + publish switch + live status), its own form
+                    // posting to /admin/tier-settings/catalog.
+                    (super::stripe_catalog_section(Ok(c), prices, status))
+                }
             }
         }
     }
@@ -108,10 +132,7 @@ pub(super) fn tier_settings_content(
 
 /// Tier config for the page. `None` renders "Could not load tier config.", so
 /// the admin sees the failure; the log is what names its cause.
-async fn tier_config(
-    st: &AppState,
-    cookie: Option<&str>,
-) -> Option<crate::api::types::TierConfigResponse> {
+async fn tier_config(st: &AppState, cookie: Option<&str>) -> Option<TierConfigResponse> {
     match admin_api::tier_config(&st.api, cookie).await {
         Ok(c) => Some(c),
         Err(e) => {
@@ -126,36 +147,83 @@ async fn tier_config(
     }
 }
 
+/// Stripe prices for the catalog selects. `None` on an unreadable list, which the
+/// catalog section renders as "derived from the price on save" placeholders.
+async fn stripe_prices(st: &AppState, cookie: Option<&str>) -> Option<Vec<StripePrice>> {
+    admin_api::list_stripe_prices(&st.api, cookie)
+        .await
+        .map_err(|e| {
+            tracing::warn!(
+                endpoint = "/v1/admin/stripe/prices",
+                error = %e.message,
+                code = %e.code,
+                "Stripe price list unavailable on the Pricing tiers page"
+            );
+        })
+        .ok()
+}
+
+/// Live /pricing diagnosis for the publish block. A failed fetch is reported to
+/// the admin (and logged), never rendered as "nothing to report".
+async fn pricing_status(st: &AppState, cookie: Option<&str>) -> Result<PricingStatus, String> {
+    admin_api::pricing_status(&st.api, cookie)
+        .await
+        .map_err(|e| {
+            tracing::warn!(
+                endpoint = "/v1/admin/pricing/status",
+                error = %e.message,
+                code = %e.code,
+                "pricing status unavailable on the Pricing tiers page"
+            );
+            e.user_message()
+        })
+}
+
+/// The checkout trial length (`stripe_config.trial_period_days`), as a string for
+/// the form. An unreadable config leaves the field blank rather than inventing 0.
+async fn checkout_trial_days(st: &AppState, cookie: Option<&str>) -> String {
+    match admin_api::stripe_config(&st.api, cookie).await {
+        Ok(s) => s.trial_period_days.to_string(),
+        Err(e) => {
+            tracing::warn!(
+                endpoint = "/v1/admin/stripe",
+                error = %e.message,
+                code = %e.code,
+                "Stripe config unavailable on the Pricing tiers page"
+            );
+            String::new()
+        }
+    }
+}
+
 pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let cfg = tier_config(&st, c.forward.as_deref()).await;
+    let fwd = c.forward.as_deref();
+    let cfg = tier_config(&st, fwd).await;
+    let prices = stripe_prices(&st, fwd).await;
+    let status = pricing_status(&st, fwd).await;
+    let trial = checkout_trial_days(&st, fwd).await;
     let values = cfg
         .as_ref()
-        .map(TierFormValues::from_config)
-        .unwrap_or_else(|| TierFormValues {
-            lifetime_slots: String::new(),
-            early_adopter_slots: String::new(),
-            early_adopter_trial_days: String::new(),
-            standard_trial_days: String::new(),
-            free_price_id: String::new(),
-            early_adopter_price_id: String::new(),
-            standard_price_id: String::new(),
-            lifetime_product_id: String::new(),
-            early_adopter_product_id: String::new(),
-            standard_product_id: String::new(),
-        });
-    let content = tier_settings_content(cfg.as_ref(), &values, None);
+        .map(|c| TierFormValues::from_config(c, &trial))
+        .unwrap_or_else(TierFormValues::empty);
+    let content = tier_settings_content(
+        cfg.as_ref(),
+        prices.as_deref(),
+        status.as_ref().map_err(String::as_str),
+        &values,
+        None,
+    );
     admin_response(&c, &user, "/admin/tier-settings", "Pricing tiers", content)
 }
 
 #[derive(Deserialize)]
 pub struct TierForm {
-    // BUNYIP-111: kept as raw strings so a non-integer submission can be
-    // echoed back and re-validated inline instead of failing Form extraction
-    // with a bare 422.
+    // BUNYIP-111: kept as raw strings so a non-integer submission can be echoed
+    // back and re-validated inline instead of failing Form extraction with a 422.
     #[serde(default)]
     pub lifetime_slots: String,
     #[serde(default)]
@@ -164,23 +232,11 @@ pub struct TierForm {
     pub early_adopter_trial_days: String,
     #[serde(default)]
     pub standard_trial_days: String,
-    // BUNYIP-122: Stripe price + product IDs. Optional - blank ("" after
-    // form parse) leaves the persisted value untouched. We send the field
-    // only when non-empty so the API's tri-state-by-omission semantics
-    // line up.
+    // BUNYIP-527: the checkout trial length, persisted to stripe_config.
     #[serde(default)]
-    pub free_price_id: String,
-    #[serde(default)]
-    pub early_adopter_price_id: String,
-    #[serde(default)]
-    pub standard_price_id: String,
-    #[serde(default)]
-    pub lifetime_product_id: String,
-    #[serde(default)]
-    pub early_adopter_product_id: String,
-    #[serde(default)]
-    pub standard_product_id: String,
+    pub trial_period_days: String,
 }
+
 pub async fn tier_settings_save(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -190,30 +246,14 @@ pub async fn tier_settings_save(
         Ok(v) => v,
         Err(r) => return r,
     };
+    let fwd = c.forward.as_deref();
 
-    // Echo back exactly what was submitted (trimmed) if we have to re-render.
-    let values = TierFormValues {
-        lifetime_slots: f.lifetime_slots.trim().to_string(),
-        early_adopter_slots: f.early_adopter_slots.trim().to_string(),
-        early_adopter_trial_days: f.early_adopter_trial_days.trim().to_string(),
-        standard_trial_days: f.standard_trial_days.trim().to_string(),
-        free_price_id: f.free_price_id.trim().to_string(),
-        early_adopter_price_id: f.early_adopter_price_id.trim().to_string(),
-        standard_price_id: f.standard_price_id.trim().to_string(),
-        lifetime_product_id: f.lifetime_product_id.trim().to_string(),
-        early_adopter_product_id: f.early_adopter_product_id.trim().to_string(),
-        standard_product_id: f.standard_product_id.trim().to_string(),
-    };
-
-    // Validate the numeric fields and build the request body before calling the
-    // API, then surface any API-side rejection instead of discarding it. `?`
-    // short-circuits on the first bad field so the message names the offending
-    // input. The Stripe catalog IDs (BUNYIP-122) are sent only when non-empty
-    // and within the 255-char column limit, so an omitted field leaves the
-    // persisted value untouched.
-    let validated = (|| {
-        let mut body = serde_json::Map::new();
-        body.insert(
+    // Validate everything up front so a bad field names itself and nothing is
+    // persisted on a partial failure. The two backends (tier config + the single
+    // stripe-config trial) are only called once every field parses.
+    let outcome = (|| {
+        let mut tier_body = serde_json::Map::new();
+        tier_body.insert(
             "lifetime_slots".into(),
             json!(parse_tier_field(
                 &f.lifetime_slots,
@@ -221,7 +261,7 @@ pub async fn tier_settings_save(
                 MAX_TIER_SLOTS
             )?),
         );
-        body.insert(
+        tier_body.insert(
             "early_adopter_slots".into(),
             json!(parse_tier_field(
                 &f.early_adopter_slots,
@@ -229,7 +269,7 @@ pub async fn tier_settings_save(
                 MAX_TIER_SLOTS
             )?),
         );
-        body.insert(
+        tier_body.insert(
             "early_adopter_trial_days".into(),
             json!(parse_tier_field(
                 &f.early_adopter_trial_days,
@@ -237,7 +277,7 @@ pub async fn tier_settings_save(
                 MAX_TRIAL_DAYS
             )?),
         );
-        body.insert(
+        tier_body.insert(
             "standard_trial_days".into(),
             json!(parse_tier_field(
                 &f.standard_trial_days,
@@ -245,37 +285,50 @@ pub async fn tier_settings_save(
                 MAX_TRIAL_DAYS
             )?),
         );
-        for (k, v) in [
-            ("free_price_id", &f.free_price_id),
-            ("early_adopter_price_id", &f.early_adopter_price_id),
-            ("standard_price_id", &f.standard_price_id),
-            ("lifetime_product_id", &f.lifetime_product_id),
-            ("early_adopter_product_id", &f.early_adopter_product_id),
-            ("standard_product_id", &f.standard_product_id),
-        ] {
-            let t = v.trim();
-            if !t.is_empty() && t.len() <= 255 {
-                body.insert(k.into(), json!(t));
-            }
-        }
-        // BUNYIP-524: the publish switch moved to the Stripe catalog mapping, so
-        // this page must NOT send `pricing_enabled`. Omitting it means "keep",
-        // so saving slots/trials here can no longer turn the pricing page off.
-        Ok::<_, String>(serde_json::Value::Object(body))
+        // BUNYIP-527: the checkout trial is a stripe_config value, bounded [0,365].
+        let checkout_trial = parse_tier_field(&f.trial_period_days, "Checkout trial (days)", 365)?;
+        Ok::<_, String>((serde_json::Value::Object(tier_body), checkout_trial))
     })();
 
-    let error = match validated {
-        Ok(body) => {
-            match admin_api::update_tier_config(&st.api, c.forward.as_deref(), body).await {
-                Ok(()) => return redirect_cookies("/admin/tier-settings", &c.set_cookies),
+    let error = match outcome {
+        Ok((tier_body, checkout_trial)) => {
+            // Persist the tier config, then the stripe-config trial. Either error
+            // surfaces inline; the tier body is slots/trials only, so it never
+            // touches the price mapping the catalog form owns.
+            match admin_api::update_tier_config(&st.api, fwd, tier_body).await {
+                Ok(()) => match admin_api::update_stripe_config(
+                    &st.api,
+                    fwd,
+                    json!({ "trial_period_days": checkout_trial }),
+                )
+                .await
+                {
+                    Ok(()) => return redirect_cookies("/admin/tier-settings", &c.set_cookies),
+                    Err(e) => e.user_message(),
+                },
                 Err(e) => e.user_message(),
             }
         }
         Err(msg) => msg,
     };
 
-    // Re-render the form inline with the error and the submitted values.
-    let cfg = tier_config(&st, c.forward.as_deref()).await;
-    let content = tier_settings_content(cfg.as_ref(), &values, Some(&error));
+    // Re-render inline with the error and the submitted values.
+    let cfg = tier_config(&st, fwd).await;
+    let prices = stripe_prices(&st, fwd).await;
+    let status = pricing_status(&st, fwd).await;
+    let values = TierFormValues {
+        lifetime_slots: f.lifetime_slots.trim().to_string(),
+        early_adopter_slots: f.early_adopter_slots.trim().to_string(),
+        early_adopter_trial_days: f.early_adopter_trial_days.trim().to_string(),
+        standard_trial_days: f.standard_trial_days.trim().to_string(),
+        trial_period_days: f.trial_period_days.trim().to_string(),
+    };
+    let content = tier_settings_content(
+        cfg.as_ref(),
+        prices.as_deref(),
+        status.as_ref().map_err(String::as_str),
+        &values,
+        Some(&error),
+    );
     admin_response(&c, &user, "/admin/tier-settings", "Pricing tiers", content)
 }

@@ -182,6 +182,12 @@ pub fn routes() -> Router<AppState> {
             "/admin/tier-settings",
             get(admin::tier_settings).post(admin::tier_settings_save),
         )
+        // BUNYIP-527: the tier -> Stripe price catalog mapping moved back here
+        // from the Stripe page (its own form + save, alongside slots/trials).
+        .route(
+            "/admin/tier-settings/catalog",
+            post(admin::stripe_catalog_save),
+        )
         .route("/admin/email", get(admin::email).post(admin::email_save))
         .route("/admin/email/test", post(admin::email_test))
         .route("/admin/email/test-send", post(admin::email_test_send))
@@ -227,7 +233,6 @@ pub fn routes() -> Router<AppState> {
             post(admin::stripe_webhook_delete),
         )
         // BUNYIP-417: tier -> Stripe price/product mapping moved from the Pricing tiers page.
-        .route("/admin/stripe/catalog", post(admin::stripe_catalog_save))
         // BUNYIP-353: account backup & restore, reached from the Backup add-on
         // tile on /applications.
         .route("/integrations/backup", get(admin::backup_settings))

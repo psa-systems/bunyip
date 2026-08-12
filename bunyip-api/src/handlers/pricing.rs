@@ -405,16 +405,27 @@ async fn resolve(
     // BUNYIP-526: each tier also carries its availability, resolved from its
     // slot cap and the live usage counts.
     let mapped: Vec<MappedTier> = [
-        ("lifetime", &cfg.free_price_id, 0),
+        ("lifetime", &cfg.free_price_id, 0, cfg.lifetime_visible),
         (
             "early_adopter",
             &cfg.early_adopter_price_id,
             cfg.early_adopter_trial_days,
+            cfg.early_adopter_visible,
         ),
-        ("standard", &cfg.standard_price_id, cfg.standard_trial_days),
+        (
+            "standard",
+            &cfg.standard_price_id,
+            cfg.standard_trial_days,
+            cfg.standard_visible,
+        ),
     ]
     .into_iter()
-    .filter_map(|(tier, id, trial)| {
+    .filter_map(|(tier, id, trial, visible)| {
+        // BUNYIP-527: a tier the admin hid is not advertised even when it maps to
+        // a usable price. This is deliberate, so it produces no unpublished reason.
+        if !visible {
+            return None;
+        }
         let id = id.as_deref().map(str::trim).filter(|s| !s.is_empty())?;
         let (available, slots_remaining) = tier_availability(tier, &cfg, usage);
         Some(MappedTier {

@@ -570,7 +570,9 @@ pub(super) fn stripe_catalog_section(
     };
     let tier_card = |price_name: &str,
                      price_val: &Option<String>,
-                     stored_product: &Option<String>|
+                     stored_product: &Option<String>,
+                     visible_name: &str,
+                     visible: bool|
      -> Markup {
         let derived = derived_product(price_val);
         let disagrees =
@@ -593,6 +595,12 @@ pub(super) fn stripe_catalog_section(
                         " no longer matches the mapped price's product. Save to re-derive it."
                     }
                 }
+                // BUNYIP-527: per-tier visibility. Hidden tiers are dropped from
+                // the public page even when mapped, under the global switch above.
+                label class="flex items-center gap-2 pt-1 text-sm font-medium" {
+                    input name=(visible_name) type="checkbox" value="true" checked[visible] class="h-4 w-4 rounded border-input";
+                    "Show this tier on the pricing page"
+                }
             }
         }
     };
@@ -606,7 +614,7 @@ pub(super) fn stripe_catalog_section(
             }
             @match tier {
                 Err(e) => (error_box_detailed("Could not load the tier catalog mapping.", Some(&e.user_message()), e.request_id.as_deref())),
-                Ok(t) => form method="post" action="/admin/stripe/catalog" class="space-y-6" {
+                Ok(t) => form method="post" action="/admin/tier-settings/catalog" class="space-y-6" {
                     // BUNYIP-524: the publish switch sits with the price mapping
                     // it depends on. Ticking it advertises these prices; the
                     // status line says whether /pricing actually publishes and,
@@ -626,13 +634,13 @@ pub(super) fn stripe_catalog_section(
                     ))
                     (admin_block_grid(vec![
                         admin_block("Free / lifetime", Some("A $0 price. Free and lifetime grants both open a subscription on it."), html! {
-                            div class="space-y-4" { (tier_card("free_price_id", &t.free_price_id, &t.lifetime_product_id)) }
+                            div class="space-y-4" { (tier_card("free_price_id", &t.free_price_id, &t.lifetime_product_id, "lifetime_visible", t.lifetime_visible)) }
                         }),
                         admin_block("Early adopter", None, html! {
-                            div class="space-y-4" { (tier_card("early_adopter_price_id", &t.early_adopter_price_id, &t.early_adopter_product_id)) }
+                            div class="space-y-4" { (tier_card("early_adopter_price_id", &t.early_adopter_price_id, &t.early_adopter_product_id, "early_adopter_visible", t.early_adopter_visible)) }
                         }),
                         admin_block("Standard", None, html! {
-                            div class="space-y-4" { (tier_card("standard_price_id", &t.standard_price_id, &t.standard_product_id)) }
+                            div class="space-y-4" { (tier_card("standard_price_id", &t.standard_price_id, &t.standard_product_id, "standard_visible", t.standard_visible)) }
                         }),
                     ]))
                     button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save catalog mapping" }
@@ -681,22 +689,9 @@ pub async fn stripe(
     let prices = admin_api::list_stripe_prices(&st.api, fwd).await;
     // DEV-518: webhook endpoints, same load-or-report posture as products/prices.
     let webhooks = admin_api::list_stripe_webhooks(&st.api, fwd).await;
-    // BUNYIP-417: the tier -> Stripe price/product mapping moved here from Tier
-    // Settings, so all Stripe config lives under one nav entry.
-    let tier = admin_api::tier_config(&st.api, fwd).await;
-    // BUNYIP-524: the live /pricing diagnosis, shown next to the publish switch
-    // in the catalog mapping. A failed fetch is reported to the admin (and
-    // logged), never rendered as "nothing to report".
-    let status: Result<crate::api::types::PricingStatus, String> =
-        admin_api::pricing_status(&st.api, fwd).await.map_err(|e| {
-            tracing::warn!(
-                endpoint = "/v1/admin/pricing/status",
-                error = %e.message,
-                code = %e.code,
-                "pricing status unavailable on the Stripe page"
-            );
-            e.user_message()
-        });
+    // BUNYIP-527: the tier -> Stripe price/product catalog mapping (and the
+    // publish switch + status) moved back to the Pricing tiers page, so the
+    // Stripe page no longer fetches or renders them.
 
     let products_loaded: Loaded<'_, _> = products.as_ref().map(Vec::as_slice);
     let prices_loaded: Loaded<'_, _> = prices.as_ref().map(Vec::as_slice);
@@ -733,12 +728,11 @@ pub async fn stripe(
                             ),
                             admin_block(
                                 "Checkout",
-                                Some("Where Stripe returns the customer after checkout, and the trial length."),
+                                Some("Where Stripe returns the customer after checkout. The trial length moved to the Pricing tiers page (BUNYIP-527)."),
                                 html! {
                                     div class="space-y-4" {
                                         div class="space-y-2" { label for="success_url" class="text-sm font-medium" { "Success URL" } input id="success_url" name="success_url" type="url" value=(s.success_url) placeholder="https://example.com/checkout/success" class=(dashboard_input()); }
                                         div class="space-y-2" { label for="cancel_url" class="text-sm font-medium" { "Cancel URL" } input id="cancel_url" name="cancel_url" type="url" value=(s.cancel_url) placeholder="https://example.com/pricing?checkout=canceled" class=(dashboard_input()); }
-                                        div class="space-y-2" { label for="trial_period_days" class="text-sm font-medium" { "Trial period (days)" } input id="trial_period_days" name="trial_period_days" type="number" min="0" max="365" value=(s.trial_period_days) class=(dashboard_input()); }
                                     }
                                 },
                             ),
@@ -748,10 +742,6 @@ pub async fn stripe(
                     (stripe_products_block(products_loaded, prices_loaded))
                     (stripe_prices_block(prices_loaded, products_loaded))
                     (stripe_webhooks_block(webhooks_loaded, &st.cfg.api_public_origin, s.has_webhook_secret, &retry))
-                    // BUNYIP-516 renders a tier load-failure with its request id;
-                    // BUNYIP-517 needs the loaded prices for the per-tier selects;
-                    // BUNYIP-524 adds the publish switch + live status.
-                    (stripe_catalog_section(tier.as_ref(), prices.as_ref().ok().map(Vec::as_slice), status.as_ref().map_err(String::as_str)))
                 },
             }
         }
@@ -1168,9 +1158,9 @@ pub async fn stripe_price_unarchive(
     redirect_cookies(&target, &c.set_cookies)
 }
 
-/// The tier -> Stripe catalog mapping form (BUNYIP-417). Same six price/product
-/// ID fields the Pricing tiers page used to carry; they persist to the tier
-/// config via a partial update (blank = keep), so nothing is lost by the move.
+/// The tier -> Stripe catalog mapping form. BUNYIP-527: moved back onto the
+/// Pricing tiers page (`/admin/tier-settings/catalog`), it carries the three
+/// price selects plus the publish switch; the api derives the product per tier.
 #[derive(Deserialize)]
 pub struct StripeCatalogForm {
     #[serde(default)]
@@ -1184,13 +1174,53 @@ pub struct StripeCatalogForm {
     // omission means "leave unchanged" there and could never turn it off).
     #[serde(default)]
     pub pricing_enabled: Option<String>,
+    // BUNYIP-527: per-tier visibility checkboxes, same absent-means-off semantics.
+    #[serde(default)]
+    pub lifetime_visible: Option<String>,
+    #[serde(default)]
+    pub early_adopter_visible: Option<String>,
+    #[serde(default)]
+    pub standard_visible: Option<String>,
 }
 
-/// POST /admin/stripe/catalog - persist the tier -> Stripe price mapping
-/// (BUNYIP-517). Only a price per tier is submitted; the api derives the product
-/// bunyip stores for webhook classification. A blank field is sent as an
-/// explicit empty string so the admin can clear a mapping, distinct from the
-/// tri-state-by-omission the price ids used to rely on.
+/// Build the catalog-save body. BUNYIP-527: each price select ALWAYS submits its
+/// value, and "(none)" submits `""`, so the price fields are always sent - an
+/// empty one as an explicit `""` that the API reads as "clear this mapping"
+/// (distinct from omitting the field, which keeps it). This is what makes
+/// "(none)" actually unmap a tier instead of silently keeping the old price. The
+/// publish switch is authoritative (absent checkbox = off), so it is always sent.
+pub(super) fn catalog_save_body(f: &StripeCatalogForm) -> serde_json::Value {
+    let mut body = serde_json::Map::new();
+    for (k, v) in [
+        ("free_price_id", &f.free_price_id),
+        ("early_adopter_price_id", &f.early_adopter_price_id),
+        ("standard_price_id", &f.standard_price_id),
+    ] {
+        let t = v.trim();
+        // Over-long junk is dropped (kept, not set); "" and valid ids pass.
+        if t.len() <= 255 {
+            body.insert(k.into(), json!(t));
+        }
+    }
+    body.insert("pricing_enabled".into(), json!(f.pricing_enabled.is_some()));
+    // BUNYIP-527: per-tier visibility, always sent (absent checkbox = hidden).
+    body.insert(
+        "lifetime_visible".into(),
+        json!(f.lifetime_visible.is_some()),
+    );
+    body.insert(
+        "early_adopter_visible".into(),
+        json!(f.early_adopter_visible.is_some()),
+    );
+    body.insert(
+        "standard_visible".into(),
+        json!(f.standard_visible.is_some()),
+    );
+    serde_json::Value::Object(body)
+}
+
+/// POST /admin/tier-settings/catalog - persist the tier -> Stripe price mapping
+/// and the publish switch (BUNYIP-527, moved from the Stripe page).
 pub async fn stripe_catalog_save(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1200,33 +1230,16 @@ pub async fn stripe_catalog_save(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let mut body = serde_json::Map::new();
-    for (k, v) in [
-        ("free_price_id", &f.free_price_id),
-        ("early_adopter_price_id", &f.early_adopter_price_id),
-        ("standard_price_id", &f.standard_price_id),
-    ] {
-        let t = v.trim();
-        if !t.is_empty() && t.len() <= 255 {
-            body.insert(k.into(), json!(t));
-        }
-    }
-    // BUNYIP-524: the switch is authoritative (absent checkbox = off), so it is
-    // always sent, unlike the price ids whose omission means "keep".
-    body.insert("pricing_enabled".into(), json!(f.pricing_enabled.is_some()));
-    let target = match admin_api::update_tier_config(
-        &st.api,
-        c.forward.as_deref(),
-        serde_json::Value::Object(body),
-    )
-    .await
-    {
-        Ok(()) => "/admin/stripe?toast_ok=Catalog%20mapping%20saved".to_string(),
-        Err(e) => format!(
-            "/admin/stripe?toast_err={}",
-            urlenc(&e.user_message_with_reference())
-        ),
-    };
+    let target =
+        match admin_api::update_tier_config(&st.api, c.forward.as_deref(), catalog_save_body(&f))
+            .await
+        {
+            Ok(()) => "/admin/tier-settings?toast_ok=Catalog%20mapping%20saved".to_string(),
+            Err(e) => format!(
+                "/admin/tier-settings?toast_err={}",
+                urlenc(&e.user_message_with_reference())
+            ),
+        };
     redirect_cookies(&target, &c.set_cookies)
 }
 
@@ -1241,8 +1254,6 @@ pub struct StripeForm {
     pub success_url: String,
     #[serde(default)]
     pub cancel_url: String,
-    #[serde(default)]
-    pub trial_period_days: String,
 }
 pub async fn stripe_save(
     State(st): State<AppState>,
@@ -1285,21 +1296,10 @@ pub async fn stripe_save(
             return render_error("Webhook secret must be 255 characters or fewer");
         }
     }
-    // BUNYIP-351: checkout knobs. URLs are sent only when non-blank (blank =
-    // keep existing); the trial length is validated to [0, 365] when present.
+    // BUNYIP-351: checkout URLs are sent only when non-blank (blank = keep
+    // existing). BUNYIP-527: the trial length moved to the Pricing tiers page.
     let success_url = f.success_url.trim();
     let cancel_url = f.cancel_url.trim();
-    let trial_days = match f.trial_period_days.trim() {
-        "" => None,
-        raw => match raw.parse::<i64>() {
-            Ok(n) if (0..=365).contains(&n) => Some(n),
-            _ => {
-                return render_error(
-                    "Trial period must be a whole number of days between 0 and 365",
-                )
-            }
-        },
-    };
 
     let mut body = json!({ "app_tag": app_tag });
     if !secret_key.is_empty() {
@@ -1313,9 +1313,6 @@ pub async fn stripe_save(
     }
     if !cancel_url.is_empty() {
         body["cancel_url"] = json!(cancel_url);
-    }
-    if let Some(days) = trial_days {
-        body["trial_period_days"] = json!(days);
     }
     match admin_api::update_stripe_config(&st.api, c.forward.as_deref(), body).await {
         Ok(()) => redirect_cookies("/admin/stripe", &c.set_cookies),

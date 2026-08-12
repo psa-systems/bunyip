@@ -584,6 +584,11 @@ pub struct TierConfig {
     /// BUNYIP-487: whether the public `/pricing` page is published. DB only
     /// (admin Pricing tiers page); false until an admin turns it on.
     pub pricing_enabled: bool,
+    /// BUNYIP-527: per-tier visibility on the public `/pricing` page. DB only,
+    /// default true; a hidden tier is not advertised even when mapped.
+    pub lifetime_visible: bool,
+    pub early_adopter_visible: bool,
+    pub standard_visible: bool,
 }
 
 impl TierConfig {
@@ -615,6 +620,10 @@ impl TierConfig {
             standard_product_id: None,
             // BUNYIP-487: no env source; the admin Pricing tiers page writes it.
             pricing_enabled: false,
+            // BUNYIP-527: no env source; default visible.
+            lifetime_visible: true,
+            early_adopter_visible: true,
+            standard_visible: true,
         }
     }
 
@@ -637,6 +646,9 @@ impl TierConfig {
             early_adopter_product_id: row.early_adopter_product_id.clone(),
             standard_product_id: row.standard_product_id.clone(),
             pricing_enabled: row.pricing_enabled,
+            lifetime_visible: row.lifetime_visible,
+            early_adopter_visible: row.early_adopter_visible,
+            standard_visible: row.standard_visible,
         }
     }
 
@@ -658,6 +670,11 @@ impl TierConfig {
             || row.lifetime_product_id.is_some()
             || row.early_adopter_product_id.is_some()
             || row.standard_product_id.is_some()
+            // BUNYIP-527: hiding a tier (visible = false) is a DB override too, so
+            // the choice survives a restart instead of falling back to env.
+            || !row.lifetime_visible
+            || !row.early_adopter_visible
+            || !row.standard_visible
     }
 }
 

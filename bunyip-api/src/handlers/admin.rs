@@ -2810,6 +2810,10 @@ pub struct UpdateTierConfigRequest {
     pub standard_product_id: Option<String>,
     /// BUNYIP-487: publish switch for the public `/pricing` page.
     pub pricing_enabled: Option<bool>,
+    /// BUNYIP-527: per-tier visibility on the public `/pricing` page.
+    pub lifetime_visible: Option<bool>,
+    pub early_adopter_visible: Option<bool>,
+    pub standard_visible: Option<bool>,
 }
 
 /// BUNYIP-517: resolve a mapped price id to the Stripe product bunyip stores for
@@ -2868,6 +2872,9 @@ pub async fn get_tier_config(
     Ok(success(
         TierConfigWithPricing {
             pricing_enabled: resolved.pricing_enabled,
+            lifetime_visible: resolved.lifetime_visible,
+            early_adopter_visible: resolved.early_adopter_visible,
+            standard_visible: resolved.standard_visible,
             config: TierConfigResponse {
                 lifetime_slots: resolved.lifetime_slots,
                 early_adopter_slots: resolved.early_adopter_slots,
@@ -2940,48 +2947,67 @@ pub async fn update_tier_config(
         }
     }
 
-    // BUNYIP-517: the catalog form now sends a price per tier and no product id.
-    // Derive the product bunyip stores for webhook classification from the mapped
-    // price, so the two halves cannot disagree. Only touch Stripe when a price is
-    // actually being set (a slots/trial-only save sends none and skips this).
-    fn nonblank(o: &Option<String>) -> Option<&str> {
-        o.as_deref().map(str::trim).filter(|s| !s.is_empty())
+    // BUNYIP-517 / BUNYIP-527: the catalog form sends a price per tier and no
+    // product id. Each price is three-state: omitted keeps the stored mapping; an
+    // explicit empty string CLEARS it (and its derived product); a non-empty id
+    // sets it, and the product bunyip stores for webhook classification is derived
+    // from that price so the two halves cannot disagree. Stripe is consulted only
+    // when at least one price is actually being set.
+    enum PriceOp<'a> {
+        Keep,
+        Clear,
+        Set(&'a str),
     }
-    let submitted_prices = [
-        ("Free / lifetime", nonblank(&body.free_price_id)),
-        ("Early adopter", nonblank(&body.early_adopter_price_id)),
-        ("Standard", nonblank(&body.standard_price_id)),
+    fn price_op(o: &Option<String>) -> PriceOp<'_> {
+        match o.as_deref().map(str::trim) {
+            None => PriceOp::Keep,
+            Some("") => PriceOp::Clear,
+            Some(id) => PriceOp::Set(id),
+        }
+    }
+    let ops = [
+        // Free and lifetime share the $0 price, and the webhook classifies that
+        // product as lifetime, so `free_price_id` derives `lifetime_product_id`.
+        ("Free / lifetime", price_op(&body.free_price_id)),
+        ("Early adopter", price_op(&body.early_adopter_price_id)),
+        ("Standard", price_op(&body.standard_price_id)),
     ];
-    let (lifetime_product_id, early_adopter_product_id, standard_product_id) =
-        if submitted_prices.iter().any(|(_, p)| p.is_some()) {
-            let prices = stripe.list_prices(None).await.map_err(stripe_err)?;
-            let app_tag = stripe.app_tag();
-            let derive = |label: &str, price: Option<&str>| -> Result<Option<String>, AppError> {
-                match price {
-                    Some(pid) => Ok(Some(derive_product_for_price(
-                        label, pid, &prices, &app_tag,
-                    )?)),
-                    None => Ok(None),
-                }
-            };
-            (
-                // Free and lifetime share the $0 price, and the webhook classifies
-                // that product as lifetime, so `free_price_id` derives
-                // `lifetime_product_id` (BUNYIP-517).
-                derive(submitted_prices[0].0, submitted_prices[0].1)?,
-                derive(submitted_prices[1].0, submitted_prices[1].1)?,
-                derive(submitted_prices[2].0, submitted_prices[2].1)?,
-            )
-        } else {
-            // No price submitted (e.g. a slots/trial-only save): keep whatever the
-            // caller passed directly. The catalog form sends nothing here, so all
-            // three stay None and COALESCE keeps the stored row.
-            (
-                body.lifetime_product_id.clone(),
-                body.early_adopter_product_id.clone(),
-                body.standard_product_id.clone(),
-            )
-        };
+    let need_stripe = ops.iter().any(|(_, op)| matches!(op, PriceOp::Set(_)));
+    let prices = if need_stripe {
+        Some(stripe.list_prices(None).await.map_err(stripe_err)?)
+    } else {
+        None
+    };
+    let app_tag = stripe.app_tag();
+    // The value passed to the repo for a price column: `None` keeps, `Some("")`
+    // clears (NULL), `Some(id)` sets.
+    let price_val = |op: &PriceOp| -> Option<String> {
+        match op {
+            PriceOp::Keep => None,
+            PriceOp::Clear => Some(String::new()),
+            PriceOp::Set(id) => Some(id.to_string()),
+        }
+    };
+    // The derived product for a tier: set -> derive from Stripe; clear -> clear it
+    // too (an unmapped tier has no product); keep -> whatever the caller passed
+    // (the catalog form sends none, so it stays None and the row is kept).
+    let derive_product = |label: &str,
+                          op: &PriceOp,
+                          fallback: &Option<String>|
+     -> Result<Option<String>, AppError> {
+        match op {
+            PriceOp::Set(id) => {
+                let prices = prices.as_ref().expect("prices fetched when a price is set");
+                Ok(Some(derive_product_for_price(label, id, prices, &app_tag)?))
+            }
+            PriceOp::Clear => Ok(Some(String::new())),
+            PriceOp::Keep => Ok(fallback.clone()),
+        }
+    };
+    let lifetime_product_id = derive_product(ops[0].0, &ops[0].1, &body.lifetime_product_id)?;
+    let early_adopter_product_id =
+        derive_product(ops[1].0, &ops[1].1, &body.early_adopter_product_id)?;
+    let standard_product_id = derive_product(ops[2].0, &ops[2].1, &body.standard_product_id)?;
 
     let row = TierConfigRepository::update(
         &pool,
@@ -2989,13 +3015,16 @@ pub async fn update_tier_config(
         body.early_adopter_slots,
         body.early_adopter_trial_days,
         body.standard_trial_days,
-        body.free_price_id.clone(),
-        body.early_adopter_price_id.clone(),
-        body.standard_price_id.clone(),
+        price_val(&ops[0].1),
+        price_val(&ops[1].1),
+        price_val(&ops[2].1),
         lifetime_product_id.clone(),
         early_adopter_product_id.clone(),
         standard_product_id.clone(),
         body.pricing_enabled,
+        body.lifetime_visible,
+        body.early_adopter_visible,
+        body.standard_visible,
         admin.0.sub,
     )
     .await?;
@@ -3030,6 +3059,9 @@ pub async fn update_tier_config(
                 "early_adopter_product_id": early_adopter_product_id,
                 "standard_product_id": standard_product_id,
                 "pricing_enabled": body.pricing_enabled,
+                "lifetime_visible": body.lifetime_visible,
+                "early_adopter_visible": body.early_adopter_visible,
+                "standard_visible": body.standard_visible,
             })),
     )
     .await?;
@@ -3037,6 +3069,9 @@ pub async fn update_tier_config(
     Ok(success(
         TierConfigWithPricing {
             pricing_enabled: resolved.pricing_enabled,
+            lifetime_visible: resolved.lifetime_visible,
+            early_adopter_visible: resolved.early_adopter_visible,
+            standard_visible: resolved.standard_visible,
             config: TierConfigResponse {
                 lifetime_slots: resolved.lifetime_slots,
                 early_adopter_slots: resolved.early_adopter_slots,
