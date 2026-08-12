@@ -81,6 +81,12 @@ pub enum AuditAction {
     AdminInviteAccepted,
     AdminInviteRevoked,
     AdminStripeConfigUpdated,
+    /// BUNYIP-512: an admin archived a plan (a Stripe product with its prices,
+    /// or a single price) from the admin Stripe page. Metadata carries the
+    /// `product_id` (null for a lone-price archive), the `archived_price_ids`,
+    /// and the `member_count` at the time (always 0, since the archive is
+    /// refused while members exist).
+    AdminStripePlanArchived,
     AdminTierConfigUpdated,
     /// BUNYIP-431: an admin moved a member to a different membership tier.
     /// Metadata carries `from_tier`, `to_tier`, the target email, and how many
@@ -239,6 +245,7 @@ impl AuditAction {
             AuditAction::AdminInviteAccepted => "admin_invite_accepted",
             AuditAction::AdminInviteRevoked => "admin_invite_revoked",
             AuditAction::AdminStripeConfigUpdated => "admin_stripe_config_updated",
+            AuditAction::AdminStripePlanArchived => "admin_stripe_plan_archived",
             AuditAction::AdminTierConfigUpdated => "admin_tier_config_updated",
             AuditAction::AdminTierChanged => "admin_tier_changed",
             AuditAction::AdminEmailConfigUpdated => "admin_email_config_updated",
@@ -314,6 +321,7 @@ impl AuditAction {
                 | AuditAction::AdminInviteAccepted
                 | AuditAction::AdminInviteRevoked
                 | AuditAction::AdminStripeConfigUpdated
+                | AuditAction::AdminStripePlanArchived
                 | AuditAction::AdminTierConfigUpdated
                 | AuditAction::AdminTierChanged
                 | AuditAction::AdminEmailConfigUpdated

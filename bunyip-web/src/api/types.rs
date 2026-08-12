@@ -1037,6 +1037,12 @@ pub struct StripeProduct {
     pub active: bool,
     #[serde(default)]
     pub created: i64,
+    /// BUNYIP-512: members currently on this product's plan. Drives the
+    /// disabled-Archive courtesy in the admin UI (the server guard is
+    /// authoritative). Not identity-bearing, so it defaults and is absent from
+    /// `ESSENTIAL_FIELDS` in `scripts/check-serde-compat.nu`.
+    #[serde(default)]
+    pub member_count: i64,
 }
 
 /// BUNYIP-416: a Stripe price surfaced in the admin Stripe panel. Mirrors
@@ -1054,6 +1060,10 @@ pub struct StripePrice {
     pub recurring_interval: Option<String>,
     #[serde(default)]
     pub active: bool,
+    /// BUNYIP-512: members on the tier this price maps to (plus anyone who
+    /// locked this price). See [`StripeProduct::member_count`].
+    #[serde(default)]
+    pub member_count: i64,
 }
 
 /// DEV-518: a Stripe webhook endpoint surfaced in the admin Stripe panel.
