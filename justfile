@@ -230,17 +230,6 @@ ensure-oidc-keys:
 init-secrets:
     ./scripts/init-secrets.nu
 
-# Render ./secrets/* from Infisical for a deployed host (BUNYIP-504). Accepts --env <staging|prod> and --dry-run; see docs/secrets-infisical.md.
-[group: 'dev']
-sync-secrets *args:
-    #!/usr/bin/env nu
-    # Nushell reserves `env` as a variable name, so the script's flag is
-    # `--environment`. Accept the shorter `--env` spelling here and translate.
-    let argv = ("{{ args }}" | split row --regex '\s+' | where {|a| $a | is-not-empty })
-    ./scripts/sync-secrets.nu ...($argv | each {|a|
-        if $a == "--env" { "--environment" } else { $a | str replace --regex '^--env=' "--environment=" }
-    })
-
 # Start the full dev stack (postgres + api + web) in the foreground.
 [group: 'dev']
 dev: ensure-env ensure-oidc-keys
