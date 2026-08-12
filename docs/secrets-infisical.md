@@ -10,6 +10,16 @@ The model is **sync, not fetch**. Infisical writes the files; the containers kee
 reading `/run/secrets/*`. A bunyip-api restart therefore never depends on
 Infisical being reachable, and no Rust code knows Infisical exists.
 
+This document covers bunyip's own `compose.yml` (`just dev` and the self-host
+reference deployment). The **docker deploy** (c-01 / nc-01, in the
+`niceguyit/docker` repo) sources secrets differently: the Group-1 startup secrets
+stay in SOPS (`server/<host>/bunyip-api/compose-secrets.yml`), and the Group-2
+integration secrets (SMTP, and later others) are rendered at runtime by an
+Infisical Agent sidecar to files the api reads via the same `{NAME}_FILE`
+convention. That upholds the same sync-not-fetch rule (the agent writes files;
+the api never fetches). See the docker repo runbook
+`docs/runbooks/dev-575-bunyip-infisical-agent-sidecar.md` (DEV-575).
+
 `scripts/init-secrets.nu` remains the dev-box path: it generates throwaway values
 locally. The two scripts do not collide - `init-secrets.nu` never overwrites a
 non-empty file, and `sync-secrets.nu` writes only what Infisical says.
