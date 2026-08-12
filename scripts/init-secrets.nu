@@ -10,11 +10,11 @@
 #   of a legacy ./.env file, and leaves any value that is already in place
 #   untouched (BUNYIP-38).
 #
-#   This is the DEV-BOX path: the values it generates are local throwaways. A
-#   deployed host whose real values live in Infisical uses the sibling script
-#   ./scripts/sync-secrets.nu (`just sync-secrets`), which renders the same
-#   files from the /bunyip/app folder (BUNYIP-504, docs/secrets-infisical.md).
-#   Neither script overwrites the other's non-empty files.
+#   This is the DEV-BOX path: the values it generates are local throwaways. On a
+#   deployment the same secret files are provided directly (the SOPS
+#   compose-secrets.yml on the docker hosts). Group-1 secrets are never fetched
+#   from or synced with Infisical; only Group-2 integration secrets use Infisical
+#   (see docs/secrets-infisical.md).
 #
 # Usage:
 #   ./scripts/init-secrets.nu        (run from the repository root)
