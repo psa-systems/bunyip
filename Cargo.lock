@@ -1557,7 +1557,7 @@ dependencies = [
 [[package]]
 name = "dunite-stripe"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=ae62c276ab187852578daad1c4b9c823579b194a#ae62c276ab187852578daad1c4b9c823579b194a"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=5dab94d7658efbd77661a0565c7b218bb22dbfc1#5dab94d7658efbd77661a0565c7b218bb22dbfc1"
 dependencies = [
  "async-stripe",
  "chrono",
@@ -1573,7 +1573,7 @@ dependencies = [
 [[package]]
 name = "dunite-stripe-core"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=ae62c276ab187852578daad1c4b9c823579b194a#ae62c276ab187852578daad1c4b9c823579b194a"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=5dab94d7658efbd77661a0565c7b218bb22dbfc1#5dab94d7658efbd77661a0565c7b218bb22dbfc1"
 dependencies = [
  "hex",
  "hmac",

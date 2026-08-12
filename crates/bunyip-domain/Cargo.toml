@@ -29,7 +29,10 @@ dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9b
 # that introduced the crate; the dunite-core/download pins stay at c5730bc since
 # dunite main advanced dunite-oidc in between (unrelated). Collapse all three to
 # the single merged rev once dunite PR #27 lands.
-dunite-stripe-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
+# BUNYIP-513: bumped with dunite-stripe to 5dab94d (unarchive_price). The
+# stripe-core source is byte-identical between ae62c27 and 5dab94d; the pins move
+# together so there is a single dunite-stripe-core in the tree.
+dunite-stripe-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "5dab94d7658efbd77661a0565c7b218bb22dbfc1" }
 # Shared feedback domain (DEV-495 / DEV-516): models + FeedbackRepository, lifted
 # from this crate's own superset into dunite so a8n-tools can share it. Pinned to
 # the branch rev that introduced the crate. The dunite pins collapse to one
@@ -37,8 +40,11 @@ dunite-stripe-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae
 dunite-feedback = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
 # Shared Stripe service layer (DEV-495 / DEV-515). This slice provides the
 # async-stripe response DTOs, re-exported from this crate's models; the service
-# + runtime config land in a follow-up. Pinned to the branch rev that added it.
-dunite-stripe = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
+# + runtime config land in a follow-up.
+# BUNYIP-513: bumped ae62c27 -> 5dab94d for StripeService::unarchive_price (the
+# reverse of the BUNYIP-512 archive). Moves in lock-step with dunite-stripe-core
+# above (its path dep), so the two stay a single version.
+dunite-stripe = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "5dab94d7658efbd77661a0565c7b218bb22dbfc1" }
 # Shared account vocabulary (DEV-495 / DEV-517): the role / membership-status /
 # subscription-tier enums and the tier-settings response, re-exported from this
 # crate's models. The User row + repository stay here (a8n's schema has not

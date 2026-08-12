@@ -342,6 +342,43 @@ pub async fn archive_stripe_product(
     Ok(success_no_data(request_id))
 }
 
+/// POST /v1/admin/stripe/products/{id}/unarchive
+///
+/// BUNYIP-513: the reverse of archive - set the Stripe product `active = true`.
+/// `metadata` is deliberately not sent (passing `None`), so `update_product`
+/// leaves the existing metadata map intact and the app tag survives. There is no
+/// cascade to prices on purpose (BUNYIP-513): the set of prices a given archive
+/// cascade touched is not recorded, and a blanket restore would resurrect prices
+/// archived for unrelated reasons (e.g. a superseded price). Each price is
+/// restored explicitly via [`unarchive_stripe_price`]. Not member-guarded:
+/// restoring a plan withdraws nothing.
+pub async fn unarchive_stripe_product(
+    req: HttpRequest,
+    admin: AdminUser,
+    stripe: web::Data<Arc<StripeService>>,
+    pool: web::Data<PgPool>,
+    pricing_cache: web::Data<Arc<PricingCache>>,
+    path: web::Path<String>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let product_id = path.into_inner();
+
+    stripe
+        .update_product(&product_id, None, None, None, Some(true))
+        .await
+        .map_err(stripe_err)?;
+
+    let audit = CreateAuditLog::new(AuditAction::AdminStripePlanUnarchived)
+        .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+        .with_metadata(serde_json::json!({ "product_id": product_id }));
+    AuditLogRepository::create(&pool, audit).await?;
+
+    // Restoring a product can republish a tier whose (still-active) price maps to
+    // it, so refresh the public pricing payload rather than keep serving stale.
+    pricing_cache.invalidate();
+    Ok(success_no_data(request_id))
+}
+
 // =============================================================================
 // Prices
 // =============================================================================
@@ -441,6 +478,37 @@ pub async fn archive_stripe_price(
 
     // BUNYIP-515: archiving the mapped price unpublishes its tier at once
     // rather than advertising a price nobody can buy for another TTL.
+    pricing_cache.invalidate();
+    Ok(success_no_data(request_id))
+}
+
+/// POST /v1/admin/stripe/prices/{id}/unarchive
+///
+/// BUNYIP-513: restore a single archived price (`active = true`) via
+/// `StripeService::unarchive_price`. Not member-guarded (restoring withdraws
+/// nothing). Republishing a mapped price changes what `/pricing` resolves, so
+/// the pricing cache is dropped.
+pub async fn unarchive_stripe_price(
+    req: HttpRequest,
+    admin: AdminUser,
+    stripe: web::Data<Arc<StripeService>>,
+    pool: web::Data<PgPool>,
+    pricing_cache: web::Data<Arc<PricingCache>>,
+    path: web::Path<String>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let price_id = path.into_inner();
+
+    stripe
+        .unarchive_price(&price_id)
+        .await
+        .map_err(stripe_err)?;
+
+    let audit = CreateAuditLog::new(AuditAction::AdminStripePlanUnarchived)
+        .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+        .with_metadata(serde_json::json!({ "price_id": price_id }));
+    AuditLogRepository::create(&pool, audit).await?;
+
     pricing_cache.invalidate();
     Ok(success_no_data(request_id))
 }
@@ -545,9 +613,16 @@ mod tests {
             // Bound the body at the closing brace in column 0 so one handler's
             // invalidate cannot vouch for the handler above it.
             let body = rest.split("\n}").next().unwrap_or(rest);
-            let mutates = ["create", "update", "archive", "delete", "replace"]
-                .iter()
-                .any(|verb| name.starts_with(verb));
+            let mutates = [
+                "create",
+                "update",
+                "archive",
+                "unarchive",
+                "delete",
+                "replace",
+            ]
+            .iter()
+            .any(|verb| name.starts_with(verb));
             if !name.contains("price") || !mutates {
                 continue;
             }
@@ -632,5 +707,51 @@ mod tests {
         assert!(one.to_string().contains("1 member is on it"), "{one}");
         let many = refuse_archive("price", 12);
         assert!(many.to_string().contains("12 members are on it"), "{many}");
+    }
+
+    // -- BUNYIP-513: unarchive --
+
+    /// Return the source body of `pub async fn <name>` (up to the next
+    /// column-0 `\n}`), for asserting a handler's shape without a live Stripe.
+    fn handler_body(name: &str) -> String {
+        let src = include_str!("admin_stripe.rs");
+        let marker = format!("\npub async fn {name}(");
+        let after = src.split_once(&marker).expect("handler present").1;
+        after.split_once("\n}").expect("handler body").0.to_string()
+    }
+
+    /// BUNYIP-513 AC: unarchiving a product sets `active = true` and sends NO
+    /// metadata (so `update_product` leaves the map intact and the app tag
+    /// survives). The metadata argument to `update_product` must be `None`.
+    #[test]
+    fn unarchive_product_sends_active_true_and_no_metadata() {
+        let body = handler_body("unarchive_stripe_product");
+        assert!(
+            body.contains("update_product(&product_id, None, None, None, Some(true))"),
+            "unarchive must call update_product with metadata = None and active = Some(true); body was:\n{body}"
+        );
+    }
+
+    /// BUNYIP-513 AC: unarchiving a product issues no price mutation - the
+    /// restore is product-only and each price is restored explicitly.
+    #[test]
+    fn unarchive_product_issues_no_price_update() {
+        let body = handler_body("unarchive_stripe_product");
+        for forbidden in ["archive_price", "unarchive_price", "create_price"] {
+            assert!(
+                !body.contains(forbidden),
+                "product unarchive must not touch prices, found `{forbidden}` in body:\n{body}"
+            );
+        }
+    }
+
+    /// BUNYIP-513: the single-price unarchive restores exactly that price.
+    #[test]
+    fn unarchive_price_restores_the_one_price() {
+        let body = handler_body("unarchive_stripe_price");
+        assert!(
+            body.contains("unarchive_price(&price_id)"),
+            "must call StripeService::unarchive_price on the path id; body was:\n{body}"
+        );
     }
 }

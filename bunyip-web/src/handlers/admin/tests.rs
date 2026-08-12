@@ -1512,6 +1512,57 @@ mod stripe_admin_tests {
         );
     }
 
+    // BUNYIP-513: an archived product row offers Unarchive; an active row does not.
+    #[test]
+    fn products_block_offers_unarchive_for_archived_only() {
+        let list = [
+            product("prod_active", "Active Plan", true),
+            product("prod_gone", "Archived Plan", false),
+        ];
+        let html = stripe_products_block(Some(&list), Some(&[])).into_string();
+        assert!(
+            html.contains(r#"action="/admin/stripe/products/prod_gone/unarchive""#),
+            "archived product has an Unarchive control"
+        );
+        assert!(html.contains("Unarchive"), "Unarchive label present");
+        assert!(
+            !html.contains("prod_active/unarchive"),
+            "active product has no Unarchive control"
+        );
+        assert!(
+            !html.contains("prod_gone/archive"),
+            "archived product has no Archive control"
+        );
+        // Confirm copy states it becomes purchasable again (AC).
+        assert!(
+            html.contains("becomes purchasable again"),
+            "unarchive confirmation states the plan becomes purchasable again"
+        );
+    }
+
+    // BUNYIP-513: same for prices.
+    #[test]
+    fn prices_block_offers_unarchive_for_archived_only() {
+        let products = [product("prod_x", "X", true)];
+        let prices = [
+            price("price_live", "prod_x", Some(300), true),
+            price("price_gone", "prod_x", Some(300), false),
+        ];
+        let html = stripe_prices_block(Some(&prices), &products).into_string();
+        assert!(
+            html.contains(r#"action="/admin/stripe/prices/price_gone/unarchive""#),
+            "archived price has an Unarchive control"
+        );
+        assert!(
+            !html.contains("price_live/unarchive"),
+            "active price has no Unarchive control"
+        );
+        assert!(
+            !html.contains("price_gone/archive"),
+            "archived price has no Archive control"
+        );
+    }
+
     #[test]
     fn catalog_section_renders_mapping_fields_prefilled() {
         // BUNYIP-417: the tier -> Stripe catalog mapping now lives on the Stripe

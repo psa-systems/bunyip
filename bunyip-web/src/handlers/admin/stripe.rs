@@ -97,6 +97,12 @@ pub(super) fn stripe_products_block(
                                         button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
                                     }
                                 }
+                            } @else {
+                                // BUNYIP-513: an archived product can be restored. No cascade to
+                                // prices - each archived price is restored on its own row.
+                                form method="post" action=(format!("/admin/stripe/products/{}/unarchive", p.id)) data-confirm="Restore this product? It becomes purchasable again. Its prices stay as they are; restore any archived price on its own row." {
+                                    button type="submit" class=(button_class("outline", "sm", "")) { "Unarchive" }
+                                }
                             }
                         }
                     }
@@ -184,6 +190,11 @@ pub(super) fn stripe_prices_block(
                                     form method="post" action=(format!("/admin/stripe/prices/{}/archive", pr.id)) data-confirm="Archive this price? Existing subscriptions using it are not affected." {
                                         button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
                                     }
+                                }
+                            } @else {
+                                // BUNYIP-513: restore an archived price.
+                                form method="post" action=(format!("/admin/stripe/prices/{}/unarchive", pr.id)) data-confirm="Restore this price? It becomes purchasable again." {
+                                    button type="submit" class=(button_class("outline", "sm", "")) { "Unarchive" }
                                 }
                             }
                         }
@@ -468,6 +479,24 @@ pub async fn stripe_product_archive(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+/// POST /admin/stripe/products/{id}/unarchive (BUNYIP-513)
+pub async fn stripe_product_unarchive(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::unarchive_stripe_product(&st.api, c.forward.as_deref(), &id).await
+    {
+        Ok(()) => "/admin/stripe?toast_ok=Product%20restored".to_string(),
+        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
 #[derive(Deserialize)]
 pub struct StripeWebhookForm {
     pub url: String,
@@ -641,6 +670,23 @@ pub async fn stripe_price_archive(
     };
     let target = match admin_api::archive_stripe_price(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => "/admin/stripe?toast_ok=Price%20archived".to_string(),
+        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+    };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+/// POST /admin/stripe/prices/{id}/unarchive (BUNYIP-513)
+pub async fn stripe_price_unarchive(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::unarchive_stripe_price(&st.api, c.forward.as_deref(), &id).await {
+        Ok(()) => "/admin/stripe?toast_ok=Price%20restored".to_string(),
         Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
     };
     redirect_cookies(&target, &c.set_cookies)

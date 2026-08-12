@@ -329,6 +329,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/stripe/products/{id}",
                 web::delete().to(handlers::archive_stripe_product),
             )
+            .route(
+                "/stripe/products/{id}/unarchive",
+                web::post().to(handlers::unarchive_stripe_product),
+            )
             // Stripe prices
             .route(
                 "/stripe/prices",
@@ -341,6 +345,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route(
                 "/stripe/prices/{id}",
                 web::delete().to(handlers::archive_stripe_price),
+            )
+            .route(
+                "/stripe/prices/{id}/unarchive",
+                web::post().to(handlers::unarchive_stripe_price),
             )
             // Stripe webhooks
             .route(
