@@ -62,7 +62,6 @@ const SECRET_MAP = [
     {key: "APP_DATABASE_URL", file: "app_database_url", allow_empty: true}
     {key: "SETUP_DEFAULT_ADMIN", file: "setup_default_admin", allow_empty: true}
     {key: "FORGEJO_API_TOKEN", file: "forgejo_api_token", allow_empty: true}
-    {key: "SMTP_PASSWORD", file: "smtp_password", allow_empty: true}
     {key: "BUNYIP_UPDATE_CHECK_TOKEN", file: "update_check_token", allow_empty: true}
 ]
 
@@ -242,7 +241,7 @@ def self-test []: nothing -> nothing {
     # 2-5. Write rules, in a throwaway directory with sentinel values.
     let dir = (mktemp --directory --tmpdir)
     let values = ($SECRET_MAP | reduce --fold {} {|m, acc|
-        $acc | insert $m.key (if $m.allow_empty and $m.key == "SMTP_PASSWORD" { "" } else { $"sentinel-value-for-($m.key)" })
+        $acc | insert $m.key (if $m.allow_empty and $m.key == "FORGEJO_API_TOKEN" { "" } else { $"sentinel-value-for-($m.key)" })
     })
 
     let first = (plan $dir $values)
@@ -280,7 +279,7 @@ def self-test []: nothing -> nothing {
     $ok = ($ok | append (assert (($missing | length) == 1 and ($missing | first | str contains "JWT_SECRET")) "a missing mapped key is reported by name"))
     let blank = (validate ($values | update APP_ENCRYPTION_KEY ""))
     $ok = ($ok | append (assert (($blank | length) == 1 and ($blank | first | str contains "APP_ENCRYPTION_KEY")) "an empty required key is reported by name"))
-    $ok = ($ok | append (assert ((validate ($values | update SMTP_PASSWORD "")) | is-empty) "an empty optional key is allowed"))
+    $ok = ($ok | append (assert ((validate ($values | update FORGEJO_API_TOKEN "")) | is-empty) "an empty optional key is allowed"))
 
     rm --recursive $dir
     if ($ok | any {|r| not $r }) { exit 1 }
