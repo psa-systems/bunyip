@@ -940,7 +940,7 @@ mod two_column_layout_tests {
         .unwrap()
     }
 
-    fn tier_vals(pricing_enabled: bool) -> TierFormValues {
+    fn tier_vals() -> TierFormValues {
         TierFormValues {
             lifetime_slots: "5".into(),
             early_adopter_slots: "5".into(),
@@ -952,8 +952,19 @@ mod two_column_layout_tests {
             lifetime_product_id: String::new(),
             early_adopter_product_id: String::new(),
             standard_product_id: String::new(),
-            pricing_enabled,
         }
+    }
+
+    /// BUNYIP-524: a web-side tier config with the publish switch set to
+    /// `pricing_enabled`, for the Stripe catalog-mapping tests.
+    fn tier_cfg_pricing(pricing_enabled: bool) -> crate::api::types::TierConfigResponse {
+        serde_json::from_value(json!({
+            "lifetime_slots": 5, "early_adopter_slots": 5, "early_adopter_trial_days": 90,
+            "standard_trial_days": 30, "source": "database",
+            "lifetime_slots_used": 0, "early_adopter_slots_used": 0,
+            "pricing_enabled": pricing_enabled
+        }))
+        .unwrap()
     }
 
     #[test]
@@ -961,16 +972,17 @@ mod two_column_layout_tests {
         // BUNYIP-417: the Stripe catalog mapping moved to the Stripe page, so
         // the Pricing tiers page keeps only slots + trial days and carries none of the
         // price/product-ID fields.
-        let vals = tier_vals(false);
-        let html = tier_settings_content(Some(&tier_cfg()), &[], Err("unavailable"), &vals, None)
-            .into_string();
-        // BUNYIP-487: the page is labelled "Pricing tiers" and carries the
-        // Enable Pricing switch; the route is unchanged.
+        let vals = tier_vals();
+        let html = tier_settings_content(Some(&tier_cfg()), &vals, None).into_string();
+        // BUNYIP-487: the page is labelled "Pricing tiers"; the route is
+        // unchanged.
         assert!(html.contains("Pricing tiers"), "renamed heading");
         assert!(!html.contains("Tier Settings"), "old heading is gone");
+        // BUNYIP-524: the publish switch moved to the Stripe catalog mapping, so
+        // it is no longer on this page.
         assert!(
-            html.contains(r#"name="pricing_enabled""#),
-            "Enable Pricing checkbox present"
+            !html.contains(r#"name="pricing_enabled""#),
+            "Enable Pricing checkbox moved to the Stripe page"
         );
         assert!(
             html.contains(r#"action="/admin/tier-settings""#),
@@ -1002,86 +1014,34 @@ mod two_column_layout_tests {
     }
 
     #[test]
-    fn enable_pricing_checkbox_reflects_the_saved_switch() {
-        // BUNYIP-487: the switch must survive save + reload, which on a
-        // checkbox means the `checked` attribute is driven by the loaded value.
-        let off = tier_settings_content(
-            Some(&tier_cfg()),
-            &[],
-            Err("unavailable"),
-            &tier_vals(false),
-            None,
-        )
-        .into_string();
-        let on = tier_settings_content(
-            Some(&tier_cfg()),
-            &[],
-            Err("unavailable"),
-            &tier_vals(true),
-            None,
-        )
-        .into_string();
-        assert!(!off.contains("checked"), "unchecked when the switch is off");
+    fn catalog_publish_switch_reflects_the_saved_state() {
+        // BUNYIP-524: the publish switch lives in the Stripe catalog mapping and
+        // its `checked` attribute is driven by the saved `pricing_enabled`, so
+        // it survives save + reload.
+        let on =
+            super::stripe_catalog_section(Ok(&tier_cfg_pricing(true)), None, Err("unavailable"))
+                .into_string();
+        let off =
+            super::stripe_catalog_section(Ok(&tier_cfg_pricing(false)), None, Err("unavailable"))
+                .into_string();
+        assert!(
+            on.contains(r#"name="pricing_enabled""#),
+            "publish switch present in the catalog mapping"
+        );
         assert!(on.contains("checked"), "checked when the switch is on");
+        assert!(!off.contains("checked"), "unchecked when the switch is off");
     }
 
-    #[test]
-    fn pricing_tiers_shows_the_resolved_stripe_amount() {
-        // BUNYIP-487: the advertised amount is derived from the mapped Stripe
-        // price, read-only, formatted exactly like the Stripe page.
-        let cfg: crate::api::types::TierConfigResponse = serde_json::from_value(json!({
-            "lifetime_slots": 5, "early_adopter_slots": 5, "early_adopter_trial_days": 90,
-            "standard_trial_days": 30, "free_price_id": "price_free",
-            "early_adopter_price_id": "price_gone", "standard_price_id": "price_std",
-            "source": "database", "lifetime_slots_used": 0, "early_adopter_slots_used": 0
-        }))
-        .unwrap();
-        let stripe_price = |id: &str, amount: i64| crate::api::types::StripePrice {
-            id: id.into(),
-            product_id: "prod_x".into(),
-            unit_amount: Some(amount),
-            currency: "usd".into(),
-            recurring_interval: Some("month".into()),
-            active: true,
-            member_count: 0,
-        };
-        let prices = vec![
-            stripe_price("price_std", 300),
-            stripe_price("price_free", 0),
-        ];
-        let html = tier_settings_content(
-            Some(&cfg),
-            &prices,
-            Err("unavailable"),
-            &tier_vals(true),
-            None,
-        )
-        .into_string();
-        assert!(html.contains("$3.00"), "standard amount resolved");
-        assert!(
-            html.contains("$0.00"),
-            "a zero lifetime price is a real price"
-        );
-        assert!(
-            html.contains("price not found in Stripe"),
-            "a mapped-but-unresolvable price is called out, not silently blank"
-        );
-        assert!(
-            !html.contains(r#"name="standard_amount""#),
-            "the amount is derived, never an editable field"
-        );
-    }
-
-    // BUNYIP-515: the Pricing tiers page says what /pricing is serving and, when
-    // it is serving nothing, which check failed. Five causes used to render as
-    // one silent 404.
+    // BUNYIP-515 / BUNYIP-524: the catalog mapping says what /pricing is serving
+    // and, when it is serving nothing, which check failed. Several causes used to
+    // render as one silent 404. The switch and this status now sit together.
 
     fn pricing_status(v: serde_json::Value) -> crate::api::types::PricingStatus {
         serde_json::from_value(v).unwrap()
     }
 
     #[test]
-    fn pricing_tiers_names_the_published_tiers() {
+    fn catalog_names_the_published_tiers() {
         let status = pricing_status(json!({
             "published": true,
             "tiers": [
@@ -1090,14 +1050,13 @@ mod two_column_layout_tests {
             ],
             "reasons": [],
         }));
-        let html =
-            tier_settings_content(Some(&tier_cfg()), &[], Ok(&status), &tier_vals(true), None)
-                .into_string();
+        let html = super::stripe_catalog_section(Ok(&tier_cfg_pricing(true)), None, Ok(&status))
+            .into_string();
         assert!(html.contains("/pricing is live and advertising: Lifetime, Standard."));
     }
 
     #[test]
-    fn pricing_tiers_lists_every_reason_it_is_unpublished() {
+    fn catalog_lists_every_reason_it_is_unpublished() {
         let status = pricing_status(json!({
             "published": false,
             "tiers": [],
@@ -1108,9 +1067,8 @@ mod two_column_layout_tests {
                   "message": "Early Adopter: price_old is archived in Stripe. Map an active price." },
             ],
         }));
-        let html =
-            tier_settings_content(Some(&tier_cfg()), &[], Ok(&status), &tier_vals(true), None)
-                .into_string();
+        let html = super::stripe_catalog_section(Ok(&tier_cfg_pricing(false)), None, Ok(&status))
+            .into_string();
         assert!(
             html.contains("app tag `bunyip`"),
             "the app-tag cause is named verbatim, tag included"
@@ -1126,15 +1084,13 @@ mod two_column_layout_tests {
     }
 
     #[test]
-    fn an_unreadable_pricing_status_says_so() {
-        // The page's whole job is explaining /pricing, so "no answer" must not
-        // render as "nothing to report".
-        let html = tier_settings_content(
-            Some(&tier_cfg()),
-            &[],
-            Err("Could not reach the server."),
-            &tier_vals(true),
+    fn catalog_says_when_pricing_status_is_unreadable() {
+        // The switch's whole point is publishing /pricing, so "no answer" must
+        // not render as "nothing to report".
+        let html = super::stripe_catalog_section(
+            Ok(&tier_cfg_pricing(false)),
             None,
+            Err("Could not reach the server."),
         )
         .into_string();
         assert!(html.contains("Could not load the pricing status"));
@@ -1608,7 +1564,8 @@ mod stripe_admin_tests {
         // The mapped free price resolves to the same product that is stored, so
         // no disagreement flag.
         let prices = [price("price_free123", "prod_life123", Some(0), true)];
-        let html = super::stripe_catalog_section(Ok(&tier), Some(&prices)).into_string();
+        let html = super::stripe_catalog_section(Ok(&tier), Some(&prices), Err("unavailable"))
+            .into_string();
         assert!(
             html.contains(r#"action="/admin/stripe/catalog""#),
             "catalog form present"
@@ -1636,9 +1593,11 @@ mod stripe_admin_tests {
             "no disagreement when stored product matches the price's product"
         );
         // Load-error state when the tier config is unavailable.
-        assert!(super::stripe_catalog_section(Err(&load_error()), None)
-            .into_string()
-            .contains("Could not load the tier catalog mapping"));
+        assert!(
+            super::stripe_catalog_section(Err(&load_error()), None, Err("unavailable"))
+                .into_string()
+                .contains("Could not load the tier catalog mapping")
+        );
     }
 
     #[test]
@@ -1656,7 +1615,8 @@ mod stripe_admin_tests {
             .unwrap();
         // The mapped standard price actually belongs to a different product.
         let prices = [price("price_std", "prod_REAL", Some(300), true)];
-        let html = super::stripe_catalog_section(Ok(&tier), Some(&prices)).into_string();
+        let html = super::stripe_catalog_section(Ok(&tier), Some(&prices), Err("unavailable"))
+            .into_string();
         assert!(
             html.contains("Stored product differs"),
             "disagreement is flagged"

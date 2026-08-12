@@ -411,13 +411,52 @@ pub(super) fn stripe_webhooks_block(
     )
 }
 
+/// BUNYIP-524: what `/pricing` is doing right now, in plain words, next to the
+/// switch that controls it. Published tiers in a success box; every reason it is
+/// not publishing in its own error box, quoting the tier, the price id and (for
+/// the app-tag filter) the fix. Without this the admin has several causes that
+/// all look like a 404. Moved here from the Pricing tiers page (BUNYIP-515) so
+/// the switch and its feedback sit together.
+fn pricing_status_block(status: Result<&crate::api::types::PricingStatus, &str>) -> Markup {
+    let s = match status {
+        Err(msg) => {
+            return error_box(&format!(
+                "Could not load the pricing status, so this page cannot say what /pricing is \
+                 serving: {msg}"
+            ))
+        }
+        Ok(s) => s,
+    };
+    let names = s
+        .tiers
+        .iter()
+        .map(|t| crate::handlers::dashboard::tier_name(&t.tier))
+        .collect::<Vec<_>>()
+        .join(", ");
+    html! {
+        div class="space-y-2" {
+            @if s.published {
+                (success_box(&format!("/pricing is live and advertising: {names}.")))
+            }
+            @for r in &s.reasons { (error_box(&r.message)) }
+            @if !s.published && s.reasons.is_empty() {
+                (error_box("/pricing returns 404 and the API gave no reason. Check the bunyip-api logs."))
+            }
+        }
+    }
+}
+
 /// BUNYIP-517: the tier catalog mapping. The admin picks the Stripe PRICE per
 /// tier; bunyip derives and stores the product it needs for webhook tier
 /// classification from that price on save, so the two can never disagree. Only
 /// price fields are asked for; the derived product is shown read-only.
+/// BUNYIP-524: the publish switch for the public `/pricing` page lives here too,
+/// in the same form, so one Save maps the prices and decides whether the page is
+/// live. `status` is the live diagnosis shown under the switch.
 pub(super) fn stripe_catalog_section(
     tier: Result<&crate::api::types::TierConfigResponse, &ApiError>,
     prices: Option<&[crate::api::types::StripePrice]>,
+    status: Result<&crate::api::types::PricingStatus, &str>,
 ) -> Markup {
     // A price <select> populated from the active prices, with the stored value
     // preserved as a selected option even when it is no longer in the list
@@ -488,6 +527,23 @@ pub(super) fn stripe_catalog_section(
             @match tier {
                 Err(e) => (error_box_detailed("Could not load the tier catalog mapping.", Some(&e.user_message()), e.request_id.as_deref())),
                 Ok(t) => form method="post" action="/admin/stripe/catalog" class="space-y-6" {
+                    // BUNYIP-524: the publish switch sits with the price mapping
+                    // it depends on. Ticking it advertises these prices; the
+                    // status line says whether /pricing actually publishes and,
+                    // if not, which tier's price is the reason.
+                    (admin_block(
+                        "Public pricing page",
+                        Some("Off by default. While this is off (or no tier resolves to a usable Stripe price) /pricing returns 404 and every link to it stays hidden."),
+                        html! {
+                            div class="space-y-4" {
+                                (pricing_status_block(status))
+                                label class="flex items-center gap-3 text-sm font-medium" {
+                                    input id="pricing_enabled" name="pricing_enabled" type="checkbox" value="true" checked[t.pricing_enabled] class="h-4 w-4 rounded border-input";
+                                    "Show pricing on the public page"
+                                }
+                            }
+                        },
+                    ))
                     (admin_block_grid(vec![
                         admin_block("Free / lifetime", Some("A $0 price. Free and lifetime grants both open a subscription on it."), html! {
                             div class="space-y-4" { (tier_card("free_price_id", &t.free_price_id, &t.lifetime_product_id)) }
@@ -548,6 +604,19 @@ pub async fn stripe(
     // BUNYIP-417: the tier -> Stripe price/product mapping moved here from Tier
     // Settings, so all Stripe config lives under one nav entry.
     let tier = admin_api::tier_config(&st.api, fwd).await;
+    // BUNYIP-524: the live /pricing diagnosis, shown next to the publish switch
+    // in the catalog mapping. A failed fetch is reported to the admin (and
+    // logged), never rendered as "nothing to report".
+    let status: Result<crate::api::types::PricingStatus, String> =
+        admin_api::pricing_status(&st.api, fwd).await.map_err(|e| {
+            tracing::warn!(
+                endpoint = "/v1/admin/pricing/status",
+                error = %e.message,
+                code = %e.code,
+                "pricing status unavailable on the Stripe page"
+            );
+            e.user_message()
+        });
 
     let products_loaded: Loaded<'_, _> = products.as_ref().map(Vec::as_slice);
     let prices_loaded: Loaded<'_, _> = prices.as_ref().map(Vec::as_slice);
@@ -600,8 +669,9 @@ pub async fn stripe(
                     (stripe_prices_block(prices_loaded, products_loaded))
                     (stripe_webhooks_block(webhooks_loaded, &st.cfg.api_public_origin, s.has_webhook_secret, &retry))
                     // BUNYIP-516 renders a tier load-failure with its request id;
-                    // BUNYIP-517 needs the loaded prices for the per-tier selects.
-                    (stripe_catalog_section(tier.as_ref(), prices.as_ref().ok().map(Vec::as_slice)))
+                    // BUNYIP-517 needs the loaded prices for the per-tier selects;
+                    // BUNYIP-524 adds the publish switch + live status.
+                    (stripe_catalog_section(tier.as_ref(), prices.as_ref().ok().map(Vec::as_slice), status.as_ref().map_err(String::as_str)))
                 },
             }
         }
@@ -913,6 +983,11 @@ pub struct StripeCatalogForm {
     pub early_adopter_price_id: String,
     #[serde(default)]
     pub standard_price_id: String,
+    // BUNYIP-524: the publish switch. An unchecked checkbox submits no field at
+    // all, so absence is "off"; it is always sent to the API (never omitted, as
+    // omission means "leave unchanged" there and could never turn it off).
+    #[serde(default)]
+    pub pricing_enabled: Option<String>,
 }
 
 /// POST /admin/stripe/catalog - persist the tier -> Stripe price mapping
@@ -940,6 +1015,9 @@ pub async fn stripe_catalog_save(
             body.insert(k.into(), json!(t));
         }
     }
+    // BUNYIP-524: the switch is authoritative (absent checkbox = off), so it is
+    // always sent, unlike the price ids whose omission means "keep".
+    body.insert("pricing_enabled".into(), json!(f.pricing_enabled.is_some()));
     let target = match admin_api::update_tier_config(
         &st.api,
         c.forward.as_deref(),
