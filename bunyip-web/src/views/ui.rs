@@ -276,6 +276,28 @@ pub fn error_box(msg: &str) -> Markup {
     }
 }
 
+/// BUNYIP-516: an [`error_box`] whose parts are rendered as separate lines: a
+/// headline saying what bunyip could not do, an optional cause, and an optional
+/// bunyip-api request id to quote. Each line is clamped on its own, so a
+/// two-sentence explanation plus a reference is not cut off at 256 characters
+/// the way one concatenated string would be.
+pub fn error_box_detailed(headline: &str, cause: Option<&str>, reference: Option<&str>) -> Markup {
+    html! {
+        div class="rounded-lg border border-destructive/50 p-3 text-sm text-destructive-text flex items-start gap-2" {
+            (icon("alert-circle", "h-4 w-4 mt-0.5 shrink-0"))
+            div class="space-y-1" {
+                p { (clamp_msg(headline)) }
+                @if let Some(c) = cause {
+                    p { (clamp_msg(c)) }
+                }
+                @if let Some(r) = reference {
+                    p class="text-xs font-mono" { "Reference: " (clamp_msg(r)) }
+                }
+            }
+        }
+    }
+}
+
 /// Success / confirmation banner, the teal-check counterpart to [`error_box`].
 /// Matches the inline `?ok=` banner the settings page renders, so the
 /// onboarding page can show the same "verification email sent" feedback for a

@@ -10,17 +10,53 @@ use serde_json::json;
 
 use crate::api::admin as admin_api;
 use crate::api::types::User;
+use crate::api::ApiError;
 use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{format_stripe_amount, urlenc};
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, empty_state, error_box, icon, success_box};
+use crate::views::ui::{
+    badge, button_class, empty_state, error_box, error_box_detailed, icon, success_box,
+};
 use crate::web::{redirect_cookies, AppState};
+
+/// BUNYIP-516: the result of loading one of the Stripe-backed lists on this
+/// page. `Ok` is the real list, which may legitimately be empty; `Err` means
+/// bunyip could not read it from Stripe and must SAY so, because rendering the
+/// empty state instead tells the admin "none exist" as though it were a fact.
+/// Before DUNITE-10 a 403 on the webhook listing came back as `Ok(vec![])`, so
+/// the page confidently reported "No webhook endpoints yet" to an admin whose
+/// key simply could not see them.
+pub(super) type Loaded<'a, T> = Result<&'a [T], &'a ApiError>;
+
+/// The cause line under a "could not read" box.
+///
+/// bunyip-api answers a permission or key failure with a 4xx whose message is
+/// bunyip-authored and names the exact permission (`stripe_err_for`, BUNYIP-516),
+/// so it is shown as-is. Anything else collapses to a generic line at
+/// `ApiError::user_message` (BUNYIP-477), and the static hint names the
+/// permission that is the usual cause instead of leaving the admin guessing.
+fn load_failure_cause(e: &ApiError, permission_hint: &str) -> String {
+    match e.status {
+        400..=499 if !e.message.is_empty() => e.user_message(),
+        _ => permission_hint.to_string(),
+    }
+}
+
+/// The "could not read this list" box: what bunyip does not know, why it
+/// probably happened, and the request id that finds it in the api log.
+fn load_failure_box(headline: &str, e: &ApiError, permission_hint: &str) -> Markup {
+    error_box_detailed(
+        headline,
+        Some(&load_failure_cause(e, permission_hint)),
+        e.request_id.as_deref(),
+    )
+}
 
 /// Setup guidance ported from the a8n-tools Stripe admin panel (BUNYIP-416):
 /// how and where to create the restricted API key and how the app-tag scopes
 /// what is shown. Rendered as a full-width intro card above the config form.
-fn stripe_setup_docs() -> Markup {
+pub(super) fn stripe_setup_docs() -> Markup {
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
             div class="p-6 space-y-3 text-sm text-muted-foreground" {
@@ -29,7 +65,16 @@ fn stripe_setup_docs() -> Markup {
                     "Your Stripe secret key authenticates API requests. Generate a "
                     a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noopener noreferrer" class="text-primary-text hover:underline" { "restricted key" }
                     " with these permissions set to " span class="font-medium text-foreground" { "Write" }
-                    ": Products, Prices, Customers, Subscriptions, and Checkout Sessions; and " span class="font-medium text-foreground" { "Read" } " for Invoices."
+                    ": Products, Prices, Customers, Subscriptions, Checkout Sessions, and "
+                    span class="font-medium text-foreground" { "Webhook Endpoints" }
+                    "; and " span class="font-medium text-foreground" { "Read" } " for Invoices."
+                }
+                // BUNYIP-516: the page offers a Create endpoint button that
+                // fails with a 403 without this permission, so the list that
+                // grants it has to say which button needs it.
+                p {
+                    "Webhook Endpoints is what the " span class="font-medium text-foreground" { "Create endpoint" }
+                    " button further down needs. Without it Stripe answers 403 and bunyip can neither create an endpoint nor read the ones that already exist."
                 }
                 p {
                     "Keys follow the format " code class="rounded bg-muted px-1 py-0.5 text-xs" { "rk_(live|test)_…" }
@@ -45,23 +90,22 @@ fn stripe_setup_docs() -> Markup {
     }
 }
 
-/// The Products block: a create form plus the app-tagged product list, each
-/// with an Archive action. `products == None` is the "could not load" state
-/// (e.g. no valid API key yet).
+/// The Products block: a create form plus the app-tagged product list, each with
+/// an Archive action. `Err` is the "could not read" state (BUNYIP-516) and is
+/// rendered as such, never as the empty state.
 pub(super) fn stripe_products_block(
-    products: Option<&[crate::api::types::StripeProduct]>,
-    prices: Option<&[crate::api::types::StripePrice]>,
+    products: Loaded<'_, crate::api::types::StripeProduct>,
+    prices: Loaded<'_, crate::api::types::StripePrice>,
 ) -> Markup {
     // BUNYIP-512: an active product with no active price is unsellable (the
     // state an archive-then-unarchive can leave behind); flag it so it is not
-    // silently broken. `None` prices = "could not load", so make no claim:
-    // this is true ONLY when the price list loaded and holds no active price.
-    let flag_no_active_price = |product_id: &str| {
-        prices.is_some_and(|list| {
-            !list
-                .iter()
-                .any(|pr| pr.product_id == product_id && pr.active)
-        })
+    // silently broken. A price-list read failure (`Err`, BUNYIP-516) makes no
+    // claim: this is true ONLY when the list loaded and holds no active price.
+    let flag_no_active_price = |product_id: &str| match prices {
+        Ok(list) => !list
+            .iter()
+            .any(|pr| pr.product_id == product_id && pr.active),
+        Err(_) => false,
     };
     admin_block(
         "Products",
@@ -73,9 +117,13 @@ pub(super) fn stripe_products_block(
                 button type="submit" class=(button_class("default", "sm", "")) { "Create product" }
             }
             @match products {
-                None => (error_box("Could not load products from Stripe. Add a valid API key above and save, then reload.")),
-                Some([]) => (empty_state("package", "No products yet. Create one to get started.", None)),
-                Some(list) => div class="divide-y" {
+                Err(e) => (load_failure_box(
+                    "Could not read the products from Stripe, so bunyip cannot tell whether any exist.",
+                    e,
+                    "This usually means the restricted key lacks the Products permission, or no valid key is saved above.",
+                )),
+                Ok([]) => (empty_state("package", "No products yet. Create one to get started.", None)),
+                Ok(list) => div class="divide-y" {
                     @for p in list {
                         div class="py-3 flex items-center justify-between gap-4" {
                             div class="min-w-0" {
@@ -135,11 +183,16 @@ fn archive_blocked_by_members(member_count: i64) -> Markup {
 /// price list, each active price with an Archive action. Prices are immutable
 /// in Stripe, so there is no edit.
 pub(super) fn stripe_prices_block(
-    prices: Option<&[crate::api::types::StripePrice]>,
-    products: &[crate::api::types::StripeProduct],
+    prices: Loaded<'_, crate::api::types::StripePrice>,
+    products: Loaded<'_, crate::api::types::StripeProduct>,
 ) -> Markup {
+    // BUNYIP-516: an unreadable product list would otherwise leave the dropdown
+    // with nothing in it, which reads as "this account has no products". The
+    // Products block states the cause; the caption below says why the picker is
+    // empty so the form is not silently unusable.
+    let product_list = products.unwrap_or(&[]);
     let name_of = |pid: &str| {
-        products
+        product_list
             .iter()
             .find(|p| p.id == pid)
             .map(|p| p.name.clone())
@@ -154,7 +207,10 @@ pub(super) fn stripe_prices_block(
                     label for="product_id" class="text-xs font-medium" { "Product" }
                     select id="product_id" name="product_id" required class=(dashboard_input()) {
                         option value="" disabled selected { "Select a product" }
-                        @for p in products.iter().filter(|p| p.active) { option value=(p.id) { (p.name) } }
+                        @for p in product_list.iter().filter(|p| p.active) { option value=(p.id) { (p.name) } }
+                    }
+                    @if products.is_err() {
+                        p class="text-xs text-destructive-text" { "Empty because the products could not be read from Stripe, not because there are none. See the Products block above." }
                     }
                 }
                 div class="space-y-1 w-28" { label for="amount" class="text-xs font-medium" { "Amount" } input id="amount" name="amount" type="number" step="0.01" min="0" required placeholder="9.99" class=(dashboard_input()); }
@@ -169,9 +225,13 @@ pub(super) fn stripe_prices_block(
                 button type="submit" class=(button_class("default", "sm", "")) { "Create price" }
             }
             @match prices {
-                None => (error_box("Could not load prices from Stripe. Add a valid API key above and save, then reload.")),
-                Some([]) => (empty_state("banknote", "No prices yet. Create one to get started.", None)),
-                Some(list) => div class="divide-y" {
+                Err(e) => (load_failure_box(
+                    "Could not read the prices from Stripe, so bunyip cannot tell whether any exist.",
+                    e,
+                    "This usually means the restricted key lacks the Prices permission, or no valid key is saved above.",
+                )),
+                Ok([]) => (empty_state("banknote", "No prices yet. Create one to get started.", None)),
+                Ok(list) => div class="divide-y" {
                     @for pr in list {
                         div class={ "py-3 flex items-center justify-between gap-4 " (if pr.active { "" } else { "opacity-50" }) } {
                             div class="min-w-0" {
@@ -255,12 +315,33 @@ pub(super) fn is_public_https_origin(origin: &str) -> bool {
 /// React admin already exposed this.
 /// BUNYIP-510: the URL is prefilled from the deployment's public API origin and
 /// the block states whether processing is live (`has_webhook_secret`).
+/// BUNYIP-516: what a failed create hands back to the form, so fixing the key
+/// and pressing the button again does not mean retyping the URL and the event
+/// list. All-`None` on a normal page load.
+#[derive(Default)]
+pub(super) struct WebhookRetry<'a> {
+    /// The user-facing reason the create failed.
+    pub error: Option<&'a str>,
+    /// The endpoint URL that was submitted.
+    pub url: Option<&'a str>,
+    /// The enabled-events text that was submitted, verbatim.
+    pub events: Option<&'a str>,
+    /// bunyip-api's request id for the failed create.
+    pub reference: Option<&'a str>,
+}
+
 pub(super) fn stripe_webhooks_block(
-    webhooks: Option<&[crate::api::types::StripeWebhookEndpoint]>,
+    webhooks: Loaded<'_, crate::api::types::StripeWebhookEndpoint>,
     api_public_origin: &str,
     has_webhook_secret: bool,
+    retry: &WebhookRetry<'_>,
 ) -> Markup {
-    let url = stripe_webhook_url(api_public_origin);
+    let derived_url = stripe_webhook_url(api_public_origin);
+    // BUNYIP-516: a failed attempt keeps what the admin typed; otherwise the
+    // form falls back to the derived URL and the recommended event set.
+    let url = retry.url.unwrap_or(&derived_url);
+    let default_events = RECOMMENDED_WEBHOOK_EVENTS.join(", ");
+    let events = retry.events.unwrap_or(&default_events);
     let origin_ok = is_public_https_origin(api_public_origin);
     admin_block(
         "Webhook endpoints",
@@ -276,6 +357,14 @@ pub(super) fn stripe_webhooks_block(
                     (error_box("Webhook processing is not active: bunyip rejects every incoming Stripe event until a signing secret is saved. Creating an endpoint below saves one automatically."))
                 }
             }
+            // BUNYIP-516: a failed create is reported here, next to the button
+            // that failed and the values it was given, rather than as a toast
+            // that has faded by the time the admin looks.
+            @if let Some(err) = retry.error {
+                div class="mb-4" {
+                    (error_box_detailed("Creating the webhook endpoint failed. Your entries are kept below, so fix the cause and press Create endpoint again.", Some(err), retry.reference))
+                }
+            }
             form method="post" action="/admin/stripe/webhooks" class="space-y-3 mb-4" {
                 div class="space-y-1" {
                     label for="url" class="text-xs font-medium" { "Endpoint URL" }
@@ -288,15 +377,19 @@ pub(super) fn stripe_webhooks_block(
                 }
                 div class="space-y-1" {
                     label for="enabled_events" class="text-xs font-medium" { "Enabled events" }
-                    textarea id="enabled_events" name="enabled_events" rows="2" class=(dashboard_input()) { (RECOMMENDED_WEBHOOK_EVENTS.join(", ")) }
+                    textarea id="enabled_events" name="enabled_events" rows="2" class=(dashboard_input()) { (events) }
                     p class="text-xs text-muted-foreground" { "Comma- or whitespace-separated. Defaults to the events bunyip handles." }
                 }
                 button type="submit" class=(button_class("default", "sm", "")) { "Create endpoint" }
             }
             @match webhooks {
-                None => (error_box("Could not load webhook endpoints from Stripe. Add a valid API key above and save, then reload.")),
-                Some([]) => (empty_state("link-2", "No webhook endpoints yet. Create one so Stripe can send checkout, subscription, and payment events to bunyip.", None)),
-                Some(list) => div class="divide-y" {
+                Err(e) => (load_failure_box(
+                    "Could not read the webhook endpoints from Stripe, so bunyip cannot tell whether one already exists.",
+                    e,
+                    "This usually means the restricted key lacks the Webhook Endpoints permission, or no valid key is saved above.",
+                )),
+                Ok([]) => (empty_state("link-2", "No webhook endpoints yet. Create one so Stripe can send checkout, subscription, and payment events to bunyip.", None)),
+                Ok(list) => div class="divide-y" {
                     @for w in list {
                         div class="py-3 flex items-center justify-between gap-4" {
                             div class="min-w-0" {
@@ -323,7 +416,7 @@ pub(super) fn stripe_webhooks_block(
 /// classification from that price on save, so the two can never disagree. Only
 /// price fields are asked for; the derived product is shown read-only.
 pub(super) fn stripe_catalog_section(
-    tier: Option<&crate::api::types::TierConfigResponse>,
+    tier: Result<&crate::api::types::TierConfigResponse, &ApiError>,
     prices: Option<&[crate::api::types::StripePrice]>,
 ) -> Markup {
     // A price <select> populated from the active prices, with the stored value
@@ -393,8 +486,8 @@ pub(super) fn stripe_catalog_section(
                 }
             }
             @match tier {
-                None => (error_box("Could not load the tier catalog mapping.")),
-                Some(t) => form method="post" action="/admin/stripe/catalog" class="space-y-6" {
+                Err(e) => (error_box_detailed("Could not load the tier catalog mapping.", Some(&e.user_message()), e.request_id.as_deref())),
+                Ok(t) => form method="post" action="/admin/stripe/catalog" class="space-y-6" {
                     (admin_block_grid(vec![
                         admin_block("Free / lifetime", Some("A $0 price. Free and lifetime grants both open a subscription on it."), html! {
                             div class="space-y-4" { (tier_card("free_price_id", &t.free_price_id, &t.lifetime_product_id)) }
@@ -413,29 +506,65 @@ pub(super) fn stripe_catalog_section(
     }
 }
 
-pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response {
+/// BUNYIP-516: the query a failed webhook create redirects back with, so the
+/// Webhook endpoints block can restate the failure and redisplay the submitted
+/// values. Every field is optional; a plain page load leaves them empty.
+#[derive(Debug, Default, Deserialize)]
+pub struct StripePageQuery {
+    #[serde(default)]
+    pub webhook_error: String,
+    #[serde(default)]
+    pub webhook_url: String,
+    #[serde(default)]
+    pub webhook_events: String,
+    #[serde(default)]
+    pub webhook_ref: String,
+}
+
+/// Non-empty `&str`, or `None`, so a blank query parameter does not blank out
+/// the form default it is meant to override.
+fn present(s: &str) -> Option<&str> {
+    Some(s.trim()).filter(|v| !v.is_empty())
+}
+
+pub async fn stripe(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<StripePageQuery>,
+) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
     let fwd = c.forward.as_deref();
-    let cfg = admin_api::stripe_config(&st.api, fwd).await.ok();
-    // Products + prices come from Stripe via the API; an unconfigured / invalid
-    // key surfaces as None and the blocks render a "could not load" note.
-    let products = admin_api::list_stripe_products(&st.api, fwd).await.ok();
-    let prices = admin_api::list_stripe_prices(&st.api, fwd).await.ok();
-    // DEV-518: webhook endpoints, same load-or-None posture as products/prices.
-    let webhooks = admin_api::list_stripe_webhooks(&st.api, fwd).await.ok();
+    let cfg = admin_api::stripe_config(&st.api, fwd).await;
+    // BUNYIP-516: keep the `Result`. These lists come from Stripe via the API,
+    // and an unreadable list is NOT an empty one: the blocks say which of the
+    // two happened, and name the api request id when it is the former.
+    let products = admin_api::list_stripe_products(&st.api, fwd).await;
+    let prices = admin_api::list_stripe_prices(&st.api, fwd).await;
+    // DEV-518: webhook endpoints, same load-or-report posture as products/prices.
+    let webhooks = admin_api::list_stripe_webhooks(&st.api, fwd).await;
     // BUNYIP-417: the tier -> Stripe price/product mapping moved here from Tier
     // Settings, so all Stripe config lives under one nav entry.
-    let tier = admin_api::tier_config(&st.api, fwd).await.ok();
+    let tier = admin_api::tier_config(&st.api, fwd).await;
+
+    let products_loaded: Loaded<'_, _> = products.as_ref().map(Vec::as_slice);
+    let prices_loaded: Loaded<'_, _> = prices.as_ref().map(Vec::as_slice);
+    let webhooks_loaded: Loaded<'_, _> = webhooks.as_ref().map(Vec::as_slice);
+    let retry = WebhookRetry {
+        error: present(&q.webhook_error),
+        url: present(&q.webhook_url),
+        events: present(&q.webhook_events),
+        reference: present(&q.webhook_ref),
+    };
 
     let content = html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Stripe" } p class="mt-2 text-muted-foreground" { "Connect and configure Stripe billing, products, and prices." } }
-            @match cfg {
-                None => (error_box("Could not load Stripe config.")),
-                Some(s) => {
+            @match &cfg {
+                Err(e) => (error_box_detailed("Could not load Stripe config.", Some(&e.user_message()), e.request_id.as_deref())),
+                Ok(s) => {
                     // BUNYIP-416: setup guidance ported from a8n-tools.
                     (stripe_setup_docs())
                     // BUNYIP-415: config in a responsive two-column block grid,
@@ -467,10 +596,12 @@ pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response 
                         ]))
                         button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
                     }
-                    (stripe_products_block(products.as_deref(), prices.as_deref()))
-                    (stripe_prices_block(prices.as_deref(), products.as_deref().unwrap_or(&[])))
-                    (stripe_webhooks_block(webhooks.as_deref(), &st.cfg.api_public_origin, s.has_webhook_secret))
-                    (stripe_catalog_section(tier.as_ref(), prices.as_deref()))
+                    (stripe_products_block(products_loaded, prices_loaded))
+                    (stripe_prices_block(prices_loaded, products_loaded))
+                    (stripe_webhooks_block(webhooks_loaded, &st.cfg.api_public_origin, s.has_webhook_secret, &retry))
+                    // BUNYIP-516 renders a tier load-failure with its request id;
+                    // BUNYIP-517 needs the loaded prices for the per-tier selects.
+                    (stripe_catalog_section(tier.as_ref(), prices.as_ref().ok().map(Vec::as_slice)))
                 },
             }
         }
@@ -508,7 +639,10 @@ pub async fn stripe_product_create(
     }
     let target = match admin_api::create_stripe_product(&st.api, c.forward.as_deref(), body).await {
         Ok(()) => "/admin/stripe?toast_ok=Product%20created".to_string(),
-        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+        Err(e) => format!(
+            "/admin/stripe?toast_err={}",
+            urlenc(&e.user_message_with_reference())
+        ),
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -525,7 +659,10 @@ pub async fn stripe_product_archive(
     };
     let target = match admin_api::archive_stripe_product(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => "/admin/stripe?toast_ok=Product%20archived".to_string(),
-        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+        Err(e) => format!(
+            "/admin/stripe?toast_err={}",
+            urlenc(&e.user_message_with_reference())
+        ),
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -589,16 +726,29 @@ pub async fn stripe_webhook_create(
             .map(|e| e.to_string())
             .collect();
     }
+    // Kept for the failure redirect below, which redisplays what was submitted.
+    let events_text = events.join(", ");
     let body = json!({ "url": url, "enabled_events": events });
     match admin_api::create_stripe_webhook(&st.api, c.forward.as_deref(), body).await {
         Ok(w) => {
             let content = webhook_created_page(&w);
             admin_response(&c, &user, "/admin/stripe", "Webhook created", content)
         }
-        Err(e) => redirect_cookies(
-            &format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
-            &c.set_cookies,
-        ),
+        // BUNYIP-516: hand the reason, the submitted URL and the submitted event
+        // text back to the page. A toast would fade in 2.5 seconds and the form
+        // would come back blank, so the admin retyped everything to retry.
+        Err(e) => {
+            let mut target = format!(
+                "/admin/stripe?webhook_error={}&webhook_url={}&webhook_events={}",
+                urlenc(&e.user_message_with_reference()),
+                urlenc(url),
+                urlenc(&events_text),
+            );
+            if let Some(id) = &e.request_id {
+                target.push_str(&format!("&webhook_ref={}", urlenc(id)));
+            }
+            redirect_cookies(&target, &c.set_cookies)
+        }
     }
 }
 
@@ -647,7 +797,10 @@ pub async fn stripe_webhook_delete(
     };
     let target = match admin_api::delete_stripe_webhook(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => "/admin/stripe?toast_ok=Webhook%20endpoint%20deleted".to_string(),
-        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+        Err(e) => format!(
+            "/admin/stripe?toast_err={}",
+            urlenc(&e.user_message_with_reference())
+        ),
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -704,7 +857,10 @@ pub async fn stripe_price_create(
     });
     let target = match admin_api::create_stripe_price(&st.api, c.forward.as_deref(), body).await {
         Ok(()) => "/admin/stripe?toast_ok=Price%20created".to_string(),
-        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+        Err(e) => format!(
+            "/admin/stripe?toast_err={}",
+            urlenc(&e.user_message_with_reference())
+        ),
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -721,7 +877,10 @@ pub async fn stripe_price_archive(
     };
     let target = match admin_api::archive_stripe_price(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => "/admin/stripe?toast_ok=Price%20archived".to_string(),
-        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+        Err(e) => format!(
+            "/admin/stripe?toast_err={}",
+            urlenc(&e.user_message_with_reference())
+        ),
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -789,7 +948,10 @@ pub async fn stripe_catalog_save(
     .await
     {
         Ok(()) => "/admin/stripe?toast_ok=Catalog%20mapping%20saved".to_string(),
-        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+        Err(e) => format!(
+            "/admin/stripe?toast_err={}",
+            urlenc(&e.user_message_with_reference())
+        ),
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -883,7 +1045,9 @@ pub async fn stripe_save(
     }
     match admin_api::update_stripe_config(&st.api, c.forward.as_deref(), body).await {
         Ok(()) => redirect_cookies("/admin/stripe", &c.set_cookies),
-        Err(e) => render_error(&e.user_message()),
+        // BUNYIP-516: the api's request id rides along so a save that still
+        // reports a generic line can be found in the api log.
+        Err(e) => render_error(&e.user_message_with_reference()),
     }
 }
 

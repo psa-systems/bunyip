@@ -25,6 +25,7 @@ use tracing::Span;
 use tracing_actix_web::{DefaultRootSpanBuilder, RequestId, RootSpanBuilder};
 
 use crate::middleware::extract_client_ip;
+use crate::middleware::request_id::RequestId as ResponseRequestId;
 
 fn http_flavor(version: Version) -> &'static str {
     match version {
@@ -63,11 +64,24 @@ impl RootSpanBuilder for ClientIpRootSpanBuilder {
             .map(Into::into)
             .unwrap_or_else(|| "default".into());
         let http_method = request.method().as_str();
+        // BUNYIP-516: prefer the `RequestId` the dunite request-id middleware
+        // put in the extensions - that is the value it echoes in the
+        // `X-Request-Id` response header, so the id a caller can quote from a
+        // failed response is the id that appears on these log lines. The
+        // `tracing_actix_web` id is a different uuid that never leaves the
+        // process, so it is only the fallback (this middleware runs outside the
+        // tracing layer, but never assume it is installed).
         let request_id = request
             .extensions()
-            .get::<RequestId>()
-            .copied()
-            .map(|id| id.to_string())
+            .get::<ResponseRequestId>()
+            .map(|id| id.0.clone())
+            .or_else(|| {
+                request
+                    .extensions()
+                    .get::<RequestId>()
+                    .copied()
+                    .map(|id| id.to_string())
+            })
             .unwrap_or_default();
         let client_ip = extract_client_ip(request.request())
             .map(|ip| ip.to_string())

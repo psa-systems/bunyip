@@ -35,6 +35,11 @@ pub struct Resp {
     /// responses so `error_from` can surface an accurate wait time
     /// (BUNYIP-314). `None` when the header is absent or non-numeric.
     pub retry_after_header: Option<u64>,
+    /// The `X-Request-Id` bunyip-api echoed, which is also what its own log
+    /// lines carry as `request_id` (BUNYIP-516). Read from the header, NOT from
+    /// `meta.request_id`: dunite-core mints a fresh id when rendering an error
+    /// body, so the value in a failed response's envelope matches no log line.
+    pub request_id: Option<String>,
 }
 
 impl Resp {
@@ -52,6 +57,10 @@ pub struct ApiError {
     /// (BUNYIP-314). Read from the `Retry-After` header, falling back to the
     /// `error.details.retry_after` body field. `None` for non-throttle errors.
     pub retry_after: Option<u64>,
+    /// bunyip-api's `X-Request-Id` for the failed call (BUNYIP-516), so an error
+    /// surface can quote the one token that ties what the admin saw to the api
+    /// log line. `None` for a transport failure, which never reached the api.
+    pub request_id: Option<String>,
 }
 
 /// Standard human phrasing for a `Retry-After` duration in seconds
@@ -74,6 +83,7 @@ impl ApiError {
             code: "NETWORK_ERROR".into(),
             message: msg.into(),
             retry_after: None,
+            request_id: None,
         }
     }
 
@@ -102,6 +112,17 @@ impl ApiError {
             500..=599 => "An unexpected error occurred. Please try again later.".to_string(),
             _ if self.message.is_empty() => "An unexpected error occurred".to_string(),
             _ => self.message.clone(),
+        }
+    }
+
+    /// BUNYIP-516: [`user_message`](Self::user_message) with bunyip-api's request
+    /// id appended, for surfaces where the admin is the one who has to quote it
+    /// to an operator. Unchanged when the call never reached the api, so a
+    /// transport failure does not advertise a reference nobody can look up.
+    pub fn user_message_with_reference(&self) -> String {
+        match &self.request_id {
+            Some(id) => format!("{} Reference: {id}.", self.user_message()),
+            None => self.user_message(),
         }
     }
 
@@ -168,6 +189,7 @@ impl Api {
             .filter_map(|v| v.to_str().ok().map(str::to_string))
             .collect();
         let retry_after_header = retry_after_from_headers(resp.headers());
+        let request_id = request_id_from_headers(resp.headers());
         let text = resp.text().await.unwrap_or_default();
         let body = if text.trim().is_empty() {
             Value::Null
@@ -180,6 +202,7 @@ impl Api {
             body,
             set_cookies,
             retry_after_header,
+            request_id,
         })
     }
 
@@ -275,6 +298,7 @@ impl Api {
             .filter_map(|v| v.to_str().ok().map(str::to_string))
             .collect();
         let retry_after_header = retry_after_from_headers(resp.headers());
+        let request_id = request_id_from_headers(resp.headers());
         let text = resp.text().await.unwrap_or_default();
         let body = serde_json::from_str(&text).unwrap_or(Value::Null);
         Ok(Resp {
@@ -283,6 +307,7 @@ impl Api {
             body,
             set_cookies,
             retry_after_header,
+            request_id,
         })
     }
 }
@@ -314,6 +339,20 @@ fn forward_client_ip(rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
 /// emits it as an integer count of seconds (dunite-core `AppError::RateLimited`);
 /// the HTTP-date form is not produced by the API, so only the delta-seconds
 /// form is honoured here.
+/// BUNYIP-516: bunyip-api's `X-Request-Id` for this response. The dunite
+/// request-id middleware sets it from the same `RequestId` the api's own log
+/// lines record, so quoting this value locates the failure in the api log. The
+/// error envelope's `meta.request_id` is NOT usable for that: dunite-core mints
+/// a fresh id while rendering the body, so it correlates with nothing.
+fn request_id_from_headers(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    headers
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
 fn retry_after_from_headers(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     headers
         .get(RETRY_AFTER)
@@ -347,6 +386,9 @@ pub fn error_from(resp: &Resp) -> ApiError {
         code,
         message,
         retry_after,
+        // BUNYIP-516: from the header, so the admin can quote an id that is
+        // actually in the api log.
+        request_id: resp.request_id.clone(),
     }
 }
 
@@ -383,6 +425,9 @@ pub fn decode_error<T>(path: &str, e: &serde_json::Error) -> ApiError {
         code: DECODE_ERROR_CODE.into(),
         message: DECODE_ERROR_MESSAGE.into(),
         retry_after: None,
+        // The caller attaches the response's id where it has one; a bare
+        // `decode_error` (auth's hand-rolled parses) has no response to read.
+        request_id: None,
     }
 }
 
@@ -390,7 +435,10 @@ pub fn decode_error<T>(path: &str, e: &serde_json::Error) -> ApiError {
 pub fn parse<T: DeserializeOwned>(resp: Resp) -> Result<T, ApiError> {
     if resp.ok() {
         let data = resp.body.get("data").cloned().unwrap_or(Value::Null);
-        serde_json::from_value(data).map_err(|e| decode_error::<T>(&resp.path, &e))
+        serde_json::from_value(data).map_err(|e| ApiError {
+            request_id: resp.request_id.clone(),
+            ..decode_error::<T>(&resp.path, &e)
+        })
     } else {
         Err(error_from(&resp))
     }
@@ -405,7 +453,10 @@ pub fn parse<T: DeserializeOwned>(resp: Resp) -> Result<T, ApiError> {
 /// The public body shape is contractual, so the client bends, not the endpoint.
 pub fn parse_bare<T: DeserializeOwned>(resp: Resp) -> Result<T, ApiError> {
     if resp.ok() {
-        serde_json::from_value(resp.body.clone()).map_err(|e| decode_error::<T>(&resp.path, &e))
+        serde_json::from_value(resp.body.clone()).map_err(|e| ApiError {
+            request_id: resp.request_id.clone(),
+            ..decode_error::<T>(&resp.path, &e)
+        })
     } else {
         Err(error_from(&resp))
     }
@@ -454,6 +505,7 @@ mod tests {
             body,
             set_cookies: vec![],
             retry_after_header,
+            request_id: Some("req_test".to_string()),
         }
     }
 
@@ -535,6 +587,7 @@ mod tests {
             code: "NETWORK_ERROR".into(),
             message: "error sending request for url (http://bunyip-api:4401/v1/auth/login): connection refused".into(),
             retry_after: None,
+            request_id: None,
         };
         let tmsg = transport.user_message();
         assert!(

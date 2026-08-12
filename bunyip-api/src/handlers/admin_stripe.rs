@@ -19,7 +19,9 @@ use crate::repositories::{
     AuditLogRepository, StripeConfigRepository, TierConfigRepository, UserRepository,
 };
 use crate::responses::{get_request_id, success, success_no_data};
-use crate::services::{stripe_config_from_db_model, stripe_err, AppKeySet, StripeService};
+use crate::services::{
+    stripe_config_from_db_model, stripe_err_for, AppKeySet, StripePermission, StripeService,
+};
 
 // =============================================================================
 // BUNYIP-512: plan archive guard + cascade
@@ -190,10 +192,16 @@ pub async fn list_stripe_products(
     pool: web::Data<PgPool>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
-    let products = stripe.list_products().await.map_err(stripe_err)?;
-    // One list of all app-tagged prices groups the product -> price sets without
-    // an extra Stripe round trip per product.
-    let all_prices = stripe.list_prices(None).await.map_err(stripe_err)?;
+    let products = stripe
+        .list_products()
+        .await
+        .map_err(stripe_err_for(StripePermission::Products))?;
+    // BUNYIP-512: one list of all app-tagged prices groups the product -> price
+    // sets without an extra Stripe round trip per product.
+    let all_prices = stripe
+        .list_prices(None)
+        .await
+        .map_err(stripe_err_for(StripePermission::Prices))?;
     let tier = TierConfigRepository::get(&pool).await?;
     let index = UserRepository::plan_member_index(&pool).await?;
 
@@ -231,7 +239,7 @@ pub async fn create_stripe_product(
             body.metadata.clone().unwrap_or_default(),
         )
         .await
-        .map_err(stripe_err)?;
+        .map_err(stripe_err_for(StripePermission::Products))?;
     Ok(success(product, request_id))
 }
 
@@ -254,7 +262,7 @@ pub async fn update_stripe_product(
             body.active,
         )
         .await
-        .map_err(stripe_err)?;
+        .map_err(stripe_err_for(StripePermission::Products))?;
     Ok(success(product, request_id))
 }
 
@@ -281,7 +289,7 @@ pub async fn archive_stripe_product(
     let prices = stripe
         .list_prices(Some(&product_id))
         .await
-        .map_err(stripe_err)?;
+        .map_err(stripe_err_for(StripePermission::Prices))?;
     let tier = TierConfigRepository::get(&pool).await?;
     let price_ids: Vec<String> = prices.iter().map(|p| p.id.clone()).collect();
     let plan = plan_for_product(&tier, &product_id, &price_ids);
@@ -302,7 +310,7 @@ pub async fn archive_stripe_product(
     let mut archived: Vec<String> = Vec::new();
     for pid in &active_price_ids {
         if let Err(e) = stripe.archive_price(pid).await {
-            let mapped = stripe_err(e);
+            let mapped = stripe_err_for(StripePermission::Prices)(e);
             tracing::error!(
                 product_id = %product_id,
                 failed_price_id = %pid,
@@ -322,7 +330,7 @@ pub async fn archive_stripe_product(
     stripe
         .archive_product(&product_id)
         .await
-        .map_err(stripe_err)?;
+        .map_err(stripe_err_for(StripePermission::Products))?;
 
     let audit = CreateAuditLog::new(AuditAction::AdminStripePlanArchived)
         .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
@@ -363,7 +371,7 @@ pub async fn unarchive_stripe_product(
     stripe
         .update_product(&product_id, None, None, None, Some(true))
         .await
-        .map_err(stripe_err)?;
+        .map_err(stripe_err_for(StripePermission::Products))?;
 
     let audit = CreateAuditLog::new(AuditAction::AdminStripePlanUnarchived)
         .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
@@ -395,7 +403,7 @@ pub async fn list_stripe_prices(
     let prices = stripe
         .list_prices(query.product_id.as_deref())
         .await
-        .map_err(stripe_err)?;
+        .map_err(stripe_err_for(StripePermission::Prices))?;
     let tier = TierConfigRepository::get(&pool).await?;
     let index = UserRepository::plan_member_index(&pool).await?;
 
@@ -430,7 +438,7 @@ pub async fn create_stripe_price(
             &body.interval,
         )
         .await
-        .map_err(stripe_err)?;
+        .map_err(stripe_err_for(StripePermission::Prices))?;
     // BUNYIP-515: the new price can be the one a tier maps to, so the public
     // payload must not stay stale for up to the TTL after an admin fixes it.
     pricing_cache.invalidate();
@@ -462,7 +470,10 @@ pub async fn archive_stripe_price(
         return Err(refuse_archive("price", members));
     }
 
-    stripe.archive_price(&price_id).await.map_err(stripe_err)?;
+    stripe
+        .archive_price(&price_id)
+        .await
+        .map_err(stripe_err_for(StripePermission::Prices))?;
 
     let audit = CreateAuditLog::new(AuditAction::AdminStripePlanArchived)
         .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
@@ -499,7 +510,7 @@ pub async fn unarchive_stripe_price(
     stripe
         .unarchive_price(&price_id)
         .await
-        .map_err(stripe_err)?;
+        .map_err(stripe_err_for(StripePermission::Prices))?;
 
     let audit = CreateAuditLog::new(AuditAction::AdminStripePlanUnarchived)
         .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
@@ -521,7 +532,10 @@ pub async fn list_stripe_webhooks(
     stripe: web::Data<Arc<StripeService>>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
-    let webhooks = stripe.list_webhook_endpoints().await.map_err(stripe_err)?;
+    let webhooks = stripe
+        .list_webhook_endpoints()
+        .await
+        .map_err(stripe_err_for(StripePermission::WebhookEndpoints))?;
     Ok(success(webhooks, request_id))
 }
 
@@ -542,7 +556,7 @@ pub async fn create_stripe_webhook(
     let webhook = stripe
         .create_webhook_endpoint(&body.url, body.enabled_events.clone())
         .await
-        .map_err(stripe_err)?;
+        .map_err(stripe_err_for(StripePermission::WebhookEndpoints))?;
 
     // If the webhook creation returned a signing secret, persist it encrypted
     if let Some(ref secret) = webhook.secret {
@@ -590,7 +604,7 @@ pub async fn delete_stripe_webhook(
     stripe
         .delete_webhook_endpoint(&endpoint_id)
         .await
-        .map_err(stripe_err)?;
+        .map_err(stripe_err_for(StripePermission::WebhookEndpoints))?;
     Ok(success_no_data(request_id))
 }
 
