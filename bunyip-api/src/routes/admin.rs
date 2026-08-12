@@ -350,6 +350,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/stripe/prices/{id}/unarchive",
                 web::post().to(handlers::unarchive_stripe_price),
             )
+            // BUNYIP-511: replace a price (create new + repoint refs + archive old).
+            .route(
+                "/stripe/prices/{id}/replace",
+                web::post().to(handlers::replace_stripe_price),
+            )
             // Stripe webhooks
             .route(
                 "/stripe/webhooks",

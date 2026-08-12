@@ -91,8 +91,9 @@ pub(super) fn stripe_setup_docs() -> Markup {
 }
 
 /// The Products block: a create form plus the app-tagged product list, each with
-/// an Archive action. `Err` is the "could not read" state (BUNYIP-516) and is
-/// rendered as such, never as the empty state.
+/// an Edit disclosure (BUNYIP-511, name/description in place) and an
+/// Archive/Unarchive action. `Err` is the "could not read" state (BUNYIP-516) and
+/// is rendered as such, never as the empty state.
 pub(super) fn stripe_products_block(
     products: Loaded<'_, crate::api::types::StripeProduct>,
     prices: Loaded<'_, crate::api::types::StripePrice>,
@@ -125,33 +126,37 @@ pub(super) fn stripe_products_block(
                 Ok([]) => (empty_state("package", "No products yet. Create one to get started.", None)),
                 Ok(list) => div class="divide-y" {
                     @for p in list {
-                        div class="py-3 flex items-center justify-between gap-4" {
-                            div class="min-w-0" {
-                                p class="font-medium flex items-center gap-2" {
-                                    (p.name)
-                                    @if p.active { (badge("success", "Active")) } @else { (badge("secondary", "Archived")) }
-                                    @if p.active && flag_no_active_price(&p.id) { (badge("warning", "No active price")) }
+                        div class="py-3 space-y-3" {
+                            div class="flex items-center justify-between gap-4" {
+                                div class="min-w-0" {
+                                    p class="font-medium flex items-center gap-2" {
+                                        (p.name)
+                                        @if p.active { (badge("success", "Active")) } @else { (badge("secondary", "Archived")) }
+                                        @if p.active && flag_no_active_price(&p.id) { (badge("warning", "No active price")) }
+                                    }
+                                    @if let Some(d) = p.description.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+                                        p class="text-xs text-muted-foreground truncate" { (d) }
+                                    }
+                                    p class="text-xs text-muted-foreground font-mono truncate" { (p.id) }
                                 }
-                                @if let Some(d) = p.description.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
-                                    p class="text-xs text-muted-foreground truncate" { (d) }
-                                }
-                                p class="text-xs text-muted-foreground font-mono truncate" { (p.id) }
-                            }
-                            @if p.active {
-                                @if p.member_count > 0 {
-                                    (archive_blocked_by_members(p.member_count))
+                                @if p.active {
+                                    @if p.member_count > 0 {
+                                        (archive_blocked_by_members(p.member_count))
+                                    } @else {
+                                        form method="post" action=(format!("/admin/stripe/products/{}/archive", p.id)) data-confirm="Archive this product? Its prices are archived too, and it will no longer be available for new subscriptions." {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                                        }
+                                    }
                                 } @else {
-                                    form method="post" action=(format!("/admin/stripe/products/{}/archive", p.id)) data-confirm="Archive this product? Its prices are archived too, and it will no longer be available for new subscriptions." {
-                                        button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                                    // BUNYIP-513: an archived product can be restored. No cascade to
+                                    // prices - each archived price is restored on its own row.
+                                    form method="post" action=(format!("/admin/stripe/products/{}/unarchive", p.id)) data-confirm="Restore this product? It becomes purchasable again. Its prices stay as they are; restore any archived price on its own row." {
+                                        button type="submit" class=(button_class("outline", "sm", "")) { "Unarchive" }
                                     }
                                 }
-                            } @else {
-                                // BUNYIP-513: an archived product can be restored. No cascade to
-                                // prices - each archived price is restored on its own row.
-                                form method="post" action=(format!("/admin/stripe/products/{}/unarchive", p.id)) data-confirm="Restore this product? It becomes purchasable again. Its prices stay as they are; restore any archived price on its own row." {
-                                    button type="submit" class=(button_class("outline", "sm", "")) { "Unarchive" }
-                                }
                             }
+                            // BUNYIP-511: correct the name/description in place.
+                            (product_edit_details(p))
                         }
                     }
                 }
@@ -178,10 +183,79 @@ fn archive_blocked_by_members(member_count: i64) -> Markup {
     }
 }
 
+/// BUNYIP-511: the inline "edit name / description" disclosure for one product
+/// row. A native `<details>` (no JS, matching the app's other disclosures) whose
+/// form posts to `/admin/stripe/products/{id}`. The request carries name +
+/// description only, so an edit cannot change lifecycle (BUNYIP-512/513 own
+/// archive/restore) and the Stripe `app_tag` metadata survives.
+fn product_edit_details(p: &crate::api::types::StripeProduct) -> Markup {
+    let desc = p.description.as_deref().unwrap_or_default();
+    html! {
+        details {
+            summary class=(button_class("outline", "sm", "cursor-pointer list-none [&::-webkit-details-marker]:hidden")) { "Edit" }
+            form method="post" action=(format!("/admin/stripe/products/{}", p.id)) class="mt-3 w-full max-w-md rounded-md border p-3 space-y-3 text-sm" {
+                div class="space-y-1" {
+                    label for=(format!("name-{}", p.id)) class="text-xs font-medium" { "Name" }
+                    input id=(format!("name-{}", p.id)) name="name" value=(p.name) required maxlength="250" class=(dashboard_input());
+                }
+                div class="space-y-1" {
+                    label for=(format!("desc-{}", p.id)) class="text-xs font-medium" { "Description" }
+                    input id=(format!("desc-{}", p.id)) name="description" value=(desc) maxlength="500" placeholder="Optional - leave blank to clear" class=(dashboard_input());
+                }
+                button type="submit" class=(button_class("default", "sm", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
+            }
+        }
+    }
+}
+
+/// BUNYIP-511: the inline "replace" disclosure for one active price row. Stripe
+/// prices are immutable, so this posts the NEW amount/currency/interval to
+/// `/admin/stripe/prices/{id}/replace`, which creates a new price on the same
+/// product, repoints bunyip's references, and archives this one. The confirm
+/// names what is NOT migrated (existing subscriptions, locked-in prices).
+fn price_replace_details(pr: &crate::api::types::StripePrice) -> Markup {
+    let amount = format!("{:.2}", pr.unit_amount.unwrap_or(0) as f64 / 100.0);
+    let cur = pr.currency.to_lowercase();
+    let interval = pr.recurring_interval.as_deref().unwrap_or("month");
+    html! {
+        details {
+            summary class=(button_class("outline", "sm", "cursor-pointer list-none [&::-webkit-details-marker]:hidden")) { "Replace" }
+            form method="post" action=(format!("/admin/stripe/prices/{}/replace", pr.id)) data-confirm="Replace this price? A new price is created and this one is archived. The catalog mapping and product entitlements move to the new price. Existing subscriptions keep billing on the old price, and anyone on a grandfathered price stays on theirs." class="mt-3 w-full max-w-xl rounded-md border p-3 space-y-3 text-sm" {
+                p class="text-xs text-muted-foreground" { "Stripe cannot change an existing price, so this creates a new one and archives this. Existing subscriptions and locked-in prices are not moved." }
+                div class="flex flex-wrap items-end gap-3" {
+                    div class="space-y-1 w-28" { label for=(format!("amount-{}", pr.id)) class="text-xs font-medium" { "Amount" } input id=(format!("amount-{}", pr.id)) name="amount" type="number" step="0.01" min="0" required value=(amount) class=(dashboard_input()); }
+                    div class="space-y-1 w-24" {
+                        label for=(format!("currency-{}", pr.id)) class="text-xs font-medium" { "Currency" }
+                        select id=(format!("currency-{}", pr.id)) name="currency" class=(dashboard_input()) {
+                            option value="usd" selected[cur == "usd"] { "USD" }
+                            option value="eur" selected[cur == "eur"] { "EUR" }
+                            option value="gbp" selected[cur == "gbp"] { "GBP" }
+                        }
+                    }
+                    div class="space-y-1 w-28" {
+                        label for=(format!("interval-{}", pr.id)) class="text-xs font-medium" { "Interval" }
+                        select id=(format!("interval-{}", pr.id)) name="interval" class=(dashboard_input()) {
+                            option value="month" selected[interval == "month"] { "Monthly" }
+                            option value="year" selected[interval == "year"] { "Yearly" }
+                        }
+                    }
+                    button type="submit" class=(button_class("default", "sm", "")) { "Replace price" }
+                }
+            }
+        }
+    }
+}
+
 /// The Prices block: a create form (product dropdown limited to active
 /// products; amount in dollars, zero allowed for a lifetime plan) plus the
-/// price list, each active price with an Archive action. Prices are immutable
-/// in Stripe, so there is no edit.
+/// price list, each active price with a Replace and an Archive action.
+///
+/// BUNYIP-511: a Stripe price is immutable in amount, currency and interval, so
+/// changing what a plan costs is a REPLACE, not an edit: the Replace control
+/// creates a new price on the same product, moves the catalog mapping and the
+/// product entitlements onto it, and archives the old price. Existing Stripe
+/// subscriptions and grandfathered (locked) prices are deliberately left on the
+/// old price; the control's confirm and the block caption say so.
 pub(super) fn stripe_prices_block(
     prices: Loaded<'_, crate::api::types::StripePrice>,
     products: Loaded<'_, crate::api::types::StripeProduct>,
@@ -200,7 +274,7 @@ pub(super) fn stripe_prices_block(
     };
     admin_block(
         "Prices",
-        Some("Pricing for your products. A lifetime plan is a $0.00 price."),
+        Some("Pricing for your products. A lifetime plan is a $0.00 price. Prices cannot be edited in Stripe, so Replace creates a new price and archives the old one, moving the catalog mapping and entitlements across; existing subscriptions and locked-in prices stay on the old price."),
         html! {
             form method="post" action="/admin/stripe/prices" class="flex flex-wrap items-end gap-3 mb-4" {
                 div class="space-y-1 min-w-[11rem]" {
@@ -233,30 +307,36 @@ pub(super) fn stripe_prices_block(
                 Ok([]) => (empty_state("banknote", "No prices yet. Create one to get started.", None)),
                 Ok(list) => div class="divide-y" {
                     @for pr in list {
-                        div class={ "py-3 flex items-center justify-between gap-4 " (if pr.active { "" } else { "opacity-50" }) } {
-                            div class="min-w-0" {
-                                p class="font-medium flex items-center gap-2" {
-                                    (format_stripe_amount(pr.unit_amount, &pr.currency))
-                                    span class="text-xs font-normal text-muted-foreground" { (pr.recurring_interval.clone().unwrap_or_else(|| "One-time".into())) }
-                                    @if pr.active { (badge("success", "Active")) } @else { (badge("secondary", "Archived")) }
+                        div class={ "py-3 space-y-3 " (if pr.active { "" } else { "opacity-50" }) } {
+                            div class="flex items-center justify-between gap-4" {
+                                div class="min-w-0" {
+                                    p class="font-medium flex items-center gap-2" {
+                                        (format_stripe_amount(pr.unit_amount, &pr.currency))
+                                        span class="text-xs font-normal text-muted-foreground" { (pr.recurring_interval.clone().unwrap_or_else(|| "One-time".into())) }
+                                        @if pr.active { (badge("success", "Active")) } @else { (badge("secondary", "Archived")) }
+                                    }
+                                    p class="text-xs text-muted-foreground truncate" { (name_of(&pr.product_id)) }
+                                    p class="text-xs text-muted-foreground font-mono truncate" { (pr.id) }
                                 }
-                                p class="text-xs text-muted-foreground truncate" { (name_of(&pr.product_id)) }
-                                p class="text-xs text-muted-foreground font-mono truncate" { (pr.id) }
-                            }
-                            @if pr.active {
-                                @if pr.member_count > 0 {
-                                    (archive_blocked_by_members(pr.member_count))
+                                @if pr.active {
+                                    @if pr.member_count > 0 {
+                                        (archive_blocked_by_members(pr.member_count))
+                                    } @else {
+                                        form method="post" action=(format!("/admin/stripe/prices/{}/archive", pr.id)) data-confirm="Archive this price? Existing subscriptions using it are not affected." {
+                                            button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                                        }
+                                    }
                                 } @else {
-                                    form method="post" action=(format!("/admin/stripe/prices/{}/archive", pr.id)) data-confirm="Archive this price? Existing subscriptions using it are not affected." {
-                                        button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                                    // BUNYIP-513: restore an archived price.
+                                    form method="post" action=(format!("/admin/stripe/prices/{}/unarchive", pr.id)) data-confirm="Restore this price? It becomes purchasable again." {
+                                        button type="submit" class=(button_class("outline", "sm", "")) { "Unarchive" }
                                     }
                                 }
-                            } @else {
-                                // BUNYIP-513: restore an archived price.
-                                form method="post" action=(format!("/admin/stripe/prices/{}/unarchive", pr.id)) data-confirm="Restore this price? It becomes purchasable again." {
-                                    button type="submit" class=(button_class("outline", "sm", "")) { "Unarchive" }
-                                }
                             }
+                            // BUNYIP-511: change what this plan costs. A replace, not
+                            // an edit (Stripe prices are immutable), so it is offered
+                            // only on an active price.
+                            @if pr.active { (price_replace_details(pr)) }
                         }
                     }
                 }
@@ -717,6 +797,75 @@ pub async fn stripe_product_create(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+#[derive(Deserialize)]
+pub struct StripeProductEditForm {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// BUNYIP-511: name validation for a product edit - trimmed, required, 1 to 250
+/// chars. A blank name is an error (never sent upstream); this is the check the
+/// edit handler runs before building the request body.
+pub(super) fn validate_product_name(raw: &str) -> Result<String, String> {
+    match crate::handlers::validate::trim_bounded_opt(raw, "Product name", 250)? {
+        Some(t) => Ok(t.to_string()),
+        None => Err("Product name is required".to_string()),
+    }
+}
+
+/// BUNYIP-511: the body of a product edit. Name + description ONLY. It must never
+/// carry an `active` key (lifecycle is owned by archive/unarchive, BUNYIP-512/513)
+/// nor a `metadata` key (Stripe replaces the whole metadata map on update, so
+/// sending it would drop the `app_tag` and vanish the product from the list). A
+/// blank description is sent as `""` so Stripe clears the field.
+pub(super) fn product_edit_body(name: &str, description: &str) -> serde_json::Value {
+    json!({ "name": name, "description": description })
+}
+
+/// POST /admin/stripe/products/{id} - edit a product's name/description in place
+/// (BUNYIP-511), then redirect back.
+pub async fn stripe_product_edit(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<StripeProductEditForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let name = match validate_product_name(&f.name) {
+        Ok(n) => n,
+        Err(msg) => {
+            return redirect_cookies(
+                &format!("/admin/stripe?toast_err={}", urlenc(&msg)),
+                &c.set_cookies,
+            )
+        }
+    };
+    let description = f.description.trim();
+    if description.len() > 500 {
+        return redirect_cookies(
+            &format!(
+                "/admin/stripe?toast_err={}",
+                urlenc("Description must be 500 characters or fewer")
+            ),
+            &c.set_cookies,
+        );
+    }
+    let body = product_edit_body(&name, description);
+    let target =
+        match admin_api::update_stripe_product(&st.api, c.forward.as_deref(), &id, body).await {
+            Ok(()) => "/admin/stripe?toast_ok=Product%20updated".to_string(),
+            Err(e) => format!(
+                "/admin/stripe?toast_err={}",
+                urlenc(&e.user_message_with_reference())
+            ),
+        };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
 /// POST /admin/stripe/products/{id}/archive
 pub async fn stripe_product_archive(
     State(st): State<AppState>,
@@ -932,6 +1081,53 @@ pub async fn stripe_price_create(
             urlenc(&e.user_message_with_reference())
         ),
     };
+    redirect_cookies(&target, &c.set_cookies)
+}
+
+#[derive(Deserialize)]
+pub struct StripePriceReplaceForm {
+    pub amount: String,
+    pub currency: String,
+    pub interval: String,
+}
+
+/// BUNYIP-511: the body of a price replace - the new amount (cents), currency and
+/// interval. Reuses [`parse_price_cents`] for the amount, exactly like create.
+pub(super) fn price_replace_body(cents: i64, currency: &str, interval: &str) -> serde_json::Value {
+    json!({ "unit_amount": cents, "currency": currency, "interval": interval })
+}
+
+/// POST /admin/stripe/prices/{id}/replace - replace a price (BUNYIP-511). The API
+/// creates the new price, repoints bunyip's references, and archives this one; a
+/// partial failure comes back as an error the toast shows verbatim.
+pub async fn stripe_price_replace(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(f): Form<StripePriceReplaceForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let cents = match parse_price_cents(&f.amount) {
+        Ok(v) => v,
+        Err(msg) => {
+            return redirect_cookies(
+                &format!("/admin/stripe?toast_err={}", urlenc(&msg)),
+                &c.set_cookies,
+            )
+        }
+    };
+    let body = price_replace_body(cents, f.currency.trim(), f.interval.trim());
+    let target =
+        match admin_api::replace_stripe_price(&st.api, c.forward.as_deref(), &id, body).await {
+            Ok(()) => "/admin/stripe?toast_ok=Price%20replaced".to_string(),
+            Err(e) => format!(
+                "/admin/stripe?toast_err={}",
+                urlenc(&e.user_message_with_reference())
+            ),
+        };
     redirect_cookies(&target, &c.set_cookies)
 }
 

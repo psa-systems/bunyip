@@ -890,6 +890,21 @@ pub async fn archive_stripe_product(
     ok_data(&r).map(|_| ())
 }
 
+/// BUNYIP-511: edit a product's name/description in place (PUT). The body carries
+/// name + description only, never `active` (lifecycle is owned by
+/// archive/unarchive) or `metadata` (so the Stripe app-tag survives the update).
+pub async fn update_stripe_product(
+    api: &Api,
+    cookie: Option<&str>,
+    id: &str,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api
+        .put(&format!("/admin/stripe/products/{id}"), cookie, Some(body))
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
 /// BUNYIP-513: restore an archived product (`active = true`). POST, no body.
 pub async fn unarchive_stripe_product(
     api: &Api,
@@ -944,6 +959,26 @@ pub async fn unarchive_stripe_price(
             &format!("/admin/stripe/prices/{id}/unarchive"),
             cookie,
             None,
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-511: replace a price. Stripe prices are immutable in amount, currency
+/// and interval, so changing what a plan costs is a create-plus-archive that also
+/// repoints bunyip's own references; the API owns that orchestration. POST, body
+/// carries the new amount/currency/interval.
+pub async fn replace_stripe_price(
+    api: &Api,
+    cookie: Option<&str>,
+    id: &str,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            &format!("/admin/stripe/prices/{id}/replace"),
+            cookie,
+            Some(body),
         )
         .await?;
     ok_data(&r).map(|_| ())
