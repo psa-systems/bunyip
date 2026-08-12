@@ -4,6 +4,7 @@ mod client_ip;
 mod config;
 mod csrf;
 mod handlers;
+mod pricing_cache;
 mod routes;
 mod security;
 mod server_status;
@@ -65,6 +66,10 @@ async fn main() {
     let state = web::AppState {
         api,
         cfg: Arc::clone(&cfg),
+        // BUNYIP-518: coalesce the per-render /v1/pricing fetch behind a short TTL.
+        pricing_cache: Arc::new(pricing_cache::PricingCache::new(
+            std::time::Duration::from_secs(pricing_cache::PRICING_CACHE_TTL_SECS),
+        )),
     };
 
     use handlers::{auth_pages as ap, consent, dashboard as dash, health, onboarding};
