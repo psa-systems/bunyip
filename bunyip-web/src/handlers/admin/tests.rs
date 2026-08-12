@@ -1628,6 +1628,11 @@ mod stripe_admin_tests {
             html.contains("Replace creates a new price"),
             "the caption describes replacement"
         );
+        // BUNYIP-511: the disclosure explains WHY a price is replaced, not edited.
+        assert!(
+            html.contains("Why replace instead of edit?") && html.contains("immutable"),
+            "the replace control explains why a Stripe price cannot be edited"
+        );
     }
 
     #[test]
