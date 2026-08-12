@@ -114,6 +114,52 @@ pub struct Config {
     /// web and the mokosh-apps SPA) carries the hidden honeypot + timing token,
     /// then is flipped on per deployment.
     pub signup_bot_guard_enabled: bool,
+    /// BUNYIP-525: settings for the app-native runtime fetch of Group-2
+    /// integration secrets from Infisical. Group-1 startup secrets stay
+    /// file/SOPS-based; this covers only post-startup integration secrets
+    /// (SMTP first). Disabled by default.
+    pub infisical: InfisicalSettings,
+}
+
+/// BUNYIP-525: configuration for the app-native Infisical runtime fetch of
+/// Group-2 (post-startup / integration) secrets. Credentials honour the
+/// `{NAME}_FILE` convention like every other secret. Disabled by default so a
+/// dev box or a host without a machine identity behaves exactly as before.
+#[derive(Debug, Clone)]
+pub struct InfisicalSettings {
+    /// Enable the runtime fetch (`INFISICAL_ENABLED`). Off by default.
+    pub enabled: bool,
+    /// Base URL of the Infisical instance (`INFISICAL_ADDRESS`),
+    /// e.g. `https://infisical.a8n.systems`.
+    pub address: String,
+    /// Infisical project id (`INFISICAL_PROJECT_ID`).
+    pub project_id: String,
+    /// Infisical environment slug (`INFISICAL_ENV`), e.g. `staging` / `prod`.
+    pub environment: String,
+    /// Secret folder path (`INFISICAL_SECRET_PATH`), e.g. `/bunyip/runtime`.
+    pub secret_path: String,
+    /// Universal Auth machine-identity client id (`INFISICAL_CLIENT_ID`).
+    pub client_id: String,
+    /// Universal Auth machine-identity client secret (`INFISICAL_CLIENT_SECRET`).
+    pub client_secret: String,
+}
+
+impl InfisicalSettings {
+    /// Load from the environment. `client_id` / `client_secret` are credentials
+    /// and honour the `{NAME}_FILE` convention via `secret_env`.
+    pub fn from_env() -> Self {
+        Self {
+            enabled: env::var("INFISICAL_ENABLED")
+                .map(|v| matches!(v.trim(), "true" | "1"))
+                .unwrap_or(false),
+            address: env::var("INFISICAL_ADDRESS").unwrap_or_default(),
+            project_id: env::var("INFISICAL_PROJECT_ID").unwrap_or_default(),
+            environment: env::var("INFISICAL_ENV").unwrap_or_default(),
+            secret_path: env::var("INFISICAL_SECRET_PATH").unwrap_or_else(|_| "/".to_string()),
+            client_id: secret_env("INFISICAL_CLIENT_ID").unwrap_or_default(),
+            client_secret: secret_env("INFISICAL_CLIENT_SECRET").unwrap_or_default(),
+        }
+    }
 }
 
 /// SMTP TLS mode
@@ -1025,6 +1071,9 @@ impl Config {
             .map(|v| v.trim().eq_ignore_ascii_case("true"))
             .unwrap_or(false);
 
+        // BUNYIP-525: app-native Infisical fetch settings for Group-2 secrets.
+        let infisical = InfisicalSettings::from_env();
+
         let config = Self {
             database_url,
             app_database_url,
@@ -1053,6 +1102,7 @@ impl Config {
             ip2proxy_db_path,
             login_approval_enabled,
             signup_bot_guard_enabled,
+            infisical,
         };
 
         info!(

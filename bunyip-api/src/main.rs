@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
 
     // Load configuration
-    let config = Config::from_env()?;
+    let mut config = Config::from_env()?;
 
     // Initialize tracing/logging. The error-log buffer (BUNYIP-327) is created
     // first so the capture layer can be wired into the subscriber; the same
@@ -337,6 +337,29 @@ async fn main() -> anyhow::Result<()> {
     // APP_ENCRYPTION_KEY_PREV entries for the rotation / consolidation window)
     // guards the TOTP secrets, the Stripe secrets and the SMTP password.
     let app_key_set = config.app_key_set();
+
+    // BUNYIP-525: fetch the Group-2 SMTP password from Infisical at runtime
+    // (app-native, no CLI/sidecar). This feeds the SMTP_PASSWORD fallback slot
+    // (config.email.smtp_password, the secret_env slot) which sits BELOW the DB
+    // email_config row resolved just below, so an admin-set password still wins.
+    // It runs only when the env/file SMTP_PASSWORD is empty and Infisical is
+    // enabled; ANY failure yields None and boot proceeds (email degrades), so
+    // Infisical is never a boot dependency. This covers the no-DB-override path;
+    // EmailConfig::from_db_row rebuilds its own env fallback, so an admin who set
+    // other email_config columns but no password keeps the plain env value.
+    // A fully-lazy background fetch + EmailService::reload (mirroring PricingCache
+    // in handlers/pricing.rs) is a follow-on if the bounded ~5s boot delay is
+    // unwanted.
+    if config.infisical.enabled && config.email.smtp_password.is_empty() {
+        if let Some(client) =
+            bunyip_domain::services::InfisicalClient::from_settings(&config.infisical)
+        {
+            if let Some(password) = client.fetch_secret("SMTP_PASSWORD").await {
+                info!("Fetched SMTP_PASSWORD from Infisical (BUNYIP-525 Group-2 runtime secret)");
+                config.email.smtp_password = password;
+            }
+        }
+    }
 
     // Initialize Email service — prefer DB config (admin UI), fall back to env
     // vars (BUNYIP-351). The SMTP password is decrypted with the application

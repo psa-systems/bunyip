@@ -10,6 +10,18 @@ The model is **sync, not fetch**. Infisical writes the files; the containers kee
 reading `/run/secrets/*`. A bunyip-api restart therefore never depends on
 Infisical being reachable, and no Rust code knows Infisical exists.
 
+That statement describes the **Group-1** tier only: the startup secrets the app
+must have to boot (postgres, `DATABASE_URL`, `APP_ENCRYPTION_KEY`, `JWT_SECRET`,
+...), which stay file/SOPS-based as above. There is a **Group-2** tier for
+post-startup integration secrets (SMTP first): the app fetches those from
+Infisical at runtime, in Rust, via `crates/bunyip-domain/src/services/infisical.rs`
+(BUNYIP-525) with a Universal Auth machine identity, reading the folder
+`/bunyip/runtime`. This is a deliberate, David-directed exception to "no Rust
+code knows Infisical": the fetch is graceful (any failure leaves the Group-2
+feature off and logs a warning), so the app still starts without Infisical and
+Infisical is still never a boot dependency. Everything below this section is the
+Group-1 file-secret path.
+
 `scripts/init-secrets.nu` remains the dev-box path: it generates throwaway values
 locally. The two scripts do not collide - `init-secrets.nu` never overwrites a
 non-empty file, and `sync-secrets.nu` writes only what Infisical says.
