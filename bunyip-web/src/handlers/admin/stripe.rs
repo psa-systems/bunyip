@@ -50,7 +50,19 @@ fn stripe_setup_docs() -> Markup {
 /// (e.g. no valid API key yet).
 pub(super) fn stripe_products_block(
     products: Option<&[crate::api::types::StripeProduct]>,
+    prices: Option<&[crate::api::types::StripePrice]>,
 ) -> Markup {
+    // BUNYIP-512: an active product with no active price is unsellable (the
+    // state an archive-then-unarchive can leave behind); flag it so it is not
+    // silently broken. `None` prices = "could not load", so make no claim:
+    // this is true ONLY when the price list loaded and holds no active price.
+    let flag_no_active_price = |product_id: &str| {
+        prices.is_some_and(|list| {
+            !list
+                .iter()
+                .any(|pr| pr.product_id == product_id && pr.active)
+        })
+    };
     admin_block(
         "Products",
         Some("Stripe products for your subscription tiers."),
@@ -70,6 +82,7 @@ pub(super) fn stripe_products_block(
                                 p class="font-medium flex items-center gap-2" {
                                     (p.name)
                                     @if p.active { (badge("success", "Active")) } @else { (badge("secondary", "Archived")) }
+                                    @if p.active && flag_no_active_price(&p.id) { (badge("warning", "No active price")) }
                                 }
                                 @if let Some(d) = p.description.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
                                     p class="text-xs text-muted-foreground truncate" { (d) }
@@ -77,8 +90,12 @@ pub(super) fn stripe_products_block(
                                 p class="text-xs text-muted-foreground font-mono truncate" { (p.id) }
                             }
                             @if p.active {
-                                form method="post" action=(format!("/admin/stripe/products/{}/archive", p.id)) data-confirm="Archive this product? It will no longer be available for new subscriptions." {
-                                    button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                                @if p.member_count > 0 {
+                                    (archive_blocked_by_members(p.member_count))
+                                } @else {
+                                    form method="post" action=(format!("/admin/stripe/products/{}/archive", p.id)) data-confirm="Archive this product? Its prices are archived too, and it will no longer be available for new subscriptions." {
+                                        button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                                    }
                                 }
                             }
                         }
@@ -87,6 +104,24 @@ pub(super) fn stripe_products_block(
             }
         },
     )
+}
+
+/// BUNYIP-512: the courtesy control shown in place of a live Archive button when
+/// a plan still has members: a disabled button plus the member count. The server
+/// guard is authoritative (a direct POST is refused with 409); this only spares
+/// the admin a click that would fail.
+fn archive_blocked_by_members(member_count: i64) -> Markup {
+    let label = if member_count == 1 {
+        "1 member".to_string()
+    } else {
+        format!("{member_count} members")
+    };
+    html! {
+        div class="flex items-center gap-2 shrink-0" {
+            span class="text-xs text-muted-foreground" { (label) }
+            button type="button" disabled title="Move members to another plan before archiving" class=(button_class("outline", "sm", "opacity-50 cursor-not-allowed")) { "Archive" }
+        }
+    }
 }
 
 /// The Prices block: a create form (product dropdown limited to active
@@ -143,8 +178,12 @@ pub(super) fn stripe_prices_block(
                                 p class="text-xs text-muted-foreground font-mono truncate" { (pr.id) }
                             }
                             @if pr.active {
-                                form method="post" action=(format!("/admin/stripe/prices/{}/archive", pr.id)) data-confirm="Archive this price? Existing subscriptions using it are not affected." {
-                                    button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                                @if pr.member_count > 0 {
+                                    (archive_blocked_by_members(pr.member_count))
+                                } @else {
+                                    form method="post" action=(format!("/admin/stripe/prices/{}/archive", pr.id)) data-confirm="Archive this price? Existing subscriptions using it are not affected." {
+                                        button type="submit" class=(button_class("outline", "sm", "")) { "Archive" }
+                                    }
                                 }
                             }
                         }
@@ -366,7 +405,7 @@ pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response 
                         ]))
                         button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
                     }
-                    (stripe_products_block(products.as_deref()))
+                    (stripe_products_block(products.as_deref(), prices.as_deref()))
                     (stripe_prices_block(prices.as_deref(), products.as_deref().unwrap_or(&[])))
                     (stripe_webhooks_block(webhooks.as_deref(), &st.cfg.api_public_origin, s.has_webhook_secret))
                     (stripe_catalog_section(tier.as_ref()))

@@ -1042,6 +1042,7 @@ mod two_column_layout_tests {
             currency: "usd".into(),
             recurring_interval: Some("month".into()),
             active: true,
+            member_count: 0,
         };
         let prices = vec![
             stripe_price("price_std", 300),
@@ -1350,6 +1351,13 @@ mod stripe_admin_tests {
             description: Some("desc".into()),
             active,
             created: 0,
+            member_count: 0,
+        }
+    }
+    fn product_with_members(id: &str, name: &str, member_count: i64) -> StripeProduct {
+        StripeProduct {
+            member_count,
+            ..product(id, name, true)
         }
     }
     fn price(id: &str, product_id: &str, amount: Option<i64>, active: bool) -> StripePrice {
@@ -1360,6 +1368,13 @@ mod stripe_admin_tests {
             currency: "usd".into(),
             recurring_interval: Some("month".into()),
             active,
+            member_count: 0,
+        }
+    }
+    fn price_with_members(id: &str, product_id: &str, member_count: i64) -> StripePrice {
+        StripePrice {
+            member_count,
+            ..price(id, product_id, Some(300), true)
         }
     }
 
@@ -1389,7 +1404,9 @@ mod stripe_admin_tests {
             product("prod_a", "Personal Plan", true),
             product("prod_b", "Old Plan", false),
         ];
-        let html = stripe_products_block(Some(&list)).into_string();
+        // Each active product has an active price, so no "no active price" warning.
+        let prices = [price("price_a", "prod_a", Some(300), true)];
+        let html = stripe_products_block(Some(&list), Some(&prices)).into_string();
         assert!(html.contains("Personal Plan") && html.contains("Old Plan"));
         assert!(html.contains(">Active<") && html.contains(">Archived<"));
         // Create form present; archive only for the active product.
@@ -1399,12 +1416,65 @@ mod stripe_admin_tests {
             !html.contains("prod_b/archive"),
             "archived product has no Archive action"
         );
+        // Confirm text states the prices go too (BUNYIP-512).
+        assert!(
+            html.contains("Its prices are archived too"),
+            "product archive confirmation says prices are archived as well"
+        );
     }
 
     #[test]
     fn products_block_renders_load_error_state() {
-        let html = stripe_products_block(None).into_string();
+        let html = stripe_products_block(None, None).into_string();
         assert!(html.contains("Could not load products"));
+    }
+
+    // BUNYIP-512: a product whose plan has members shows a disabled Archive
+    // control plus the count instead of a live archive form.
+    #[test]
+    fn products_block_gates_archive_when_members_present() {
+        let list = [product_with_members("prod_busy", "Busy Plan", 3)];
+        let prices = [price("price_busy", "prod_busy", Some(300), true)];
+        let html = stripe_products_block(Some(&list), Some(&prices)).into_string();
+        assert!(html.contains("3 members"), "member count shown");
+        assert!(html.contains("disabled"), "archive control is disabled");
+        assert!(
+            !html.contains("prod_busy/archive"),
+            "no live archive form while members are on the plan"
+        );
+    }
+
+    // BUNYIP-512: singular vs plural on the courtesy label.
+    #[test]
+    fn products_block_member_count_is_singular_for_one() {
+        let list = [product_with_members("prod_one", "Solo Plan", 1)];
+        let html = stripe_products_block(Some(&list), Some(&[])).into_string();
+        assert!(html.contains("1 member"), "singular label");
+        assert!(!html.contains("1 members"), "no stray plural");
+    }
+
+    // BUNYIP-512: an active product with no active price is flagged.
+    #[test]
+    fn products_block_flags_active_product_without_active_price() {
+        let list = [product("prod_empty", "Empty Plan", true)];
+        // Only an archived price exists for it.
+        let prices = [price("price_dead", "prod_empty", Some(300), false)];
+        let html = stripe_products_block(Some(&list), Some(&prices)).into_string();
+        assert!(
+            html.contains("No active price"),
+            "unsellable active product is warned about"
+        );
+    }
+
+    // BUNYIP-512: with prices unknown (load error) make no unsellable claim.
+    #[test]
+    fn products_block_no_warning_when_prices_unknown() {
+        let list = [product("prod_x", "Plan X", true)];
+        let html = stripe_products_block(Some(&list), None).into_string();
+        assert!(
+            !html.contains("No active price"),
+            "cannot claim unsellable when the price list failed to load"
+        );
     }
 
     #[test]
@@ -1422,6 +1492,24 @@ mod stripe_admin_tests {
             "create form present"
         );
         assert!(html.contains(r#"action="/admin/stripe/prices/price_free/archive""#));
+    }
+
+    // BUNYIP-512: a price whose plan has members shows the disabled control +
+    // count, not a live archive form.
+    #[test]
+    fn prices_block_gates_archive_when_members_present() {
+        let products = [product("prod_std", "Standard", true)];
+        let prices = [price_with_members("price_std", "prod_std", 5)];
+        let html = stripe_prices_block(Some(&prices), &products).into_string();
+        assert!(
+            html.contains("5 members"),
+            "member count shown on the price row"
+        );
+        assert!(html.contains("disabled"), "archive control disabled");
+        assert!(
+            !html.contains("price_std/archive"),
+            "no live archive form while the price's plan has members"
+        );
     }
 
     #[test]

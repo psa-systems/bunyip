@@ -49,4 +49,4 @@ pub use tier::TierConfigRepository;
 pub use token::{EmailResendLimiterRow, TokenRepository};
 pub use totp::TotpRepository;
 pub use trusted_device::TrustedDeviceRepository;
-pub use user::UserRepository;
+pub use user::{PlanMemberIndex, UserRepository};

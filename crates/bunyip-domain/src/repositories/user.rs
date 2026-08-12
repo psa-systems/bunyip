@@ -1269,11 +1269,134 @@ impl UserRepository {
 
         Ok(users)
     }
+
+    /// BUNYIP-512: membership statuses that count a user as still "on a plan"
+    /// for the archive guard. `past_due` counts because a member mid-dunning is
+    /// not off the plan yet; `canceled`, `none` and `unpaid` do not.
+    pub const PLAN_MEMBER_STATUSES: [&'static str; 3] = ["active", "grace_period", "past_due"];
+
+    /// BUNYIP-512: count users still attached to a plan, either by an active
+    /// membership on one of the plan's `tiers` or by holding a grandfathered
+    /// `locked_price_id` that is one of the plan's `price_ids`. Backs the admin
+    /// Stripe archive guard: a non-zero count refuses the archive before any
+    /// Stripe call is made. `OR` (not two counts) so a user who matches on both
+    /// the tier and a locked price is counted once. `locked_price_id` counts
+    /// regardless of status because a grandfathered price must not be withdrawn
+    /// out from under the user who locked it.
+    pub async fn count_members_for_plan(
+        pool: &PgPool,
+        tiers: &[String],
+        price_ids: &[String],
+    ) -> Result<i64, AppError> {
+        let row: (i64,) = sqlx::query_as(Self::COUNT_MEMBERS_FOR_PLAN_SQL)
+            .bind(tiers)
+            .bind(price_ids)
+            .bind(&Self::PLAN_MEMBER_STATUSES[..])
+            .fetch_one(pool)
+            .await?;
+        Ok(row.0)
+    }
+
+    /// SQL backing [`Self::count_members_for_plan`]. A named const so the
+    /// regression test can assert the predicate set (the tier + status guard,
+    /// the `locked_price_id` OR arm, and the `deleted_at` exclusion) without a
+    /// live database, mirroring the `COUNT_TIER_ASSIGNMENTS_SQL` test.
+    const COUNT_MEMBERS_FOR_PLAN_SQL: &'static str = r#"
+            SELECT COUNT(*)
+            FROM users
+            WHERE deleted_at IS NULL
+              AND (
+                    (COALESCE(membership_tier, 'standard') = ANY($1)
+                     AND membership_status = ANY($3))
+                 OR locked_price_id = ANY($2)
+              )
+            "#;
+
+    /// BUNYIP-512: one grouped snapshot of plan membership, so the admin Stripe
+    /// list endpoints can label every product/price row with a member count
+    /// without a per-row query (the N+1 the archive guard would otherwise be).
+    /// Rows are grouped by the pair `(active_tier, locked_price_id)`, so a caller
+    /// summing the rows whose tier OR locked price falls in a given plan gets the
+    /// same `OR`-deduplicated count [`Self::count_members_for_plan`] returns for
+    /// that plan, computed once for the whole page.
+    pub async fn plan_member_index(pool: &PgPool) -> Result<PlanMemberIndex, AppError> {
+        let rows: Vec<(Option<String>, Option<String>, i64)> = sqlx::query_as(
+            r#"
+            SELECT
+                CASE
+                    WHEN membership_status = ANY($1)
+                        THEN COALESCE(membership_tier, 'standard')
+                    ELSE NULL
+                END AS active_tier,
+                locked_price_id,
+                COUNT(*) AS member_count
+            FROM users
+            WHERE deleted_at IS NULL
+              AND (membership_status = ANY($1) OR locked_price_id IS NOT NULL)
+            GROUP BY active_tier, locked_price_id
+            "#,
+        )
+        .bind(&Self::PLAN_MEMBER_STATUSES[..])
+        .fetch_all(pool)
+        .await?;
+        Ok(PlanMemberIndex {
+            rows: rows
+                .into_iter()
+                .map(|(tier, locked, count)| PlanMemberRow {
+                    active_tier: tier,
+                    locked_price_id: locked,
+                    count,
+                })
+                .collect(),
+        })
+    }
+}
+
+/// One `(active_tier, locked_price_id)` bucket of [`PlanMemberIndex`].
+#[derive(Debug, Clone)]
+struct PlanMemberRow {
+    /// The user's tier when their membership status is one of
+    /// [`UserRepository::PLAN_MEMBER_STATUSES`], else `None` (the row is then a
+    /// locked-price-only bucket).
+    active_tier: Option<String>,
+    locked_price_id: Option<String>,
+    count: i64,
+}
+
+/// BUNYIP-512: a page-wide snapshot of plan membership counts, grouped so a
+/// per-plan count is a filter-and-sum over a handful of buckets rather than a
+/// query per row. Built by [`UserRepository::plan_member_index`].
+#[derive(Debug, Clone, Default)]
+pub struct PlanMemberIndex {
+    rows: Vec<PlanMemberRow>,
+}
+
+impl PlanMemberIndex {
+    /// Members on a plan defined by its `tiers` and `price_ids`, matching the
+    /// `OR` semantics (and the single count) of
+    /// [`UserRepository::count_members_for_plan`]: a bucket counts if its active
+    /// tier is one of the plan's tiers, or its locked price is one of the plan's
+    /// prices. Each user is in exactly one bucket, so there is no double count.
+    pub fn count_for(&self, tiers: &[String], price_ids: &[String]) -> i64 {
+        self.rows
+            .iter()
+            .filter(|row| {
+                row.active_tier
+                    .as_deref()
+                    .is_some_and(|t| tiers.iter().any(|x| x == t))
+                    || row
+                        .locked_price_id
+                        .as_deref()
+                        .is_some_and(|l| price_ids.iter().any(|x| x == l))
+            })
+            .map(|row| row.count)
+            .sum()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::UserRepository;
+    use super::{PlanMemberIndex, PlanMemberRow, UserRepository};
 
     /// BUNYIP-105 regression: slot-usage counts must include unverified holders.
     ///
@@ -1294,5 +1417,86 @@ mod tests {
             sql.contains("deleted_at IS NULL"),
             "count_tier_assignments must still exclude soft-deleted users; SQL was: {sql}"
         );
+    }
+
+    /// BUNYIP-512 AC: the archive guard counts `active` / `grace_period` /
+    /// `past_due` members on the plan's tiers, plus anyone whose
+    /// `locked_price_id` is one of the plan's prices, and never a soft-deleted
+    /// user. Assert the predicate set on the const SQL (no live DB), same
+    /// pattern as the `COUNT_TIER_ASSIGNMENTS_SQL` regression above.
+    #[test]
+    fn count_members_for_plan_sql_guards_status_locked_price_and_soft_delete() {
+        let sql = UserRepository::COUNT_MEMBERS_FOR_PLAN_SQL;
+        assert!(
+            sql.contains("deleted_at IS NULL"),
+            "must exclude soft-deleted users; SQL was: {sql}"
+        );
+        assert!(
+            sql.contains("membership_tier") && sql.contains("membership_status = ANY($3)"),
+            "must gate the tier match on the plan-member status list; SQL was: {sql}"
+        );
+        assert!(
+            sql.contains("locked_price_id = ANY($2)"),
+            "must count grandfathered locked prices; SQL was: {sql}"
+        );
+        assert!(
+            sql.contains(" OR "),
+            "tier and locked-price arms must be OR'd so a user is counted once; SQL was: {sql}"
+        );
+        // The status list the SQL's $3 binds to is exactly the three that mean
+        // "still on the plan"; canceled/none/unpaid are absent by construction.
+        assert_eq!(
+            UserRepository::PLAN_MEMBER_STATUSES,
+            ["active", "grace_period", "past_due"]
+        );
+    }
+
+    /// BUNYIP-512: the page-wide index sums the same `OR` set the single-plan
+    /// guard would, counting each user once even when their tier and their
+    /// locked price both point at the plan.
+    #[test]
+    fn plan_member_index_counts_or_semantics_without_double_counting() {
+        let index = PlanMemberIndex {
+            rows: vec![
+                // Active standard members with no locked price.
+                PlanMemberRow {
+                    active_tier: Some("standard".into()),
+                    locked_price_id: None,
+                    count: 5,
+                },
+                // Active standard members who ALSO hold the plan's locked price:
+                // one bucket, counted once.
+                PlanMemberRow {
+                    active_tier: Some("standard".into()),
+                    locked_price_id: Some("price_std".into()),
+                    count: 2,
+                },
+                // Canceled users who only hold the grandfathered locked price.
+                PlanMemberRow {
+                    active_tier: None,
+                    locked_price_id: Some("price_std".into()),
+                    count: 3,
+                },
+                // An unrelated tier: must not leak into the standard plan count.
+                PlanMemberRow {
+                    active_tier: Some("early_adopter".into()),
+                    locked_price_id: None,
+                    count: 9,
+                },
+            ],
+        };
+
+        // Plan = standard tier + its locked price: 5 + 2 + 3 = 10, and the
+        // early_adopter bucket is excluded.
+        assert_eq!(
+            index.count_for(&["standard".into()], &["price_std".into()]),
+            10
+        );
+        // Tier only (no price): the canceled-but-locked bucket drops out.
+        assert_eq!(index.count_for(&["standard".into()], &[]), 7);
+        // Price only: only buckets holding that locked price.
+        assert_eq!(index.count_for(&[], &["price_std".into()]), 5);
+        // Nothing maps: zero.
+        assert_eq!(index.count_for(&[], &[]), 0);
     }
 }
