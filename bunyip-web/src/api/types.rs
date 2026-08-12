@@ -1268,6 +1268,16 @@ pub struct PricingTier {
     pub interval: Option<String>,
     #[serde(default)]
     pub trial_days: i64,
+    /// BUNYIP-526: whether this tier can still be signed up for. A slot-limited
+    /// tier is `false` once sold out; Standard is unlimited and always `true`.
+    /// Defaults to `true` so an older API (without the field) never renders a
+    /// tier as wrongly sold out.
+    #[serde(default = "default_true")]
+    pub available: bool,
+    /// BUNYIP-526: remaining slots for a limited tier (an honest scarcity line);
+    /// `None` for an unlimited tier.
+    #[serde(default)]
+    pub slots_remaining: Option<i64>,
 }
 
 impl PricingResponse {

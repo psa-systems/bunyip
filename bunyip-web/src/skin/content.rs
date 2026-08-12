@@ -47,11 +47,38 @@ pub(super) fn trial_phrase(days: i64) -> String {
     }
 }
 
+/// BUNYIP-526: the per-card value line under the price. Each tier states its own
+/// trial length; Lifetime is a price-locked membership, not a trial, so its line
+/// never says "trial". A paid tier with no trial falls back to the price-lock
+/// line rather than advertising a trial it does not have.
+pub(super) fn card_value_line(is_lifetime: bool, trial_days: i64) -> String {
+    if is_lifetime || trial_days <= 0 {
+        "Price locked for life when you join".to_string()
+    } else {
+        format!("Free {trial_days}-day trial, then price locked for life")
+    }
+}
+
+/// BUNYIP-526: an honest scarcity line for a limited tier that still has slots.
+/// An unlimited tier (`None`) or a sold-out one returns `""` (the sold-out CTA
+/// already carries that state), so nothing is invented.
+pub(super) fn scarcity_line(slots_remaining: Option<i64>, available: bool) -> String {
+    match slots_remaining {
+        Some(1) if available => "Only 1 spot left".to_string(),
+        Some(n) if available && n > 0 => format!("Only {n} spots left"),
+        _ => String::new(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn pricing_card(
     title: &str,
     desc: &str,
     price: &str,
+    value_line: &str,
     features: &[&str],
+    scarcity: &str,
+    available: bool,
     highlight: bool,
     stripe: bool,
     cta_href: &str,
@@ -71,7 +98,9 @@ fn pricing_card(
                     span class="text-5xl font-bold" { (price) }
                     span class="text-muted-foreground" { "/month" }
                 }
-                p class="mt-2 text-sm text-muted-foreground" { "Price locked for life when you join" }
+                // BUNYIP-526: per-tier, so the trial length shown is this tier's
+                // own, not one number pretending to be global.
+                p class="mt-2 text-sm text-muted-foreground" { (value_line) }
             }
             div class="p-6 pt-0" {
                 ul class="space-y-4" {
@@ -79,12 +108,22 @@ fn pricing_card(
                         li class="flex items-center gap-3" { (icon("check", "h-5 w-5 text-primary-text flex-shrink-0")) span { (f) } }
                     }
                 }
-                @if stripe {
+                // BUNYIP-526: sold-out tiers get a disabled CTA rather than a
+                // sign-up link that cannot be honoured.
+                @if !available {
+                    div class="mt-8" {
+                        button type="button" disabled title="This tier is sold out" class=(button_class("default", "lg", "w-full")) { "Sold out" }
+                    }
+                } @else if stripe {
                     a href=(cta_href) class=(button_class("default", "lg", "mt-8 w-full")) { (cta_label) }
                 } @else {
                     div class="mt-8" {
                         button type="button" disabled title="Payment is not configured" class=(button_class("default", "lg", "w-full")) { (cta_label) }
                     }
+                }
+                // BUNYIP-526: honest scarcity for a limited tier with slots left.
+                @if !scarcity.is_empty() {
+                    p class="mt-3 text-center text-sm font-medium text-primary-text" { (scarcity) }
                 }
                 // Policy constant, not tier configuration: it matches the Terms
                 // of Service text further down this module.
@@ -114,8 +153,11 @@ pub(super) fn pricing_content(pricing: &PricingResponse, stripe: bool, signed_in
             div class="container" {
                 div class="text-center" {
                     h1 class="text-4xl font-bold" { "Simple, transparent pricing" }
+                    // BUNYIP-526: the subhead no longer prints one tier's trial
+                    // length as if it applied to all three. Each card states its
+                    // own trial below.
                     p class="mt-4 text-lg text-muted-foreground" {
-                        "The business layer for your PSA. Start " (trial_phrase(pricing.trial_days)) ", no credit card required."
+                        "The business layer for your PSA. No credit card required."
                     }
                 }
                 div class={ "mt-16 grid gap-8 mx-auto " (grid) } {
@@ -125,11 +167,15 @@ pub(super) fn pricing_content(pricing: &PricingResponse, stripe: bool, signed_in
                         // labels are byte-identical. Renaming the tier (e.g.
                         // "Standard" -> "Starter") is a one-line change in
                         // `handlers::dashboard::tier_name`.
+                        @let is_lifetime = matches!(t.tier, crate::api::types::MembershipTier::Lifetime);
                         (pricing_card(
                             tier_name(&t.tier),
                             "Everything around the product, nothing in it",
                             &format_stripe_amount(Some(t.amount), &t.currency),
+                            &card_value_line(is_lifetime, t.trial_days),
                             &PERSONAL,
+                            &scarcity_line(t.slots_remaining, t.available),
+                            t.available,
                             false,
                             stripe,
                             cta_href,
@@ -1043,7 +1089,7 @@ mod feedback_tests {
 
 #[cfg(test)]
 mod pricing_tests {
-    use super::{pricing_content, trial_phrase, PERSONAL};
+    use super::{card_value_line, pricing_content, scarcity_line, trial_phrase, PERSONAL};
     use crate::api::types::{MembershipTier, PricingResponse, PricingTier};
 
     fn standard(amount: i64, trial_days: i64) -> PricingResponse {
@@ -1056,6 +1102,8 @@ mod pricing_tests {
                 currency: "usd".into(),
                 interval: Some("month".into()),
                 trial_days,
+                available: true,
+                slots_remaining: None,
             }],
         }
     }
@@ -1086,6 +1134,8 @@ mod pricing_tests {
             currency: "usd".into(),
             interval: Some("month".into()),
             trial_days: 30,
+            available: true,
+            slots_remaining: None,
         };
         let payload = PricingResponse {
             enabled: true,
@@ -1109,16 +1159,85 @@ mod pricing_tests {
         );
     }
 
-    /// The trial length comes from `tier_config.standard_trial_days`, so the
-    /// page can no longer advertise a trial the application does not honour.
+    /// BUNYIP-526: each card advertises its OWN trial length, and the subhead no
+    /// longer prints one tier's number as if it were global.
     #[test]
-    fn trial_length_comes_from_config() {
-        let html = pricing_content(&standard(300, 30), true, false).into_string();
-        assert!(html.contains("free for 30 days"));
+    fn each_card_shows_its_own_trial_and_the_subhead_is_generic() {
+        let html = pricing_content(&standard(300, 75), true, false).into_string();
+        assert!(
+            html.contains("Free 75-day trial"),
+            "the card states this tier's own trial length"
+        );
+        assert!(
+            !html.contains("Start free for 75 days"),
+            "the subhead no longer advertises a single tier's trial as global"
+        );
+        assert!(
+            html.contains("No credit card required"),
+            "the subhead keeps the honest, tier-agnostic promise"
+        );
         let html = pricing_content(&standard(300, 7), true, false).into_string();
-        assert!(html.contains("free for 7 days"));
-        // Unknown length drops the number rather than inventing one.
+        assert!(
+            html.contains("Free 7-day trial"),
+            "a different trial length renders"
+        );
+        // The homepage helper is unchanged and still used there.
         assert_eq!(trial_phrase(0), "free");
+    }
+
+    /// BUNYIP-526: Lifetime is a price-locked membership, not a trial. Its card
+    /// never says "trial"; a paid tier states its own; a paid tier with no trial
+    /// falls back to the price-lock line.
+    #[test]
+    fn card_value_line_is_per_tier_and_lifetime_has_no_trial() {
+        assert_eq!(
+            card_value_line(true, 0),
+            "Price locked for life when you join"
+        );
+        assert!(
+            !card_value_line(true, 0).contains("trial"),
+            "Lifetime never advertises a trial"
+        );
+        assert_eq!(
+            card_value_line(false, 90),
+            "Free 90-day trial, then price locked for life"
+        );
+        assert_eq!(
+            card_value_line(false, 0),
+            "Price locked for life when you join",
+            "a paid tier with no trial does not invent one"
+        );
+    }
+
+    /// BUNYIP-526: a sold-out limited tier renders a disabled Sold out CTA, not a
+    /// sign-up link; an available tier with slots left shows an honest count.
+    #[test]
+    fn sold_out_and_scarcity_render_from_availability() {
+        assert_eq!(scarcity_line(None, true), "", "unlimited shows no count");
+        assert_eq!(scarcity_line(Some(0), false), "", "sold out shows no count");
+        assert_eq!(scarcity_line(Some(1), true), "Only 1 spot left");
+        assert_eq!(scarcity_line(Some(3), true), "Only 3 spots left");
+
+        let mut sold_out = standard(300, 30);
+        sold_out.tiers[0].available = false;
+        sold_out.tiers[0].slots_remaining = Some(0);
+        let html = pricing_content(&sold_out, true, false).into_string();
+        assert!(
+            html.contains("Sold out"),
+            "a sold-out tier shows a Sold out CTA"
+        );
+        assert!(
+            !html.contains(r#"href="/register""#),
+            "a sold-out tier offers no sign-up link"
+        );
+
+        let mut scarce = standard(300, 30);
+        scarce.tiers[0].slots_remaining = Some(2);
+        let html = pricing_content(&scarce, true, false).into_string();
+        assert!(
+            html.contains("Only 2 spots left"),
+            "an available tier shows its remaining count"
+        );
     }
 
     /// A pricing page that renders is a page with something to show: exactly
