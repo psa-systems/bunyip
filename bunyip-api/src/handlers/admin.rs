@@ -3550,6 +3550,7 @@ mod tests {
             unit_amount: Some(300),
             currency: "usd".into(),
             recurring_interval: Some("month".into()),
+            recurring_interval_count: Some(1),
             active,
         }
     }

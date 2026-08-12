@@ -29,9 +29,11 @@ dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9b
 # that introduced the crate; the dunite-core/download pins stay at c5730bc since
 # dunite main advanced dunite-oidc in between (unrelated). Collapse all three to
 # the single merged rev once dunite PR #27 lands.
-# BUNYIP-513: bumped with dunite-stripe to 5dab94d (unarchive_price). The
-# stripe-core source is byte-identical between ae62c27 and 5dab94d; the pins move
-# together so there is a single dunite-stripe-core in the tree.
+# BUNYIP-513/516: bumped to 5dab94d, moving in lock-step with dunite-stripe
+# below (its path dep) so there is one dunite-stripe-core in the tree. 5dab94d is
+# a descendant of the DUNITE-10 merge, so it carries the classified
+# `StripeServiceError::Stripe` variant BUNYIP-516 maps as well as the
+# `unarchive_price` BUNYIP-513 uses.
 dunite-stripe-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "5dab94d7658efbd77661a0565c7b218bb22dbfc1" }
 # Shared feedback domain (DEV-495 / DEV-516): models + FeedbackRepository, lifted
 # from this crate's own superset into dunite so a8n-tools can share it. Pinned to
@@ -41,9 +43,12 @@ dunite-feedback = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c
 # Shared Stripe service layer (DEV-495 / DEV-515). This slice provides the
 # async-stripe response DTOs, re-exported from this crate's models; the service
 # + runtime config land in a follow-up.
-# BUNYIP-513: bumped ae62c27 -> 5dab94d for StripeService::unarchive_price (the
-# reverse of the BUNYIP-512 archive). Moves in lock-step with dunite-stripe-core
-# above (its path dep), so the two stay a single version.
+# BUNYIP-513/516: at 5dab94d. It carries StripeService::unarchive_price (the
+# reverse of the BUNYIP-512 archive, BUNYIP-513) and, being a descendant of the
+# DUNITE-10 merge, the classified `StripeServiceError::Stripe { message, details }`
+# (HTTP status + Stripe `error.code` / `error.type`, no free-text Stripe message)
+# plus the `list_webhook_endpoints` 403-check that BUNYIP-516's `stripe_err`
+# permission mapping depends on. Moves in lock-step with dunite-stripe-core above.
 dunite-stripe = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "5dab94d7658efbd77661a0565c7b218bb22dbfc1" }
 # Shared account vocabulary (DEV-495 / DEV-517): the role / membership-status /
 # subscription-tier enums and the tier-settings response, re-exported from this

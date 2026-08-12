@@ -54,6 +54,14 @@ every DB-stored secret (TOTP, Stripe, SMTP), not Stripe configuration.
 Until a secret key is present the dashboard renders the disabled "Payment is not
 configured" button (`bunyip-web/src/handlers/dashboard.rs`).
 
+BUNYIP-516: if you use a **restricted** key (`rk_test_...`) instead of the
+unrestricted secret key above, it needs **Write** on Products, Prices,
+Customers, Subscriptions, Checkout Sessions and **Webhook Endpoints**, plus
+**Read** on Invoices. Webhook Endpoints is what the admin page's "Create
+endpoint" button uses; without it Stripe answers 403 and bunyip can neither
+create an endpoint nor list the existing ones. The admin Stripe page states the
+same list and reports a missing permission by name.
+
 ## Step 2 - forward webhooks with the Stripe CLI
 
 In a dedicated terminal, run the listener and forward to the local api:

@@ -901,6 +901,7 @@ mod two_column_layout_tests {
             code: "RATE_LIMITED".into(),
             message: String::new(),
             retry_after: Some(120),
+            request_id: None,
         };
         let throttled_html = test_send_banner(Err(throttled)).into_string();
         assert!(
@@ -1340,8 +1341,9 @@ mod stripe_admin_tests {
     // integration tests (this port calls those existing endpoints); here we
     // cover the rendering + the dollars->cents parsing, including the $0.00
     // lifetime-price case that must render as a real price, not "--".
-    use super::{parse_price_cents, stripe_prices_block, stripe_products_block};
+    use super::{parse_price_cents, stripe_prices_block, stripe_products_block, WebhookRetry};
     use crate::api::types::{StripePrice, StripeProduct};
+    use crate::api::ApiError;
     use crate::util::format_stripe_amount;
 
     fn product(id: &str, name: &str, active: bool) -> StripeProduct {
@@ -1378,6 +1380,32 @@ mod stripe_admin_tests {
         }
     }
 
+    /// A generic 500 from bunyip-api: `user_message` collapses it (BUNYIP-477),
+    /// so the block itself has to name the likely cause.
+    fn load_error() -> ApiError {
+        ApiError {
+            status: 500,
+            code: "INTERNAL_ERROR".into(),
+            message: "Failed to list webhook endpoints".into(),
+            retry_after: None,
+            request_id: Some("req_abc123".into()),
+        }
+    }
+
+    /// The 400 `stripe_err_for` produces for `more_permissions_required`: the
+    /// message is bunyip-authored and names the permission, so it passes through.
+    fn permission_error(permission: &str) -> ApiError {
+        ApiError {
+            status: 400,
+            code: "VALIDATION_ERROR".into(),
+            message: format!(
+                "Your Stripe restricted key does not have the {permission} permission. Add Write access for {permission} to the key in the Stripe dashboard, paste the key into Secret key above, and save."
+            ),
+            retry_after: None,
+            request_id: Some("req_perm001".into()),
+        }
+    }
+
     #[test]
     fn format_stripe_amount_handles_zero_and_null() {
         assert_eq!(format_stripe_amount(Some(0), "usd"), "$0.00");
@@ -1406,7 +1434,7 @@ mod stripe_admin_tests {
         ];
         // Each active product has an active price, so no "no active price" warning.
         let prices = [price("price_a", "prod_a", Some(300), true)];
-        let html = stripe_products_block(Some(&list), Some(&prices)).into_string();
+        let html = stripe_products_block(Ok(&list), Ok(&prices)).into_string();
         assert!(html.contains("Personal Plan") && html.contains("Old Plan"));
         assert!(html.contains(">Active<") && html.contains(">Archived<"));
         // Create form present; archive only for the active product.
@@ -1425,8 +1453,8 @@ mod stripe_admin_tests {
 
     #[test]
     fn products_block_renders_load_error_state() {
-        let html = stripe_products_block(None, None).into_string();
-        assert!(html.contains("Could not load products"));
+        let html = stripe_products_block(Err(&load_error()), Ok(&[])).into_string();
+        assert!(html.contains("Could not read the products from Stripe"));
     }
 
     // BUNYIP-512: a product whose plan has members shows a disabled Archive
@@ -1435,7 +1463,7 @@ mod stripe_admin_tests {
     fn products_block_gates_archive_when_members_present() {
         let list = [product_with_members("prod_busy", "Busy Plan", 3)];
         let prices = [price("price_busy", "prod_busy", Some(300), true)];
-        let html = stripe_products_block(Some(&list), Some(&prices)).into_string();
+        let html = stripe_products_block(Ok(&list), Ok(&prices)).into_string();
         assert!(html.contains("3 members"), "member count shown");
         assert!(html.contains("disabled"), "archive control is disabled");
         assert!(
@@ -1448,7 +1476,7 @@ mod stripe_admin_tests {
     #[test]
     fn products_block_member_count_is_singular_for_one() {
         let list = [product_with_members("prod_one", "Solo Plan", 1)];
-        let html = stripe_products_block(Some(&list), Some(&[])).into_string();
+        let html = stripe_products_block(Ok(&list), Ok(&[])).into_string();
         assert!(html.contains("1 member"), "singular label");
         assert!(!html.contains("1 members"), "no stray plural");
     }
@@ -1459,7 +1487,7 @@ mod stripe_admin_tests {
         let list = [product("prod_empty", "Empty Plan", true)];
         // Only an archived price exists for it.
         let prices = [price("price_dead", "prod_empty", Some(300), false)];
-        let html = stripe_products_block(Some(&list), Some(&prices)).into_string();
+        let html = stripe_products_block(Ok(&list), Ok(&prices)).into_string();
         assert!(
             html.contains("No active price"),
             "unsellable active product is warned about"
@@ -1470,7 +1498,7 @@ mod stripe_admin_tests {
     #[test]
     fn products_block_no_warning_when_prices_unknown() {
         let list = [product("prod_x", "Plan X", true)];
-        let html = stripe_products_block(Some(&list), None).into_string();
+        let html = stripe_products_block(Ok(&list), Err(&load_error())).into_string();
         assert!(
             !html.contains("No active price"),
             "cannot claim unsellable when the price list failed to load"
@@ -1481,7 +1509,7 @@ mod stripe_admin_tests {
     fn prices_block_shows_zero_price_and_resolves_product_name() {
         let products = [product("prod_life", "Lifetime", true)];
         let prices = [price("price_free", "prod_life", Some(0), true)];
-        let html = stripe_prices_block(Some(&prices), &products).into_string();
+        let html = stripe_prices_block(Ok(&prices), Ok(&products)).into_string();
         assert!(
             html.contains("$0.00"),
             "zero lifetime price renders as $0.00, not --"
@@ -1500,7 +1528,7 @@ mod stripe_admin_tests {
     fn prices_block_gates_archive_when_members_present() {
         let products = [product("prod_std", "Standard", true)];
         let prices = [price_with_members("price_std", "prod_std", 5)];
-        let html = stripe_prices_block(Some(&prices), &products).into_string();
+        let html = stripe_prices_block(Ok(&prices), Ok(&products)).into_string();
         assert!(
             html.contains("5 members"),
             "member count shown on the price row"
@@ -1519,7 +1547,7 @@ mod stripe_admin_tests {
             product("prod_active", "Active Plan", true),
             product("prod_gone", "Archived Plan", false),
         ];
-        let html = stripe_products_block(Some(&list), Some(&[])).into_string();
+        let html = stripe_products_block(Ok(&list), Ok(&[])).into_string();
         assert!(
             html.contains(r#"action="/admin/stripe/products/prod_gone/unarchive""#),
             "archived product has an Unarchive control"
@@ -1548,7 +1576,7 @@ mod stripe_admin_tests {
             price("price_live", "prod_x", Some(300), true),
             price("price_gone", "prod_x", Some(300), false),
         ];
-        let html = stripe_prices_block(Some(&prices), &products).into_string();
+        let html = stripe_prices_block(Ok(&prices), Ok(&products)).into_string();
         assert!(
             html.contains(r#"action="/admin/stripe/prices/price_gone/unarchive""#),
             "archived price has an Unarchive control"
@@ -1580,7 +1608,7 @@ mod stripe_admin_tests {
         // The mapped free price resolves to the same product that is stored, so
         // no disagreement flag.
         let prices = [price("price_free123", "prod_life123", Some(0), true)];
-        let html = super::stripe_catalog_section(Some(&tier), Some(&prices)).into_string();
+        let html = super::stripe_catalog_section(Ok(&tier), Some(&prices)).into_string();
         assert!(
             html.contains(r#"action="/admin/stripe/catalog""#),
             "catalog form present"
@@ -1608,7 +1636,7 @@ mod stripe_admin_tests {
             "no disagreement when stored product matches the price's product"
         );
         // Load-error state when the tier config is unavailable.
-        assert!(super::stripe_catalog_section(None, None)
+        assert!(super::stripe_catalog_section(Err(&load_error()), None)
             .into_string()
             .contains("Could not load the tier catalog mapping"));
     }
@@ -1628,7 +1656,7 @@ mod stripe_admin_tests {
             .unwrap();
         // The mapped standard price actually belongs to a different product.
         let prices = [price("price_std", "prod_REAL", Some(300), true)];
-        let html = super::stripe_catalog_section(Some(&tier), Some(&prices)).into_string();
+        let html = super::stripe_catalog_section(Ok(&tier), Some(&prices)).into_string();
         assert!(
             html.contains("Stored product differs"),
             "disagreement is flagged"
@@ -1686,7 +1714,13 @@ mod stripe_admin_tests {
 
     #[test]
     fn webhooks_block_prefills_the_derived_url_and_names_its_source() {
-        let html = stripe_webhooks_block(Some(&[]), "https://api.example.com", true).into_string();
+        let html = stripe_webhooks_block(
+            Ok(&[]),
+            "https://api.example.com",
+            true,
+            &WebhookRetry::default(),
+        )
+        .into_string();
         assert!(
             html.contains(r#"value="https://api.example.com/v1/webhooks/stripe""#),
             "endpoint URL prefilled with the real path"
@@ -1708,7 +1742,9 @@ mod stripe_admin_tests {
 
     #[test]
     fn webhooks_block_warns_when_the_origin_is_not_public() {
-        let html = stripe_webhooks_block(Some(&[]), "http://api:4401", true).into_string();
+        let html =
+            stripe_webhooks_block(Ok(&[]), "http://api:4401", true, &WebhookRetry::default())
+                .into_string();
         assert!(
             html.contains(r#"value="http://api:4401/v1/webhooks/stripe""#),
             "still prefilled, but flagged"
@@ -1721,11 +1757,23 @@ mod stripe_admin_tests {
 
     #[test]
     fn webhooks_block_states_whether_processing_is_active() {
-        let live = stripe_webhooks_block(Some(&[]), "https://api.example.com", true).into_string();
+        let live = stripe_webhooks_block(
+            Ok(&[]),
+            "https://api.example.com",
+            true,
+            &WebhookRetry::default(),
+        )
+        .into_string();
         assert!(live.contains("Webhook processing is active"));
         assert!(!live.contains("rejects every incoming Stripe event"));
 
-        let off = stripe_webhooks_block(Some(&[]), "https://api.example.com", false).into_string();
+        let off = stripe_webhooks_block(
+            Ok(&[]),
+            "https://api.example.com",
+            false,
+            &WebhookRetry::default(),
+        )
+        .into_string();
         assert!(off.contains("Webhook processing is not active"));
         assert!(
             off.contains("rejects every incoming Stripe event until a signing secret is saved"),
@@ -1735,11 +1783,211 @@ mod stripe_admin_tests {
 
     #[test]
     fn webhooks_block_never_asks_for_a_manual_paste() {
-        let html = stripe_webhooks_block(Some(&[]), "https://api.example.com", false).into_string();
+        let html = stripe_webhooks_block(
+            Ok(&[]),
+            "https://api.example.com",
+            false,
+            &WebhookRetry::default(),
+        )
+        .into_string();
         let lower = html.to_lowercase();
         assert!(
             !lower.contains("paste") && !lower.contains("copy"),
             "the api saves the signing secret itself; no manual step to advertise"
+        );
+    }
+
+    // ---- BUNYIP-516 -------------------------------------------------------
+    // A list bunyip could not read must never render as "none exist", and the
+    // reason it could not read it has to be on the page, not only in the log.
+
+    /// The three Stripe-backed blocks each keep "could not read" and "there are
+    /// none" apart, name the permission that usually explains the former, and
+    /// carry the api request id that locates it in the log.
+    #[test]
+    fn every_stripe_block_separates_could_not_read_from_empty() {
+        let cases: [(&str, &str, String, String); 3] = [
+            (
+                "products",
+                "Products",
+                stripe_products_block(Err(&load_error()), Ok(&[])).into_string(),
+                stripe_products_block(Ok(&[]), Ok(&[])).into_string(),
+            ),
+            (
+                "prices",
+                "Prices",
+                stripe_prices_block(Err(&load_error()), Ok(&[])).into_string(),
+                stripe_prices_block(Ok(&[]), Ok(&[])).into_string(),
+            ),
+            (
+                "webhook endpoints",
+                "Webhook Endpoints",
+                stripe_webhooks_block(
+                    Err(&load_error()),
+                    "https://api.example.com",
+                    true,
+                    &WebhookRetry::default(),
+                )
+                .into_string(),
+                stripe_webhooks_block(
+                    Ok(&[]),
+                    "https://api.example.com",
+                    true,
+                    &WebhookRetry::default(),
+                )
+                .into_string(),
+            ),
+        ];
+
+        for (noun, permission, unreadable, empty) in cases {
+            assert!(
+                unreadable.contains(&format!("Could not read the {noun} from Stripe")),
+                "{noun}: the failure says what could not be read: {unreadable}"
+            );
+            assert!(
+                unreadable.contains("cannot tell whether"),
+                "{noun}: the failure admits bunyip does not know: {unreadable}"
+            );
+            assert!(
+                unreadable.contains(&format!("lacks the {permission} permission")),
+                "{noun}: the likely cause names the permission: {unreadable}"
+            );
+            assert!(
+                unreadable.contains("req_abc123"),
+                "{noun}: the api request id ties it to the log: {unreadable}"
+            );
+            // The whole point: the unreadable state must NOT read as "none".
+            assert!(
+                !unreadable.contains("No products yet")
+                    && !unreadable.contains("No prices yet")
+                    && !unreadable.contains("No webhook endpoints yet"),
+                "{noun}: an unreadable list never renders the empty state: {unreadable}"
+            );
+            // ...and a genuinely empty list still does, with no error text.
+            assert!(
+                empty.contains("yet.") && !empty.contains("Could not read"),
+                "{noun}: a real empty list keeps the empty state: {empty}"
+            );
+        }
+    }
+
+    /// An unreadable product list must not leave the Prices form's picker
+    /// looking like an account with no products.
+    #[test]
+    fn an_unreadable_product_list_explains_the_empty_picker() {
+        let html = stripe_prices_block(Ok(&[]), Err(&load_error())).into_string();
+        assert!(
+            html.contains("Empty because the products could not be read from Stripe"),
+            "the picker says why it is empty: {html}"
+        );
+        // A readable-but-empty product list says nothing of the sort.
+        let clean = stripe_prices_block(Ok(&[]), Ok(&[])).into_string();
+        assert!(!clean.contains("could not be read from Stripe"));
+    }
+
+    /// When bunyip-api already answered with the authored 4xx naming the exact
+    /// permission, that message is what the block shows, verbatim.
+    #[test]
+    fn a_permission_failure_reaches_the_page_verbatim() {
+        let html = stripe_webhooks_block(
+            Err(&permission_error("Webhook Endpoints")),
+            "https://api.example.com",
+            true,
+            &WebhookRetry::default(),
+        )
+        .into_string();
+        assert!(
+            html.contains("does not have the Webhook Endpoints permission"),
+            "the API's authored 4xx copy is shown, not a generic line: {html}"
+        );
+        assert!(
+            html.contains("paste the key into Secret key above, and save"),
+            "the fix steps survive: {html}"
+        );
+        assert!(
+            !html.contains("An unexpected error occurred"),
+            "a 4xx is never collapsed to the generic line: {html}"
+        );
+        assert!(html.contains("req_perm001"), "reference present: {html}");
+    }
+
+    /// A failed create restates the reason next to the button and keeps what was
+    /// typed, so retrying after fixing the key is one click.
+    #[test]
+    fn a_failed_create_redisplays_the_submitted_url_and_events() {
+        let err = permission_error("Webhook Endpoints");
+        let msg = err.user_message();
+        let retry = WebhookRetry {
+            error: Some(&msg),
+            url: Some("https://custom.example.com/v1/webhooks/stripe"),
+            events: Some("checkout.session.completed, invoice.payment_failed"),
+            reference: err.request_id.as_deref(),
+        };
+        let html =
+            stripe_webhooks_block(Ok(&[]), "https://api.example.com", true, &retry).into_string();
+
+        assert!(
+            html.contains("Creating the webhook endpoint failed"),
+            "the failure is stated on the page, not only as a toast: {html}"
+        );
+        assert!(
+            html.contains("does not have the Webhook Endpoints permission"),
+            "the reason is the authored permission copy: {html}"
+        );
+        assert!(
+            html.contains(r#"value="https://custom.example.com/v1/webhooks/stripe""#),
+            "the submitted URL is redisplayed, not replaced by the derived one: {html}"
+        );
+        assert!(
+            html.contains("checkout.session.completed, invoice.payment_failed"),
+            "the submitted event list is redisplayed: {html}"
+        );
+        assert!(
+            !html.contains("customer.subscription.created"),
+            "the submitted events replace the defaults rather than reappending them: {html}"
+        );
+        assert!(html.contains("req_perm001"), "reference present: {html}");
+    }
+
+    /// A plain page load carries no retry state, so the form keeps its derived
+    /// URL and recommended events and shows no failure box.
+    #[test]
+    fn a_clean_load_keeps_the_derived_defaults() {
+        let html = stripe_webhooks_block(
+            Ok(&[]),
+            "https://api.example.com",
+            true,
+            &WebhookRetry::default(),
+        )
+        .into_string();
+        assert!(html.contains(r#"value="https://api.example.com/v1/webhooks/stripe""#));
+        assert!(html.contains("customer.subscription.created"));
+        assert!(!html.contains("Creating the webhook endpoint failed"));
+    }
+
+    /// The setup docs must ask for the permission the page's own Create endpoint
+    /// button needs; asking for the other five and not this one is what produced
+    /// the unresolvable 403.
+    #[test]
+    fn setup_docs_ask_for_the_webhook_endpoints_permission() {
+        let html = super::stripe_setup_docs().into_string();
+        for permission in [
+            "Products",
+            "Prices",
+            "Customers",
+            "Subscriptions",
+            "Checkout Sessions",
+            "Webhook Endpoints",
+        ] {
+            assert!(
+                html.contains(permission),
+                "the Write list names {permission}: {html}"
+            );
+        }
+        assert!(html.contains("Invoices"), "Read list unchanged");
+        assert!(
+            html.contains("Create endpoint"),
+            "the docs tie the permission to the button that needs it: {html}"
         );
     }
 
