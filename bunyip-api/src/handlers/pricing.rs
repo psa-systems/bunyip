@@ -24,11 +24,13 @@ use std::time::{Duration, Instant};
 
 use actix_web::{web, HttpRequest, HttpResponse};
 use serde::Serialize;
+use sqlx::PgPool;
 
 use crate::config::TierConfig;
 use crate::errors::AppError;
 use crate::middleware::AdminUser;
 use crate::models::StripePriceResponse;
+use crate::repositories::UserRepository;
 use crate::responses::{get_request_id, success};
 use crate::services::StripeService;
 
@@ -50,6 +52,14 @@ pub struct PublicPricingTier {
     pub currency: String,
     pub interval: Option<String>,
     pub trial_days: i64,
+    /// BUNYIP-526: whether this tier can still be signed up for. A slot-limited
+    /// tier (Lifetime, Early Adopter) is `false` once its usage reaches its cap;
+    /// Standard is unlimited and always `true`. The public page renders a sold-out
+    /// CTA rather than inviting a purchase that cannot be honoured.
+    pub available: bool,
+    /// BUNYIP-526: remaining slots for a limited tier, for an honest scarcity
+    /// line. `None` for an unlimited tier (Standard), so the page shows no count.
+    pub slots_remaining: Option<i64>,
 }
 
 /// `GET /v1/pricing` body.
@@ -297,19 +307,44 @@ fn tier_label(tier: &str) -> &'static str {
     }
 }
 
-/// Match each mapped `(tier, price_id, trial_days)` against the Stripe price
-/// list: publishable tiers in mapping order, plus one reason per tier that did
-/// not resolve. Pure, so every per-tier outcome is unit-testable without Stripe.
-#[allow(clippy::type_complexity)]
+/// One tier as configured for advertising: its price id, its own trial length,
+/// and its availability (BUNYIP-526), before the Stripe price is matched.
+struct MappedTier {
+    tier: &'static str,
+    price_id: String,
+    trial_days: i64,
+    available: bool,
+    slots_remaining: Option<i64>,
+}
+
+/// BUNYIP-526: availability for one tier from its slot cap and live usage.
+/// Standard is unlimited (`(true, None)`); Lifetime and Early Adopter are capped
+/// and sell out once usage reaches the cap. `usage` is `(lifetime_used,
+/// early_adopter_used)`, straight from `count_tier_assignments`.
+fn tier_availability(tier: &str, cfg: &TierConfig, usage: (i64, i64)) -> (bool, Option<i64>) {
+    let (cap, used) = match tier {
+        "lifetime" => (cfg.lifetime_slots, usage.0),
+        "early_adopter" => (cfg.early_adopter_slots, usage.1),
+        // Standard is uncapped, so it never sells out and shows no count.
+        _ => return (true, None),
+    };
+    let remaining = (cap - used).max(0);
+    (remaining > 0, Some(remaining))
+}
+
+/// Match each mapped tier against the Stripe price list: publishable tiers in
+/// mapping order (carrying their trial length and availability), plus one reason
+/// per tier that did not resolve. Pure, so every per-tier outcome is
+/// unit-testable without Stripe.
 fn match_mapped_tiers(
-    mapped: &[(&'static str, String, i64)],
+    mapped: &[MappedTier],
     prices: &[StripePriceResponse],
     app_tag: &str,
 ) -> (Vec<PublicPricingTier>, Vec<UnpublishedReason>) {
     let mut tiers = Vec::new();
     let mut reasons = Vec::new();
-    for (tier, price_id, tier_trial_days) in mapped {
-        let detail = match prices.iter().find(|p| &p.id == price_id) {
+    for m in mapped {
+        let detail = match prices.iter().find(|p| p.id == m.price_id) {
             None => Some(PriceUnresolved::NotVisible {
                 app_tag: app_tag.to_string(),
             }),
@@ -317,11 +352,13 @@ fn match_mapped_tiers(
             Some(p) => match p.unit_amount {
                 Some(amount) => {
                     tiers.push(PublicPricingTier {
-                        tier,
+                        tier: m.tier,
                         amount,
                         currency: p.currency.clone(),
                         interval: p.recurring_interval.clone(),
-                        trial_days: *tier_trial_days,
+                        trial_days: m.trial_days,
+                        available: m.available,
+                        slots_remaining: m.slots_remaining,
                     });
                     None
                 }
@@ -330,8 +367,8 @@ fn match_mapped_tiers(
         };
         if let Some(detail) = detail {
             reasons.push(UnpublishedReason::PriceUnresolved {
-                tier,
-                price_id: price_id.clone(),
+                tier: m.tier,
+                price_id: m.price_id.clone(),
                 detail,
             });
         }
@@ -349,6 +386,7 @@ fn match_mapped_tiers(
 async fn resolve(
     cfg: TierConfig,
     stripe: Arc<StripeService>,
+    usage: (i64, i64),
 ) -> (PublicPricingResponse, Vec<UnpublishedReason>) {
     let trial_days = cfg.standard_trial_days;
     let unpublished = |reason: UnpublishedReason| {
@@ -364,7 +402,9 @@ async fn resolve(
     // Early Adopter, Standard. `free_price_id` is the Lifetime tier's price;
     // the model carries that naming asymmetry and we mirror it rather than
     // re-aliasing. A lifetime membership has no trial, so its trial length is 0.
-    let mapped: Vec<(&'static str, String, i64)> = [
+    // BUNYIP-526: each tier also carries its availability, resolved from its
+    // slot cap and the live usage counts.
+    let mapped: Vec<MappedTier> = [
         ("lifetime", &cfg.free_price_id, 0),
         (
             "early_adopter",
@@ -376,7 +416,14 @@ async fn resolve(
     .into_iter()
     .filter_map(|(tier, id, trial)| {
         let id = id.as_deref().map(str::trim).filter(|s| !s.is_empty())?;
-        Some((tier, id.to_string(), trial))
+        let (available, slots_remaining) = tier_availability(tier, &cfg, usage);
+        Some(MappedTier {
+            tier,
+            price_id: id.to_string(),
+            trial_days: trial,
+            available,
+            slots_remaining,
+        })
     })
     .collect();
 
@@ -425,15 +472,34 @@ pub async fn public_pricing(
     tier_config: web::Data<Arc<RwLock<TierConfig>>>,
     stripe: web::Data<Arc<StripeService>>,
     cache: web::Data<Arc<PricingCache>>,
+    pool: web::Data<PgPool>,
 ) -> Result<HttpResponse, AppError> {
     let cfg = snapshot(&tier_config);
     let stripe = stripe.get_ref().clone();
+    let pool = pool.get_ref().clone();
     // The reasons are dropped here, not swallowed: `resolve` has already logged
     // each one, and the public body must not name price ids or config state.
+    // BUNYIP-526: the slot-usage counts ride inside the cached resolve, so they
+    // refresh on the same TTL as the prices rather than per request.
     let body = cache
-        .get_or_resolve(|| async { resolve(cfg, stripe).await.0 })
+        .get_or_resolve(|| async move {
+            let usage = slot_usage(&pool).await;
+            resolve(cfg, stripe, usage).await.0
+        })
         .await;
     Ok(HttpResponse::Ok().json(body.as_ref()))
+}
+
+/// BUNYIP-526: live `(lifetime_used, early_adopter_used)` for the availability
+/// computation. A count failure degrades to `(0, 0)` - it must not 500 the
+/// public page - which reads as "not sold out" and is logged.
+async fn slot_usage(pool: &PgPool) -> (i64, i64) {
+    UserRepository::count_tier_assignments(pool)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "pricing: tier-assignment count failed; treating tiers as available");
+            (0, 0)
+        })
 }
 
 /// `GET /v1/admin/pricing/status` - the same resolve the public page runs, with
@@ -446,10 +512,12 @@ pub async fn admin_pricing_status(
     _admin: AdminUser,
     tier_config: web::Data<Arc<RwLock<TierConfig>>>,
     stripe: web::Data<Arc<StripeService>>,
+    pool: web::Data<PgPool>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let cfg = snapshot(&tier_config);
-    let (payload, reasons) = resolve(cfg, stripe.get_ref().clone()).await;
+    let usage = slot_usage(pool.get_ref()).await;
+    let (payload, reasons) = resolve(cfg, stripe.get_ref().clone(), usage).await;
     Ok(success(
         AdminPricingStatus {
             published: payload.enabled && !payload.tiers.is_empty(),
@@ -537,7 +605,7 @@ mod tests {
         let mut cfg = TierConfig::from_env();
         cfg.standard_price_id = Some("price_123".into());
         cfg.pricing_enabled = false;
-        let (out, reasons) = resolve(cfg, unconfigured_stripe()).await;
+        let (out, reasons) = resolve(cfg, unconfigured_stripe(), (0, 0)).await;
         assert!(!out.enabled);
         assert!(out.tiers.is_empty());
         assert_eq!(out.trial_days, 30, "trial length is still reported");
@@ -549,7 +617,7 @@ mod tests {
         let mut cfg = TierConfig::from_env();
         cfg.pricing_enabled = true;
         cfg.standard_price_id = None;
-        let (out, reasons) = resolve(cfg, unconfigured_stripe()).await;
+        let (out, reasons) = resolve(cfg, unconfigured_stripe(), (0, 0)).await;
         assert!(!out.enabled, "no mapped price is nothing to advertise");
         assert!(out.tiers.is_empty());
         assert_eq!(reasons, vec![UnpublishedReason::NoTierMapped]);
@@ -563,7 +631,7 @@ mod tests {
         cfg.pricing_enabled = true;
         cfg.free_price_id = Some("  ".into());
         cfg.standard_price_id = Some(String::new());
-        let (_, reasons) = resolve(cfg, unconfigured_stripe()).await;
+        let (_, reasons) = resolve(cfg, unconfigured_stripe(), (0, 0)).await;
         assert_eq!(reasons, vec![UnpublishedReason::NoTierMapped]);
     }
 
@@ -572,26 +640,45 @@ mod tests {
         let mut cfg = TierConfig::from_env();
         cfg.pricing_enabled = true;
         cfg.early_adopter_price_id = Some("price_ea".into());
-        let (out, reasons) = resolve(cfg, unconfigured_stripe()).await;
+        let (out, reasons) = resolve(cfg, unconfigured_stripe(), (0, 0)).await;
         assert!(!out.enabled);
         assert_eq!(reasons, vec![UnpublishedReason::StripeNotConfigured]);
     }
 
-    /// BUNYIP-515 AC1: every mapped tier publishes, in ladder order, each with
-    /// its own trial length.
+    /// A `MappedTier` fixture; `available`/`slots_remaining` default to an
+    /// unlimited-and-open tier unless a test overrides them.
+    fn mapped(tier: &'static str, price_id: &str, trial_days: i64) -> MappedTier {
+        MappedTier {
+            tier,
+            price_id: price_id.into(),
+            trial_days,
+            available: true,
+            slots_remaining: None,
+        }
+    }
+
+    /// BUNYIP-515 AC1 / BUNYIP-526: every mapped tier publishes, in ladder
+    /// order, each carrying its own trial length AND its availability.
     #[test]
     fn every_mapped_tier_that_resolves_is_published() {
-        let mapped = vec![
-            ("lifetime", "price_life".to_string(), 0),
-            ("early_adopter", "price_ea".to_string(), 90),
-            ("standard", "price_std".to_string(), 30),
+        let mapped_tiers = vec![
+            MappedTier {
+                slots_remaining: Some(3),
+                ..mapped("lifetime", "price_life", 0)
+            },
+            MappedTier {
+                available: false,
+                slots_remaining: Some(0),
+                ..mapped("early_adopter", "price_ea", 90)
+            },
+            mapped("standard", "price_std", 30),
         ];
         let prices = vec![
             price("price_std", Some(300), true),
             price("price_ea", Some(200), true),
             price("price_life", Some(0), true),
         ];
-        let (tiers, reasons) = match_mapped_tiers(&mapped, &prices, "bunyip");
+        let (tiers, reasons) = match_mapped_tiers(&mapped_tiers, &prices, "bunyip");
         assert!(reasons.is_empty());
         assert_eq!(
             tiers.iter().map(|t| t.tier).collect::<Vec<_>>(),
@@ -601,21 +688,56 @@ mod tests {
         assert_eq!(tiers[0].amount, 0, "a zero lifetime price is a real price");
         assert_eq!(tiers[1].trial_days, 90, "each tier carries its own trial");
         assert_eq!(tiers[2].amount, 300);
+        // BUNYIP-526: availability rides through the match untouched.
+        assert_eq!(tiers[0].slots_remaining, Some(3));
+        assert!(
+            !tiers[1].available,
+            "a sold-out tier still publishes, as sold out"
+        );
+        assert!(
+            tiers[2].available && tiers[2].slots_remaining.is_none(),
+            "Standard is unlimited"
+        );
+    }
+
+    /// BUNYIP-526: Standard is uncapped; Lifetime / Early Adopter sell out once
+    /// usage reaches the cap.
+    #[test]
+    fn tier_availability_caps_limited_tiers_only() {
+        let mut cfg = TierConfig::from_env();
+        cfg.lifetime_slots = 5;
+        cfg.early_adopter_slots = 5;
+        // (lifetime_used, early_adopter_used)
+        assert_eq!(
+            tier_availability("standard", &cfg, (999, 999)),
+            (true, None)
+        );
+        assert_eq!(tier_availability("lifetime", &cfg, (2, 0)), (true, Some(3)));
+        assert_eq!(
+            tier_availability("lifetime", &cfg, (5, 0)),
+            (false, Some(0)),
+            "used == cap is sold out"
+        );
+        assert_eq!(
+            tier_availability("early_adopter", &cfg, (0, 8)),
+            (false, Some(0)),
+            "oversold clamps remaining to 0"
+        );
     }
 
     /// BUNYIP-515 AC10: archived resolves to the archived reason, not a
     /// generic miss, and one broken tier does not unpublish the others.
     #[test]
     fn an_archived_price_is_named_as_archived() {
-        let mapped = vec![
-            ("early_adopter", "price_old".to_string(), 90),
-            ("standard", "price_std".to_string(), 30),
+        let mapped_tiers = vec![
+            mapped("early_adopter", "price_old", 90),
+            mapped("standard", "price_std", 30),
         ];
         let prices = vec![
             price("price_old", Some(200), false),
             price("price_std", Some(300), true),
         ];
-        let (tiers, reasons) = match_mapped_tiers(&mapped, &prices, "bunyip");
+        let (tiers, reasons) = match_mapped_tiers(&mapped_tiers, &prices, "bunyip");
         assert_eq!(tiers.len(), 1, "the healthy tier still publishes");
         assert_eq!(
             reasons,
@@ -630,9 +752,9 @@ mod tests {
 
     #[test]
     fn a_price_with_no_amount_is_named_as_such() {
-        let mapped = vec![("standard", "price_metered".to_string(), 30)];
+        let mapped_tiers = vec![mapped("standard", "price_metered", 30)];
         let prices = vec![price("price_metered", None, true)];
-        let (tiers, reasons) = match_mapped_tiers(&mapped, &prices, "bunyip");
+        let (tiers, reasons) = match_mapped_tiers(&mapped_tiers, &prices, "bunyip");
         assert!(tiers.is_empty());
         assert!(matches!(
             reasons.as_slice(),
@@ -647,8 +769,8 @@ mod tests {
     /// the tag as a possible cause and quotes it.
     #[test]
     fn an_invisible_price_quotes_the_app_tag() {
-        let mapped = vec![("standard", "price_dashboard".to_string(), 30)];
-        let (tiers, reasons) = match_mapped_tiers(&mapped, &[], "bunyip");
+        let mapped_tiers = vec![mapped("standard", "price_dashboard", 30)];
+        let (tiers, reasons) = match_mapped_tiers(&mapped_tiers, &[], "bunyip");
         assert!(tiers.is_empty());
         let msg = reasons[0].message();
         assert!(msg.contains("price_dashboard"), "names the price id: {msg}");

@@ -130,6 +130,8 @@ mod tests {
                 currency: "usd".into(),
                 interval: Some("month".into()),
                 trial_days: 30,
+                available: true,
+                slots_remaining: None,
             }],
         }
     }
