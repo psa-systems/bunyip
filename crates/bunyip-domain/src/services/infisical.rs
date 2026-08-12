@@ -97,10 +97,12 @@ impl InfisicalClient {
         format!("{}/api/v1/auth/universal-auth/login", self.address)
     }
 
-    /// The base secret-read URL (query params added separately). HOST-VALIDATION:
-    /// this uses the long-stable v3 "raw" endpoint; confirm it against the
-    /// deployed Infisical version. The newer v4 form is
-    /// `GET {address}/api/v4/secrets/{name}?projectId=&environment=&secretPath=`.
+    /// The base secret-read URL (query params added separately). Uses the
+    /// long-stable v3 "raw" endpoint, confirmed on infisical.a8n.systems
+    /// (unauthenticated it returns 401, so the route exists; a fetch 404 means the
+    /// key is not at the queried project/env/path). A v4 form
+    /// (`GET {address}/api/v4/secrets/{name}?projectId=...`) exists for
+    /// deployments that drop v3.
     fn secret_url(&self, name: &str) -> String {
         format!("{}/api/v3/secrets/raw/{}", self.address, name)
     }
@@ -175,7 +177,7 @@ mod tests {
             address: "https://infisical.example.com/".to_string(),
             project_id: "proj-123".to_string(),
             environment: "staging".to_string(),
-            secret_path: "/bunyip/runtime".to_string(),
+            secret_path: "/runtime".to_string(),
             client_id: "cid".to_string(),
             client_secret: "csecret".to_string(),
         }

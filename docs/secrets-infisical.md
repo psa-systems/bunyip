@@ -39,12 +39,12 @@ One folder, one key per secret, per environment:
 ```
 bunyip (project)
 ├── staging
-│   ├── /bunyip/app      <- Group-1 file secrets (this section)
-│   ├── /bunyip/runtime  <- Group-2 runtime fetch (see below)
+│   ├── /bunyip/app      <- Group-1 file secrets (sync-secrets.nu)
+│   ├── /runtime         <- Group-2 runtime fetch (project-relative; see below)
 │   └── /bunyip/e2e      <- the E2E account password (docs/e2e.md)
 └── prod
     ├── /bunyip/app
-    └── /bunyip/runtime
+    └── /runtime
 ```
 
 The Infisical key is the environment variable name the api reads, i.e. the
@@ -68,7 +68,7 @@ service environment, and CI runs that self-test, so adding a compose secret
 without mapping it here fails the build.
 
 `SMTP_PASSWORD` is deliberately **not** in this Group-1 table: it is Group-2-only
-(BUNYIP-529), sourced from the `/bunyip/runtime` Infisical fetch or a DB
+(BUNYIP-529), sourced from the `/runtime` Infisical fetch or a DB
 `email_config` row. See [Group-2: runtime fetch](#group-2-runtime-fetch).
 
 `./secrets/oidc/*.pem` is **out of scope**. The OIDC signing keys are generated
@@ -140,7 +140,7 @@ Two rotations need more than that:
 The Group-1 path above renders files before the container starts. Group-2 is the
 opposite: bunyip-api itself fetches the secret from Infisical at boot, in Rust
 (`crates/bunyip-domain/src/services/infisical.rs`, BUNYIP-525), using a Universal
-Auth machine identity and reading the `/bunyip/runtime` folder. There is no CLI
+Auth machine identity and reading the `/runtime` folder. There is no CLI
 and no sidecar. Today the only Group-2 secret is `SMTP_PASSWORD`; more
 post-startup integration secrets can follow the same path.
 
@@ -162,7 +162,7 @@ the two credentials live in the SOPS `compose-secrets.yml`.
 | `INFISICAL_ADDRESS`       | no      | plain env    | `""`    | Infisical base URL (e.g. `https://infisical.a8n.systems`) |
 | `INFISICAL_PROJECT_ID`    | no      | plain env    | `""`    | the Infisical project (workspace) id                      |
 | `INFISICAL_ENV`           | no      | plain env    | `""`    | the environment slug (`staging` / `prod`)                 |
-| `INFISICAL_SECRET_PATH`   | no      | plain env    | `/`     | the folder to read (`/bunyip/runtime`)                    |
+| `INFISICAL_SECRET_PATH`   | no      | plain env    | `/`     | the folder to read (`/runtime`, project-relative)         |
 | `INFISICAL_CLIENT_ID`     | yes     | `secret_env` | `""`    | Universal Auth machine-identity client id                 |
 | `INFISICAL_CLIENT_SECRET` | yes     | `secret_env` | `""`    | Universal Auth machine-identity client secret             |
 
@@ -170,8 +170,9 @@ The two credentials go through `secret_env`, so they honour the `{NAME}_FILE`
 convention and can themselves be Group-1 file secrets. If either credential is
 empty the client is not built and the fetch is skipped (fail-open). The machine
 identity needs Universal Auth and read access to `INFISICAL_SECRET_PATH`
-(`/bunyip/runtime`) in the target environment - a separate grant from the sync
-identity's read on `/bunyip/app`.
+(`/runtime`) in the target environment. Paths are project-relative: the identity is
+scoped to the bunyip Infisical project, so no `/bunyip` prefix is needed. This is a
+separate grant from the sync identity's read on the Group-1 folder (`/bunyip/app`).
 
 ### Source precedence
 
@@ -222,6 +223,6 @@ for a lingering Group-1 `SMTP_PASSWORD` or a DB `email_config` row.
 | Symptom | Cause |
 | --- | --- |
 | Boot warn, `infisical login failed` | Wrong `INFISICAL_CLIENT_ID` / `_CLIENT_SECRET`, or the identity lacks Universal Auth on `INFISICAL_ADDRESS`. Graceful: the app still starts. |
-| Boot warn on the secret read, HTTP 404 | The v3 raw endpoint is absent on that Infisical version, or the key/path/env is wrong. The client uses `GET /api/v3/secrets/raw/{name}`; a v4 alternative is noted in `infisical.rs`. |
+| Boot warn on the secret read, HTTP 404 | The key is not at the queried project/env/path: check `INFISICAL_SECRET_PATH`, `INFISICAL_ENV`, `INFISICAL_PROJECT_ID`, and that the key exists there. The v3 endpoint is confirmed correct on infisical.a8n.systems (401 unauthenticated), so a 404 is a lookup mismatch, not an API-version issue. |
 | Feature enabled but no "Fetched ..." log line | The slot was already non-empty; a Group-1 `SMTP_PASSWORD` or a DB `email_config` row won. Remove the Group-1 value to use Infisical. |
-| App starts, email off, boot warn about Infisical | Infisical unreachable or the key absent in `/bunyip/runtime`. Graceful by design; the app boots and email stays off until the fetch succeeds on a later restart. |
+| App starts, email off, boot warn about Infisical | Infisical unreachable or the key absent in `/runtime`. Graceful by design; the app boots and email stays off until the fetch succeeds on a later restart. |
