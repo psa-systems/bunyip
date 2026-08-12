@@ -70,8 +70,6 @@ secrets:
     file: ./secrets/setup_default_admin
   forgejo_api_token:
     file: ./secrets/forgejo_api_token
-  smtp_password:
-    file: ./secrets/smtp_password
   update_check_token:
     file: ./secrets/update_check_token
 
@@ -144,7 +142,6 @@ services:
       APP_ENCRYPTION_KEY_PREV: ${APP_ENCRYPTION_KEY_PREV:-}
       SETUP_DEFAULT_ADMIN_FILE: /run/secrets/setup_default_admin
       FORGEJO_API_TOKEN_FILE: /run/secrets/forgejo_api_token
-      SMTP_PASSWORD_FILE: /run/secrets/smtp_password
       BUNYIP_UPDATE_CHECK_TOKEN_FILE: /run/secrets/update_check_token
       HOST_IP: 0.0.0.0
       APP_PORT: "4401"
@@ -170,7 +167,9 @@ services:
       # reachable from an untrusted private network. See docs/client-ip-forwarding.md.
       TRUSTED_PROXY_CIDR: ${TRUSTED_PROXY_CIDR:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
       RUST_LOG: ${RUST_LOG:-info}
-      # ── Email (SMTP). Password comes from the smtp_password secret above. ──
+      # ── Email (SMTP). SMTP_PASSWORD is a Group-2 secret: the DB email_config
+      # row or the Infisical runtime fetch supplies it, not a compose secret
+      # (BUNYIP-525; see docs/secrets-infisical.md). ──
       EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-465}
@@ -237,7 +236,6 @@ services:
       - app_encryption_key
       - setup_default_admin
       - forgejo_api_token
-      - smtp_password
       - update_check_token
     volumes:
       # OIDC signing keys only (a dedicated subdir, NOT the whole ./secrets

@@ -60,7 +60,6 @@ The Infisical key is the environment variable name the api reads, i.e. the
 | `APP_DATABASE_URL`            | `app_database_url`      | yes           | per-user RLS inactive (BUNYIP-360)     |
 | `SETUP_DEFAULT_ADMIN`         | `setup_default_admin`   | yes           | no bootstrap admin is seeded           |
 | `FORGEJO_API_TOKEN`           | `forgejo_api_token`     | yes           | Forgejo integration off                |
-| `SMTP_PASSWORD`               | `smtp_password`         | yes           | outbound email unauthenticated / off   |
 | `BUNYIP_UPDATE_CHECK_TOKEN`   | `update_check_token`    | yes           | update check runs unauthenticated      |
 
 The table is not maintained by hand on both sides: `sync-secrets.nu --self-test`
@@ -68,9 +67,9 @@ re-derives it from the `compose.yml` `secrets:` block and the `{NAME}_FILE`
 service environment, and CI runs that self-test, so adding a compose secret
 without mapping it here fails the build.
 
-`SMTP_PASSWORD` appears here **and** as a Group-2 key in `/bunyip/runtime`; the
-two are reconciled by [source precedence](#source-precedence). A host that wants
-SMTP sourced from the Group-2 fetch omits `SMTP_PASSWORD` here.
+`SMTP_PASSWORD` is deliberately **not** in this Group-1 table: it is Group-2-only
+(BUNYIP-529), sourced from the `/bunyip/runtime` Infisical fetch or a DB
+`email_config` row. See [Group-2: runtime fetch](#group-2-runtime-fetch).
 
 `./secrets/oidc/*.pem` is **out of scope**. The OIDC signing keys are generated
 out of band and the sync never touches them.
@@ -181,18 +180,18 @@ example), the value the app uses is resolved in this order, highest first:
 
 1. The **database row**, when the feature stores one (`email_config.smtp_password`,
    set from the admin UI). This wins outright.
-2. The **env/file value**: `secret_env("SMTP_PASSWORD")` - the Group-1 file secret
-   (`/run/secrets/smtp_password`) or a plain `SMTP_PASSWORD` env var (for example
-   from the SOPS `compose-secrets.yml`).
+2. A **plain `SMTP_PASSWORD` env var**, read via `secret_env("SMTP_PASSWORD")`.
+   Since BUNYIP-529 `SMTP_PASSWORD` is no longer a Group-1 file secret (it is gone
+   from `compose.yml` and the `/bunyip/app` sync mapping), so this slot is normally
+   empty; a leftover value in a deployment's SOPS `compose-secrets.yml` is the one
+   thing that still shadows the fetch.
 3. The **Group-2 Infisical fetch**.
 
 The fetch fills the slot **only when it is empty** (`bunyip-api/src/main.rs` gates
-it on `config.infisical.enabled && config.email.smtp_password.is_empty()`). So
-Infisical is the *effective* source of `SMTP_PASSWORD` on a host only when there
-is no `email_config` DB row **and** no Group-1 value. To move a host onto
-Infisical for SMTP, remove `SMTP_PASSWORD` from that host's Group-1 secrets (drop
-it from the `/bunyip/app` sync mapping, and from the SOPS `compose-secrets.yml`
-on docker-repo deployments); otherwise the fetch stays enabled but inert.
+it on `config.infisical.enabled && config.email.smtp_password.is_empty()`). With no
+`email_config` DB row and no stray env value, Infisical is the source. If email
+unexpectedly does not use Infisical, look for an `email_config` DB row or a
+lingering `SMTP_PASSWORD` in the deployment's SOPS `compose-secrets.yml`.
 
 ### Validating a fetch
 

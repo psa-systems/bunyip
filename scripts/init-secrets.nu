@@ -168,7 +168,6 @@ def main [] {
     # api treats as "feature not configured".
     secret-from-env-or-empty $"($secrets_dir)/setup_default_admin" $env_file "SETUP_DEFAULT_ADMIN"
     secret-from-env-or-empty $"($secrets_dir)/forgejo_api_token" $env_file "FORGEJO_API_TOKEN"
-    secret-from-env-or-empty $"($secrets_dir)/smtp_password" $env_file "SMTP_PASSWORD"
     secret-from-env-or-empty $"($secrets_dir)/update_check_token" $env_file "BUNYIP_UPDATE_CHECK_TOKEN"
 
     # BUNYIP-482: no stripe_secret_key / stripe_webhook_secret files. The Stripe
