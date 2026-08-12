@@ -47,17 +47,14 @@ struct PlanScope {
 }
 
 /// Every `tier_config` mapping as `(tier name, price-id column, product-id
-/// column)`. Reads all seven price/product columns (BUNYIP-512 AC), including
-/// the one-time `lifetime_price_id` and the product-less `free` tier, so tier
-/// resolution is not limited to the columns the admin catalog form exposes.
+/// column)`. Reads every price/product column bunyip stores (BUNYIP-512 AC), so
+/// tier resolution is not limited to the columns the admin catalog form exposes.
+/// `free` and `lifetime` share the $0 `free_price_id` (BUNYIP-517), so `lifetime`
+/// carries no dedicated price column; it is matched by its derived product id.
 fn tier_mappings(t: &TierConfigRow) -> [(&'static str, Option<&str>, Option<&str>); 4] {
     [
         ("free", t.free_price_id.as_deref(), None),
-        (
-            "lifetime",
-            t.lifetime_price_id.as_deref(),
-            t.lifetime_product_id.as_deref(),
-        ),
+        ("lifetime", None, t.lifetime_product_id.as_deref()),
         (
             "early_adopter",
             t.early_adopter_price_id.as_deref(),
@@ -648,7 +645,6 @@ mod tests {
             early_adopter_trial_days: None,
             standard_trial_days: None,
             free_price_id: Some("price_free".into()),
-            lifetime_price_id: Some("price_life".into()),
             early_adopter_price_id: Some("price_ea".into()),
             standard_price_id: Some("price_std".into()),
             lifetime_product_id: Some("prod_life".into()),
@@ -682,11 +678,11 @@ mod tests {
     }
 
     #[test]
-    fn plan_for_product_reads_the_lifetime_price_column() {
-        // BUNYIP-512 AC: tier resolution reads lifetime_price_id, which the
-        // catalog form does not expose and TierConfigRow previously omitted.
+    fn plan_for_product_matches_lifetime_by_its_derived_product() {
+        // BUNYIP-517: free and lifetime share the $0 free price, so lifetime has
+        // no dedicated price column; it is matched by its derived product id.
         let t = tier_row();
-        let plan = plan_for_product(&t, "prod_unknown", &["price_life".into()]);
+        let plan = plan_for_product(&t, "prod_life", &[]);
         assert_eq!(plan.tiers, vec!["lifetime".to_string()]);
     }
 

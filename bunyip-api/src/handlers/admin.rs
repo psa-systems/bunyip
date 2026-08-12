@@ -19,7 +19,8 @@ use crate::models::{
     AuditAction, CreateApplication, CreateApplicationGroup, CreateAuditLog,
     CreatePasswordResetToken, CreateRefreshToken, DeleteApplicationRequest, MembershipStatus,
     MembershipTier, RateLimitConfig, ReorderApplicationsRequest, SetApplicationGroupRequest,
-    StripeConfigResponse, UpdateApplication, UpdateApplicationGroup, UserResponse,
+    StripeConfigResponse, StripePriceResponse, UpdateApplication, UpdateApplicationGroup,
+    UserResponse,
 };
 use crate::repositories::{
     ApplicationGroupRepository, ApplicationRepository, AuditLogRepository, EmailConfigRepository,
@@ -2811,6 +2812,36 @@ pub struct UpdateTierConfigRequest {
     pub pricing_enabled: Option<bool>,
 }
 
+/// BUNYIP-517: resolve a mapped price id to the Stripe product bunyip stores for
+/// webhook tier classification (`resolve_tier_for_product`). `prices` is the
+/// app-tagged price list. A price that is not in the list (unknown id, or a
+/// product not tagged for this app) or that is archived is refused, naming the
+/// tier and the reason, rather than storing a mapping that resolves to no tier
+/// when a `customer.subscription.*` event arrives. Deriving the product from the
+/// price is what keeps the checkout price and the webhook classification from
+/// disagreeing: there is one entered value per tier, the price.
+fn derive_product_for_price(
+    tier_label: &str,
+    price_id: &str,
+    prices: &[StripePriceResponse],
+    app_tag: &str,
+) -> Result<String, AppError> {
+    match prices.iter().find(|p| p.id == price_id) {
+        Some(p) if p.active => Ok(p.product_id.clone()),
+        Some(_) => Err(AppError::validation(
+            "price_id",
+            format!("{tier_label}: {price_id} is archived in Stripe. Map an active price."),
+        )),
+        None => Err(AppError::validation(
+            "price_id",
+            format!(
+                "{tier_label}: {price_id} is not visible under app tag `{app_tag}`. \
+                 Check the id, or set that product's app_tag metadata in Stripe."
+            ),
+        )),
+    }
+}
+
 /// GET /v1/admin/tier-config
 pub async fn get_tier_config(
     req: HttpRequest,
@@ -2865,6 +2896,7 @@ pub async fn update_tier_config(
     admin: AdminUser,
     pool: web::Data<PgPool>,
     auth_service: web::Data<Arc<AuthService>>,
+    stripe: web::Data<Arc<StripeService>>,
     pricing_cache: web::Data<Arc<crate::handlers::PricingCache>>,
     body: web::Json<UpdateTierConfigRequest>,
 ) -> Result<HttpResponse, AppError> {
@@ -2908,6 +2940,49 @@ pub async fn update_tier_config(
         }
     }
 
+    // BUNYIP-517: the catalog form now sends a price per tier and no product id.
+    // Derive the product bunyip stores for webhook classification from the mapped
+    // price, so the two halves cannot disagree. Only touch Stripe when a price is
+    // actually being set (a slots/trial-only save sends none and skips this).
+    fn nonblank(o: &Option<String>) -> Option<&str> {
+        o.as_deref().map(str::trim).filter(|s| !s.is_empty())
+    }
+    let submitted_prices = [
+        ("Free / lifetime", nonblank(&body.free_price_id)),
+        ("Early adopter", nonblank(&body.early_adopter_price_id)),
+        ("Standard", nonblank(&body.standard_price_id)),
+    ];
+    let (lifetime_product_id, early_adopter_product_id, standard_product_id) =
+        if submitted_prices.iter().any(|(_, p)| p.is_some()) {
+            let prices = stripe.list_prices(None).await.map_err(stripe_err)?;
+            let app_tag = stripe.app_tag();
+            let derive = |label: &str, price: Option<&str>| -> Result<Option<String>, AppError> {
+                match price {
+                    Some(pid) => Ok(Some(derive_product_for_price(
+                        label, pid, &prices, &app_tag,
+                    )?)),
+                    None => Ok(None),
+                }
+            };
+            (
+                // Free and lifetime share the $0 price, and the webhook classifies
+                // that product as lifetime, so `free_price_id` derives
+                // `lifetime_product_id` (BUNYIP-517).
+                derive(submitted_prices[0].0, submitted_prices[0].1)?,
+                derive(submitted_prices[1].0, submitted_prices[1].1)?,
+                derive(submitted_prices[2].0, submitted_prices[2].1)?,
+            )
+        } else {
+            // No price submitted (e.g. a slots/trial-only save): keep whatever the
+            // caller passed directly. The catalog form sends nothing here, so all
+            // three stay None and COALESCE keeps the stored row.
+            (
+                body.lifetime_product_id.clone(),
+                body.early_adopter_product_id.clone(),
+                body.standard_product_id.clone(),
+            )
+        };
+
     let row = TierConfigRepository::update(
         &pool,
         body.lifetime_slots,
@@ -2917,9 +2992,9 @@ pub async fn update_tier_config(
         body.free_price_id.clone(),
         body.early_adopter_price_id.clone(),
         body.standard_price_id.clone(),
-        body.lifetime_product_id.clone(),
-        body.early_adopter_product_id.clone(),
-        body.standard_product_id.clone(),
+        lifetime_product_id.clone(),
+        early_adopter_product_id.clone(),
+        standard_product_id.clone(),
         body.pricing_enabled,
         admin.0.sub,
     )
@@ -2949,9 +3024,11 @@ pub async fn update_tier_config(
                 "free_price_id": body.free_price_id,
                 "early_adopter_price_id": body.early_adopter_price_id,
                 "standard_price_id": body.standard_price_id,
-                "lifetime_product_id": body.lifetime_product_id,
-                "early_adopter_product_id": body.early_adopter_product_id,
-                "standard_product_id": body.standard_product_id,
+                // BUNYIP-517: product ids are derived from the mapped prices, so
+                // the audit records the derived values actually written.
+                "lifetime_product_id": lifetime_product_id,
+                "early_adopter_product_id": early_adopter_product_id,
+                "standard_product_id": standard_product_id,
                 "pricing_enabled": body.pricing_enabled,
             })),
     )
@@ -3463,6 +3540,53 @@ pub(crate) async fn dispatch_lifecycle_event(
 mod tests {
     use super::*;
     use sqlx::PgPool;
+
+    // BUNYIP-517: deriving the tier's product id from its mapped price.
+
+    fn price(id: &str, product_id: &str, active: bool) -> StripePriceResponse {
+        StripePriceResponse {
+            id: id.into(),
+            product_id: product_id.into(),
+            unit_amount: Some(300),
+            currency: "usd".into(),
+            recurring_interval: Some("month".into()),
+            active,
+        }
+    }
+
+    #[test]
+    fn derive_product_for_price_returns_the_active_prices_product() {
+        let prices = [
+            price("price_std", "prod_std", true),
+            price("price_ea", "prod_ea", true),
+        ];
+        assert_eq!(
+            derive_product_for_price("Standard", "price_std", &prices, "bunyip").unwrap(),
+            "prod_std"
+        );
+    }
+
+    #[test]
+    fn derive_product_for_price_refuses_an_archived_price_by_name() {
+        let prices = [price("price_old", "prod_std", false)];
+        let err = derive_product_for_price("Standard", "price_old", &prices, "bunyip").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Standard"), "names the tier: {msg}");
+        assert!(msg.contains("archived"), "names the reason: {msg}");
+    }
+
+    #[test]
+    fn derive_product_for_price_refuses_an_invisible_price_naming_the_app_tag() {
+        let prices = [price("price_std", "prod_std", true)];
+        let err = derive_product_for_price("Early adopter", "price_ghost", &prices, "bunyip")
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Early adopter"), "names the tier: {msg}");
+        assert!(
+            msg.contains("app tag `bunyip`"),
+            "names the app tag so the admin can fix product metadata: {msg}"
+        );
+    }
 
     // BUNYIP-474: a dataset is stale only once it is past the refresh cadence;
     // an unread/unconfigured file (None age) is never "stale" (it is "not

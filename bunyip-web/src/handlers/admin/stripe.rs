@@ -318,41 +318,92 @@ pub(super) fn stripe_webhooks_block(
     )
 }
 
+/// BUNYIP-517: the tier catalog mapping. The admin picks the Stripe PRICE per
+/// tier; bunyip derives and stores the product it needs for webhook tier
+/// classification from that price on save, so the two can never disagree. Only
+/// price fields are asked for; the derived product is shown read-only.
 pub(super) fn stripe_catalog_section(
     tier: Option<&crate::api::types::TierConfigResponse>,
+    prices: Option<&[crate::api::types::StripePrice]>,
 ) -> Markup {
-    let field = |label: &str, name: &str, ph: &str, value: &Option<String>| -> Markup {
+    // A price <select> populated from the active prices, with the stored value
+    // preserved as a selected option even when it is no longer in the list
+    // (archived or invisible), so a save does not silently drop it.
+    let price_select = |name: &str, current: &Option<String>| -> Markup {
+        let cur = current.as_deref().unwrap_or("").to_string();
+        let active: Vec<&crate::api::types::StripePrice> = prices
+            .map(|l| l.iter().filter(|p| p.active).collect())
+            .unwrap_or_default();
+        let current_listed = active.iter().any(|p| p.id == cur);
+        html! {
+            label for=(name) class="text-sm font-medium" { "Price" }
+            select id=(name) name=(name) class=(dashboard_input()) {
+                option value="" selected[cur.is_empty()] { "(none)" }
+                @for p in &active {
+                    option value=(&p.id) selected[p.id == cur] { (format!("{} - {}", format_stripe_amount(p.unit_amount, &p.currency), p.id)) }
+                }
+                @if !cur.is_empty() && !current_listed {
+                    option value=(&cur) selected { (format!("{} (not in the active list)", cur)) }
+                }
+            }
+        }
+    };
+    // The product of the currently-mapped price, looked up in the loaded list.
+    let derived_product = |price_id: &Option<String>| -> Option<String> {
+        let pid = price_id.as_deref()?;
+        prices?
+            .iter()
+            .find(|p| p.id == pid)
+            .map(|p| p.product_id.clone())
+    };
+    let tier_card = |price_name: &str,
+                     price_val: &Option<String>,
+                     stored_product: &Option<String>|
+     -> Markup {
+        let derived = derived_product(price_val);
+        let disagrees =
+            matches!((stored_product.as_deref(), derived.as_deref()), (Some(s), Some(d)) if s != d);
         html! {
             div class="space-y-2" {
-                label for=(name) class="text-sm font-medium" { (label) }
-                input id=(name) name=(name) type="text" maxlength="255" placeholder=(ph) value=(value.clone().unwrap_or_default()) class=(dashboard_input());
+                (price_select(price_name, price_val))
+                p class="text-xs text-muted-foreground" {
+                    "Webhook events for this tier are classified by its product: "
+                    @match &derived {
+                        Some(p) => span class="font-mono" { (p) },
+                        None => span { "derived from the price on save" },
+                    }
+                }
+                @if disagrees {
+                    (badge("warning", "Stored product differs from the price"))
+                    p class="text-xs text-destructive-text" {
+                        "The stored product "
+                        @if let Some(sp) = stored_product.as_deref() { span class="font-mono" { (sp) } }
+                        " no longer matches the mapped price's product. Save to re-derive it."
+                    }
+                }
             }
         }
     };
     html! {
         div class="space-y-3" {
-            div { h3 class="text-xl font-semibold" { "Tier catalog mapping" } p class="text-sm text-muted-foreground" { "Wire each membership tier to the Stripe price / product it should use. Leave a field blank to keep the existing value." } }
+            div {
+                h3 class="text-xl font-semibold" { "Tier catalog mapping" }
+                p class="text-sm text-muted-foreground" {
+                    "Stripe has no concept of a bunyip membership tier, so each tier is bound to the Stripe price that represents it. The binding is read forwards, to advertise pricing and to open the $0 subscription behind a free or lifetime grant, and backwards, to classify incoming subscription events onto the right tier. Pick the price; bunyip derives and stores the product it needs for that classification, so the two halves cannot disagree."
+                }
+            }
             @match tier {
                 None => (error_box("Could not load the tier catalog mapping.")),
                 Some(t) => form method="post" action="/admin/stripe/catalog" class="space-y-6" {
                     (admin_block_grid(vec![
-                        admin_block("Free / lifetime", None, html! {
-                            div class="space-y-4" {
-                                (field("Free price ID", "free_price_id", "price_…", &t.free_price_id))
-                                (field("Lifetime product ID", "lifetime_product_id", "prod_…", &t.lifetime_product_id))
-                            }
+                        admin_block("Free / lifetime", Some("A $0 price. Free and lifetime grants both open a subscription on it."), html! {
+                            div class="space-y-4" { (tier_card("free_price_id", &t.free_price_id, &t.lifetime_product_id)) }
                         }),
                         admin_block("Early adopter", None, html! {
-                            div class="space-y-4" {
-                                (field("Early-adopter price ID", "early_adopter_price_id", "price_…", &t.early_adopter_price_id))
-                                (field("Early-adopter product ID", "early_adopter_product_id", "prod_…", &t.early_adopter_product_id))
-                            }
+                            div class="space-y-4" { (tier_card("early_adopter_price_id", &t.early_adopter_price_id, &t.early_adopter_product_id)) }
                         }),
                         admin_block("Standard", None, html! {
-                            div class="space-y-4" {
-                                (field("Standard price ID", "standard_price_id", "price_…", &t.standard_price_id))
-                                (field("Standard product ID", "standard_product_id", "prod_…", &t.standard_product_id))
-                            }
+                            div class="space-y-4" { (tier_card("standard_price_id", &t.standard_price_id, &t.standard_product_id)) }
                         }),
                     ]))
                     button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save catalog mapping" }
@@ -419,7 +470,7 @@ pub async fn stripe(State(st): State<AppState>, headers: HeaderMap) -> Response 
                     (stripe_products_block(products.as_deref(), prices.as_deref()))
                     (stripe_prices_block(prices.as_deref(), products.as_deref().unwrap_or(&[])))
                     (stripe_webhooks_block(webhooks.as_deref(), &st.cfg.api_public_origin, s.has_webhook_secret))
-                    (stripe_catalog_section(tier.as_ref()))
+                    (stripe_catalog_section(tier.as_ref(), prices.as_deref()))
                 },
             }
         }
@@ -703,17 +754,13 @@ pub struct StripeCatalogForm {
     pub early_adopter_price_id: String,
     #[serde(default)]
     pub standard_price_id: String,
-    #[serde(default)]
-    pub lifetime_product_id: String,
-    #[serde(default)]
-    pub early_adopter_product_id: String,
-    #[serde(default)]
-    pub standard_product_id: String,
 }
 
-/// POST /admin/stripe/catalog - persist the tier -> Stripe price/product
-/// mapping. Only non-blank, in-bounds (<=255) fields are sent, so an untouched
-/// field keeps its stored value (matches the old Pricing tiers behaviour).
+/// POST /admin/stripe/catalog - persist the tier -> Stripe price mapping
+/// (BUNYIP-517). Only a price per tier is submitted; the api derives the product
+/// bunyip stores for webhook classification. A blank field is sent as an
+/// explicit empty string so the admin can clear a mapping, distinct from the
+/// tri-state-by-omission the price ids used to rely on.
 pub async fn stripe_catalog_save(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -728,9 +775,6 @@ pub async fn stripe_catalog_save(
         ("free_price_id", &f.free_price_id),
         ("early_adopter_price_id", &f.early_adopter_price_id),
         ("standard_price_id", &f.standard_price_id),
-        ("lifetime_product_id", &f.lifetime_product_id),
-        ("early_adopter_product_id", &f.early_adopter_product_id),
-        ("standard_product_id", &f.standard_product_id),
     ] {
         let t = v.trim();
         if !t.is_empty() && t.len() <= 255 {

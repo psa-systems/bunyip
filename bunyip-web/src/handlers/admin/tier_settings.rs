@@ -79,8 +79,11 @@ fn resolved_pricing_block(
     cfg: &crate::api::types::TierConfigResponse,
     prices: &[crate::api::types::StripePrice],
 ) -> Markup {
+    // BUNYIP-517: `free_price_id` is the one $0 price shared by free and lifetime
+    // grants, so the label matches the catalog form ("Free / lifetime") rather
+    // than implying a lifetime-only price.
     let rows: Vec<(&str, Option<&str>)> = vec![
-        ("Lifetime", cfg.free_price_id.as_deref()),
+        ("Free / lifetime", cfg.free_price_id.as_deref()),
         ("Early Adopter", cfg.early_adopter_price_id.as_deref()),
         ("Standard", cfg.standard_price_id.as_deref()),
     ];
