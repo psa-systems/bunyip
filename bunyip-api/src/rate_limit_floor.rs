@@ -46,6 +46,14 @@ const EXEMPT_PATHS: &[&str] = &[
     "/v1/version",
     "/v1/auth/register-challenge",
     "/v1/webhooks/stripe",
+    // BUNYIP-518: the public pricing payload. It is unauthenticated, read-only,
+    // and already TTL-cached server-side (`PricingCache`), so it drives no Stripe
+    // traffic and needs no floor. `bunyip-web::public_ctx` fetches it on EVERY
+    // public page render (for the nav/footer links), so under the 20/60s-per-IP
+    // floor a few page loads from one browser exhausted that visitor's bucket;
+    // the 429 was swallowed into an unpublished payload, which 404'd `/pricing`
+    // and hid its links with the switch on and every tier resolving.
+    "/v1/pricing",
 ];
 
 /// Whether the floor applies to this request.
@@ -174,6 +182,10 @@ mod tests {
         assert!(is_exempt("/v1/auth/refresh", &Method::OPTIONS));
         // BUNYIP-450: the stateless signup timing-challenge mint is exempt.
         assert!(is_exempt("/v1/auth/register-challenge", &Method::GET));
+        // BUNYIP-518: the public pricing payload is fetched on every BFF render
+        // and is server-side TTL-cached, so it is exempt from the per-IP floor
+        // that was silently 404'ing /pricing after a few page loads.
+        assert!(is_exempt("/v1/pricing", &Method::GET));
     }
 
     #[test]
@@ -182,9 +194,6 @@ mod tests {
         // The register POST stays floored even though its challenge is exempt.
         assert!(!is_exempt("/v1/auth/register", &Method::POST));
         assert!(!is_exempt("/v1/users/me", &Method::GET));
-        // BUNYIP-487: the public pricing endpoint is unauthenticated, so the
-        // floor is the only cap standing between it and an anonymous flood.
-        assert!(!is_exempt("/v1/pricing", &Method::GET));
         assert!(!is_exempt("/v1/auth/password-reset/verify", &Method::GET));
         // Near-misses must not fall through the exact-match list.
         assert!(!is_exempt("/v1/healthz", &Method::GET));

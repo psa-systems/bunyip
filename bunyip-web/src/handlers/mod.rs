@@ -72,16 +72,15 @@ pub async fn public_ctx(
             );
             Vec::new()
         });
-    let pricing = calls::pricing(&st.api).await.unwrap_or_else(|e| {
-        tracing::error!(
-            endpoint = "/v1/pricing",
-            error = %e.message,
-            code = %e.code,
-            "public chrome falling back to unpublished pricing; /pricing will 404 \
-             and every link to it is hidden until this call succeeds"
-        );
-        PricingResponse::default()
-    });
+    // BUNYIP-518: the pricing payload drives the nav/footer links on EVERY public
+    // render, so it goes through a short-TTL cache: renders coalesce into one
+    // upstream call, keeping the per-render fetch off the rate-limit floor that
+    // used to 404 /pricing. The cache logs a fetch failure (with status + target)
+    // and serves the last good payload rather than silently unpublishing.
+    let pricing = st
+        .pricing_cache
+        .get_or_fetch(|| calls::pricing(&st.api))
+        .await;
     (c, apps, pricing)
 }
 

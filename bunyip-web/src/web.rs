@@ -9,11 +9,16 @@ use maud::Markup;
 
 use crate::api::Api;
 use crate::config::Config;
+use crate::pricing_cache::PricingCache;
 
 #[derive(Clone)]
 pub struct AppState {
     pub api: Api,
     pub cfg: Arc<Config>,
+    /// BUNYIP-518: short-TTL cache of the public `/v1/pricing` payload, so a
+    /// public page render does not always produce an upstream call (which,
+    /// per-render, tripped the rate-limit floor and 404'd `/pricing`).
+    pub pricing_cache: Arc<PricingCache>,
 }
 
 fn attach_cookies(resp: &mut Response, cookies: &[String]) {
