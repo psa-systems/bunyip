@@ -221,7 +221,15 @@ fn price_replace_details(pr: &crate::api::types::StripePrice) -> Markup {
         details {
             summary class=(button_class("outline", "sm", "cursor-pointer list-none [&::-webkit-details-marker]:hidden")) { "Replace" }
             form method="post" action=(format!("/admin/stripe/prices/{}/replace", pr.id)) data-confirm="Replace this price? A new price is created and this one is archived. The catalog mapping and product entitlements move to the new price. Existing subscriptions keep billing on the old price, and anyone on a grandfathered price stays on theirs." class="mt-3 w-full max-w-xl rounded-md border p-3 space-y-3 text-sm" {
-                p class="text-xs text-muted-foreground" { "Stripe cannot change an existing price, so this creates a new one and archives this. Existing subscriptions and locked-in prices are not moved." }
+                // BUNYIP-511: explain WHY this is a replace, not an edit, so the
+                // create-then-archive is understood rather than surprising.
+                div class="space-y-1 text-xs text-muted-foreground" {
+                    p {
+                        span class="font-medium text-foreground" { "Why replace instead of edit? " }
+                        "A Stripe price is immutable: its amount, currency and interval are fixed the moment it is created. Live subscriptions and past invoices reference that exact price object, so letting you change its amount would retroactively alter what existing customers agreed to pay and what their invoices say. Stripe only permits changing a price's active state, nickname or metadata - never its amount."
+                    }
+                    p { "So changing what a plan costs means creating a NEW price at the new amount and archiving this one. bunyip moves the catalog mapping and product entitlements onto the new price for you. Existing subscriptions keep billing on the old price until migrated in Stripe, and anyone on a grandfathered (locked) price stays on theirs." }
+                }
                 div class="flex flex-wrap items-end gap-3" {
                     div class="space-y-1 w-28" { label for=(format!("amount-{}", pr.id)) class="text-xs font-medium" { "Amount" } input id=(format!("amount-{}", pr.id)) name="amount" type="number" step="0.01" min="0" required value=(amount) class=(dashboard_input()); }
                     div class="space-y-1 w-24" {
