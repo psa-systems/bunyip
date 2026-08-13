@@ -88,9 +88,10 @@ bunyip (project)
 
 ### Configuration
 
-bunyip splits these across the deployment files: the non-secret keys are plain
-env (in the docker repo, `server/<host>/bunyip-api/compose-variables.yml`), and
-the two credentials live in the SOPS `compose-secrets.yml`.
+bunyip keeps its Infisical config together in the docker repo: only
+`INFISICAL_ENABLED` is a plain env in `server/<host>/bunyip-api/compose-variables.yml`;
+every other key (address, environment, project id, secret path, and the two
+credentials) lives in the SOPS `compose-secrets.yml`.
 
 | Env var                   | Secret? | How read     | Default | Meaning                                                   |
 | ------------------------- | ------- | ------------ | ------- | --------------------------------------------------------- |
