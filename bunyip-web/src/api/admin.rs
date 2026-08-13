@@ -8,8 +8,9 @@ use super::types::{
     AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList, ArchivedFeedback,
     AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary,
     IpEnrichment, PaginatedResponse, PricingStatus, RestoreReport, SeedTemplateInfo,
-    SmtpTestResult, StripeConfigResponse, StripePrice, StripeProduct, StripeWebhookEndpoint,
-    SystemHealth, SystemHealthResponse, TestEmailResult, TierConfigResponse, UserEntitlement,
+    SmtpTestResult, StripeConfigResponse, StripePermissionReport, StripePrice, StripeProduct,
+    StripeWebhookEndpoint, SystemHealth, SystemHealthResponse, TestEmailResult, TierConfigResponse,
+    UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -1015,6 +1016,14 @@ pub async fn delete_stripe_webhook(
         .delete(&format!("/admin/stripe/webhooks/{id}"), cookie, None)
         .await?;
     ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-532: run the Stripe key permission self-test. Read-only.
+pub async fn check_stripe_permissions(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<StripePermissionReport, ApiError> {
+    parse(api.get("/admin/stripe/permissions", cookie).await?)
 }
 
 pub async fn email_config(

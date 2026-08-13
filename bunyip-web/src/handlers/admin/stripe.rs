@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::api::admin as admin_api;
-use crate::api::types::User;
+use crate::api::types::{StripePermissionCheck, StripePermissionReport, User};
 use crate::api::ApiError;
 use crate::auth::AuthCtx;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
@@ -75,6 +75,11 @@ pub(super) fn stripe_setup_docs() -> Markup {
                 p {
                     "Webhook Endpoints is what the " span class="font-medium text-foreground" { "Create endpoint" }
                     " button further down needs. Without it Stripe answers 403 and bunyip can neither create an endpoint nor read the ones that already exist."
+                }
+                // BUNYIP-532: point the admin at the proactive self-test.
+                p {
+                    "After saving, use " span class="font-medium text-foreground" { "Test key and permissions" }
+                    " below to check the key can read Products, Prices and Webhook Endpoints before a customer or a webhook hits a missing permission."
                 }
                 p {
                     "Keys follow the format " code class="rounded bg-muted px-1 py-0.5 text-xs" { "rk_(live|test)_…" }
@@ -671,12 +676,122 @@ pub struct StripePageQuery {
     pub webhook_events: String,
     #[serde(default)]
     pub webhook_ref: String,
+    /// BUNYIP-532: `check=permissions` runs the key permission self-test and
+    /// renders its results. Absent on a plain page load, so the probe reads only
+    /// happen when the admin clicks Test.
+    #[serde(default)]
+    pub check: String,
 }
 
 /// Non-empty `&str`, or `None`, so a blank query parameter does not blank out
 /// the form default it is meant to override.
 fn present(s: &str) -> Option<&str> {
     Some(s.trim()).filter(|v| !v.is_empty())
+}
+
+/// BUNYIP-532: the status pill for one probed permission. Colour and wording are
+/// bunyip's, keyed off the machine `status` string so an unrecognised value reads
+/// as a neutral "Unknown" rather than a panic.
+fn permission_status_badge(status: &str) -> Markup {
+    match status {
+        "granted" => badge("success", "Granted"),
+        "missing" => badge("destructive", "Missing"),
+        "key_rejected" => badge("destructive", "Key rejected"),
+        "unknown" => badge("warning", "Could not verify"),
+        "untested" => badge("outline", "Not tested here"),
+        _ => badge("outline", "Unknown"),
+    }
+}
+
+/// One row of the permission checklist: what the permission is, the access level
+/// it needs, and how the saved key fared.
+fn permission_row(c: &StripePermissionCheck) -> Markup {
+    html! {
+        li class="flex items-center justify-between gap-3 border-b py-2 last:border-0" {
+            div class="flex flex-col" {
+                span class="font-medium" { (c.label) }
+                span class="text-xs text-muted-foreground" { "Needs " (c.access) " access" }
+            }
+            (permission_status_badge(&c.status))
+        }
+    }
+}
+
+/// BUNYIP-532: render the self-test result. An unreadable test says so; a
+/// rejected key is reported once (not as N missing permissions); an unconfigured
+/// account is told to save a key first. Otherwise the checklist splits into the
+/// live-tested admin permissions and the checkout ones bunyip lists but does not
+/// probe here.
+fn stripe_permission_results(r: &Result<StripePermissionReport, ApiError>) -> Markup {
+    let report = match r {
+        Err(e) => {
+            return error_box_detailed(
+                "Could not run the permission test.",
+                Some(&e.user_message()),
+                e.request_id.as_deref(),
+            )
+        }
+        Ok(rep) => rep,
+    };
+    if !report.configured {
+        return error_box("Save a secret key above first, then run the test.");
+    }
+    if report.key_status == "rejected" {
+        return error_box(
+            "Stripe rejected your secret key: it is invalid, expired or revoked. Create a new restricted key in the Stripe dashboard, paste it into Secret key above, and save.",
+        );
+    }
+
+    let tested: Vec<&StripePermissionCheck> =
+        report.checks.iter().filter(|c| c.when == "admin").collect();
+    let checkout: Vec<&StripePermissionCheck> = report
+        .checks
+        .iter()
+        .filter(|c| c.when == "checkout")
+        .collect();
+    let any_missing = tested.iter().any(|c| c.status == "missing");
+
+    html! {
+        div class="space-y-5" {
+            @if any_missing {
+                (error_box("A permission below is missing. Add Write access for it to the restricted key in the Stripe dashboard, paste the key into Secret key above, and save."))
+            } @else {
+                (success_box("The tested permissions are all present on the saved key."))
+            }
+            div class="space-y-2" {
+                h4 class="text-sm font-semibold" { "Tested now" }
+                ul class="rounded-md border px-3" { @for c in &tested { (permission_row(c)) } }
+            }
+            div class="space-y-2" {
+                h4 class="text-sm font-semibold" { "Also required (used at checkout)" }
+                p class="text-xs text-muted-foreground" { "bunyip does not live-test these here, but checkout needs them. Grant them on the same key." }
+                ul class="rounded-md border px-3" { @for c in &checkout { (permission_row(c)) } }
+            }
+        }
+    }
+}
+
+/// BUNYIP-532: the "Key and permissions" card. Always shows the Test button; when
+/// a report is present (the admin clicked Test) it shows the results underneath.
+pub(super) fn stripe_permission_block(
+    report: Option<&Result<StripePermissionReport, ApiError>>,
+) -> Markup {
+    html! {
+        div id="permission-check" class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="p-6 space-y-4" {
+                div class="flex flex-wrap items-center justify-between gap-4" {
+                    div {
+                        h3 class="text-base font-semibold" { "Key and permissions" }
+                        p class="mt-1 text-sm text-muted-foreground" { "Check the saved key can do what bunyip needs before a customer or a webhook hits a missing permission." }
+                    }
+                    a href="/admin/stripe?check=permissions#permission-check" class=(button_class("outline", "default", "")) { (icon("shield-check", "mr-2 h-4 w-4")) "Test key and permissions" }
+                }
+                @if let Some(r) = report {
+                    (stripe_permission_results(r))
+                }
+            }
+        }
+    }
 }
 
 pub async fn stripe(
@@ -709,6 +824,13 @@ pub async fn stripe(
         url: present(&q.webhook_url),
         events: present(&q.webhook_events),
         reference: present(&q.webhook_ref),
+    };
+    // BUNYIP-532: only probe when the admin clicked Test, so a plain page load
+    // does not fire three extra Stripe reads.
+    let permission_report = if q.check == "permissions" {
+        Some(admin_api::check_stripe_permissions(&st.api, fwd).await)
+    } else {
+        None
     };
 
     let content = html! {
@@ -747,6 +869,7 @@ pub async fn stripe(
                         ]))
                         button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save" }
                     }
+                    (stripe_permission_block(permission_report.as_ref()))
                     (stripe_products_block(products_loaded, prices_loaded))
                     (stripe_prices_block(prices_loaded, products_loaded))
                     (stripe_webhooks_block(webhooks_loaded, &st.cfg.api_public_origin, s.has_webhook_secret, &retry))

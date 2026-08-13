@@ -1084,6 +1084,36 @@ pub struct StripeWebhookEndpoint {
     pub secret: Option<String>,
 }
 
+/// BUNYIP-532: one row of the Stripe key permission self-test. Mirrors
+/// bunyip-api's `StripePermissionCheck`. `status` is one of `granted`, `missing`,
+/// `key_rejected`, `unknown`, `untested` (decoded as a plain string so an added
+/// variant never fails the response).
+#[derive(Debug, Clone, Deserialize)]
+pub struct StripePermissionCheck {
+    #[serde(default)]
+    pub permission: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub access: String,
+    #[serde(default)]
+    pub when: String,
+    #[serde(default)]
+    pub status: String,
+}
+
+/// BUNYIP-532: the Stripe key permission self-test result. Mirrors bunyip-api's
+/// `StripePermissionReport`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StripePermissionReport {
+    #[serde(default)]
+    pub configured: bool,
+    #[serde(default)]
+    pub key_status: String,
+    #[serde(default)]
+    pub checks: Vec<StripePermissionCheck>,
+}
+
 /// BUNYIP-351: email / SMTP configuration surfaced to the admin settings form.
 /// Mirrors `bunyip-api`'s `EmailConfigResponse`; the SMTP password is never
 /// returned in plaintext (only a masked hint + `has_smtp_password`).

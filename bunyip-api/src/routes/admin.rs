@@ -312,6 +312,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             // Stripe config
             .route("/stripe", web::get().to(handlers::get_stripe_config))
             .route("/stripe", web::put().to(handlers::update_stripe_config))
+            // BUNYIP-532: proactive key permission self-test (read-only).
+            .route(
+                "/stripe/permissions",
+                web::get().to(handlers::check_stripe_permissions),
+            )
             // Stripe products
             .route(
                 "/stripe/products",
