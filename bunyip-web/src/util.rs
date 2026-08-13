@@ -156,3 +156,50 @@ pub fn days_until(iso: &str) -> Option<i64> {
         Some((diff.num_seconds() as f64 / 86_400.0).ceil() as i64)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::app_link;
+    use crate::api::types::Application;
+
+    fn app(slug: &str, subdomain: Option<&str>) -> Application {
+        Application {
+            id: "app-1".into(),
+            slug: slug.into(),
+            display_name: "Let's Chat".into(),
+            description: None,
+            icon_url: None,
+            version: None,
+            source_code_url: None,
+            release_notes_url: None,
+            subdomain: subdomain.map(str::to_string),
+            is_accessible: false,
+            maintenance_mode: false,
+            maintenance_message: None,
+            group_id: None,
+        }
+    }
+
+    /// BUNYIP-533: the "Let's Chat" product is served at `chat.{app_domain}`, so
+    /// its application row carries `subdomain = "chat"`; the link then resolves
+    /// correctly on both environments (staging `a8n.systems`, prod `spa.systems`)
+    /// because only the domain half varies. Without the subdomain the link fell
+    /// back to the slug and pointed at the wrong host (`lets-chat.{app_domain}`),
+    /// which is the bug the seed migration corrects.
+    #[test]
+    fn app_link_prefers_subdomain_over_slug() {
+        let with = app("lets-chat", Some("chat"));
+        assert_eq!(app_link(&with, "a8n.systems"), "https://chat.a8n.systems");
+        assert_eq!(app_link(&with, "spa.systems"), "https://chat.spa.systems");
+
+        // The pre-fix state: no subdomain -> slug fallback -> wrong host.
+        let without = app("lets-chat", None);
+        assert_eq!(
+            app_link(&without, "a8n.systems"),
+            "https://lets-chat.a8n.systems"
+        );
+
+        // No apex domain configured -> a neutral href, never a broken absolute.
+        assert_eq!(app_link(&with, ""), "#");
+    }
+}
