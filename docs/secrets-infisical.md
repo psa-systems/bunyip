@@ -97,7 +97,7 @@ the two credentials live in the SOPS `compose-secrets.yml`.
 | `INFISICAL_ENABLED`       | no      | plain env    | `false` | master switch; the fetch runs only when `true`            |
 | `INFISICAL_ADDRESS`       | no      | plain env    | `""`    | Infisical base URL (e.g. `https://infisical.a8n.systems`) |
 | `INFISICAL_PROJECT_ID`    | no      | plain env    | `""`    | the Infisical project (workspace) id                      |
-| `INFISICAL_ENV`           | no      | plain env    | `""`    | the environment slug (`staging` / `prod`)                 |
+| `INFISICAL_ENVIRONMENT`   | no      | plain env    | `""`    | environment slug (`staging`/`prod`); legacy `INFISICAL_ENV` |
 | `INFISICAL_SECRET_PATH`   | no      | plain env    | `/`     | the folder to read (`/runtime`, project-relative)         |
 | `INFISICAL_CLIENT_ID`     | yes     | `secret_env` | `""`    | Universal Auth machine-identity client id                 |
 | `INFISICAL_CLIENT_SECRET` | yes     | `secret_env` | `""`    | Universal Auth machine-identity client secret             |
@@ -146,6 +146,6 @@ row.
 | Symptom | Cause |
 | --- | --- |
 | Boot warn, `infisical login failed` | Wrong `INFISICAL_CLIENT_ID` / `_CLIENT_SECRET`, or the identity lacks Universal Auth on `INFISICAL_ADDRESS`. Graceful: the app still starts. |
-| Boot warn on the secret read, HTTP 404 | The key is not at the queried project/env/path: check `INFISICAL_SECRET_PATH`, `INFISICAL_ENV`, `INFISICAL_PROJECT_ID`, and that the key exists there. The v3 endpoint is confirmed correct on infisical.a8n.systems (401 unauthenticated), so a 404 is a lookup mismatch, not an API-version issue. |
+| Boot warn on the secret read, HTTP 404 | The key is not at the queried project/env/path: check `INFISICAL_SECRET_PATH`, `INFISICAL_ENVIRONMENT`, `INFISICAL_PROJECT_ID`, and that the key exists there. The v3 endpoint is confirmed correct on infisical.a8n.systems (401 unauthenticated), so a 404 is a lookup mismatch, not an API-version issue. |
 | Feature enabled but no "Fetched ..." log line | The slot was already non-empty; a stray `SMTP_PASSWORD` env value or a DB `email_config` row won. Remove the stray value to use Infisical. |
 | App starts, email off, boot warn about Infisical | Infisical unreachable or the key absent in `/runtime`. Graceful by design; the app boots and email stays off until the fetch succeeds on a later restart. |
