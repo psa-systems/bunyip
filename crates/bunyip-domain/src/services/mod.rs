@@ -64,8 +64,9 @@ pub use infisical::InfisicalClient;
 pub use ip_enrich::{IpEnrichService, IpEnrichment, NetworkCategory, VpnLikelihood};
 pub use jwt::{AccessTokenClaims, JwtService, RefreshTokenClaims, TwoFactorChallengeClaims};
 pub use stripe::{
-    stripe_config_from_db_model, stripe_err, stripe_err_for, unconfigured_stripe_config,
-    StripeConfig, StripeErrorDetails, StripePermission, StripeService, StripeServiceError,
+    classify_probe, stripe_config_from_db_model, stripe_err, stripe_err_for,
+    unconfigured_stripe_config, ProbeStatus, StripeConfig, StripeErrorDetails, StripePermission,
+    StripeService, StripeServiceError,
 };
 pub use totp::TotpService;
 pub use webhook::WebhookService;

@@ -21,7 +21,8 @@ use crate::repositories::{
 };
 use crate::responses::{get_request_id, success, success_no_data};
 use crate::services::{
-    stripe_config_from_db_model, stripe_err_for, AppKeySet, StripePermission, StripeService,
+    classify_probe, stripe_config_from_db_model, stripe_err_for, AppKeySet, ProbeStatus,
+    StripePermission, StripeService,
 };
 
 // =============================================================================
@@ -781,6 +782,121 @@ pub async fn delete_stripe_webhook(
     Ok(success_no_data(request_id))
 }
 
+// =============================================================================
+// BUNYIP-532: proactive Stripe key permission self-test
+//
+// BUNYIP-516 explains a permission failure reactively, at the moment the admin
+// attempts the operation that needs it. This endpoint lets the admin check the
+// saved key up front: it makes the harmless list reads whose errors the shared
+// crate classifies (products, prices, webhook endpoints - the last gained HTTP
+// status handling in DUNITE-10) and reports each as granted / missing / key
+// rejected. The checkout-time permissions bunyip also needs (customers, checkout
+// sessions, subscriptions, invoices) are listed as required but not live-tested:
+// the dunite-stripe methods for them collapse Stripe's error, so a 403 there
+// cannot be told from a 404. Classifying those is a separate dunite change.
+// =============================================================================
+
+/// One permission bunyip needs, and (for the live-tested three) how the saved
+/// key fared against it.
+#[derive(Debug, serde::Serialize)]
+pub struct StripePermissionCheck {
+    /// Stable machine name (`StripePermission::key`).
+    pub permission: &'static str,
+    /// The label Stripe's key editor shows.
+    pub label: &'static str,
+    /// The access level the key needs: `"Write"` or `"Read"`.
+    pub access: &'static str,
+    /// When the permission is exercised: `"admin"` (on this page, live-tested) or
+    /// `"checkout"` (later, by a customer; listed but not live-tested).
+    pub when: &'static str,
+    pub status: ProbeStatus,
+}
+
+/// The self-test result: overall key status plus the per-permission checklist.
+#[derive(Debug, serde::Serialize)]
+pub struct StripePermissionReport {
+    /// Whether a real secret key is saved at all.
+    pub configured: bool,
+    /// `"ok"`, `"rejected"` (the key itself is bad) or `"not_configured"`.
+    pub key_status: &'static str,
+    pub checks: Vec<StripePermissionCheck>,
+}
+
+/// The permissions bunyip's Stripe calls need, with the access level and where
+/// each is exercised. Single source of truth for both the live test and the
+/// checklist. `Subscriptions` needs Write (bunyip creates free subscriptions and
+/// cancels / reactivates them), `Invoices` only Read (billing history).
+const REQUIRED_PERMISSIONS: [(StripePermission, &str, &str); 7] = [
+    (StripePermission::Products, "Write", "admin"),
+    (StripePermission::Prices, "Write", "admin"),
+    (StripePermission::WebhookEndpoints, "Write", "admin"),
+    (StripePermission::Customers, "Write", "checkout"),
+    (StripePermission::CheckoutSessions, "Write", "checkout"),
+    (StripePermission::Subscriptions, "Write", "checkout"),
+    (StripePermission::Invoices, "Read", "checkout"),
+];
+
+/// Assemble the report from the three live probe outcomes (products, prices,
+/// webhook endpoints), or `None` when no key is saved. Pure, so the mapping is
+/// unit-tested without a live Stripe.
+fn build_permission_report(
+    probed: Option<(ProbeStatus, ProbeStatus, ProbeStatus)>,
+) -> StripePermissionReport {
+    let (configured, key_status) = match probed {
+        None => (false, "not_configured"),
+        Some((p, pr, wh)) => {
+            let rejected = [p, pr, wh].contains(&ProbeStatus::KeyRejected);
+            (true, if rejected { "rejected" } else { "ok" })
+        }
+    };
+
+    let checks = REQUIRED_PERMISSIONS
+        .iter()
+        .map(|&(perm, access, when)| {
+            let status = match perm {
+                StripePermission::Products => probed.map_or(ProbeStatus::Untested, |l| l.0),
+                StripePermission::Prices => probed.map_or(ProbeStatus::Untested, |l| l.1),
+                StripePermission::WebhookEndpoints => probed.map_or(ProbeStatus::Untested, |l| l.2),
+                _ => ProbeStatus::Untested,
+            };
+            StripePermissionCheck {
+                permission: perm.key(),
+                label: perm.label(),
+                access,
+                when,
+                status,
+            }
+        })
+        .collect();
+
+    StripePermissionReport {
+        configured,
+        key_status,
+        checks,
+    }
+}
+
+/// GET /v1/admin/stripe/permissions
+///
+/// Probe the saved restricted key with harmless list reads and report which
+/// permissions it holds. Read-only: makes no change in Stripe or the DB.
+pub async fn check_stripe_permissions(
+    req: HttpRequest,
+    _admin: AdminUser,
+    stripe: web::Data<Arc<StripeService>>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let probed = if stripe.is_configured() {
+        let products = classify_probe(&stripe.list_products().await);
+        let prices = classify_probe(&stripe.list_prices(None).await);
+        let webhooks = classify_probe(&stripe.list_webhook_endpoints().await);
+        Some((products, prices, webhooks))
+    } else {
+        None
+    };
+    Ok(success(build_permission_report(probed), request_id))
+}
+
 #[cfg(test)]
 mod tests {
     /// BUNYIP-515: every handler here that MUTATES a Stripe price can change
@@ -817,6 +933,91 @@ mod tests {
             );
         }
         assert!(checked >= 2, "the scan matched the price handlers");
+    }
+
+    // -- BUNYIP-532: permission report assembly --
+
+    use super::{build_permission_report, ProbeStatus, REQUIRED_PERMISSIONS};
+
+    fn status_of<'a>(
+        report: &'a super::StripePermissionReport,
+        key: &str,
+    ) -> &'a super::StripePermissionCheck {
+        report
+            .checks
+            .iter()
+            .find(|c| c.permission == key)
+            .unwrap_or_else(|| panic!("missing check for {key}"))
+    }
+
+    /// No saved key: nothing is claimed tested, and the checklist still lists
+    /// every permission bunyip needs so the admin knows what to grant.
+    #[test]
+    fn report_unconfigured_lists_all_as_untested() {
+        let r = build_permission_report(None);
+        assert!(!r.configured);
+        assert_eq!(r.key_status, "not_configured");
+        assert_eq!(r.checks.len(), REQUIRED_PERMISSIONS.len());
+        assert!(r.checks.iter().all(|c| c.status == ProbeStatus::Untested));
+    }
+
+    /// The reported incident: the Webhook Endpoints probe comes back missing.
+    /// It is flagged missing while the other two tested ones pass, and the
+    /// checkout-time permissions stay untested (not falsely reported as passing).
+    #[test]
+    fn report_flags_the_missing_probed_permission_only() {
+        let r = build_permission_report(Some((
+            ProbeStatus::Granted,
+            ProbeStatus::Granted,
+            ProbeStatus::Missing,
+        )));
+        assert!(r.configured);
+        assert_eq!(r.key_status, "ok");
+        assert_eq!(status_of(&r, "products").status, ProbeStatus::Granted);
+        assert_eq!(status_of(&r, "prices").status, ProbeStatus::Granted);
+        assert_eq!(
+            status_of(&r, "webhook_endpoints").status,
+            ProbeStatus::Missing
+        );
+        // Checkout-time permissions are listed but not live-tested.
+        for key in [
+            "customers",
+            "checkout_sessions",
+            "subscriptions",
+            "invoices",
+        ] {
+            assert_eq!(status_of(&r, key).status, ProbeStatus::Untested);
+        }
+    }
+
+    /// A rejected key is the key's fault: `key_status` says so once, rather than
+    /// the panel reading as "three separate permissions missing".
+    #[test]
+    fn report_key_rejected_when_any_probe_rejects_the_key() {
+        let r = build_permission_report(Some((
+            ProbeStatus::KeyRejected,
+            ProbeStatus::KeyRejected,
+            ProbeStatus::KeyRejected,
+        )));
+        assert!(r.configured);
+        assert_eq!(r.key_status, "rejected");
+    }
+
+    /// Every tested permission carries the access level and stage the admin
+    /// needs to act on; the three admin-side ones are the live-tested set.
+    #[test]
+    fn report_carries_access_level_and_stage() {
+        let r = build_permission_report(Some((
+            ProbeStatus::Granted,
+            ProbeStatus::Granted,
+            ProbeStatus::Granted,
+        )));
+        assert_eq!(status_of(&r, "products").access, "Write");
+        assert_eq!(status_of(&r, "products").when, "admin");
+        assert_eq!(status_of(&r, "invoices").access, "Read");
+        assert_eq!(status_of(&r, "invoices").when, "checkout");
+        let admin_tested = r.checks.iter().filter(|c| c.when == "admin").count();
+        assert_eq!(admin_tested, 3);
     }
 
     // -- BUNYIP-512: plan resolution + archive-refusal message --

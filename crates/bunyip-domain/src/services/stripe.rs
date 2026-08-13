@@ -53,6 +53,62 @@ impl StripePermission {
             Self::WebhookEndpoints => "Webhook Endpoints",
         }
     }
+
+    /// BUNYIP-532: the stable machine name used on the wire (JSON key / test id),
+    /// so the web panel keys off an identifier rather than the display label.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Products => "products",
+            Self::Prices => "prices",
+            Self::Subscriptions => "subscriptions",
+            Self::Customers => "customers",
+            Self::CheckoutSessions => "checkout_sessions",
+            Self::Invoices => "invoices",
+            Self::WebhookEndpoints => "webhook_endpoints",
+        }
+    }
+}
+
+/// BUNYIP-532: the outcome of probing one restricted-key permission by making a
+/// harmless read against that resource. `Untested` is not a probe result: it
+/// marks a permission bunyip needs but cannot classify from a bunyip-only call
+/// today (the checkout-time resources, whose dunite-stripe methods collapse
+/// Stripe's error), so the panel lists it as required without claiming a verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeStatus {
+    /// The read succeeded: the key can at least read this resource.
+    Granted,
+    /// Stripe returned 403 / `more_permissions_required`: the key lacks it.
+    Missing,
+    /// Stripe rejected the key itself (401 / expired / invalid).
+    KeyRejected,
+    /// Some other failure; the probe could not decide.
+    Unknown,
+    /// bunyip needs this permission but does not live-test it here.
+    Untested,
+}
+
+/// BUNYIP-532: classify a probe read into a [`ProbeStatus`]. Reuses the same
+/// key-rejected / permission-denied predicates BUNYIP-516 uses to build the
+/// reactive error copy, so the proactive test and the reactive message agree on
+/// what a given Stripe failure means. Only the classified `Stripe { details }`
+/// variant can be a permission verdict; every other error is inconclusive.
+pub fn classify_probe<T>(res: &Result<T, StripeServiceError>) -> ProbeStatus {
+    match res {
+        Ok(_) => ProbeStatus::Granted,
+        Err(StripeServiceError::Unauthorized) => ProbeStatus::KeyRejected,
+        Err(StripeServiceError::Stripe { details, .. }) => {
+            if is_key_rejected(details) {
+                ProbeStatus::KeyRejected
+            } else if is_permission_denied(details) {
+                ProbeStatus::Missing
+            } else {
+                ProbeStatus::Unknown
+            }
+        }
+        Err(_) => ProbeStatus::Unknown,
+    }
 }
 
 /// The tail every restricted-key message ends with: where to fix it and what to
@@ -626,5 +682,82 @@ mod tests {
         assert_eq!(StripePermission::Customers.label(), "Customers");
         assert_eq!(StripePermission::Subscriptions.label(), "Subscriptions");
         assert_eq!(StripePermission::Invoices.label(), "Invoices");
+    }
+
+    // -- BUNYIP-532: probe classification (the proactive self-test) --
+
+    /// A successful read means the key can at least see the resource.
+    #[test]
+    fn classify_probe_ok_is_granted() {
+        let ok: Result<(), StripeServiceError> = Ok(());
+        assert_eq!(classify_probe(&ok), ProbeStatus::Granted);
+    }
+
+    /// The reported incident: a 403 / `more_permissions_required` on a probe read
+    /// is the permission being missing, the same failure BUNYIP-516 maps
+    /// reactively.
+    #[test]
+    fn classify_probe_403_is_missing() {
+        let denied: Result<(), _> = Err(stripe_failure(403, Some("more_permissions_required")));
+        assert_eq!(classify_probe(&denied), ProbeStatus::Missing);
+        // A bare 403 with no code reads the same way.
+        let bare: Result<(), _> = Err(stripe_failure(403, None));
+        assert_eq!(classify_probe(&bare), ProbeStatus::Missing);
+    }
+
+    /// A rejected / expired key is the key's fault, not a single permission's, so
+    /// the panel can say so once instead of flagging every permission as missing.
+    #[test]
+    fn classify_probe_key_rejected_takes_precedence() {
+        for e in [
+            stripe_failure(401, None),
+            stripe_failure(400, Some("api_key_expired")),
+            stripe_failure(400, Some("invalid_api_key")),
+        ] {
+            let res: Result<(), _> = Err(e);
+            assert_eq!(classify_probe(&res), ProbeStatus::KeyRejected);
+        }
+        let unauthorized: Result<(), _> = Err(StripeServiceError::Unauthorized);
+        assert_eq!(classify_probe(&unauthorized), ProbeStatus::KeyRejected);
+    }
+
+    /// Anything bunyip cannot explain stays inconclusive rather than being
+    /// reported as a definite pass or fail.
+    #[test]
+    fn classify_probe_other_errors_are_unknown() {
+        for e in [
+            stripe_failure(429, Some("rate_limit")),
+            stripe_failure(500, None),
+            StripeServiceError::internal("boom"),
+        ] {
+            let res: Result<(), _> = Err(e);
+            assert_eq!(classify_probe(&res), ProbeStatus::Unknown);
+        }
+    }
+
+    /// The wire key is stable and distinct per permission (the panel keys off it).
+    #[test]
+    fn permission_keys_are_stable_and_unique() {
+        let all = [
+            StripePermission::Products,
+            StripePermission::Prices,
+            StripePermission::Subscriptions,
+            StripePermission::Customers,
+            StripePermission::CheckoutSessions,
+            StripePermission::Invoices,
+            StripePermission::WebhookEndpoints,
+        ];
+        let keys: Vec<&str> = all.iter().map(|p| p.key()).collect();
+        assert_eq!(keys.len(), 7);
+        let unique: std::collections::HashSet<&str> = keys.iter().copied().collect();
+        assert_eq!(unique.len(), 7, "keys must be unique: {keys:?}");
+        assert_eq!(
+            StripePermission::WebhookEndpoints.key(),
+            "webhook_endpoints"
+        );
+        assert_eq!(
+            StripePermission::CheckoutSessions.key(),
+            "checkout_sessions"
+        );
     }
 }
