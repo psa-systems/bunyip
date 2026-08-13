@@ -134,7 +134,7 @@ pub struct InfisicalSettings {
     pub address: String,
     /// Infisical project id (`INFISICAL_PROJECT_ID`).
     pub project_id: String,
-    /// Infisical environment slug (`INFISICAL_ENV`), e.g. `staging` / `prod`.
+    /// Infisical environment slug (`INFISICAL_ENVIRONMENT`, legacy `INFISICAL_ENV`), e.g. `staging` / `prod`.
     pub environment: String,
     /// Secret folder path (`INFISICAL_SECRET_PATH`), e.g. `/runtime` (project-relative).
     pub secret_path: String,
@@ -154,7 +154,9 @@ impl InfisicalSettings {
                 .unwrap_or(false),
             address: env::var("INFISICAL_ADDRESS").unwrap_or_default(),
             project_id: env::var("INFISICAL_PROJECT_ID").unwrap_or_default(),
-            environment: env::var("INFISICAL_ENV").unwrap_or_default(),
+            environment: env::var("INFISICAL_ENVIRONMENT")
+                .or_else(|_| env::var("INFISICAL_ENV"))
+                .unwrap_or_default(),
             secret_path: env::var("INFISICAL_SECRET_PATH").unwrap_or_else(|_| "/".to_string()),
             client_id: secret_env("INFISICAL_CLIENT_ID").unwrap_or_default(),
             client_secret: secret_env("INFISICAL_CLIENT_SECRET").unwrap_or_default(),
@@ -1332,6 +1334,23 @@ mod tests {
                 "{env_name:?} must forbid purge"
             );
         }
+    }
+
+    /// BUNYIP-535: the environment slug reads canonical INFISICAL_ENVIRONMENT
+    /// first, falling back to the legacy INFISICAL_ENV for one release.
+    #[test]
+    fn infisical_environment_prefers_canonical_then_legacy() {
+        let _env = env_lock();
+        // Canonical wins when both are present.
+        env::set_var("INFISICAL_ENVIRONMENT", "staging");
+        env::set_var("INFISICAL_ENV", "prod");
+        assert_eq!(InfisicalSettings::from_env().environment, "staging");
+        // Legacy still resolves when only it is set.
+        env::remove_var("INFISICAL_ENVIRONMENT");
+        assert_eq!(InfisicalSettings::from_env().environment, "prod");
+        // Neither set yields the empty default.
+        env::remove_var("INFISICAL_ENV");
+        assert_eq!(InfisicalSettings::from_env().environment, "");
     }
 
     /// BUNYIP-483: unset outside production keeps the loud all-zero dev key.
