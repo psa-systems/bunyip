@@ -41,7 +41,14 @@ WORKDIR /build
 ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
     CARGO_NET_GIT_FETCH_WITH_CLI=true \
     SQLX_OFFLINE=true
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+# The cargo cache mounts here and below carry a per-image `id` and
+# `sharing=locked` (BUNYIP-534): an unnamed, shared mount is keyed by target path
+# alone, so concurrent builds (a release fires both a main push and a tag push
+# onto one buildkit) unpack crates into the same directory and die with
+# `.cargo-ok: File exists`. Cargo's own `.package-cache` lock lives outside the
+# mount and cannot serialise them. The api ids differ from bunyip-web's, so the
+# two images still build in parallel.
+RUN --mount=type=cache,id=bunyip-api-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     cargo install cargo-chef --locked
 
 # ---- Planner: distil the dependency recipe from the manifests ----
@@ -73,8 +80,8 @@ ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 # network.
 COPY --from=planner /build/recipe.json recipe.json
 RUN --mount=type=secret,id=dunite_token \
-    --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,id=bunyip-api-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=bunyip-api-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     sh -c 'if [ -s /run/secrets/dunite_token ]; then \
               git config --global url."https://oauth2:$(cat /run/secrets/dunite_token)@dev.a8n.run/".insteadOf "https://dev.a8n.run/"; \
            fi' \
@@ -86,8 +93,8 @@ RUN --mount=type=secret,id=dunite_token \
 # leak, so no size guard is needed.
 COPY . .
 RUN --mount=type=secret,id=dunite_token \
-    --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,id=bunyip-api-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=bunyip-api-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     sh -c 'if [ -s /run/secrets/dunite_token ]; then \
               git config --global url."https://oauth2:$(cat /run/secrets/dunite_token)@dev.a8n.run/".insteadOf "https://dev.a8n.run/"; \
            fi' \
