@@ -42,7 +42,7 @@ pre-commit: ensure-env
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-no-bash check-scrollbars check-build check-clippy check-fmt check-docker
+check: check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-no-bash check-scrollbars check-cache-mounts check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -99,6 +99,14 @@ check-no-bash:
 check-scrollbars:
     ./scripts/check-scrollbars.nu --self-test
     ./scripts/check-scrollbars.nu
+
+# Gate the buildkit cargo cache mounts: every `type=cache` mount carries a
+# per-image `id=` and `sharing=locked`, so concurrent builds cannot unpack
+# crates into one registry directory (BUNYIP-534).
+[group: 'checks']
+check-cache-mounts:
+    ./scripts/check-cache-mount-sharing.nu --self-test
+    ./scripts/check-cache-mount-sharing.nu
 
 # Build every target in the workspace.
 [group: 'checks']
