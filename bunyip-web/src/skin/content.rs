@@ -559,7 +559,57 @@ fn feedback_thanks(page_path: Option<&str>) -> Markup {
     }
 }
 
-fn feedback_form(error: Option<&str>, page_path: Option<&str>, draft: &FeedbackDraft) -> Markup {
+/// `"true"` / `"false"` for an `aria-invalid` attribute. Rendering the literal
+/// value (not a valueless boolean attribute) lets the `aria-[invalid=true]:`
+/// Tailwind variant paint the red border, and lets `app.js` flip it in place.
+fn aria_invalid(is_invalid: bool) -> &'static str {
+    if is_invalid {
+        "true"
+    } else {
+        "false"
+    }
+}
+
+/// The shared class for a text field, plus the invalid-state border/ring driven
+/// by `aria-invalid="true"` (BUNYIP-541), so marking a field invalid is a single
+/// attribute flip on both the server redraw and the client path.
+fn feedback_field_class(extra: &str) -> String {
+    format!(
+        "{} aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-1 aria-[invalid=true]:ring-destructive {extra}",
+        dashboard_input()
+    )
+}
+
+/// The inline error slot rendered under a field. It always exists (so the
+/// input's `aria-describedby` target is real and `app.js` has a stable node to
+/// fill), and is hidden until it carries a message (BUNYIP-541).
+fn feedback_field_error(field: &str, msg: Option<&str>) -> Markup {
+    let hidden = if msg.is_some() { "" } else { " hidden" };
+    html! {
+        p id=(format!("{field}-error")) data-feedback-error=(field) role="alert"
+          class={ "mt-1 text-sm text-destructive-text" (hidden) } {
+            @if let Some(m) = msg { (m) }
+        }
+    }
+}
+
+/// BUNYIP-541: validation errors render inline under the field they belong to
+/// (`field_error`, keyed by input id), not as a top-of-form banner. `form_error`
+/// stays for the non-field cases (a multipart read failure or an API submit
+/// failure) that no single field owns.
+fn feedback_form(
+    field_error: Option<(&str, &str)>,
+    form_error: Option<&str>,
+    page_path: Option<&str>,
+    draft: &FeedbackDraft,
+) -> Markup {
+    let err_for = |field: &str| -> Option<&str> {
+        field_error.and_then(|(f, m)| if f == field { Some(m) } else { None })
+    };
+    let name_err = err_for("name");
+    let email_err = err_for("email");
+    let subject_err = err_for("subject");
+    let message_err = err_for("message");
     html! {
         div class="relative overflow-hidden py-20" {
             div class="container relative" {
@@ -570,7 +620,7 @@ fn feedback_form(error: Option<&str>, page_path: Option<&str>, draft: &FeedbackD
                         p class="text-sm text-muted-foreground" { "Leave your email if you would like a follow-up." }
                     }
                     div class="p-6 pt-0" {
-                        @if let Some(e) = error {
+                        @if let Some(e) = form_error {
                             div class="mb-6" { (error_box(e)) }
                         }
                         // `enctype="multipart/form-data"` is required so the
@@ -578,15 +628,32 @@ fn feedback_form(error: Option<&str>, page_path: Option<&str>, draft: &FeedbackD
                         // form-handler reads via axum's Multipart extractor.
                         // `data-feedback-form` opts this form into the
                         // progressive-enhancement behaviour in `app.js` (submit
-                        // spinner + client-side attachment validation); the
-                        // no-JS path stays fully functional and the server is
-                        // the source of truth for validation (BUNYIP-540).
-                        form method="post" action="/feedback" enctype="multipart/form-data" class="space-y-4" data-feedback-form {
+                        // spinner, client-side attachment validation, and the
+                        // BUNYIP-541 inline field validation that catches the
+                        // common invalid case before a round-trip); the no-JS
+                        // path stays fully functional and the server is the
+                        // source of truth for validation (BUNYIP-540).
+                        form method="post" action="/feedback" enctype="multipart/form-data" class="space-y-4" novalidate data-feedback-form {
                             div class="grid gap-4 md:grid-cols-2" {
-                                div class="grid gap-2" { label for="name" class="text-sm font-medium" { "Name" } input id="name" name="name" maxlength="100" placeholder="Optional" value=(draft.name) class=(dashboard_input()); }
-                                div class="grid gap-2" { label for="email" class="text-sm font-medium" { "Email" } input id="email" name="email" type="email" maxlength="254" placeholder="you@example.com" value=(draft.email) class=(dashboard_input()); }
+                                div class="grid gap-2" {
+                                    label for="name" class="text-sm font-medium" { "Name" }
+                                    input id="name" name="name" maxlength="100" placeholder="Optional" value=(draft.name)
+                                        aria-describedby="name-error" aria-invalid=(aria_invalid(name_err.is_some())) class=(feedback_field_class(""));
+                                    (feedback_field_error("name", name_err))
+                                }
+                                div class="grid gap-2" {
+                                    label for="email" class="text-sm font-medium" { "Email" }
+                                    input id="email" name="email" type="email" maxlength="254" placeholder="you@example.com" value=(draft.email)
+                                        aria-describedby="email-error" aria-invalid=(aria_invalid(email_err.is_some())) class=(feedback_field_class(""));
+                                    (feedback_field_error("email", email_err))
+                                }
                             }
-                            div class="grid gap-2" { label for="subject" class="text-sm font-medium" { "Subject" } input id="subject" name="subject" maxlength="200" placeholder="Optional" value=(draft.subject) class=(dashboard_input()); }
+                            div class="grid gap-2" {
+                                label for="subject" class="text-sm font-medium" { "Subject" }
+                                input id="subject" name="subject" maxlength="200" placeholder="Optional" value=(draft.subject)
+                                    aria-describedby="subject-error" aria-invalid=(aria_invalid(subject_err.is_some())) class=(feedback_field_class(""));
+                                (feedback_field_error("subject", subject_err))
+                            }
                             div class="grid gap-3" {
                                 label class="text-sm font-medium" { "Tags " span class="text-muted-foreground font-normal" { "(optional, pick any)" } }
                                 div class="flex flex-wrap gap-2" {
@@ -615,7 +682,9 @@ fn feedback_form(error: Option<&str>, page_path: Option<&str>, draft: &FeedbackD
                                     span class="text-destructive-text" aria-hidden="true" { "*" }
                                     span class="sr-only" { "(required)" }
                                 }
-                                textarea id="message" name="message" rows="7" required aria-required="true" maxlength="16000" placeholder="What would you like to see improved?" class={ (dashboard_input()) " min-h-[168px]" } { (draft.message) }
+                                textarea id="message" name="message" rows="7" required aria-required="true" maxlength="16000" placeholder="What would you like to see improved?"
+                                    aria-describedby="message-error" aria-invalid=(aria_invalid(message_err.is_some())) class=(feedback_field_class("min-h-[168px]")) { (draft.message) }
+                                (feedback_field_error("message", message_err))
                             }
                             div class="grid gap-2" {
                                 label for="attachments" class="text-sm font-medium" { "Attachments " span class="text-muted-foreground font-normal" { "(optional)" } }
@@ -671,7 +740,7 @@ pub async fn feedback_get(
         &pricing,
         "Feedback",
         false,
-        feedback_form(None, from.as_deref(), &draft),
+        feedback_form(None, None, from.as_deref(), &draft),
     )
 }
 
@@ -787,7 +856,9 @@ pub async fn feedback_post(
     // not wipe the message; a success renders the dedicated thank-you state
     // instead of an empty form under a banner.
     let content = match parsed {
-        Err(msg) => feedback_form(Some(&msg), None, &FeedbackDraft::default()),
+        // A multipart read / attachment-ceiling failure belongs to no single
+        // field, so it stays a top-of-form banner (BUNYIP-541).
+        Err(msg) => feedback_form(None, Some(&msg), None, &FeedbackDraft::default()),
         Ok(input) => {
             // Round-trip the captured path on error redraw so the next submit
             // attempt keeps the context (otherwise a typo on the message field
@@ -805,40 +876,50 @@ pub async fn feedback_post(
             // email round-tripped without complaint.
             use crate::handlers::validate;
             const MESSAGE_MAX: usize = 16_000;
-            let mut err: Option<String> = None;
+            // BUNYIP-541: the backstop error is bound to the field id it belongs
+            // to (matching the client keys), so the redraw shows it inline under
+            // that field, not as a top banner. This is the authoritative check;
+            // the client catches the common cases before a round-trip.
+            let mut err: Option<(&'static str, String)> = None;
             if !input.name.trim().is_empty() {
                 if let Err(msg) = validate::trim_bounded(&input.name, "Name", 100) {
-                    err = Some(msg);
+                    err = Some(("name", msg));
                 }
             }
             if err.is_none() && !input.email.trim().is_empty() {
                 if let Err(msg) = validate::email(&input.email, "Email") {
-                    err = Some(msg);
+                    err = Some(("email", msg));
                 }
             }
             if err.is_none() && !input.subject.trim().is_empty() {
                 if let Err(msg) = validate::trim_bounded(&input.subject, "Subject", 200) {
-                    err = Some(msg);
+                    err = Some(("subject", msg));
                 }
             }
             if err.is_none() {
                 if input.message.trim().is_empty() {
-                    err = Some("Please enter a message.".to_string());
+                    err = Some(("message", "Please enter a message.".to_string()));
                 } else if input.message.len() > MESSAGE_MAX {
-                    err = Some(format!("Message must be {MESSAGE_MAX} characters or fewer"));
+                    err = Some((
+                        "message",
+                        format!("Message must be {MESSAGE_MAX} characters or fewer"),
+                    ));
                 }
             }
             match err {
-                Some(msg) => feedback_form(
-                    Some(&msg),
+                Some((field, msg)) => feedback_form(
+                    Some((field, &msg)),
+                    None,
                     render_path.as_deref(),
                     &FeedbackDraft::from_input(&input),
                 ),
                 None => match calls::submit_feedback(&st.api, cookie.as_deref(), &input).await {
                     Ok(()) => feedback_thanks(render_path.as_deref()),
+                    // An API-side failure is not tied to a field either.
                     Err(e) => {
                         let msg = e.user_message();
                         feedback_form(
+                            None,
                             Some(&msg),
                             render_path.as_deref(),
                             &FeedbackDraft::from_input(&input),
@@ -1208,8 +1289,8 @@ mod feedback_tests {
         for path in ["/admin", "/admin/users", "/admin/feedback?from=spam"] {
             let sanitized = sanitize_page_path(path).expect("admin path is accepted");
             assert_eq!(sanitized, path);
-            let html =
-                feedback_form(None, Some(&sanitized), &FeedbackDraft::default()).into_string();
+            let html = feedback_form(None, None, Some(&sanitized), &FeedbackDraft::default())
+                .into_string();
             assert!(
                 html.contains(&format!(r#"name="page_path" value="{path}""#)),
                 "the hidden page_path input carries {path}"
@@ -1254,7 +1335,7 @@ mod feedback_tests {
         assert_eq!(d.name, "Ada Lovelace");
         assert_eq!(d.email, "ada@x.io");
 
-        let html = feedback_form(None, None, &d).into_string();
+        let html = feedback_form(None, None, None, &d).into_string();
         assert!(html.contains(
             r#"id="name" name="name" maxlength="100" placeholder="Optional" value="Ada Lovelace""#
         ));
@@ -1284,7 +1365,8 @@ mod feedback_tests {
             attachments: Vec::new(),
         };
         let html = feedback_form(
-            Some("Please enter a message."),
+            Some(("message", "Please enter a message.")),
+            None,
             None,
             &FeedbackDraft::from_input(&input),
         )
@@ -1313,6 +1395,61 @@ mod feedback_tests {
             "an unchosen tag is not checked"
         );
         assert!(html.contains("Please enter a message."), "the error shows");
+    }
+
+    /// BUNYIP-541: a field validation error renders in that field's own inline
+    /// slot (not a top banner), the input is marked `aria-invalid="true"` and
+    /// points at the slot via `aria-describedby`, and the other fields' slots
+    /// stay hidden and valid.
+    #[test]
+    fn field_error_renders_inline_under_its_field() {
+        let html = feedback_form(
+            Some(("email", "Email domain must contain a dot")),
+            None,
+            None,
+            &FeedbackDraft::default(),
+        )
+        .into_string();
+        // The email input is marked invalid and wired to its slot.
+        assert!(
+            html.contains(r#"aria-describedby="email-error" aria-invalid="true""#),
+            "the email input is marked invalid and described by its slot"
+        );
+        // The message lands in the email slot, visible (not hidden).
+        assert!(
+            html.contains(r#"id="email-error" data-feedback-error="email" role="alert" class="mt-1 text-sm text-destructive-text">Email domain must contain a dot"#),
+            "the message renders inside the email slot"
+        );
+        // A sibling field is neither invalid nor showing a message.
+        assert!(
+            html.contains(r#"aria-describedby="message-error" aria-invalid="false""#),
+            "the message field is not marked invalid"
+        );
+        assert!(
+            html.contains(r#"data-feedback-error="message" role="alert" class="mt-1 text-sm text-destructive-text hidden""#),
+            "the message slot stays hidden"
+        );
+    }
+
+    /// BUNYIP-541: a non-field error (multipart read / API failure) stays a
+    /// top-of-form banner, and no field is marked invalid.
+    #[test]
+    fn form_error_stays_a_banner() {
+        let html = feedback_form(
+            None,
+            Some("Could not read form: boom"),
+            None,
+            &FeedbackDraft::default(),
+        )
+        .into_string();
+        assert!(
+            html.contains("Could not read form: boom"),
+            "the banner shows"
+        );
+        assert!(
+            !html.contains(r#"aria-invalid="true""#),
+            "no field is marked invalid for a form-level error"
+        );
     }
 
     /// BUNYIP-540: the success state replaces the form with a thank-you panel

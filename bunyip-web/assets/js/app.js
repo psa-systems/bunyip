@@ -199,12 +199,16 @@
   });
 
   // ------------------------------------------------------ feedback form -----
-  // BUNYIP-540 progressive enhancement for /feedback: an in-flight submit
-  // state (disable + spinner) and client-side attachment validation with
-  // image previews. The no-JS path stays fully functional - the native file
-  // input keeps its id so the styled label still opens the picker, and the
-  // server re-validates every field and file. The limits mirror the Rust
-  // constants in skin::content (3 files, 5 MB each, same MIME allowlist).
+  // Progressive enhancement for /feedback. BUNYIP-540: an in-flight submit
+  // state (disable + spinner) and client-side attachment validation with image
+  // previews. BUNYIP-541: inline per-field validation (email + required
+  // message) that catches the common invalid case before a round-trip, marks
+  // the field aria-invalid, renders the message in that field's own slot, and
+  // moves focus to the first invalid field - no reload, no data loss. The no-JS
+  // path stays fully functional: the native file input keeps its id so the
+  // styled label still opens the picker, and the server re-validates every
+  // field and file authoritatively. The limits and the email rule mirror the
+  // Rust in skin::content / handlers::validate so client and server agree.
   (function () {
     var form = document.querySelector('[data-feedback-form]');
     if (!form) return;
@@ -218,6 +222,8 @@
     var submitBtn = form.querySelector('[data-feedback-submit]');
     var spinner = form.querySelector('[data-feedback-spinner]');
     var submitLabel = form.querySelector('[data-feedback-submit-label]');
+    var emailInput = form.querySelector('#email');
+    var messageInput = form.querySelector('#message');
     var objectUrls = [];
 
     function fmtSize(n) {
@@ -245,6 +251,53 @@
         fileError.classList.add('hidden');
       }
     }
+    // BUNYIP-541 inline field validation. Each function returns '' when valid,
+    // else the exact message the server would return, so client and server
+    // agree and an inline error reads the same whichever side caught it.
+    // Mirrors bunyip-web/src/handlers/validate.rs::email.
+    function validateEmail(v) {
+      var t = v.trim();
+      if (t === '') return ''; // optional, for follow-up
+      if (t.length > 254) return 'Email must be 254 characters or fewer';
+      var at = t.indexOf('@');
+      if (at === -1) return 'Email must contain an @';
+      var local = t.slice(0, at);
+      var domain = t.slice(at + 1); // everything after the first @, as split_once does
+      if (local === '' || domain === '') return 'Email must have characters on both sides of @';
+      if (domain.indexOf('.') === -1) return 'Email domain must contain a dot';
+      if (/\s/.test(t)) return 'Email must not contain whitespace';
+      return '';
+    }
+    function validateMessage(v) {
+      return v.trim() === '' ? 'Please enter a message.' : '';
+    }
+    // Set or clear an inline error under a field: flip aria-invalid on the
+    // input (the aria-[invalid=true]: variant paints the red border) and fill
+    // the field's own [data-feedback-error] slot.
+    function setFieldError(el, msg) {
+      if (!el) return;
+      var slot = form.querySelector('[data-feedback-error="' + el.id + '"]');
+      if (msg) {
+        el.setAttribute('aria-invalid', 'true');
+        if (slot) {
+          slot.textContent = msg;
+          slot.classList.remove('hidden');
+        }
+      } else {
+        el.setAttribute('aria-invalid', 'false');
+        if (slot) {
+          slot.textContent = '';
+          slot.classList.add('hidden');
+        }
+      }
+    }
+    // (input element, validator) pairs, in DOM order so "first invalid" is the
+    // topmost one for focus.
+    var FIELD_CHECKS = [
+      { el: emailInput, fn: validateEmail },
+      { el: messageInput, fn: validateMessage },
+    ];
+
     // Returns '' when the selection is within the limits, else the message.
     function validate(files) {
       if (files.length > MAX_FILES) return 'Up to ' + MAX_FILES + ' files only.';
@@ -307,17 +360,44 @@
     }
     if (input) input.addEventListener('change', render);
 
-    form.addEventListener('submit', function (e) {
-      // Block a submit the client already knows the server will reject, and
-      // point the user at the file control.
-      if (input && input.files && input.files.length) {
-        var err = validate(input.files);
-        if (err) {
-          e.preventDefault();
-          setFileError(err);
-          input.focus();
-          return;
+    // Validate a field on blur, and once it is showing an error, re-validate on
+    // every keystroke so the message clears the moment the input becomes valid.
+    FIELD_CHECKS.forEach(function (c) {
+      if (!c.el) return;
+      c.el.addEventListener('blur', function () {
+        setFieldError(c.el, c.fn(c.el.value));
+      });
+      c.el.addEventListener('input', function () {
+        if (c.el.getAttribute('aria-invalid') === 'true') {
+          setFieldError(c.el, c.fn(c.el.value));
         }
+      });
+    });
+
+    form.addEventListener('submit', function (e) {
+      // BUNYIP-541: validate every field first, mark each invalid one inline,
+      // and remember the topmost so focus lands there. This catches the common
+      // invalid case (bad email, empty message) in the browser with no
+      // round-trip and no data loss; the server still validates as a backstop.
+      var firstInvalid = null;
+      FIELD_CHECKS.forEach(function (c) {
+        if (!c.el) return;
+        var msg = c.fn(c.el.value);
+        setFieldError(c.el, msg);
+        if (msg && !firstInvalid) firstInvalid = c.el;
+      });
+      // Block a submit the client already knows the server will reject for an
+      // attachment, and point the user at the file control if nothing earlier
+      // is invalid.
+      if (input && input.files && input.files.length) {
+        var ferr = validate(input.files);
+        setFileError(ferr);
+        if (ferr && !firstInvalid) firstInvalid = input;
+      }
+      if (firstInvalid) {
+        e.preventDefault();
+        if (typeof firstInvalid.focus === 'function') firstInvalid.focus();
+        return;
       }
       // Guard a double submit, then show the in-flight state. The full-page
       // navigation keeps it visible until the response renders.
