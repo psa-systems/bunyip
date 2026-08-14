@@ -197,4 +197,138 @@
       location.reload();
     }, delay);
   });
+
+  // ------------------------------------------------------ feedback form -----
+  // BUNYIP-540 progressive enhancement for /feedback: an in-flight submit
+  // state (disable + spinner) and client-side attachment validation with
+  // image previews. The no-JS path stays fully functional - the native file
+  // input keeps its id so the styled label still opens the picker, and the
+  // server re-validates every field and file. The limits mirror the Rust
+  // constants in skin::content (3 files, 5 MB each, same MIME allowlist).
+  (function () {
+    var form = document.querySelector('[data-feedback-form]');
+    if (!form) return;
+    var MAX_FILES = 3;
+    var MAX_BYTES = 5 * 1024 * 1024;
+    var ALLOWED = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'text/plain'];
+    var input = form.querySelector('[data-feedback-input]');
+    var fileLabel = form.querySelector('[data-feedback-filelabel]');
+    var previews = form.querySelector('[data-feedback-previews]');
+    var fileError = form.querySelector('[data-feedback-fileerror]');
+    var submitBtn = form.querySelector('[data-feedback-submit]');
+    var spinner = form.querySelector('[data-feedback-spinner]');
+    var submitLabel = form.querySelector('[data-feedback-submit-label]');
+    var objectUrls = [];
+
+    function fmtSize(n) {
+      if (n >= 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+      if (n >= 1024) return Math.round(n / 1024) + ' KB';
+      return n + ' B';
+    }
+    function clearPreviews() {
+      objectUrls.forEach(function (u) {
+        URL.revokeObjectURL(u);
+      });
+      objectUrls = [];
+      if (previews) {
+        previews.textContent = '';
+        previews.classList.add('hidden');
+      }
+    }
+    function setFileError(msg) {
+      if (!fileError) return;
+      if (msg) {
+        fileError.textContent = msg;
+        fileError.classList.remove('hidden');
+      } else {
+        fileError.textContent = '';
+        fileError.classList.add('hidden');
+      }
+    }
+    // Returns '' when the selection is within the limits, else the message.
+    function validate(files) {
+      if (files.length > MAX_FILES) return 'Up to ' + MAX_FILES + ' files only.';
+      for (var i = 0; i < files.length; i++) {
+        var f = files[i];
+        if (ALLOWED.indexOf(f.type) === -1) {
+          return 'Only PNG, JPEG, WebP, GIF, and plain text files are allowed.';
+        }
+        if (f.size > MAX_BYTES) return '"' + f.name + '" is larger than 5 MB.';
+      }
+      return '';
+    }
+    function render() {
+      clearPreviews();
+      var files = input && input.files ? input.files : [];
+      if (!files.length) {
+        if (fileLabel) fileLabel.textContent = 'No file chosen';
+        setFileError('');
+        return;
+      }
+      if (fileLabel) {
+        fileLabel.textContent =
+          files.length === 1 ? '1 file selected' : files.length + ' files selected';
+      }
+      setFileError(validate(files));
+      if (previews) previews.classList.remove('hidden');
+      for (var i = 0; i < files.length; i++) {
+        var f = files[i];
+        var chip = document.createElement('div');
+        chip.className =
+          'flex min-w-0 items-center gap-2 rounded-md border border-border bg-muted/40 p-2 text-sm';
+        if (f.type.indexOf('image/') === 0) {
+          var url = URL.createObjectURL(f);
+          objectUrls.push(url);
+          var img = document.createElement('img');
+          img.src = url;
+          img.alt = '';
+          img.className = 'h-10 w-10 shrink-0 rounded object-cover';
+          chip.appendChild(img);
+        } else {
+          var box = document.createElement('span');
+          box.className =
+            'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded bg-muted text-xs font-medium text-muted-foreground';
+          box.textContent = 'TXT';
+          chip.appendChild(box);
+        }
+        var meta = document.createElement('div');
+        meta.className = 'min-w-0';
+        var nm = document.createElement('div');
+        nm.className = 'truncate font-medium';
+        nm.textContent = f.name;
+        var sz = document.createElement('div');
+        sz.className = 'text-xs text-muted-foreground';
+        sz.textContent = fmtSize(f.size);
+        meta.appendChild(nm);
+        meta.appendChild(sz);
+        chip.appendChild(meta);
+        if (previews) previews.appendChild(chip);
+      }
+    }
+    if (input) input.addEventListener('change', render);
+
+    form.addEventListener('submit', function (e) {
+      // Block a submit the client already knows the server will reject, and
+      // point the user at the file control.
+      if (input && input.files && input.files.length) {
+        var err = validate(input.files);
+        if (err) {
+          e.preventDefault();
+          setFileError(err);
+          input.focus();
+          return;
+        }
+      }
+      // Guard a double submit, then show the in-flight state. The full-page
+      // navigation keeps it visible until the response renders.
+      if (form.dataset.feedbackSubmitting === '1') {
+        e.preventDefault();
+        return;
+      }
+      form.dataset.feedbackSubmitting = '1';
+      if (submitBtn) submitBtn.disabled = true;
+      if (spinner) spinner.classList.remove('hidden');
+      if (submitLabel) submitLabel.textContent = 'Sending...';
+    });
+  })();
 })();
