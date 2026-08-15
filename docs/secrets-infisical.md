@@ -24,17 +24,30 @@ reads a Group-1 secret from Infisical.
 The Group-1 secrets (the `{NAME}` half of each `{NAME}_FILE` entry in
 `compose.yml`):
 
-| Secret                      | Secret file           | Empty allowed | Meaning when empty                     |
-| --------------------------- | --------------------- | ------------- | -------------------------------------- |
-| `POSTGRES_PASSWORD`         | `postgres_password`   | no            | postgres refuses to initialize         |
-| `DATABASE_URL`              | `database_url`        | no            | the api cannot connect                 |
-| `JWT_SECRET`                | `jwt_secret`          | no            | no session signing key                 |
-| `APP_ENCRYPTION_KEY`        | `app_encryption_key`  | no            | no at-rest key (see the rotation note) |
-| `BUNYIP_APP_PASSWORD`       | `bunyip_app_password` | yes           | per-user RLS inactive (BUNYIP-360)     |
-| `APP_DATABASE_URL`          | `app_database_url`    | yes           | per-user RLS inactive (BUNYIP-360)     |
-| `SETUP_DEFAULT_ADMIN`       | `setup_default_admin` | yes           | no bootstrap admin is seeded           |
-| `FORGEJO_API_TOKEN`         | `forgejo_api_token`   | yes           | Forgejo integration off                |
-| `BUNYIP_UPDATE_CHECK_TOKEN` | `update_check_token`  | yes           | update check runs unauthenticated      |
+| Secret                          | Secret file               | Empty allowed | Meaning when empty                       |
+| ------------------------------- | ------------------------- | ------------- | ---------------------------------------- |
+| `POSTGRES_PASSWORD`             | `postgres_password`       | no            | postgres refuses to initialize           |
+| `DATABASE_URL`                  | `database_url`            | no            | the api cannot connect                   |
+| `JWT_SECRET`                    | `jwt_secret`              | no            | no session signing key                   |
+| `BUNYIP_WEBHOOK_SIGNING_SECRET` | `webhook_signing_secret`  | no            | no webhook dispatch signature (BUNYIP-332) |
+| `APP_ENCRYPTION_KEY`            | `app_encryption_key`      | no            | no at-rest key (see the rotation note)   |
+| `BUNYIP_APP_PASSWORD`           | `bunyip_app_password`     | yes           | per-user RLS inactive (BUNYIP-360)       |
+| `APP_DATABASE_URL`              | `app_database_url`        | yes           | per-user RLS inactive (BUNYIP-360)       |
+| `SETUP_DEFAULT_ADMIN`           | `setup_default_admin`     | yes           | no bootstrap admin is seeded             |
+| `FORGEJO_API_TOKEN`             | `forgejo_api_token`       | yes           | Forgejo integration off                  |
+| `BUNYIP_UPDATE_CHECK_TOKEN`     | `update_check_token`      | yes           | update check runs unauthenticated        |
+
+The four `Empty allowed: no` rows other than `POSTGRES_PASSWORD` are the api's
+required set: with `ENVIRONMENT=production` it logs one `ERROR` per missing one
+and exits non-zero rather than starting degraded (BUNYIP-537). The full
+classification of every variable, required or not, is in
+[`configuration.md`](configuration.md).
+
+Deployments created before BUNYIP-537 have no `webhook_signing_secret` file.
+Create it (`just init-secrets` on a self-host, or add the value to the SOPS
+`compose-secrets.yml` on the docker hosts) BEFORE the next `docker compose up`,
+or compose aborts on the missing secret file. The receiving app holds the same
+value: mokosh-server reads it as `BUNYIP_WEBHOOK_SECRET`.
 
 `SMTP_PASSWORD` is deliberately absent: it is Group-2-only (BUNYIP-529), from the
 `/runtime` Infisical fetch or a DB `email_config` row (below). `./secrets/oidc/*.pem`

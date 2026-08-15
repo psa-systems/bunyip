@@ -34,8 +34,16 @@
 # never expose them (BUNYIP-38). The api reads each one via the {NAME}_FILE
 # convention with a fallback to {NAME} env vars for dev. Every secret file must
 # exist before compose starts; an EMPTY file means "not configured" (feature
-# off) for every secret except postgres_password and database_url, which must
-# be non-empty (postgres refuses to initialize with an empty password).
+# off) for the optional ones. These must be non-empty: postgres_password and
+# database_url (postgres refuses to initialize with an empty password), plus
+# jwt_secret, app_encryption_key and webhook_signing_secret, which the api
+# reports as startup errors and refuses to start without on ENVIRONMENT=production
+# (BUNYIP-537).
+#
+# Upgrading a deployment created before BUNYIP-537: create the new
+# ./secrets/webhook_signing_secret file (./scripts/init-secrets.nu generates it)
+# BEFORE `docker compose up`, or compose aborts because the secret file is
+# missing. On the docker hosts, add the value to the SOPS compose-secrets.yml.
 #
 # Resource naming follows the governance convention: bunyip-{service} for
 # containers/volumes/network (no dev- prefix in production).
@@ -60,6 +68,14 @@ secrets:
     file: ./secrets/app_database_url
   jwt_secret:
     file: ./secrets/jwt_secret
+  # BUNYIP-332: the HMAC-SHA256 secret that signs outbound webhook dispatches
+  # (account_deleted, maintenance_change, active_change). Separate from
+  # jwt_secret so a receiving RP verifies webhooks without holding bunyip's
+  # access-token signing key. The receiver holds the same value (mokosh-server:
+  # BUNYIP_WEBHOOK_SECRET). Must be non-empty: the api refuses to start in
+  # production without it (BUNYIP-537).
+  webhook_signing_secret:
+    file: ./secrets/webhook_signing_secret
   # BUNYIP-483: the ONE at-rest AES-256-GCM key, protecting the TOTP secrets
   # (user_totp), the Stripe credentials (stripe_config) and the SMTP password
   # (email_config). The Stripe API keys themselves are NOT secret files: they
@@ -135,6 +151,8 @@ services:
       BUNYIP_APP_PASSWORD_FILE: /run/secrets/bunyip_app_password
       APP_DATABASE_URL_FILE: /run/secrets/app_database_url
       JWT_SECRET_FILE: /run/secrets/jwt_secret
+      # BUNYIP-332: signs outbound webhook dispatches. Required in production.
+      BUNYIP_WEBHOOK_SIGNING_SECRET_FILE: /run/secrets/webhook_signing_secret
       APP_ENCRYPTION_KEY_FILE: /run/secrets/app_encryption_key
       # Comma-separated hex keys still needed to read rows written under an
       # earlier key (rotation, or the BUNYIP-483 consolidation window). Empty
@@ -234,6 +252,7 @@ services:
       - bunyip_app_password
       - app_database_url
       - jwt_secret
+      - webhook_signing_secret
       - app_encryption_key
       - setup_default_admin
       - forgejo_api_token

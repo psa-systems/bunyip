@@ -129,6 +129,11 @@ def main [] {
     # -----------------------------------------------------------------------
 
     secret-from-env-or-gen $"($secrets_dir)/jwt_secret" $env_file "JWT_SECRET" $gen_hex
+    # BUNYIP-332 / BUNYIP-537: the webhook dispatch signing secret. Required in
+    # production, so it is generated rather than left empty. The receiving app
+    # holds the same value (mokosh-server: BUNYIP_WEBHOOK_SECRET), so copy it
+    # there after a rotation.
+    secret-from-env-or-gen $"($secrets_dir)/webhook_signing_secret" $env_file "BUNYIP_WEBHOOK_SIGNING_SECRET" $gen_hex
     # BUNYIP-483: ONE at-rest key for the TOTP, Stripe and SMTP secrets.
     secret-from-env-or-gen $"($secrets_dir)/app_encryption_key" $env_file "APP_ENCRYPTION_KEY" $gen_hex
 
@@ -166,6 +171,11 @@ def main [] {
 
     # Optional secrets: present in .env -> migrated, else an empty file which the
     # api treats as "feature not configured".
+    # BUNYIP-360: empty keeps per-user RLS inactive (the app pool falls back to
+    # the primary pool). Created regardless, because compose.yml mounts both and
+    # a missing FILE aborts `docker compose up`.
+    secret-from-env-or-empty $"($secrets_dir)/bunyip_app_password" $env_file "BUNYIP_APP_PASSWORD"
+    secret-from-env-or-empty $"($secrets_dir)/app_database_url" $env_file "APP_DATABASE_URL"
     secret-from-env-or-empty $"($secrets_dir)/setup_default_admin" $env_file "SETUP_DEFAULT_ADMIN"
     secret-from-env-or-empty $"($secrets_dir)/forgejo_api_token" $env_file "FORGEJO_API_TOKEN"
     secret-from-env-or-empty $"($secrets_dir)/update_check_token" $env_file "BUNYIP_UPDATE_CHECK_TOKEN"
