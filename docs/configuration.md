@@ -1,608 +1,384 @@
 # Configuration reference
 
-Every environment variable bunyip reads, and every setting that lives inside the application instead. If a knob is not
-in this document, it does not exist.
+Every environment variable bunyip reads, how its absence is reported at startup,
+where its value comes from in the reference deployment, and the settings that are
+not environment variables at all. If a knob is not in this document, it does not
+exist.
 
-The dividing line:
+The source of truth for the api's variables is `ENV_INVENTORY` in
+`crates/bunyip-domain/src/config.rs`; a variable read without an entry there
+fails `bunyip-api/tests/env_inventory.rs`. The classification tables below are
+the operator-facing rendering of that table, so they cannot drift from the code.
+The three sections that follow them are not derivable from the inventory:
 
-- **Environment variables** (sections 1-8) are read once at process start. Changing one means restarting the container.
-  They configure the deployment: where the process listens, which database it uses, what key material it holds.
-- **In-app settings** (section 10) live in the database, are edited on the admin pages, and apply without a restart.
-  They configure the product: Stripe credentials, pricing tiers, rate limits, SMTP.
+- [Which store a running deployment is using](#which-store-a-running-deployment-is-using), and what each store costs.
+- [Compose coverage](#secret-files-and-compose-coverage): what the api reads that this repository's `compose.yml` does not pass.
+- [Settings that are not environment variables](#settings-that-are-not-environment-variables): the database-backed configuration, its admin pages and its columns.
 
-Some settings exist in both places. There the environment variable is a **bootstrap default** and the database row wins;
-those are marked as such and collected in section 7.
+The dividing line for that last one: **environment variables** are read once at
+process start, so changing one means restarting the container, and they
+configure the deployment. **In-app settings** live in the database, are edited on
+the admin pages, and apply without a restart, and they configure the product.
+Where a setting exists in both places the environment variable is a bootstrap
+default and the database row wins; those are marked as such.
 
-Related documents: [secrets-infisical.md](secrets-infisical.md) (the two secret tiers and the Infisical
-fetch), [encryption-key-rotation.md](encryption-key-rotation.md)
-(at-rest keys), [client-ip-forwarding.md](client-ip-forwarding.md) (the proxy trust
-chain), [oci-registry-verification.md](oci-registry-verification.md)
-(distribution proxy).
+Secrets resolve through the `{NAME}_FILE` convention first (a compose secret
+under `/run/secrets/*`), then the plain variable (a dev `.env`). An empty value
+counts as unset everywhere. The exception is the three governed integration
+secrets below, which are `{NAME}_FILE`-only and are read only when
+`SECRETS_STORAGE=environment`.
 
-## How a value is resolved
+## The reporting contract (BUNYIP-537)
 
-1. **Plain environment variable**, e.g. `SMTP_HOST=smtp.example.com`.
-2. **File-backed environment variable**, the `{NAME}_FILE` convention (BUNYIP-38). Every variable read through
-   `secret_env` accepts `{NAME}_FILE` pointing at a file whose contents are the value. `compose.yml` uses this for all
-   Group-1 secrets, so `docker inspect` and `/proc/<pid>/environ` never expose them. An empty file means "not
-   configured".
-3. **Infisical runtime fetch** (Group-2, BUNYIP-525), for `SMTP_PASSWORD` only today. It fills the slot *only if* the
-   env/file slot is empty.
-4. **Database row**, for the settings in section 7 and section 10. Highest precedence, applied after boot, no restart
-   needed.
+| Classification            | At startup                                                                    |
+| ------------------------- | ----------------------------------------------------------------------------- |
+| Required                  | one `ERROR` naming the variable, the reason and the remedy, then exit 1        |
+| Required in production    | the same, but only when `ENVIRONMENT=production`; other environments fall back |
+| Feature-gating (optional) | one `WARN` naming the variable and the functionality that is off               |
+| Defaulted (optional)      | nothing: the default works and is documented below                            |
 
-The "Source" column below says where a value comes from in the reference deployment (`compose.yml`):
+All required failures are collected in ONE pass, so a deployment missing four
+variables learns about all four in one boot instead of one per restart. Nothing
+in this path panics: a configuration mistake reads as a configuration error, not
+as a crash with exit code 101.
 
-| Source         | Meaning                                                                                                        |
-|----------------|----------------------------------------------------------------------------------------------------------------|
-| `.env`         | passed through by compose from the operator's `.env`                                                           |
-| secret file    | a compose secret under `/run/secrets/*`, read via `{NAME}_FILE`                                                |
-| literal        | hard-coded in the compose file, not operator-settable                                                          |
-| **not passed** | the app reads it, but no compose file provides it. Add it to the api service's `environment:` block to use it. |
+Some entries are *gated*: they are only demanded (or warned about) once the
+variable that switches their feature on is itself set. `OIDC_JWT_ACTIVE_KID` is
+required only when `OIDC_ISSUER` is set; `INFISICAL_ADDRESS` warns only when
+`INFISICAL_ENABLED` is on. That keeps an unused integration to one line rather
+than one per variable in its group.
 
-## Where the integration secrets live
+## Required
 
-Three secrets have more than one possible store, so "where is it?" is a real question for them and only for
-them:
+| Variable                        | Gate          | Why the api will not start without it                                                    |
+| ------------------------------- | ------------- | ---------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                  | -             | the api cannot connect to postgres (required in every environment)                       |
+| `SECRETS_STORAGE`               | -             | the deployment has not declared where its integration secrets live (required in every environment, see below) |
+| `JWT_SECRET`                    | -             | no signing key for session access/refresh tokens                                         |
+| `APP_ENCRYPTION_KEY`            | -             | no at-rest key for the TOTP, Stripe and SMTP secrets (BUNYIP-483)                        |
+| `BUNYIP_WEBHOOK_SIGNING_SECRET` | -             | no HMAC key for outbound webhook dispatches (BUNYIP-332)                                 |
+| `OIDC_JWT_PRIVATE_KEY_PATH`     | `OIDC_ISSUER` | the OIDC provider would sign with the development key path                               |
+| `OIDC_JWT_ACTIVE_KID`           | `OIDC_ISSUER` | a `dev-` kid in production is consumed by RPs as legitimate (BUNYIP-258); also value-checked |
+| `SMTP_HOST` / `EMAIL_ENABLED`   | -             | email disabled in production would log single-use login/reset tokens instead of sending them (BUNYIP-204) |
 
-| Secret                | Database                                          | Environment                       | Infisical                |
-|-----------------------|---------------------------------------------------|-----------------------------------|--------------------------|
-| SMTP password         | `email_config.smtp_password` (+ nonce, `key_version`) | `SMTP_PASSWORD` / `_FILE`     | `/runtime/SMTP_PASSWORD` |
-| Stripe secret key     | `stripe_config.secret_key` (+ nonce)              | none (BUNYIP-482 removed the name) | none                     |
-| Stripe webhook secret | `stripe_config.webhook_secret` (+ nonce)          | none (BUNYIP-482 removed the name) | none                     |
+Every one except `DATABASE_URL` and `SECRETS_STORAGE` is required only on
+`ENVIRONMENT=production`; development and staging fall back to documented
+placeholder values.
 
-The database columns are `BYTEA`: AES-256-GCM ciphertext plus nonce under `APP_ENCRYPTION_KEY`, written from the admin
-Stripe and Email pages. Confirm what a running deployment actually holds without decrypting anything:
+## `SECRETS_STORAGE`: where the integration secrets live (BUNYIP-542)
+
+`SECRETS_STORAGE` declares the ONE store bunyip reads its governed integration
+secrets from. Legal values: `environment`, `database`, `infisical`. Unset or
+unrecognised logs one `ERROR` naming the legal set and exits 1.
+
+The governed set is exactly the secrets with more than one possible store:
+
+| Secret                  | `database`                       | `environment`                | `infisical`               |
+| ----------------------- | -------------------------------- | ---------------------------- | ------------------------- |
+| `SMTP_PASSWORD`         | `email_config.smtp_password`     | `SMTP_PASSWORD_FILE`         | `<path>/SMTP_PASSWORD`    |
+| `STRIPE_SECRET_KEY`     | `stripe_config.secret_key`       | `STRIPE_SECRET_KEY_FILE`     | `<path>/STRIPE_SECRET_KEY` |
+| `STRIPE_WEBHOOK_SECRET` | `stripe_config.webhook_secret`   | `STRIPE_WEBHOOK_SECRET_FILE` | `<path>/STRIPE_WEBHOOK_SECRET` |
+
+The declared store is the ONLY one consulted. There is no fallback and no
+precedence chain: in `database` mode the environment slot and Infisical are not
+read at all, and vice versa. Group-1 startup secrets (`DATABASE_URL`,
+`JWT_SECRET`, `APP_ENCRYPTION_KEY`, ...) cannot be governed by this switch - the
+database cannot hold the credential used to reach the database - and stay
+file-based.
+
+In `environment` mode a governed secret is read from `{NAME}_FILE` ONLY. A plain
+`STRIPE_SECRET_KEY=sk_live_...` in a compose `environment:` block is visible to
+`docker inspect` and to every child process, so it is deliberately not consulted.
+
+### Startup enforcement, per governed secret
+
+| Situation                                          | Behaviour                                                                    |
+| -------------------------------------------------- | ---------------------------------------------------------------------------- |
+| present in the declared store                       | use it                                                                       |
+| absent everywhere                                   | feature off, one `WARN` naming the secret and the feature it gates           |
+| absent from the declared store, present in another  | **fatal**: one `ERROR` naming the secret, both stores and `secrets-migrate`, then exit 1 |
+| present in the declared store AND in another        | boot, and one `WARN` per duplicate naming `secrets-purge`                    |
+
+"Present" means a non-null ciphertext column (database), a non-empty
+`{NAME}_FILE` read (environment), or a successful key read (infisical). The
+duplicate warning is what keeps a later mode change honest: a stale copy in a
+store nobody reads today becomes live the moment someone flips the mode.
+
+`infisical` mode is **fail-closed**: an unreachable Infisical or a failed read
+aborts the boot, because the operator declared it the store of record.
+`database` and `environment` mode never contact Infisical at boot, so it stays
+off the boot path for them.
+
+### Writing from the admin pages
+
+| Mode          | Admin Stripe / Email secret fields                                                          |
+| ------------- | -------------------------------------------------------------------------------------------- |
+| `database`    | editable; encrypted under `APP_ENCRYPTION_KEY`, written to the row, service hot-reloaded    |
+| `infisical`   | editable; written to `INFISICAL_SECRET_PATH` through the API (no DB write), service hot-reloaded, and an audit entry records the admin, the secret and the target store |
+| `environment` | read-only, labelled with the owning store and the file to edit; the API answers 409          |
+
+A failed Infisical write surfaces on the form and in the log with the underlying
+cause, performs no reload and reports no success. The machine identity needs
+**write** access to `INFISICAL_SECRET_PATH`; read access alone fails the save.
+
+Non-secret configuration (`smtp_host`, `smtp_port`, `smtp_tls`, `smtp_username`,
+`from_email`, the checkout URLs, the tier ids) stays editable in every mode: the
+switch governs secrets only.
+
+### Restart versus hot-apply
+
+Only a change made through the admin pages hot-applies. A value changed directly
+in Infisical, or in a secret file, takes effect on the next restart, because the
+boot read is the only reader.
+
+### Which store a running deployment is using
+
+`bunyip-api secrets-status` answers this from inside the container. To confirm
+from outside, without decrypting anything:
 
 ```nu
 docker exec bunyip-postgres psql --username postgres --dbname bunyip --command "select (secret_key is not null) as has_secret_key, (webhook_secret is not null) as has_webhook_secret, key_version, updated_at from stripe_config"
 docker exec bunyip-postgres psql --username postgres --dbname bunyip --command "select smtp_host, smtp_username, (smtp_password is not null) as has_password, key_version, updated_at from email_config"
-docker exec bunyip-api env | lines | where {|l| $l =~ '^SMTP_PASSWORD' }
+docker exec bunyip-api env | lines | where {|l| $l =~ '^(SECRETS_STORAGE|SMTP_PASSWORD)' }
 ```
 
-A populated database column plus empty output from the third command means the database row is the live source, and
-Infisical will show nothing for that secret however long you look. That is the expected result of the precedence chain
-above, not a misconfiguration.
-
-Everything outside this set has exactly one store and no ambiguity: Group-1 startup secrets and the env-only
-integration secrets (`FORGEJO_API_TOKEN`, `BUNYIP_UPDATE_CHECK_TOKEN`, `LETS_CHAT_CLIENT_SECRET_HASH`, the two
-`INFISICAL_*` credentials) are file-backed environment variables, and nothing else can hold them. `APP_ENCRYPTION_KEY`
-is the extreme case: it decrypts the database copies, so it can never live in them.
-
-### Choosing a store, and what each one costs
-
-| Store           | Set from                          | Applies without a restart                 | Cons                                                                                                                                                                                 |
-|-----------------|-----------------------------------|-------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Database**    | admin Stripe / Email pages        | yes                                       | the value is only as recoverable as `APP_ENCRYPTION_KEY`; a restore under a rotated key needs `APP_ENCRYPTION_KEY_PREV` and a re-encrypt pass. Secrets live in the same backup as user data. |
-| **Environment** | secret file, edited on the host   | no: restart to pick up a new value        | **the admin UI cannot write it**, so those fields are read-only and every rotation is a host edit plus a restart. Needs the Stripe names reintroduced (see below).                     |
-| **Infisical**   | admin pages, or Infisical itself  | only for changes made through the admin pages | a remote dependency in the request path for saves, and a boot dependency when it is the declared store. The machine identity needs write access, not just read.                       |
-
-The read-only consequence of `environment` is not a policy choice: a process cannot set an environment variable for its
-own next boot, and `/run/secrets/*` is mounted read-only, so a save has nowhere to go. The admin form is read-only there
-because the alternative is worse: the handler would encrypt the value into a database row that nothing reads and the
-page would report success. Infisical has a write API and bunyip-api already holds a machine identity, so its admin
-fields stay editable; the save writes through to Infisical and hot-reloads the affected service.
-
-### Declaring the store, and moving between stores
-
-Today the source is decided by the precedence chain in the previous section, which means a deployment cannot state its
-intent and a stale copy in an unread store is invisible. BUNYIP-542 specifies a required `SECRETS_STORAGE` variable
-(`environment` | `database` | `infisical`) that supersedes that chain: the declared store becomes the only source
-consulted, and the enforcement at boot is
-
-| Situation                                         | Behaviour                                                                      |
-|---------------------------------------------------|--------------------------------------------------------------------------------|
-| present in the declared store                     | use it                                                                         |
-| absent everywhere                                 | feature off, one warning naming the feature                                    |
-| absent from the declared store, present in another | fatal: error naming the secret, both stores and the remediation, then exit      |
-| present in the declared store and also in another | boot, one warning per duplicate                                                |
-
-Migration between stores is an operator procedure run against a **healthy** deployment, not a restart that either works
-or takes the service down. The order matters:
-
-1. `bunyip-api secrets-status` on the running service. Read-only, prints no secret values, and reports per-secret
-   readiness for each candidate store.
-2. `bunyip-api secrets-migrate --to <store>` copies each secret from its current live source into the target. Into
-   `database` and `infisical` it writes directly; for `environment` it cannot write, so it emits the exact secret-file
-   paths and `{NAME}_FILE` entries to create.
-3. `bunyip-api secrets-status` again, confirming the target store is complete.
-4. Set `SECRETS_STORAGE` to the new store and restart. The old copies are still in place, so a wrong value is a
-   rollback rather than an outage.
-5. Soak, then `bunyip-api secrets-purge --confirm` to remove the copies outside the declared store. This step is
-   explicit and never automatic, and the duplicate warning at boot is what reminds you it is still outstanding.
-
-Skipping step 5 is not harmless: a leftover copy becomes live the moment someone changes the mode back.
-
-Two prerequisites are human steps, not code: every deployment must have `SECRETS_STORAGE` in its environment before the
-api will boot, and a deployment choosing `infisical` needs its Universal Auth machine identity granted write access to
-`INFISICAL_SECRET_PATH`. Runbook: [secrets-infisical.md](secrets-infisical.md).
-
-## 1. Environmental
-
-| Variable      | Read by  | Default      | Source |
-|---------------|----------|--------------|--------|
-| `ENVIRONMENT` | api      | `production` | `.env` |
-| `RUST_LOG`    | api, web | `info`       | `.env` |
-
-`ENVIRONMENT=production` (the default when unset) turns on the strict posture:
-
-- email must resolve to enabled or the api refuses to start (BUNYIP-204),
-- an OIDC kid beginning with `dev-` panics at boot (BUNYIP-258),
-- `JWT_SECRET` and `BUNYIP_WEBHOOK_SIGNING_SECRET` lose their dev fallbacks and panic when unset,
-- `EMAIL_LOG_TOKENS` is forced off so single-use tokens never reach a log.
-
-Any other value (`development`, `staging`) is non-production.
-
-## 2. Hosting
-
-### Listeners
-
-| Variable           | Read by | Default        | Source                                          |
-|--------------------|---------|----------------|-------------------------------------------------|
-| `HOST_IP`          | api     | `0.0.0.0`      | literal (container), `.env` (host publish side) |
-| `APP_PORT`         | api     | `4000`         | literal `4401`                                  |
-| `BUNYIP_BIND_ADDR` | web     | `0.0.0.0:4400` | literal                                         |
-
-`HOST_IP` is two different settings that share a name. Inside the container it is the api's bind address and both
-compose files hard-code it to `0.0.0.0`. In `.env`
-it is the **host-side publish interface** for the port mappings, defaulting to
-`127.0.0.1`. Setting `HOST_IP=0.0.0.0` in `.env` publishes the plaintext listeners on every host interface.
-
-`APP_PORT` in `.env` is inert under compose: both files pass `4401` literally. It matters only when running the binary
-directly.
-
-### Database
-
-| Variable              | Read by | Default         | Source                            |
-|-----------------------|---------|-----------------|-----------------------------------|
-| `DATABASE_URL`        | api     | none (required) | secret file `database_url`        |
-| `APP_DATABASE_URL`    | api     | none            | secret file `app_database_url`    |
-| `BUNYIP_APP_PASSWORD` | api     | none            | secret file `bunyip_app_password` |
-
-`APP_DATABASE_URL` and `BUNYIP_APP_PASSWORD` drive per-user row level security (BUNYIP-344 / BUNYIP-360). When
-`BUNYIP_APP_PASSWORD` is set the api creates the
-`bunyip_app` (NOSUPERUSER NOBYPASSRLS) role at startup and sets that password on it; `APP_DATABASE_URL` then connects
-the self-service pool as that role, so the password embedded in the URL must equal `BUNYIP_APP_PASSWORD`. Both empty
-leaves RLS inactive and isolation at the application `WHERE user_id` layer only.
-
-### Proxy trust
-
-| Variable                 | Read by        | Default               | Source                              |
-|--------------------------|----------------|-----------------------|-------------------------------------|
-| `TRUSTED_PROXY_CIDR`     | api, web       | empty (trust nothing) | `.env`, RFC1918 fallback in compose |
-| `WEB_TRUSTED_PROXY_CIDR` | (compose only) | RFC1918 fallback      | `.env`                              |
-
-Comma-separated CIDRs. `X-Forwarded-For` / `X-Real-IP` are honoured only when the immediate socket peer is inside one of
-these ranges. `WEB_TRUSTED_PROXY_CIDR` is not read by any binary: compose maps it onto the web service's own
-`TRUSTED_PROXY_CIDR` so the two hops can be tuned separately. Full walkthrough:
-[client-ip-forwarding.md](client-ip-forwarding.md).
-
-### Service-to-service
-
-| Variable                   | Read by | Default                        | Source |
-|----------------------------|---------|--------------------------------|--------|
-| `BUNYIP_API_URL`           | web     | `http://localhost:4401`        | `.env` |
-| `BUNYIP_API_PUBLIC_ORIGIN` | web     | falls back to `BUNYIP_API_URL` | `.env` |
-
-`BUNYIP_API_PUBLIC_ORIGIN` is the browser-facing origin (BUNYIP-192 / BUNYIP-510), used by the dashboard SSE subscriber
-and the Stripe webhook URL the admin page prefills. Left unset in a real deployment, both point at an internal hostname
-no browser and no Stripe delivery can reach.
-
-### Compose-only (not read by any binary)
-
-| Variable                                                | Purpose                                                                               |
-|---------------------------------------------------------|---------------------------------------------------------------------------------------|
-| `BUNYIP_API_IMAGE`, `BUNYIP_WEB_IMAGE`                  | pinned image tags. REQUIRED: `compose.yml` refuses to start without them (BUNYIP-237) |
-| `BUNYIP_API_PORT`, `BUNYIP_WEB_PORT`, `BUNYIP_OCI_PORT` | host-side published ports                                                             |
-| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`     | the postgres container's own settings                                                 |
-| `HOST_UID`, `HOST_GID`                                  | in-container dev user, dev only                                                       |
-| `CARGO_BUILD_JOBS`                                      | build concurrency cap, dev only                                                       |
-| `DUNITE_GIT_TOKEN`                                      | optional token for an authed dunite mirror, build time only                           |
-
-## 3. Application
-
-| Variable            | Read by  | Default                                                   | Source         |
-|---------------------|----------|-----------------------------------------------------------|----------------|
-| `APP_NAME`          | api, web | `localhost` (api), `Bunyip` (web)                         | `.env`         |
-| `APP_URL`           | api      | falls back to `CORS_ORIGIN`, then `http://localhost:5173` | **not passed** |
-| `BUNYIP_APP_DOMAIN` | web      | empty                                                     | `.env`         |
-| `BRAND_DESCRIPTION` | web      | built-in string                                           | **not passed** |
-| `BRAND_THEME_CSS`   | web      | none                                                      | **not passed** |
-
-`APP_URL` is the app's public base URL: it is the base for links inside transactional email and the first fallback for
-the SMTP EHLO name. No compose file passes it, so in a compose deployment the base URL is always the **first
-`CORS_ORIGIN` entry**. Add `APP_URL: ${APP_URL:-}` to the api service's
-`environment:` block to make it settable.
-
-## 4. Security and secrets
-
-### Signing and at-rest key material
-
-| Variable                        | Read by | Default                                   | Source                           |
-|---------------------------------|---------|-------------------------------------------|----------------------------------|
-| `JWT_SECRET`                    | api     | dev placeholder; **panics in production** | secret file `jwt_secret`         |
-| `BUNYIP_WEBHOOK_SIGNING_SECRET` | api     | dev placeholder; **panics in production** | **not passed**                   |
-| `APP_ENCRYPTION_KEY`            | api     | all-zero dev key                          | secret file `app_encryption_key` |
-| `APP_ENCRYPTION_KEY_PREV`       | api     | empty                                     | `.env`                           |
-| `APP_KEY_VERSION`               | api     | `1`                                       | **not passed**                   |
-
-`APP_ENCRYPTION_KEY` is the ONE AES-256-GCM at-rest key (BUNYIP-483). It protects
-`user_totp`, `stripe_config.secret_key` / `webhook_secret`, and
-`email_config.smtp_password` alike. `APP_ENCRYPTION_KEY_PREV` is a comma-separated list of older keys still needed to
-READ existing rows; clear it after running `bunyip-api reencrypt-secrets`. Runbook:
-[encryption-key-rotation.md](encryption-key-rotation.md).
-
-`BUNYIP_WEBHOOK_SIGNING_SECRET` (BUNYIP-332) signs OUTBOUND webhook dispatches so a receiving RP does not need bunyip's
-access-token signing key. It panics at boot in production, and the reference `compose.yml` neither declares it as a
-secret nor passes it, and `scripts/init-secrets.nu` does not generate it: a deployment must supply it by hand.
-
-### Browser origin, CORS and cookies
-
-| Variable                             | Read by | Default                   | Source         |
-|--------------------------------------|---------|---------------------------|----------------|
-| `CORS_ORIGIN`                        | api     | `http://localhost:5173`   | `.env`         |
-| `BUNYIP_WEB_ORIGIN`                  | api     | first `CORS_ORIGIN` entry | **not passed** |
-| `COOKIE_DOMAIN`                      | api     | none (host-scoped)        | `.env`         |
-| `BUNYIP_COOKIE_SHARED_DOMAIN`        | api     | `false`                   | **not passed** |
-| `CSP_CONNECT_SRC`, `CSP_FORM_ACTION` | web     | empty                     | **not passed** |
-
-`CORS_ORIGIN` is a comma-separated list and carries three jobs: the CORS allow-list, the CSRF allow-list (BUNYIP-423, a
-missing origin gets its cookie-authenticated writes refused with 403), and the fallback base URL (see
-`APP_URL`). `BUNYIP_WEB_ORIGIN` pins the single login-UI origin explicitly, which a multi-RP deployment needs so the
-authorize handler does not concatenate the comma-list onto `/login`.
-
-`COOKIE_DOMAIN` alone does not share the OP session cookie across subdomains:
-`BUNYIP_COOKIE_SHARED_DOMAIN=true` must opt in as well (BUNYIP-266). Setting one without the other logs a warning at
-boot.
-
-### First-admin bootstrap
-
-| Variable                | Read by | Default | Source                            |
-|-------------------------|---------|---------|-----------------------------------|
-| `SETUP_DEFAULT_ADMIN`   | api     | none    | secret file `setup_default_admin` |
-| `BOOTSTRAP_ADMIN_EMAIL` | api     | none    | `.env`                            |
-
-`SETUP_DEFAULT_ADMIN` is `email:password` and seeds an admin on first boot.
-`BOOTSTRAP_ADMIN_EMAIL` (BUNYIP-290) promotes whoever signs in with that address to admin while zero admins exist, with
-no password in the environment; it is inert once any admin exists. That first admin is also the SUPER ADMIN
-(`users.is_super_admin`), the only account allowed to change rate limits or ban IPs by hand (BUNYIP-413).
-`BOOTSTRAP_ADMIN_EMAIL` is plain-env only: the
-`{NAME}_FILE` convention does not apply.
-
-### Opt-in abuse gates
-
-| Variable                   | Read by | Default | Source         |
-|----------------------------|---------|---------|----------------|
-| `LOGIN_APPROVAL_ENABLED`   | api     | `false` | **not passed** |
-| `SIGNUP_BOT_GUARD_ENABLED` | api     | `false` | **not passed** |
-
-Both are off by default because both can reject legitimate traffic:
-the login-approval gate (BUNYIP-373) can withhold a login, and the signup bot guard (BUNYIP-377) rejects any register
-form that lacks the honeypot and timing token.
-
-## 5. Identity provider (OIDC)
-
-bunyip-api IS the OpenID Provider: it holds the signing key and serves
-`/.well-known/*` and `/oauth2/*`. bunyip-web is a relying party. mokosh-server is a Resource Server only.
-
-### bunyip-api as the OP
-
-| Variable                         | Read by | Default                           | Source                      |
-|----------------------------------|---------|-----------------------------------|-----------------------------|
-| `OIDC_ISSUER`                    | api     | none (OIDC disabled)              | `.env`                      |
-| `OIDC_JWT_PRIVATE_KEY_PATH`      | api     | `secrets/jwt_private.pem`         | `.env`, REQUIRED by compose |
-| `OIDC_JWT_ACTIVE_KID`            | api     | `dev-key`                         | `.env`, REQUIRED by compose |
-| `OIDC_JWT_PUBLIC_KEYS_DIR`       | api     | `secrets`                         | literal `/run/secrets/oidc` |
-| `OIDC_ACCESS_TOKEN_TTL_SECONDS`  | api     | `600`, clamped to 60-900          | **not passed**              |
-| `OIDC_REFRESH_TOKEN_TTL_SECONDS` | api     | `2592000` (30d)                   | **not passed**              |
-| `OIDC_REFRESH_IDLE_TTL_SECONDS`  | api     | `1209600` (14d)                   | **not passed**              |
-| `OIDC_CODE_TTL_SECONDS`          | api     | `60`, capped at 120               | **not passed**              |
-| `OIDC_RS_AUDIENCE`               | api     | `urn:bunyip:rs`                   | **not passed**              |
-| `OIDC_LIFECYCLE_EVENT_KEY`       | api     | `urn:bunyip:event:user-lifecycle` | **not passed**              |
-
-The absence of `OIDC_ISSUER` disables the provider endpoints entirely. The key path and kid have no default in
-`compose.yml` and abort `compose up` when unset (BUNYIP-258); a `dev-` prefixed kid panics at boot under
-`ENVIRONMENT=production`, because a dev-named kid on production tokens is consumed happily by any RP whose JWKS lookup
-follows what the OP advertises.
-
-### bunyip-web as a relying party
-
-| Variable                   | Read by       | Default                        | Source                         |
-|----------------------------|---------------|--------------------------------|--------------------------------|
-| `BUNYIP_OIDC_ISSUER`       | web           | falls back to `BUNYIP_API_URL` | `.env`                         |
-| `BUNYIP_OIDC_CLIENT_ID`    | nothing today | n/a                            | `.env` via compose.dev-sso.yml |
-| `BUNYIP_OIDC_REDIRECT_URI` | nothing today | n/a                            | `.env` via compose.dev-sso.yml |
-| `BUNYIP_OIDC_SCOPES`       | nothing today | n/a                            | `.env` via compose.dev-sso.yml |
-
-The last three are read by no binary in this workspace. They date from the pre-BUNYIP-299 Dioxus SPA, whose container
-entrypoint rendered them into a same-origin `/config.json`; that entrypoint no longer exists. `compose.dev-sso.yml`
-still requires `BUNYIP_OIDC_CLIENT_ID` and `BUNYIP_OIDC_REDIRECT_URI` at
-`compose up`, and `just register-dev-clients` still prints the hub UUID for the operator to paste into `.env`, so the
-value remains useful as a record of which client was registered (mokosh-apps holds its own copy).
-
-## 6. Integrations
-
-### Infisical (Group-2 runtime secrets)
-
-| Variable                                         | Read by | Default | Source         |
-|--------------------------------------------------|---------|---------|----------------|
-| `INFISICAL_ENABLED`                              | api     | `false` | **not passed** |
-| `INFISICAL_ADDRESS`                              | api     | empty   | **not passed** |
-| `INFISICAL_PROJECT_ID`                           | api     | empty   | **not passed** |
-| `INFISICAL_ENVIRONMENT` (legacy `INFISICAL_ENV`) | api     | empty   | **not passed** |
-| `INFISICAL_SECRET_PATH`                          | api     | `/`     | **not passed** |
-| `INFISICAL_CLIENT_ID`                            | api     | empty   | **not passed** |
-| `INFISICAL_CLIENT_SECRET`                        | api     | empty   | **not passed** |
-
-Group-1 startup secrets are never fetched from Infisical, so Infisical is never a boot dependency. Group-2 secrets
-(`SMTP_PASSWORD` today) are fetched at runtime from the project-relative `/runtime` folder via a Universal Auth machine
-identity; any failure leaves the feature off and boot continues. The two credentials honour the `{NAME}_FILE` convention
-and can themselves be Group-1 file secrets. No compose file in this repo passes these, so enabling the fetch on a
-compose deployment means adding them to the api service's `environment:`.
-Runbook: [secrets-infisical.md](secrets-infisical.md).
-
-### Email (SMTP)
-
-Every variable here is a **bootstrap default**: the `email_config` DB row (admin Email page) overrides it per field and
-applies without a restart (BUNYIP-351).
-
-| Variable                    | Read by | Default                           | Source                      | DB column                   |
-|-----------------------------|---------|-----------------------------------|-----------------------------|-----------------------------|
-| `EMAIL_ENABLED`             | api     | `false`                           | `.env`                      | `enabled`                   |
-| `SMTP_HOST`                 | api     | `localhost`                       | `.env`                      | `smtp_host`                 |
-| `SMTP_PORT`                 | api     | `465` implicit / `587` starttls   | `.env`                      | `smtp_port`                 |
-| `SMTP_TLS`                  | api     | `implicit`                        | `.env`                      | `smtp_tls`                  |
-| `SMTP_USERNAME`             | api     | empty                             | `.env`                      | `smtp_username`             |
-| `SMTP_PASSWORD`             | api     | empty, then Infisical             | **not passed** (deliberate) | `smtp_password` (encrypted) |
-| `SMTP_FROM`                 | api     | `noreply@localhost`               | `.env`                      | `from_email`, `from_name`   |
-| `SMTP_EHLO_NAME`            | api     | see below                         | `.env`                      | **none**                    |
-| `ADMIN_NOTIFICATION_EMAILS` | api     | empty                             | `.env`                      | `admin_notification_emails` |
-| `EMAIL_LOG_TOKENS`          | api     | `false`, forced off in production | **not passed**              | none                        |
-
-`SMTP_PASSWORD` is one of the three secrets covered by
-[Where the integration secrets live](#where-the-integration-secrets-live): which store holds it, what each store costs,
-and how to move it.
-
-Two behaviours are worth stating explicitly.
-
-**The production email gate runs before the database is read.** `Config::from_env`
-refuses to start when `ENVIRONMENT=production` and the env-only email config resolves to disabled. The `email_config`
-row is loaded later, so it cannot satisfy that check. A deployment configured entirely through the admin UI still needs
-either a real `SMTP_HOST` or `EMAIL_ENABLED=true` in the environment. Setting
-`EMAIL_ENABLED=true` weakens the BUNYIP-204 fail-fast: the app then boots happily even if the DB row is later emptied,
-and mail fails at send time instead.
-
-**`SMTP_EHLO_NAME` has no admin-UI equivalent** and no `email_config` column. It is deployment identity (it must match
-the sending host's DNS), not per-deployment SMTP tuning, so BUNYIP-507 kept it env-only alongside the base URL. The EHLO
-name is resolved when the SMTP transport is built, which happens *after* the DB row is merged, in this order:
-
-1. `SMTP_EHLO_NAME` (env only),
-2. the host of the app base URL (env only: `APP_URL`, else `CORS_ORIGIN`),
-3. the domain of the **resolved** from-address (`email_config.from_email` when set, else `SMTP_FROM`),
-4. lettre's default, which inside a container is the container id and is what BUNYIP-507 existed to stop.
-
-### Stripe
-
-There is no Stripe environment variable (BUNYIP-482), and
-`scripts/check-no-stripe-env.nu` fails the build if one reappears. Everything lives in the `stripe_config` row: see
-section 10. The only billing env var is the trial-length bootstrap default in section 7. The at-rest key that encrypts
-the stored Stripe secrets is `APP_ENCRYPTION_KEY`, which is key material, not Stripe configuration.
-
-The secret key and webhook secret are two of the three secrets covered by
-[Where the integration secrets live](#where-the-integration-secrets-live), including the trade-offs of each store and
-the migration sequence. Storing them anywhere but the database means reintroducing the two Stripe-prefixed variable
-names this guard forbids, as file-backed values only, and amending the guard to allow exactly those two in that form.
-BUNYIP-542 covers both halves. Until then the guard is the reason this document does not spell the names out.
-
-### Distribution proxy: downloads and OCI registry
-
-Both verticals stay disabled until `FORGEJO_BASE_URL` and `FORGEJO_API_TOKEN` are set (BUNYIP-28). Token scopes and
-reverse-proxy requirements:
-[oci-registry-verification.md](oci-registry-verification.md).
-
-| Variable                            | Read by | Default                             | Source                          |
-|-------------------------------------|---------|-------------------------------------|---------------------------------|
-| `FORGEJO_BASE_URL`                  | api     | none (feature off)                  | `.env`                          |
-| `FORGEJO_API_TOKEN`                 | api     | none (feature off)                  | secret file `forgejo_api_token` |
-| `FORGEJO_RELEASE_CACHE_TTL_SECS`    | api     | `300`                               | `.env`                          |
-| `DOWNLOAD_CACHE_DIR`                | api     | `/var/cache/bunyip-downloads`       | literal                         |
-| `DOWNLOAD_CACHE_MAX_BYTES`          | api     | `10737418240` (10 GiB)              | `.env`                          |
-| `DOWNLOAD_CONCURRENCY_PER_USER`     | api     | `2`                                 | `.env`                          |
-| `DOWNLOAD_DAILY_LIMIT_PER_USER`     | api     | `50`                                | `.env`                          |
-| `OCI_REGISTRY_ENABLED`              | api     | `false`                             | `.env`                          |
-| `OCI_REGISTRY_PORT`                 | api     | `18081`                             | literal                         |
-| `OCI_REGISTRY_SERVICE`              | api     | `oci.example.com`                   | `.env`                          |
-| `OCI_REGISTRY_REALM`                | api     | derived from `OCI_REGISTRY_SERVICE` | `.env` (dev compose only)       |
-| `OCI_BLOB_CACHE_DIR`                | api     | `/var/cache/bunyip-oci`             | literal                         |
-| `OCI_BLOB_CACHE_MAX_BYTES`          | api     | `53687091200` (50 GiB)              | `.env`                          |
-| `OCI_MANIFEST_CACHE_TTL_SECS`       | api     | `300`                               | `.env`                          |
-| `OCI_CONCURRENT_MANIFESTS_PER_USER` | api     | `2`                                 | `.env`                          |
-| `OCI_PULLS_PER_USER_PER_DAY`        | api     | `50`                                | `.env`                          |
-| `OCI_TOKEN_TTL_SECS`                | api     | `900`                               | `.env`                          |
-
-`OCI_REGISTRY_SERVICE` is required when the registry is enabled (startup fails fast if empty). Leave
-`OCI_REGISTRY_REALM` unset in production: pointing it at a localhost URL tells every docker client to fetch tokens from
-its own loopback.
-
-### Mokosh
-
-| Variable                | Read by | Default                     | Source                         |
-|-------------------------|---------|-----------------------------|--------------------------------|
-| `MOKOSH_BACKUP_API_URL` | api     | none (Backup stays a stub)  | `.env` via compose.dev-sso.yml |
-| `MOKOSH_WEBHOOK_URL`    | api     | none (registration skipped) | **not passed**                 |
-
-`MOKOSH_BACKUP_API_URL` (BUNYIP-356) enables the Backup add-on to call Mokosh's
-`/api/v1/data/{export,import}` with a short-lived, bunyip-minted Mokosh-audience
-`at+jwt`. `MOKOSH_WEBHOOK_URL` is written onto the `mokosh` row in `applications`
-at boot; unset leaves whatever the row already holds.
-
-### Let's Chat
-
-| Variable                              | Read by | Default                           | Source         |
-|---------------------------------------|---------|-----------------------------------|----------------|
-| `LETS_CHAT_REDIRECT_URIS`             | api     | none                              | **not passed** |
-| `LETS_CHAT_AUDIENCE`                  | api     | none                              | **not passed** |
-| `LETS_CHAT_POST_LOGOUT_REDIRECT_URIS` | api     | empty                             | **not passed** |
-| `LETS_CHAT_CLIENT_SECRET_HASH`        | api     | keeps the migration's shared hash | **not passed** |
-| `BUNYIP_COMMUNITY_URL`                | web     | empty (button hidden)             | `.env`         |
-
-The first two gate the boot-time upsert of the Let's Chat row in `oauth_clients`:
-with either unset, registration is skipped and logged, so an environment that never configured the client cannot
-resurface a stale row. All four honour the
-`{NAME}_FILE` convention. `BUNYIP_COMMUNITY_URL` (BUNYIP-329) is separate: it is the sidebar Community link in
-bunyip-web, and empty hides the button so a deploy without a Let's Chat instance never shows a dead link.
-
-### Update checker
-
-| Variable                    | Read by | Default               | Source                           |
-|-----------------------------|---------|-----------------------|----------------------------------|
-| `BUNYIP_UPDATE_CHECK_URL`   | api     | none (check disabled) | `.env`                           |
-| `BUNYIP_UPDATE_CHECK_TOKEN` | api     | none                  | secret file `update_check_token` |
-
-### GeoIP enrichment
-
-| Variable              | Read by | Default            | Source         |
-|-----------------------|---------|--------------------|----------------|
-| `IP2LOCATION_DB_PATH` | api     | none (feature off) | **not passed** |
-| `IP2PROXY_DB_PATH`    | api     | none (feature off) | **not passed** |
-
-Country resolution for login-location alerts (BUNYIP-366) and ASN / VPN enrichment (BUNYIP-437). Neither `.BIN` ships in
-the image, so a deployment must mount the files and pass the paths. Refresh procedure:
-[ip2-dataset-refresh.md](ip2-dataset-refresh.md).
-
-## 7. Bootstrap defaults for in-app settings
-
-Precedence for everything in this section is **const -> env -> DB row**. The env var seeds a fresh database; once an
-admin saves the setting the row wins and applies without a restart, and a wiped database falls back to the env value.
-**None of these is passed through by `compose.yml`**, so a deployment that wants a non-default seed must add it to the
-api service's `environment:` block.
-
-| Variable                             | Default    | Admin page        | DB table                               |
-|--------------------------------------|------------|-------------------|----------------------------------------|
-| `AUTO_BAN_ENABLED`                   | `true`     | Auto-ban settings | `auto_ban_config.enabled`              |
-| `AUTO_BAN_THRESHOLD`                 | `5`        | Auto-ban settings | `auto_ban_config.threshold`            |
-| `AUTO_BAN_WINDOW_SECS`               | `3600`     | Auto-ban settings | `auto_ban_config.window_secs`          |
-| `AUTO_BAN_DURATION_SECS`             | `86400`    | Auto-ban settings | `auto_ban_config.ban_duration_secs`    |
-| `RATE_LIMIT_{ACTION}_MAX_REQUESTS`   | per action | Rate Limits       | `rate_limit_configs.max_requests`      |
-| `RATE_LIMIT_{ACTION}_WINDOW_SECONDS` | per action | Rate Limits       | `rate_limit_configs.window_seconds`    |
-| `TIER_LIFETIME_SLOTS`                | `5`        | Pricing tiers     | `tier_config.lifetime_slots`           |
-| `TIER_EARLY_ADOPTER_SLOTS`           | `5`        | Pricing tiers     | `tier_config.early_adopter_slots`      |
-| `TIER_EARLY_ADOPTER_TRIAL_DAYS`      | `90`       | Pricing tiers     | `tier_config.early_adopter_trial_days` |
-| `TIER_STANDARD_TRIAL_DAYS`           | `30`       | Pricing tiers     | `tier_config.standard_trial_days`      |
-| `BUNYIP_BILLING_TRIAL_PERIOD_DAYS`   | `30`       | Stripe            | `stripe_config.trial_period_days`      |
-
-`{ACTION}` is the upper-cased name of each action in `RateLimitConfig::ALL`:
-`login`, `magic_link`, `password_reset`, `api_auth`, `api_unauth`, `registration`,
-`registration_non_prod`, `oci_token_failures`, `oci_token_throughput`,
-`two_factor_verify_failures`, `oci_token_ip_failures`, `oauth_token`,
-`oauth_authorize`, `oauth_userinfo`, `oauth_revoke`, `oauth_discovery`,
-`feedback_submit`, `smtp_test`. Either half may be set alone; an unparseable or non-positive value is ignored. Editing
-rate limits or banning an IP by hand is super-admin-only (BUNYIP-413).
-
-The email bootstrap defaults follow the same rule and are documented with the rest of the SMTP settings in section 6.
-
-## 8. Development, build and test only
-
-| Variable                                                       | Read by              | Purpose                                                                                                 |
-|----------------------------------------------------------------|----------------------|---------------------------------------------------------------------------------------------------------|
-| `EMAIL_LOG_TOKENS`                                             | api                  | log the full magic-link / reset URL at DEBUG when sending is off. Forced off in production (BUNYIP-204) |
-| `BUNYIP_SEED_ALLOW`                                            | seed binary          | must be `true`, and `ENVIRONMENT` must not be production, or the seeder refuses to run                  |
-| `BUNYIP_E2E_BOOTSTRAP_ALLOW`                                   | e2e bootstrap binary | same gate for the E2E fixture bootstrap                                                                 |
-| `BUNYIP_E2E_TOTP_SECRET`                                       | e2e bootstrap binary | base32 TOTP secret for `--enable-2fa`; needs the same `APP_ENCRYPTION_KEY` as the api                   |
-| `BUNYIP_GIT_SHA`                                               | api                  | build metadata surfaced by the version endpoint                                                         |
-| `HOST_UID`, `HOST_GID`, `CARGO_BUILD_JOBS`, `DUNITE_GIT_TOKEN` | compose / build      | see section 2                                                                                           |
-
-The E2E harness has its own `E2E_*` variables, documented in
-[e2e.md](e2e.md) and `e2e/README.md`. They configure the Playwright suite, not bunyip, and `E2E_STRIPE_SECRET_KEY` is
-the only Stripe-shaped name the build guard allows.
-
-## 9. Variables the app reads that compose does not pass
-
-Collected for auditing. Each is inert in the reference deployment until added to the api service's `environment:` block
-(or, for the two web entries, the web service's).
-
-| Variable                                                                   | Consequence of the gap                                                                                                       |
-|----------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|
-| `BUNYIP_WEBHOOK_SIGNING_SECRET`                                            | **api panics at boot in production.** Not in `compose.yml`'s `secrets:` block and not generated by `scripts/init-secrets.nu` |
-| `APP_URL`                                                                  | base URL for email links and the EHLO fallback silently comes from `CORS_ORIGIN`                                             |
-| `INFISICAL_*` (7)                                                          | the Group-2 runtime fetch cannot be enabled                                                                                  |
-| `APP_KEY_VERSION`                                                          | key rotation cannot stamp a new version                                                                                      |
-| `BUNYIP_WEB_ORIGIN`                                                        | multi-RP deployments cannot pin the login-UI origin                                                                          |
-| `BUNYIP_COOKIE_SHARED_DOMAIN`                                              | cross-subdomain OP session cookie cannot be enabled                                                                          |
-| `LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`                       | the two opt-in gates cannot be turned on                                                                                     |
-| `OIDC_*_TTL_SECONDS`, `OIDC_RS_AUDIENCE`, `OIDC_LIFECYCLE_EVENT_KEY`       | token lifetimes and identifiers are fixed at their defaults                                                                  |
-| `MOKOSH_WEBHOOK_URL`                                                       | the `applications.webhook_url` upsert never runs                                                                             |
-| `LETS_CHAT_*` (4)                                                          | the Let's Chat OAuth client is never registered from the environment                                                         |
-| `IP2LOCATION_DB_PATH`, `IP2PROXY_DB_PATH`                                  | GeoIP enrichment stays off                                                                                                   |
-| `AUTO_BAN_*`, `RATE_LIMIT_*`, `TIER_*`, `BUNYIP_BILLING_TRIAL_PERIOD_DAYS` | seeds for a fresh DB cannot be set; the admin UI is the only path                                                            |
-| `CSP_CONNECT_SRC`, `CSP_FORM_ACTION`, `BRAND_*` (web)                      | CSP additions and branding overrides are unavailable                                                                         |
-| `EMAIL_LOG_TOKENS`                                                         | dev-only; correctly absent from production                                                                                   |
-
-A deployment that runs its own compose file (the PSA hosts use the docker repo's per-host template, not this reference
-file) may already pass some of these. This table describes `compose.yml` in this repository.
-
-## 10. In-app settings (no environment variable)
-
-These are edited on the admin pages and stored in the database. They apply without a restart. Nothing here has an
-environment-variable equivalent unless the table says so.
+A populated column with `SECRETS_STORAGE=database` means the row is the live
+source, and Infisical holding nothing for that secret is the expected result
+rather than a misconfiguration. The database columns are `BYTEA`: AES-256-GCM
+ciphertext plus nonce under `APP_ENCRYPTION_KEY`.
+
+### What each store costs
+
+| Store           | Set from                         | Applies without a restart                     | Cons                                                                                                                                                                              |
+| --------------- | -------------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **database**    | admin Stripe / Email pages       | yes                                           | recoverable only with `APP_ENCRYPTION_KEY`; a restore under a rotated key needs `APP_ENCRYPTION_KEY_PREV` and a re-encrypt pass. The secrets share a backup with user data.        |
+| **environment** | secret file, edited on the host  | no: restart to pick up a new value            | **the admin UI cannot write it**, so those fields are read-only and every rotation is a host edit plus a restart.                                                                  |
+| **infisical**   | admin pages, or Infisical itself | only for changes made through the admin pages | a remote dependency in the save path, and a boot dependency when declared. The machine identity needs write access, not just read.                                                 |
+
+The read-only consequence of `environment` is structural, not a policy choice: a
+process cannot set an environment variable for its own next boot and
+`/run/secrets/*` is mounted read-only, so a save has nowhere to go. The admin
+form is read-only there because the alternative is worse, namely a handler that
+encrypts the value into a row nothing reads while the page reports success.
+
+### Changing the store
+
+Never by editing `SECRETS_STORAGE` and hoping. The pre-flight runs while the
+current deployment is healthy: `bunyip-api secrets-status`, then
+`secrets-migrate --to <target>`, then `secrets-status` again, then set
+`SECRETS_STORAGE`, restart, soak, and finally `secrets-purge --confirm`. The
+full runbook is in [`secrets-infisical.md`](secrets-infisical.md).
+
+Changing the Infisical **instance** (rather than the store) needs the database as
+a staging hop, because bunyip-api holds one set of `INFISICAL_*` values and can
+never see both instances at once. That procedure is tracked in BUNYIP-544 and
+belongs in the same runbook.
+
+## Feature-gating (one `WARN`, boot continues)
+
+| Variable                                | Gate                        | What is off without it                                       |
+| --------------------------------------- | --------------------------- | ------------------------------------------------------------ |
+| `APP_DATABASE_URL`                      | -                           | per-user RLS: reads fall back to the RLS-bypassing pool       |
+| `BUNYIP_APP_PASSWORD`                   | -                           | the unprivileged `bunyip_app` RLS role is not provisioned     |
+| `SETUP_DEFAULT_ADMIN`                   | -                           | no bootstrap admin is seeded                                  |
+| `BOOTSTRAP_ADMIN_EMAIL`                 | -                           | no account is auto-promoted to first admin / super admin      |
+| `TRUSTED_PROXY_CIDR`                    | -                           | forwarded client IPs are dropped (audit / rate limit see the proxy) |
+| `OIDC_ISSUER`                           | -                           | the whole OIDC provider: no RP can log in through bunyip      |
+| `FORGEJO_BASE_URL`                      | -                           | the distribution proxy has no upstream                        |
+| `FORGEJO_API_TOKEN`                     | -                           | downloads cannot authenticate to Forgejo                      |
+| `OCI_REGISTRY_ENABLED`                  | -                           | the OCI registry endpoint                                     |
+| `OCI_REGISTRY_SERVICE`                  | `OCI_REGISTRY_ENABLED`      | the registry token realm cannot be derived                    |
+| `SMTP_HOST`                             | -                           | transactional email (outside production, where it is required)|
+| `ADMIN_NOTIFICATION_EMAILS`             | `SMTP_HOST`                 | admin notifications have no recipient                         |
+| `IP2LOCATION_DB_PATH`                   | -                           | GeoIP enrichment on login-location alerts                     |
+| `IP2PROXY_DB_PATH`                      | -                           | ASN / VPN enrichment on login alerts                          |
+| `BUNYIP_UPDATE_CHECK_URL`               | -                           | the operator update checker                                   |
+| `BUNYIP_UPDATE_CHECK_TOKEN`             | `BUNYIP_UPDATE_CHECK_URL`   | authenticated access to a private release feed                |
+| `INFISICAL_ENABLED`                     | -                           | inspecting the Infisical store (`secrets-status` readiness)   |
+| `INFISICAL_ADDRESS`                     | `INFISICAL_ENABLED`         | the Infisical server address                                  |
+| `INFISICAL_PROJECT_ID`                  | `INFISICAL_ENABLED`         | the Infisical project                                         |
+| `INFISICAL_CLIENT_ID`                   | `INFISICAL_ENABLED`         | the Universal Auth machine identity                           |
+| `INFISICAL_CLIENT_SECRET`               | `INFISICAL_ENABLED`         | the Universal Auth machine-identity secret                    |
+| `MOKOSH_APPS_REDIRECT_URIS`             | -                           | the mokosh-apps OIDC client keeps the migration-seeded URIs   |
+| `MOKOSH_APPS_AUDIENCE`                  | -                           | the mokosh-apps OIDC client is not reconciled                 |
+| `MOKOSH_APPS_POST_LOGOUT_REDIRECT_URIS` | `MOKOSH_APPS_REDIRECT_URIS` | its post-logout redirect list is reconciled empty             |
+| `DRILLMARK_REDIRECT_URIS`               | -                           | the drillmark OIDC client keeps the migration-seeded URIs     |
+| `DRILLMARK_AUDIENCE`                    | -                           | the drillmark OIDC client is not reconciled                   |
+| `DRILLMARK_POST_LOGOUT_REDIRECT_URIS`   | `DRILLMARK_REDIRECT_URIS`   | its post-logout redirect list is reconciled empty             |
+| `LETS_CHAT_REDIRECT_URIS`               | -                           | the lets-chat OIDC client keeps the migration-seeded URIs     |
+| `LETS_CHAT_AUDIENCE`                    | -                           | the lets-chat OIDC client is not reconciled                   |
+| `LETS_CHAT_POST_LOGOUT_REDIRECT_URIS`   | `LETS_CHAT_REDIRECT_URIS`   | its post-logout redirect list is reconciled empty             |
+| `LETS_CHAT_CLIENT_SECRET_HASH`          | `LETS_CHAT_REDIRECT_URIS`   | the client keeps the migration's shared secret hash           |
+| `MOKOSH_WEBHOOK_URL`                    | -                           | `account_deleted` events are never dispatched to mokosh       |
+| `MOKOSH_BACKUP_API_URL`                 | -                           | account backup/restore falls back to the pending stub         |
+
+## Defaulted (no boot-time log)
+
+Every variable below has a working default; set it only to tune the deployment.
+
+- **Identity and transport**: `ENVIRONMENT` (unset means `production`),
+  `APP_NAME`, `APP_URL`, `HOST_IP`, `APP_PORT`, `RUST_LOG`, `CORS_ORIGIN`,
+  `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`, `BUNYIP_COOKIE_SHARED_DOMAIN`.
+- **At-rest keys**: `APP_ENCRYPTION_KEY_PREV`, `APP_KEY_VERSION` (see
+  [`encryption-key-rotation.md`](encryption-key-rotation.md)).
+- **Email**: `EMAIL_ENABLED`, `EMAIL_LOG_TOKENS`, `SMTP_PORT`, `SMTP_TLS`,
+  `SMTP_USERNAME`, `SMTP_EHLO_NAME`, `SMTP_FROM`.
+- **Governed secrets** (read only when `SECRETS_STORAGE=environment`, and only
+  as `{NAME}_FILE`): `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`,
+  `STRIPE_WEBHOOK_SECRET`.
+- **Abuse controls**: `AUTO_BAN_ENABLED`, `AUTO_BAN_THRESHOLD`,
+  `AUTO_BAN_WINDOW_SECS`, `AUTO_BAN_DURATION_SECS`, `LOGIN_APPROVAL_ENABLED`,
+  `SIGNUP_BOT_GUARD_ENABLED`.
+- **Rate limits**: `RATE_LIMIT_{ACTION}_MAX_REQUESTS` and
+  `RATE_LIMIT_{ACTION}_WINDOW_SECONDS`, one pair per action
+  (`crates/bunyip-domain/src/models/rate_limit.rs`). The names are built at
+  runtime from the action, so they are a family rather than inventory entries;
+  precedence is const -> env -> the `rate_limit_configs` DB row.
+- **Tiers and billing**: `TIER_LIFETIME_SLOTS`, `TIER_EARLY_ADOPTER_SLOTS`,
+  `TIER_EARLY_ADOPTER_TRIAL_DAYS`, `TIER_STANDARD_TRIAL_DAYS`,
+  `BUNYIP_BILLING_TRIAL_PERIOD_DAYS`.
+- **Distribution proxy**: `DOWNLOAD_CACHE_DIR`, `DOWNLOAD_CACHE_MAX_BYTES`,
+  `DOWNLOAD_CONCURRENCY_PER_USER`, `DOWNLOAD_DAILY_LIMIT_PER_USER`,
+  `FORGEJO_RELEASE_CACHE_TTL_SECS`.
+- **OCI registry**: `OCI_REGISTRY_PORT`, `OCI_REGISTRY_REALM`,
+  `OCI_BLOB_CACHE_DIR`, `OCI_BLOB_CACHE_MAX_BYTES`,
+  `OCI_MANIFEST_CACHE_TTL_SECS`, `OCI_CONCURRENT_MANIFESTS_PER_USER`,
+  `OCI_PULLS_PER_USER_PER_DAY`, `OCI_TOKEN_TTL_SECS`.
+- **OIDC**: `OIDC_JWT_PUBLIC_KEYS_DIR`, `OIDC_ACCESS_TOKEN_TTL_SECONDS`,
+  `OIDC_REFRESH_TOKEN_TTL_SECONDS`, `OIDC_REFRESH_IDLE_TTL_SECONDS`,
+  `OIDC_CODE_TTL_SECONDS`, `OIDC_LIFECYCLE_EVENT_KEY`, `OIDC_RS_AUDIENCE`.
+- **Infisical**: `INFISICAL_SECRET_PATH`, `INFISICAL_ENVIRONMENT`,
+  `INFISICAL_ENV` (legacy alias).
+- **Non-production tooling**: `BUNYIP_E2E_BOOTSTRAP_ALLOW`,
+  `BUNYIP_E2E_TOTP_SECRET`, `BUNYIP_SEED_ALLOW`, `BUNYIP_GIT_SHA`.
+
+## Secret files and compose coverage
+
+The reference `compose.yml` passes every required secret as a `{NAME}_FILE`
+secret, so `just init-secrets` followed by `docker compose up` boots on
+`ENVIRONMENT=production` with no manual step. `SECRETS_STORAGE` is the one
+required variable it passes with **no default** (`${SECRETS_STORAGE:?...}`), so
+`docker compose up` aborts until the deployment states where its integration
+secrets live. `compose.dev.yml` and `compose.dev-sso.yml` default it to
+`database`, which is what dev has always used, so `just dev` is unchanged. The
+secret files, their "empty allowed" status and the rotation procedure are in
+[`secrets-infisical.md`](secrets-infisical.md).
+
+The feature-gating variables are deliberately NOT all passed by `compose.yml`:
+a self-host with no Forgejo, no GeoIP data, no Infisical and no RPs is a
+supported deployment. Each one it omits produces the single boot warning above,
+which is how an operator tells "off because I chose so" from "off because I
+forgot".
+
+### The gaps, explicitly
+
+Every inventory entry the reference `compose.yml` does not pass through, so the
+gaps are visible instead of implied. Each is inert until added to the api
+service's `environment:` block. A deployment running its own compose file (the
+PSA hosts use the docker repo's per-host template) may already pass some of
+these; this table describes `compose.yml` in this repository.
+
+| Variable                                                                                     | Consequence of the gap                                                              |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`                                | deliberate: governed secrets, read only as `{NAME}_FILE` under `SECRETS_STORAGE=environment` |
+| `APP_URL`                                                                                    | the base URL for email links and the EHLO fallback silently comes from `CORS_ORIGIN` |
+| `INFISICAL_*` (7)                                                                            | the `infisical` store cannot be selected or inspected                                |
+| `BUNYIP_WEB_ORIGIN`                                                                          | a multi-RP deployment cannot pin the login-UI origin                                 |
+| `BUNYIP_COOKIE_SHARED_DOMAIN`                                                                | the cross-subdomain OP session cookie cannot be enabled                              |
+| `MOKOSH_APPS_*`, `DRILLMARK_*`, `LETS_CHAT_*`                                                | those OIDC clients keep whatever the migrations seeded; no reconciliation runs        |
+| `MOKOSH_WEBHOOK_URL`, `MOKOSH_BACKUP_API_URL`                                                | the `applications.webhook_url` upsert never runs; Backup stays a stub                |
+| `IP2LOCATION_DB_PATH`, `IP2PROXY_DB_PATH`                                                    | GeoIP and ASN / VPN enrichment stay off                                              |
+| `OCI_REGISTRY_REALM`                                                                         | the realm is always derived from `OCI_REGISTRY_SERVICE` (correct for production)     |
+| `OIDC_LIFECYCLE_EVENT_KEY`                                                                   | the lifecycle event key is fixed at its default                                      |
+| `BUNYIP_BILLING_TRIAL_PERIOD_DAYS`, `TIER_EARLY_ADOPTER_TRIAL_DAYS`                          | those bootstrap seeds cannot be set; the admin pages are the only path               |
+| `EMAIL_LOG_TOKENS`, `BUNYIP_E2E_BOOTSTRAP_ALLOW`, `BUNYIP_GIT_SHA`                           | dev and build-time only; correctly absent from a production deployment               |
+
+The bootstrap-default families are in the same position: `AUTO_BAN_*`,
+`RATE_LIMIT_{ACTION}_*` and the remaining `TIER_*` variables seed a fresh
+database and are not passed either, so on a deployed instance the admin pages are
+the only way to change them.
+
+bunyip-web's own variables (below) are passed by the `web` service, except
+`BRAND_THEME_CSS`, `BRAND_DESCRIPTION`, `CSP_CONNECT_SRC` and `CSP_FORM_ACTION`.
+
+## Settings that are not environment variables
+
+These live in the database, are edited on the admin pages, and apply without a
+restart. Nothing here has an environment-variable equivalent unless the table
+says so.
 
 ### Stripe (`stripe_config`, admin page: Stripe)
 
-Singleton row (`id = 1`). BUNYIP-482 removed every Stripe env var.
+Singleton row (`id = 1`).
 
-| Column                                    | Meaning                                                                                          |
-|-------------------------------------------|--------------------------------------------------------------------------------------------------|
-| `secret_key` + `secret_key_nonce`         | Stripe API secret key as AES-256-GCM ciphertext plus nonce (`BYTEA`), under `APP_ENCRYPTION_KEY` |
-| `webhook_secret` + `webhook_secret_nonce` | Stripe webhook signing secret (`whsec_...`), same encoding                                       |
-| `key_version`                             | which key in the set the row was written under                                                   |
-| `app_tag`                                 | Stripe app tag                                                                                   |
-| `success_url`, `cancel_url`               | checkout redirect targets. Unset defaults to the first `CORS_ORIGIN` entry                       |
-| `trial_period_days`                       | signup free trial, 0-365. Env seed: `BUNYIP_BILLING_TRIAL_PERIOD_DAYS`                           |
-| `price_id_personal`, `price_id_business`  | from the original table; no current code reads them (per-tier price ids live in `tier_config`)   |
+| Column                                    | Meaning                                                                                       |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `secret_key` + `secret_key_nonce`         | governed secret; ciphertext plus nonce when `SECRETS_STORAGE=database`                        |
+| `webhook_secret` + `webhook_secret_nonce` | governed secret; same encoding                                                                |
+| `key_version`                             | which key in the set the row was written under                                                |
+| `app_tag`                                 | Stripe app tag                                                                                |
+| `success_url`, `cancel_url`               | checkout redirect targets. Unset defaults to the first `CORS_ORIGIN` entry                    |
+| `trial_period_days`                       | signup free trial, 0-365. Env seed: `BUNYIP_BILLING_TRIAL_PERIOD_DAYS`                        |
+| `price_id_personal`, `price_id_business`  | from the original table; no current code reads them (per-tier ids live in `tier_config`)      |
 
 Unconfigured means payment is simply disabled. Test-mode walkthrough:
-[stripe-test-mode.md](stripe-test-mode.md).
+[`stripe-test-mode.md`](stripe-test-mode.md).
 
 ### Pricing tiers (`tier_config`, admin page: Pricing tiers)
 
-Singleton row. Slot counts and trial lengths have env seeds (section 7); the Stripe identifiers and the publish switch
-have **no env source at all**.
+Singleton row. Slot counts and trial lengths have env seeds; the Stripe
+identifiers and the publish switch have **no env source at all**.
 
-| Column                                                                              | Meaning                                                                   |
-|-------------------------------------------------------------------------------------|---------------------------------------------------------------------------|
-| `pricing_enabled`                                                                   | when false the public `/pricing` page 404s and every link to it is hidden |
-| `free_price_id`, `lifetime_price_id`, `early_adopter_price_id`, `standard_price_id` | Stripe price ids per tier                                                 |
-| `lifetime_product_id`, `early_adopter_product_id`, `standard_product_id`            | Stripe product ids per tier                                               |
-| `lifetime_slots`, `early_adopter_slots`                                             | capacity per tier. Env seeds exist                                        |
-| `early_adopter_trial_days`, `standard_trial_days`                                   | trial length per tier. Env seeds exist                                    |
+| Column                                                                                       | Meaning                                                                    |
+| -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `pricing_enabled`                                                                            | when false the public `/pricing` page 404s and every link to it is hidden   |
+| `free_price_id`, `lifetime_price_id`, `early_adopter_price_id`, `standard_price_id`          | Stripe price ids per tier                                                  |
+| `lifetime_product_id`, `early_adopter_product_id`, `standard_product_id`                     | Stripe product ids per tier                                                |
+| `lifetime_slots`, `early_adopter_slots`                                                      | capacity per tier. Env seeds exist                                         |
+| `early_adopter_trial_days`, `standard_trial_days`                                            | trial length per tier. Env seeds exist                                     |
 
 ### Email (`email_config`, admin page: Email)
 
-Singleton row; every column is nullable and a NULL column falls back to the matching environment variable per field.
-Column-to-variable mapping is in section 6. `smtp_password` is stored as ciphertext plus nonce with
-`key_version`, encrypted under `APP_ENCRYPTION_KEY`. There is no column for the EHLO name.
+Singleton row; every column is nullable and a NULL column falls back to the
+matching environment variable per field, except `smtp_password`, which is a
+governed secret and follows `SECRETS_STORAGE` rather than a fallback. There is no
+column for the EHLO name: `SMTP_EHLO_NAME` is deployment identity, not SMTP
+tuning (BUNYIP-507), so it stays env-only alongside the base URL.
 
 ### Auto-ban (`auto_ban_config`, admin page: Auto-ban settings)
 
-Singleton row: `enabled`, `threshold`, `window_secs`, `ban_duration_secs`. Every column has an env seed (section 7).
-Individual IPs are banned and lifted from the admin IP Bans screen, which is super-admin-only and takes effect on that
-address's next request.
+Singleton row: `enabled`, `threshold`, `window_secs`, `ban_duration_secs`. Every
+column has an env seed. Individual IPs are banned and lifted from the admin IP
+Bans screen, which is super-admin-only and takes effect on that address's next
+request.
 
 ### Rate limits (`rate_limit_configs`, admin page: Rate Limits)
 
 One row per action, keyed by the action name, with `max_requests` and
-`window_seconds`. A present row overrides both the constant and the env seed. Super-admin-only (BUNYIP-413).
+`window_seconds`. A present row overrides both the constant and the env seed.
+Super-admin-only (BUNYIP-413).
 
 ### Applications and OAuth clients
 
-| Table                                                                | Set from                                                   | Notes                                                                |
-|----------------------------------------------------------------------|------------------------------------------------------------|----------------------------------------------------------------------|
-| `applications.forgejo_owner`, `.forgejo_repo`, `.pinned_release_tag` | admin Applications page                                    | an app is downloadable only when all three are set                   |
-| `applications.webhook_url`                                           | admin Applications page                                    | also upserted at boot for the `mokosh` row from `MOKOSH_WEBHOOK_URL` |
-| `oauth_clients`                                                      | `just register-dev-clients`, migrations, boot-time upserts | the Let's Chat row is upserted from `LETS_CHAT_*` when those are set |
+| Table                                                              | Set from                                             | Notes                                                                       |
+| ------------------------------------------------------------------ | ---------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `applications.forgejo_owner`, `.forgejo_repo`, `.pinned_release_tag` | admin Applications page                              | an app is downloadable only when all three are set                          |
+| `applications.webhook_url`                                         | admin Applications page                              | also upserted at boot for the `mokosh` row from `MOKOSH_WEBHOOK_URL`        |
+| `oauth_clients`                                                    | migrations, boot-time reconciliation, `just register-dev-clients` | the `MOKOSH_APPS_*`, `DRILLMARK_*` and `LETS_CHAT_*` variables reconcile these rows |
 
 ### Per-user settings
 
-Two-factor enrolment (`user_totp`, encrypted under `APP_ENCRYPTION_KEY`), trusted devices, active sessions and
-notification preferences are per-user records managed from the member's own settings pages. They are product state, not
+Two-factor enrolment (`user_totp`, encrypted under `APP_ENCRYPTION_KEY`), trusted
+devices, active sessions and notification preferences are per-user records
+managed from the member's own settings pages. They are product state, not
 deployment configuration, and are listed here only so the boundary is explicit.
+
+## bunyip-web
+
+bunyip-web is a separate binary with its own configuration
+(`bunyip-web/src/config.rs`): `BUNYIP_BIND_ADDR`, `BUNYIP_API_URL`,
+`BUNYIP_API_PUBLIC_ORIGIN`, `BUNYIP_OIDC_ISSUER`, `BUNYIP_APP_DOMAIN`,
+`BUNYIP_COMMUNITY_URL`, `TRUSTED_PROXY_CIDR`, `APP_NAME`, `BRAND_THEME_CSS`,
+`BRAND_DESCRIPTION`, `CSP_CONNECT_SRC`, `CSP_FORM_ACTION`, `RUST_LOG`. Every one
+has a working default. It holds no secrets and reads none of the api variables
+above, so the api's inventory does not cover it.

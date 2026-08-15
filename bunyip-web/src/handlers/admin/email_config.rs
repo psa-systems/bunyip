@@ -9,6 +9,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::api::admin as admin_api;
+use crate::handlers::admin::secret_field_note;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::views::layout::{admin_block, admin_block_grid};
 use crate::views::ui::{button_class, error_box, icon, success_box};
@@ -51,12 +52,18 @@ pub(super) fn email_settings_content(
                                         }
                                     }
                                     div class="space-y-2" { label for="smtp_username" class="text-sm font-medium" { "SMTP username" } input id="smtp_username" name="smtp_username" value=(e.smtp_username) autocomplete="off" class=(dashboard_input()); }
-                                    div class="space-y-2" { label for="smtp_password" class="text-sm font-medium" { "SMTP password" } input id="smtp_password" name="smtp_password" type="password" autocomplete="new-password" placeholder=(if e.has_smtp_password { "••••••••" } else { "Not set" }) class=(dashboard_input()); p class="text-xs text-muted-foreground" {
+                                    div class="space-y-2" {
+                                        label for="smtp_password" class="text-sm font-medium" { "SMTP password" }
                                         // BUNYIP-432: the placeholder is a fixed-length mask driven only
                                         // by has_smtp_password; the real password (and its length) never
                                         // reaches the browser. Leave blank to keep the current one.
-                                        @if e.has_smtp_password { "A password is set (stored encrypted). Leave blank to keep it, or type a new one to replace it." } @else { "No password set. Stored encrypted when you save one." }
-                                    } }
+                                        // BUNYIP-542: in SECRETS_STORAGE=environment there is no writable
+                                        // store, so the field is read-only and names the file to edit.
+                                        input id="smtp_password" name="smtp_password" type="password" autocomplete="new-password" readonly[!e.smtp_password_editable] disabled[!e.smtp_password_editable] placeholder=(if e.has_smtp_password { "••••••••" } else { "Not set" }) class=(dashboard_input());
+                                        p class="text-xs text-muted-foreground" {
+                                            (secret_field_note(e.smtp_password_editable, &e.secrets_storage, e.has_smtp_password, "SMTP_PASSWORD", "smtp_password"))
+                                        }
+                                    }
                                 }
                             },
                         ),

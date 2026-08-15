@@ -15,9 +15,9 @@
 #      On a deployment the same secret files are supplied by the SOPS
 #      compose-secrets.yml (docker repo, per host); see docs/secrets-infisical.md.
 #      Group-1 secrets are never fetched from Infisical, so no Group-1 secret is
-#      fetched at runtime. Group-2 integration secrets (SMTP) are the exception:
-#      the app fetches them from Infisical at runtime, gracefully, so Infisical is
-#      never a boot dependency.
+#      fetched at runtime. The Group-2 integration secrets (SMTP password, the
+#      two Stripe secrets) come from the ONE store SECRETS_STORAGE declares, and
+#      only from that store (BUNYIP-542).
 #   3. docker login dev.a8n.run   (the images live in the private registry).
 #   4. docker compose up --detach
 #
@@ -34,8 +34,16 @@
 # never expose them (BUNYIP-38). The api reads each one via the {NAME}_FILE
 # convention with a fallback to {NAME} env vars for dev. Every secret file must
 # exist before compose starts; an EMPTY file means "not configured" (feature
-# off) for every secret except postgres_password and database_url, which must
-# be non-empty (postgres refuses to initialize with an empty password).
+# off) for the optional ones. These must be non-empty: postgres_password and
+# database_url (postgres refuses to initialize with an empty password), plus
+# jwt_secret, app_encryption_key and webhook_signing_secret, which the api
+# reports as startup errors and refuses to start without on ENVIRONMENT=production
+# (BUNYIP-537).
+#
+# Upgrading a deployment created before BUNYIP-537: create the new
+# ./secrets/webhook_signing_secret file (./scripts/init-secrets.nu generates it)
+# BEFORE `docker compose up`, or compose aborts because the secret file is
+# missing. On the docker hosts, add the value to the SOPS compose-secrets.yml.
 #
 # Resource naming follows the governance convention: bunyip-{service} for
 # containers/volumes/network (no dev- prefix in production).
@@ -60,6 +68,14 @@ secrets:
     file: ./secrets/app_database_url
   jwt_secret:
     file: ./secrets/jwt_secret
+  # BUNYIP-332: the HMAC-SHA256 secret that signs outbound webhook dispatches
+  # (account_deleted, maintenance_change, active_change). Separate from
+  # jwt_secret so a receiving RP verifies webhooks without holding bunyip's
+  # access-token signing key. The receiver holds the same value (mokosh-server:
+  # BUNYIP_WEBHOOK_SECRET). Must be non-empty: the api refuses to start in
+  # production without it (BUNYIP-537).
+  webhook_signing_secret:
+    file: ./secrets/webhook_signing_secret
   # BUNYIP-483: the ONE at-rest AES-256-GCM key, protecting the TOTP secrets
   # (user_totp), the Stripe credentials (stripe_config) and the SMTP password
   # (email_config). The Stripe API keys themselves are NOT secret files: they
@@ -132,8 +148,8 @@ services:
       # ══ Environmental ═════════════════════════════════════════════════════
       # `production` turns on the strict posture: email must resolve to enabled
       # or the api refuses to start (BUNYIP-204), a `dev-` OIDC kid panics at
-      # boot (BUNYIP-258), and JWT_SECRET / BUNYIP_WEBHOOK_SIGNING_SECRET have
-      # no dev fallback.
+      # boot (BUNYIP-258), and JWT_SECRET / BUNYIP_WEBHOOK_SIGNING_SECRET are
+      # reported as startup errors when unset (BUNYIP-537).
       ENVIRONMENT: ${ENVIRONMENT:-production}
       RUST_LOG: ${RUST_LOG:-info}
 
@@ -173,8 +189,20 @@ services:
       # Branding shown in the UI and in email subjects/templates.
       APP_NAME: ${APP_NAME:-PSA Systems}
 
+      # ══ Security: where the governed secrets live ═════════════════════════
+      # BUNYIP-542: which ONE store holds the governed integration secrets (the
+      # SMTP password and the two Stripe secrets): environment | database |
+      # infisical. No default on purpose - a deployment must state where its
+      # secrets live, because inferring it from what happens to be populated
+      # cannot tell a deliberate copy from a leftover one. `database` matches a
+      # deployment whose secrets were entered on the admin pages. Migration
+      # runbook: docs/secrets-infisical.md.
+      SECRETS_STORAGE: ${SECRETS_STORAGE:?SECRETS_STORAGE must be set to environment, database or infisical - no default (BUNYIP-542, see docs/configuration.md)}
+
       # ══ Security: at-rest + signing key material ══════════════════════════
       JWT_SECRET_FILE: /run/secrets/jwt_secret
+      # BUNYIP-332: signs outbound webhook dispatches. Required in production.
+      BUNYIP_WEBHOOK_SIGNING_SECRET_FILE: /run/secrets/webhook_signing_secret
       APP_ENCRYPTION_KEY_FILE: /run/secrets/app_encryption_key
       # Comma-separated hex keys still needed to read rows written under an
       # earlier key (rotation, or the BUNYIP-483 consolidation window). Empty
@@ -211,11 +239,11 @@ services:
       OIDC_JWT_PUBLIC_KEYS_DIR: /run/secrets/oidc
 
       # ══ Integration: email (SMTP) ═════════════════════════════════════════
-      # BOOTSTRAP DEFAULTS only. The email_config DB row (admin Email page)
-      # overrides these per field and applies without a restart (BUNYIP-351).
-      # SMTP_PASSWORD is deliberately absent: it is a Group-2 secret supplied by
-      # the DB row or the Infisical runtime fetch, never a compose secret
-      # (BUNYIP-525; see docs/secrets-infisical.md).
+      # The non-secret settings below are BOOTSTRAP DEFAULTS: the email_config
+      # DB row (admin Email page) overrides them per field and applies without a
+      # restart (BUNYIP-351). SMTP_PASSWORD is NOT among them: it is a governed
+      # secret, supplied by the ONE store SECRETS_STORAGE declares, never by a
+      # precedence chain (BUNYIP-542; see docs/secrets-infisical.md).
       EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-465}
@@ -277,6 +305,7 @@ services:
       - bunyip_app_password
       - app_database_url
       - jwt_secret
+      - webhook_signing_secret
       - app_encryption_key
       - setup_default_admin
       - forgejo_api_token

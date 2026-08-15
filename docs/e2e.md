@@ -261,8 +261,8 @@ first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODU
      not exist" is expected and irrelevant.
    - **Nothing creates it for you.** The E2E password is a test credential, kept
      in Infisical at `/bunyip/e2e`, separate from the application's own secrets
-     (Group-1 startup secrets live in the compose secrets file; Group-2 integration
-     secrets in Infisical `/runtime`; see
+     (Group-1 startup secrets live in the compose secrets file; the Group-2
+     integration secrets live in whichever store `SECRETS_STORAGE` declares; see
      [`secrets-infisical.md`](secrets-infisical.md)). It is provisioned by hand.
      The value is the shared password the bootstrap hashes onto BOTH
      accounts, so you CHOOSE it: pick a strong password, seed with it, then store

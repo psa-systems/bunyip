@@ -1021,6 +1021,14 @@ pub struct StripeConfigResponse {
     pub updated_at: Option<String>,
     #[serde(default)]
     pub source: String,
+    /// BUNYIP-542: the declared store for the two Stripe secrets
+    /// (`SECRETS_STORAGE`).
+    #[serde(default)]
+    pub secrets_storage: String,
+    /// Whether the two secret fields are editable. Defaults to `true` for the
+    /// same reason as `EmailConfigResponse::smtp_password_editable`.
+    #[serde(default = "default_true")]
+    pub secrets_editable: bool,
 }
 
 /// BUNYIP-416: a Stripe product surfaced in the admin Stripe panel. Mirrors
@@ -1143,6 +1151,16 @@ pub struct EmailConfigResponse {
     pub admin_notification_emails: Vec<String>,
     #[serde(default)]
     pub source: String,
+    /// BUNYIP-542: the declared store for the SMTP password
+    /// (`SECRETS_STORAGE`). Rendered so the page names the store that owns the
+    /// value; the non-secret settings are unaffected by it.
+    #[serde(default)]
+    pub secrets_storage: String,
+    /// Whether the password field is editable. Defaults to `true` so a response
+    /// from an api that predates the field keeps the form usable; the server is
+    /// the authority either way and answers 409 when the store is read-only.
+    #[serde(default = "default_true")]
+    pub smtp_password_editable: bool,
     #[serde(default)]
     pub updated_at: Option<String>,
     #[serde(default)]

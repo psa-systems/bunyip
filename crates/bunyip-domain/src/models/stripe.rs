@@ -100,9 +100,59 @@ pub struct StripeConfigResponse {
     /// "database" or "unconfigured" - indicates where the config came from
     /// (BUNYIP-482: env is no longer a source).
     pub source: String,
+    /// BUNYIP-542: the declared store for the two Stripe secrets
+    /// (`SECRETS_STORAGE`). The non-secret fields above are unaffected by it.
+    pub secrets_storage: String,
+    /// Whether the two secrets can be changed from the admin page. False in
+    /// `environment` mode, where there is no writable store.
+    pub secrets_editable: bool,
 }
 
 impl StripeConfigResponse {
+    /// BUNYIP-542: the admin read model built from the row's NON-SECRET columns
+    /// plus the two secret values as the DECLARED store holds them.
+    ///
+    /// The masked hints and the `has_*` booleans therefore describe the values
+    /// the running service actually uses, not whatever the database happens to
+    /// still hold in a mode that does not read it.
+    pub fn from_store(
+        config: &StripeConfig,
+        storage: crate::config::SecretsStorage,
+        secret_key: Option<&str>,
+        webhook_secret: Option<&str>,
+    ) -> Self {
+        Self {
+            secret_key_masked: secret_key.map(mask_secret),
+            webhook_secret_masked: webhook_secret.map(mask_secret),
+            has_secret_key: secret_key.is_some(),
+            has_webhook_secret: webhook_secret.is_some(),
+            app_tag: config.app_tag.clone().unwrap_or_else(Self::default_app_tag),
+            success_url: config
+                .success_url
+                .clone()
+                .unwrap_or_else(crate::services::stripe::default_success_url),
+            cancel_url: config
+                .cancel_url
+                .clone()
+                .unwrap_or_else(crate::services::stripe::default_cancel_url),
+            trial_period_days: config
+                .trial_period_days
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or_else(crate::services::stripe::trial_period_days_from_env),
+            updated_at: Some(config.updated_at),
+            source: if secret_key.is_some() || webhook_secret.is_some() {
+                storage.as_str().to_string()
+            } else {
+                "unconfigured".to_string()
+            },
+            secrets_storage: storage.as_str().to_string(),
+            secrets_editable: storage.is_writable(),
+        }
+    }
+
+    /// The `SECRETS_STORAGE=database` form of [`Self::from_store`]: decrypt the
+    /// row's own ciphertext columns. Only correct when the database IS the
+    /// declared store, so handlers go through `from_store`.
     pub fn from_db(config: &StripeConfig, key_set: &AppKeySet) -> Result<Self, AppError> {
         let secret_key_plain = match (&config.secret_key, &config.secret_key_nonce) {
             (Some(ct), Some(nonce)) => {
@@ -124,6 +174,8 @@ impl StripeConfigResponse {
             webhook_secret_masked: webhook_secret_plain.as_deref().map(mask_secret),
             has_secret_key: config.secret_key.is_some(),
             has_webhook_secret: config.webhook_secret.is_some(),
+            secrets_storage: crate::config::SecretsStorage::Database.as_str().to_string(),
+            secrets_editable: true,
             app_tag,
             // BUNYIP-351: resolved (DB-over-default) checkout knobs.
             success_url: config
@@ -146,7 +198,7 @@ impl StripeConfigResponse {
     /// BUNYIP-482: the admin read model for a deployment with nothing saved in
     /// `stripe_config`. No secret is set and the checkout knobs show the derived
     /// defaults the runtime would use.
-    pub fn unconfigured() -> Self {
+    pub fn unconfigured(storage: crate::config::SecretsStorage) -> Self {
         Self {
             secret_key_masked: None,
             webhook_secret_masked: None,
@@ -158,6 +210,8 @@ impl StripeConfigResponse {
             trial_period_days: crate::services::stripe::trial_period_days_from_env(),
             updated_at: None,
             source: "unconfigured".to_string(),
+            secrets_storage: storage.as_str().to_string(),
+            secrets_editable: storage.is_writable(),
         }
     }
 

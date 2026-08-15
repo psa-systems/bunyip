@@ -26,7 +26,7 @@ use bunyip_api::{
     },
     routes,
     services::{
-        stripe_config_from_db_model, unconfigured_stripe_config, AppBackupAdapter,
+        stripe_settings_from_db_model, unconfigured_stripe_config, AppBackupAdapter,
         AppDownloadCache, AuthService, BackupService, DownloadLimiter, EmailService,
         ForgejoAssetClient, GeoIpService, IpEnrichService, JwtConfig, JwtService,
         MokoshBackupAdapter, PasswordService, ReleaseCache, StripeService, TotpService,
@@ -51,21 +51,41 @@ async fn main() -> anyhow::Result<()> {
     // inject real environment). Must run before Config::from_env().
     let _ = dotenvy::dotenv();
 
-    // Load configuration
-    let mut config = Config::from_env()?;
-
-    // Initialize tracing/logging. The error-log buffer (BUNYIP-327) is created
-    // first so the capture layer can be wired into the subscriber; the same
-    // buffer is registered as app data below so the admin log view can read it.
+    // Initialize tracing/logging BEFORE the config loads (BUNYIP-537), so a
+    // configuration failure is reported as operator-facing log lines instead of
+    // vanishing: every warn/error raised while parsing the environment (missing
+    // required variables, invalid TRUSTED_PROXY_CIDR entries) predates the
+    // subscriber otherwise. RUST_LOG is read directly because `config.log_level`
+    // does not exist yet; it is the same read.
+    let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+    // The error-log buffer (BUNYIP-327) is created first so the capture layer
+    // can be wired into the subscriber; the same buffer is registered as app
+    // data below so the admin log view can read it.
     let error_log =
         bunyip_api::error_log::ErrorLogBuffer::new(bunyip_api::error_log::DEFAULT_CAPACITY);
-    init_tracing(&config.log_level, error_log.clone());
+    init_tracing(&log_level, error_log.clone());
+
+    // Load configuration. A missing or malformed required variable is reported
+    // as one error! line per variable (all of them, in this one run) and exits
+    // non-zero: an operator message, not a panic and a backtrace (BUNYIP-537).
+    let mut config = match Config::from_env() {
+        Ok(config) => config,
+        Err(e) => {
+            e.log_startup_report();
+            error!("Refusing to start: fix the configuration errors above and restart");
+            std::process::exit(1);
+        }
+    };
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
         environment = %config.environment,
         "Starting bunyip-api"
     );
+
+    // One warn! per optional variable whose absence turns a feature off, from
+    // the same inventory. Variables with a working default log nothing.
+    bunyip_domain::config::log_feature_gaps();
 
     // BUNYIP-476: make the trusted-proxy posture visible at boot. With no
     // trusted proxy, X-Forwarded-For is ignored and the socket peer is used - on
@@ -74,14 +94,12 @@ async fn main() -> anyhow::Result<()> {
     // attributed to bunyip-web instead of the real browser. That is safe but
     // silent, and is the "audit records a Docker IP" symptom; surface it so a
     // misconfiguration is diagnosable from the logs rather than the data.
+    // The unset case is reported once by the inventory warning above; an entry
+    // that is set but unparseable is reported by `parse_trusted_proxies`.
     if config.trusts_forwarded_client_ip() {
         info!(
             trusted_proxy_cidrs = config.trusted_proxies.len(),
             "TRUSTED_PROXY_CIDR set; forwarded client IPs (audit, access log, rate limit) resolve to the real client behind a trusted proxy"
-        );
-    } else {
-        tracing::warn!(
-            "TRUSTED_PROXY_CIDR is empty: X-Forwarded-For is not trusted, so SSR-proxied client IPs (audit actor_ip_address, access log, per-IP rate limit) are attributed to the bunyip-web peer, not the real browser. Set TRUSTED_PROXY_CIDR to include bunyip-web's network address. See docs/client-ip-forwarding.md."
         );
     }
 
@@ -100,11 +118,13 @@ async fn main() -> anyhow::Result<()> {
 
     // BUNYIP-483: `bunyip-api reencrypt-secrets` rewrites every at-rest secret
     // under the current APP_ENCRYPTION_KEY and exits, so an operator decides
-    // when the pass runs and can take a database backup first. Migrations stay
-    // owned by the server path below, so the subcommand runs against the schema
-    // a running deployment already has.
-    if let Some(subcommand) = std::env::args().nth(1) {
-        return run_subcommand(&subcommand, &pool, &config).await;
+    // when the pass runs and can take a database backup first. BUNYIP-542 adds
+    // the `secrets-*` pre-flight family. Migrations stay owned by the server
+    // path below, so a subcommand runs against the schema a running deployment
+    // already has.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(subcommand) = args.first() {
+        return run_subcommand(subcommand, &args[1..], &pool, &config).await;
     }
 
     // BUNYIP-79: heal the in-place-edited migration checksums before the
@@ -182,7 +202,8 @@ async fn main() -> anyhow::Result<()> {
             p
         }
         None => {
-            info!("APP_DATABASE_URL unset; self-service RLS pool falls back to the primary pool (RLS no-op)");
+            // The reason and the remedy come from the env inventory warning
+            // emitted at boot (BUNYIP-537), so this branch stays silent.
             pool.clone()
         }
     };
@@ -195,9 +216,15 @@ async fn main() -> anyhow::Result<()> {
     if let Some(setup_admin) = secret_env("SETUP_DEFAULT_ADMIN") {
         let admin_emails = UserRepository::find_admin_emails(&pool).await?;
         if admin_emails.is_empty() {
-            let (email, password) = setup_admin.split_once(':').unwrap_or_else(|| {
-                panic!("SETUP_DEFAULT_ADMIN must be in format 'email:password'");
-            });
+            let Some((email, password)) = setup_admin.split_once(':') else {
+                fatal_config_error(
+                    "SETUP_DEFAULT_ADMIN",
+                    "the value is not in the required `email:password` format, so no bootstrap \
+                     admin can be seeded",
+                    "Set SETUP_DEFAULT_ADMIN (or the setup_default_admin secret file) to \
+                     `email:password`, or unset it and use BOOTSTRAP_ADMIN_EMAIL instead.",
+                );
+            };
 
             let email = email.trim();
             let password = password.trim();
@@ -284,7 +311,14 @@ async fn main() -> anyhow::Result<()> {
     // unconfigured production deployment fails fast here.
     let jwt_secret = secret_env("JWT_SECRET").unwrap_or_else(|| {
         if config.is_production() {
-            panic!("JWT_SECRET must be set in production");
+            // Unreachable in practice: the startup audit (BUNYIP-537) already
+            // refused to build this Config. Kept as the defence in depth, and
+            // reported the same way: an operator message, not a panic.
+            fatal_config_error(
+                "JWT_SECRET",
+                "no signing key for session access/refresh tokens",
+                "Set JWT_SECRET_FILE=/run/secrets/jwt_secret (compose) or JWT_SECRET (dev .env).",
+            );
         }
         "development-secret-key-min-32-chars-long!".to_string()
     });
@@ -312,7 +346,15 @@ async fn main() -> anyhow::Result<()> {
     // dev/test falls back to a stable placeholder.
     let webhook_signing_secret = secret_env("BUNYIP_WEBHOOK_SIGNING_SECRET").unwrap_or_else(|| {
         if config.is_production() {
-            panic!("BUNYIP_WEBHOOK_SIGNING_SECRET must be set in production");
+            // Unreachable in practice (the startup audit already refused this
+            // Config); reported as an operator message, never a panic.
+            fatal_config_error(
+                "BUNYIP_WEBHOOK_SIGNING_SECRET",
+                "no HMAC key for outbound webhook dispatches",
+                "Set BUNYIP_WEBHOOK_SIGNING_SECRET_FILE=/run/secrets/webhook_signing_secret \
+                 (compose) or BUNYIP_WEBHOOK_SIGNING_SECRET (dev .env); `just init-secrets` \
+                 generates the secret file.",
+            );
         }
         "development-webhook-signing-secret-change-in-production".to_string()
     });
@@ -338,40 +380,53 @@ async fn main() -> anyhow::Result<()> {
     // guards the TOTP secrets, the Stripe secrets and the SMTP password.
     let app_key_set = config.app_key_set();
 
-    // BUNYIP-525: fetch the Group-2 SMTP password from Infisical at runtime
-    // (app-native, no CLI/sidecar). This feeds the SMTP_PASSWORD fallback slot
-    // (config.email.smtp_password, the secret_env slot) which sits BELOW the DB
-    // email_config row resolved just below, so an admin-set password still wins.
-    // It runs only when the env/file SMTP_PASSWORD is empty and Infisical is
-    // enabled; ANY failure yields None and boot proceeds (email degrades), so
-    // Infisical is never a boot dependency. This covers the no-DB-override path;
-    // EmailConfig::from_db_row rebuilds its own env fallback, so an admin who set
-    // other email_config columns but no password keeps the plain env value.
-    // A fully-lazy background fetch + EmailService::reload (mirroring PricingCache
-    // in handlers/pricing.rs) is a follow-on if the bounded ~5s boot delay is
-    // unwanted.
-    if config.infisical.enabled && config.email.smtp_password.is_empty() {
-        if let Some(client) =
-            bunyip_domain::services::InfisicalClient::from_settings(&config.infisical)
-        {
-            if let Some(password) = client.fetch_secret("SMTP_PASSWORD").await {
-                info!("Fetched SMTP_PASSWORD from Infisical (BUNYIP-525 Group-2 runtime secret)");
-                config.email.smtp_password = password;
-            }
+    // BUNYIP-542: read every governed integration secret from the ONE store
+    // SECRETS_STORAGE declares, and enforce the store declaration. The old
+    // three-level precedence chain (DB row, then the env slot, then a
+    // conditional Infisical fetch that filled the slot only when it was empty)
+    // is gone: which copy is live is now the operator's declaration.
+    //
+    // Infisical is contacted only when it IS the declared store, so `database`
+    // and `environment` deployments keep the property that Infisical is never a
+    // boot dependency. In `infisical` mode the read is deliberately fail-closed.
+    let infisical_probe = if config.secrets_storage == bunyip_api::config::SecretsStorage::Infisical
+    {
+        bunyip_api::secrets::InfisicalProbe::Inspect
+    } else {
+        bunyip_api::secrets::InfisicalProbe::Skip
+    };
+    let secret_survey =
+        bunyip_api::secrets::survey(&pool, &config, &app_key_set, infisical_probe).await?;
+    let fatal_secret_reports = bunyip_api::secrets::enforce(&secret_survey);
+    if !fatal_secret_reports.is_empty() {
+        for report in &fatal_secret_reports {
+            error!(env_var = "SECRETS_STORAGE", "{report}");
         }
+        error!("Refusing to start: fix the secret storage errors above and restart");
+        std::process::exit(1);
     }
+    info!(
+        secrets_storage = %config.secrets_storage,
+        "Governed integration secrets resolved from the declared store"
+    );
+    // The env-fallback EmailConfig carries the same resolved password, so both
+    // branches below agree on the one store's value.
+    let smtp_password = secret_survey
+        .value(bunyip_api::config::GovernedSecret::SmtpPassword)
+        .map(str::to_string);
+    config.email.smtp_password = smtp_password.clone().unwrap_or_default();
 
-    // Initialize Email service — prefer DB config (admin UI), fall back to env
-    // vars (BUNYIP-351). The SMTP password is decrypted with the application
-    // key set, so this must run after `app_key_set` is built. The auth service
-    // (built below) also holds the email service for BUNYIP-366 login-location
-    // alerts, so email is now wired ahead of auth.
+    // Initialize Email service: non-secret settings prefer the DB row (admin
+    // UI) and fall back to the environment (BUNYIP-351); the SMTP password
+    // comes from the declared store alone (BUNYIP-542). The auth service (built
+    // below) also holds the email service for BUNYIP-366 login-location alerts,
+    // so email is wired ahead of auth.
     let email_config = {
         use bunyip_api::repositories::EmailConfigRepository;
         match EmailConfigRepository::get(&pool).await {
             Ok(row) if EmailConfig::has_db_overrides(&row) => {
                 info!("Email config initialized from database");
-                EmailConfig::from_db_row(&row, &app_key_set, config.is_production())
+                EmailConfig::from_db_row(&row, smtp_password, config.is_production())
             }
             _ => {
                 info!("Email config initialized from environment variables");
@@ -383,9 +438,13 @@ async fn main() -> anyhow::Result<()> {
     // even when the effective config is resolved from the DB. The disabled path
     // suppresses transactional mail (magic links, resets), breaking auth flows.
     if config.is_production() && !email_config.enabled {
-        panic!(
-            "Email is disabled in a production deployment (resolved from DB + env). Refusing to \
-             start: configure SMTP via the admin UI or SMTP_HOST/EMAIL_ENABLED (BUNYIP-204)."
+        fatal_config_error(
+            "SMTP_HOST",
+            "email is disabled in a production deployment (resolved from the DB email_config row \
+             plus the environment), so magic links and password resets are never delivered \
+             (BUNYIP-204)",
+            "Configure SMTP on the admin Email page, or set SMTP_HOST / EMAIL_ENABLED in the api \
+             environment.",
         );
     }
     let email_enabled = email_config.enabled;
@@ -451,25 +510,40 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Auth service initialized");
 
-    // BUNYIP-482: the `stripe_config` DB row (admin Stripe page) is the only
-    // source. No row, or an undecryptable one, boots with Stripe disabled.
+    // BUNYIP-542: the non-secret Stripe settings (app tag, checkout URLs, trial
+    // length) still come from the `stripe_config` row, but the two secrets come
+    // from the declared store alone.
     let stripe_config = {
+        use bunyip_api::config::GovernedSecret;
         use bunyip_api::repositories::StripeConfigRepository;
-        match StripeConfigRepository::get(&pool).await {
-            Ok(db_config) if db_config.secret_key.is_some() => {
-                match stripe_config_from_db_model(&db_config, &app_key_set) {
-                    Ok(cfg) => {
-                        info!("Stripe service initialized from database config");
-                        cfg
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Failed to decrypt the saved Stripe config; starting with Stripe disabled. Re-enter the keys on the admin Stripe page.");
-                        unconfigured_stripe_config()
-                    }
-                }
+        // A row read failure is reported before it degrades to "Stripe
+        // disabled", so a broken query never reads as an unconfigured account.
+        let row = match StripeConfigRepository::get(&pool).await {
+            Ok(row) => Some(row),
+            Err(e) => {
+                error!(error = %e, "Failed to read stripe_config; starting with Stripe disabled");
+                None
+            }
+        };
+        let secret_key = secret_survey.value(GovernedSecret::StripeSecretKey);
+        match (&row, secret_key) {
+            (Some(row), Some(secret_key)) => {
+                // The non-secret columns come from the row in every mode; the
+                // two secrets come from the declared store alone.
+                let mut cfg = stripe_settings_from_db_model(row);
+                cfg.secret_key = secret_key.to_string();
+                cfg.webhook_secret = secret_survey
+                    .value(GovernedSecret::StripeWebhookSecret)
+                    .map(str::to_string)
+                    .unwrap_or(unconfigured_stripe_config().webhook_secret);
+                info!(
+                    secrets_storage = %config.secrets_storage,
+                    "Stripe service initialized with secrets from the declared store"
+                );
+                cfg
             }
             _ => {
-                info!("No Stripe config saved; starting with Stripe disabled (configure it on the admin Stripe page)");
+                info!("No Stripe secret key in the declared store; starting with Stripe disabled");
                 unconfigured_stripe_config()
             }
         }
@@ -625,27 +699,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize OIDC provider (optional — only when OIDC_ISSUER is set)
     let oidc_provider: Option<Arc<OidcProvider>> = if config.oidc.enabled() {
-        // BUNYIP-258: refuse to sign with a dev-named kid in production.
-        // The compose.yml `:?` markers stop a deploy that forgot to set
-        // OIDC_JWT_ACTIVE_KID outright; this guard catches the paste-error
-        // case where an operator filled the var with a leftover dev value
-        // (e.g. copying a staging .env into prod). Tokens minted under a
-        // `dev-*` kid would be advertised by JWKS and consumed by RPs as
-        // legitimate, masking the misconfiguration until rotation.
-        if config.is_production()
-            && config
-                .oidc
-                .jwt_active_kid
-                .to_ascii_lowercase()
-                .starts_with("dev-")
-        {
-            panic!(
-                "OIDC_JWT_ACTIVE_KID={} starts with `dev-` in production. \
-                 Set it to a production kid name (e.g. prod-2026) and \
-                 OIDC_JWT_PRIVATE_KEY_PATH to the matching prod key.",
-                config.oidc.jwt_active_kid
-            );
-        }
+        // BUNYIP-258's dev-kid guard is part of the startup audit in
+        // `Config::from_env` (BUNYIP-537), so a `dev-` kid in production never
+        // reaches this point.
         let key_set = OidcKeySet::load(
             &config.oidc.jwt_private_key_path,
             &config.oidc.jwt_active_kid,
@@ -1158,9 +1214,72 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Maintenance subcommands (BUNYIP-483). Anything but a known subcommand is an
-/// error rather than a silently-ignored argument.
+/// Maintenance subcommands (BUNYIP-483, BUNYIP-542). Anything but a known
+/// subcommand is an error rather than a silently-ignored argument.
 async fn run_subcommand(
+    subcommand: &str,
+    args: &[String],
+    pool: &sqlx::PgPool,
+    config: &Config,
+) -> anyhow::Result<()> {
+    use bunyip_api::config::SecretsStorage;
+    use bunyip_api::secrets;
+
+    // BUNYIP-542: the `secrets-*` family is the non-destructive pre-flight the
+    // operator runs on a HEALTHY deployment, before a cutover, instead of
+    // discovering a mistake as a crash loop after the old configuration stopped
+    // serving. Infisical is inspected when the deployment has it enabled, which
+    // is what makes "is `--to infisical` ready?" answerable.
+    let key_set = config.app_key_set();
+    let probe = if config.infisical.enabled || config.secrets_storage == SecretsStorage::Infisical {
+        secrets::InfisicalProbe::Inspect
+    } else {
+        secrets::InfisicalProbe::Skip
+    };
+
+    match subcommand {
+        "secrets-status" => {
+            let survey = secrets::survey(pool, config, &key_set, probe).await?;
+            let report = secrets::status_report(&survey);
+            if args.iter().any(|arg| arg == "--json") {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", secrets::render_status(&report));
+            }
+            Ok(())
+        }
+        "secrets-migrate" => {
+            let target = match args.iter().position(|arg| arg == "--to") {
+                Some(idx) => args.get(idx + 1).and_then(|raw| SecretsStorage::parse(raw)),
+                None => None,
+            };
+            let Some(target) = target else {
+                anyhow::bail!(
+                    "secrets-migrate needs --to <{}>",
+                    SecretsStorage::LEGAL_VALUES
+                );
+            };
+            let survey = secrets::survey(pool, config, &key_set, probe).await?;
+            let dry_run = args.iter().any(|arg| arg == "--dry-run");
+            let summary =
+                secrets::run_migration(pool, config, &key_set, &survey, target, dry_run).await?;
+            print!("{summary}");
+            Ok(())
+        }
+        "secrets-purge" => {
+            let survey = secrets::survey(pool, config, &key_set, probe).await?;
+            let confirm = args.iter().any(|arg| arg == "--confirm");
+            let summary = secrets::run_purge(pool, config, &survey, confirm).await?;
+            print!("{summary}");
+            Ok(())
+        }
+        other => run_reencrypt_subcommand(other, pool, config).await,
+    }
+}
+
+/// The BUNYIP-483 re-encryption pass, split out so the subcommand table above
+/// reads as one match.
+async fn run_reencrypt_subcommand(
     subcommand: &str,
     pool: &sqlx::PgPool,
     config: &Config,
@@ -1182,7 +1301,10 @@ async fn run_subcommand(
             }
             Ok(())
         }
-        other => anyhow::bail!("unknown subcommand {other:?} (known: reencrypt-secrets)"),
+        other => anyhow::bail!(
+            "unknown subcommand {other:?} (known: reencrypt-secrets, secrets-status, \
+             secrets-migrate, secrets-purge)"
+        ),
     }
 }
 
@@ -1213,10 +1335,8 @@ async fn upsert_spa_oidc_client(
     let (Some(redirect_uris), Some(audience)) =
         (secret_env(redirect_uris_var), secret_env(audience_var))
     else {
-        info!(
-            client = name,
-            "SPA OIDC client redirect/audience env vars unset, skipping registration"
-        );
+        // Silent here: the env inventory warns once at boot for each of this
+        // client's variables, so the message lives in one place (BUNYIP-537).
         return Ok(());
     };
     // Optional: a client with no post-logout URIs upserts an empty array.
@@ -1304,7 +1424,8 @@ async fn upsert_lets_chat_oidc_client(pool: &sqlx::PgPool) -> anyhow::Result<()>
         secret_env("LETS_CHAT_REDIRECT_URIS"),
         secret_env("LETS_CHAT_AUDIENCE"),
     ) else {
-        info!("lets-chat OIDC client redirect/audience env vars unset, skipping registration");
+        // Silent here: the env inventory warns once at boot for each of the two
+        // variables, so the message lives in exactly one place (BUNYIP-537).
         return Ok(());
     };
     let post_logout = secret_env("LETS_CHAT_POST_LOGOUT_REDIRECT_URIS").unwrap_or_default();
@@ -1380,7 +1501,7 @@ async fn upsert_lets_chat_oidc_client(pool: &sqlx::PgPool) -> anyhow::Result<()>
 /// hub on a bad seed.
 async fn upsert_mokosh_webhook_url(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     let Some(url) = secret_env("MOKOSH_WEBHOOK_URL") else {
-        info!("MOKOSH_WEBHOOK_URL unset, skipping mokosh webhook_url registration");
+        // Silent here: the env inventory warns once at boot (BUNYIP-537).
         return Ok(());
     };
 
@@ -1411,6 +1532,23 @@ async fn upsert_mokosh_webhook_url(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Report a configuration error that only surfaces after the config has loaded
+/// (a malformed value, or a feature resolved from the database), then exit
+/// non-zero (BUNYIP-537).
+///
+/// Same operator-facing shape as [`ConfigError::log_startup_report`]: one
+/// `tracing::error!` naming the variable, the reason and the remedy. Never a
+/// `panic!`, which prints a panic location and exits 101, reading as a bug
+/// rather than as a configuration error.
+fn fatal_config_error(env_var: &str, reason: &str, remedy: &str) -> ! {
+    error!(
+        env_var,
+        "Startup configuration error: {env_var} is not usable - {reason}. {remedy}"
+    );
+    error!("Refusing to start: fix the configuration error above and restart");
+    std::process::exit(1);
 }
 
 /// Initialize tracing subscriber with compact human-readable output, plus the
