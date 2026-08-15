@@ -1,9 +1,12 @@
 # Application secrets
 
 bunyip's secrets split by whether the app needs them to boot. **Group-1** startup
-secrets are file/SOPS-based and provided directly; **Group-2** integration secrets
-are fetched by the app from Infisical at runtime. Only Group-2 uses Infisical.
-`CLAUDE.md`'s "Secret sourcing (two tiers)" bullet is the one-paragraph summary.
+secrets are file/SOPS-based and provided directly. **Group-2** integration
+secrets come from the ONE store the deployment declares in `SECRETS_STORAGE`
+(BUNYIP-542): `environment`, `database` or `infisical`. `CLAUDE.md`'s "Secret
+sourcing (two tiers)" bullet is the one-paragraph summary; the enforcement table
+and the per-mode write behaviour are in
+[`configuration.md`](configuration.md#secrets_storage-where-the-integration-secrets-live-bunyip-542).
 
 ## Group-1: startup secrets (files / SOPS, not Infisical)
 
@@ -49,9 +52,13 @@ Create it (`just init-secrets` on a self-host, or add the value to the SOPS
 or compose aborts on the missing secret file. The receiving app holds the same
 value: mokosh-server reads it as `BUNYIP_WEBHOOK_SECRET`.
 
-`SMTP_PASSWORD` is deliberately absent: it is Group-2-only (BUNYIP-529), from the
-`/runtime` Infisical fetch or a DB `email_config` row (below). `./secrets/oidc/*.pem`
-is out of scope: the OIDC signing keys are generated out of band.
+`SMTP_PASSWORD` is deliberately absent from the table above: it is a Group-2
+governed secret, so it comes from whichever store `SECRETS_STORAGE` declares. A
+deployment running `SECRETS_STORAGE=environment` adds `smtp_password`,
+`stripe_secret_key` and `stripe_webhook_secret` as ordinary compose secrets and
+passes them as `{NAME}_FILE`; nothing else changes about how they are provided.
+`./secrets/oidc/*.pem` is out of scope: the OIDC signing keys are generated out
+of band.
 
 ### Rotating a Group-1 secret
 
@@ -70,19 +77,26 @@ more than that:
   `APP_KEY_VERSION` and the admin key-health endpoints, is in
   [`encryption-key-rotation.md`](encryption-key-rotation.md).
 
-## Group-2: runtime fetch (Infisical)
+## Group-2: the governed integration secrets
 
-bunyip-api itself fetches the secret from Infisical at boot, in Rust
+Three secrets are **governed** by `SECRETS_STORAGE`, because each has more than
+one possible store: `SMTP_PASSWORD`, `STRIPE_SECRET_KEY` and
+`STRIPE_WEBHOOK_SECRET`. The declared store is the only one bunyip reads. There
+is no precedence chain and no fallback.
+
+bunyip-api reads the Infisical store itself, in Rust
 (`crates/bunyip-domain/src/services/infisical.rs`, BUNYIP-525), using a Universal
-Auth machine identity and reading the `/runtime` folder. There is no CLI and no
-sidecar. Today the only Group-2 secret is `SMTP_PASSWORD`; more post-startup
-integration secrets can follow the same path.
+Auth machine identity against the `/runtime` folder. There is no CLI and no
+sidecar.
 
-The fetch is **graceful**: any failure (Infisical unreachable, bad credentials,
-missing key) leaves the secret unset and logs a warning, so the app always starts.
-Infisical is never a boot dependency, which is why SMTP (a post-startup
-integration, not needed to boot) is Group-2 while postgres/JWT/encryption keys stay
-Group-1.
+Whether Infisical is a boot dependency is now **mode-scoped**:
+
+- `SECRETS_STORAGE=database` / `environment`: Infisical is **not contacted at
+  boot at all**, so it can never delay or block a restart.
+- `SECRETS_STORAGE=infisical`: the read is **fail-closed**. An unreachable
+  Infisical, bad credentials or a failed read logs one `ERROR` and exits 1. An
+  operator who declared Infisical the store of record is better served by a
+  refusal than by a silent boot with email and payments disabled.
 
 ### Infisical folder layout
 
@@ -93,7 +107,7 @@ Only Group-2 (and the separate E2E credential) live in Infisical. Paths are
 ```
 bunyip (project)
 ├── staging
-│   ├── /runtime      <- Group-2 runtime fetch (SMTP_PASSWORD)
+│   ├── /runtime      <- the governed secrets (SMTP_PASSWORD, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET)
 │   └── /bunyip/e2e   <- the E2E account password (docs/e2e.md)
 └── prod
     └── /runtime
@@ -108,7 +122,7 @@ credentials) lives in the SOPS `compose-secrets.yml`.
 
 | Env var                   | Secret? | How read     | Default | Meaning                                                   |
 | ------------------------- | ------- | ------------ | ------- | --------------------------------------------------------- |
-| `INFISICAL_ENABLED`       | no      | plain env    | `false` | master switch; the fetch runs only when `true`            |
+| `INFISICAL_ENABLED`       | no      | plain env    | `false` | whether the Infisical store is inspected outside `SECRETS_STORAGE=infisical` (which always inspects it) |
 | `INFISICAL_ADDRESS`       | no      | plain env    | `""`    | Infisical base URL (e.g. `https://infisical.a8n.systems`) |
 | `INFISICAL_PROJECT_ID`    | no      | plain env    | `""`    | the Infisical project (workspace) id                      |
 | `INFISICAL_ENVIRONMENT`   | no      | plain env    | `""`    | environment slug (`staging`/`prod`); legacy `INFISICAL_ENV` |
@@ -118,48 +132,80 @@ credentials) lives in the SOPS `compose-secrets.yml`.
 
 The two credentials go through `secret_env`, so they honour the `{NAME}_FILE`
 convention and can themselves be Group-1 file secrets. If either credential is
-empty the client is not built and the fetch is skipped (fail-open). The machine
-identity needs Universal Auth and read access to `INFISICAL_SECRET_PATH`
-(`/runtime`) in the target environment.
+empty the client is not built: in `database` / `environment` mode that is
+harmless (Infisical is not read), and in `infisical` mode it is a fatal startup
+error naming the missing variables.
 
-### Source precedence
+### Access the machine identity needs
 
-For a Group-2 secret that also has a config slot (`SMTP_PASSWORD` is the current
-example), the value the app uses is resolved in this order, highest first:
+| Mode this deployment runs | Required access to `INFISICAL_SECRET_PATH` |
+| --- | --- |
+| any mode, reading only | **read** |
+| `infisical`, admin pages saving secrets | **write** as well |
+| any mode, running `secrets-migrate --to infisical` | **write** as well |
 
-1. The **database row**, when the feature stores one (`email_config.smtp_password`,
-   set from the admin UI). This wins outright.
-2. A **plain `SMTP_PASSWORD` env var**, read via `secret_env("SMTP_PASSWORD")`.
-   Since BUNYIP-529 `SMTP_PASSWORD` is no longer a Group-1 file secret (it is gone
-   from `compose.yml`), so this slot is normally empty; a leftover value in a
-   deployment's SOPS `compose-secrets.yml` is the one thing that still shadows the
-   fetch.
-3. The **Group-2 Infisical fetch**.
+Write access is what BUNYIP-542 adds to the requirement: the admin Stripe and
+Email pages upsert through the v3 raw-secrets endpoint, and a read-only identity
+fails the save with a 502 naming the missing scope. Grant it in the Infisical
+project's machine-identity settings for the target environment.
 
-The fetch fills the slot **only when it is empty** (`bunyip-api/src/main.rs` gates
-it on `config.infisical.enabled && config.email.smtp_password.is_empty()`). With no
-`email_config` DB row and no stray env value, Infisical is the source. If email
-unexpectedly does not use Infisical, look for an `email_config` DB row or a
-lingering `SMTP_PASSWORD` in the deployment's SOPS `compose-secrets.yml`.
+## Migration runbook: changing `SECRETS_STORAGE`
 
-### Validating a fetch
+Never change the variable and restart to see what happens. Under
+`restart: unless-stopped` a wrong declaration is a crash loop, discovered only
+after the old configuration stopped serving. The pre-flight runs against the
+CURRENT, healthy deployment.
 
-With `INFISICAL_ENABLED=true`, the credentials set, and no stray env/DB value, the
-boot log shows:
+Each step is `docker compose exec api bunyip-api <subcommand>` (or
+`docker compose run --rm api <subcommand>`). None of them prints a secret value.
 
-```
-Fetched SMTP_PASSWORD from Infisical (BUNYIP-525 Group-2 runtime secret)
-```
+1. **`bunyip-api secrets-status`** (add `--json` for machine output). Read-only.
+   For each governed secret it reports which stores hold a value, which one is
+   live under the current mode, and a readiness verdict for each candidate mode.
+   Run this first, with nothing at risk.
 
-Its absence, with the feature enabled, means the slot was already filled: look for
-a lingering `SMTP_PASSWORD` in the SOPS `compose-secrets.yml` or a DB `email_config`
-row.
+2. **`bunyip-api secrets-migrate --to <mode> [--dry-run]`**. Copies each governed
+   secret from its current live source into the target store, leaving the source
+   copy in place. `--dry-run` prints the plan and writes nothing.
+   - `--to database` writes the encrypted columns.
+   - `--to infisical` upserts each key (needs the write scope above).
+   - `--to environment` cannot write, so it emits the exact `{NAME}_FILE` entries
+     and `./secrets/*` paths to create; `secrets-status` verifies them afterwards.
 
-## Troubleshooting (Group-2 fetch)
+3. **`bunyip-api secrets-status`** again. Every governed secret must read `ready`
+   for the target mode.
+
+4. **Set `SECRETS_STORAGE=<mode>` and restart.** The boot log names the declared
+   store, plus one `WARN` per copy still sitting outside it.
+
+5. **Soak.** The old copies are untouched, so a wrong value is a rollback (set
+   `SECRETS_STORAGE` back and restart), not an outage. This is exactly why the
+   cutover does not delete anything.
+
+6. **`bunyip-api secrets-purge --confirm`**. Removes the copies outside the
+   declared store. It refuses to run unless the declared store holds every
+   governed secret, and it is never invoked automatically. The `environment`
+   store cannot be written from the app, so its copies are reported as the
+   `{NAME}_FILE` entries for the operator to remove.
+
+Staging is migrated and soaked before production is touched.
+
+### Restart versus hot-apply
+
+A secret changed through the admin pages hot-applies (the write-through reloads
+the email or Stripe service). A value changed directly in Infisical, or in a
+secret file, needs a bunyip-api restart, because the boot read is the only
+reader.
+
+## Troubleshooting
 
 | Symptom | Cause |
 | --- | --- |
-| Boot warn, `infisical login failed` | Wrong `INFISICAL_CLIENT_ID` / `_CLIENT_SECRET`, or the identity lacks Universal Auth on `INFISICAL_ADDRESS`. Graceful: the app still starts. |
-| Boot warn on the secret read, HTTP 404 | The key is not at the queried project/env/path: check `INFISICAL_SECRET_PATH`, `INFISICAL_ENVIRONMENT`, `INFISICAL_PROJECT_ID`, and that the key exists there. The v3 endpoint is confirmed correct on infisical.a8n.systems (401 unauthenticated), so a 404 is a lookup mismatch, not an API-version issue. |
-| Feature enabled but no "Fetched ..." log line | The slot was already non-empty; a stray `SMTP_PASSWORD` env value or a DB `email_config` row won. Remove the stray value to use Infisical. |
-| App starts, email off, boot warn about Infisical | Infisical unreachable or the key absent in `/runtime`. Graceful by design; the app boots and email stays off until the fetch succeeds on a later restart. |
+| Boot `ERROR`: `SECRETS_STORAGE is not usable` | Unset or not one of `environment` / `database` / `infisical`. Set it; `database` matches a deployment whose secrets were entered on the admin pages. |
+| Boot `ERROR`: `<SECRET> is absent from the declared <X> store but present in the <Y> store` | The copy lives in a store this deployment does not read. Run `secrets-migrate --to <X>`, or declare `<Y>`. |
+| Boot `WARN`: `<SECRET> is also stored in the <Y> store` | A leftover copy. Harmless today, live if the mode ever changes to `<Y>`. Clear it with `secrets-purge --confirm`. |
+| Boot `WARN`: `<SECRET> is not set in the declared store` | No store holds it; the named feature is off. Set it on the admin page or migrate it in. |
+| Boot `ERROR`: Infisical `could not be read` in `infisical` mode | Fail-closed by design. Wrong `INFISICAL_CLIENT_ID` / `_CLIENT_SECRET`, no Universal Auth on `INFISICAL_ADDRESS`, or the instance is unreachable. |
+| Infisical read returns HTTP 404 for a key | The key is not at the queried project/env/path: check `INFISICAL_SECRET_PATH`, `INFISICAL_ENVIRONMENT` and `INFISICAL_PROJECT_ID`. The v3 endpoint is confirmed correct on infisical.a8n.systems (401 unauthenticated), so a 404 is a lookup mismatch, not an API-version issue. |
+| Admin save fails with "Could not write ... to Infisical" | The machine identity lacks **write** access to `INFISICAL_SECRET_PATH`. Nothing was saved and nothing was reloaded. |
+| Admin secret field is read-only, save returns 409 | `SECRETS_STORAGE=environment`. There is no writable store: edit the file `{NAME}_FILE` points at and restart. |

@@ -52,6 +52,41 @@ use crate::api::types::User;
 use crate::auth::AuthCtx;
 use crate::web::redirect_cookies;
 
+/// BUNYIP-542: the help line under a governed secret field.
+///
+/// In a writable store (`database`, `infisical`) it is the usual "leave blank to
+/// keep it" note. In `environment` mode the field is read-only, so the note
+/// names the store that owns the value and the file to edit instead: without it
+/// an admin types a key into a form whose save lands nowhere.
+pub(super) fn secret_field_note(
+    editable: bool,
+    storage: &str,
+    has_value: bool,
+    env_name: &str,
+    secret_file: &str,
+) -> String {
+    if !editable {
+        return format!(
+            "Owned by the {storage} store (SECRETS_STORAGE={storage}), which bunyip cannot write. \
+             Edit the file {env_name}_FILE points at (./secrets/{secret_file}) and restart \
+             bunyip-api. Saving here returns a conflict."
+        );
+    }
+    let store = if storage.is_empty() {
+        "declared"
+    } else {
+        storage
+    };
+    if has_value {
+        format!(
+            "A value is set in the {store} store. Leave blank to keep it, or type a new one to \
+             replace it."
+        )
+    } else {
+        format!("No value set. Saved to the {store} store.")
+    }
+}
+
 /// Page number plus the tier filter, shared by every paginated admin list
 /// (BUNYIP-291 AC4).
 #[derive(Deserialize)]

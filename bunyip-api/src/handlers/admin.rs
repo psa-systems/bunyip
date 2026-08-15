@@ -29,9 +29,8 @@ use crate::repositories::{
 };
 use crate::responses::{created, get_request_id, paginated, success, success_no_data};
 use crate::services::{
-    stripe_config_from_db_model, stripe_err, AppDownloadCache, AppKeySet, AuthService,
-    EmailService, JwtService, PasswordService, ReleaseCache, StripeService, TotpService,
-    WebhookService,
+    stripe_err, AppDownloadCache, AppKeySet, AuthService, EmailService, JwtService,
+    PasswordService, ReleaseCache, StripeService, TotpService, WebhookService,
 };
 use crate::validation;
 use bunyip_domain::services::{BunyipEvent, EventBus};
@@ -2005,36 +2004,46 @@ pub struct UpdateStripeConfigRequest {
 }
 
 /// GET /v1/admin/stripe
-/// Returns the current Stripe config with secrets masked. BUNYIP-482: the DB
-/// row is the only source; with nothing saved it reports the unconfigured
-/// state plus the derived checkout defaults.
+/// Returns the current Stripe config with secrets masked. BUNYIP-542: the
+/// non-secret columns come from the DB row; the two secrets come from the store
+/// `SECRETS_STORAGE` declares, so the masked hints describe what the running
+/// service uses rather than what the database happens to still hold.
 pub async fn get_stripe_config(
     req: HttpRequest,
     _admin: AdminUser,
     pool: web::Data<PgPool>,
+    config: web::Data<Config>,
     app_key_set: web::Data<AppKeySet>,
 ) -> Result<HttpResponse, AppError> {
+    use crate::config::GovernedSecret;
+
     let request_id = get_request_id(&req);
 
     let db = StripeConfigRepository::get(&pool).await?;
+    let secret_key = crate::secrets::read_secret(
+        &pool,
+        &config,
+        &app_key_set,
+        GovernedSecret::StripeSecretKey,
+    )
+    .await?;
+    let webhook_secret = crate::secrets::read_secret(
+        &pool,
+        &config,
+        &app_key_set,
+        GovernedSecret::StripeWebhookSecret,
+    )
+    .await?;
 
-    let response = if db.secret_key.is_some() || db.webhook_secret.is_some() {
-        match StripeConfigResponse::from_db(&db, &app_key_set) {
-            Ok(resp) => resp,
-            Err(_) => {
-                tracing::warn!(
-                    "Stripe secrets could not be decrypted (encryption key may have changed). \
-                     Clearing stale encrypted secrets from database."
-                );
-                StripeConfigRepository::clear_secrets(&pool).await?;
-                StripeConfigResponse::unconfigured()
-            }
-        }
-    } else {
-        StripeConfigResponse::unconfigured()
-    };
-
-    Ok(success(response, request_id))
+    Ok(success(
+        StripeConfigResponse::from_store(
+            &db,
+            config.secrets_storage,
+            secret_key.as_deref(),
+            webhook_secret.as_deref(),
+        ),
+        request_id,
+    ))
 }
 
 /// PUT /v1/admin/stripe
@@ -2044,16 +2053,36 @@ pub async fn update_stripe_config(
     req: HttpRequest,
     admin: AdminUser,
     pool: web::Data<PgPool>,
+    config: web::Data<Config>,
     app_key_set: web::Data<AppKeySet>,
     stripe_service: web::Data<Arc<StripeService>>,
     pricing_cache: web::Data<Arc<crate::handlers::PricingCache>>,
     body: web::Json<UpdateStripeConfigRequest>,
 ) -> Result<HttpResponse, AppError> {
+    use crate::config::{GovernedSecret, SecretsStorage};
+
     let request_id = get_request_id(&req);
 
     // Treat empty strings the same as None — user left the field blank
     let secret_key_plain = body.secret_key.as_deref().filter(|s| !s.is_empty());
     let webhook_secret_plain = body.webhook_secret.as_deref().filter(|s| !s.is_empty());
+
+    // BUNYIP-542: the two secrets are written to the ONE declared store. The
+    // non-secret fields below (app tag, checkout URLs, trial length) stay
+    // editable in every mode.
+    let storage = config.secrets_storage;
+    if !storage.is_writable() {
+        if secret_key_plain.is_some() {
+            return Err(crate::secrets::read_only_store_error(
+                GovernedSecret::StripeSecretKey,
+            ));
+        }
+        if webhook_secret_plain.is_some() {
+            return Err(crate::secrets::read_only_store_error(
+                GovernedSecret::StripeWebhookSecret,
+            ));
+        }
+    }
     let app_tag = body
         .app_tag
         .as_deref()
@@ -2081,21 +2110,45 @@ pub async fn update_stripe_config(
         }
     }
 
-    // Encrypt secrets before storing
+    // Encrypt secrets before storing, but ONLY when the database IS the
+    // declared store; in `infisical` mode the ciphertext columns stay untouched.
+    let db_is_the_store = storage == SecretsStorage::Database;
     let (secret_key_enc, secret_key_nonce, key_version) = match secret_key_plain {
-        Some(sk) => {
+        Some(sk) if db_is_the_store => {
             let (ct, nonce, ver) = encrypt_secret(&app_key_set, sk)?;
             (Some(ct), Some(nonce), ver)
         }
-        None => (None, None, app_key_set.current_version),
+        _ => (None, None, app_key_set.current_version),
     };
     let (webhook_secret_enc, webhook_secret_nonce) = match webhook_secret_plain {
-        Some(ws) => {
+        Some(ws) if db_is_the_store => {
             let (ct, nonce, _) = encrypt_secret(&app_key_set, ws)?;
             (Some(ct), Some(nonce))
         }
-        None => (None, None),
+        _ => (None, None),
     };
+
+    // Infisical mode writes through FIRST, so a failed upsert aborts the save
+    // with its underlying cause: no row change, no reload, no reported success.
+    if storage == SecretsStorage::Infisical {
+        for (secret, value) in [
+            (GovernedSecret::StripeSecretKey, secret_key_plain),
+            (GovernedSecret::StripeWebhookSecret, webhook_secret_plain),
+        ] {
+            if let Some(value) = value {
+                crate::secrets::write_secret(
+                    &pool,
+                    &config,
+                    &app_key_set,
+                    storage,
+                    secret,
+                    value,
+                    Some(admin.0.sub),
+                )
+                .await?;
+            }
+        }
+    }
 
     let updated = StripeConfigRepository::update(
         &pool,
@@ -2112,16 +2165,16 @@ pub async fn update_stripe_config(
     )
     .await?;
 
-    // Hot-reload the live StripeService so new API calls use the updated keys
-    match stripe_config_from_db_model(&updated, &app_key_set) {
-        Ok(new_config) => {
-            stripe_service.reload(new_config);
-            tracing::info!("Stripe service reloaded with updated config");
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to reload Stripe service after config update");
-        }
-    }
+    // Hot-reload the live StripeService so new API calls use the updated keys.
+    // BUNYIP-542: the reload reads the secrets back from the declared store, so
+    // `database` and `infisical` saves take effect identically.
+    let new_config =
+        crate::secrets::stripe_runtime_config(&pool, &config, &app_key_set, &updated).await?;
+    stripe_service.reload(new_config);
+    tracing::info!(
+        secrets_storage = %storage,
+        "Stripe service reloaded with updated config"
+    );
 
     // BUNYIP-515: the secret key and the app tag both decide which prices
     // /pricing can see, so a save takes effect on the next load rather than
@@ -2160,6 +2213,11 @@ pub async fn update_stripe_config(
                 "webhook_secret": webhook_secret_plain.is_some(),
                 "app_tag": app_tag,
             },
+            // BUNYIP-542: which store the secrets went to. Writing to Infisical
+            // loses the row's updated_by attribution, so this entry is the
+            // in-app trail for that mode.
+            "secret_store": (secret_key_plain.is_some() || webhook_secret_plain.is_some())
+                .then(|| storage.as_str()),
             // BUNYIP-189: surface the auto-bootstrap outcome in the
             // audit log so an operator chasing the "where did this
             // product come from" question can trace it to the config
@@ -2171,8 +2229,27 @@ pub async fn update_stripe_config(
         }));
     AuditLogRepository::create(&pool, audit_log).await?;
 
+    let secret_key = crate::secrets::read_secret(
+        &pool,
+        &config,
+        &app_key_set,
+        GovernedSecret::StripeSecretKey,
+    )
+    .await?;
+    let webhook_secret = crate::secrets::read_secret(
+        &pool,
+        &config,
+        &app_key_set,
+        GovernedSecret::StripeWebhookSecret,
+    )
+    .await?;
     Ok(success(
-        StripeConfigResponse::from_db(&updated, &app_key_set)?,
+        StripeConfigResponse::from_store(
+            &updated,
+            storage,
+            secret_key.as_deref(),
+            webhook_secret.as_deref(),
+        ),
         request_id,
     ))
 }
@@ -2471,10 +2548,13 @@ fn smtp_tls_str(tls: &crate::config::SmtpTls) -> String {
 fn email_config_response(
     resolved: crate::config::EmailConfig,
     source: &'static str,
+    secrets_storage: crate::config::SecretsStorage,
     updated_at: chrono::DateTime<chrono::Utc>,
     updated_by: Option<uuid::Uuid>,
 ) -> crate::models::email::EmailConfigResponse {
     crate::models::email::EmailConfigResponse {
+        secrets_storage: secrets_storage.as_str(),
+        smtp_password_editable: secrets_storage.is_writable(),
         enabled: resolved.enabled,
         smtp_host: resolved.smtp_host,
         smtp_port: resolved.smtp_port as i32,
@@ -2509,10 +2589,26 @@ pub async fn get_email_config(
     } else {
         "environment"
     };
-    let resolved = EmailConfig::from_db_row(&row, &app_key_set, config.is_production());
+    // BUNYIP-542: the non-secret settings come from the row (or the env
+    // defaults); the password comes from the declared store alone, so the page
+    // can never claim a password the running service does not use.
+    let smtp_password = crate::secrets::read_secret(
+        &pool,
+        &config,
+        &app_key_set,
+        crate::config::GovernedSecret::SmtpPassword,
+    )
+    .await?;
+    let resolved = EmailConfig::from_db_row(&row, smtp_password, config.is_production());
 
     Ok(success(
-        email_config_response(resolved, source, row.updated_at, row.updated_by),
+        email_config_response(
+            resolved,
+            source,
+            config.secrets_storage,
+            row.updated_at,
+            row.updated_by,
+        ),
         request_id,
     ))
 }
@@ -2565,15 +2661,38 @@ pub async fn update_email_config(
     let from_name = nonempty(&body.from_name);
     let admin_notification_emails = nonempty(&body.admin_notification_emails);
 
-    // Encrypt the SMTP password before storing (never persisted in plaintext).
+    // BUNYIP-542: the SMTP password is written to the ONE declared store.
+    let storage = config.secrets_storage;
     let smtp_password_plain = body.smtp_password.as_deref().filter(|s| !s.is_empty());
-    let (pw_enc, pw_nonce, key_version) = match smtp_password_plain {
-        Some(pw) => {
+    if smtp_password_plain.is_some() && !storage.is_writable() {
+        return Err(crate::secrets::read_only_store_error(
+            crate::config::GovernedSecret::SmtpPassword,
+        ));
+    }
+    // The ciphertext columns are written ONLY when the database IS the declared
+    // store; in `infisical` mode the row's secret columns are left untouched.
+    let (pw_enc, pw_nonce, key_version) = match (smtp_password_plain, storage) {
+        (Some(pw), crate::config::SecretsStorage::Database) => {
             let (ct, nonce, ver) = encrypt_secret(&app_key_set, pw)?;
             (Some(ct), Some(nonce), ver)
         }
-        None => (None, None, app_key_set.current_version),
+        _ => (None, None, app_key_set.current_version),
     };
+    // Infisical mode writes through FIRST: a failed upsert must abort the save
+    // with its underlying cause, leaving the row untouched, performing no
+    // reload, and reporting no success.
+    if let (Some(pw), crate::config::SecretsStorage::Infisical) = (smtp_password_plain, storage) {
+        crate::secrets::write_secret(
+            &pool,
+            &config,
+            &app_key_set,
+            storage,
+            crate::config::GovernedSecret::SmtpPassword,
+            pw,
+            Some(admin.0.sub),
+        )
+        .await?;
+    }
 
     let updated = EmailConfigRepository::update(
         &pool,
@@ -2592,7 +2711,21 @@ pub async fn update_email_config(
     )
     .await?;
 
-    let resolved = EmailConfig::from_db_row(&updated, &app_key_set, config.is_production());
+    // The password just written is the live one; otherwise re-read the declared
+    // store so the hot reload uses exactly what the next boot will.
+    let resolved_password = match smtp_password_plain {
+        Some(pw) => Some(pw.to_string()),
+        None => {
+            crate::secrets::read_secret(
+                &pool,
+                &config,
+                &app_key_set,
+                crate::config::GovernedSecret::SmtpPassword,
+            )
+            .await?
+        }
+    };
+    let resolved = EmailConfig::from_db_row(&updated, resolved_password, config.is_production());
 
     // BUNYIP-204/351: refuse to disable email in production, even via the DB.
     if config.is_production() && !resolved.enabled {
@@ -2617,8 +2750,13 @@ pub async fn update_email_config(
                 "smtp_port": body.smtp_port,
                 "smtp_tls": body.smtp_tls,
                 "smtp_username": body.smtp_username,
-                // Never log the password itself; record only that it changed.
+                // Never log the password itself; record only that it changed,
+                // and (BUNYIP-542) which store it was written to. Writing to
+                // Infisical loses the row's updated_by attribution, so this
+                // entry is the in-app trail for that mode.
                 "password_changed": smtp_password_plain.is_some(),
+                "secret": smtp_password_plain.map(|_| "SMTP_PASSWORD"),
+                "secret_store": smtp_password_plain.map(|_| storage.as_str()),
                 "from_email": body.from_email,
                 "from_name": body.from_name,
             })),
@@ -2626,7 +2764,13 @@ pub async fn update_email_config(
     .await?;
 
     Ok(success(
-        email_config_response(resolved, "database", updated.updated_at, updated.updated_by),
+        email_config_response(
+            resolved,
+            "database",
+            storage,
+            updated.updated_at,
+            updated.updated_by,
+        ),
         request_id,
     ))
 }
@@ -2665,7 +2809,14 @@ pub async fn test_email_config(
     // verify the credential email actually sends with. The web UI tells the
     // admin to save before testing.
     let row = EmailConfigRepository::get(&pool).await?;
-    let resolved = EmailConfig::from_db_row(&row, &app_key_set, config.is_production());
+    let smtp_password = crate::secrets::read_secret(
+        &pool,
+        &config,
+        &app_key_set,
+        crate::config::GovernedSecret::SmtpPassword,
+    )
+    .await?;
+    let resolved = EmailConfig::from_db_row(&row, smtp_password, config.is_production());
 
     let outcome = EmailService::test_connection(&resolved).await;
 
@@ -2757,7 +2908,14 @@ pub async fn send_test_email_message(
     // prove the settings email actually sends with. Hot-reloaded into the live
     // service so the transport matches what was persisted.
     let row = EmailConfigRepository::get(&pool).await?;
-    let resolved = EmailConfig::from_db_row(&row, &app_key_set, config.is_production());
+    let smtp_password = crate::secrets::read_secret(
+        &pool,
+        &config,
+        &app_key_set,
+        crate::config::GovernedSecret::SmtpPassword,
+    )
+    .await?;
+    let resolved = EmailConfig::from_db_row(&row, smtp_password, config.is_production());
 
     // A transport that will not even build is the same class of news as a relay
     // that refuses the message, so it reports through the same banner instead
@@ -3679,6 +3837,8 @@ mod tests {
             from_name: "Bunyip".into(),
             admin_notification_emails: vec!["ops@example.com".into()],
             source: "database",
+            secrets_storage: "database",
+            smtp_password_editable: true,
             updated_at: None,
             updated_by: None,
         };
@@ -3691,12 +3851,13 @@ mod tests {
             !body.contains("smtp_password_masked"),
             "no masked-password field is serialized"
         );
-        // The only `password` token in the whole body is the has_smtp_password
-        // key; any password value or masked field would add another.
+        // The only `password` tokens are the two boolean keys (BUNYIP-432's
+        // has_smtp_password and BUNYIP-542's smtp_password_editable); any
+        // password value or masked field would add another.
         assert_eq!(
             body.matches("password").count(),
-            1,
-            "the sole password token is has_smtp_password: {body}"
+            2,
+            "the only password tokens are has_smtp_password and smtp_password_editable: {body}"
         );
     }
 

@@ -8,7 +8,9 @@ rendering of the same table.
 
 Secrets resolve through the `{NAME}_FILE` convention first (a compose secret
 under `/run/secrets/*`), then the plain variable (a dev `.env`). An empty value
-counts as unset everywhere.
+counts as unset everywhere. The exception is the three governed integration
+secrets below, which are `{NAME}_FILE`-only and are read only when
+`SECRETS_STORAGE=environment`.
 
 ## The reporting contract (BUNYIP-537)
 
@@ -35,6 +37,7 @@ than one per variable in its group.
 | Variable                        | Gate          | Why the api will not start without it                                                    |
 | ------------------------------- | ------------- | ---------------------------------------------------------------------------------------- |
 | `DATABASE_URL`                  | -             | the api cannot connect to postgres (required in every environment)                       |
+| `SECRETS_STORAGE`               | -             | the deployment has not declared where its integration secrets live (required in every environment, see below) |
 | `JWT_SECRET`                    | -             | no signing key for session access/refresh tokens                                         |
 | `APP_ENCRYPTION_KEY`            | -             | no at-rest key for the TOTP, Stripe and SMTP secrets (BUNYIP-483)                        |
 | `BUNYIP_WEBHOOK_SIGNING_SECRET` | -             | no HMAC key for outbound webhook dispatches (BUNYIP-332)                                 |
@@ -42,8 +45,83 @@ than one per variable in its group.
 | `OIDC_JWT_ACTIVE_KID`           | `OIDC_ISSUER` | a `dev-` kid in production is consumed by RPs as legitimate (BUNYIP-258); also value-checked |
 | `SMTP_HOST` / `EMAIL_ENABLED`   | -             | email disabled in production would log single-use login/reset tokens instead of sending them (BUNYIP-204) |
 
-Every one except `DATABASE_URL` is required only on `ENVIRONMENT=production`;
-development and staging fall back to documented placeholder values.
+Every one except `DATABASE_URL` and `SECRETS_STORAGE` is required only on
+`ENVIRONMENT=production`; development and staging fall back to documented
+placeholder values.
+
+## `SECRETS_STORAGE`: where the integration secrets live (BUNYIP-542)
+
+`SECRETS_STORAGE` declares the ONE store bunyip reads its governed integration
+secrets from. Legal values: `environment`, `database`, `infisical`. Unset or
+unrecognised logs one `ERROR` naming the legal set and exits 1.
+
+The governed set is exactly the secrets with more than one possible store:
+
+| Secret                  | `database`                       | `environment`                | `infisical`               |
+| ----------------------- | -------------------------------- | ---------------------------- | ------------------------- |
+| `SMTP_PASSWORD`         | `email_config.smtp_password`     | `SMTP_PASSWORD_FILE`         | `<path>/SMTP_PASSWORD`    |
+| `STRIPE_SECRET_KEY`     | `stripe_config.secret_key`       | `STRIPE_SECRET_KEY_FILE`     | `<path>/STRIPE_SECRET_KEY` |
+| `STRIPE_WEBHOOK_SECRET` | `stripe_config.webhook_secret`   | `STRIPE_WEBHOOK_SECRET_FILE` | `<path>/STRIPE_WEBHOOK_SECRET` |
+
+The declared store is the ONLY one consulted. There is no fallback and no
+precedence chain: in `database` mode the environment slot and Infisical are not
+read at all, and vice versa. Group-1 startup secrets (`DATABASE_URL`,
+`JWT_SECRET`, `APP_ENCRYPTION_KEY`, ...) cannot be governed by this switch - the
+database cannot hold the credential used to reach the database - and stay
+file-based.
+
+In `environment` mode a governed secret is read from `{NAME}_FILE` ONLY. A plain
+`STRIPE_SECRET_KEY=sk_live_...` in a compose `environment:` block is visible to
+`docker inspect` and to every child process, so it is deliberately not consulted.
+
+### Startup enforcement, per governed secret
+
+| Situation                                          | Behaviour                                                                    |
+| -------------------------------------------------- | ---------------------------------------------------------------------------- |
+| present in the declared store                       | use it                                                                       |
+| absent everywhere                                   | feature off, one `WARN` naming the secret and the feature it gates           |
+| absent from the declared store, present in another  | **fatal**: one `ERROR` naming the secret, both stores and `secrets-migrate`, then exit 1 |
+| present in the declared store AND in another        | boot, and one `WARN` per duplicate naming `secrets-purge`                    |
+
+"Present" means a non-null ciphertext column (database), a non-empty
+`{NAME}_FILE` read (environment), or a successful key read (infisical). The
+duplicate warning is what keeps a later mode change honest: a stale copy in a
+store nobody reads today becomes live the moment someone flips the mode.
+
+`infisical` mode is **fail-closed**: an unreachable Infisical or a failed read
+aborts the boot, because the operator declared it the store of record.
+`database` and `environment` mode never contact Infisical at boot, so it stays
+off the boot path for them.
+
+### Writing from the admin pages
+
+| Mode          | Admin Stripe / Email secret fields                                                          |
+| ------------- | -------------------------------------------------------------------------------------------- |
+| `database`    | editable; encrypted under `APP_ENCRYPTION_KEY`, written to the row, service hot-reloaded    |
+| `infisical`   | editable; written to `INFISICAL_SECRET_PATH` through the API (no DB write), service hot-reloaded, and an audit entry records the admin, the secret and the target store |
+| `environment` | read-only, labelled with the owning store and the file to edit; the API answers 409          |
+
+A failed Infisical write surfaces on the form and in the log with the underlying
+cause, performs no reload and reports no success. The machine identity needs
+**write** access to `INFISICAL_SECRET_PATH`; read access alone fails the save.
+
+Non-secret configuration (`smtp_host`, `smtp_port`, `smtp_tls`, `smtp_username`,
+`from_email`, the checkout URLs, the tier ids) stays editable in every mode: the
+switch governs secrets only.
+
+### Restart versus hot-apply
+
+Only a change made through the admin pages hot-applies. A value changed directly
+in Infisical, or in a secret file, takes effect on the next restart, because the
+boot read is the only reader.
+
+### Changing the store
+
+Never by editing `SECRETS_STORAGE` and hoping. The pre-flight runs while the
+current deployment is healthy: `bunyip-api secrets-status`, then
+`secrets-migrate --to <target>`, then `secrets-status` again, then set
+`SECRETS_STORAGE`, restart, soak, and finally `secrets-purge --confirm`. The
+full runbook is in [`secrets-infisical.md`](secrets-infisical.md).
 
 ## Feature-gating (one `WARN`, boot continues)
 
@@ -65,7 +143,7 @@ development and staging fall back to documented placeholder values.
 | `IP2PROXY_DB_PATH`                      | -                           | ASN / VPN enrichment on login alerts                          |
 | `BUNYIP_UPDATE_CHECK_URL`               | -                           | the operator update checker                                   |
 | `BUNYIP_UPDATE_CHECK_TOKEN`             | `BUNYIP_UPDATE_CHECK_URL`   | authenticated access to a private release feed                |
-| `INFISICAL_ENABLED`                     | -                           | the Group-2 runtime secret fetch                              |
+| `INFISICAL_ENABLED`                     | -                           | inspecting the Infisical store (`secrets-status` readiness)   |
 | `INFISICAL_ADDRESS`                     | `INFISICAL_ENABLED`         | the Infisical server address                                  |
 | `INFISICAL_PROJECT_ID`                  | `INFISICAL_ENABLED`         | the Infisical project                                         |
 | `INFISICAL_CLIENT_ID`                   | `INFISICAL_ENABLED`         | the Universal Auth machine identity                           |
@@ -93,8 +171,10 @@ Every variable below has a working default; set it only to tune the deployment.
 - **At-rest keys**: `APP_ENCRYPTION_KEY_PREV`, `APP_KEY_VERSION` (see
   [`encryption-key-rotation.md`](encryption-key-rotation.md)).
 - **Email**: `EMAIL_ENABLED`, `EMAIL_LOG_TOKENS`, `SMTP_PORT`, `SMTP_TLS`,
-  `SMTP_USERNAME`, `SMTP_PASSWORD` (Group-2: the DB row or Infisical),
-  `SMTP_EHLO_NAME`, `SMTP_FROM`.
+  `SMTP_USERNAME`, `SMTP_EHLO_NAME`, `SMTP_FROM`.
+- **Governed secrets** (read only when `SECRETS_STORAGE=environment`, and only
+  as `{NAME}_FILE`): `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`,
+  `STRIPE_WEBHOOK_SECRET`.
 - **Abuse controls**: `AUTO_BAN_ENABLED`, `AUTO_BAN_THRESHOLD`,
   `AUTO_BAN_WINDOW_SECS`, `AUTO_BAN_DURATION_SECS`, `LOGIN_APPROVAL_ENABLED`,
   `SIGNUP_BOT_GUARD_ENABLED`.
@@ -123,10 +203,14 @@ Every variable below has a working default; set it only to tune the deployment.
 
 ## Secret files and compose coverage
 
-The reference `compose.yml` passes every required variable as a `{NAME}_FILE`
+The reference `compose.yml` passes every required secret as a `{NAME}_FILE`
 secret, so `just init-secrets` followed by `docker compose up` boots on
-`ENVIRONMENT=production` with no manual step. The secret files, their
-"empty allowed" status and the rotation procedure are in
+`ENVIRONMENT=production` with no manual step. `SECRETS_STORAGE` is the one
+required variable it passes with **no default** (`${SECRETS_STORAGE:?...}`), so
+`docker compose up` aborts until the deployment states where its integration
+secrets live. `compose.dev.yml` and `compose.dev-sso.yml` default it to
+`database`, which is what dev has always used, so `just dev` is unchanged. The
+secret files, their "empty allowed" status and the rotation procedure are in
 [`secrets-infisical.md`](secrets-infisical.md).
 
 The feature-gating variables are deliberately NOT all passed by `compose.yml`:

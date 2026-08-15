@@ -180,6 +180,9 @@ fn unconfigured_production_boot_exits_non_zero_with_one_error_per_variable() {
     );
     for expected in [
         "DATABASE_URL",
+        // BUNYIP-542: unset means the deployment has not declared where its
+        // integration secrets live, which stops the boot in every environment.
+        "SECRETS_STORAGE",
         "JWT_SECRET",
         "APP_ENCRYPTION_KEY",
         "BUNYIP_WEBHOOK_SIGNING_SECRET",

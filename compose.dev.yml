@@ -78,6 +78,11 @@ services:
       # ranges; the API is only reachable over the Docker network + Traefik.
       TRUSTED_PROXY_CIDR: ${TRUSTED_PROXY_CIDR:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
       RUST_LOG: ${RUST_LOG:-info,bunyip_api=debug,bunyip_core=info}
+      # BUNYIP-542: the ONE store for the governed integration secrets (SMTP
+      # password, Stripe secret key, Stripe webhook secret). `database` is what
+      # dev has always used - they are entered on the admin pages - so `just
+      # dev` is unchanged.
+      SECRETS_STORAGE: ${SECRETS_STORAGE:-database}
       JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-at-least-32-characters-long-000000}
       # BUNYIP-483: the ONE at-rest AES-256-GCM key for the secrets stored in
       # user_totp / stripe_config / email_config. NOT Stripe API configuration

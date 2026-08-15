@@ -26,7 +26,7 @@ use bunyip_api::{
     },
     routes,
     services::{
-        stripe_config_from_db_model, unconfigured_stripe_config, AppBackupAdapter,
+        stripe_settings_from_db_model, unconfigured_stripe_config, AppBackupAdapter,
         AppDownloadCache, AuthService, BackupService, DownloadLimiter, EmailService,
         ForgejoAssetClient, GeoIpService, IpEnrichService, JwtConfig, JwtService,
         MokoshBackupAdapter, PasswordService, ReleaseCache, StripeService, TotpService,
@@ -118,11 +118,13 @@ async fn main() -> anyhow::Result<()> {
 
     // BUNYIP-483: `bunyip-api reencrypt-secrets` rewrites every at-rest secret
     // under the current APP_ENCRYPTION_KEY and exits, so an operator decides
-    // when the pass runs and can take a database backup first. Migrations stay
-    // owned by the server path below, so the subcommand runs against the schema
-    // a running deployment already has.
-    if let Some(subcommand) = std::env::args().nth(1) {
-        return run_subcommand(&subcommand, &pool, &config).await;
+    // when the pass runs and can take a database backup first. BUNYIP-542 adds
+    // the `secrets-*` pre-flight family. Migrations stay owned by the server
+    // path below, so a subcommand runs against the schema a running deployment
+    // already has.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(subcommand) = args.first() {
+        return run_subcommand(subcommand, &args[1..], &pool, &config).await;
     }
 
     // BUNYIP-79: heal the in-place-edited migration checksums before the
@@ -378,40 +380,53 @@ async fn main() -> anyhow::Result<()> {
     // guards the TOTP secrets, the Stripe secrets and the SMTP password.
     let app_key_set = config.app_key_set();
 
-    // BUNYIP-525: fetch the Group-2 SMTP password from Infisical at runtime
-    // (app-native, no CLI/sidecar). This feeds the SMTP_PASSWORD fallback slot
-    // (config.email.smtp_password, the secret_env slot) which sits BELOW the DB
-    // email_config row resolved just below, so an admin-set password still wins.
-    // It runs only when the env/file SMTP_PASSWORD is empty and Infisical is
-    // enabled; ANY failure yields None and boot proceeds (email degrades), so
-    // Infisical is never a boot dependency. This covers the no-DB-override path;
-    // EmailConfig::from_db_row rebuilds its own env fallback, so an admin who set
-    // other email_config columns but no password keeps the plain env value.
-    // A fully-lazy background fetch + EmailService::reload (mirroring PricingCache
-    // in handlers/pricing.rs) is a follow-on if the bounded ~5s boot delay is
-    // unwanted.
-    if config.infisical.enabled && config.email.smtp_password.is_empty() {
-        if let Some(client) =
-            bunyip_domain::services::InfisicalClient::from_settings(&config.infisical)
-        {
-            if let Some(password) = client.fetch_secret("SMTP_PASSWORD").await {
-                info!("Fetched SMTP_PASSWORD from Infisical (BUNYIP-525 Group-2 runtime secret)");
-                config.email.smtp_password = password;
-            }
+    // BUNYIP-542: read every governed integration secret from the ONE store
+    // SECRETS_STORAGE declares, and enforce the store declaration. The old
+    // three-level precedence chain (DB row, then the env slot, then a
+    // conditional Infisical fetch that filled the slot only when it was empty)
+    // is gone: which copy is live is now the operator's declaration.
+    //
+    // Infisical is contacted only when it IS the declared store, so `database`
+    // and `environment` deployments keep the property that Infisical is never a
+    // boot dependency. In `infisical` mode the read is deliberately fail-closed.
+    let infisical_probe = if config.secrets_storage == bunyip_api::config::SecretsStorage::Infisical
+    {
+        bunyip_api::secrets::InfisicalProbe::Inspect
+    } else {
+        bunyip_api::secrets::InfisicalProbe::Skip
+    };
+    let secret_survey =
+        bunyip_api::secrets::survey(&pool, &config, &app_key_set, infisical_probe).await?;
+    let fatal_secret_reports = bunyip_api::secrets::enforce(&secret_survey);
+    if !fatal_secret_reports.is_empty() {
+        for report in &fatal_secret_reports {
+            error!(env_var = "SECRETS_STORAGE", "{report}");
         }
+        error!("Refusing to start: fix the secret storage errors above and restart");
+        std::process::exit(1);
     }
+    info!(
+        secrets_storage = %config.secrets_storage,
+        "Governed integration secrets resolved from the declared store"
+    );
+    // The env-fallback EmailConfig carries the same resolved password, so both
+    // branches below agree on the one store's value.
+    let smtp_password = secret_survey
+        .value(bunyip_api::config::GovernedSecret::SmtpPassword)
+        .map(str::to_string);
+    config.email.smtp_password = smtp_password.clone().unwrap_or_default();
 
-    // Initialize Email service — prefer DB config (admin UI), fall back to env
-    // vars (BUNYIP-351). The SMTP password is decrypted with the application
-    // key set, so this must run after `app_key_set` is built. The auth service
-    // (built below) also holds the email service for BUNYIP-366 login-location
-    // alerts, so email is now wired ahead of auth.
+    // Initialize Email service: non-secret settings prefer the DB row (admin
+    // UI) and fall back to the environment (BUNYIP-351); the SMTP password
+    // comes from the declared store alone (BUNYIP-542). The auth service (built
+    // below) also holds the email service for BUNYIP-366 login-location alerts,
+    // so email is wired ahead of auth.
     let email_config = {
         use bunyip_api::repositories::EmailConfigRepository;
         match EmailConfigRepository::get(&pool).await {
             Ok(row) if EmailConfig::has_db_overrides(&row) => {
                 info!("Email config initialized from database");
-                EmailConfig::from_db_row(&row, &app_key_set, config.is_production())
+                EmailConfig::from_db_row(&row, smtp_password, config.is_production())
             }
             _ => {
                 info!("Email config initialized from environment variables");
@@ -495,25 +510,40 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Auth service initialized");
 
-    // BUNYIP-482: the `stripe_config` DB row (admin Stripe page) is the only
-    // source. No row, or an undecryptable one, boots with Stripe disabled.
+    // BUNYIP-542: the non-secret Stripe settings (app tag, checkout URLs, trial
+    // length) still come from the `stripe_config` row, but the two secrets come
+    // from the declared store alone.
     let stripe_config = {
+        use bunyip_api::config::GovernedSecret;
         use bunyip_api::repositories::StripeConfigRepository;
-        match StripeConfigRepository::get(&pool).await {
-            Ok(db_config) if db_config.secret_key.is_some() => {
-                match stripe_config_from_db_model(&db_config, &app_key_set) {
-                    Ok(cfg) => {
-                        info!("Stripe service initialized from database config");
-                        cfg
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Failed to decrypt the saved Stripe config; starting with Stripe disabled. Re-enter the keys on the admin Stripe page.");
-                        unconfigured_stripe_config()
-                    }
-                }
+        // A row read failure is reported before it degrades to "Stripe
+        // disabled", so a broken query never reads as an unconfigured account.
+        let row = match StripeConfigRepository::get(&pool).await {
+            Ok(row) => Some(row),
+            Err(e) => {
+                error!(error = %e, "Failed to read stripe_config; starting with Stripe disabled");
+                None
+            }
+        };
+        let secret_key = secret_survey.value(GovernedSecret::StripeSecretKey);
+        match (&row, secret_key) {
+            (Some(row), Some(secret_key)) => {
+                // The non-secret columns come from the row in every mode; the
+                // two secrets come from the declared store alone.
+                let mut cfg = stripe_settings_from_db_model(row);
+                cfg.secret_key = secret_key.to_string();
+                cfg.webhook_secret = secret_survey
+                    .value(GovernedSecret::StripeWebhookSecret)
+                    .map(str::to_string)
+                    .unwrap_or(unconfigured_stripe_config().webhook_secret);
+                info!(
+                    secrets_storage = %config.secrets_storage,
+                    "Stripe service initialized with secrets from the declared store"
+                );
+                cfg
             }
             _ => {
-                info!("No Stripe config saved; starting with Stripe disabled (configure it on the admin Stripe page)");
+                info!("No Stripe secret key in the declared store; starting with Stripe disabled");
                 unconfigured_stripe_config()
             }
         }
@@ -1184,9 +1214,72 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Maintenance subcommands (BUNYIP-483). Anything but a known subcommand is an
-/// error rather than a silently-ignored argument.
+/// Maintenance subcommands (BUNYIP-483, BUNYIP-542). Anything but a known
+/// subcommand is an error rather than a silently-ignored argument.
 async fn run_subcommand(
+    subcommand: &str,
+    args: &[String],
+    pool: &sqlx::PgPool,
+    config: &Config,
+) -> anyhow::Result<()> {
+    use bunyip_api::config::SecretsStorage;
+    use bunyip_api::secrets;
+
+    // BUNYIP-542: the `secrets-*` family is the non-destructive pre-flight the
+    // operator runs on a HEALTHY deployment, before a cutover, instead of
+    // discovering a mistake as a crash loop after the old configuration stopped
+    // serving. Infisical is inspected when the deployment has it enabled, which
+    // is what makes "is `--to infisical` ready?" answerable.
+    let key_set = config.app_key_set();
+    let probe = if config.infisical.enabled || config.secrets_storage == SecretsStorage::Infisical {
+        secrets::InfisicalProbe::Inspect
+    } else {
+        secrets::InfisicalProbe::Skip
+    };
+
+    match subcommand {
+        "secrets-status" => {
+            let survey = secrets::survey(pool, config, &key_set, probe).await?;
+            let report = secrets::status_report(&survey);
+            if args.iter().any(|arg| arg == "--json") {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", secrets::render_status(&report));
+            }
+            Ok(())
+        }
+        "secrets-migrate" => {
+            let target = match args.iter().position(|arg| arg == "--to") {
+                Some(idx) => args.get(idx + 1).and_then(|raw| SecretsStorage::parse(raw)),
+                None => None,
+            };
+            let Some(target) = target else {
+                anyhow::bail!(
+                    "secrets-migrate needs --to <{}>",
+                    SecretsStorage::LEGAL_VALUES
+                );
+            };
+            let survey = secrets::survey(pool, config, &key_set, probe).await?;
+            let dry_run = args.iter().any(|arg| arg == "--dry-run");
+            let summary =
+                secrets::run_migration(pool, config, &key_set, &survey, target, dry_run).await?;
+            print!("{summary}");
+            Ok(())
+        }
+        "secrets-purge" => {
+            let survey = secrets::survey(pool, config, &key_set, probe).await?;
+            let confirm = args.iter().any(|arg| arg == "--confirm");
+            let summary = secrets::run_purge(pool, config, &survey, confirm).await?;
+            print!("{summary}");
+            Ok(())
+        }
+        other => run_reencrypt_subcommand(other, pool, config).await,
+    }
+}
+
+/// The BUNYIP-483 re-encryption pass, split out so the subcommand table above
+/// reads as one match.
+async fn run_reencrypt_subcommand(
     subcommand: &str,
     pool: &sqlx::PgPool,
     config: &Config,
@@ -1208,7 +1301,10 @@ async fn run_subcommand(
             }
             Ok(())
         }
-        other => anyhow::bail!("unknown subcommand {other:?} (known: reencrypt-secrets)"),
+        other => anyhow::bail!(
+            "unknown subcommand {other:?} (known: reencrypt-secrets, secrets-status, \
+             secrets-migrate, secrets-purge)"
+        ),
     }
 }
 
