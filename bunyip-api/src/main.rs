@@ -51,21 +51,41 @@ async fn main() -> anyhow::Result<()> {
     // inject real environment). Must run before Config::from_env().
     let _ = dotenvy::dotenv();
 
-    // Load configuration
-    let mut config = Config::from_env()?;
-
-    // Initialize tracing/logging. The error-log buffer (BUNYIP-327) is created
-    // first so the capture layer can be wired into the subscriber; the same
-    // buffer is registered as app data below so the admin log view can read it.
+    // Initialize tracing/logging BEFORE the config loads (BUNYIP-537), so a
+    // configuration failure is reported as operator-facing log lines instead of
+    // vanishing: every warn/error raised while parsing the environment (missing
+    // required variables, invalid TRUSTED_PROXY_CIDR entries) predates the
+    // subscriber otherwise. RUST_LOG is read directly because `config.log_level`
+    // does not exist yet; it is the same read.
+    let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+    // The error-log buffer (BUNYIP-327) is created first so the capture layer
+    // can be wired into the subscriber; the same buffer is registered as app
+    // data below so the admin log view can read it.
     let error_log =
         bunyip_api::error_log::ErrorLogBuffer::new(bunyip_api::error_log::DEFAULT_CAPACITY);
-    init_tracing(&config.log_level, error_log.clone());
+    init_tracing(&log_level, error_log.clone());
+
+    // Load configuration. A missing or malformed required variable is reported
+    // as one error! line per variable (all of them, in this one run) and exits
+    // non-zero: an operator message, not a panic and a backtrace (BUNYIP-537).
+    let mut config = match Config::from_env() {
+        Ok(config) => config,
+        Err(e) => {
+            e.log_startup_report();
+            error!("Refusing to start: fix the configuration errors above and restart");
+            std::process::exit(1);
+        }
+    };
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
         environment = %config.environment,
         "Starting bunyip-api"
     );
+
+    // One warn! per optional variable whose absence turns a feature off, from
+    // the same inventory. Variables with a working default log nothing.
+    bunyip_domain::config::log_feature_gaps();
 
     // BUNYIP-476: make the trusted-proxy posture visible at boot. With no
     // trusted proxy, X-Forwarded-For is ignored and the socket peer is used - on
@@ -74,14 +94,12 @@ async fn main() -> anyhow::Result<()> {
     // attributed to bunyip-web instead of the real browser. That is safe but
     // silent, and is the "audit records a Docker IP" symptom; surface it so a
     // misconfiguration is diagnosable from the logs rather than the data.
+    // The unset case is reported once by the inventory warning above; an entry
+    // that is set but unparseable is reported by `parse_trusted_proxies`.
     if config.trusts_forwarded_client_ip() {
         info!(
             trusted_proxy_cidrs = config.trusted_proxies.len(),
             "TRUSTED_PROXY_CIDR set; forwarded client IPs (audit, access log, rate limit) resolve to the real client behind a trusted proxy"
-        );
-    } else {
-        tracing::warn!(
-            "TRUSTED_PROXY_CIDR is empty: X-Forwarded-For is not trusted, so SSR-proxied client IPs (audit actor_ip_address, access log, per-IP rate limit) are attributed to the bunyip-web peer, not the real browser. Set TRUSTED_PROXY_CIDR to include bunyip-web's network address. See docs/client-ip-forwarding.md."
         );
     }
 
@@ -182,7 +200,8 @@ async fn main() -> anyhow::Result<()> {
             p
         }
         None => {
-            info!("APP_DATABASE_URL unset; self-service RLS pool falls back to the primary pool (RLS no-op)");
+            // The reason and the remedy come from the env inventory warning
+            // emitted at boot (BUNYIP-537), so this branch stays silent.
             pool.clone()
         }
     };
@@ -195,9 +214,15 @@ async fn main() -> anyhow::Result<()> {
     if let Some(setup_admin) = secret_env("SETUP_DEFAULT_ADMIN") {
         let admin_emails = UserRepository::find_admin_emails(&pool).await?;
         if admin_emails.is_empty() {
-            let (email, password) = setup_admin.split_once(':').unwrap_or_else(|| {
-                panic!("SETUP_DEFAULT_ADMIN must be in format 'email:password'");
-            });
+            let Some((email, password)) = setup_admin.split_once(':') else {
+                fatal_config_error(
+                    "SETUP_DEFAULT_ADMIN",
+                    "the value is not in the required `email:password` format, so no bootstrap \
+                     admin can be seeded",
+                    "Set SETUP_DEFAULT_ADMIN (or the setup_default_admin secret file) to \
+                     `email:password`, or unset it and use BOOTSTRAP_ADMIN_EMAIL instead.",
+                );
+            };
 
             let email = email.trim();
             let password = password.trim();
@@ -284,7 +309,14 @@ async fn main() -> anyhow::Result<()> {
     // unconfigured production deployment fails fast here.
     let jwt_secret = secret_env("JWT_SECRET").unwrap_or_else(|| {
         if config.is_production() {
-            panic!("JWT_SECRET must be set in production");
+            // Unreachable in practice: the startup audit (BUNYIP-537) already
+            // refused to build this Config. Kept as the defence in depth, and
+            // reported the same way: an operator message, not a panic.
+            fatal_config_error(
+                "JWT_SECRET",
+                "no signing key for session access/refresh tokens",
+                "Set JWT_SECRET_FILE=/run/secrets/jwt_secret (compose) or JWT_SECRET (dev .env).",
+            );
         }
         "development-secret-key-min-32-chars-long!".to_string()
     });
@@ -312,7 +344,15 @@ async fn main() -> anyhow::Result<()> {
     // dev/test falls back to a stable placeholder.
     let webhook_signing_secret = secret_env("BUNYIP_WEBHOOK_SIGNING_SECRET").unwrap_or_else(|| {
         if config.is_production() {
-            panic!("BUNYIP_WEBHOOK_SIGNING_SECRET must be set in production");
+            // Unreachable in practice (the startup audit already refused this
+            // Config); reported as an operator message, never a panic.
+            fatal_config_error(
+                "BUNYIP_WEBHOOK_SIGNING_SECRET",
+                "no HMAC key for outbound webhook dispatches",
+                "Set BUNYIP_WEBHOOK_SIGNING_SECRET_FILE=/run/secrets/webhook_signing_secret \
+                 (compose) or BUNYIP_WEBHOOK_SIGNING_SECRET (dev .env); `just init-secrets` \
+                 generates the secret file.",
+            );
         }
         "development-webhook-signing-secret-change-in-production".to_string()
     });
@@ -383,9 +423,13 @@ async fn main() -> anyhow::Result<()> {
     // even when the effective config is resolved from the DB. The disabled path
     // suppresses transactional mail (magic links, resets), breaking auth flows.
     if config.is_production() && !email_config.enabled {
-        panic!(
-            "Email is disabled in a production deployment (resolved from DB + env). Refusing to \
-             start: configure SMTP via the admin UI or SMTP_HOST/EMAIL_ENABLED (BUNYIP-204)."
+        fatal_config_error(
+            "SMTP_HOST",
+            "email is disabled in a production deployment (resolved from the DB email_config row \
+             plus the environment), so magic links and password resets are never delivered \
+             (BUNYIP-204)",
+            "Configure SMTP on the admin Email page, or set SMTP_HOST / EMAIL_ENABLED in the api \
+             environment.",
         );
     }
     let email_enabled = email_config.enabled;
@@ -625,27 +669,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize OIDC provider (optional — only when OIDC_ISSUER is set)
     let oidc_provider: Option<Arc<OidcProvider>> = if config.oidc.enabled() {
-        // BUNYIP-258: refuse to sign with a dev-named kid in production.
-        // The compose.yml `:?` markers stop a deploy that forgot to set
-        // OIDC_JWT_ACTIVE_KID outright; this guard catches the paste-error
-        // case where an operator filled the var with a leftover dev value
-        // (e.g. copying a staging .env into prod). Tokens minted under a
-        // `dev-*` kid would be advertised by JWKS and consumed by RPs as
-        // legitimate, masking the misconfiguration until rotation.
-        if config.is_production()
-            && config
-                .oidc
-                .jwt_active_kid
-                .to_ascii_lowercase()
-                .starts_with("dev-")
-        {
-            panic!(
-                "OIDC_JWT_ACTIVE_KID={} starts with `dev-` in production. \
-                 Set it to a production kid name (e.g. prod-2026) and \
-                 OIDC_JWT_PRIVATE_KEY_PATH to the matching prod key.",
-                config.oidc.jwt_active_kid
-            );
-        }
+        // BUNYIP-258's dev-kid guard is part of the startup audit in
+        // `Config::from_env` (BUNYIP-537), so a `dev-` kid in production never
+        // reaches this point.
         let key_set = OidcKeySet::load(
             &config.oidc.jwt_private_key_path,
             &config.oidc.jwt_active_kid,
@@ -1213,10 +1239,8 @@ async fn upsert_spa_oidc_client(
     let (Some(redirect_uris), Some(audience)) =
         (secret_env(redirect_uris_var), secret_env(audience_var))
     else {
-        info!(
-            client = name,
-            "SPA OIDC client redirect/audience env vars unset, skipping registration"
-        );
+        // Silent here: the env inventory warns once at boot for each of this
+        // client's variables, so the message lives in one place (BUNYIP-537).
         return Ok(());
     };
     // Optional: a client with no post-logout URIs upserts an empty array.
@@ -1304,7 +1328,8 @@ async fn upsert_lets_chat_oidc_client(pool: &sqlx::PgPool) -> anyhow::Result<()>
         secret_env("LETS_CHAT_REDIRECT_URIS"),
         secret_env("LETS_CHAT_AUDIENCE"),
     ) else {
-        info!("lets-chat OIDC client redirect/audience env vars unset, skipping registration");
+        // Silent here: the env inventory warns once at boot for each of the two
+        // variables, so the message lives in exactly one place (BUNYIP-537).
         return Ok(());
     };
     let post_logout = secret_env("LETS_CHAT_POST_LOGOUT_REDIRECT_URIS").unwrap_or_default();
@@ -1380,7 +1405,7 @@ async fn upsert_lets_chat_oidc_client(pool: &sqlx::PgPool) -> anyhow::Result<()>
 /// hub on a bad seed.
 async fn upsert_mokosh_webhook_url(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     let Some(url) = secret_env("MOKOSH_WEBHOOK_URL") else {
-        info!("MOKOSH_WEBHOOK_URL unset, skipping mokosh webhook_url registration");
+        // Silent here: the env inventory warns once at boot (BUNYIP-537).
         return Ok(());
     };
 
@@ -1411,6 +1436,23 @@ async fn upsert_mokosh_webhook_url(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Report a configuration error that only surfaces after the config has loaded
+/// (a malformed value, or a feature resolved from the database), then exit
+/// non-zero (BUNYIP-537).
+///
+/// Same operator-facing shape as [`ConfigError::log_startup_report`]: one
+/// `tracing::error!` naming the variable, the reason and the remedy. Never a
+/// `panic!`, which prints a panic location and exits 101, reading as a bug
+/// rather than as a configuration error.
+fn fatal_config_error(env_var: &str, reason: &str, remedy: &str) -> ! {
+    error!(
+        env_var,
+        "Startup configuration error: {env_var} is not usable - {reason}. {remedy}"
+    );
+    error!("Refusing to start: fix the configuration error above and restart");
+    std::process::exit(1);
 }
 
 /// Initialize tracing subscriber with compact human-readable output, plus the

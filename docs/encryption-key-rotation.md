@@ -13,8 +13,10 @@ Three environment variables drive it (each honours the `{NAME}_FILE`
 compose-secret convention):
 
 - `APP_ENCRYPTION_KEY` - hex, 32 bytes. Every new write uses it. Required in
-  production: the api panics at boot when it is unset. Outside production an
-  unset key falls back to the all-zero DEVELOPMENT key with a loud warning.
+  production: the api logs one startup configuration `ERROR` naming the variable
+  and the remedy, then exits non-zero (BUNYIP-537). Malformed key material (not
+  hex, or not 32 bytes) is reported the same way. Outside production an unset
+  key falls back to the all-zero DEVELOPMENT key with a loud warning.
 - `APP_ENCRYPTION_KEY_PREV` - comma-separated hex keys still needed to READ rows
   written under an earlier key. Empty on a steady-state deployment.
 - `APP_KEY_VERSION` - the version stamped on rows written under the current key

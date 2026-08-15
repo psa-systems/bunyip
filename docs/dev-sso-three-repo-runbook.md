@@ -260,8 +260,10 @@ folded into `fix/dev-sso-nebula-secure-list`.
 ### 6.9 Register page "error sending request ... /v1/auth/register"
 Symptom: web SSR could not reach `api:4401`. Cause: the api **crash-looped on
 config** - the `.env` was the **old-architecture** one (missing ~20 new keys), so
-`APP_ENCRYPTION_KEY` was empty (must be 32-byte hex) and
-the api panicked; plus `secrets/oidc/` had no Ed25519 OIDC keys. Fix: regenerate `.env`
+`APP_ENCRYPTION_KEY` was empty (must be 32-byte hex) and the api refused to
+start (since BUNYIP-537 it reports every unusable variable as a startup
+configuration `ERROR` and exits 1; before that it panicked); plus
+`secrets/oidc/` had no Ed25519 OIDC keys. Fix: regenerate `.env`
 from the new template (generated secret keys, kept the registered client_id + uid),
 generate `secrets/oidc/dev-2026.pem`, recreate the api. Durable fix: `ensure-oidc-keys`
 recipe (`feat/dev-ensure-oidc-keys`) + the existing `ensure-env` key generation.
@@ -295,8 +297,8 @@ bunyip-api's `TRUSTED_PROXY_CIDR`. bunyip-api logs its posture once at boot (a
 | default cert / "not private" | wrong entrypoint/host, or pre-issuance | 6.3 |
 | compose "incorrect label ... network" | missing `external: true` | 6.6 |
 | containers restart, 404 backend | HOST_UID fell back to 1000 (0700 repo) | 6.7 |
-| api panics "must be 32 bytes" | stale `.env` missing the new secret keys | 6.9 |
-| api panics on OIDC key | `secrets/oidc/dev-2026.pem` missing | 3.7 / 6.9 |
+| api exits 1, "APP_ENCRYPTION_KEY ... not the required 32" | stale `.env` missing the new secret keys | 6.9 |
+| api fails to load the OIDC key set | `secrets/oidc/dev-2026.pem` missing | 3.7 / 6.9 |
 | `${USER}` literal in `docker inspect` labels | map-syntax labels | 6.8 |
 
 ## 8. Open / transitional items

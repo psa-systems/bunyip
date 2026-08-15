@@ -959,10 +959,21 @@ impl Config {
     /// # Errors
     /// Returns an error if required environment variables are missing.
     pub fn from_env_inner() -> Result<Self, ConfigError> {
+        let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| "production".to_string());
+        let is_production = environment == "production";
+
+        // BUNYIP-537: collect EVERY startup failure in one pass, so an operator
+        // fixes them all before the next restart instead of discovering the next
+        // one each time. Nothing below returns early on a required variable;
+        // the single `finish_startup_audit` at the end of this function decides.
+        let mut failures = audit_required(is_production);
+
         // DATABASE_URL embeds the postgres password, so it supports the
-        // DATABASE_URL_FILE secret convention like every other secret.
-        let database_url = secret_env("DATABASE_URL")
-            .ok_or_else(|| ConfigError::MissingEnv("DATABASE_URL".to_string()))?;
+        // DATABASE_URL_FILE secret convention like every other secret. Its
+        // absence is already recorded by the audit above; the placeholder here
+        // is never observed, because a non-empty `failures` returns Err before
+        // this Config is built.
+        let database_url = secret_env("DATABASE_URL").unwrap_or_default();
 
         // Optional NOBYPASSRLS pool for per-user RLS (BUNYIP-344). Absent on
         // deployments that have not provisioned the `bunyip_app` role yet.
@@ -973,15 +984,22 @@ impl Config {
 
         let host = env::var("HOST_IP").unwrap_or_else(|_| "0.0.0.0".to_string());
 
-        let port = env::var("APP_PORT")
+        let port = match env::var("APP_PORT")
             .unwrap_or_else(|_| "4000".to_string())
             .parse::<u16>()
-            .map_err(|_| {
-                ConfigError::InvalidValue(
-                    "APP_PORT".to_string(),
-                    "must be a valid port number".to_string(),
-                )
-            })?;
+        {
+            Ok(port) => port,
+            Err(e) => {
+                failures.push(ConfigFailure {
+                    var: "APP_PORT",
+                    reason: format!("the value is not a valid port number ({e})"),
+                    remedy: "Set it to a TCP port in 1..=65535 (the api listens on 4401 in the \
+                             reference compose deployment)."
+                        .to_string(),
+                });
+                4000
+            }
+        };
 
         let log_level = env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
 
@@ -1007,9 +1025,7 @@ impl Config {
                     .to_string()
             });
 
-        let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| "production".to_string());
         let app_name = env::var("APP_NAME").unwrap_or_else(|_| "localhost".to_string());
-        let is_production = environment == "production";
         let email = EmailConfig::from_env(is_production);
 
         // Fail fast: a production deployment with email disabled would silently
@@ -1018,7 +1034,7 @@ impl Config {
         // included) at INFO, handing account-takeover credentials to anyone with
         // log read access. Refuse to start instead of degrading silently.
         if is_production && !email.enabled {
-            return Err(ConfigError::EmailDisabledInProduction);
+            failures.push(email_disabled_failure());
         }
 
         // Cookie domain: must be set explicitly via COOKIE_DOMAIN env var.
@@ -1044,9 +1060,21 @@ impl Config {
         let trusted_proxies =
             parse_trusted_proxies(&env::var("TRUSTED_PROXY_CIDR").unwrap_or_default());
 
-        let app_encryption_key = Self::load_app_encryption_key(&environment);
+        let app_encryption_key = match Self::load_app_encryption_key(&environment) {
+            Ok(key) => key,
+            Err(failure) => {
+                failures.push(failure);
+                [0u8; 32]
+            }
+        };
         let app_encryption_key_prev =
-            Self::load_previous_encryption_keys("APP_ENCRYPTION_KEY_PREV");
+            match Self::load_previous_encryption_keys("APP_ENCRYPTION_KEY_PREV") {
+                Ok(keys) => keys,
+                Err(failure) => {
+                    failures.push(failure);
+                    Vec::new()
+                }
+            };
         let app_key_version: i16 = env::var("APP_KEY_VERSION")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -1056,6 +1084,28 @@ impl Config {
         let download = DownloadConfig::from_env();
         let oci = OciConfig::from_env();
         let oidc = OidcConfig::from_env();
+
+        // BUNYIP-258: a `dev-` kid in production is the paste-error case (a
+        // staging .env copied into prod). Tokens minted under it are advertised
+        // by JWKS and consumed by RPs as legitimate, masking the
+        // misconfiguration until rotation. Presence is covered by the audit;
+        // this is the value-level half.
+        if is_production
+            && oidc.enabled()
+            && oidc.jwt_active_kid.to_ascii_lowercase().starts_with("dev-")
+        {
+            failures.push(ConfigFailure {
+                var: "OIDC_JWT_ACTIVE_KID",
+                reason: format!(
+                    "the value {} starts with `dev-` in production, so RPs would consume \
+                     dev-signed tokens as legitimate",
+                    oidc.jwt_active_kid
+                ),
+                remedy: "Set it to a production kid name (e.g. prod-2026) and \
+                         OIDC_JWT_PRIVATE_KEY_PATH to the matching production key."
+                    .to_string(),
+            });
+        }
 
         // BUNYIP-290: the bootstrap admin email. Trimmed + lowercased so it
         // compares equal to stored emails (which `normalize_email` lowercases)
@@ -1123,6 +1173,11 @@ impl Config {
             signup_bot_guard_enabled,
             infisical,
         };
+
+        // BUNYIP-537: the one place startup failures are reported. Every branch
+        // above pushes instead of returning, so a deployment missing four
+        // variables learns about all four in this run.
+        finish_startup_audit(failures)?;
 
         info!(
             host = %config.host,
@@ -1233,12 +1288,19 @@ impl Config {
 
     /// Load the at-rest key from APP_ENCRYPTION_KEY (env var or _FILE secret,
     /// hex-encoded 32 bytes). In development, defaults to 32 zero bytes.
-    fn load_app_encryption_key(environment: &str) -> [u8; 32] {
+    ///
+    /// # Errors
+    /// Returns the operator-facing failure when the key is absent in production
+    /// or the material is malformed. Never panics (BUNYIP-537).
+    fn load_app_encryption_key(environment: &str) -> Result<[u8; 32], ConfigFailure> {
         match secret_env("APP_ENCRYPTION_KEY") {
             Some(hex_str) => parse_encryption_key("APP_ENCRYPTION_KEY", &hex_str),
             None => {
                 if environment == "production" {
-                    panic!("APP_ENCRYPTION_KEY must be set in production");
+                    // `audit_required` already recorded this; repeat it rather
+                    // than return a key the operator never chose. The caller
+                    // dedupes by variable name.
+                    return Err(required_failure("APP_ENCRYPTION_KEY"));
                 }
                 // Loud, because data encrypted under the zero key is not
                 // protected and will fail to decrypt once a real key is set.
@@ -1246,7 +1308,7 @@ impl Config {
                     "APP_ENCRYPTION_KEY is not set; using the all-zero DEVELOPMENT key. \
                      TOTP, Stripe and SMTP secrets encrypted with it are NOT protected."
                 );
-                [0u8; 32]
+                Ok([0u8; 32])
             }
         }
     }
@@ -1255,7 +1317,13 @@ impl Config {
     /// an env var or its `_FILE` secret. Empty when unset: nothing to fall back
     /// to. A list rather than one key because the consolidation window has to
     /// read rows written under BOTH retired key families (BUNYIP-483).
-    fn load_previous_encryption_keys(env_var: &str) -> Vec<[u8; 32]> {
+    ///
+    /// # Errors
+    /// Returns the operator-facing failure on malformed key material. Never
+    /// panics (BUNYIP-537).
+    fn load_previous_encryption_keys(
+        env_var: &'static str,
+    ) -> Result<Vec<[u8; 32]>, ConfigFailure> {
         secret_env(env_var)
             .unwrap_or_default()
             .split(',')
@@ -1280,23 +1348,636 @@ pub enum ConfigError {
     #[error("Invalid value for {0}: {1}")]
     InvalidValue(String, String),
 
+    /// The collected startup-configuration failures (BUNYIP-537). Every missing
+    /// or malformed required variable found in one pass, so an operator fixes
+    /// them all before the next restart instead of one per restart.
     #[error(
-        "Email sending is disabled in a production deployment. Set SMTP_HOST (not \"localhost\") \
-         so transactional emails can be delivered, or set EMAIL_ENABLED=true. Refusing to start: \
-         the disabled path would log single-use login/reset tokens instead of emailing them."
+        "{} startup configuration error(s): {}",
+        .0.len(),
+        .0.iter().map(|f| f.var).collect::<Vec<_>>().join(", ")
     )]
-    EmailDisabledInProduction,
+    Startup(Vec<ConfigFailure>),
 }
 
-/// Decode one hex-encoded 32-byte at-rest key. Panics (at startup, before any
-/// request) on a malformed value rather than silently encrypting under a key the
-/// operator did not intend.
-fn parse_encryption_key(env_var: &str, hex_str: &str) -> [u8; 32] {
-    let bytes =
-        hex::decode(hex_str.trim()).unwrap_or_else(|_| panic!("{env_var} must be valid hex"));
-    bytes
-        .try_into()
-        .unwrap_or_else(|_| panic!("{env_var} must be exactly 32 bytes (64 hex chars)"))
+impl ConfigError {
+    /// Log this error as operator-facing lines: one `tracing::error!` per
+    /// failure naming the variable, why it is required, and how to supply it.
+    /// The caller exits non-zero afterwards; nothing here panics, so the
+    /// operator sees a configuration report rather than a crash report.
+    pub fn log_startup_report(&self) {
+        match self {
+            Self::Startup(failures) => {
+                for failure in failures {
+                    tracing::error!(
+                        env_var = failure.var,
+                        "Startup configuration error: {} is not usable - {}. {}",
+                        failure.var,
+                        failure.reason,
+                        failure.remedy
+                    );
+                }
+            }
+            other => tracing::error!("Startup configuration error: {other}"),
+        }
+    }
+}
+
+/// One operator-facing startup-configuration failure: which variable, why the
+/// api will not start without it, and what to do about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigFailure {
+    /// The environment variable at fault.
+    pub var: &'static str,
+    /// Why the api cannot start.
+    pub reason: String,
+    /// What the operator must do to supply it.
+    pub remedy: String,
+}
+
+/// How a variable is reported at startup (BUNYIP-537).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnvClass {
+    /// Absent means the api must not start, in every environment.
+    Required,
+    /// Absent means the api must not start in production; other environments
+    /// fall back to a documented development value.
+    RequiredInProduction,
+    /// Optional, but its absence turns a feature off: one `warn!` at boot.
+    FeatureGating,
+    /// Optional with a working default: no boot-time log at all.
+    Defaulted,
+}
+
+/// One classified environment variable the api reads.
+pub struct EnvVarSpec {
+    /// The variable name. Secrets also resolve through `{NAME}_FILE`.
+    pub name: &'static str,
+    /// How its absence is reported.
+    pub class: EnvClass,
+    /// What it configures, or what stops working when it is absent.
+    pub feature: &'static str,
+    /// How the operator supplies it.
+    pub remedy: &'static str,
+    /// Only report this variable when the named variable is itself set. Keeps a
+    /// deliberately-unused integration to one warning instead of one per member
+    /// of its variable group.
+    pub gate: Option<&'static str>,
+}
+
+impl EnvVarSpec {
+    const fn required(name: &'static str, feature: &'static str, remedy: &'static str) -> Self {
+        Self {
+            name,
+            class: EnvClass::Required,
+            feature,
+            remedy,
+            gate: None,
+        }
+    }
+
+    const fn required_in_production(
+        name: &'static str,
+        feature: &'static str,
+        remedy: &'static str,
+    ) -> Self {
+        Self {
+            name,
+            class: EnvClass::RequiredInProduction,
+            feature,
+            remedy,
+            gate: None,
+        }
+    }
+
+    const fn gating(name: &'static str, feature: &'static str, remedy: &'static str) -> Self {
+        Self {
+            name,
+            class: EnvClass::FeatureGating,
+            feature,
+            remedy,
+            gate: None,
+        }
+    }
+
+    const fn defaulted(name: &'static str, feature: &'static str) -> Self {
+        Self {
+            name,
+            class: EnvClass::Defaulted,
+            feature,
+            remedy: "",
+            gate: None,
+        }
+    }
+
+    const fn gated_by(mut self, gate: &'static str) -> Self {
+        self.gate = Some(gate);
+        self
+    }
+
+    /// The failure this variable produces when it is required and absent.
+    fn failure(&self) -> ConfigFailure {
+        ConfigFailure {
+            var: self.name,
+            reason: self.feature.to_string(),
+            remedy: self.remedy.to_string(),
+        }
+    }
+}
+
+/// The one classified inventory of every environment variable bunyip-api reads
+/// (BUNYIP-537). A new variable is added here with its classification, gated
+/// feature and remediation text, or `env_inventory_covers_every_api_env_read`
+/// (bunyip-api/tests/env_inventory.rs) fails the build.
+///
+/// The reporting contract:
+///
+/// - [`EnvClass::Required`] / [`EnvClass::RequiredInProduction`]: one
+///   `tracing::error!` naming the variable, the reason and the remedy, then a
+///   non-zero exit. No panic, no backtrace.
+/// - [`EnvClass::FeatureGating`]: one `tracing::warn!` naming the variable and
+///   the functionality that is off.
+/// - [`EnvClass::Defaulted`]: nothing. The defaults are documented in
+///   `docs/configuration.md`; a line per default would drown the two cases
+///   above.
+pub static ENV_INVENTORY: &[EnvVarSpec] = &[
+    // ---- Required ---------------------------------------------------------
+    EnvVarSpec::required(
+        "DATABASE_URL",
+        "the api cannot connect to postgres without it",
+        "Set DATABASE_URL_FILE=/run/secrets/database_url (compose) or DATABASE_URL (dev .env); \
+         `just init-secrets` generates the secret file.",
+    ),
+    EnvVarSpec::required_in_production(
+        "JWT_SECRET",
+        "no signing key for session access/refresh tokens",
+        "Set JWT_SECRET_FILE=/run/secrets/jwt_secret (compose) or JWT_SECRET (dev .env); \
+         `just init-secrets` generates the secret file.",
+    ),
+    EnvVarSpec::required_in_production(
+        "APP_ENCRYPTION_KEY",
+        "no at-rest key for the TOTP, Stripe and SMTP secrets (BUNYIP-483)",
+        "Set APP_ENCRYPTION_KEY_FILE=/run/secrets/app_encryption_key (compose) or \
+         APP_ENCRYPTION_KEY (dev .env) to 32 hex-encoded bytes (`openssl rand -hex 32`); \
+         `just init-secrets` generates the secret file.",
+    ),
+    EnvVarSpec::required_in_production(
+        "BUNYIP_WEBHOOK_SIGNING_SECRET",
+        "no HMAC key for outbound webhook dispatches, so every receiving RP would have to \
+         hold bunyip's access-token signing key (BUNYIP-332)",
+        "Set BUNYIP_WEBHOOK_SIGNING_SECRET_FILE=/run/secrets/webhook_signing_secret (compose) \
+         or BUNYIP_WEBHOOK_SIGNING_SECRET (dev .env); `just init-secrets` generates the secret \
+         file. The receiving app holds the same value (mokosh-server: BUNYIP_WEBHOOK_SECRET).",
+    ),
+    EnvVarSpec::required_in_production(
+        "OIDC_JWT_PRIVATE_KEY_PATH",
+        "the OIDC provider is enabled but would sign with the development key path",
+        "Set it to the production signing-key path (e.g. /run/secrets/oidc/prod-2026.pem).",
+    )
+    .gated_by("OIDC_ISSUER"),
+    EnvVarSpec::required_in_production(
+        "OIDC_JWT_ACTIVE_KID",
+        "the OIDC provider is enabled but would advertise a development kid, which RPs would \
+         consume as legitimate (BUNYIP-258)",
+        "Set it to a production kid name (e.g. prod-2026) matching \
+         OIDC_JWT_PRIVATE_KEY_PATH.",
+    )
+    .gated_by("OIDC_ISSUER"),
+    // ---- Feature-gating ---------------------------------------------------
+    EnvVarSpec::gating(
+        "APP_DATABASE_URL",
+        "per-user row level security is inactive: self-service reads fall back to the primary \
+         pool, which bypasses RLS (BUNYIP-344)",
+        "Set APP_DATABASE_URL_FILE=/run/secrets/app_database_url to a NOBYPASSRLS bunyip_app \
+         connection URL.",
+    ),
+    EnvVarSpec::gating(
+        "BUNYIP_APP_PASSWORD",
+        "the unprivileged bunyip_app RLS role is not provisioned (BUNYIP-360)",
+        "Set BUNYIP_APP_PASSWORD_FILE=/run/secrets/bunyip_app_password to the password embedded \
+         in APP_DATABASE_URL.",
+    ),
+    EnvVarSpec::gating(
+        "SETUP_DEFAULT_ADMIN",
+        "no bootstrap admin is seeded on first boot",
+        "Set SETUP_DEFAULT_ADMIN_FILE=/run/secrets/setup_default_admin to `email:password`, or \
+         use BOOTSTRAP_ADMIN_EMAIL instead.",
+    ),
+    EnvVarSpec::gating(
+        "BOOTSTRAP_ADMIN_EMAIL",
+        "no account is auto-promoted to the first admin / super admin (BUNYIP-290)",
+        "Set it to the email that signs up first; it is inert once any admin exists.",
+    ),
+    EnvVarSpec::gating(
+        "TRUSTED_PROXY_CIDR",
+        "forwarded client IPs are dropped: sessions and audit rows record the proxy address \
+         instead of the end user (BUNYIP-409)",
+        "Set it to the CIDRs of the peers allowed to set X-Forwarded-For (see \
+         docs/client-ip-forwarding.md).",
+    ),
+    EnvVarSpec::gating(
+        "OIDC_ISSUER",
+        "the OIDC provider is off: /.well-known/* and /oauth2/* serve nothing, so no RP can log \
+         in through bunyip",
+        "Set it to the public issuer URL of this deployment (e.g. https://api.example.com).",
+    ),
+    EnvVarSpec::gating(
+        "FORGEJO_BASE_URL",
+        "the distribution proxy is off: member downloads and the OCI registry have no upstream",
+        "Set it to the Forgejo base URL and supply FORGEJO_API_TOKEN (see \
+         docs/oci-registry-verification.md).",
+    ),
+    EnvVarSpec::gating(
+        "FORGEJO_API_TOKEN",
+        "the distribution proxy is off: downloads cannot authenticate to Forgejo",
+        "Set FORGEJO_API_TOKEN_FILE=/run/secrets/forgejo_api_token to a token with read access \
+         to the release packages.",
+    ),
+    EnvVarSpec::gating(
+        "OCI_REGISTRY_ENABLED",
+        "the OCI registry endpoint is off",
+        "Set OCI_REGISTRY_ENABLED=true and OCI_REGISTRY_SERVICE to serve it.",
+    ),
+    EnvVarSpec::gating(
+        "OCI_REGISTRY_SERVICE",
+        "the OCI registry is enabled but has no public hostname, so the token realm cannot be \
+         derived",
+        "Set it to the public registry hostname behind the TLS proxy (e.g. \
+         registry.example.com).",
+    )
+    .gated_by("OCI_REGISTRY_ENABLED"),
+    EnvVarSpec::gating(
+        "SMTP_HOST",
+        "transactional email is disabled: magic links, password resets and notifications are \
+         not delivered",
+        "Set it to the SMTP relay hostname (production refuses to start without it).",
+    ),
+    EnvVarSpec::gating(
+        "ADMIN_NOTIFICATION_EMAILS",
+        "admin notification emails have no recipient",
+        "Set it to a comma-separated list of admin addresses.",
+    )
+    .gated_by("SMTP_HOST"),
+    EnvVarSpec::gating(
+        "IP2LOCATION_DB_PATH",
+        "GeoIP enrichment is off: login-location alerts cannot name a country (BUNYIP-366)",
+        "Set it to the IP2Location .BIN path (see docs/ip2-dataset-refresh.md).",
+    ),
+    EnvVarSpec::gating(
+        "IP2PROXY_DB_PATH",
+        "ASN / VPN enrichment is off: login alerts cannot flag proxy or hosting IPs \
+         (BUNYIP-437)",
+        "Set it to the IP2Proxy PX .BIN path (see docs/ip2-dataset-refresh.md).",
+    ),
+    EnvVarSpec::gating(
+        "BUNYIP_UPDATE_CHECK_URL",
+        "the operator update checker is off: no new-release notice on the admin pages",
+        "Set it to a Forgejo/Gitea releases/latest endpoint.",
+    ),
+    EnvVarSpec::gating(
+        "BUNYIP_UPDATE_CHECK_TOKEN",
+        "the update check runs unauthenticated, so a private release feed returns nothing",
+        "Set BUNYIP_UPDATE_CHECK_TOKEN_FILE=/run/secrets/update_check_token to a read token.",
+    )
+    .gated_by("BUNYIP_UPDATE_CHECK_URL"),
+    EnvVarSpec::gating(
+        "INFISICAL_ENABLED",
+        "the Infisical runtime fetch is off: Group-2 integration secrets (SMTP password) come \
+         only from the database (BUNYIP-525)",
+        "Set INFISICAL_ENABLED=true plus the INFISICAL_* credentials (see \
+         docs/secrets-infisical.md).",
+    ),
+    EnvVarSpec::gating(
+        "INFISICAL_ADDRESS",
+        "the Infisical fetch is enabled but has no server address",
+        "Set it to the Infisical base URL.",
+    )
+    .gated_by("INFISICAL_ENABLED"),
+    EnvVarSpec::gating(
+        "INFISICAL_PROJECT_ID",
+        "the Infisical fetch is enabled but has no project",
+        "Set it to the Infisical project id holding the /runtime folder.",
+    )
+    .gated_by("INFISICAL_ENABLED"),
+    EnvVarSpec::gating(
+        "INFISICAL_CLIENT_ID",
+        "the Infisical fetch is enabled but has no machine identity",
+        "Set INFISICAL_CLIENT_ID_FILE or INFISICAL_CLIENT_ID to the Universal Auth client id.",
+    )
+    .gated_by("INFISICAL_ENABLED"),
+    EnvVarSpec::gating(
+        "INFISICAL_CLIENT_SECRET",
+        "the Infisical fetch is enabled but has no machine-identity secret",
+        "Set INFISICAL_CLIENT_SECRET_FILE or INFISICAL_CLIENT_SECRET to the Universal Auth \
+         client secret.",
+    )
+    .gated_by("INFISICAL_ENABLED"),
+    EnvVarSpec::gating(
+        "MOKOSH_APPS_REDIRECT_URIS",
+        "the mokosh-apps SPA OIDC client is not reconciled from the environment, so it keeps the \
+         redirect URIs the migration seeded (BUNYIP-57)",
+        "Set it to the comma-separated redirect URIs of this deployment's mokosh-apps.",
+    ),
+    EnvVarSpec::gating(
+        "MOKOSH_APPS_AUDIENCE",
+        "the mokosh-apps SPA OIDC client is not reconciled from the environment (BUNYIP-57)",
+        "Set it to the mokosh-apps API audience.",
+    ),
+    EnvVarSpec::gating(
+        "MOKOSH_APPS_POST_LOGOUT_REDIRECT_URIS",
+        "the mokosh-apps client is reconciled with an empty post-logout redirect list",
+        "Set it to the comma-separated post-logout redirect URIs.",
+    )
+    .gated_by("MOKOSH_APPS_REDIRECT_URIS"),
+    EnvVarSpec::gating(
+        "DRILLMARK_REDIRECT_URIS",
+        "the drillmark SPA OIDC client is not reconciled from the environment, so it keeps the \
+         redirect URIs the migration seeded (BUNYIP-57)",
+        "Set it to the comma-separated redirect URIs of this deployment's drillmark.",
+    ),
+    EnvVarSpec::gating(
+        "DRILLMARK_AUDIENCE",
+        "the drillmark SPA OIDC client is not reconciled from the environment (BUNYIP-57)",
+        "Set it to the drillmark API audience.",
+    ),
+    EnvVarSpec::gating(
+        "DRILLMARK_POST_LOGOUT_REDIRECT_URIS",
+        "the drillmark client is reconciled with an empty post-logout redirect list",
+        "Set it to the comma-separated post-logout redirect URIs.",
+    )
+    .gated_by("DRILLMARK_REDIRECT_URIS"),
+    EnvVarSpec::gating(
+        "LETS_CHAT_REDIRECT_URIS",
+        "the lets-chat OIDC client is not reconciled from the environment, so it keeps whatever \
+         the migration seeded",
+        "Set it to the comma-separated redirect URIs of this deployment's lets-chat.",
+    ),
+    EnvVarSpec::gating(
+        "LETS_CHAT_AUDIENCE",
+        "the lets-chat OIDC client is not reconciled from the environment, so it keeps whatever \
+         the migration seeded",
+        "Set it to the lets-chat API audience.",
+    ),
+    EnvVarSpec::gating(
+        "LETS_CHAT_POST_LOGOUT_REDIRECT_URIS",
+        "the lets-chat client is reconciled with an empty post-logout redirect list",
+        "Set it to the comma-separated post-logout redirect URIs.",
+    )
+    .gated_by("LETS_CHAT_REDIRECT_URIS"),
+    EnvVarSpec::gating(
+        "LETS_CHAT_CLIENT_SECRET_HASH",
+        "the lets-chat client keeps the migration's shared client-secret hash instead of a \
+         per-environment one",
+        "Set it to an Argon2id PHC hash of this environment's lets-chat client secret.",
+    )
+    .gated_by("LETS_CHAT_REDIRECT_URIS"),
+    EnvVarSpec::gating(
+        "MOKOSH_WEBHOOK_URL",
+        "the mokosh application row has no webhook_url, so account-deleted events are never \
+         dispatched (BUNYIP-336)",
+        "Set it to mokosh-server's bunyip webhook receiver URL.",
+    ),
+    EnvVarSpec::gating(
+        "MOKOSH_BACKUP_API_URL",
+        "account backup/restore falls back to the pending stub: Mokosh tenant data is not \
+         exported or imported (BUNYIP-356)",
+        "Set it to mokosh-server's tenant export/import base URL.",
+    ),
+    // ---- Defaulted (documented in docs/configuration.md; no boot-time log) --
+    EnvVarSpec::defaulted(
+        "ENVIRONMENT",
+        "deployment environment name; unset means production",
+    ),
+    EnvVarSpec::defaulted("APP_NAME", "product name in emails and tokens"),
+    EnvVarSpec::defaulted(
+        "APP_URL",
+        "public base URL used in email bodies and the EHLO name",
+    ),
+    EnvVarSpec::defaulted("HOST_IP", "bind address"),
+    EnvVarSpec::defaulted("APP_PORT", "listen port"),
+    EnvVarSpec::defaulted("RUST_LOG", "log filter"),
+    EnvVarSpec::defaulted("CORS_ORIGIN", "browser origins allowed to call /v1"),
+    EnvVarSpec::defaulted(
+        "BUNYIP_WEB_ORIGIN",
+        "login UI origin; falls back to CORS_ORIGIN",
+    ),
+    EnvVarSpec::defaulted(
+        "COOKIE_DOMAIN",
+        "cookie domain; unset scopes cookies to the host",
+    ),
+    EnvVarSpec::defaulted(
+        "BUNYIP_COOKIE_SHARED_DOMAIN",
+        "opt-in cross-subdomain OP session cookie (BUNYIP-266)",
+    ),
+    EnvVarSpec::defaulted(
+        "APP_ENCRYPTION_KEY_PREV",
+        "retired at-rest keys still needed to read old rows",
+    ),
+    EnvVarSpec::defaulted("APP_KEY_VERSION", "version stamped on newly encrypted rows"),
+    EnvVarSpec::defaulted(
+        "EMAIL_ENABLED",
+        "force-enable email without a real SMTP_HOST",
+    ),
+    EnvVarSpec::defaulted(
+        "EMAIL_LOG_TOKENS",
+        "dev-only token logging; forced off in production",
+    ),
+    EnvVarSpec::defaulted("SMTP_PORT", "SMTP port"),
+    EnvVarSpec::defaulted("SMTP_TLS", "SMTP TLS mode"),
+    EnvVarSpec::defaulted("SMTP_USERNAME", "SMTP username"),
+    EnvVarSpec::defaulted(
+        "SMTP_PASSWORD",
+        "SMTP password; Group-2 (DB row or Infisical)",
+    ),
+    EnvVarSpec::defaulted(
+        "SMTP_EHLO_NAME",
+        "EHLO name; falls back to the APP_URL host",
+    ),
+    EnvVarSpec::defaulted("SMTP_FROM", "From address"),
+    EnvVarSpec::defaulted("AUTO_BAN_ENABLED", "auto-ban switch"),
+    EnvVarSpec::defaulted("AUTO_BAN_THRESHOLD", "auto-ban failure threshold"),
+    EnvVarSpec::defaulted("AUTO_BAN_WINDOW_SECS", "auto-ban window"),
+    EnvVarSpec::defaulted("AUTO_BAN_DURATION_SECS", "auto-ban duration"),
+    EnvVarSpec::defaulted("LOGIN_APPROVAL_ENABLED", "suspicious-login approval gate"),
+    EnvVarSpec::defaulted("SIGNUP_BOT_GUARD_ENABLED", "signup honeypot / timing guard"),
+    EnvVarSpec::defaulted("TIER_LIFETIME_SLOTS", "lifetime tier slots"),
+    EnvVarSpec::defaulted("TIER_EARLY_ADOPTER_SLOTS", "early-adopter tier slots"),
+    EnvVarSpec::defaulted(
+        "TIER_EARLY_ADOPTER_TRIAL_DAYS",
+        "early-adopter trial length",
+    ),
+    EnvVarSpec::defaulted("TIER_STANDARD_TRIAL_DAYS", "standard trial length"),
+    EnvVarSpec::defaulted(
+        "BUNYIP_BILLING_TRIAL_PERIOD_DAYS",
+        "Stripe trial period fallback",
+    ),
+    EnvVarSpec::defaulted("DOWNLOAD_CACHE_DIR", "download cache directory"),
+    EnvVarSpec::defaulted("DOWNLOAD_CACHE_MAX_BYTES", "download cache size cap"),
+    EnvVarSpec::defaulted(
+        "DOWNLOAD_CONCURRENCY_PER_USER",
+        "concurrent downloads per user",
+    ),
+    EnvVarSpec::defaulted("DOWNLOAD_DAILY_LIMIT_PER_USER", "daily downloads per user"),
+    EnvVarSpec::defaulted(
+        "FORGEJO_RELEASE_CACHE_TTL_SECS",
+        "release listing cache TTL",
+    ),
+    EnvVarSpec::defaulted("OCI_REGISTRY_PORT", "OCI registry listener port"),
+    EnvVarSpec::defaulted(
+        "OCI_REGISTRY_REALM",
+        "token realm; derived from the service host",
+    ),
+    EnvVarSpec::defaulted("OCI_BLOB_CACHE_DIR", "OCI blob cache directory"),
+    EnvVarSpec::defaulted("OCI_BLOB_CACHE_MAX_BYTES", "OCI blob cache size cap"),
+    EnvVarSpec::defaulted("OCI_MANIFEST_CACHE_TTL_SECS", "OCI manifest cache TTL"),
+    EnvVarSpec::defaulted(
+        "OCI_CONCURRENT_MANIFESTS_PER_USER",
+        "concurrent manifest pulls",
+    ),
+    EnvVarSpec::defaulted("OCI_PULLS_PER_USER_PER_DAY", "daily OCI pulls per user"),
+    EnvVarSpec::defaulted("OCI_TOKEN_TTL_SECS", "OCI token TTL"),
+    EnvVarSpec::defaulted("OIDC_JWT_PUBLIC_KEYS_DIR", "JWKS public-key directory"),
+    EnvVarSpec::defaulted("OIDC_ACCESS_TOKEN_TTL_SECONDS", "OIDC access token TTL"),
+    EnvVarSpec::defaulted("OIDC_REFRESH_TOKEN_TTL_SECONDS", "OIDC refresh token TTL"),
+    EnvVarSpec::defaulted("OIDC_REFRESH_IDLE_TTL_SECONDS", "OIDC refresh idle TTL"),
+    EnvVarSpec::defaulted("OIDC_CODE_TTL_SECONDS", "authorization code TTL"),
+    EnvVarSpec::defaulted(
+        "OIDC_LIFECYCLE_EVENT_KEY",
+        "back-channel lifecycle event key",
+    ),
+    EnvVarSpec::defaulted("OIDC_RS_AUDIENCE", "resource-server audience"),
+    EnvVarSpec::defaulted(
+        "INFISICAL_SECRET_PATH",
+        "Infisical folder, relative to the project",
+    ),
+    EnvVarSpec::defaulted(
+        "INFISICAL_ENVIRONMENT",
+        "Infisical environment slug (BUNYIP-535)",
+    ),
+    EnvVarSpec::defaulted("INFISICAL_ENV", "legacy alias of INFISICAL_ENVIRONMENT"),
+    EnvVarSpec::defaulted(
+        "BUNYIP_E2E_BOOTSTRAP_ALLOW",
+        "non-production e2e hard-delete switch (BUNYIP-246)",
+    ),
+    EnvVarSpec::defaulted("BUNYIP_E2E_TOTP_SECRET", "e2e bootstrap TOTP seed"),
+    EnvVarSpec::defaulted("BUNYIP_SEED_ALLOW", "non-production demo-seed switch"),
+    EnvVarSpec::defaulted(
+        "BUNYIP_GIT_SHA",
+        "build stamp shown on the version endpoint",
+    ),
+];
+
+/// Look up one variable's spec.
+pub fn env_spec(name: &str) -> Option<&'static EnvVarSpec> {
+    ENV_INVENTORY.iter().find(|spec| spec.name == name)
+}
+
+/// The failure for an inventory variable that is required and absent. Falls
+/// back to a generic message for a name the inventory does not carry, which the
+/// coverage test in `bunyip-api/tests/env_inventory.rs` prevents.
+fn required_failure(name: &'static str) -> ConfigFailure {
+    match env_spec(name) {
+        Some(spec) => spec.failure(),
+        None => ConfigFailure {
+            var: name,
+            reason: "is required but missing".to_string(),
+            remedy: "Set it in the api environment.".to_string(),
+        },
+    }
+}
+
+/// The production email gate (BUNYIP-204/351), as an inventory-shaped failure.
+fn email_disabled_failure() -> ConfigFailure {
+    ConfigFailure {
+        var: "SMTP_HOST",
+        reason: "email sending is disabled in a production deployment, and the disabled path \
+                 would log single-use login/reset tokens instead of emailing them (BUNYIP-204)"
+            .to_string(),
+        remedy: "Set SMTP_HOST to a real relay (not \"localhost\") so transactional emails are \
+                 delivered, or set EMAIL_ENABLED=true."
+            .to_string(),
+    }
+}
+
+/// Turn the collected failures into the startup error, one entry per variable.
+/// A variable reported by both the presence audit and a value-level check
+/// (`APP_ENCRYPTION_KEY` absent in production, say) appears once.
+fn finish_startup_audit(mut failures: Vec<ConfigFailure>) -> Result<(), ConfigError> {
+    if failures.is_empty() {
+        return Ok(());
+    }
+    let mut seen = std::collections::HashSet::new();
+    failures.retain(|failure| seen.insert(failure.var));
+    Err(ConfigError::Startup(failures))
+}
+
+/// True when the variable resolves to a non-empty value, through either the
+/// `{NAME}_FILE` secret convention or the plain variable.
+fn env_present(name: &str) -> bool {
+    secret_env(name).is_some()
+}
+
+/// The startup presence pass: every [`EnvClass::Required`] /
+/// [`EnvClass::RequiredInProduction`] variable that is absent, in one report
+/// (BUNYIP-537). Gated entries only count when their gate is set, so an
+/// OIDC-less deployment is not asked for OIDC key material.
+pub fn audit_required(is_production: bool) -> Vec<ConfigFailure> {
+    ENV_INVENTORY
+        .iter()
+        .filter(|spec| match spec.class {
+            EnvClass::Required => true,
+            EnvClass::RequiredInProduction => is_production,
+            EnvClass::FeatureGating | EnvClass::Defaulted => false,
+        })
+        .filter(|spec| spec.gate.is_none_or(env_present))
+        .filter(|spec| !env_present(spec.name))
+        .map(EnvVarSpec::failure)
+        .collect()
+}
+
+/// The feature-gating variables that are absent, in inventory order. Pure, so
+/// the classification is testable without a log subscriber;
+/// [`log_feature_gaps`] is the thin emitting half.
+pub fn feature_gaps() -> Vec<&'static EnvVarSpec> {
+    ENV_INVENTORY
+        .iter()
+        .filter(|spec| spec.class == EnvClass::FeatureGating)
+        .filter(|spec| spec.gate.is_none_or(env_present))
+        .filter(|spec| !env_present(spec.name))
+        .collect()
+}
+
+/// Emit one `tracing::warn!` per absent feature-gating variable, naming the
+/// functionality that is off. Defaulted variables log nothing. Called once at
+/// startup, after the config loads, so the message for each variable lives in
+/// exactly one place instead of at its call site.
+pub fn log_feature_gaps() {
+    for spec in feature_gaps() {
+        tracing::warn!(
+            env_var = spec.name,
+            "{} is not set: {}. {}",
+            spec.name,
+            spec.feature,
+            spec.remedy
+        );
+    }
+}
+
+/// Decode one hex-encoded 32-byte at-rest key. Returns an operator-facing
+/// failure (never a panic) on malformed material rather than silently
+/// encrypting under a key the operator did not intend.
+fn parse_encryption_key(env_var: &'static str, hex_str: &str) -> Result<[u8; 32], ConfigFailure> {
+    let remedy = "Set it to 32 hex-encoded bytes (64 hex chars), e.g. `openssl rand -hex 32`.";
+    let bytes = hex::decode(hex_str.trim()).map_err(|e| ConfigFailure {
+        var: env_var,
+        reason: format!("the value is not valid hex ({e})"),
+        remedy: remedy.to_string(),
+    })?;
+    let len = bytes.len();
+    bytes.try_into().map_err(|_| ConfigFailure {
+        var: env_var,
+        reason: format!("the value decodes to {len} bytes, not the required 32"),
+        remedy: remedy.to_string(),
+    })
 }
 
 /// Pure half of [`Config::e2e_purge_enabled`]: the environment must be a real
@@ -1359,17 +2040,23 @@ mod tests {
         let _env = env_lock();
         env::remove_var("APP_ENCRYPTION_KEY");
         env::remove_var("APP_ENCRYPTION_KEY_FILE");
-        assert_eq!(Config::load_app_encryption_key("development"), [0u8; 32]);
+        assert_eq!(
+            Config::load_app_encryption_key("development").unwrap(),
+            [0u8; 32]
+        );
     }
 
     /// BUNYIP-483: production still refuses to boot without the key.
+    /// BUNYIP-537: as an operator-facing failure, not a panic.
     #[test]
-    #[should_panic(expected = "APP_ENCRYPTION_KEY must be set in production")]
     fn app_encryption_key_is_required_in_production() {
         let _env = env_lock();
         env::remove_var("APP_ENCRYPTION_KEY");
         env::remove_var("APP_ENCRYPTION_KEY_FILE");
-        Config::load_app_encryption_key("production");
+        let failure = Config::load_app_encryption_key("production")
+            .expect_err("production without the key must fail");
+        assert_eq!(failure.var, "APP_ENCRYPTION_KEY");
+        assert!(!failure.remedy.is_empty());
     }
 
     /// BUNYIP-483: the consolidation window lists BOTH retired keys, so the
@@ -1382,12 +2069,16 @@ mod tests {
             format!("{},  {}", "a1".repeat(32), "b2".repeat(32)),
         );
         assert_eq!(
-            Config::load_previous_encryption_keys("APP_ENCRYPTION_KEY_PREV"),
+            Config::load_previous_encryption_keys("APP_ENCRYPTION_KEY_PREV").unwrap(),
             vec![[0xA1u8; 32], [0xB2u8; 32]]
         );
 
         env::remove_var("APP_ENCRYPTION_KEY_PREV");
-        assert!(Config::load_previous_encryption_keys("APP_ENCRYPTION_KEY_PREV").is_empty());
+        assert!(
+            Config::load_previous_encryption_keys("APP_ENCRYPTION_KEY_PREV")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1434,9 +2125,239 @@ mod tests {
         env::remove_var("EMAIL_ENABLED");
 
         let err = Config::from_env_inner().expect_err("production without SMTP must fail");
-        assert!(matches!(err, ConfigError::EmailDisabledInProduction));
+        let ConfigError::Startup(failures) = &err else {
+            panic!("expected a startup report, got {err:?}");
+        };
+        let email = failures
+            .iter()
+            .find(|f| f.var == "SMTP_HOST")
+            .unwrap_or_else(|| panic!("SMTP_HOST not reported in {failures:?}"));
+        assert!(email.reason.contains("single-use login/reset tokens"));
 
         env::remove_var("ENVIRONMENT");
+    }
+
+    /// BUNYIP-537: several missing required variables are reported in ONE run,
+    /// so an operator fixes them all before the next restart rather than
+    /// discovering the next one each time.
+    #[test]
+    fn missing_required_variables_are_reported_in_one_run() {
+        let _env = env_lock();
+        env::set_var("ENVIRONMENT", "production");
+        for var in [
+            "DATABASE_URL",
+            "DATABASE_URL_FILE",
+            "JWT_SECRET",
+            "JWT_SECRET_FILE",
+            "APP_ENCRYPTION_KEY",
+            "APP_ENCRYPTION_KEY_FILE",
+            "BUNYIP_WEBHOOK_SIGNING_SECRET",
+            "BUNYIP_WEBHOOK_SIGNING_SECRET_FILE",
+            "SMTP_HOST",
+            "EMAIL_ENABLED",
+        ] {
+            env::remove_var(var);
+        }
+
+        let err = Config::from_env_inner().expect_err("an unconfigured production must fail");
+        env::remove_var("ENVIRONMENT");
+
+        let ConfigError::Startup(failures) = &err else {
+            panic!("expected a startup report, got {err:?}");
+        };
+        let reported: Vec<&str> = failures.iter().map(|f| f.var).collect();
+        for expected in [
+            "DATABASE_URL",
+            "JWT_SECRET",
+            "APP_ENCRYPTION_KEY",
+            "BUNYIP_WEBHOOK_SIGNING_SECRET",
+            "SMTP_HOST",
+        ] {
+            assert!(
+                reported.contains(&expected),
+                "{expected} missing from {reported:?}"
+            );
+        }
+        // One entry per variable: APP_ENCRYPTION_KEY is found by both the
+        // presence audit and the key loader, and must not be reported twice.
+        let mut unique = reported.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            reported.len(),
+            "duplicate report: {reported:?}"
+        );
+        // Every failure carries the reason and the remedy the operator needs.
+        for failure in failures {
+            assert!(!failure.reason.is_empty(), "{failure:?}");
+            assert!(!failure.remedy.is_empty(), "{failure:?}");
+        }
+        // ... and the aggregate message names them, so the `Display` half of
+        // the error is usable on its own too.
+        assert!(err.to_string().contains("JWT_SECRET"), "{err}");
+    }
+
+    /// BUNYIP-537: outside production the same variables are not required, so a
+    /// dev boot needs only DATABASE_URL.
+    #[test]
+    fn production_only_requirements_do_not_apply_outside_production() {
+        let _env = env_lock();
+        for var in [
+            "JWT_SECRET",
+            "JWT_SECRET_FILE",
+            "APP_ENCRYPTION_KEY",
+            "APP_ENCRYPTION_KEY_FILE",
+            "BUNYIP_WEBHOOK_SIGNING_SECRET",
+            "BUNYIP_WEBHOOK_SIGNING_SECRET_FILE",
+        ] {
+            env::remove_var(var);
+        }
+        env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
+
+        assert!(audit_required(false).is_empty());
+        assert_eq!(
+            audit_required(true)
+                .iter()
+                .map(|f| f.var)
+                .collect::<Vec<_>>(),
+            vec![
+                "JWT_SECRET",
+                "APP_ENCRYPTION_KEY",
+                "BUNYIP_WEBHOOK_SIGNING_SECRET"
+            ]
+        );
+    }
+
+    /// BUNYIP-537: a required variable that is gated (the OIDC key material) is
+    /// only demanded once its gate is set, so an OIDC-less deployment is not
+    /// asked for key material it has no use for.
+    #[test]
+    fn gated_required_variables_only_apply_once_their_gate_is_set() {
+        let _env = env_lock();
+        env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
+        env::set_var("JWT_SECRET", "x".repeat(32));
+        env::set_var("APP_ENCRYPTION_KEY", "aa".repeat(32));
+        env::set_var("BUNYIP_WEBHOOK_SIGNING_SECRET", "y".repeat(32));
+        env::remove_var("OIDC_ISSUER");
+        env::remove_var("OIDC_JWT_PRIVATE_KEY_PATH");
+        env::remove_var("OIDC_JWT_ACTIVE_KID");
+
+        assert!(audit_required(true).is_empty());
+
+        env::set_var("OIDC_ISSUER", "https://api.example.com");
+        assert_eq!(
+            audit_required(true)
+                .iter()
+                .map(|f| f.var)
+                .collect::<Vec<_>>(),
+            vec!["OIDC_JWT_PRIVATE_KEY_PATH", "OIDC_JWT_ACTIVE_KID"]
+        );
+
+        for var in [
+            "OIDC_ISSUER",
+            "DATABASE_URL",
+            "JWT_SECRET",
+            "APP_ENCRYPTION_KEY",
+            "BUNYIP_WEBHOOK_SIGNING_SECRET",
+        ] {
+            env::remove_var(var);
+        }
+    }
+
+    /// BUNYIP-537: a missing feature-gating variable is reported (one warning
+    /// naming the variable and the functionality that is off) and boot
+    /// continues; a defaulted variable is never reported at all.
+    #[test]
+    fn feature_gating_variables_are_reported_and_defaulted_ones_are_not() {
+        let _env = env_lock();
+        env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
+        env::set_var("ENVIRONMENT", "development");
+        env::remove_var("IP2LOCATION_DB_PATH");
+        env::remove_var("APP_PORT");
+        env::remove_var("RUST_LOG");
+
+        // Boot continues: the missing optional variable is not an error.
+        Config::from_env_inner().expect("a missing optional variable must not fail the boot");
+
+        let gaps: Vec<&str> = feature_gaps().iter().map(|spec| spec.name).collect();
+        assert!(
+            gaps.contains(&"IP2LOCATION_DB_PATH"),
+            "feature-gating variable missing from {gaps:?}"
+        );
+        // Defaulted variables produce nothing, however absent they are.
+        for defaulted in ["APP_PORT", "RUST_LOG"] {
+            assert!(!gaps.contains(&defaulted), "{defaulted} must not warn");
+        }
+
+        // The warning carries the functionality that is off plus the remedy.
+        let spec = env_spec("IP2LOCATION_DB_PATH").expect("classified in the inventory");
+        assert_eq!(spec.class, EnvClass::FeatureGating);
+        assert!(spec.feature.contains("GeoIP enrichment is off"));
+        assert!(!spec.remedy.is_empty());
+
+        // Setting it clears the warning.
+        env::set_var("IP2LOCATION_DB_PATH", "/data/IP2LOCATION.BIN");
+        assert!(!feature_gaps()
+            .iter()
+            .any(|spec| spec.name == "IP2LOCATION_DB_PATH"));
+        env::remove_var("IP2LOCATION_DB_PATH");
+        env::remove_var("ENVIRONMENT");
+    }
+
+    /// BUNYIP-537: a group member only warns once its gate is set, so an
+    /// unused integration costs one line, not one per variable.
+    #[test]
+    fn gated_feature_warnings_wait_for_their_gate() {
+        let _env = env_lock();
+        for var in [
+            "INFISICAL_ENABLED",
+            "INFISICAL_ADDRESS",
+            "INFISICAL_PROJECT_ID",
+            "INFISICAL_CLIENT_ID",
+            "INFISICAL_CLIENT_SECRET",
+        ] {
+            env::remove_var(var);
+        }
+
+        let gaps: Vec<&str> = feature_gaps().iter().map(|spec| spec.name).collect();
+        assert!(gaps.contains(&"INFISICAL_ENABLED"), "{gaps:?}");
+        assert!(!gaps.contains(&"INFISICAL_ADDRESS"), "{gaps:?}");
+
+        env::set_var("INFISICAL_ENABLED", "true");
+        let gaps: Vec<&str> = feature_gaps().iter().map(|spec| spec.name).collect();
+        assert!(gaps.contains(&"INFISICAL_ADDRESS"), "{gaps:?}");
+        env::remove_var("INFISICAL_ENABLED");
+    }
+
+    /// BUNYIP-537: every inventory entry is usable as an operator message -
+    /// unique name, a feature sentence, and a remedy wherever one is reported.
+    #[test]
+    fn every_inventory_entry_is_complete() {
+        let mut names: Vec<&str> = ENV_INVENTORY.iter().map(|spec| spec.name).collect();
+        let total = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), total, "duplicate entry in ENV_INVENTORY");
+
+        for spec in ENV_INVENTORY {
+            assert!(
+                !spec.feature.is_empty(),
+                "{} has no feature text",
+                spec.name
+            );
+            match spec.class {
+                EnvClass::Defaulted => {}
+                _ => assert!(!spec.remedy.is_empty(), "{} has no remedy", spec.name),
+            }
+            if let Some(gate) = spec.gate {
+                assert!(
+                    env_spec(gate).is_some(),
+                    "{} is gated by unclassified {gate}",
+                    spec.name
+                );
+            }
+        }
     }
 
     #[test]
@@ -1488,7 +2409,9 @@ mod tests {
     fn test_previous_encryption_keys_empty_when_unset() {
         let _env = env_lock();
         env::remove_var("TEST_PREV_KEY_UNSET");
-        assert!(Config::load_previous_encryption_keys("TEST_PREV_KEY_UNSET").is_empty());
+        assert!(Config::load_previous_encryption_keys("TEST_PREV_KEY_UNSET")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1496,26 +2419,38 @@ mod tests {
         let _env = env_lock();
         env::set_var("TEST_PREV_KEY_HEX", "aa".repeat(32)); // 64 hex chars = 32 bytes
         assert_eq!(
-            Config::load_previous_encryption_keys("TEST_PREV_KEY_HEX"),
+            Config::load_previous_encryption_keys("TEST_PREV_KEY_HEX").unwrap(),
             vec![[0xAAu8; 32]]
         );
         env::remove_var("TEST_PREV_KEY_HEX");
     }
 
+    /// BUNYIP-537: malformed key material is an operator-facing failure naming
+    /// the variable and the remedy, not a panic.
     #[test]
-    #[should_panic(expected = "must be valid hex")]
-    fn test_previous_encryption_keys_panic_on_invalid_hex() {
+    fn test_previous_encryption_keys_fail_on_invalid_hex() {
         let _env = env_lock();
         env::set_var("TEST_PREV_KEY_BAD", "not-valid-hex!");
-        Config::load_previous_encryption_keys("TEST_PREV_KEY_BAD");
+        let failure = Config::load_previous_encryption_keys("TEST_PREV_KEY_BAD")
+            .expect_err("invalid hex must fail");
+        env::remove_var("TEST_PREV_KEY_BAD");
+        assert_eq!(failure.var, "TEST_PREV_KEY_BAD");
+        assert!(failure.reason.contains("not valid hex"), "{failure:?}");
+        assert!(failure.remedy.contains("64 hex chars"), "{failure:?}");
     }
 
     #[test]
-    #[should_panic(expected = "must be exactly 32 bytes")]
-    fn test_previous_encryption_keys_panic_on_wrong_length() {
+    fn test_previous_encryption_keys_fail_on_wrong_length() {
         let _env = env_lock();
         env::set_var("TEST_PREV_KEY_SHORT", "aabb"); // only 2 bytes
-        Config::load_previous_encryption_keys("TEST_PREV_KEY_SHORT");
+        let failure = Config::load_previous_encryption_keys("TEST_PREV_KEY_SHORT")
+            .expect_err("a short key must fail");
+        env::remove_var("TEST_PREV_KEY_SHORT");
+        assert_eq!(failure.var, "TEST_PREV_KEY_SHORT");
+        assert!(
+            failure.reason.contains("2 bytes, not the required 32"),
+            "{failure:?}"
+        );
     }
 
     // secret_env tests moved to dunite-core with the function (PSA-37).
