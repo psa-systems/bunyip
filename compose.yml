@@ -139,7 +139,27 @@ services:
     image: ${BUNYIP_API_IMAGE:?BUNYIP_API_IMAGE must be a pinned image tag e.g. dev.a8n.run/psa-systems-private/bunyip-api:v0.4.1 - see compose.yml comment}
     container_name: bunyip-api
     restart: unless-stopped
+    # Grouped by concern: environmental, hosting, application, security,
+    # identity provider, then one block per integration. Every variable here is
+    # catalogued in docs/configuration.md, which also lists the variables the
+    # api reads that this reference deployment does NOT pass through.
     environment:
+
+      # ══ Environmental ═════════════════════════════════════════════════════
+      # `production` turns on the strict posture: email must resolve to enabled
+      # or the api refuses to start (BUNYIP-204), a `dev-` OIDC kid panics at
+      # boot (BUNYIP-258), and JWT_SECRET / BUNYIP_WEBHOOK_SIGNING_SECRET are
+      # reported as startup errors when unset (BUNYIP-537).
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      RUST_LOG: ${RUST_LOG:-info}
+
+      # ══ Hosting: listeners ════════════════════════════════════════════════
+      # In-container bind address + port. Distinct from the host-side publish
+      # interface in `ports:` below (also spelled HOST_IP, in .env).
+      HOST_IP: 0.0.0.0
+      APP_PORT: "4401"
+
+      # ══ Hosting: database ═════════════════════════════════════════════════
       # Secrets are file-based: each {NAME}_FILE points at a compose secret
       # mounted under /run/secrets. The api's config layer reads the file and
       # treats an empty file as "not configured" (BUNYIP-38).
@@ -150,29 +170,8 @@ services:
       # both files are populated (see the secrets: block header).
       BUNYIP_APP_PASSWORD_FILE: /run/secrets/bunyip_app_password
       APP_DATABASE_URL_FILE: /run/secrets/app_database_url
-      JWT_SECRET_FILE: /run/secrets/jwt_secret
-      # BUNYIP-332: signs outbound webhook dispatches. Required in production.
-      BUNYIP_WEBHOOK_SIGNING_SECRET_FILE: /run/secrets/webhook_signing_secret
-      APP_ENCRYPTION_KEY_FILE: /run/secrets/app_encryption_key
-      # Comma-separated hex keys still needed to read rows written under an
-      # earlier key (rotation, or the BUNYIP-483 consolidation window). Empty
-      # once `bunyip-api reencrypt-secrets` has run. Honours the _FILE
-      # convention too, if the list is kept in a secret file.
-      APP_ENCRYPTION_KEY_PREV: ${APP_ENCRYPTION_KEY_PREV:-}
-      SETUP_DEFAULT_ADMIN_FILE: /run/secrets/setup_default_admin
-      FORGEJO_API_TOKEN_FILE: /run/secrets/forgejo_api_token
-      BUNYIP_UPDATE_CHECK_TOKEN_FILE: /run/secrets/update_check_token
-      HOST_IP: 0.0.0.0
-      APP_PORT: "4401"
-      ENVIRONMENT: ${ENVIRONMENT:-production}
-      APP_NAME: ${APP_NAME:-PSA Systems}
-      # BUNYIP-290: bootstrap the first admin from an email (no password in env).
-      # Whoever signs up / signs in with this email is promoted to admin while
-      # zero admins exist; inert once an admin exists. Unset = no auto admin.
-      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
-      # Set to the public bunyip-web origin for any real deployment.
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4400}
-      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+
+      # ══ Hosting: proxy trust ══════════════════════════════════════════════
       # BUNYIP-311 / BUNYIP-409: trusted-proxy CIDRs for the SECOND hop of the
       # client-IP trust chain (Traefik -> bunyip-web -> bunyip-api). bunyip-api
       # honours a forwarded X-Forwarded-For only from a peer inside these ranges,
@@ -185,7 +184,12 @@ services:
       # Docker peer (BUNYIP-409). Override for a topology where the API is
       # reachable from an untrusted private network. See docs/client-ip-forwarding.md.
       TRUSTED_PROXY_CIDR: ${TRUSTED_PROXY_CIDR:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
-      RUST_LOG: ${RUST_LOG:-info}
+
+      # ══ Application ═══════════════════════════════════════════════════════
+      # Branding shown in the UI and in email subjects/templates.
+      APP_NAME: ${APP_NAME:-PSA Systems}
+
+      # ══ Security: where the governed secrets live ═════════════════════════
       # BUNYIP-542: which ONE store holds the governed integration secrets (the
       # SMTP password and the two Stripe secrets): environment | database |
       # infisical. No default on purpose - a deployment must state where its
@@ -194,21 +198,34 @@ services:
       # deployment whose secrets were entered on the admin pages. Migration
       # runbook: docs/secrets-infisical.md.
       SECRETS_STORAGE: ${SECRETS_STORAGE:?SECRETS_STORAGE must be set to environment, database or infisical - no default (BUNYIP-542, see docs/configuration.md)}
-      # ── Email (SMTP). SMTP_PASSWORD is a governed secret: the store declared
-      # by SECRETS_STORAGE supplies it, never a precedence chain
-      # (BUNYIP-542; see docs/secrets-infisical.md). ──
-      EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
-      SMTP_HOST: ${SMTP_HOST:-}
-      SMTP_PORT: ${SMTP_PORT:-465}
-      SMTP_TLS: ${SMTP_TLS:-implicit}
-      SMTP_USERNAME: ${SMTP_USERNAME:-}
-      # EHLO/HELO name announced to the relay. Unset falls back to APP_URL's
-      # host, then the SMTP_FROM domain, never the container id (BUNYIP-507).
-      SMTP_EHLO_NAME: ${SMTP_EHLO_NAME:-}
-      SMTP_FROM: ${SMTP_FROM:-}
-      ADMIN_NOTIFICATION_EMAILS: ${ADMIN_NOTIFICATION_EMAILS:-}
-      # ── Update checker (operator-facing). Token via update_check_token secret. ──
-      BUNYIP_UPDATE_CHECK_URL: ${BUNYIP_UPDATE_CHECK_URL:-}
+
+      # ══ Security: at-rest + signing key material ══════════════════════════
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      # BUNYIP-332: signs outbound webhook dispatches. Required in production.
+      BUNYIP_WEBHOOK_SIGNING_SECRET_FILE: /run/secrets/webhook_signing_secret
+      APP_ENCRYPTION_KEY_FILE: /run/secrets/app_encryption_key
+      # Comma-separated hex keys still needed to read rows written under an
+      # earlier key (rotation, or the BUNYIP-483 consolidation window). Empty
+      # once `bunyip-api reencrypt-secrets` has run. Honours the _FILE
+      # convention too, if the list is kept in a secret file.
+      APP_ENCRYPTION_KEY_PREV: ${APP_ENCRYPTION_KEY_PREV:-}
+
+      # ══ Security: browser origin + cookies ════════════════════════════════
+      # Set to the public bunyip-web origin for any real deployment. BUNYIP-423:
+      # the same comma-separated list is the CSRF allow-list. It is also the
+      # fallback source for the app's own base URL (used in email links and as
+      # the EHLO fallback) because APP_URL is not passed through here.
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4400}
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+
+      # ══ Security: first-admin bootstrap ═══════════════════════════════════
+      SETUP_DEFAULT_ADMIN_FILE: /run/secrets/setup_default_admin
+      # BUNYIP-290: bootstrap the first admin from an email (no password in env).
+      # Whoever signs up / signs in with this email is promoted to admin while
+      # zero admins exist; inert once an admin exists. Unset = no auto admin.
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+
+      # ══ Identity provider (bunyip-api IS the OIDC issuer) ═════════════════
       OIDC_ISSUER: ${OIDC_ISSUER:-}
       # BUNYIP-258: no defaults for OIDC signing key path / active kid. The
       # previous defaults (`/run/secrets/oidc/dev-2026.pem`, `dev-2026`)
@@ -220,12 +237,36 @@ services:
       OIDC_JWT_PRIVATE_KEY_PATH: ${OIDC_JWT_PRIVATE_KEY_PATH:?OIDC_JWT_PRIVATE_KEY_PATH must be set to the production signing-key path (e.g. /run/secrets/oidc/prod-2026.pem) - no dev default}
       OIDC_JWT_ACTIVE_KID: ${OIDC_JWT_ACTIVE_KID:?OIDC_JWT_ACTIVE_KID must be set to the active kid name (e.g. prod-2026) - no dev default}
       OIDC_JWT_PUBLIC_KEYS_DIR: /run/secrets/oidc
-      # ── Distribution proxy (member downloads + OCI registry, BUNYIP-28) ──
-      # Disabled until FORGEJO_BASE_URL (.env) + the forgejo_api_token secret
-      # file are set. Configuration rules, token scopes, and the reverse-proxy
-      # requirements live in ONE place: docs/oci-registry-verification.md
-      # (Production notes). Every ${VAR} below is documented in .env.example.
+
+      # ══ Integration: email (SMTP) ═════════════════════════════════════════
+      # The non-secret settings below are BOOTSTRAP DEFAULTS: the email_config
+      # DB row (admin Email page) overrides them per field and applies without a
+      # restart (BUNYIP-351). SMTP_PASSWORD is NOT among them: it is a governed
+      # secret, supplied by the ONE store SECRETS_STORAGE declares, never by a
+      # precedence chain (BUNYIP-542; see docs/secrets-infisical.md).
+      EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_TLS: ${SMTP_TLS:-implicit}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      # EHLO/HELO name announced to the relay, resolved when the SMTP transport
+      # is built (after the DB row is merged), never the container id
+      # (BUNYIP-507). Unset falls back to the host of APP_URL - which this file
+      # does not pass, so in practice the host of CORS_ORIGIN - then the domain
+      # of the RESOLVED from-address (email_config.from_email when set, else
+      # SMTP_FROM), then lettre's default.
+      SMTP_EHLO_NAME: ${SMTP_EHLO_NAME:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      ADMIN_NOTIFICATION_EMAILS: ${ADMIN_NOTIFICATION_EMAILS:-}
+
+      # ══ Integration: distribution proxy (downloads + OCI registry) ════════
+      # BUNYIP-28. Disabled until FORGEJO_BASE_URL (.env) + the forgejo_api_token
+      # secret file are set. Configuration rules, token scopes, and the
+      # reverse-proxy requirements live in ONE place:
+      # docs/oci-registry-verification.md (Production notes). Every ${VAR} below
+      # is documented in .env.example and docs/configuration.md.
       FORGEJO_BASE_URL: ${FORGEJO_BASE_URL:-}
+      FORGEJO_API_TOKEN_FILE: /run/secrets/forgejo_api_token
       DOWNLOAD_CACHE_DIR: /var/cache/bunyip-downloads
       DOWNLOAD_CACHE_MAX_BYTES: ${DOWNLOAD_CACHE_MAX_BYTES:-10737418240}
       OCI_REGISTRY_ENABLED: ${OCI_REGISTRY_ENABLED:-false}
@@ -244,6 +285,10 @@ services:
       OCI_CONCURRENT_MANIFESTS_PER_USER: ${OCI_CONCURRENT_MANIFESTS_PER_USER:-2}
       OCI_MANIFEST_CACHE_TTL_SECS: ${OCI_MANIFEST_CACHE_TTL_SECS:-300}
       OCI_TOKEN_TTL_SECS: ${OCI_TOKEN_TTL_SECS:-900}
+
+      # ══ Integration: update checker (operator-facing) ═════════════════════
+      BUNYIP_UPDATE_CHECK_URL: ${BUNYIP_UPDATE_CHECK_URL:-}
+      BUNYIP_UPDATE_CHECK_TOKEN_FILE: /run/secrets/update_check_token
     expose:
       - "4401"
       - "18081"
@@ -291,7 +336,14 @@ services:
     image: ${BUNYIP_WEB_IMAGE:?BUNYIP_WEB_IMAGE must be a pinned image tag e.g. dev.a8n.run/psa-systems-private/bunyip-web:v0.4.1 - see compose.yml comment on api service}
     container_name: bunyip-web
     restart: unless-stopped
+    # Same grouping as the api service. bunyip-web holds no secrets: it is a
+    # BFF that talks to bunyip-api over /v1. See docs/configuration.md.
     environment:
+
+      # ══ Environmental ═════════════════════════════════════════════════════
+      RUST_LOG: ${RUST_LOG:-info}
+
+      # ══ Hosting: listener + upstream ══════════════════════════════════════
       BUNYIP_BIND_ADDR: 0.0.0.0:4400
       BUNYIP_API_URL: ${BUNYIP_API_URL:-http://api:4401}
       # BUNYIP-192 / BUNYIP-510: the browser-facing origin of bunyip-api. Used
@@ -299,9 +351,8 @@ services:
       # admin page prefills. Unset falls back to the internal BUNYIP_API_URL,
       # which no browser and no Stripe delivery can reach.
       BUNYIP_API_PUBLIC_ORIGIN: ${BUNYIP_API_PUBLIC_ORIGIN:-}
-      BUNYIP_OIDC_ISSUER: ${BUNYIP_OIDC_ISSUER:-}
-      BUNYIP_APP_DOMAIN: ${BUNYIP_APP_DOMAIN:-}
-      BUNYIP_COMMUNITY_URL: ${BUNYIP_COMMUNITY_URL:-}
+
+      # ══ Hosting: proxy trust ══════════════════════════════════════════════
       # BUNYIP-311 / BUNYIP-409: trusted-proxy CIDRs for the FIRST hop of the
       # client-IP trust chain (Traefik -> bunyip-web). bunyip-web reads the
       # end-user IP from the inbound X-Forwarded-For (set by Traefik) ONLY when
@@ -310,7 +361,19 @@ services:
       # trusted out of the box; empty left the forwarded IP dropped, so sessions
       # showed the internal Docker peer (BUNYIP-409). See docs/client-ip-forwarding.md.
       TRUSTED_PROXY_CIDR: ${WEB_TRUSTED_PROXY_CIDR:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
-      RUST_LOG: ${RUST_LOG:-info}
+
+      # ══ Application ═══════════════════════════════════════════════════════
+      # Public apex domain, used to derive per-app subdomain links.
+      BUNYIP_APP_DOMAIN: ${BUNYIP_APP_DOMAIN:-}
+
+      # ══ Identity provider (bunyip-web is a relying party) ═════════════════
+      # Unset defaults to BUNYIP_API_URL; set it when the issuer origin differs
+      # from the API origin.
+      BUNYIP_OIDC_ISSUER: ${BUNYIP_OIDC_ISSUER:-}
+
+      # ══ Integration: Let's Chat community ═════════════════════════════════
+      # BUNYIP-329: empty hides the sidebar Community button entirely.
+      BUNYIP_COMMUNITY_URL: ${BUNYIP_COMMUNITY_URL:-}
     expose:
       - "4400"
     ports:
