@@ -190,6 +190,81 @@ Each step is `docker compose exec api bunyip-api <subcommand>` (or
 
 Staging is migrated and soaked before production is touched.
 
+### Changing the Infisical instance
+
+The store stays `infisical` and the instance changes: a new Infisical
+deployment, a migrated one, or a different `INFISICAL_ENVIRONMENT` /
+`INFISICAL_SECRET_PATH` on the same one. This is supported by the commands
+above, in a different order, and it needs a hop through the database.
+
+**Why the hop.** bunyip-api holds exactly ONE set of `INFISICAL_*` values
+(`InfisicalSettings::from_env` in `crates/bunyip-domain/src/config.rs`), so no
+process, and therefore no command, can hold the old and the new instance open at
+once. `secrets-migrate` reads from the DECLARED store and writes to the store
+named by `--to`, so declaring the database in the middle turns one impossible
+copy into two ordinary ones.
+
+Never just repoint `INFISICAL_*` and restart. The new instance is empty, so in
+`infisical` mode the api either exits 1 (new instance not reachable, or its
+credentials not issued yet) or boots with email and payments off, and the values
+are stranded on an instance it no longer talks to.
+
+1. **Copy out of the old instance.** Declared store is still `infisical`,
+   pointing at the old instance and healthy. Run
+   `docker compose exec api bunyip-api secrets-migrate --to database --dry-run`,
+   then the same without `--dry-run`. It reads the live values from the old
+   instance and writes the encrypted `email_config` / `stripe_config` columns.
+   `bunyip-api secrets-status` must then read `database: ready` for all three.
+
+2. **Cut over to the database.** Set `SECRETS_STORAGE=database` and restart. This
+   is now an ordinary database-mode deployment serving from those rows, and it is
+   a state you can sit in indefinitely. With `INFISICAL_ENABLED=true` the boot
+   logs one `WARN` per copy still on the old instance; that is the expected
+   duplicate, not a fault.
+
+3. **Repoint `INFISICAL_*` at the new instance** (address, project id,
+   environment, secret path, and the two credentials) and restart to pick the
+   values up. Nothing reads them: the declared store is the database, and
+   `database` mode makes no call to Infisical. Keep `INFISICAL_ENABLED=true`, so
+   `secrets-status` still inspects the Infisical store and can answer whether the
+   NEW instance is ready; with it off, the `infisical:` rows read
+   `not inspected` and the next step is unverifiable.
+
+4. **Copy into the new instance.** Run
+   `bunyip-api secrets-migrate --to infisical`. It reads the declared database
+   store and upserts each key into the new instance, which needs the **write**
+   access in "Access the machine identity needs". `bunyip-api secrets-status`
+   must then read `infisical: ready` for all three, and that answer now comes
+   from the new instance.
+
+5. **Cut over to the new instance.** Set `SECRETS_STORAGE=infisical` and restart.
+   Confirm with `bunyip-api secrets-status`, soak, then
+   `bunyip-api secrets-purge --confirm` to drop the database copies.
+
+**Why it is safe.** Every intermediate state is a legal, running configuration,
+so the sequence can stop after any step and resume days later. At each step the
+rollback is the store just left: back to `infisical` on the old instance through
+step 2, back to `database` after steps 3 to 5, since nothing is deleted until
+the explicit purge. Nothing is ever mid-flight between two stores.
+
+**The same procedure covers a change of `INFISICAL_ENVIRONMENT` or
+`INFISICAL_SECRET_PATH`** on one instance. Those are connection parameters like
+the address, so the old and the new location are equally invisible to each other
+and the hop is needed just the same.
+
+**Cleanup the tooling cannot reach.** After step 5 the OLD instance still holds
+every secret, and bunyip-api can no longer see it, so `secrets-purge` cannot
+touch it and no boot warning mentions it. Deleting those keys on the old
+instance is a MANUAL step, done in its UI or with its own CLI, and it is part of
+this procedure. Skipping it leaves live credentials on a decommissioned host
+that nothing is watching, which is worse than the duplicate the boot-time
+warning exists to catch, precisely because nothing warns about it.
+
+**Per-deployment scope.** Each deployment migrates its own secrets. Staging is
+where the procedure is rehearsed, never the vehicle for another environment's
+values: staging runs a different database under a different `APP_ENCRYPTION_KEY`,
+so it cannot stage production's secrets.
+
 ### Restart versus hot-apply
 
 A secret changed through the admin pages hot-applies (the write-through reloads
@@ -206,6 +281,7 @@ reader.
 | Boot `WARN`: `<SECRET> is also stored in the <Y> store` | A leftover copy. Harmless today, live if the mode ever changes to `<Y>`. Clear it with `secrets-purge --confirm`. |
 | Boot `WARN`: `<SECRET> is not set in the declared store` | No store holds it; the named feature is off. Set it on the admin page or migrate it in. |
 | Boot `ERROR`: Infisical `could not be read` in `infisical` mode | Fail-closed by design. Wrong `INFISICAL_CLIENT_ID` / `_CLIENT_SECRET`, no Universal Auth on `INFISICAL_ADDRESS`, or the instance is unreachable. |
+| After repointing `INFISICAL_*` at a new instance: boot `ERROR` Infisical `could not be read`, or one `WARN` per secret `is not set in the declared store` | The instance was changed without the database hop, so the values are still on the OLD instance and nothing reads it now. Point `INFISICAL_*` back at the old instance, restart, and follow "Changing the Infisical instance" above. |
 | Infisical read returns HTTP 404 for a key | The key is not at the queried project/env/path: check `INFISICAL_SECRET_PATH`, `INFISICAL_ENVIRONMENT` and `INFISICAL_PROJECT_ID`. The v3 endpoint is confirmed correct on infisical.a8n.systems (401 unauthenticated), so a 404 is a lookup mismatch, not an API-version issue. |
 | Admin save fails with "Could not write ... to Infisical" | The machine identity lacks **write** access to `INFISICAL_SECRET_PATH`. Nothing was saved and nothing was reloaded. |
 | Admin secret field is read-only, save returns 409 | `SECRETS_STORAGE=environment`. There is no writable store: edit the file `{NAME}_FILE` points at and restart. |
