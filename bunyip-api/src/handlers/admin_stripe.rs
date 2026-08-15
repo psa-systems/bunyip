@@ -9,10 +9,10 @@ use sqlx::PgPool;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::config::Config;
 use crate::errors::AppError;
 use crate::handlers::PricingCache;
 use crate::middleware::AdminUser;
-use crate::models::stripe::encrypt_secret;
 use crate::models::tier::TierConfigRow;
 use crate::models::{AuditAction, CreateAuditLog, StripePriceResponse, StripeProductResponse};
 use crate::repositories::{
@@ -21,8 +21,7 @@ use crate::repositories::{
 };
 use crate::responses::{get_request_id, success, success_no_data};
 use crate::services::{
-    classify_probe, stripe_config_from_db_model, stripe_err_for, AppKeySet, ProbeStatus,
-    StripePermission, StripeService,
+    classify_probe, stripe_err_for, AppKeySet, ProbeStatus, StripePermission, StripeService,
 };
 
 // =============================================================================
@@ -716,11 +715,15 @@ pub async fn list_stripe_webhooks(
 /// POST /v1/admin/stripe/webhooks
 ///
 /// Creates a Stripe webhook endpoint and auto-saves the returned signing secret
-/// to the database (encrypted), then reloads the StripeService.
+/// to the store `SECRETS_STORAGE` declares (BUNYIP-542), then reloads the
+/// StripeService. In `environment` mode there is no writable store, so the
+/// endpoint is created and the secret is reported for the operator to file,
+/// rather than saved somewhere nothing reads.
 pub async fn create_stripe_webhook(
     req: HttpRequest,
     admin: AdminUser,
     stripe: web::Data<Arc<StripeService>>,
+    config: web::Data<Config>,
     app_key_set: web::Data<AppKeySet>,
     pool: web::Data<PgPool>,
     body: web::Json<CreateStripeWebhookRequest>,
@@ -732,35 +735,43 @@ pub async fn create_stripe_webhook(
         .await
         .map_err(stripe_err_for(StripePermission::WebhookEndpoints))?;
 
-    // If the webhook creation returned a signing secret, persist it encrypted
+    // If the webhook creation returned a signing secret, persist it to the
+    // declared store.
     if let Some(ref secret) = webhook.secret {
-        let (ws_enc, ws_nonce, key_version) = encrypt_secret(&app_key_set, secret)?;
-
-        let updated = StripeConfigRepository::update(
+        let storage = config.secrets_storage;
+        if !storage.is_writable() {
+            // The endpoint exists on Stripe's side now, so this is reported, not
+            // swallowed: the admin must place the value themselves or events
+            // stay rejected.
+            tracing::error!(
+                secrets_storage = %storage,
+                "Created the Stripe webhook endpoint, but SECRETS_STORAGE=environment has no \
+                 writable store: the signing secret was NOT saved. Write it to the file \
+                 STRIPE_WEBHOOK_SECRET_FILE points at and restart bunyip-api."
+            );
+            return Err(crate::secrets::read_only_store_error(
+                crate::config::GovernedSecret::StripeWebhookSecret,
+            ));
+        }
+        crate::secrets::write_secret(
             &pool,
-            None, // secret_key unchanged
-            None, // secret_key_nonce unchanged
-            Some(ws_enc),
-            Some(ws_nonce),
-            admin.0.sub,
-            key_version,
-            None, // app_tag unchanged
-            None, // success_url unchanged
-            None, // cancel_url unchanged
-            None, // trial_period_days unchanged
+            &config,
+            &app_key_set,
+            storage,
+            crate::config::GovernedSecret::StripeWebhookSecret,
+            secret,
+            Some(admin.0.sub),
         )
         .await?;
 
-        // Hot-reload the StripeService with the new webhook secret
-        match stripe_config_from_db_model(&updated, &app_key_set) {
-            Ok(new_config) => {
-                stripe.reload(new_config);
-                tracing::info!("Stripe service reloaded with new webhook secret");
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to reload Stripe service after webhook creation");
-            }
-        }
+        let row = StripeConfigRepository::get(&pool).await?;
+        let new_config =
+            crate::secrets::stripe_runtime_config(&pool, &config, &app_key_set, &row).await?;
+        stripe.reload(new_config);
+        tracing::info!(
+            secrets_storage = %storage,
+            "Stripe service reloaded with new webhook secret"
+        );
     }
 
     Ok(success(webhook, request_id))

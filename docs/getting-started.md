@@ -7,7 +7,7 @@ This guide covers the developer fast path: clone, run, sign in, click around. Se
 - Docker + Docker Compose v2 (the modern `docker compose` plugin, not the legacy `docker-compose` binary).
 - [`just`](https://github.com/casey/just) for the task runner.
 - [Nushell `0.112.2`](https://www.nushell.sh/) (used by several `just` recipes, by every script under `scripts/` including the CI guards, and by every `run:` step in `.forgejo/workflows/`).
-- No `infisical` CLI is needed. Group-1 secrets are files (`just init-secrets` generates dev throwaways; deployments supply them via the SOPS `compose-secrets.yml`), and Group-2 integration secrets (SMTP) are fetched by the app itself at runtime over HTTP. See [application secrets](secrets-infisical.md).
+- No `infisical` CLI is needed. Group-1 secrets are files (`just init-secrets` generates dev throwaways; deployments supply them via the SOPS `compose-secrets.yml`), and the Group-2 integration secrets come from the store `SECRETS_STORAGE` declares (`database` in dev, so they are entered on the admin pages). See [application secrets](secrets-infisical.md).
 - No host-side Rust toolchain. All cargo work happens inside the dev container.
 - A copy of `.env.example` -> `.env` if you're going to run the SSO overlay (`just dev-sso`). The plain `just dev` recipe does not require a real mokosh-server.
 

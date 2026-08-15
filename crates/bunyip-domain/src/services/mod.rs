@@ -60,13 +60,13 @@ pub use backup::{
 pub use email::{EmailService, SmtpTestError, SmtpTestStage};
 pub use event_bus::{BunyipEvent, EventBus};
 pub use geoip::GeoIpService;
-pub use infisical::InfisicalClient;
+pub use infisical::{InfisicalClient, InfisicalError};
 pub use ip_enrich::{IpEnrichService, IpEnrichment, NetworkCategory, VpnLikelihood};
 pub use jwt::{AccessTokenClaims, JwtService, RefreshTokenClaims, TwoFactorChallengeClaims};
 pub use stripe::{
     classify_probe, stripe_config_from_db_model, stripe_err, stripe_err_for,
-    unconfigured_stripe_config, ProbeStatus, StripeConfig, StripeErrorDetails, StripePermission,
-    StripeService, StripeServiceError,
+    stripe_settings_from_db_model, unconfigured_stripe_config, ProbeStatus, StripeConfig,
+    StripeErrorDetails, StripePermission, StripeService, StripeServiceError,
 };
 pub use totp::TotpService;
 pub use webhook::WebhookService;

@@ -21,6 +21,7 @@ pub mod rate_limit_floor;
 pub mod reencrypt;
 pub mod root_span;
 pub mod routes;
+pub mod secrets;
 pub mod seed;
 pub mod version;
 

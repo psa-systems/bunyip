@@ -15,9 +15,9 @@
 #      On a deployment the same secret files are supplied by the SOPS
 #      compose-secrets.yml (docker repo, per host); see docs/secrets-infisical.md.
 #      Group-1 secrets are never fetched from Infisical, so no Group-1 secret is
-#      fetched at runtime. Group-2 integration secrets (SMTP) are the exception:
-#      the app fetches them from Infisical at runtime, gracefully, so Infisical is
-#      never a boot dependency.
+#      fetched at runtime. The Group-2 integration secrets (SMTP password, the
+#      two Stripe secrets) come from the ONE store SECRETS_STORAGE declares, and
+#      only from that store (BUNYIP-542).
 #   3. docker login dev.a8n.run   (the images live in the private registry).
 #   4. docker compose up --detach
 #
@@ -186,9 +186,17 @@ services:
       # reachable from an untrusted private network. See docs/client-ip-forwarding.md.
       TRUSTED_PROXY_CIDR: ${TRUSTED_PROXY_CIDR:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
       RUST_LOG: ${RUST_LOG:-info}
-      # ── Email (SMTP). SMTP_PASSWORD is a Group-2 secret: the DB email_config
-      # row or the Infisical runtime fetch supplies it, not a compose secret
-      # (BUNYIP-525; see docs/secrets-infisical.md). ──
+      # BUNYIP-542: which ONE store holds the governed integration secrets (the
+      # SMTP password and the two Stripe secrets): environment | database |
+      # infisical. No default on purpose - a deployment must state where its
+      # secrets live, because inferring it from what happens to be populated
+      # cannot tell a deliberate copy from a leftover one. `database` matches a
+      # deployment whose secrets were entered on the admin pages. Migration
+      # runbook: docs/secrets-infisical.md.
+      SECRETS_STORAGE: ${SECRETS_STORAGE:?SECRETS_STORAGE must be set to environment, database or infisical - no default (BUNYIP-542, see docs/configuration.md)}
+      # ── Email (SMTP). SMTP_PASSWORD is a governed secret: the store declared
+      # by SECRETS_STORAGE supplies it, never a precedence chain
+      # (BUNYIP-542; see docs/secrets-infisical.md). ──
       EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-465}

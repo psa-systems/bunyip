@@ -114,20 +114,198 @@ pub struct Config {
     /// web and the mokosh-apps SPA) carries the hidden honeypot + timing token,
     /// then is flipped on per deployment.
     pub signup_bot_guard_enabled: bool,
-    /// BUNYIP-525: settings for the app-native runtime fetch of Group-2
-    /// integration secrets from Infisical. Group-1 startup secrets stay
-    /// file/SOPS-based; this covers only post-startup integration secrets
-    /// (SMTP first). Disabled by default.
+    /// BUNYIP-525: how to reach the Infisical store of the Group-2 integration
+    /// secrets. Group-1 startup secrets stay file/SOPS-based and are never held
+    /// here. Whether the store is read at all is `secrets_storage`.
     pub infisical: InfisicalSettings,
+    /// BUNYIP-542: the ONE store the deployment declares for its governed
+    /// integration secrets (`SECRETS_STORAGE`). Required, with no default: the
+    /// app consults only this store, so which copy is live is an operator
+    /// declaration rather than a precedence chain.
+    pub secrets_storage: SecretsStorage,
 }
 
-/// BUNYIP-525: configuration for the app-native Infisical runtime fetch of
-/// Group-2 (post-startup / integration) secrets. Credentials honour the
-/// `{NAME}_FILE` convention like every other secret. Disabled by default so a
-/// dev box or a host without a machine identity behaves exactly as before.
+/// BUNYIP-542: where a deployment keeps its governed integration secrets.
+///
+/// Declared by `SECRETS_STORAGE` and required, because inferring it from what
+/// happens to be populated cannot tell "deliberately in the database" from
+/// "left behind in the database". The declared store is the ONLY one consulted:
+/// there is no fallback to a second store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretsStorage {
+    /// The process environment, through `{NAME}_FILE` compose secrets.
+    Environment,
+    /// The `email_config` / `stripe_config` rows, encrypted under
+    /// `APP_ENCRYPTION_KEY`.
+    Database,
+    /// The Infisical folder at `INFISICAL_SECRET_PATH`.
+    Infisical,
+}
+
+impl SecretsStorage {
+    /// The legal values, for the operator-facing error on an unrecognised one.
+    pub const LEGAL_VALUES: &'static str = "environment, database, infisical";
+
+    /// Every store, in declaration order.
+    pub const ALL: [Self; 3] = [Self::Environment, Self::Database, Self::Infisical];
+
+    /// The wire/env spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Environment => "environment",
+            Self::Database => "database",
+            Self::Infisical => "infisical",
+        }
+    }
+
+    /// Parse the `SECRETS_STORAGE` value. `None` for anything else, which the
+    /// caller reports as a startup configuration failure.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "environment" => Some(Self::Environment),
+            "database" => Some(Self::Database),
+            "infisical" => Some(Self::Infisical),
+            _ => None,
+        }
+    }
+
+    /// Whether the admin pages can write a governed secret to this store.
+    ///
+    /// `environment` is the one read-only store: a process cannot set an
+    /// environment variable for its own next boot, and the compose secret files
+    /// are mounted read-only. That is a property of the store, not a policy.
+    pub fn is_writable(self) -> bool {
+        !matches!(self, Self::Environment)
+    }
+}
+
+impl std::fmt::Display for SecretsStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// BUNYIP-542: an integration secret with more than one possible store, and so
+/// governed by `SECRETS_STORAGE`.
+///
+/// Group-1 startup secrets are structurally excluded (the database cannot hold
+/// the credential used to reach the database), and an integration secret with
+/// exactly one store today is excluded because the declaration would be a
+/// no-op. Either joins this list the moment it gains a second store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GovernedSecret {
+    /// `email_config.smtp_password` / `SMTP_PASSWORD` / `/runtime/SMTP_PASSWORD`.
+    SmtpPassword,
+    /// `stripe_config.secret_key` / `STRIPE_SECRET_KEY`.
+    StripeSecretKey,
+    /// `stripe_config.webhook_secret` / `STRIPE_WEBHOOK_SECRET`.
+    StripeWebhookSecret,
+}
+
+impl GovernedSecret {
+    /// Every governed secret, in report order.
+    pub const ALL: [Self; 3] = [
+        Self::SmtpPassword,
+        Self::StripeSecretKey,
+        Self::StripeWebhookSecret,
+    ];
+
+    /// The variable name in the `environment` store, which is also the key name
+    /// in the `infisical` store.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::SmtpPassword => "SMTP_PASSWORD",
+            Self::StripeSecretKey => "STRIPE_SECRET_KEY",
+            Self::StripeWebhookSecret => "STRIPE_WEBHOOK_SECRET",
+        }
+    }
+
+    /// What stops working when no store holds this secret.
+    pub fn feature(self) -> &'static str {
+        match self {
+            Self::SmtpPassword => {
+                "transactional email: the SMTP relay is never authenticated, so magic links, \
+                 password resets and notifications are not delivered"
+            }
+            Self::StripeSecretKey => {
+                "Stripe billing: checkout, subscriptions and the pricing catalogue are disabled"
+            }
+            Self::StripeWebhookSecret => {
+                "Stripe webhook verification: /v1/webhooks/stripe fails closed and every event \
+                 is rejected"
+            }
+        }
+    }
+
+    /// The admin form field this secret is typed into, so a failed save reports
+    /// against the field the admin is looking at.
+    pub fn form_field(self) -> &'static str {
+        match self {
+            Self::SmtpPassword => "smtp_password",
+            Self::StripeSecretKey => "secret_key",
+            Self::StripeWebhookSecret => "webhook_secret",
+        }
+    }
+
+    /// The `environment`-store secret file this value belongs in, as the
+    /// `{NAME}_FILE` target `secrets-migrate --to environment` emits.
+    pub fn secret_file(self) -> &'static str {
+        match self {
+            Self::SmtpPassword => "smtp_password",
+            Self::StripeSecretKey => "stripe_secret_key",
+            Self::StripeWebhookSecret => "stripe_webhook_secret",
+        }
+    }
+
+    /// This secret's value in the `environment` store.
+    ///
+    /// File-backed ONLY: the plain variable is deliberately not consulted. A
+    /// `STRIPE_SECRET_KEY=sk_live_...` in a compose `environment:` block is the
+    /// exposure BUNYIP-38 removed - it is visible to `docker inspect` and to
+    /// every child process - so the environment store means a `{NAME}_FILE`
+    /// compose secret, in every mode.
+    pub fn read_environment(self) -> Option<String> {
+        secret_file_env(self.name())
+    }
+}
+
+/// Read one secret from a `{NAME}_FILE` compose secret, and only from there
+/// (BUNYIP-542). An unreadable path is reported at `error` and treated as
+/// absent, so the boot enforcement below turns it into either the fatal
+/// "declared store is empty but another store holds it" report or the
+/// feature-off warning, never a silent success.
+fn secret_file_env(name: &str) -> Option<String> {
+    let file_var = format!("{name}_FILE");
+    let path = env::var(&file_var).ok()?;
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
+    match std::fs::read_to_string(path) {
+        Ok(contents) => Some(contents.trim().to_string()).filter(|value| !value.is_empty()),
+        Err(e) => {
+            tracing::error!(
+                env_var = %file_var,
+                path = %path,
+                error = %e,
+                "{file_var} points at an unreadable file, so the environment store holds no \
+                 value for {name}"
+            );
+            None
+        }
+    }
+}
+
+/// BUNYIP-525: how to reach the Infisical store of the Group-2 (integration)
+/// secrets. Credentials honour the `{NAME}_FILE` convention like every other
+/// secret. Whether this store is READ is [`SecretsStorage`]; `enabled` only
+/// decides whether it is inspected outside `SECRETS_STORAGE=infisical`, which
+/// is what `bunyip-api secrets-status` needs to report readiness.
 #[derive(Debug, Clone)]
 pub struct InfisicalSettings {
-    /// Enable the runtime fetch (`INFISICAL_ENABLED`). Off by default.
+    /// Inspect the Infisical store outside `SECRETS_STORAGE=infisical`
+    /// (`INFISICAL_ENABLED`). Off by default; the declared store is read
+    /// regardless.
     pub enabled: bool,
     /// Base URL of the Infisical instance (`INFISICAL_ADDRESS`),
     /// e.g. `https://infisical.a8n.systems`.
@@ -263,9 +441,10 @@ impl EmailConfig {
                 .unwrap_or(default_port),
             smtp_tls,
             smtp_username: env::var("SMTP_USERNAME").unwrap_or_default(),
-            // SMTP_PASSWORD is a secret: supports the SMTP_PASSWORD_FILE
-            // compose-secret convention.
-            smtp_password: secret_env("SMTP_PASSWORD").unwrap_or_default(),
+            // BUNYIP-542: the SMTP password is a governed secret. It comes from
+            // the ONE store `SECRETS_STORAGE` declares, resolved by the caller,
+            // so it is deliberately not read here.
+            smtp_password: String::new(),
             smtp_ehlo_name: env::var("SMTP_EHLO_NAME")
                 .ok()
                 .map(|v| v.trim().to_string())
@@ -292,14 +471,45 @@ impl EmailConfig {
         }
     }
 
-    /// Build an `EmailConfig` from the DB row, falling back to env defaults for
-    /// any NULL column (BUNYIP-351). Mirrors [`TierConfig::from_db_row`]. The
-    /// SMTP password is decrypted with the application [`AppKeySet`]
-    /// (`APP_ENCRYPTION_KEY`, the same set guarding TOTP and Stripe secrets); a
-    /// decryption failure (e.g. a rotated key) falls back to the env password
-    /// rather than aborting startup.
+    /// The `database` store's copy of the SMTP password: the decrypted
+    /// `email_config.smtp_password` ciphertext (BUNYIP-542).
+    ///
+    /// `None` when the row holds no ciphertext. A ciphertext no key in the set
+    /// can read is logged at `error` and reported as absent, so the boot
+    /// enforcement treats it as "the declared store holds nothing" rather than
+    /// silently substituting another store's value.
     ///
     /// [`AppKeySet`]: crate::services::AppKeySet
+    pub fn db_smtp_password(
+        row: &crate::models::email::EmailConfigRow,
+        key_set: &crate::services::AppKeySet,
+    ) -> Option<String> {
+        let (ciphertext, nonce) = match (&row.smtp_password, &row.smtp_password_nonce) {
+            (Some(ct), Some(nonce)) => (ct, nonce),
+            _ => return None,
+        };
+        match crate::models::stripe::decrypt_secret(key_set, ciphertext, nonce, row.key_version) {
+            Ok(password) => Some(password),
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    key_version = row.key_version,
+                    "email_config.smtp_password does not decrypt with APP_ENCRYPTION_KEY or any \
+                     APP_ENCRYPTION_KEY_PREV entry; treating the database store as holding no \
+                     SMTP password"
+                );
+                None
+            }
+        }
+    }
+
+    /// Build an `EmailConfig` from the DB row, falling back to env defaults for
+    /// any NULL column (BUNYIP-351). Mirrors [`TierConfig::from_db_row`].
+    ///
+    /// BUNYIP-542: `smtp_password` is passed in, already resolved from the ONE
+    /// store `SECRETS_STORAGE` declares (see [`GovernedSecret`]). This function
+    /// no longer consults a second source for it: the "DB row, else the env
+    /// slot" fallback WAS the invisible precedence chain.
     ///
     /// System-level fields (`base_url`, `app_name`, `smtp_ehlo_name`) and the dev-only
     /// `log_tokens` gate stay env-derived: they are branding / bootstrap
@@ -307,7 +517,7 @@ impl EmailConfig {
     /// host so the BUNYIP-204 production semantics still hold against DB config.
     pub fn from_db_row(
         row: &crate::models::email::EmailConfigRow,
-        key_set: &crate::services::AppKeySet,
+        smtp_password: Option<String>,
         is_production: bool,
     ) -> Self {
         let env = Self::from_env(is_production);
@@ -327,13 +537,7 @@ impl EmailConfig {
             _ => env.smtp_tls,
         };
         let smtp_username = row.smtp_username.clone().unwrap_or(env.smtp_username);
-        let smtp_password = match (&row.smtp_password, &row.smtp_password_nonce) {
-            (Some(ct), Some(nonce)) => {
-                crate::models::stripe::decrypt_secret(key_set, ct, nonce, row.key_version)
-                    .unwrap_or(env.smtp_password)
-            }
-            _ => env.smtp_password,
-        };
+        let smtp_password = smtp_password.unwrap_or_default();
         let from_email = row
             .from_email
             .clone()
@@ -1028,6 +1232,28 @@ impl Config {
         let app_name = env::var("APP_NAME").unwrap_or_else(|_| "localhost".to_string());
         let email = EmailConfig::from_env(is_production);
 
+        // BUNYIP-542: the declared store for every governed integration secret.
+        // Absence is reported by the presence audit above, so the placeholder in
+        // that arm is never observed: a non-empty `failures` returns Err before
+        // this Config is built. An unrecognised value is its own failure, named
+        // with the legal set.
+        let secrets_storage = match secret_env("SECRETS_STORAGE") {
+            Some(raw) => SecretsStorage::parse(&raw).unwrap_or_else(|| {
+                failures.push(ConfigFailure {
+                    var: "SECRETS_STORAGE",
+                    reason: format!(
+                        "the value {raw:?} is not one of the stores bunyip can read secrets from"
+                    ),
+                    remedy: format!(
+                        "Set SECRETS_STORAGE to one of: {}. See docs/configuration.md.",
+                        SecretsStorage::LEGAL_VALUES
+                    ),
+                });
+                SecretsStorage::Database
+            }),
+            None => SecretsStorage::Database,
+        };
+
         // Fail fast: a production deployment with email disabled would silently
         // degrade to the dev-mode path. Before BUNYIP-204 that path logged the
         // full magic-link / reset / email-change URL (single-use bearer token
@@ -1172,6 +1398,7 @@ impl Config {
             login_approval_enabled,
             signup_bot_guard_enabled,
             infisical,
+            secrets_storage,
         };
 
         // BUNYIP-537: the one place startup failures are reported. Every branch
@@ -1184,6 +1411,7 @@ impl Config {
             port = %config.port,
             environment = %config.environment,
             bootstrap_admin_configured = config.bootstrap_admin_email.is_some(),
+            secrets_storage = %config.secrets_storage,
             "Configuration loaded"
         );
 
@@ -1507,6 +1735,14 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
         "Set DATABASE_URL_FILE=/run/secrets/database_url (compose) or DATABASE_URL (dev .env); \
          `just init-secrets` generates the secret file.",
     ),
+    EnvVarSpec::required(
+        "SECRETS_STORAGE",
+        "the deployment has not declared where its integration secrets live, so bunyip cannot \
+         tell a deliberate copy from a leftover one (BUNYIP-542)",
+        "Set SECRETS_STORAGE to environment, database or infisical. `database` matches a \
+         deployment whose SMTP and Stripe secrets were entered on the admin pages. See \
+         docs/configuration.md.",
+    ),
     EnvVarSpec::required_in_production(
         "JWT_SECRET",
         "no signing key for session access/refresh tokens",
@@ -1641,10 +1877,10 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
     .gated_by("BUNYIP_UPDATE_CHECK_URL"),
     EnvVarSpec::gating(
         "INFISICAL_ENABLED",
-        "the Infisical runtime fetch is off: Group-2 integration secrets (SMTP password) come \
-         only from the database (BUNYIP-525)",
+        "the Infisical store is not inspected: `bunyip-api secrets-status` cannot report whether \
+         SECRETS_STORAGE=infisical is ready to switch to (BUNYIP-525, BUNYIP-542)",
         "Set INFISICAL_ENABLED=true plus the INFISICAL_* credentials (see \
-         docs/secrets-infisical.md).",
+         docs/secrets-infisical.md). SECRETS_STORAGE=infisical inspects it either way.",
     ),
     EnvVarSpec::gating(
         "INFISICAL_ADDRESS",
@@ -1786,7 +2022,16 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
     EnvVarSpec::defaulted("SMTP_USERNAME", "SMTP username"),
     EnvVarSpec::defaulted(
         "SMTP_PASSWORD",
-        "SMTP password; Group-2 (DB row or Infisical)",
+        "SMTP password; governed by SECRETS_STORAGE, read only as SMTP_PASSWORD_FILE",
+    ),
+    EnvVarSpec::defaulted(
+        "STRIPE_SECRET_KEY",
+        "Stripe secret key; governed by SECRETS_STORAGE, read only as STRIPE_SECRET_KEY_FILE",
+    ),
+    EnvVarSpec::defaulted(
+        "STRIPE_WEBHOOK_SECRET",
+        "Stripe webhook signing secret; governed by SECRETS_STORAGE, read only as \
+         STRIPE_WEBHOOK_SECRET_FILE",
     ),
     EnvVarSpec::defaulted(
         "SMTP_EHLO_NAME",
@@ -2092,6 +2337,7 @@ mod tests {
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
         // Use development to avoid requiring APP_ENCRYPTION_KEY
         env::set_var("ENVIRONMENT", "development");
+        env::set_var("SECRETS_STORAGE", "database");
         env::set_var("HOST_IP", "0.0.0.0");
         env::set_var("APP_PORT", "4000");
         env::remove_var("RUST_LOG");
@@ -2121,6 +2367,7 @@ mod tests {
         let _env = env_lock();
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
         env::set_var("ENVIRONMENT", "production");
+        env::set_var("SECRETS_STORAGE", "database");
         env::remove_var("SMTP_HOST");
         env::remove_var("EMAIL_ENABLED");
 
@@ -2153,6 +2400,8 @@ mod tests {
             "APP_ENCRYPTION_KEY_FILE",
             "BUNYIP_WEBHOOK_SIGNING_SECRET",
             "BUNYIP_WEBHOOK_SIGNING_SECRET_FILE",
+            "SECRETS_STORAGE",
+            "SECRETS_STORAGE_FILE",
             "SMTP_HOST",
             "EMAIL_ENABLED",
         ] {
@@ -2168,6 +2417,7 @@ mod tests {
         let reported: Vec<&str> = failures.iter().map(|f| f.var).collect();
         for expected in [
             "DATABASE_URL",
+            "SECRETS_STORAGE",
             "JWT_SECRET",
             "APP_ENCRYPTION_KEY",
             "BUNYIP_WEBHOOK_SIGNING_SECRET",
@@ -2214,6 +2464,9 @@ mod tests {
             env::remove_var(var);
         }
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
+        // SECRETS_STORAGE is Required in EVERY environment (BUNYIP-542), so it
+        // is set here: this test is about the production-only entries.
+        env::set_var("SECRETS_STORAGE", "database");
 
         assert!(audit_required(false).is_empty());
         assert_eq!(
@@ -2236,6 +2489,7 @@ mod tests {
     fn gated_required_variables_only_apply_once_their_gate_is_set() {
         let _env = env_lock();
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
+        env::set_var("SECRETS_STORAGE", "database");
         env::set_var("JWT_SECRET", "x".repeat(32));
         env::set_var("APP_ENCRYPTION_KEY", "aa".repeat(32));
         env::set_var("BUNYIP_WEBHOOK_SIGNING_SECRET", "y".repeat(32));
@@ -2273,6 +2527,7 @@ mod tests {
         let _env = env_lock();
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
         env::set_var("ENVIRONMENT", "development");
+        env::set_var("SECRETS_STORAGE", "database");
         env::remove_var("IP2LOCATION_DB_PATH");
         env::remove_var("APP_PORT");
         env::remove_var("RUST_LOG");
@@ -2387,6 +2642,87 @@ mod tests {
         // by checking the error variant directly (avoids env var race with parallel tests)
         let err = ConfigError::MissingEnv("DATABASE_URL".to_string());
         assert!(err.to_string().contains("DATABASE_URL"));
+    }
+
+    // -- BUNYIP-542: SECRETS_STORAGE ----------------------------------------
+
+    /// Every legal value round-trips, and nothing else parses: an operator
+    /// typo must be a startup error, never a silent fallback to some default
+    /// store.
+    #[test]
+    fn secrets_storage_parses_exactly_the_three_legal_values() {
+        for (raw, expected) in [
+            ("environment", SecretsStorage::Environment),
+            ("database", SecretsStorage::Database),
+            ("infisical", SecretsStorage::Infisical),
+            // Case and surrounding whitespace are operator noise, not intent.
+            ("  DataBase ", SecretsStorage::Database),
+        ] {
+            assert_eq!(SecretsStorage::parse(raw), Some(expected), "{raw}");
+        }
+        for raw in ["", "db", "vault", "environmnet", "database,infisical"] {
+            assert_eq!(SecretsStorage::parse(raw), None, "{raw}");
+        }
+    }
+
+    /// An unrecognised value is a startup failure naming the variable and the
+    /// legal set, collected with every other failure in the one report.
+    #[test]
+    fn an_unrecognised_secrets_storage_is_a_startup_failure() {
+        let _env = env_lock();
+        env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
+        env::set_var("ENVIRONMENT", "development");
+        env::set_var("SECRETS_STORAGE", "vault");
+
+        let err = Config::from_env_inner().expect_err("an unrecognised store must fail the boot");
+        let ConfigError::Startup(failures) = &err else {
+            panic!("expected a startup report, got {err:?}");
+        };
+        let failure = failures
+            .iter()
+            .find(|f| f.var == "SECRETS_STORAGE")
+            .unwrap_or_else(|| panic!("SECRETS_STORAGE not reported in {failures:?}"));
+        assert!(failure.reason.contains("vault"), "{failure:?}");
+        for legal in ["environment", "database", "infisical"] {
+            assert!(failure.remedy.contains(legal), "{failure:?}");
+        }
+
+        env::set_var("SECRETS_STORAGE", "infisical");
+        let config = Config::from_env_inner().expect("a legal store loads");
+        assert_eq!(config.secrets_storage, SecretsStorage::Infisical);
+
+        env::remove_var("SECRETS_STORAGE");
+        env::remove_var("ENVIRONMENT");
+    }
+
+    /// The environment store is `{NAME}_FILE` only. A plain variable holding a
+    /// governed secret is the compose-`environment:` exposure BUNYIP-38
+    /// removed, so it resolves to nothing rather than quietly working.
+    #[test]
+    fn the_environment_store_reads_the_file_and_ignores_the_plain_variable() {
+        let _env = env_lock();
+        let dir = std::env::temp_dir().join("bunyip-542-env-store");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("smtp_password");
+        std::fs::write(&path, "  from-the-file\n").expect("write the secret file");
+
+        env::remove_var("SMTP_PASSWORD_FILE");
+        env::set_var("SMTP_PASSWORD", "from-the-plain-variable");
+        assert_eq!(GovernedSecret::SmtpPassword.read_environment(), None);
+
+        env::set_var("SMTP_PASSWORD_FILE", &path);
+        assert_eq!(
+            GovernedSecret::SmtpPassword.read_environment().as_deref(),
+            Some("from-the-file")
+        );
+
+        // An empty file counts as unset, matching every other secret read.
+        std::fs::write(&path, "\n").expect("truncate the secret file");
+        assert_eq!(GovernedSecret::SmtpPassword.read_environment(), None);
+
+        env::remove_var("SMTP_PASSWORD_FILE");
+        env::remove_var("SMTP_PASSWORD");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -2782,7 +3118,7 @@ mod tests {
         assert!(!EmailConfig::has_db_overrides(&row));
 
         // dev (is_production=false) with no SMTP env => the env defaults.
-        let cfg = EmailConfig::from_db_row(&row, &test_key_set(), false);
+        let cfg = EmailConfig::from_db_row(&row, None, false);
         assert_eq!(cfg.smtp_host, "localhost");
         assert!(!cfg.enabled);
         assert!(cfg.admin_notification_emails.is_empty());
@@ -2804,7 +3140,7 @@ mod tests {
         row.admin_notification_emails = Some("ops@example.com, alerts@example.com".to_string());
         assert!(EmailConfig::has_db_overrides(&row));
 
-        let cfg = EmailConfig::from_db_row(&row, &test_key_set(), false);
+        let cfg = EmailConfig::from_db_row(&row, None, false);
         assert!(cfg.enabled);
         assert_eq!(cfg.smtp_host, "smtp.example.com");
         assert_eq!(cfg.smtp_port, 587);
@@ -2835,7 +3171,11 @@ mod tests {
         row.smtp_password_nonce = Some(nonce);
         row.key_version = ver;
 
-        let cfg = EmailConfig::from_db_row(&row, &key_set, false);
+        // BUNYIP-542: the caller resolves the password from the declared store;
+        // `db_smtp_password` is the database store's half of that resolution.
+        let from_store = EmailConfig::db_smtp_password(&row, &key_set);
+        assert_eq!(from_store.as_deref(), Some("s3cr3t-relay-pass"));
+        let cfg = EmailConfig::from_db_row(&row, from_store, false);
         assert_eq!(cfg.smtp_password, "s3cr3t-relay-pass");
         assert!(EmailConfig::has_db_overrides(&row));
     }
@@ -2849,7 +3189,7 @@ mod tests {
         // (465 for the default implicit TLS) is kept rather than wrapping.
         let mut row = email_row();
         row.smtp_port = Some(-1);
-        let cfg = EmailConfig::from_db_row(&row, &test_key_set(), false);
+        let cfg = EmailConfig::from_db_row(&row, None, false);
         assert_eq!(cfg.smtp_port, 465);
     }
 
@@ -2967,6 +3307,7 @@ mod tests {
     fn dev_config_with_trusted_proxy() -> Config {
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
         env::set_var("ENVIRONMENT", "development");
+        env::set_var("SECRETS_STORAGE", "database");
         env::set_var("TRUSTED_PROXY_CIDR", "10.0.0.0/8");
         env::remove_var("SMTP_HOST");
         env::remove_var("EMAIL_ENABLED");

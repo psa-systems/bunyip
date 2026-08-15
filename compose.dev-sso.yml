@@ -57,6 +57,9 @@ services:
   # /auth/token to the registry listener (port 18081).
   api:
     environment:
+      # BUNYIP-542: same store as plain `just dev` - the governed integration
+      # secrets are entered on the admin pages.
+      SECRETS_STORAGE: ${SECRETS_STORAGE:-database}
       # Advertise the public Traefik hostname. The token realm is forced back
       # to its code default (https://<service>/auth/token) by clearing the
       # localhost realm that compose.dev.yml sets for plain `just dev`.

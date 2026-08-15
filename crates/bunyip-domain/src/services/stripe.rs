@@ -289,10 +289,37 @@ pub fn unconfigured_stripe_config() -> StripeConfig {
     }
 }
 
+/// Build a runtime [`StripeConfig`] from the DB row's NON-SECRET columns only
+/// (app tag, checkout URLs, trial length), leaving the two secrets on their
+/// unconfigured placeholders (BUNYIP-542).
+///
+/// Those columns are configuration, not secrets: they stay editable and
+/// readable in every `SECRETS_STORAGE` mode. The caller overlays the secret key
+/// and webhook secret from whichever store the deployment declared.
+pub fn stripe_settings_from_db_model(db: &crate::models::stripe::StripeConfig) -> StripeConfig {
+    let defaults = unconfigured_stripe_config();
+    StripeConfig {
+        secret_key: defaults.secret_key,
+        webhook_secret: defaults.webhook_secret,
+        success_url: db.success_url.clone().unwrap_or(defaults.success_url),
+        cancel_url: db.cancel_url.clone().unwrap_or(defaults.cancel_url),
+        free_price_id: None,
+        app_tag: db.app_tag.clone().unwrap_or(defaults.app_tag),
+        trial_period_days: db
+            .trial_period_days
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(defaults.trial_period_days),
+    }
+}
+
 /// Build a runtime [`StripeConfig`] from the DB model, decrypting secrets and
 /// falling back to the derived defaults for any field that is NULL (was
 /// `StripeConfig::from_db_model`). Bunyip-side because it decrypts with bunyip's
 /// [`AppKeySet`].
+///
+/// This is the `SECRETS_STORAGE=database` form of the secret resolution; the
+/// other two modes overlay their own values onto
+/// [`stripe_settings_from_db_model`].
 pub fn stripe_config_from_db_model(
     db: &crate::models::stripe::StripeConfig,
     key_set: &AppKeySet,
