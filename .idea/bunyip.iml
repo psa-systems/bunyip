@@ -9,6 +9,7 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/bunyip-domain/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/bunyip-oci/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/bunyip-oidc/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/bunyip-api/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />
