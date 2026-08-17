@@ -187,6 +187,22 @@ pub fn button_class(variant: &str, size: &str, extra: &str) -> String {
     )
 }
 
+/// The one "return to the parent surface" affordance (BUNYIP-550 F6). Every
+/// surface with a parent renders this, so back navigation is one treatment
+/// instead of the four it had grown (muted text link with a literal arrow,
+/// bare underline link, outline button, filled button). It is navigation, not
+/// an action, so it resolves to the `link` variant's colour rather than a
+/// button, and the direction cue is the lucide glyph rather than a hardcoded
+/// character that renders in the body font and ignores the icon classes.
+pub fn back_link(href: &str, label: &str) -> Markup {
+    html! {
+        a href=(href) class="inline-flex items-center gap-1 text-sm text-primary-text hover:underline" {
+            (icon("arrow-left", "h-4 w-4"))
+            (label)
+        }
+    }
+}
+
 /// Prev/Next pager shared by the admin tables and the two `/settings` lists
 /// (BUNYIP-467 F15). `base` is the path (optionally already carrying query
 /// params) and `param` is the page query key: `page` for the admin tables, and
@@ -672,5 +688,47 @@ mod tests {
     #[test]
     fn link_variant_uses_the_foreground_token() {
         assert!(super::variant_classes("link").contains("text-primary-text"));
+    }
+
+    /// BUNYIP-550: an arrow written as a literal character renders in the body
+    /// font and cannot be sized or coloured with the surrounding icon classes,
+    /// so it is never the arrow. In-app views use [`icon`] (`arrow-left` /
+    /// `arrow-right`), the marketing skin uses its Font Awesome `<i>`. The
+    /// needles are `\u{}` escapes so this file's own source does not match.
+    #[test]
+    fn no_view_hardcodes_an_arrow_character() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        let mut stack = vec![src];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("readable source dir") {
+                let path = entry.expect("readable dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let body = std::fs::read_to_string(&path).expect("readable source file");
+                    if body.contains('\u{2190}') || body.contains('\u{2192}') {
+                        offenders.push(path);
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "literal arrow characters render in the body font; use `icon(\"arrow-left\")` / \
+             `icon(\"arrow-right\")`, or the Font Awesome glyph in the marketing skin: {offenders:?}"
+        );
+    }
+
+    /// The one back-link treatment: navigation colour, not a button, and the
+    /// lucide glyph rather than a hardcoded character (BUNYIP-550 F6).
+    #[test]
+    fn back_link_is_a_navigation_link_carrying_the_arrow_glyph() {
+        let markup = super::back_link("/admin/users", "Back to users").into_string();
+        assert!(markup.contains(r#"href="/admin/users""#), "{markup}");
+        assert!(markup.contains("text-primary-text"), "{markup}");
+        assert!(markup.contains("hover:underline"), "{markup}");
+        assert!(!markup.contains(super::BTN_BASE), "{markup}");
+        assert!(markup.contains(super::inner("arrow-left")), "{markup}");
     }
 }

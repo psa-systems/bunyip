@@ -13,7 +13,9 @@ use crate::api::types::AdminApplication;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::urlenc;
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{badge, button_class, empty_state, error_box, icon, toggle_switch};
+use crate::views::ui::{
+    back_link, badge, button_class, empty_state, error_box, icon, toggle_switch,
+};
 use crate::web::{redirect_cookies, status_cookies, AppState};
 
 use super::application_groups::group_assignment_form;
@@ -972,7 +974,7 @@ pub async fn application_docs(
     let content = html! {
         div class="space-y-6" {
             div {
-                a class="text-sm text-muted-foreground hover:underline" href="/admin/applications" { "← Applications" }
+                (back_link("/admin/applications", "Applications"))
                 h1 class="text-3xl font-bold mt-2" { "Documentation: " (app_name) }
                 p class="text-muted-foreground" { "Public pages, rendered as markdown (raw HTML is stripped). Lower sort order shows first." }
             }

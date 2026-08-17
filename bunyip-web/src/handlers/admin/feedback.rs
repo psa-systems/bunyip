@@ -12,7 +12,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::{AdminFeedbackDetail, FeedbackAttachmentMeta, FeedbackStatus};
 use crate::handlers::{admin_guard, admin_response};
 use crate::util::{rel_time, urlenc};
-use crate::views::ui::{badge, button_class, empty_state, error_box, icon, pager};
+use crate::views::ui::{back_link, badge, button_class, empty_state, error_box, icon, pager};
 use crate::web::{redirect_cookies, AppState};
 
 use super::with_attachment_hardening;
@@ -622,7 +622,7 @@ pub(super) fn feedback_detail_view(f: &AdminFeedbackDetail, tab: FeedbackTab) ->
                 div {
                     h1 class="text-3xl font-bold" { (f.subject.clone().unwrap_or_else(|| "(no subject)".into())) }
                     p class="mt-2 text-muted-foreground text-sm" {
-                        a href=(tab.path()) class="hover:underline" { "← Back to feedback" }
+                        (back_link(tab.path(), "Back to feedback"))
                     }
                 }
                 (feedback_status_chip(&f.status))

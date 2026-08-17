@@ -17,7 +17,7 @@ use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{format_stripe_amount, urlenc};
 use crate::views::layout::{admin_block, admin_block_grid};
 use crate::views::ui::{
-    badge, button_class, empty_state, error_box, error_box_detailed, icon, success_box,
+    back_link, badge, button_class, empty_state, error_box, error_box_detailed, icon, success_box,
 };
 use crate::web::{redirect_cookies, AppState};
 
@@ -1131,7 +1131,7 @@ pub(super) fn webhook_created_page(w: &crate::api::types::StripeWebhookEndpoint)
                         },
                         None => p class="text-sm text-muted-foreground" { "Stripe did not return a signing secret. bunyip rejects every incoming Stripe event until one is saved: retrieve the secret from the Stripe dashboard for this endpoint, paste it into Webhook secret on the Stripe page, then Save." },
                     }
-                    div class="mt-4" { a href="/admin/stripe" class=(button_class("default", "default", "")) { "Back to Stripe" } }
+                    div class="mt-4" { (back_link("/admin/stripe", "Back to Stripe")) }
                 },
             ))
         }
@@ -1477,7 +1477,7 @@ fn stripe_error_page(c: &AuthCtx, user: &User, err: &str) -> Response {
             div { h1 class="text-3xl font-bold" { "Stripe" } p class="mt-2 text-muted-foreground" { "Connect and configure Stripe billing." } }
             (error_box(err))
             p class="text-sm text-muted-foreground" { "Re-open the Stripe page to retry with the persisted values." }
-            a href="/admin/stripe" class=(button_class("default", "default", "")) { "Back to Stripe" }
+            (back_link("/admin/stripe", "Back to Stripe"))
         }
     };
     admin_response(c, user, "/admin/stripe", "Stripe", content)

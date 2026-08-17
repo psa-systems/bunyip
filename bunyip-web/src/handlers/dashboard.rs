@@ -18,7 +18,9 @@ use crate::api::types::{
 };
 use crate::handlers::{dashboard_response, guard, needs_onboarding, password_ok, rotating_index};
 use crate::util::{app_gradient, days_until, has_active_membership, rel_time, urlenc};
-use crate::views::ui::{badge, button_class, empty_state, error_box, icon, pager, success_box};
+use crate::views::ui::{
+    back_link, badge, button_class, empty_state, error_box, icon, pager, success_box,
+};
 use crate::web::{redirect_cookies, AppState};
 
 const TAGLINES: [&str; 5] = [
@@ -856,7 +858,7 @@ pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap)
                     p class="text-center text-muted-foreground" { "Subscribe to get access to all applications for just $3/month." }
                     div class="flex flex-col gap-4" {
                         a href="/membership" class=(button_class("default", "default", "w-full")) { "Subscribe Now" }
-                        a href="/dashboard" class=(button_class("outline", "default", "w-full")) { (icon("arrow-left", "mr-2 h-4 w-4")) "Back to Dashboard" }
+                        div class="flex justify-center" { (back_link("/dashboard", "Back to Dashboard")) }
                     }
                 }
             }
