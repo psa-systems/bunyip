@@ -1115,10 +1115,13 @@ pub async fn app_docs_index(
         .find(|a| a.slug == slug)
         .map(|a| a.display_name.clone())
         .unwrap_or_else(|| slug.clone());
-    // BUNYIP-515: an empty docs list and an unreadable one render the same
-    // empty state, so the failure has to be legible somewhere: log it, then
-    // fall back (a docs index that 500s helps nobody).
-    let docs = calls::app_docs(&st.api, &slug).await.unwrap_or_else(|e| {
+    // BUNYIP-515 logged the failure because the reader could not see it.
+    // BUNYIP-546: the reader now sees it too, so an unreadable docs list no
+    // longer reads as an app that has published nothing. Still not a 500: the
+    // rest of the page is worth rendering.
+    let docs_data = calls::app_docs(&st.api, &slug).await;
+    let docs_reachable = docs_data.is_ok();
+    let docs = docs_data.unwrap_or_else(|e| {
         tracing::error!(
             endpoint = "/v1/applications/{slug}/docs",
             slug = %slug,
@@ -1131,7 +1134,9 @@ pub async fn app_docs_index(
     let content = html! {
         div class="container max-w-4xl py-12" {
             h1 class="text-4xl font-bold mb-4" { (app_name) " documentation" }
-            @if docs.is_empty() {
+            @if !docs_reachable {
+                (error_box("Could not reach the API to load documentation."))
+            } @else if docs.is_empty() {
                 (empty_state("file-text", "No documentation for this app yet.", None))
             } @else {
                 ul class="space-y-3" {

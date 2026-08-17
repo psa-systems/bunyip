@@ -38,7 +38,12 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
     };
     let fwd = c.forward.as_deref();
 
-    let apps = calls::applications(&st.api, fwd).await.unwrap_or_default();
+    // BUNYIP-546: an unreadable catalog and an empty one are different facts,
+    // so the grid is told which it is rather than rendering a heading over
+    // empty space in both cases.
+    let apps_data = calls::applications(&st.api, fwd).await;
+    let apps_reachable = apps_data.is_ok();
+    let apps = apps_data.unwrap_or_default();
     let stripe_enabled = auth_api::setup_status(&st.api)
         .await
         .map(|s| s.stripe_enabled)
@@ -104,7 +109,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                     }
                     h2 class="text-xl font-semibold tracking-tight" { "Your Applications" }
                 }
-                (dashboard_apps_grid(&apps, &base_domain, is_member))
+                (dashboard_apps_grid(&apps, apps_reachable, &base_domain, is_member))
             }
         }
     };
@@ -114,35 +119,48 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
 
 /// The "Your Applications" card grid on /dashboard. Pure so the card container
 /// is unit-testable (BUNYIP-367): `gap-6` is the same 24px rhythm the rest of
-/// the authenticated shells stack their cards on.
-fn dashboard_apps_grid(apps: &[Application], base_domain: &str, is_member: bool) -> Markup {
+/// the authenticated shells stack their cards on. `reachable` is `false` when
+/// the catalog fetch failed, which is a different state from an empty catalog
+/// (BUNYIP-546).
+fn dashboard_apps_grid(
+    apps: &[Application],
+    reachable: bool,
+    base_domain: &str,
+    is_member: bool,
+) -> Markup {
     html! {
-        div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
-            @for (i, app) in apps.iter().enumerate() {
-                @let subdomain = app.subdomain.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| app.slug.clone());
-                @let app_url = format!("{subdomain}.{base_domain}");
-                div class="rounded-lg border bg-card text-card-foreground shadow-sm flex h-full flex-col border-border/50 transition-all hover:shadow-lg hover:shadow-indigo-500/5" {
-                    div class="flex flex-col space-y-1.5 p-6" {
-                        div class="flex items-center justify-between" {
-                            h3 class="text-2xl font-semibold leading-none tracking-tight" { (app.display_name) }
-                            @if app.maintenance_mode { (badge("warning", "Maintenance")) }
-                            @else if app.is_accessible { (badge("success", "Active")) }
-                            @else { (badge("secondary", "Locked")) }
-                        }
-                        p class="text-sm text-muted-foreground" { (app.description.clone().unwrap_or_default()) }
-                    }
-                    div class="p-6 pt-0 mt-auto" {
-                        @if app.is_accessible {
-                            a href=(format!("https://{app_url}/dashboard")) target="_blank" rel="noopener noreferrer" {
-                                span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md shadow-indigo-500/15 hover:shadow-lg hover:shadow-indigo-500/25 transition-shadow", app_gradient(i)))) {
-                                    "Open " (app.display_name) (icon("external-link", "ml-2 h-4 w-4"))
-                                }
+        @if !reachable {
+            (error_box("Could not reach the API to load applications."))
+        } @else if apps.is_empty() {
+            (empty_state("app-window", "No applications are available yet.", None))
+        } @else {
+            div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
+                @for (i, app) in apps.iter().enumerate() {
+                    @let subdomain = app.subdomain.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| app.slug.clone());
+                    @let app_url = format!("{subdomain}.{base_domain}");
+                    div class="rounded-lg border bg-card text-card-foreground shadow-sm flex h-full flex-col border-border/50 transition-all hover:shadow-lg hover:shadow-indigo-500/5" {
+                        div class="flex flex-col space-y-1.5 p-6" {
+                            div class="flex items-center justify-between" {
+                                h3 class="text-2xl font-semibold leading-none tracking-tight" { (app.display_name) }
+                                @if app.maintenance_mode { (badge("warning", "Maintenance")) }
+                                @else if app.is_accessible { (badge("success", "Active")) }
+                                @else { (badge("secondary", "Locked")) }
                             }
-                        } @else {
-                            button type="button" disabled class=(button_class("default", "default", "w-full")) {
-                                @if !is_member { "Membership Required" }
-                                @else if app.maintenance_mode { "Under Maintenance" }
-                                @else { "Not Available" }
+                            p class="text-sm text-muted-foreground" { (app.description.clone().unwrap_or_default()) }
+                        }
+                        div class="p-6 pt-0 mt-auto" {
+                            @if app.is_accessible {
+                                a href=(format!("https://{app_url}/dashboard")) target="_blank" rel="noopener noreferrer" {
+                                    span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md shadow-indigo-500/15 hover:shadow-lg hover:shadow-indigo-500/25 transition-shadow", app_gradient(i)))) {
+                                        "Open " (app.display_name) (icon("external-link", "ml-2 h-4 w-4"))
+                                    }
+                                }
+                            } @else {
+                                button type="button" disabled class=(button_class("default", "default", "w-full")) {
+                                    @if !is_member { "Membership Required" }
+                                    @else if app.maintenance_mode { "Under Maintenance" }
+                                    @else { "Not Available" }
+                                }
                             }
                         }
                     }
@@ -335,15 +353,40 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
         Err(r) => return r,
     };
     let fwd = c.forward.as_deref();
-    let apps = calls::applications(&st.api, fwd).await.unwrap_or_default();
-    // Groups (BUNYIP-100). A failed fetch degrades to a flat ungrouped list.
+    // BUNYIP-546: the catalog fetch outcome decides between the error box and
+    // the empty state below; both used to render as a bare page.
+    let apps_data = calls::applications(&st.api, fwd).await;
+    let apps_reachable = apps_data.is_ok();
+    let apps = apps_data.unwrap_or_default();
+    // Groups (BUNYIP-100). A failed fetch degrades to a flat ungrouped list,
+    // which is a usable page rather than an error, so it is logged rather than
+    // surfaced (BUNYIP-546).
     let groups = calls::application_groups(&st.api, fwd)
         .await
-        .unwrap_or_default();
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                endpoint = "/v1/application-groups",
+                error = %e.message,
+                code = %e.code,
+                "applications page falling back to a flat, ungrouped list"
+            );
+            Vec::new()
+        });
     // Per-product downloads (BUNYIP-100), joined onto each card by slug so
     // downloads live on the Applications page (the standalone Downloads page is
-    // retired). A failed fetch degrades to cards with no Download affordance.
-    let download_groups = calls::downloads_all(&st.api, fwd).await.unwrap_or_default();
+    // retired). A failed fetch degrades to cards with no Download affordance;
+    // same reasoning as the groups fetch above.
+    let download_groups = calls::downloads_all(&st.api, fwd)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                endpoint = "/v1/downloads",
+                error = %e.message,
+                code = %e.code,
+                "applications page rendering cards with no download affordance"
+            );
+            Vec::new()
+        });
     let stripe = auth_api::setup_status(&st.api)
         .await
         .map(|s| s.stripe_enabled)
@@ -384,6 +427,8 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
         .iter()
         .filter(|g| !apps.iter().any(|a| a.slug == g.app_slug))
         .collect();
+    let nothing_to_show =
+        group_sections.is_empty() && ungrouped.is_empty() && catalog_only.is_empty();
 
     let content = html! {
         div class="space-y-6" {
@@ -401,27 +446,35 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                     }
                 }
             }
-            @for (name, members) in &group_sections {
-                section class="space-y-3" {
-                    h2 class="text-xl font-semibold tracking-tight" { (name) }
-                    div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
-                        @for &(idx, app) in members { (app_card(idx, app, &domain, is_member, download_groups.iter().find(|g| g.app_slug == app.slug))) }
+            // BUNYIP-546: could-not-load, empty and populated are three states,
+            // not two. Nothing to render used to look identical either way.
+            @if !apps_reachable {
+                (error_box("Could not reach the API to load applications."))
+            } @else if nothing_to_show {
+                (empty_state("app-window", "No applications are available yet.", None))
+            } @else {
+                @for (name, members) in &group_sections {
+                    section class="space-y-3" {
+                        h2 class="text-xl font-semibold tracking-tight" { (name) }
+                        div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
+                            @for &(idx, app) in members { (app_card(idx, app, &domain, is_member, download_groups.iter().find(|g| g.app_slug == app.slug))) }
+                        }
                     }
                 }
-            }
-            @if !ungrouped.is_empty() {
-                section class="space-y-3" {
-                    @if has_groups { h2 class="text-xl font-semibold tracking-tight" { "Other" } }
-                    div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
-                        @for &(idx, app) in &ungrouped { (app_card(idx, app, &domain, is_member, download_groups.iter().find(|g| g.app_slug == app.slug))) }
+                @if !ungrouped.is_empty() {
+                    section class="space-y-3" {
+                        @if has_groups { h2 class="text-xl font-semibold tracking-tight" { "Other" } }
+                        div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
+                            @for &(idx, app) in &ungrouped { (app_card(idx, app, &domain, is_member, download_groups.iter().find(|g| g.app_slug == app.slug))) }
+                        }
                     }
                 }
-            }
-            @if !catalog_only.is_empty() {
-                section class="space-y-3" {
-                    h2 class="text-xl font-semibold tracking-tight" { "More downloads" }
-                    div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
-                        @for &g in &catalog_only { (download_only_card(g, is_member)) }
+                @if !catalog_only.is_empty() {
+                    section class="space-y-3" {
+                        h2 class="text-xl font-semibold tracking-tight" { "More downloads" }
+                        div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
+                            @for &g in &catalog_only { (download_only_card(g, is_member)) }
+                        }
                     }
                 }
             }
@@ -913,13 +966,18 @@ pub async fn membership(
     };
     let fwd = c.forward.as_deref();
     let current: Option<Membership> = calls::membership(&st.api, fwd).await.unwrap_or(None);
-    let payments = calls::payment_history(&st.api, fwd)
-        .await
-        .unwrap_or_default();
+    // BUNYIP-546: "no payments yet" and "we could not read your payments" are
+    // different answers to the same question, so each list keeps its fetch
+    // outcome and renders an error box rather than the empty state.
+    let payments_data = calls::payment_history(&st.api, fwd).await;
+    let payments_reachable = payments_data.is_ok();
+    let payments = payments_data.unwrap_or_default();
     // The page now absorbs the invoices table that used to live on /billing;
     // /billing is a 308 redirect into this page. See docs/bunyip-upgrade/
     // 01-membership-plan-data.md.
-    let invoices = calls::invoices(&st.api, fwd).await.unwrap_or_default();
+    let invoices_data = calls::invoices(&st.api, fwd).await;
+    let invoices_reachable = invoices_data.is_ok();
+    let invoices = invoices_data.unwrap_or_default();
     let stripe = auth_api::setup_status(&st.api)
         .await
         .map(|s| s.stripe_enabled)
@@ -1067,7 +1125,9 @@ pub async fn membership(
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Invoices" } p class="text-sm text-muted-foreground" { "Your billing history" } }
                 div class="p-6 pt-0" {
-                    @if invoices.is_empty() {
+                    @if !invoices_reachable {
+                        (error_box("Could not reach the API to load invoices."))
+                    } @else if invoices.is_empty() {
                         (empty_state("file-text", "No invoices yet.", None))
                     } @else {
                         div class="divide-y" {
@@ -1093,7 +1153,8 @@ pub async fn membership(
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Payment History" } }
                 div class="p-6 pt-0" {
-                    @if payments.is_empty() { (empty_state("receipt", "No payment history yet.", None)) }
+                    @if !payments_reachable { (error_box("Could not reach the API to load payment history.")) }
+                    @else if payments.is_empty() { (empty_state("receipt", "No payment history yet.", None)) }
                     @else {
                         div class="space-y-4" {
                             @for p in &payments {
@@ -1231,18 +1292,6 @@ pub struct SettingsQuery {
 /// Page size for the Settings sessions / trusted-device lists (BUNYIP-177).
 const SETTINGS_PAGE_SIZE: i64 = 20;
 
-/// Empty page fallback so a failed sessions/devices fetch does not break the
-/// rest of /settings (BUNYIP-177).
-fn empty_page<T>(page: i64) -> crate::api::types::PaginatedResponse<T> {
-    crate::api::types::PaginatedResponse {
-        items: Vec::new(),
-        total: 0,
-        page,
-        page_size: Some(SETTINGS_PAGE_SIZE),
-        total_pages: 0,
-    }
-}
-
 pub async fn settings(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1260,19 +1309,23 @@ pub async fn settings(
         .unwrap_or(user.two_factor_enabled);
     let is_admin = matches!(user.role, crate::api::types::UserRole::Admin);
     // Active sessions (BUNYIP-137), paginated (BUNYIP-177). A failure here must
-    // not break the rest of the settings page, so fall back to an empty page.
+    // not break the rest of the settings page, so it stays local to the card:
+    // `None` means the fetch failed and the card says so, rather than claiming
+    // the account has no sessions (BUNYIP-546).
     let session_page = q.session_page.unwrap_or(1).max(1);
     let device_page = q.device_page.unwrap_or(1).max(1);
     let sessions = calls::list_sessions(&st.api, fwd, session_page, SETTINGS_PAGE_SIZE)
         .await
-        .unwrap_or_else(|_| empty_page(session_page));
-    // Trusted devices (BUNYIP-138). Only 2FA users have any; fetch lazily.
+        .ok();
+    // Trusted devices (BUNYIP-138). Only 2FA users have any, and the card below
+    // renders under the same condition, so `None` here can only mean a failed
+    // fetch.
     let trusted_devices = if twofa_enabled {
         auth_api::list_trusted_devices(&st.api, fwd, device_page, SETTINGS_PAGE_SIZE)
             .await
-            .unwrap_or_else(|_| empty_page(device_page))
+            .ok()
     } else {
-        empty_page(device_page)
+        None
     };
 
     let content = html! {
@@ -1389,11 +1442,11 @@ pub async fn settings(
             }))
 
             // Active sessions (BUNYIP-137)
-            (settings_card("key", "from-indigo-500 to-primary", "Active Sessions", sessions_card_body(&sessions, device_page)))
+            (settings_card("key", "from-indigo-500 to-primary", "Active Sessions", sessions_card_body(sessions.as_ref(), device_page)))
 
             // Trusted devices (BUNYIP-138). Only meaningful with 2FA on.
             @if twofa_enabled {
-                (settings_card("shield-check", "from-teal-500 to-primary", "Trusted Devices", trusted_devices_card_body(&trusted_devices, session_page)))
+                (settings_card("shield-check", "from-teal-500 to-primary", "Trusted Devices", trusted_devices_card_body(trusted_devices.as_ref(), session_page)))
             }
 
             // Danger zone
@@ -1433,11 +1486,16 @@ fn settings_card(icon_name: &str, gradient: &str, title: &str, body: Markup) -> 
 /// Body of the "Active Sessions" card: one row per session with device, IP,
 /// last-active time, a "This device" badge on the current session, a per-row
 /// revoke action for non-current sessions, and a "log out all other devices"
-/// action when there is at least one other session (BUNYIP-137).
+/// action when there is at least one other session (BUNYIP-137). `None` is a
+/// failed fetch, which someone auditing a compromised account very much needs
+/// told apart from an account with no sessions (BUNYIP-546).
 fn sessions_card_body(
-    page: &crate::api::types::PaginatedResponse<crate::api::types::SessionInfo>,
+    page: Option<&crate::api::types::PaginatedResponse<crate::api::types::SessionInfo>>,
     device_page: i64,
 ) -> Markup {
+    let Some(page) = page else {
+        return error_box("Could not reach the API to load active sessions.");
+    };
     let sessions = &page.items;
     // "Log out all other devices" appears whenever the account has more than one
     // active session, even if the others are on a later page (BUNYIP-177).
@@ -1518,11 +1576,15 @@ pub async fn settings_revoke_other_sessions(
 }
 
 /// Body of the "Trusted Devices" card (BUNYIP-138): devices that skip the TOTP
-/// prompt at login, each with a revoke action.
+/// prompt at login, each with a revoke action. `None` is a failed fetch
+/// (BUNYIP-546).
 fn trusted_devices_card_body(
-    page: &crate::api::types::PaginatedResponse<crate::api::types::TrustedDeviceInfo>,
+    page: Option<&crate::api::types::PaginatedResponse<crate::api::types::TrustedDeviceInfo>>,
     session_page: i64,
 ) -> Markup {
+    let Some(page) = page else {
+        return error_box("Could not reach the API to load trusted devices.");
+    };
     let devices = &page.items;
     html! {
         p class="text-sm text-muted-foreground mb-4" { "Devices that skip the two-factor prompt when you sign in. Revoke any you do not recognize." }
@@ -2617,7 +2679,7 @@ mod session_row_clipping_tests {
             page_size: Some(20),
             total_pages: 1,
         };
-        let html = super::sessions_card_body(&page, 1).into_string();
+        let html = super::sessions_card_body(Some(&page), 1).into_string();
         assert_no_truncating_flex_container(&html);
         assert!(
             html.contains(">This device<"),
@@ -2659,7 +2721,7 @@ mod card_spacing_tests {
     #[test]
     fn dashboard_application_cards_are_spaced() {
         let apps = [app("mokosh"), app("backup"), app("chat")];
-        let html = super::dashboard_apps_grid(&apps, "example.com", true).into_string();
+        let html = super::dashboard_apps_grid(&apps, true, "example.com", true).into_string();
         assert_cards_are_spaced(&html);
         assert!(html.contains("grid gap-6"), "24px rhythm: {html}");
     }
@@ -2681,5 +2743,131 @@ mod card_spacing_tests {
     #[should_panic(expected = "negative margin on a card")]
     fn the_guard_rejects_a_card_pulled_over_its_neighbour() {
         assert_cards_are_spaced(r#"<div class="rounded-lg border bg-card -mt-px"></div>"#);
+    }
+}
+
+/// BUNYIP-546: every fetched list on these pages tells populated, empty and
+/// could-not-load apart. Before this, a failed fetch rendered exactly what an
+/// empty one did, so "your sessions could not be loaded" read as "you have no
+/// sessions".
+#[cfg(test)]
+mod fetch_state_tests {
+    use crate::api::types::{Application, PaginatedResponse, SessionInfo, TrustedDeviceInfo};
+
+    fn app(slug: &str) -> Application {
+        Application {
+            id: slug.into(),
+            slug: slug.into(),
+            display_name: slug.into(),
+            description: Some("An app.".into()),
+            icon_url: None,
+            version: None,
+            source_code_url: None,
+            release_notes_url: None,
+            subdomain: None,
+            is_accessible: true,
+            maintenance_mode: false,
+            maintenance_message: None,
+            group_id: None,
+        }
+    }
+
+    fn page<T>(items: Vec<T>) -> PaginatedResponse<T> {
+        let total = items.len() as i64;
+        PaginatedResponse {
+            items,
+            total,
+            page: 1,
+            page_size: Some(super::SETTINGS_PAGE_SIZE),
+            total_pages: 1,
+        }
+    }
+
+    #[test]
+    fn dashboard_grid_separates_the_three_catalog_states() {
+        let populated =
+            super::dashboard_apps_grid(&[app("mokosh")], true, "a8n.run", true).into_string();
+        assert!(populated.contains("mokosh"), "cards render: {populated}");
+
+        let empty = super::dashboard_apps_grid(&[], true, "a8n.run", true).into_string();
+        assert!(
+            empty.contains("No applications are available yet."),
+            "shared empty state: {empty}"
+        );
+        assert!(!empty.contains("Could not reach"), "empty is not an error");
+
+        let unreachable = super::dashboard_apps_grid(&[], false, "a8n.run", true).into_string();
+        assert!(
+            unreachable.contains("Could not reach the API to load applications."),
+            "error box on a failed fetch: {unreachable}"
+        );
+        assert!(
+            !unreachable.contains("No applications are available yet."),
+            "a failed fetch never claims the catalog is empty: {unreachable}"
+        );
+    }
+
+    #[test]
+    fn sessions_card_says_it_could_not_load_rather_than_none_exist() {
+        let unreachable = super::sessions_card_body(None, 1).into_string();
+        assert!(
+            unreachable.contains("Could not reach the API to load active sessions."),
+            "error box on a failed fetch: {unreachable}"
+        );
+        assert!(
+            !unreachable.contains("No active sessions found."),
+            "a failed fetch never claims the account has no sessions: {unreachable}"
+        );
+
+        let empty =
+            super::sessions_card_body(Some(&page(Vec::<SessionInfo>::new())), 1).into_string();
+        assert!(
+            empty.contains("No active sessions found.") && !empty.contains("Could not reach"),
+            "genuinely empty keeps the empty state: {empty}"
+        );
+    }
+
+    #[test]
+    fn trusted_devices_card_says_it_could_not_load_rather_than_none_exist() {
+        let unreachable = super::trusted_devices_card_body(None, 1).into_string();
+        assert!(
+            unreachable.contains("Could not reach the API to load trusted devices."),
+            "error box on a failed fetch: {unreachable}"
+        );
+        assert!(
+            !unreachable.contains("No trusted devices."),
+            "a failed fetch never claims there are no trusted devices: {unreachable}"
+        );
+
+        let empty =
+            super::trusted_devices_card_body(Some(&page(Vec::<TrustedDeviceInfo>::new())), 1)
+                .into_string();
+        assert!(
+            empty.contains("No trusted devices.") && !empty.contains("Could not reach"),
+            "genuinely empty keeps the empty state: {empty}"
+        );
+    }
+
+    /// The `empty_page()` fallback is gone, not merely unused: it substituted a
+    /// zero-item page for a failed fetch, which is exactly the conflation this
+    /// issue removes. A reintroduction fails here.
+    #[test]
+    fn no_empty_page_fallback_absorbs_a_fetch_error() {
+        let src = include_str!("dashboard.rs");
+        let needle = concat!("empty_", "page");
+        // Handlers and views only: stop at the first test module (so this
+        // module's own name is not scanned) and drop comment lines.
+        let hits: Vec<&str> = src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split yields a head")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .filter(|l| l.contains(needle))
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "a failed fetch must render an error box, not an empty page: {hits:?}"
+        );
     }
 }

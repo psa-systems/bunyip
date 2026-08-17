@@ -1004,9 +1004,12 @@ pub async fn application_docs(
             );
         }
     };
-    let docs = admin_api::app_docs(&st.api, c.forward.as_deref(), &id)
-        .await
-        .unwrap_or_default();
+    // BUNYIP-546: an unreadable page list is not an app with no pages. Saying
+    // "No pages yet" over a failed fetch invites the admin to re-add pages that
+    // already exist.
+    let docs_data = admin_api::app_docs(&st.api, c.forward.as_deref(), &id).await;
+    let docs_reachable = docs_data.is_ok();
+    let docs = docs_data.unwrap_or_default();
     let content = html! {
         div class="space-y-6" {
             div {
@@ -1015,7 +1018,9 @@ pub async fn application_docs(
                 p class="text-muted-foreground" { "Public pages, rendered as markdown (raw HTML is stripped). Lower sort order shows first." }
             }
             div class="space-y-6" {
-                @if docs.is_empty() {
+                @if !docs_reachable {
+                    (error_box("Could not reach the API to load documentation pages."))
+                } @else if docs.is_empty() {
                     (empty_state("file-text", "No pages yet. Add one below.", None))
                 }
                 @for d in &docs {

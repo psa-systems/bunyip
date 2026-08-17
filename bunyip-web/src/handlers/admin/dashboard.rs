@@ -45,7 +45,11 @@ pub(super) fn dataset_row(d: &DatasetHealth) -> maud::Markup {
 }
 
 /// The dashboard "Datasets" card: freshness of the offline IP `.BIN` files.
-pub(super) fn datasets_card(datasets: &[DatasetHealth]) -> maud::Markup {
+/// BUNYIP-546: the card renders on every load. Hiding it when the list was
+/// empty erased the very distinction `dataset_row`'s four badges exist to draw,
+/// and hiding it when the health call failed made a broken dashboard look like
+/// a healthy one, so both states are stated inside the card instead.
+pub(super) fn datasets_card(datasets: &[DatasetHealth], reachable: bool) -> maud::Markup {
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
             div class="flex flex-col space-y-1.5 p-6" {
@@ -53,7 +57,13 @@ pub(super) fn datasets_card(datasets: &[DatasetHealth]) -> maud::Markup {
                 p class="text-sm text-muted-foreground" { "Offline IP intelligence for login-location and abuse enrichment. Refreshed out of band (see scripts/refresh-ip2-datasets.nu); a stale file keeps working but its data drifts." }
             }
             div class="p-6 pt-0" {
-                div class="divide-y" { @for d in datasets { (dataset_row(d)) } }
+                @if !reachable {
+                    (error_box("Could not reach the API to load dataset health."))
+                } @else if datasets.is_empty() {
+                    (empty_state("package", "No datasets are configured.", None))
+                } @else {
+                    div class="divide-y" { @for d in datasets { (dataset_row(d)) } }
+                }
             }
         }
     }
@@ -91,12 +101,12 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
     };
     let fwd = c.forward.as_deref();
     let stats = admin_api::stats(&st.api, fwd).await.ok();
-    // BUNYIP-474: dataset freshness for the Datasets card. Degrades to no card
-    // if the health call fails; it never blocks the dashboard.
-    let datasets = admin_api::system_health(&st.api, fwd)
-        .await
-        .map(|h| h.datasets)
-        .unwrap_or_default();
+    // BUNYIP-474: dataset freshness for the Datasets card. BUNYIP-546: the card
+    // always renders and says which of the three states it is in; a failed
+    // health call still never blocks the dashboard.
+    let health = admin_api::system_health(&st.api, fwd).await;
+    let datasets_reachable = health.is_ok();
+    let datasets = health.map(|h| h.datasets).unwrap_or_default();
     let logs_data = admin_api::audit_logs(&st.api, fwd, 1, 5, false).await;
     let logs_reachable = logs_data.is_ok();
     let logs = logs_data.map(|p| p.items).unwrap_or_default();
@@ -127,7 +137,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
             } @else {
                 (error_box("Could not reach the API."))
             }
-            @if !datasets.is_empty() { (datasets_card(&datasets)) }
+            (datasets_card(&datasets, datasets_reachable))
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Recent Activity" } p class="text-sm text-muted-foreground" { "Latest platform events" } }
                 div class="p-6 pt-0" {
@@ -180,7 +190,7 @@ mod dataset_card_tests {
             ds("Missing one", true, false, None, false),
             ds("Unset one", false, false, None, false),
         ];
-        let html = datasets_card(&rows).into_string();
+        let html = datasets_card(&rows, true).into_string();
         assert!(html.contains("Datasets"), "card titled");
         assert!(html.contains("3 days old"), "fresh age shown");
         assert!(html.contains(">Fresh<"), "fresh badge");
@@ -211,7 +221,39 @@ mod dataset_card_tests {
 
     #[test]
     fn age_is_singular_for_one_day() {
-        let html = datasets_card(&[ds("A", true, true, Some(1), false)]).into_string();
+        let html = datasets_card(&[ds("A", true, true, Some(1), false)], true).into_string();
         assert!(html.contains("1 day old") && !html.contains("1 days old"));
+    }
+
+    /// BUNYIP-546 (F14): no dataset configured is a state the operator has to
+    /// be able to read, not a reason to drop the card off the page.
+    #[test]
+    fn datasets_card_states_an_empty_list_inside_the_card() {
+        let html = datasets_card(&[], true).into_string();
+        assert!(html.contains("Datasets"), "card still renders");
+        assert!(
+            html.contains("No datasets are configured."),
+            "shared empty state inside the card: {html}"
+        );
+        assert!(
+            !html.contains("Could not reach"),
+            "empty is not an error: {html}"
+        );
+    }
+
+    /// BUNYIP-546 (F1): a failed `system_health` call is distinct from an empty
+    /// list, and neither hides the card.
+    #[test]
+    fn datasets_card_distinguishes_an_unreachable_api_from_an_empty_list() {
+        let html = datasets_card(&[], false).into_string();
+        assert!(html.contains("Datasets"), "card still renders");
+        assert!(
+            html.contains("Could not reach the API to load dataset health."),
+            "error box on a failed fetch: {html}"
+        );
+        assert!(
+            !html.contains("No datasets are configured."),
+            "a failed fetch never claims the list is empty: {html}"
+        );
     }
 }
