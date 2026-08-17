@@ -73,6 +73,37 @@ fn skin_theme_css() -> Option<&'static str> {
     SKIN_THEME_CSS.get().and_then(Option::as_deref)
 }
 
+/// BUNYIP-549: the two `<meta name="theme-color">` values (light scheme, dark
+/// scheme) that paint the browser chrome. A skin recolours every in-page token
+/// through [`SKIN_THEME_CSS`], so the chrome colour is config-supplied too
+/// (`Config::theme_color_light` / `theme_color_dark`) rather than a literal in
+/// this shell. Set once from `main` (same `OnceLock` pattern as
+/// [`SSE_API_ORIGIN`]); unset falls back to the bunyip defaults in
+/// `crate::config`, so unskinned output is byte-identical.
+static THEME_COLOR_LIGHT: OnceLock<String> = OnceLock::new();
+static THEME_COLOR_DARK: OnceLock<String> = OnceLock::new();
+
+/// Install the browser-chrome colours. Called once from `main` before serving.
+/// Idempotent (the underlying `OnceLock`s ignore subsequent sets).
+pub fn install_theme_colors(light: impl Into<String>, dark: impl Into<String>) {
+    let _ = THEME_COLOR_LIGHT.set(light.into());
+    let _ = THEME_COLOR_DARK.set(dark.into());
+}
+
+fn theme_color_light() -> &'static str {
+    THEME_COLOR_LIGHT
+        .get()
+        .map(String::as_str)
+        .unwrap_or(crate::config::DEFAULT_THEME_COLOR_LIGHT)
+}
+
+fn theme_color_dark() -> &'static str {
+    THEME_COLOR_DARK
+        .get()
+        .map(String::as_str)
+        .unwrap_or(crate::config::DEFAULT_THEME_COLOR_DARK)
+}
+
 /// BUNYIP-499: the app/brand name for the nav brand mark and the browser-title
 /// suffix. Set once from `main` out of `Config::app_name` (same `OnceLock`
 /// pattern as [`SSE_API_ORIGIN`]). Defaults to `"Bunyip"` so output is
@@ -124,8 +155,8 @@ pub fn document(title: &str, body: Markup) -> Markup {
                 meta charset="UTF-8";
                 meta name="viewport" content="width=device-width, initial-scale=1.0";
                 meta name="description" content=(brand_description());
-                meta name="theme-color" media="(prefers-color-scheme: light)" content="#2f4e2e";
-                meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161a16";
+                meta name="theme-color" media="(prefers-color-scheme: light)" content=(theme_color_light());
+                meta name="theme-color" media="(prefers-color-scheme: dark)" content=(theme_color_dark());
                 title { (title) " · " (app_name()) }
                 // BUNYIP-339: favicon set derived from the Bunyip hero art
                 // (face crop, rounded corners). Served from /assets via ServeDir.
@@ -953,6 +984,46 @@ mod tests {
                 "script with an inline body: <script{attrs}>"
             );
         }
+    }
+
+    /// BUNYIP-549: the browser-chrome colour used to be two hex literals in
+    /// `document()`, so a skin recoloured every in-page token and left the
+    /// Android address bar / iOS status bar reed-green. Both metas now come
+    /// from config: unset renders the bunyip defaults byte-for-byte, and an
+    /// installed pair moves both. One test, because the values live behind a
+    /// process-wide `OnceLock` that can only be set once.
+    #[test]
+    fn theme_color_metas_default_to_bunyip_and_follow_the_skin() {
+        let unskinned = document("Test", html! {}).into_string();
+        assert!(
+            unskinned.contains(&format!(
+                r#"<meta name="theme-color" media="(prefers-color-scheme: light)" content="{}">"#,
+                crate::config::DEFAULT_THEME_COLOR_LIGHT
+            )),
+            "unskinned head is unchanged: {unskinned}"
+        );
+        assert!(
+            unskinned.contains(&format!(
+                r#"<meta name="theme-color" media="(prefers-color-scheme: dark)" content="{}">"#,
+                crate::config::DEFAULT_THEME_COLOR_DARK
+            )),
+            "unskinned head is unchanged: {unskinned}"
+        );
+
+        install_theme_colors("#123456", "#654321");
+        let skinned = document("Test", html! {}).into_string();
+        assert!(
+            skinned.contains(
+                r##"<meta name="theme-color" media="(prefers-color-scheme: light)" content="#123456">"##
+            ),
+            "the light meta follows the skin: {skinned}"
+        );
+        assert!(
+            skinned.contains(
+                r##"<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#654321">"##
+            ),
+            "the dark meta follows the skin: {skinned}"
+        );
     }
 
     /// BUNYIP-487: `/pricing` 404s unless an admin published it, so the nav and

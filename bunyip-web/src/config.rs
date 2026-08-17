@@ -2,6 +2,14 @@
 //! read `window.__RUNTIME_CONFIG__`), this is a normal server process, so plain
 //! env vars are the source of truth.
 
+/// BUNYIP-549: default `theme-color` for the light scheme, bunyip's reed-700
+/// (the default value of `--skin-primary-700`). Lives here rather than in
+/// `views::layout` so the framework shell carries no colour literal.
+pub const DEFAULT_THEME_COLOR_LIGHT: &str = "#2f4e2e";
+
+/// BUNYIP-549: default `theme-color` for the dark scheme, bunyip's dark surface.
+pub const DEFAULT_THEME_COLOR_DARK: &str = "#161a16";
+
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Address the server binds to (e.g. `0.0.0.0:4400`).
@@ -59,6 +67,16 @@ pub struct Config {
     /// ramp the `@theme` tokens fall back to. `BRAND_THEME_CSS`; `None` (default)
     /// emits nothing, so the default (Bunyip) palette is unchanged.
     pub theme_css: Option<String>,
+    /// BUNYIP-549: the `<meta name="theme-color">` value for the light scheme
+    /// (the browser chrome: Android address bar, iOS status bar, PWA splash).
+    /// A skin recolours every in-page token through `theme_css`, so the chrome
+    /// colour is config-driven too rather than a framework literal.
+    /// `BRAND_THEME_COLOR_LIGHT`; defaults to bunyip's reed-700 so unskinned
+    /// output is unchanged.
+    pub theme_color_light: String,
+    /// BUNYIP-549: the dark-scheme twin of [`Config::theme_color_light`].
+    /// `BRAND_THEME_COLOR_DARK`; defaults to bunyip's dark surface.
+    pub theme_color_dark: String,
     /// BUNYIP-499: app/brand name rendered in the nav brand mark and the
     /// browser-title suffix. `APP_NAME`, default `"Bunyip"` so output is
     /// unchanged until a skin overrides it. Mirrors the email subsystem's
@@ -140,6 +158,10 @@ impl Config {
             // end-user IP. Same comma-separated CIDR form bunyip-api parses.
             trusted_proxies: parse_trusted_proxies(&var("TRUSTED_PROXY_CIDR").unwrap_or_default()),
             theme_css: var("BRAND_THEME_CSS"),
+            theme_color_light: var("BRAND_THEME_COLOR_LIGHT")
+                .unwrap_or_else(|| DEFAULT_THEME_COLOR_LIGHT.into()),
+            theme_color_dark: var("BRAND_THEME_COLOR_DARK")
+                .unwrap_or_else(|| DEFAULT_THEME_COLOR_DARK.into()),
             app_name: var("APP_NAME").unwrap_or_else(|| "Bunyip".into()),
             brand_description: var("BRAND_DESCRIPTION").unwrap_or_else(|| {
                 "Bunyip - the SaaS layer for your PSA. Auth, billing, members, and identity for Mokosh.".into()

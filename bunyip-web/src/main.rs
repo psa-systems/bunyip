@@ -52,6 +52,12 @@ async fn main() {
     // BUNYIP-500: per-skin brand theme override (BRAND_THEME_CSS); None keeps
     // the default palette.
     views::layout::install_skin_theme_css(cfg.theme_css.clone());
+    // BUNYIP-549: browser-chrome colours (BRAND_THEME_COLOR_LIGHT / _DARK);
+    // the defaults keep unskinned output byte-identical.
+    views::layout::install_theme_colors(
+        cfg.theme_color_light.clone(),
+        cfg.theme_color_dark.clone(),
+    );
     // BUNYIP-499: brand name for the nav brand mark and the browser-title suffix
     // (APP_NAME; defaults to "Bunyip").
     views::layout::install_app_name(cfg.app_name.clone());

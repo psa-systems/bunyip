@@ -1346,6 +1346,8 @@ mod logout_clear_tests {
             community_url: String::new(),
             trusted_proxies: Vec::new(),
             theme_css: None,
+            theme_color_light: crate::config::DEFAULT_THEME_COLOR_LIGHT.into(),
+            theme_color_dark: crate::config::DEFAULT_THEME_COLOR_DARK.into(),
             app_name: "Bunyip".into(),
             brand_description: String::new(),
             csp: crate::config::CspConfig::default(),

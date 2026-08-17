@@ -159,6 +159,18 @@ jobs:
           ./scripts/check-ui-copy.nu --self-test
           ./scripts/check-ui-copy.nu
 
+      - name: Check every surface is painted from the theme tokens
+        # No unmapped stock Tailwind scale in the client-side scripts (the toast
+        # pills were emerald / red / slate, the only surfaces that ignored dark
+        # and high-contrast) and no colour literal in the framework shell (the
+        # two `theme-color` metas were hex, so a skin left the browser chrome
+        # bunyip reed-green) - BUNYIP-549.
+        # --self-test first, so a gate that stopped detecting anything fails the
+        # build instead of passing vacuously.
+        run: |
+          ./scripts/check-theme-colors.nu --self-test
+          ./scripts/check-theme-colors.nu
+
       - name: Check buildkit cache mounts are per-image and locked
         # Every `--mount=type=cache` carries an `id=` and `sharing=locked`, so
         # the concurrent builds of a release commit (main push plus tag push,
