@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::errors::AppError;
 use crate::repositories::TotpRepository;
-use crate::services::AppKeySet;
+use crate::services::{argon2_offload, AppKeySet};
 
 /// RFC 6238 time step, in seconds. Also the size of the backward tolerance
 /// `match_step` applies.
@@ -152,14 +152,24 @@ impl TotpService {
         let unused_codes =
             TotpRepository::find_all_unused_recovery_codes(&self.pool, user_id).await?;
 
-        for recovery_code in unused_codes {
-            if Self::verify_code_against_hash(&normalized, &recovery_code.code_hash)? {
-                TotpRepository::mark_recovery_code_used(&self.pool, recovery_code.id).await?;
-                return Ok(true);
+        // Up to 8 Argon2 verifies, all in ONE blocking task rather than one task
+        // per code, so the whole loop leaves the request future free (BUNYIP-553).
+        let matched = argon2_offload::offload("recovery code verify", move || {
+            for recovery_code in unused_codes {
+                if Self::verify_code_against_hash(&normalized, &recovery_code.code_hash)? {
+                    return Ok(Some(recovery_code.id));
+                }
             }
-        }
+            Ok(None)
+        })
+        .await?;
 
-        Ok(false)
+        let Some(code_id) = matched else {
+            return Ok(false);
+        };
+
+        TotpRepository::mark_recovery_code_used(&self.pool, code_id).await?;
+        Ok(true)
     }
 
     /// Regenerate recovery codes (requires 2FA to be enabled)
@@ -370,16 +380,23 @@ impl TotpService {
         &self,
         user_id: Uuid,
     ) -> Result<Vec<String>, AppError> {
-        let mut codes = Vec::with_capacity(8);
-        let mut hashes = Vec::with_capacity(8);
+        // All 8 Argon2 hashes in ONE blocking task, not one task per code
+        // (BUNYIP-553).
+        let (codes, hashes) = argon2_offload::offload("recovery code hash", || {
+            let mut codes = Vec::with_capacity(8);
+            let mut hashes = Vec::with_capacity(8);
 
-        for _ in 0..8 {
-            let code = Self::generate_recovery_code();
-            let normalized = code.replace('-', "");
-            let hash = Self::hash_code_argon2(&normalized)?;
-            codes.push(code);
-            hashes.push(hash);
-        }
+            for _ in 0..8 {
+                let code = Self::generate_recovery_code();
+                let normalized = code.replace('-', "");
+                let hash = Self::hash_code_argon2(&normalized)?;
+                codes.push(code);
+                hashes.push(hash);
+            }
+
+            Ok((codes, hashes))
+        })
+        .await?;
 
         TotpRepository::insert_recovery_codes(&self.pool, user_id, &hashes).await?;
 

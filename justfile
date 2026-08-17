@@ -42,7 +42,7 @@ pre-commit: ensure-env
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-no-bash check-scrollbars check-ui-copy check-theme-colors check-cache-mounts check-build check-clippy check-fmt check-docker
+check: check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-argon2-offload check-no-bash check-scrollbars check-ui-copy check-theme-colors check-cache-mounts check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -86,6 +86,13 @@ check-stripe-env:
 [group: 'checks']
 check-key-env:
     ./scripts/check-no-legacy-key-env.nu
+
+# Gate that Argon2 never runs on an actix worker: every hash and verify goes
+# through services::argon2_offload (BUNYIP-553).
+[group: 'checks']
+check-argon2-offload:
+    ./scripts/check-argon2-offload.nu --self-test
+    ./scripts/check-argon2-offload.nu
 
 # Gate that scripts/ stays Nushell: no .sh file and no POSIX-shell shebang
 # (BUNYIP-490).

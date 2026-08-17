@@ -22,7 +22,7 @@ use crate::repositories::{
     AuditLogRepository, InviteRepository, TokenRepository, TotpRepository, TrustedDeviceRepository,
     UserRepository,
 };
-use crate::services::{EmailService, GeoIpService, JwtService, PasswordService};
+use crate::services::{argon2_offload, EmailService, GeoIpService, JwtService, PasswordService};
 use dunite_geoip::{is_non_public_ip, login_location_decision, LoginLocationDecision};
 
 /// Authentication tokens returned after login
@@ -231,6 +231,8 @@ impl TierGrantTrigger {
 pub struct AuthService {
     pool: PgPool,
     jwt: JwtService,
+    /// Strength / email-containment checks only. Argon2 itself runs through
+    /// `argon2_offload`, never on the request future (BUNYIP-553).
     password: PasswordService,
     tier_config: Arc<RwLock<TierConfig>>,
     /// BUNYIP-290: the trimmed + lowercased bootstrap admin email, if
@@ -759,7 +761,7 @@ impl AuthService {
         }
 
         // Hash password
-        let password_hash = self.password.hash(&password)?;
+        let password_hash = argon2_offload::hash_password(password).await?;
 
         // Create user. Everyone registers as a subscriber; the bootstrap-admin
         // promotion below (BUNYIP-290) is the sole path that upgrades the first
@@ -824,10 +826,10 @@ impl AuthService {
         // Verify password
         let password_hash = user
             .password_hash
-            .as_ref()
+            .clone()
             .ok_or(AppError::InvalidCredentials)?;
 
-        if !self.password.verify(&password, password_hash)? {
+        if !argon2_offload::verify_password(password, password_hash).await? {
             return Err(AppError::InvalidCredentials);
         }
 
@@ -1523,7 +1525,7 @@ impl AuthService {
             .validate_not_contains_email(&new_password, &user.email)?;
 
         // Hash new password
-        let password_hash = self.password.hash(&new_password)?;
+        let password_hash = argon2_offload::hash_password(new_password).await?;
 
         // Claim the token BEFORE the password write, so the loser of a
         // concurrent race cannot also set a password (BUNYIP-426 F9).
@@ -1565,12 +1567,12 @@ impl AuthService {
             .ok_or(AppError::not_found("User"))?;
 
         // Verify current password
-        let password_hash = user.password_hash.as_ref().ok_or(AppError::validation(
+        let password_hash = user.password_hash.clone().ok_or(AppError::validation(
             "password",
             "No password set for this account",
         ))?;
 
-        if !self.password.verify(&current_password, password_hash)? {
+        if !argon2_offload::verify_password(current_password, password_hash).await? {
             return Err(AppError::validation(
                 "current_password",
                 "Current password is incorrect",
@@ -1592,7 +1594,7 @@ impl AuthService {
         }
 
         // Hash and update
-        let new_hash = self.password.hash(&new_password)?;
+        let new_hash = argon2_offload::hash_password(new_password).await?;
         UserRepository::update_password(&self.pool, user_id, &new_hash).await?;
 
         // Revoke every outstanding refresh token (legacy + OIDC) so a changed
@@ -1650,12 +1652,12 @@ impl AuthService {
         }
 
         // If user has a password, require it for verification
-        if let Some(password_hash) = &user.password_hash {
+        if let Some(password_hash) = user.password_hash.clone() {
             let password = current_password.ok_or(AppError::validation(
                 "current_password",
                 "Password is required to change email",
             ))?;
-            if !self.password.verify(&password, password_hash)? {
+            if !argon2_offload::verify_password(password, password_hash).await? {
                 return Err(AppError::validation(
                     "current_password",
                     "Current password is incorrect",
@@ -2234,7 +2236,7 @@ impl AuthService {
                 self.password.validate_strength(&password)?;
                 self.password
                     .validate_not_contains_email(&password, &invite.email)?;
-                let password_hash = self.password.hash(&password)?;
+                let password_hash = argon2_offload::hash_password(password).await?;
 
                 // Create user as admin
                 let user = UserRepository::create(

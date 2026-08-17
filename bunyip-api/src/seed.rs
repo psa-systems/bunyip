@@ -35,7 +35,7 @@ use crate::repositories::{
     ApplicationGroupRepository, ApplicationRepository, EntitlementRepository, FeedbackRepository,
     UserRepository,
 };
-use crate::services::PasswordService;
+use crate::services::{argon2_offload, PasswordService};
 
 /// Canonical schema version this build understands. A file declaring any other
 /// version is rejected rather than silently mis-read.
@@ -724,15 +724,30 @@ pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadErr
     }
 
     // 3. Users (upsert by email), then apply verified/profile/membership state.
-    for u in &file.users {
-        // Resolve the password: an env-var reference (a secret, `_FILE`-aware
-        // via secret_env) wins, then a literal per-user password, then the file
-        // default. Trimmed before hashing so a newline from a secret store does
-        // not diverge from what the login path sends (PSA-56).
-        let raw_password = resolve_password(u, file.default_password.as_deref())?;
-        let hash = hasher
-            .hash(raw_password.trim())
-            .map_err(|e| LoadError::Hash(e.to_string()))?;
+    //
+    // Resolve the password: an env-var reference (a secret, `_FILE`-aware via
+    // secret_env) wins, then a literal per-user password, then the file
+    // default. Trimmed before hashing so a newline from a secret store does not
+    // diverge from what the login path sends (PSA-56).
+    //
+    // Every hash runs up front in ONE blocking task: `load` is reachable from
+    // the admin seed endpoint, so N sequential Argon2 hashes on the request
+    // future would stall the whole actix arbiter (BUNYIP-553).
+    let raw_passwords = file
+        .users
+        .iter()
+        .map(|u| resolve_password(u, file.default_password.as_deref()))
+        .collect::<Result<Vec<_>, LoadError>>()?;
+    let hashes = argon2_offload::offload("seed password hash", move || {
+        raw_passwords
+            .iter()
+            .map(|p| hasher.hash(p.trim()))
+            .collect::<Result<Vec<_>, AppError>>()
+    })
+    .await
+    .map_err(|e| LoadError::Hash(e.to_string()))?;
+
+    for (u, hash) in file.users.iter().zip(hashes) {
         let role = parse_role(&u.role);
 
         let user = match UserRepository::find_by_email(pool, &u.email).await? {

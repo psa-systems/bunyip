@@ -133,6 +133,15 @@ jobs:
         # SMTP secrets are all protected by APP_ENCRYPTION_KEY (BUNYIP-483).
         run: ./scripts/check-no-legacy-key-env.nu
 
+      - name: Check Argon2 stays off the actix workers
+        # Every hash and verify goes through services::argon2_offload, so a
+        # ~100 ms Argon2 never blocks a worker arbiter (BUNYIP-553). A direct
+        # call compiles fine, so it needs an explicit gate. --self-test first,
+        # so a gate that stopped detecting fails the job rather than passing.
+        run: |
+          ./scripts/check-argon2-offload.nu --self-test
+          ./scripts/check-argon2-offload.nu
+
       - name: Check scripts/ stays Nushell
         # The guards above are Nushell (BUNYIP-490). Nothing else stops a
         # contributor adding a .sh back, so gate the extension and the shebang.

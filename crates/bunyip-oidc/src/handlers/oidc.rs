@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::errors::AppError;
 use crate::middleware::auth::OptionalUser;
 use crate::repositories::UserRepository;
+use crate::services::argon2_offload;
 use crate::services::oidc_provider::{sha256_bytes, OAuthClient, OidcProvider};
 
 /// Unwrap `Option<Arc<OidcProvider>>` from `web::Data`, returning 404 when absent.
@@ -880,7 +881,7 @@ pub async fn token(
         .ok_or_else(|| AppError::OidcInvalidClient("unknown client".into()))?;
 
     // Authenticate the client
-    authenticate_client(&client, client_secret_opt.as_deref())?;
+    authenticate_client(&client, client_secret_opt.as_deref()).await?;
 
     // BUNYIP-254: enforce per-client `allowed_grant_types`. The schema
     // already carries the list; the runtime previously ignored it, so a
@@ -1286,7 +1287,7 @@ pub async fn revoke(
         .load_client(client_id)
         .await?
         .ok_or_else(|| AppError::OidcInvalidClient("unknown client".into()))?;
-    authenticate_client(&client, client_secret_opt.as_deref())?;
+    authenticate_client(&client, client_secret_opt.as_deref()).await?;
 
     // RFC 7009 §2.2: respond 200 regardless of whether the token was found.
     let _ = do_revoke(provider, client.client_id, &form.token).await;
@@ -1528,7 +1529,7 @@ fn extract_client_credentials(
 /// - `private_key_jwt`: the schema accepts this value but the runtime
 ///   does not yet implement JWT client assertion verification. Refuse
 ///   rather than silently fall through; tracked as a follow-up.
-fn authenticate_client(
+async fn authenticate_client(
     client: &OAuthClient,
     provided_secret: Option<&str>,
 ) -> Result<(), AppError> {
@@ -1562,12 +1563,21 @@ fn authenticate_client(
             let secret = provided_secret.ok_or_else(|| {
                 AppError::OidcInvalidClient("client_secret required for confidential client".into())
             })?;
-            use argon2::{Argon2, PasswordHash, PasswordVerifier};
-            let parsed = PasswordHash::new(expected_hash)
-                .map_err(|_| AppError::OidcInvalidClient("malformed client secret hash".into()))?;
-            Argon2::default()
-                .verify_password(secret.as_bytes(), &parsed)
-                .map_err(|_| AppError::OidcInvalidClient("invalid client_secret".into()))
+            // Off the request future like every other Argon2 call (BUNYIP-553):
+            // the token endpoint is hit once per client credential exchange, and
+            // actix would otherwise spend the whole verify on the arbiter.
+            let expected_hash = expected_hash.to_string();
+            let secret = secret.to_string();
+            argon2_offload::offload("oidc client secret verify", move || {
+                use argon2::{Argon2, PasswordHash, PasswordVerifier};
+                let parsed = PasswordHash::new(&expected_hash).map_err(|_| {
+                    AppError::OidcInvalidClient("malformed client secret hash".into())
+                })?;
+                Argon2::default()
+                    .verify_password(secret.as_bytes(), &parsed)
+                    .map_err(|_| AppError::OidcInvalidClient("invalid client_secret".into()))
+            })
+            .await
         }
         "private_key_jwt" => {
             // BUNYIP-254: schema allows this value, but the runtime

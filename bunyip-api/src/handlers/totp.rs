@@ -13,7 +13,7 @@ use crate::repositories::{
     UserRepository,
 };
 use crate::responses::{get_request_id, success};
-use crate::services::{AuthService, PasswordService, TotpService};
+use crate::services::{argon2_offload, AuthService, TotpService};
 
 use super::check_rate_limit;
 
@@ -315,13 +315,12 @@ pub async fn disable_2fa(
         .await?
         .ok_or(AppError::not_found("User"))?;
 
-    let password_hash = db_user.password_hash.as_ref().ok_or(AppError::validation(
+    let password_hash = db_user.password_hash.clone().ok_or(AppError::validation(
         "password",
         "No password set for this account",
     ))?;
 
-    let password_service = PasswordService::new();
-    if !password_service.verify(&body.password, password_hash)? {
+    if !argon2_offload::verify_password(body.password.clone(), password_hash).await? {
         return Err(AppError::validation("password", "Invalid password"));
     }
 
@@ -381,13 +380,12 @@ pub async fn regenerate_recovery_codes(
         .await?
         .ok_or(AppError::not_found("User"))?;
 
-    let password_hash = db_user.password_hash.as_ref().ok_or(AppError::validation(
+    let password_hash = db_user.password_hash.clone().ok_or(AppError::validation(
         "password",
         "No password set for this account",
     ))?;
 
-    let password_service = PasswordService::new();
-    if !password_service.verify(&body.password, password_hash)? {
+    if !argon2_offload::verify_password(body.password.clone(), password_hash).await? {
         return Err(AppError::validation("password", "Invalid password"));
     }
 
@@ -426,12 +424,11 @@ pub async fn begin_rekey(
     let db_user = UserRepository::find_by_id(&pool, user.0.sub)
         .await?
         .ok_or(AppError::not_found("User"))?;
-    let password_hash = db_user.password_hash.as_ref().ok_or(AppError::validation(
+    let password_hash = db_user.password_hash.clone().ok_or(AppError::validation(
         "password",
         "No password set for this account",
     ))?;
-    let password_service = PasswordService::new();
-    if !password_service.verify(&body.password, password_hash)? {
+    if !argon2_offload::verify_password(body.password.clone(), password_hash).await? {
         return Err(AppError::validation("password", "Invalid password"));
     }
 

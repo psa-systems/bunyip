@@ -229,6 +229,9 @@ async fn main() -> anyhow::Result<()> {
             let email = email.trim();
             let password = password.trim();
 
+            // Exempt from the argon2_offload rule (BUNYIP-553): this runs once
+            // at startup, before the server binds, so there is no worker
+            // arbiter to block.
             let password_service = PasswordService::new();
             let password_hash = password_service.hash(password)?;
 

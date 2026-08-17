@@ -21,7 +21,7 @@ use crate::repositories::{
 };
 use crate::responses::{get_request_id, paginated, success, success_no_data};
 use crate::services::{
-    AuthService, EmailService, PasswordService, StripeService, TierGrantTrigger, TotpService,
+    argon2_offload, AuthService, EmailService, StripeService, TierGrantTrigger, TotpService,
     WebhookService,
 };
 use crate::validation::validate_email;
@@ -836,13 +836,12 @@ pub async fn delete_account(
         .ok_or(AppError::not_found("User"))?;
 
     // Verify password
-    let password_hash = db_user.password_hash.as_ref().ok_or(AppError::validation(
+    let password_hash = db_user.password_hash.clone().ok_or(AppError::validation(
         "password",
         "No password set for this account",
     ))?;
 
-    let password_service = PasswordService::new();
-    if !password_service.verify(&body.password, password_hash)? {
+    if !argon2_offload::verify_password(body.password.clone(), password_hash).await? {
         return Err(AppError::validation("password", "Invalid password"));
     }
 

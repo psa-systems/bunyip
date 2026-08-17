@@ -18,7 +18,7 @@ use crate::repositories::{
     ApplicationRepository, AuditLogRepository, EntitlementRepository, RateLimitConfigRepository,
     RateLimitRepository, UserRepository,
 };
-use crate::services::{OciTokenService, PasswordService};
+use crate::services::{argon2_offload, OciTokenService, PasswordService};
 
 #[derive(Debug, Deserialize)]
 pub struct TokenQuery {
@@ -45,6 +45,24 @@ fn dummy_hash() -> &'static str {
             .hash("unused-password-for-timing-mitigation")
             .expect("failed to compute dummy hash")
     })
+}
+
+/// Timing padding for the branches that have no real hash to check.
+///
+/// The boolean is false by construction (the candidate is checked against a
+/// hash of a fixed string), so it is discarded; what matters is that the branch
+/// costs what a real verify costs. Runs on the blocking pool like every other
+/// Argon2 call, and `dummy_hash()`'s one-off lazy init happens inside the same
+/// task, so neither lands on an actix worker (BUNYIP-553).
+async fn dummy_verify(password: &str) {
+    let password = password.to_string();
+    let outcome = argon2_offload::offload("oci dummy verify", move || {
+        PasswordService::new().verify(&password, dummy_hash())
+    })
+    .await;
+    if let Err(e) = outcome {
+        tracing::error!(error = %e, "oci dummy password verify failed");
+    }
 }
 
 /// GET /auth/token
@@ -143,8 +161,7 @@ pub async fn issue_token(
         None => {
             // Perform dummy verification on the "user not found" path to mitigate
             // email enumeration attacks via response-time analysis.
-            let password_service = PasswordService::new();
-            let _ = password_service.verify(&password, dummy_hash());
+            dummy_verify(&password).await;
             return Err(
                 fail_credential(pool.get_ref(), &rate_key, &email, ip, "user_not_found").await,
             );
@@ -156,18 +173,16 @@ pub async fn issue_token(
         return Err(OciError::Unauthorized);
     }
 
-    let password_service = PasswordService::new();
-
     // Passwordless accounts (magic-link only) cannot use the registry. Still
     // perform a dummy verify to keep timing indistinguishable from the
     // password-check branch.
-    let Some(password_hash) = user.password_hash.as_ref() else {
-        let _ = password_service.verify(&password, dummy_hash());
+    let Some(password_hash) = user.password_hash.clone() else {
+        dummy_verify(&password).await;
         return Err(fail_credential(pool.get_ref(), &rate_key, &email, ip, "no_password").await);
     };
 
-    let password_ok = password_service
-        .verify(&password, password_hash)
+    let password_ok = argon2_offload::verify_password(password, password_hash)
+        .await
         .map_err(|_| OciError::Internal)?;
     if !password_ok {
         return Err(fail_credential(pool.get_ref(), &rate_key, &email, ip, "bad_password").await);
