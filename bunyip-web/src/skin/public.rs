@@ -170,8 +170,11 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                                 h3 class="text-2xl md:text-3xl font-bold tracking-tight" { "Ready to wire up your business layer?" }
                                 p class="mt-2 text-brand-primary-100" { "Try Bunyip " (crate::skin::content::trial_phrase(trial_days)) ". Bring your team along." }
                             }
-                            a href=(cta_href) class="whitespace-nowrap rounded-lg bg-white px-6 py-3 font-medium text-brand-primary-800 shadow-sm transition-shadow hover:shadow-md" {
-                                (if signed_in { "Go to Membership" } else { "Create your account" }) " →"
+                            // Same size and shape as the hero CTA; only the
+                            // inverted-on-gradient colouring is bespoke.
+                            a href=(cta_href) class=(button_class("default", "lg", "whitespace-nowrap gap-2 bg-white hover:bg-white text-brand-primary-800 border-0 shadow-sm hover:shadow-md")) {
+                                (if signed_in { "Go to Membership" } else { "Create your account" })
+                                i class="fa-solid fa-arrow-right text-[1rem]" {}
                             }
                         }
                     }

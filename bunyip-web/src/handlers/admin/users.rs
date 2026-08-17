@@ -11,7 +11,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::{AdminRateLimit, AdminUser};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{rel_time, urlenc};
-use crate::views::ui::{badge, button_class, empty_state, icon};
+use crate::views::ui::{back_link, badge, button_class, empty_state, icon};
 use crate::web::{redirect_cookies, AppState};
 
 use super::rate_limits::rate_limit_row;
@@ -1027,7 +1027,7 @@ pub async fn user_detail(
                 html! {
                     div class="rounded-lg border bg-card text-card-foreground shadow-sm p-6" {
                         p { "Could not load user " (id) "." }
-                        p class="mt-2" { a href="/admin/users" class="text-primary-text hover:underline" { "Back to users" } }
+                        div class="mt-2" { (back_link("/admin/users", "Back to users")) }
                     }
                 },
             )
@@ -1065,7 +1065,7 @@ pub async fn user_detail(
                         }
                     }
                 }
-                a href="/admin/users" class=(button_class("outline", "sm", "")) { (icon("arrow-left", "h-4 w-4 mr-1")) "Back" }
+                (back_link("/admin/users", "Back to users"))
             }
 
             // Profile card

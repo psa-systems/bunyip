@@ -12,7 +12,7 @@ use crate::api::types::{PricingResponse, User};
 use crate::handlers::dashboard::tier_name;
 use crate::handlers::{dashboard_input, public_ctx, public_response};
 use crate::util::format_stripe_amount;
-use crate::views::ui::{button_class, empty_state, error_box, icon};
+use crate::views::ui::{back_link, button_class, empty_state, error_box, icon};
 use crate::web::AppState;
 
 /// Displayed at the top of /terms and /privacy. Bump this string the SAME
@@ -1052,9 +1052,8 @@ pub async fn docs_page(
         let content = html! {
             div class="container max-w-4xl py-12" {
                 h1 class="text-4xl font-bold mb-4" { "Document not found" }
-                p class="text-muted-foreground" {
-                    "No such doc. " a class="text-primary-text hover:underline" href="/docs" { "Back to documentation" } "."
-                }
+                p class="text-muted-foreground" { "No such doc." }
+                div class="mt-4" { (back_link("/docs", "Back to documentation")) }
             }
         };
         let mut resp = public_response(&st, &c, &apps, &pricing, "Docs", true, content);
@@ -1075,7 +1074,7 @@ pub async fn docs_page(
     let content = html! {
         style { (PreEscaped(DOCS_CSS)) }
         div class="container max-w-4xl py-12" {
-            div class="mb-6" { a class="text-sm text-primary-text hover:underline" href="/docs" { "← Documentation" } }
+            div class="mb-6" { (back_link("/docs", "Documentation")) }
             @if has_token && username.is_some() {
                 @if personalized {
                     p class="text-sm text-muted-foreground mb-6" {
@@ -1184,10 +1183,9 @@ pub async fn app_docs_page(
             let content = html! {
                 div class="container max-w-4xl py-12" {
                     h1 class="text-4xl font-bold mb-4" { "Document not found" }
-                    p class="text-muted-foreground" {
-                        "No such page. "
-                        a class="text-primary-text hover:underline" href=(format!("/apps/{slug}/docs")) { "Back to " (app_name) " docs" }
-                        "."
+                    p class="text-muted-foreground" { "No such page." }
+                    div class="mt-4" {
+                        (back_link(&format!("/apps/{slug}/docs"), &format!("Back to {app_name} docs")))
                     }
                 }
             };
@@ -1200,7 +1198,7 @@ pub async fn app_docs_page(
         style { (PreEscaped(DOCS_CSS)) }
         div class="container max-w-4xl py-12" {
             div class="mb-6" {
-                a class="text-sm text-muted-foreground hover:underline" href=(format!("/apps/{slug}/docs")) { "← " (app_name) " documentation" }
+                (back_link(&format!("/apps/{slug}/docs"), &format!("{app_name} documentation")))
             }
             article class="docs-article" { (PreEscaped(render_markdown(&doc.body))) }
         }

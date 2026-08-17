@@ -107,7 +107,7 @@ fn bunyip_auth_cookie_clears(cfg: &Config) -> Vec<String> {
     }
     out
 }
-use crate::views::ui::{button_class, error_box};
+use crate::views::ui::{back_link, button_class, error_box};
 use crate::web::{html, html_cookies, redirect, redirect_cookies, AppState};
 
 fn field(id: &str, label: &str, ty: &str, placeholder: &str, autocomplete: &str) -> Markup {
@@ -946,9 +946,7 @@ fn twofa_card(error: Option<&str>, redirect: Option<&str>) -> Markup {
                 }
                 (submit_btn("Verify"))
             }
-            div class="mt-4 text-center" {
-                a href="/login" class="inline-flex items-center text-sm text-muted-foreground hover:text-foreground" { "Back to sign in" }
-            }
+            div class="mt-4 flex justify-center" { (back_link("/login", "Back to sign in")) }
         },
     )
 }
