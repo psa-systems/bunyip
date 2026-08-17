@@ -299,7 +299,8 @@ database and are not passed either, so on a deployed instance the admin pages ar
 the only way to change them.
 
 bunyip-web's own variables (below) are passed by the `web` service, except
-`BRAND_THEME_CSS`, `BRAND_DESCRIPTION`, `CSP_CONNECT_SRC` and `CSP_FORM_ACTION`.
+`BRAND_THEME_CSS`, `BRAND_THEME_COLOR_LIGHT`, `BRAND_THEME_COLOR_DARK`,
+`BRAND_DESCRIPTION`, `CSP_CONNECT_SRC` and `CSP_FORM_ACTION`.
 
 ## Settings that are not environment variables
 
@@ -379,6 +380,14 @@ bunyip-web is a separate binary with its own configuration
 (`bunyip-web/src/config.rs`): `BUNYIP_BIND_ADDR`, `BUNYIP_API_URL`,
 `BUNYIP_API_PUBLIC_ORIGIN`, `BUNYIP_OIDC_ISSUER`, `BUNYIP_APP_DOMAIN`,
 `BUNYIP_COMMUNITY_URL`, `TRUSTED_PROXY_CIDR`, `APP_NAME`, `BRAND_THEME_CSS`,
-`BRAND_DESCRIPTION`, `CSP_CONNECT_SRC`, `CSP_FORM_ACTION`, `RUST_LOG`. Every one
-has a working default. It holds no secrets and reads none of the api variables
-above, so the api's inventory does not cover it.
+`BRAND_THEME_COLOR_LIGHT`, `BRAND_THEME_COLOR_DARK`, `BRAND_DESCRIPTION`,
+`CSP_CONNECT_SRC`, `CSP_FORM_ACTION`, `RUST_LOG`. Every one has a working
+default. It holds no secrets and reads none of the api variables above, so the
+api's inventory does not cover it.
+
+`BRAND_THEME_COLOR_LIGHT` and `BRAND_THEME_COLOR_DARK` are the two
+`<meta name="theme-color">` values that paint the browser chrome (Android
+address bar, iOS status bar, PWA splash) under `prefers-color-scheme: light` and
+`dark`. `BRAND_THEME_CSS` recolours every in-page token, so a skin sets these
+alongside it or the chrome stays bunyip reed-green. Defaults `#2f4e2e` and
+`#161a16`, so unskinned output is unchanged (BUNYIP-549).

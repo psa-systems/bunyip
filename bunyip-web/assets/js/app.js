@@ -23,16 +23,23 @@
   // capped at 5 visible pills, evicting the oldest, so rapid-fire calls (e.g.
   // spamming a Copy button) cannot grow it without bound. The auto-dismiss
   // timers guard on pill.parentNode so an evicted pill never double-removes.
+  //
+  // BUNYIP-549: the palette is the same semantic token pair each kind's
+  // server-rendered counterpart uses - success the `success` badge
+  // (views/ui.rs), error the offline banner (server_status.rs), info the
+  // popover surface - so the pills track dark and high-contrast like every
+  // other surface instead of sitting at a fixed stock-Tailwind colour.
+  var TOAST_PALETTE = {
+    success: 'bg-teal-500/15 text-teal-600 dark:text-teal-400 border border-teal-500/40',
+    error: 'bg-destructive text-destructive-foreground',
+    info: 'bg-popover text-popover-foreground border border-border',
+  };
+
   window.bunyipToast = function (msg, kind) {
     var root = document.getElementById('bunyip-toast-root');
     if (!root) return;
     while (root.children.length >= 5) root.removeChild(root.firstChild);
-    var palette =
-      {
-        success: 'bg-emerald-600 text-white',
-        error: 'bg-red-600 text-white',
-        info: 'bg-slate-800 text-white',
-      }[kind || 'info'] || 'bg-slate-800 text-white';
+    var palette = TOAST_PALETTE[kind || 'info'] || TOAST_PALETTE.info;
     var pill = document.createElement('div');
     pill.className = 'pointer-events-auto rounded-md px-4 py-2 text-sm shadow-lg ' + palette;
     pill.setAttribute('role', 'status');
