@@ -228,7 +228,7 @@ pub fn badge(variant: &str, text: &str) -> Markup {
         "destructive" => "border-transparent bg-destructive text-destructive-foreground",
         "outline" => "text-foreground",
         "success" => "border-transparent bg-teal-500/15 text-teal-600 dark:text-teal-400",
-        "warning" => "border-transparent bg-amber-500/15 text-amber-700 dark:text-amber-300",
+        "warning" => "border-transparent bg-amber-500/15 text-amber-800 dark:text-amber-300",
         _ => "border-transparent bg-primary text-primary-foreground",
     };
     html! {
@@ -649,6 +649,163 @@ mod tests {
                 }
             }
         }
+    }
+
+    // -- BUNYIP-548: amber text over its own tint ----------------------------
+    //
+    // The `warning` badge paints amber text on a 15% amber-500 wash. The wash
+    // lightens the surface beneath the text, so the ratio has to be measured
+    // against the composite rather than the bare surface: amber-700 came to
+    // 4.49:1 on the light card and 4.18:1 on the page background, both under
+    // AA for the badge's 12px type. amber-800 clears every surface.
+
+    /// sRGB (0..1) of `oklch(L% C H)`, the form Tailwind v4 declares its stock
+    /// scales in. Out-of-gamut components clamp, as the browser does.
+    fn oklch(l: f64, c: f64, h: f64) -> [f64; 3] {
+        let (a, b) = (c * h.to_radians().cos(), c * h.to_radians().sin());
+        let cube = |v: f64| v * v * v;
+        let (lc, mc, sc) = (
+            cube(l + 0.3963377774 * a + 0.2158037573 * b),
+            cube(l - 0.1055613458 * a - 0.0638541728 * b),
+            cube(l - 0.0894841775 * a - 1.2914855480 * b),
+        );
+        [
+            4.0767416621 * lc - 3.3077115913 * mc + 0.2309699292 * sc,
+            -1.2684380046 * lc + 2.6097574011 * mc - 0.3413193965 * sc,
+            -0.0041960863 * lc - 0.7034186147 * mc + 1.7076147010 * sc,
+        ]
+        .map(|v| {
+            let v = v.clamp(0.0, 1.0);
+            if v <= 0.0031308 {
+                12.92 * v
+            } else {
+                1.055 * v.powf(1.0 / 2.4) - 0.055
+            }
+        })
+    }
+
+    /// `--color-amber-<step>` as the built stylesheet declares it, so the check
+    /// reads the palette that actually ships rather than a remembered hex.
+    fn amber(step: &str) -> [f64; 3] {
+        let css = include_str!("../../assets/styles.css");
+        let decl = format!("--color-amber-{step}:oklch(");
+        let at = css.find(&decl).unwrap_or_else(|| {
+            panic!("`--color-amber-{step}` missing from assets/styles.css; rebuild it with `bun run build:css`")
+        }) + decl.len();
+        let body = &css[at..at + css[at..].find(')').expect("closed `oklch(`")];
+        let mut parts = body.split_whitespace().map(|p| {
+            p.trim_end_matches('%')
+                .parse::<f64>()
+                .expect("numeric oklch component")
+        });
+        oklch(
+            parts.next().expect("lightness") / 100.0,
+            parts.next().expect("chroma"),
+            parts.next().expect("hue"),
+        )
+    }
+
+    /// Every amber utility in one class list, split by theme half: the wash
+    /// alpha (0 when the element carries no tint of its own) and the text steps
+    /// the half paints, since one class list can carry more than one.
+    fn amber_utilities(classes: &str) -> (f64, Vec<String>, Vec<String>) {
+        let (wash_p, light_p, dark_p) = (
+            concat!("bg-", "amber-500/"),
+            concat!("text-", "amber-"),
+            concat!("dark:text-", "amber-"),
+        );
+        let (mut wash, mut light, mut dark) = (0.0, Vec::new(), Vec::new());
+        for raw in classes.split_whitespace() {
+            let tok = raw.trim_matches(|c: char| {
+                !c.is_ascii_alphanumeric() && c != '-' && c != '/' && c != ':'
+            });
+            if let Some(pct) = tok.strip_prefix(wash_p) {
+                wash = pct.parse::<f64>().expect("numeric wash alpha") / 100.0;
+            } else if let Some(step) = tok.strip_prefix(dark_p) {
+                dark.push(step.to_string());
+            } else if let Some(step) = tok.strip_prefix(light_p) {
+                light.push(step.to_string());
+            }
+        }
+        (wash, light, dark)
+    }
+
+    /// AA for every amber text step in `classes`, measured against its own wash
+    /// over both surfaces an amber element lands on, in all four theme blocks.
+    fn assert_amber_meets_aa(site: &str, classes: &str) {
+        let css = include_str!("../../input.css");
+        let (wash, light, dark) = amber_utilities(classes);
+        let fill = amber("500");
+        for (selector, theme, is_dark) in [
+            (":root {", "light", false),
+            ("\n.dark {", "dark", true),
+            ("\n.high-contrast {", "high-contrast", false),
+            (".dark.high-contrast {", "dark.high-contrast", true),
+        ] {
+            let block = theme_block(css, selector);
+            let steps = if is_dark { &dark } else { &light };
+            for step in steps {
+                let text = amber(step);
+                for surface in ["--card", "--background"] {
+                    let against = mix(fill, token(block, surface), wash);
+                    let ratio = contrast(text, against);
+                    assert!(
+                        ratio >= 4.5,
+                        "{site}: {theme} amber-{step} on {surface} under a \
+                         {:.0}% amber-500 wash is {ratio:.2}:1, below AA 4.5:1",
+                        wash * 100.0
+                    );
+                }
+            }
+        }
+    }
+
+    /// The badge's own tint is what pushed its text under AA, so the check runs
+    /// against the classes the rendered badge actually carries.
+    #[test]
+    fn warning_badge_text_meets_aa_over_its_own_tint() {
+        let markup = super::badge("warning", "Stale dataset").into_string();
+        let classes = markup
+            .split("class=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .expect("badge renders a class attribute");
+        let (wash, light, dark) = amber_utilities(classes);
+        assert!(wash > 0.0, "warning badge lost its tint: {classes}");
+        assert_eq!(light.len(), 1, "one light amber step: {classes}");
+        assert_eq!(dark.len(), 1, "one dark amber step: {classes}");
+        assert_amber_meets_aa("badge(\"warning\")", classes);
+    }
+
+    /// Same rule wherever else the views paint amber text, tinted or not: a
+    /// class list is one composite, so a wash on the line applies to the text
+    /// on it. Keeps the next amber surface from landing under AA unnoticed.
+    #[test]
+    fn every_amber_text_use_meets_aa() {
+        let needle = concat!("text-", "amber-");
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![src];
+        let mut checked = 0;
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("readable source dir") {
+                let path = entry.expect("readable dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let body = std::fs::read_to_string(&path).expect("readable source file");
+                    for (n, line) in body.lines().enumerate() {
+                        if line.contains(needle) {
+                            assert_amber_meets_aa(&format!("{}:{}", path.display(), n + 1), line);
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            checked > 0,
+            "the amber scan matched nothing; needle is stale"
+        );
     }
 
     /// The suffix-less spelling of the utility paints the fill colour, so

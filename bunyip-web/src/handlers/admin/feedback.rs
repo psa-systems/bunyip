@@ -686,7 +686,7 @@ pub(super) fn feedback_detail_view(f: &AdminFeedbackDetail, tab: FeedbackTab) ->
                     // no email goes out. Make that explicit so admins do
                     // not silently assume the submitter received it.
                     @if !has_email {
-                        div class="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300" {
+                        div class="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-300" {
                             "No email on record - the submitter did not provide an address. Your response will be saved but cannot be delivered."
                         }
                     }
