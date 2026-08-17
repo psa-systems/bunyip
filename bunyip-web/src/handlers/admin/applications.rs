@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::api::admin as admin_api;
-use crate::api::types::AdminApplication;
+use crate::api::types::{AdminApplication, AppDoc};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::urlenc;
 use crate::views::layout::{admin_block, admin_block_grid};
@@ -50,13 +50,15 @@ pub(super) fn app_admin_row(app: &AdminApplication) -> Markup {
                 form method="post" action=(format!("/admin/applications/{}/field", app.id)) class="flex items-center gap-2" {
                     input type="hidden" name="field" value="is_active";
                     input type="hidden" name="value" value=(if app.is_active { "false" } else { "true" });
-                    label class="text-sm text-muted-foreground" { "Active" }
+                    // BUNYIP-552: the switch is a button carrying its own aria-label,
+                    // so this visible text is a span, not an unassociated label.
+                    span class="text-sm text-muted-foreground" { "Active" }
                     (toggle_switch(app.is_active, "Toggle active"))
                 }
                 form method="post" action=(format!("/admin/applications/{}/field", app.id)) class="flex items-center gap-2" {
                     input type="hidden" name="field" value="maintenance_mode";
                     input type="hidden" name="value" value=(if app.maintenance_mode { "false" } else { "true" });
-                    label class="text-sm text-muted-foreground" { "Maintenance" }
+                    span class="text-sm text-muted-foreground" { "Maintenance" }
                     (toggle_switch(app.maintenance_mode, "Toggle maintenance mode"))
                 }
                 a href=(format!("/admin/applications/{}/edit", app.id)) class=(button_class("outline", "sm", "")) { "Edit" }
@@ -936,6 +938,40 @@ pub struct DocForm {
     pub sort_order: String,
 }
 
+/// The four docs-editor fields, shared by the per-page edit form and the add
+/// form (`None` renders the empty add form).
+///
+/// BUNYIP-552: the app-wide field shape, `div class="space-y-2"` wrapping a
+/// `label for` + `input id`, instead of the implicit label these eight fields
+/// used to wrap their input in. `prefix` keeps the ids unique, since every
+/// page's edit form and the add form render together.
+fn doc_fields(prefix: &str, d: Option<&AppDoc>) -> Markup {
+    let title_id = format!("{prefix}-title");
+    let slug_id = format!("{prefix}-slug");
+    let sort_id = format!("{prefix}-sort_order");
+    let body_id = format!("{prefix}-body");
+    html! {
+        div class="grid gap-3 md:grid-cols-3" {
+            div class="space-y-2" {
+                label for=(title_id) class="text-sm font-medium" { "Title" }
+                input id=(title_id) name="title" value=(d.map(|d| d.title.as_str()).unwrap_or_default()) required class=(dashboard_input());
+            }
+            div class="space-y-2" {
+                label for=(slug_id) class="text-sm font-medium" { "Slug" }
+                input id=(slug_id) name="slug" value=(d.map(|d| d.slug.as_str()).unwrap_or_default()) placeholder="getting-started" required class=(dashboard_input());
+            }
+            div class="space-y-2" {
+                label for=(sort_id) class="text-sm font-medium" { "Sort order" }
+                input id=(sort_id) name="sort_order" type="number" value=(d.map_or(0, |d| d.sort_order)) class=(dashboard_input());
+            }
+        }
+        div class="space-y-2" {
+            label for=(body_id) class="text-sm font-medium" { "Body (markdown)" }
+            textarea id=(body_id) name="body" rows="10" class={ (dashboard_input()) " min-h-[200px] font-mono text-sm" } { (d.map(|d| d.body.as_str()).unwrap_or_default()) }
+        }
+    }
+}
+
 /// GET /admin/applications/{id}/docs - manage an app's documentation pages.
 pub async fn application_docs(
     State(st): State<AppState>,
@@ -985,12 +1021,7 @@ pub async fn application_docs(
                 @for d in &docs {
                     div class="rounded-lg border p-6 space-y-3" {
                         form method="post" action=(format!("/admin/applications/{id}/docs/{}", d.id)) class="space-y-3" {
-                            div class="grid gap-3 md:grid-cols-3" {
-                                label class="text-sm block" { "Title" input class=(dashboard_input()) name="title" value=(d.title) required; }
-                                label class="text-sm block" { "Slug" input class=(dashboard_input()) name="slug" value=(d.slug) required; }
-                                label class="text-sm block" { "Sort order" input type="number" class=(dashboard_input()) name="sort_order" value=(d.sort_order); }
-                            }
-                            label class="text-sm block" { "Body (markdown)" textarea class={ (dashboard_input()) " min-h-[200px] font-mono text-sm" } name="body" rows="10" { (d.body) } }
+                            (doc_fields(&format!("doc-{}", d.id), Some(d)))
                             button type="submit" class=(button_class("default", "sm", "")) { "Save" }
                         }
                         form method="post" action=(format!("/admin/applications/{id}/docs/{}/delete", d.id)) data-confirm="Delete this documentation entry? This cannot be undone." {
@@ -1002,12 +1033,7 @@ pub async fn application_docs(
             div class="rounded-lg border p-6 space-y-3" {
                 h2 class="text-xl font-semibold" { "Add a page" }
                 form method="post" action=(format!("/admin/applications/{id}/docs")) class="space-y-3" {
-                    div class="grid gap-3 md:grid-cols-3" {
-                        label class="text-sm block" { "Title" input class=(dashboard_input()) name="title" required; }
-                        label class="text-sm block" { "Slug" input class=(dashboard_input()) name="slug" placeholder="getting-started" required; }
-                        label class="text-sm block" { "Sort order" input type="number" class=(dashboard_input()) name="sort_order" value="0"; }
-                    }
-                    label class="text-sm block" { "Body (markdown)" textarea class={ (dashboard_input()) " min-h-[200px] font-mono text-sm" } name="body" rows="10" {} }
+                    (doc_fields("doc-new", None))
                     button type="submit" class=(button_class("default", "sm", "")) { "Add page" }
                 }
             }
@@ -1113,4 +1139,91 @@ pub async fn application_doc_delete(
         }
     };
     redirect_cookies(&target, &c.set_cookies)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{doc_fields, AppDoc};
+
+    fn doc(id: &str) -> AppDoc {
+        AppDoc {
+            id: id.into(),
+            slug: "getting-started".into(),
+            title: "Getting started".into(),
+            body: "hello".into(),
+            sort_order: 3,
+        }
+    }
+
+    /// Pull every `<attr>="..."` value out of rendered markup.
+    fn attr_values(html: &str, attr: &str) -> Vec<String> {
+        let needle = format!(" {attr}=\"");
+        html.match_indices(&needle)
+            .map(|(i, _)| {
+                let rest = &html[i + needle.len()..];
+                rest[..rest.find('"').expect("attribute is quoted")].to_string()
+            })
+            .collect()
+    }
+
+    /// BUNYIP-552: every docs-editor label is explicitly associated with its
+    /// control, and the ids stay unique when both edit forms and the add form
+    /// render on one page.
+    #[test]
+    fn doc_fields_labels_are_explicit_and_ids_unique() {
+        let (a, b) = (doc("aaa"), doc("bbb"));
+        let page = format!(
+            "{}{}{}",
+            doc_fields("doc-aaa", Some(&a)).into_string(),
+            doc_fields("doc-bbb", Some(&b)).into_string(),
+            doc_fields("doc-new", None).into_string(),
+        );
+
+        let ids = attr_values(&page, "id");
+        let fors = attr_values(&page, "for");
+        assert_eq!(ids.len(), 12, "four fields across three forms carry an id");
+        assert_eq!(fors.len(), page.matches("<label").count());
+        for f in &fors {
+            assert!(ids.contains(f), "label for={f} has no matching input id");
+        }
+        let mut unique = ids.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len(), "duplicate id emitted: {ids:?}");
+
+        assert_eq!(
+            page.matches(r#"class="text-sm font-medium""#).count(),
+            fors.len(),
+            "every label renders at the app-wide label weight"
+        );
+        assert!(page.contains(r#"value="Getting started""#) && page.contains(">hello<"));
+        assert!(page.contains(r#"value="3""#) && page.contains(r#"value="0""#));
+    }
+
+    /// BUNYIP-552: no label in this file goes back to implicit association.
+    /// Every `<label>` opens with its `for`, so a label written without one
+    /// fails here rather than shipping a second field idiom.
+    #[test]
+    fn every_label_in_this_file_is_explicitly_associated() {
+        let src = include_str!("applications.rs");
+        // Markup only: stop before this module (so the needle below is not
+        // scanned) and drop comment lines (prose mentions the tag by name).
+        let markup: String = src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split yields a head")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let needle = concat!("lab", "el ");
+        for (i, _) in markup.match_indices(needle) {
+            let rest = &markup[i + needle.len()..];
+            assert!(
+                rest.starts_with("for="),
+                "label without an explicit `for`: {}",
+                &markup[i..(i + 80).min(markup.len())]
+            );
+        }
+    }
 }
