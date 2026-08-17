@@ -47,6 +47,10 @@ fn inner(name: &str) -> &'static str {
         }
         // BUNYIP-408: caret for the profile-menu disclosure.
         "chevron-down" => r#"<path d="m6 9 6 6 6-6"/>"#,
+        // BUNYIP-547: summary glyph of the below-md navigation disclosure.
+        "menu" => {
+            r#"<line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/>"#
+        }
         // BUNYIP-405: disclosure chevron for clickable list rows.
         "chevron-right" => r#"<path d="m9 18 6-6-6-6"/>"#,
         // BUNYIP-404: reorder-up affordance (pairs with chevron-down).

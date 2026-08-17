@@ -548,12 +548,87 @@ const NAV_ACTIVE: &str =
     "bg-gradient-to-r from-primary to-indigo-500 text-white shadow-md shadow-primary/20";
 const NAV_INACTIVE: &str = "text-muted-foreground hover:bg-accent hover:text-accent-foreground";
 
-fn sidebar(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup {
-    let items = if admin {
+/// BUNYIP-547: the complete nav destination list of an authenticated shell,
+/// grouped into the sections a divider separates. The cross-shell switch
+/// (BUNYIP-417) is its own leading section; the page items follow. Both the
+/// sidebar and the below-`md` disclosure render from this one list, so an entry
+/// added here reaches every width.
+fn shell_nav_sections(admin: bool, is_admin: bool, is_member: bool) -> Vec<Vec<NavItem>> {
+    let mut sections = Vec::new();
+    // BUNYIP-417: the user/admin dashboard switch is a top-level, frequently
+    // used control, so it sits at the TOP of the nav rather than at the bottom.
+    if admin {
+        sections.push(vec![NavItem {
+            title: "User Dashboard",
+            href: "/dashboard",
+            icon: "layout-dashboard",
+        }]);
+    } else if is_admin {
+        sections.push(vec![NavItem {
+            title: "Admin Panel",
+            href: "/admin",
+            icon: "shield",
+        }]);
+    }
+    sections.push(if admin {
         admin_items()
     } else {
         dashboard_items(is_member)
-    };
+    });
+    sections
+}
+
+/// The nav rows themselves, shared by the sidebar and the below-`md` disclosure
+/// (BUNYIP-547) so the two cannot drift in destinations, active styling, or
+/// external-link handling.
+fn nav_links(sections: &[Vec<NavItem>], active: &str) -> Markup {
+    html! {
+        @for (i, section) in sections.iter().enumerate() {
+            @if i > 0 { div class="my-3 border-t border-border/50" {} }
+            @for item in section {
+                // BUNYIP-329: Community launches the external Let's Chat
+                // instance, so open it in a new tab and keep the Bunyip tab.
+                @let external = item.href == "/community";
+                a href=(item.href)
+                  target=[external.then_some("_blank")]
+                  rel=[external.then_some("noopener noreferrer")]
+                  class={ "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-all " (if active == item.href { NAV_ACTIVE } else { NAV_INACTIVE }) } {
+                    (icon(item.icon, "h-4 w-4"))
+                    (item.title)
+                    // BUNYIP-341: flag the external Community launch with a
+                    // trailing external-link glyph (opens in a new tab), so
+                    // the row reads as "leaves Bunyip" before it is clicked.
+                    @if external {
+                        (icon("external-link", "ml-auto h-3.5 w-3.5 opacity-60"))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// BUNYIP-547: the authenticated navigation below the `md` breakpoint, where
+/// [`sidebar`] is not rendered at all. A `<details data-menu>` disclosure, the
+/// same pattern [`profile_menu`] uses, so it inherits the click-away and Escape
+/// dismissal already bound in `assets/js/app.js` and needs no new script. Its
+/// panel scrolls (`overflow-y-auto`) because the admin list is fifteen entries.
+fn mobile_nav(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup {
+    let sections = shell_nav_sections(admin, is_admin, is_member);
+    html! {
+        details class="relative md:hidden" data-menu data-mobile-nav {
+            summary class="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground [&::-webkit-details-marker]:hidden"
+                    aria-label="Open navigation" {
+                (icon("menu", "h-5 w-5"))
+            }
+            nav class="absolute left-0 z-50 mt-2 max-h-[70vh] w-64 space-y-1 overflow-y-auto rounded-md border border-border/60 bg-background p-2 shadow-lg" {
+                (nav_links(&sections, active))
+            }
+        }
+    }
+}
+
+fn sidebar(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup {
+    let sections = shell_nav_sections(admin, is_admin, is_member);
     html! {
         // BUNYIP-368: the sidebar is its own scroll container. It fills the
         // viewport-locked shell (`h-full`), keeps the brand row pinned
@@ -567,39 +642,7 @@ fn sidebar(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup
                 }
             }
             nav class="flex-1 space-y-1 overflow-y-auto p-4" {
-                // BUNYIP-417: the user/admin dashboard switch is a top-level,
-                // frequently-used control, so it sits at the TOP of the nav
-                // (above the section items) rather than buried at the bottom.
-                @if !admin && is_admin {
-                    a href="/admin" class={ "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors " (NAV_INACTIVE) } {
-                        (icon("shield", "h-4 w-4")) "Admin Panel"
-                    }
-                    div class="my-3 border-t border-border/50" {}
-                }
-                @if admin {
-                    a href="/dashboard" class={ "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors " (NAV_INACTIVE) } {
-                        (icon("layout-dashboard", "h-4 w-4")) "User Dashboard"
-                    }
-                    div class="my-3 border-t border-border/50" {}
-                }
-                @for item in &items {
-                    // BUNYIP-329: Community launches the external Let's Chat
-                    // instance, so open it in a new tab and keep the Bunyip tab.
-                    @let external = item.href == "/community";
-                    a href=(item.href)
-                      target=[external.then_some("_blank")]
-                      rel=[external.then_some("noopener noreferrer")]
-                      class={ "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-all " (if active == item.href { NAV_ACTIVE } else { NAV_INACTIVE }) } {
-                        (icon(item.icon, "h-4 w-4"))
-                        (item.title)
-                        // BUNYIP-341: flag the external Community launch with a
-                        // trailing external-link glyph (opens in a new tab), so
-                        // the row reads as "leaves Bunyip" before it is clicked.
-                        @if external {
-                            (icon("external-link", "ml-auto h-3.5 w-3.5 opacity-60"))
-                        }
-                    }
-                }
+                (nav_links(&sections, active))
             }
         }
     }
@@ -661,7 +704,10 @@ fn profile_menu(user: &User) -> Markup {
     }
 }
 
-fn app_topbar(title: &str, user: &User) -> Markup {
+/// `nav` is the below-`md` navigation disclosure ([`mobile_nav`]), rendered left
+/// of the page title. It is the only nav an authenticated shell has under 768px,
+/// where [`sidebar`] is `hidden` (BUNYIP-547).
+fn app_topbar(title: &str, user: &User, nav: Markup) -> Markup {
     html! {
         // BUNYIP-408: `relative z-40` gives the topbar a stacking context that
         // sits above the scrolling `<main>` content. Without it the profile-menu
@@ -670,7 +716,10 @@ fn app_topbar(title: &str, user: &User) -> Markup {
         // nor clickable in the dashboard / admin shells. The public `header`
         // already carries `z-50`, which is why the same component worked there.
         header class="relative z-40 flex h-16 items-center justify-between border-b border-border/50 bg-background/80 backdrop-blur-sm px-6" {
-            h1 class="text-lg font-semibold" { (title) }
+            div class="flex min-w-0 items-center gap-2" {
+                (nav)
+                h1 class="truncate text-lg font-semibold" { (title) }
+            }
             div class="flex items-center gap-2" {
                 (theme_controls("h-4 w-4"))
                 (profile_menu(user))
@@ -702,7 +751,7 @@ pub fn dashboard_shell(user: &User, active: &str, topbar_title: &str, content: M
         div class=(APP_SHELL_CLASS) {
             (sidebar(false, is_admin, active, is_member))
             div class=(APP_COLUMN_CLASS) {
-                (app_topbar(topbar_title, user))
+                (app_topbar(topbar_title, user, mobile_nav(false, is_admin, active, is_member)))
                 main class=(APP_MAIN_CLASS) {
                     div class="pointer-events-none absolute inset-0 bg-gradient-to-br from-indigo-500/[0.02] via-transparent to-teal-500/[0.02]" {}
                     div class="relative" { (content) }
@@ -720,7 +769,7 @@ pub fn admin_shell(user: &User, active: &str, topbar_title: &str, content: Marku
         div class=(APP_SHELL_CLASS) {
             (sidebar(true, true, active, true))
             div class=(APP_COLUMN_CLASS) {
-                (app_topbar(topbar_title, user))
+                (app_topbar(topbar_title, user, mobile_nav(true, true, active, true)))
                 main class=(APP_MAIN_CLASS) {
                     div class="relative" { (content) }
                 }
@@ -901,6 +950,71 @@ mod tests {
                 markup.contains("Have feedback?"),
                 "{name}'s launcher must render its label"
             );
+        }
+    }
+
+    /// BUNYIP-547: `sidebar()` is `hidden md:flex`, so on a phone it rendered
+    /// nothing and every nav destination was reachable only by typing the URL.
+    /// The invariant: every entry of a shell's nav list is reachable with
+    /// the sidebar removed. Mirrors
+    /// `every_authenticated_shell_mounts_the_feedback_launcher` - a new shell
+    /// that ships the sidebar as its only nav fails here.
+    #[test]
+    fn every_authenticated_shell_navigates_below_the_md_breakpoint() {
+        let admin = test_user(UserRole::Admin);
+        let member = test_user(UserRole::Subscriber);
+        let shells = [
+            (
+                "admin_shell",
+                admin_shell(&admin, "/admin", "Admin", html! {}).into_string(),
+                shell_nav_sections(true, true, true),
+            ),
+            (
+                "dashboard_shell",
+                dashboard_shell(&member, "/dashboard", "Dashboard", html! {}).into_string(),
+                shell_nav_sections(
+                    false,
+                    member.role == UserRole::Admin,
+                    crate::util::has_active_membership(Some(&member)),
+                ),
+            ),
+        ];
+        for (name, markup, sections) in shells {
+            let aside = first_tag(&markup, "aside");
+            assert!(
+                aside.contains("hidden") && aside.contains("md:flex"),
+                "{name}'s sidebar is still the wide-viewport-only column this guard is about: {aside}"
+            );
+
+            // Everything the sidebar contributes, dropped: what remains is what
+            // a 375px viewport actually renders.
+            let (before, after) = markup
+                .split_once("<aside")
+                .expect("the shell renders a sidebar");
+            let (_, after) = after.split_once("</aside>").expect("the sidebar closes");
+            let small = format!("{before}{after}");
+            assert!(
+                !small.contains("<aside"),
+                "{name} renders more than one sidebar; this guard only strips the first"
+            );
+
+            let nav = small
+                .split_once("data-mobile-nav")
+                .unwrap_or_else(|| panic!("{name} mounts the below-md nav disclosure"))
+                .1;
+            let nav = nav
+                .split_once("</details>")
+                .expect("the disclosure closes")
+                .0;
+
+            let hrefs: Vec<&str> = sections.iter().flatten().map(|i| i.href).collect();
+            assert!(hrefs.len() > 1, "{name}'s nav list is not empty");
+            for href in hrefs {
+                assert!(
+                    nav.contains(&format!(r#"href="{href}""#)),
+                    "{name} drops {href} below the md breakpoint: {nav}"
+                );
+            }
         }
     }
 
