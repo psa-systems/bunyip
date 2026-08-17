@@ -431,7 +431,7 @@ fn dashboard_items(is_member: bool) -> Vec<NavItem> {
 fn admin_items() -> Vec<NavItem> {
     vec![
         NavItem {
-            title: "Overview",
+            title: "Admin Dashboard",
             href: "/admin",
             icon: "layout-dashboard",
         },
@@ -449,7 +449,7 @@ fn admin_items() -> Vec<NavItem> {
             icon: "app-window",
         },
         NavItem {
-            title: "Groups",
+            title: "Application Groups",
             href: "/admin/application-groups",
             icon: "layers",
         },
@@ -471,7 +471,7 @@ fn admin_items() -> Vec<NavItem> {
         NavItem {
             // BUNYIP-487: label only. The route stays /admin/tier-settings so
             // existing admin bookmarks keep working.
-            title: "Pricing tiers",
+            title: "Pricing Tiers",
             href: "/admin/tier-settings",
             icon: "settings",
         },
@@ -501,7 +501,7 @@ fn admin_items() -> Vec<NavItem> {
             icon: "shield-off",
         },
         NavItem {
-            title: "Auto-ban",
+            title: "Auto-ban Settings",
             href: "/admin/auto-ban-settings",
             icon: "shield-alert",
         },
@@ -978,15 +978,33 @@ mod tests {
         assert!(hidden.contains(r#"href="/roadmap""#));
     }
 
-    /// The admin nav reads "Pricing tiers" while the route stays put, so
-    /// existing bookmarks keep working (BUNYIP-487).
+    /// The admin nav reads "Pricing Tiers" while the route stays put, so
+    /// existing bookmarks keep working (BUNYIP-487, re-cased in BUNYIP-551).
     #[test]
     fn admin_nav_renames_tier_settings_without_moving_it() {
         let item = admin_items()
             .into_iter()
             .find(|i| i.href == "/admin/tier-settings")
             .expect("the tier-settings entry is still mounted at its old route");
-        assert_eq!(item.title, "Pricing tiers");
+        assert_eq!(item.title, "Pricing Tiers");
+    }
+
+    /// BUNYIP-551: one casing for every admin section name. The sidebar label is
+    /// also the topbar title and the page h1, so a sentence-case entry here is a
+    /// sentence-case heading on the page too.
+    #[test]
+    fn admin_nav_titles_are_title_case() {
+        for item in admin_items() {
+            for word in item.title.split(' ') {
+                let first = word.chars().next().expect("no empty word in a nav title");
+                assert!(
+                    first.is_uppercase(),
+                    "admin nav entry {:?} ({}) is not Title Case: {word:?} starts lowercase",
+                    item.title,
+                    item.href
+                );
+            }
+        }
     }
 
     /// The SSE subscriber takes its origin as passive markup, never as

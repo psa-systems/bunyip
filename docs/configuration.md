@@ -324,7 +324,7 @@ Singleton row (`id = 1`).
 Unconfigured means payment is simply disabled. Test-mode walkthrough:
 [`stripe-test-mode.md`](stripe-test-mode.md).
 
-### Pricing tiers (`tier_config`, admin page: Pricing tiers)
+### Pricing tiers (`tier_config`, admin page: Pricing Tiers)
 
 Singleton row. Slot counts and trial lengths have env seeds; the Stripe
 identifiers and the publish switch have **no env source at all**.
@@ -345,7 +345,7 @@ governed secret and follows `SECRETS_STORAGE` rather than a fallback. There is n
 column for the EHLO name: `SMTP_EHLO_NAME` is deployment identity, not SMTP
 tuning (BUNYIP-507), so it stays env-only alongside the base URL.
 
-### Auto-ban (`auto_ban_config`, admin page: Auto-ban settings)
+### Auto-ban (`auto_ban_config`, admin page: Auto-ban Settings)
 
 Singleton row: `enabled`, `threshold`, `window_secs`, `ban_duration_secs`. Every
 column has an env seed. Individual IPs are banned and lifted from the admin IP

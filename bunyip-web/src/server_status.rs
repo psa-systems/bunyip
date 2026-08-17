@@ -65,7 +65,7 @@ pub fn banner() -> Markup {
         div role="status" aria-live="polite"
             class="w-full bg-destructive text-destructive-foreground" {
             div class="container flex items-center justify-center gap-2 py-2 text-sm text-center" {
-                span class="font-medium" { "Service unavailable. Reconnecting..." }
+                span class="font-medium" { "Service unavailable. Reconnecting…" }
             }
         }
     }
