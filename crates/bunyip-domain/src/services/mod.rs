@@ -7,6 +7,7 @@
 //! are re-exported below.
 
 pub mod app_key;
+pub mod argon2_offload;
 pub mod auth;
 pub mod backup;
 pub mod email;

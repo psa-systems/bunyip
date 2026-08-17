@@ -29,8 +29,8 @@ use crate::repositories::{
 };
 use crate::responses::{created, get_request_id, paginated, success, success_no_data};
 use crate::services::{
-    stripe_err, AppDownloadCache, AppKeySet, AuthService, EmailService, JwtService,
-    PasswordService, ReleaseCache, StripeService, TotpService, WebhookService,
+    argon2_offload, stripe_err, AppDownloadCache, AppKeySet, AuthService, EmailService, JwtService,
+    ReleaseCache, StripeService, TotpService, WebhookService,
 };
 use crate::validation;
 use bunyip_domain::services::{BunyipEvent, EventBus};
@@ -1084,12 +1084,11 @@ pub async fn delete_application(
         .ok_or(AppError::not_found("User"))?;
 
     // Verify password
-    let password_service = PasswordService::new();
     let password_hash = admin_user
         .password_hash
-        .as_deref()
+        .clone()
         .ok_or_else(|| AppError::validation("password", "Account has no password set"))?;
-    if !password_service.verify(&body.password, password_hash)? {
+    if !argon2_offload::verify_password(body.password.clone(), password_hash).await? {
         return Err(AppError::validation("password", "Invalid password"));
     }
 
