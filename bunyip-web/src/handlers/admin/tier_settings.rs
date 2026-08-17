@@ -87,7 +87,7 @@ pub(super) fn tier_settings_content(
 ) -> Markup {
     html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Pricing tiers" } p class="mt-2 text-muted-foreground" { "Slot limits, trial lengths, the tier -> Stripe price mapping, and the public pricing switch. Raw Stripe products, prices and webhooks live on the " a href="/admin/stripe" class="text-primary-text hover:underline" { "Stripe" } " page." } }
+            div { h1 class="text-3xl font-bold" { "Pricing Tiers" } p class="mt-2 text-muted-foreground" { "Slot limits, trial lengths, the tier -> Stripe price mapping, and the public pricing switch. Raw Stripe products, prices and webhooks live on the " a href="/admin/stripe" class="text-primary-text hover:underline" { "Stripe" } " page." } }
             @match cfg {
                 None => (error_box("Could not load tier config.")),
                 Some(c) => {
@@ -217,7 +217,7 @@ pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Re
         &values,
         None,
     );
-    admin_response(&c, &user, "/admin/tier-settings", "Pricing tiers", content)
+    admin_response(&c, &user, "/admin/tier-settings", "Pricing Tiers", content)
 }
 
 #[derive(Deserialize)]
@@ -330,5 +330,5 @@ pub async fn tier_settings_save(
         &values,
         Some(&error),
     );
-    admin_response(&c, &user, "/admin/tier-settings", "Pricing tiers", content)
+    admin_response(&c, &user, "/admin/tier-settings", "Pricing Tiers", content)
 }

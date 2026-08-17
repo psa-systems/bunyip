@@ -200,8 +200,8 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
 pub fn not_found_content() -> maud::Markup {
     html! {
         div class="flex min-h-[60vh] flex-col items-center justify-center text-center px-6" {
-            p class="text-6xl font-bold text-gradient bg-gradient-to-r from-primary to-indigo-500" { "404" }
-            h1 class="mt-4 text-2xl font-semibold" { "Page not found" }
+            p class="text-5xl font-bold text-gradient bg-gradient-to-r from-primary to-indigo-500" { "404" }
+            h1 class="mt-4 text-4xl font-bold" { "Page not found" }
             a href="/" class=(button_class("default", "default", "mt-8")) { "Back home" }
         }
     }

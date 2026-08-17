@@ -971,7 +971,7 @@ mod two_column_layout_tests {
         let vals = tier_vals();
         let html = tier_settings_content(Some(&tier_cfg()), None, Err("unavailable"), &vals, None)
             .into_string();
-        assert!(html.contains("Pricing tiers"), "heading present");
+        assert!(html.contains("Pricing Tiers"), "heading present");
         for f in [
             "lifetime_slots",
             "early_adopter_slots",
