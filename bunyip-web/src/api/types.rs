@@ -1122,6 +1122,26 @@ pub struct StripePermissionReport {
     pub checks: Vec<StripePermissionCheck>,
 }
 
+/// BUNYIP-561: the admin-managed product branding, from `GET /v1/branding` (and
+/// from `GET /v1/admin/branding`, which adds attribution fields this form does
+/// not render). Mirrors bunyip-api's `Branding`.
+///
+/// Every field defaults, and none is in `ESSENTIAL_FIELDS` in
+/// `scripts/check-serde-compat.nu`: an absent field degrades to empty, which
+/// omits its markup, and that is strictly better than failing the decode and
+/// losing the whole record over one missing key.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Branding {
+    #[serde(default)]
+    pub brand_name: String,
+    #[serde(default)]
+    pub tagline: String,
+    #[serde(default)]
+    pub meta_description: String,
+    #[serde(default)]
+    pub og_image_url: String,
+}
+
 /// BUNYIP-351: email / SMTP configuration surfaced to the admin settings form.
 /// Mirrors `bunyip-api`'s `EmailConfigResponse`; the SMTP password is never
 /// returned in plaintext (only a masked hint + `has_smtp_password`).

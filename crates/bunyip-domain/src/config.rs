@@ -1983,7 +1983,14 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
         "ENVIRONMENT",
         "deployment environment name; unset means production",
     ),
-    EnvVarSpec::defaulted("APP_NAME", "product name in emails and tokens"),
+    // BUNYIP-561: demoted to a bootstrap default. The product name is the
+    // admin-managed `branding.brand_name`; this value is used only while that
+    // row is still empty, i.e. a database that has never been branded.
+    EnvVarSpec::defaulted(
+        "APP_NAME",
+        "bootstrap product name for an unbranded database; the admin Branding page is the source \
+         of truth once brand_name is set",
+    ),
     EnvVarSpec::defaulted(
         "APP_URL",
         "public base URL used in email bodies and the EHLO name",

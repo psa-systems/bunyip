@@ -68,16 +68,22 @@ fn scope_label(scope: &str) -> &'static str {
 /// authorize handler passed a client name (BUNYIP-342); falls back to the
 /// generic wording for a hand-crafted URL or an older backend that sends none.
 /// Rendered as escaped text by Maud, so a spoofed name cannot inject markup.
-fn consent_description(client_name: Option<&str>) -> String {
+///
+/// BUNYIP-561: the account being accessed is named from the admin-managed brand
+/// record. An unbranded deployment says "your account" rather than carrying a
+/// product name compiled into the binary.
+fn consent_description(client_name: Option<&str>, brand_name: &str) -> String {
+    let account = if brand_name.is_empty() {
+        "your account".to_string()
+    } else {
+        format!("your {brand_name} account")
+    };
     match client_name.map(str::trim).filter(|n| !n.is_empty()) {
         Some(name) => {
-            format!(
-                "{name} is requesting access to your Bunyip account. Approve below to continue."
-            )
+            format!("{name} is requesting access to {account}. Approve below to continue.")
         }
         None => {
-            "An application is requesting access to your Bunyip account. Approve below to continue."
-                .to_string()
+            format!("An application is requesting access to {account}. Approve below to continue.")
         }
     }
 }
@@ -170,7 +176,10 @@ pub async fn consent_get(
         "shield",
         "bg-primary/10 text-primary-text",
         "Approve access",
-        &consent_description(q.client_name.as_deref()),
+        &consent_description(
+            q.client_name.as_deref(),
+            &crate::views::layout::brand_name(),
+        ),
         body,
     );
 
@@ -277,18 +286,28 @@ mod tests {
 
     #[test]
     fn consent_description_names_the_client_or_falls_back() {
-        assert!(consent_description(Some("Mokosh")).starts_with("Mokosh is requesting access"));
-        assert!(consent_description(None).starts_with("An application is requesting access"));
+        assert!(
+            consent_description(Some("Mokosh"), "Acme").starts_with("Mokosh is requesting access")
+        );
+        assert!(
+            consent_description(None, "Acme").starts_with("An application is requesting access")
+        );
         // A blank / whitespace-only name falls back to the generic wording.
-        assert!(consent_description(Some("   ")).starts_with("An application is requesting access"));
+        assert!(
+            consent_description(Some("   "), "Acme").starts_with("An application is requesting")
+        );
     }
 
-    /// BUNYIP-406: the copy names the account being accessed (the user's Bunyip
-    /// account), both when the client is named and in the generic fallback.
+    /// BUNYIP-406: the copy names the account being accessed, both when the
+    /// client is named and in the generic fallback. BUNYIP-561: that name is
+    /// the admin-managed brand, and an unbranded deployment says "your account"
+    /// rather than falling back to a compiled-in product name.
     #[test]
-    fn consent_copy_names_the_bunyip_account() {
-        assert!(consent_description(Some("Mokosh")).contains("your Bunyip account"));
-        assert!(consent_description(None).contains("your Bunyip account"));
+    fn consent_copy_names_the_branded_account() {
+        assert!(consent_description(Some("Mokosh"), "Acme").contains("your Acme account"));
+        assert!(consent_description(None, "Acme").contains("your Acme account"));
+        assert!(consent_description(Some("Mokosh"), "").contains("access to your account"));
+        assert!(consent_description(None, "").contains("access to your account"));
     }
 
     /// BUNYIP-406: only https / same-origin logo URLs are honoured; every other

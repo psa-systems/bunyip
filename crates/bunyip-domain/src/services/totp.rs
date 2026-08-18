@@ -30,6 +30,11 @@ pub struct TotpService {
     key_set: AppKeySet,
     issuer: String,
     pool: PgPool,
+    /// BUNYIP-561: the admin-managed branding record. The issuer label a new
+    /// enrolment is stamped with follows the product name here rather than the
+    /// `APP_NAME` fixed at construction. `None` before `main` attaches it, and
+    /// in the bootstrap binary, where the constructor argument stands.
+    branding: std::sync::RwLock<Option<std::sync::Arc<crate::models::BrandingCache>>>,
 }
 
 impl TotpService {
@@ -38,6 +43,30 @@ impl TotpService {
             key_set,
             issuer,
             pool,
+            branding: std::sync::RwLock::new(None),
+        }
+    }
+
+    /// BUNYIP-561: attach the process-wide branding cache. Called once from
+    /// `main` before the listener binds; safe to call again (it replaces).
+    pub fn set_branding_cache(&self, cache: std::sync::Arc<crate::models::BrandingCache>) {
+        *self.branding.write().unwrap_or_else(|e| e.into_inner()) = Some(cache);
+    }
+
+    /// The issuer label stamped into a new enrolment's `otpauth://` URI.
+    ///
+    /// Existing enrolments keep whatever label they were created with: the
+    /// issuer is part of the QR payload only, never of the code computation, so
+    /// a rename neither invalidates nor migrates `user_totp` rows.
+    fn issuer(&self) -> String {
+        match self
+            .branding
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            Some(cache) => cache.brand_name(),
+            None => self.issuer.clone(),
         }
     }
 
@@ -296,7 +325,7 @@ impl TotpService {
             0,
             TOTP_STEP_SECS,
             secret.to_vec(),
-            Some(self.issuer.clone()),
+            Some(self.issuer()),
             account_name.to_string(),
         )
         .map_err(|e| AppError::internal(format!("Failed to create TOTP: {}", e)))
@@ -309,7 +338,7 @@ impl TotpService {
             .duration_since(UNIX_EPOCH)
             .map_err(|e| AppError::internal(format!("System time error: {}", e)))?
             .as_secs();
-        Self::match_step(secret, &self.issuer, code, now)
+        Self::match_step(secret, &self.issuer(), code, now)
     }
 
     /// Match `code` at unix time `now` against the current step and the one

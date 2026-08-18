@@ -77,15 +77,12 @@ pub struct Config {
     /// BUNYIP-549: the dark-scheme twin of [`Config::theme_color_light`].
     /// `BRAND_THEME_COLOR_DARK`; defaults to bunyip's dark surface.
     pub theme_color_dark: String,
-    /// BUNYIP-499: app/brand name rendered in the nav brand mark and the
-    /// browser-title suffix. `APP_NAME`, default `"Bunyip"` so output is
-    /// unchanged until a skin overrides it. Mirrors the email subsystem's
-    /// config-driven `APP_NAME`.
-    pub app_name: String,
-    /// BUNYIP-501: the `<meta name="description">` copy. Skin marketing text, so
-    /// it is config-driven rather than a framework literal. `BRAND_DESCRIPTION`;
-    /// defaults to bunyip's copy so output is unchanged until a skin overrides it.
-    pub brand_description: String,
+    // BUNYIP-561: `app_name` (`APP_NAME`) and `brand_description`
+    // (`BRAND_DESCRIPTION`) are gone. The product name, tagline, meta
+    // description and Open Graph image are the admin-managed branding record
+    // bunyip-web fetches from `/v1/branding` (see `crate::branding`), so a
+    // rebrand is one admin edit rather than an environment change plus a
+    // redeploy of both services.
     /// BUNYIP-503: cross-origin hosts a skin appends to the CSP.
     pub csp: CspConfig,
 }
@@ -162,10 +159,6 @@ impl Config {
                 .unwrap_or_else(|| DEFAULT_THEME_COLOR_LIGHT.into()),
             theme_color_dark: var("BRAND_THEME_COLOR_DARK")
                 .unwrap_or_else(|| DEFAULT_THEME_COLOR_DARK.into()),
-            app_name: var("APP_NAME").unwrap_or_else(|| "Bunyip".into()),
-            brand_description: var("BRAND_DESCRIPTION").unwrap_or_else(|| {
-                "Bunyip - the SaaS layer for your PSA. Auth, billing, members, and identity for Mokosh.".into()
-            }),
             csp: CspConfig {
                 connect_src: parse_csp_hosts(&var("CSP_CONNECT_SRC").unwrap_or_default()),
                 form_action: parse_csp_hosts(&var("CSP_FORM_ACTION").unwrap_or_default()),

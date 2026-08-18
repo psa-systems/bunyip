@@ -291,6 +291,12 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             // Tier config
             .route("/tier-config", web::get().to(handlers::get_tier_config))
             .route("/tier-config", web::put().to(handlers::update_tier_config))
+            // Branding (BUNYIP-561): the product name, tagline, meta
+            // description and Open Graph image, admin-managed rather than
+            // compiled in. A PUT refreshes the api-side cache in the same
+            // request, so email subjects follow without a restart.
+            .route("/branding", web::get().to(handlers::get_branding))
+            .route("/branding", web::put().to(handlers::update_branding))
             // Email config (BUNYIP-351)
             .route("/email", web::get().to(handlers::get_email_config))
             .route("/email", web::put().to(handlers::update_email_config))

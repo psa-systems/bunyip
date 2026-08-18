@@ -168,6 +168,17 @@ jobs:
           ./scripts/check-ui-copy.nu --self-test
           ./scripts/check-ui-copy.nu
 
+      - name: Check no product name is compiled into bunyip-web
+        # The brand is an admin-managed database record, not a literal: no
+        # standalone `Bunyip` in bunyip-web/src/{views,handlers,skin}, and every
+        # legitimate non-copy occurrence carries a `// brand-literal-ok:` reason
+        # (BUNYIP-561).
+        # --self-test first, so a gate that stopped detecting anything fails the
+        # build instead of passing vacuously.
+        run: |
+          ./scripts/check-brand-literals.nu --self-test
+          ./scripts/check-brand-literals.nu
+
       - name: Check every surface is painted from the theme tokens
         # No unmapped stock Tailwind scale in the client-side scripts (the toast
         # pills were emerald / red / slate, the only surfaces that ignored dark

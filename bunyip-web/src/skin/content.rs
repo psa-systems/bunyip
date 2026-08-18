@@ -227,25 +227,61 @@ pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response
 
 // --- our story --------------------------------------------------------------
 
+/// BUNYIP-561: the "Why X?" heading, from the admin-managed brand. Unbranded,
+/// the question stands on its own rather than naming a compiled-in product.
+fn why_heading(brand_name: &str) -> String {
+    if brand_name.is_empty() {
+        "Why this exists".to_string()
+    } else {
+        format!("Why {brand_name}?")
+    }
+}
+
+/// BUNYIP-561: the `/docs` index lead line.
+fn docs_index_note(brand_name: &str) -> String {
+    let subject = if brand_name.is_empty() {
+        "Mokosh and this platform".to_string()
+    } else {
+        format!("Mokosh and {brand_name}")
+    };
+    format!("Guides and runbooks for {subject}. Temporary home while the dedicated docs app is built out.")
+}
+
+/// BUNYIP-561: the "this page is personalized" note above a doc.
+fn personalized_note(brand_name: &str) -> String {
+    if brand_name.is_empty() {
+        "Personalized with your username. ".to_string()
+    } else {
+        format!("Personalized with your {brand_name} username. ")
+    }
+}
+
 pub async fn our_story(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (c, apps, pricing) = public_ctx(&st, &headers).await;
+    // BUNYIP-561: the product name comes from the admin-managed record.
+    let brand_name = crate::views::layout::brand_name();
+    let brand = if brand_name.is_empty() {
+        "The platform"
+    } else {
+        &brand_name
+    };
     let content = html! {
         div class="container max-w-4xl py-12" {
             h1 class="text-4xl font-bold mb-8" { "Our Story" }
             div class="max-w-none space-y-8" {
                 section {
-                    h2 class="text-2xl font-semibold mb-4" { "Why Bunyip?" }
+                    h2 class="text-2xl font-semibold mb-4" { (why_heading(&brand_name)) }
                     div class="space-y-4 text-muted-foreground" {
                         p { "Mokosh is a focused PSA: the product your MSP actually uses to run service delivery. But every product needs a business layer around it - signup, billing, members, invitations, single sign-on - and that layer is the same boring infrastructure everyone reinvents." }
-                        p { "We pulled that layer out into its own surface so the PSA never has to carry it. Bunyip owns identity, billing, and memberships; Mokosh owns the work. Each does one thing well." }
+                        p { (format!("We pulled that layer out into its own surface so the PSA never has to carry it. {brand} owns identity, billing, and memberships; Mokosh owns the work. Each does one thing well.")) }
                         p { "The name is the lake cryptid that surfaces what matters. That is the job: lift the business-y bits up out of the product and keep them out of the way." }
                     }
                 }
                 section {
                     h2 class="text-2xl font-semibold mb-4" { "The business shell" }
                     div class="space-y-4 text-muted-foreground" {
-                        p { "Bunyip is the business shell that wraps Mokosh. It is the OIDC entry point, the Stripe-backed billing engine, the membership and entitlement directory, and the admin console - everything around the product, nothing in it." }
-                        p { "Your team logs in once through Bunyip and lands in Mokosh. Billing, trials, dunning, MFA, magic links, and trusted devices come out of the box, so the PSA stays focused on what makes your MSP tick." }
+                        p { (format!("{brand} is the business shell that wraps Mokosh. It is the OIDC entry point, the Stripe-backed billing engine, the membership and entitlement directory, and the admin console - everything around the product, nothing in it.")) }
+                        p { (format!("Your team logs in once through {brand} and lands in Mokosh. Billing, trials, dunning, MFA, magic links, and trusted devices come out of the box, so the PSA stays focused on what makes your MSP tick.")) }
                     }
                 }
             }
@@ -264,7 +300,7 @@ pub async fn our_story(State(st): State<AppState>, headers: HeaderMap) -> Respon
 const ROADMAP_SHIPPING_SOON: [(&str, &str); 2] = [
     (
         "Single sign-on hardening",
-        "Tighter session rotation and trusted-device controls across Bunyip and Mokosh.",
+        "Tighter session rotation and trusted-device controls across every app the platform signs you in to.",
     ),
     (
         "Org switching polish",
@@ -514,13 +550,16 @@ impl FeedbackDraft {
 /// Shared hero header (heading + pill + subhead) above whichever card the page
 /// shows - the form or the thank-you state.
 fn feedback_hero() -> Markup {
+    // BUNYIP-561: the product name is the admin-managed record; unbranded, the
+    // sentence drops the name rather than naming a compiled-in product.
+    let brand_name = crate::views::layout::brand_name();
     html! {
         div class="mx-auto max-w-3xl text-center" {
             div class="inline-flex items-center gap-2 rounded-full bg-brand-primary-100 dark:bg-brand-primary-800 px-4 py-1.5 text-sm font-medium text-brand-primary-800 dark:text-brand-primary-100" {
                 (icon("smile-plus", "h-4 w-4")) "Help shape what ships next"
             }
             h1 class="mt-6 text-4xl font-bold tracking-tight sm:text-5xl" {
-                "Tell us what would make " span class="text-brand-primary-900 dark:text-brand-primary-50" { "Bunyip" } " better."
+                @if brand_name.is_empty() { "Tell us what would make this better." } @else { "Tell us what would make " span class="text-brand-primary-900 dark:text-brand-primary-50" { (brand_name) } " better." }
             }
             p class="mx-auto mt-4 max-w-2xl text-lg text-muted-foreground" { "Share bugs, missing features, rough edges, or ideas. We read everything." }
         }
@@ -934,7 +973,7 @@ pub async fn feedback_post(
 
 // --- docs (BUNYIP-385, curated for users in BUNYIP-387) ---------------------
 //
-// Public PRODUCT docs under /docs, for people using Bunyip to access and
+// Public PRODUCT docs under /docs, for people using this platform to access and
 // download apps (e.g. Mokosh). This set is user-facing by design: internal
 // developer runbooks (e2e, sqlx checksums, dev-sso, client-IP forwarding,
 // Stripe test mode, the OCI verification runbook) live under the repo `docs/`
@@ -1013,7 +1052,7 @@ pub struct DocQuery {
 const USERNAME_TOKEN: &str = "&lt;username&gt;";
 
 /// Replace the escaped `<username>` placeholder in already-rendered docs HTML
-/// with the signed-in reader's own username (their Bunyip email, which is the
+/// with the signed-in reader's own username (their account email, which is the
 /// `docker login --username` value), highlighted. The email is HTML-escaped via
 /// Maud before substitution so a crafted username cannot inject markup.
 fn personalize_docs(html: &str, username: &str) -> String {
@@ -1027,7 +1066,7 @@ pub async fn docs_index(State(st): State<AppState>, headers: HeaderMap) -> Respo
     let content = html! {
         div class="container max-w-4xl py-12" {
             h1 class="text-4xl font-bold mb-4" { "Documentation" }
-            p class="text-muted-foreground mb-8" { "Guides and runbooks for Mokosh and Bunyip. Temporary home while the dedicated docs app is built out." }
+            p class="text-muted-foreground mb-8" { (docs_index_note(&crate::views::layout::brand_name())) }
             ul class="space-y-3" {
                 @for &(slug, title, _) in DOCS.iter() {
                     li {
@@ -1078,7 +1117,7 @@ pub async fn docs_page(
             @if has_token && username.is_some() {
                 @if personalized {
                     p class="text-sm text-muted-foreground mb-6" {
-                        "Personalized with your Bunyip username. "
+                        (personalized_note(&crate::views::layout::brand_name()))
                         a class="text-primary-text hover:underline" href=(format!("/docs/{slug}?raw=1")) { "Show the generic version" }
                     }
                 } @else {

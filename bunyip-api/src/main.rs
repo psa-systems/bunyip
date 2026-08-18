@@ -45,6 +45,11 @@ use bunyip_oci::{
 type AppBlobCache = BlobCache<OciBlobCacheRepository>;
 use bunyip_oidc::services::{oidc_keys::OidcKeySet, oidc_provider::OidcProvider};
 
+/// BUNYIP-561: how often each api process re-reads the branding row. A `PUT`
+/// refreshes the replica that served it in the same request; this is what makes
+/// the change reach the others.
+const BRANDING_REFRESH_SECS: u64 = 60;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Load a local .env if present (dev convenience; no-op in containers that
@@ -419,6 +424,53 @@ async fn main() -> anyhow::Result<()> {
         .map(str::to_string);
     config.email.smtp_password = smtp_password.clone().unwrap_or_default();
 
+    // BUNYIP-561: the admin-managed branding record, cached process-wide.
+    // `APP_NAME` is only the bootstrap default for a database that has never
+    // been branded. A read failure is logged with its cause and leaves the
+    // bootstrap default in place (the api must still boot without a brand); the
+    // refresh task below retries on its interval.
+    let branding_cache = Arc::new(bunyip_api::models::BrandingCache::new(
+        config.app_name.clone(),
+    ));
+    match bunyip_api::repositories::BrandingRepository::get(&pool).await {
+        Ok(row) => {
+            let resolved = branding_cache.store(&row);
+            info!(brand_name = %resolved.brand_name, "Branding loaded");
+        }
+        Err(e) => {
+            error!(
+                error = %e,
+                "Failed to load the branding record; serving the APP_NAME bootstrap default until \
+                 the next refresh"
+            );
+        }
+    }
+    {
+        // Refresh on a TTL as well as on PUT: a save reaches only the replica
+        // that served it, so every other process picks the change up here.
+        let cache = Arc::clone(&branding_cache);
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            let mut ticker =
+                tokio::time::interval(std::time::Duration::from_secs(BRANDING_REFRESH_SECS));
+            ticker.tick().await; // the first tick fires immediately; skip it.
+            loop {
+                ticker.tick().await;
+                match bunyip_api::repositories::BrandingRepository::get(&pool).await {
+                    Ok(row) => {
+                        cache.store(&row);
+                    }
+                    // Keep the last good value rather than flipping the product
+                    // name back to the bootstrap default on a transient error.
+                    Err(e) => tracing::warn!(
+                        error = %e,
+                        "Branding refresh failed; keeping the last loaded values"
+                    ),
+                }
+            }
+        });
+    }
+
     // Initialize Email service: non-secret settings prefer the DB row (admin
     // UI) and fall back to the environment (BUNYIP-351); the SMTP password
     // comes from the declared store alone (BUNYIP-542). The auth service (built
@@ -455,6 +507,10 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(error = %e, "Failed to initialize email service, using dev mode");
         EmailService::new_dev()
     }));
+
+    // BUNYIP-561: subjects and the template `app_name` follow the branding
+    // record from here on, so an admin rename lands without a restart.
+    email_service.set_branding_cache(Arc::clone(&branding_cache));
 
     info!(enabled = email_enabled, "Email service initialized");
 
@@ -682,6 +738,11 @@ async fn main() -> anyhow::Result<()> {
         config.app_name.clone(),
         pool.clone(),
     ));
+
+    // BUNYIP-561: new enrolments are stamped with the branded issuer. Existing
+    // `user_totp` rows keep the label they were created with and are not
+    // migrated: the issuer is part of the QR payload only, never of the code.
+    totp_service.set_branding_cache(Arc::clone(&branding_cache));
 
     info!("TOTP service initialized");
 
@@ -1124,6 +1185,7 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::Data::new(backchannel_http_client.clone()))
             .app_data(web::Data::new(tier_config.clone()))
             .app_data(web::Data::new(pricing_cache.clone()))
+            .app_data(web::Data::new(branding_cache.clone()))
             // Update checker for the root-level /version endpoint
             .app_data(web::Data::new(update_checker.clone()))
             .app_data(web::Data::new(ip_enrich.clone()))

@@ -64,6 +64,13 @@ pub struct EmailService {
     runtime: std::sync::RwLock<EmailRuntime>,
     /// Template engine (immutable; unaffected by config reloads).
     templates: Tera,
+    /// BUNYIP-561: the admin-managed branding record. Every subject and the
+    /// `app_name` template value read the product name from here rather than
+    /// from the `APP_NAME` baked into `EmailConfig` at construction, so an
+    /// admin rename reaches the next email without a restart. `None` before
+    /// `main` attaches it (and in the dev/test constructors), where the
+    /// `EmailConfig` value stands.
+    branding: std::sync::RwLock<Option<std::sync::Arc<crate::models::BrandingCache>>>,
 }
 
 impl EmailService {
@@ -235,13 +242,33 @@ impl EmailService {
             })
     }
 
+    /// BUNYIP-561: attach the process-wide branding cache. Called once from
+    /// `main` before the listener binds; safe to call again (it replaces).
+    pub fn set_branding_cache(&self, cache: std::sync::Arc<crate::models::BrandingCache>) {
+        *self.branding.write().unwrap_or_else(|e| e.into_inner()) = Some(cache);
+    }
+
     /// Snapshot the current config (cheap clone under a short read lock; never held across .await).
+    ///
+    /// BUNYIP-561: `app_name` is overridden from the branding record when one
+    /// is attached, so every subject and the template context follow the admin
+    /// panel rather than the `APP_NAME` fixed at construction.
     fn config(&self) -> EmailConfig {
-        self.runtime
+        let mut config = self
+            .runtime
             .read()
             .expect("EmailService lock poisoned")
             .config
-            .clone()
+            .clone();
+        if let Some(cache) = self
+            .branding
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            config.app_name = cache.brand_name();
+        }
+        config
     }
 
     /// Snapshot the current transport (lettre transports are Clone = cheap Arc bump).
@@ -520,6 +547,7 @@ impl EmailService {
         Ok(Self {
             runtime: std::sync::RwLock::new(EmailRuntime { transport, config }),
             templates,
+            branding: std::sync::RwLock::new(None),
         })
     }
 
@@ -550,6 +578,7 @@ impl EmailService {
                 config,
             }),
             templates,
+            branding: std::sync::RwLock::new(None),
         }
     }
 
@@ -1237,7 +1266,56 @@ mod tests {
                 config,
             }),
             templates: Tera::default(),
+            branding: std::sync::RwLock::new(None),
         }
+    }
+
+    /// BUNYIP-561: subjects and the template `app_name` follow the branding
+    /// record, not the `APP_NAME` fixed at construction. An empty record keeps
+    /// the bootstrap default, so an unbranded deployment is unchanged.
+    #[test]
+    fn subjects_follow_the_branding_record() {
+        use crate::models::branding::{BrandingCache, BrandingRow};
+
+        let service = service_with_from("noreply@a8n.run");
+        assert_eq!(
+            service.config().app_name,
+            "PSA Staging",
+            "no cache attached: the EmailConfig value stands"
+        );
+
+        let cache = std::sync::Arc::new(BrandingCache::new("PSA Staging"));
+        service.set_branding_cache(std::sync::Arc::clone(&cache));
+        assert_eq!(
+            service.config().app_name,
+            "PSA Staging",
+            "an empty record resolves to the bootstrap default"
+        );
+
+        cache.store(&BrandingRow {
+            id: 1,
+            brand_name: "Acme".to_string(),
+            tagline: String::new(),
+            meta_description: String::new(),
+            og_image_url: String::new(),
+            updated_at: Utc::now(),
+            updated_by: None,
+        });
+        let config = service.config();
+        assert_eq!(
+            config.app_name, "Acme",
+            "an admin rename reaches the subject"
+        );
+        assert_eq!(
+            format!("Welcome to {}!", config.app_name),
+            "Welcome to Acme!"
+        );
+        let ctx = service.base_context(&config);
+        assert_eq!(
+            ctx.get("app_name").and_then(|v| v.as_str()),
+            Some("Acme"),
+            "the template context carries the branded name too"
+        );
     }
 
     /// Extract the `Message-ID` header lines from a built message's wire form.
