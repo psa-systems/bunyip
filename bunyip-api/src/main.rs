@@ -1376,8 +1376,54 @@ async fn run_subcommand(
             print!("{summary}");
             Ok(())
         }
+        "reconcile-duplicate-prices" => {
+            // BUNYIP-562: clean up duplicate active prices left by a partially
+            // failed BUNYIP-511 replace. Read-only unless `--apply`. A CLI, not a
+            // background job or a button, so an operator stays in the loop for an
+            // archive (the silent withdrawal BUNYIP-512's guard exists to prevent).
+            let survey = secrets::survey(pool, config, &key_set, probe).await?;
+            let stripe = build_stripe_service(pool, &survey).await;
+            let apply = args.iter().any(|arg| arg == "--apply");
+            let report = bunyip_api::reconcile_prices::reconcile(pool, &stripe, apply).await?;
+            print!("{report}");
+            Ok(())
+        }
         other => run_reencrypt_subcommand(other, pool, config).await,
     }
+}
+
+/// BUNYIP-562: build a `StripeService` for a CLI subcommand the same way startup
+/// does - non-secret settings from the `stripe_config` row, the secret key and
+/// webhook secret from the declared secret store (the survey). An unreadable row
+/// or a missing secret key yields the disabled service, so the caller can report
+/// "nothing to do" rather than crash.
+async fn build_stripe_service(
+    pool: &sqlx::PgPool,
+    survey: &bunyip_api::secrets::Survey,
+) -> std::sync::Arc<StripeService> {
+    use bunyip_api::config::GovernedSecret;
+    use bunyip_api::repositories::StripeConfigRepository;
+
+    let row = match StripeConfigRepository::get(pool).await {
+        Ok(row) => Some(row),
+        Err(e) => {
+            error!(error = %e, "reconcile: failed to read stripe_config; treating Stripe as disabled");
+            None
+        }
+    };
+    let cfg = match (&row, survey.value(GovernedSecret::StripeSecretKey)) {
+        (Some(row), Some(secret_key)) => {
+            let mut cfg = stripe_settings_from_db_model(row);
+            cfg.secret_key = secret_key.to_string();
+            cfg.webhook_secret = survey
+                .value(GovernedSecret::StripeWebhookSecret)
+                .map(str::to_string)
+                .unwrap_or(unconfigured_stripe_config().webhook_secret);
+            cfg
+        }
+        _ => unconfigured_stripe_config(),
+    };
+    std::sync::Arc::new(StripeService::new(cfg))
 }
 
 /// The BUNYIP-483 re-encryption pass, split out so the subcommand table above
@@ -1406,7 +1452,7 @@ async fn run_reencrypt_subcommand(
         }
         other => anyhow::bail!(
             "unknown subcommand {other:?} (known: reencrypt-secrets, secrets-status, \
-             secrets-migrate, secrets-purge)"
+             secrets-migrate, secrets-purge, reconcile-duplicate-prices)"
         ),
     }
 }
