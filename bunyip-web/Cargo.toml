@@ -27,7 +27,11 @@ maud = "0.26"
 pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 
 # Server-side HTTP client for the /v1 API. rustls to avoid a native OpenSSL dep.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "stream"] }
+# BUNYIP-559 F12: `gzip` makes the client advertise Accept-Encoding and decode
+# the reply transparently, so bunyip-api's Compress middleware has something to
+# negotiate with on the BFF hop. Without it the BFF never asks and every /v1
+# response crosses uncompressed, admin lists included.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "stream", "gzip"] }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

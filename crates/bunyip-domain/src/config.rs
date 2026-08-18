@@ -1995,6 +1995,12 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
         "APP_URL",
         "public base URL used in email bodies and the EHLO name",
     ),
+    // BUNYIP-559 F10: off unless a load run asks for it. The acquire-timeout
+    // count is always collected; only the periodic size/idle sample is gated.
+    EnvVarSpec::defaulted(
+        "DB_POOL_METRICS_INTERVAL_SECS",
+        "seconds between database pool size/idle samples; unset or 0 means no sampling",
+    ),
     EnvVarSpec::defaulted("HOST_IP", "bind address"),
     EnvVarSpec::defaulted("APP_PORT", "listen port"),
     EnvVarSpec::defaulted("RUST_LOG", "log filter"),

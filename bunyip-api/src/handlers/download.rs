@@ -519,7 +519,11 @@ async fn download_asset_core(
                     format!("attachment; filename=\"{}\"", asset_name),
                 ))
                 .streaming(stream);
-            Ok(resp)
+            // BUNYIP-559 F12: exempt from the `Compress` middleware. Encoding
+            // would drop the Content-Length set just above (actix switches an
+            // encoded body to chunked), and release assets are already
+            // compressed archives, so there is nothing to win.
+            Ok(crate::compress::mark_uncompressed(resp))
         }
         Err(LimitDenial::Concurrency) => {
             AuditLogRepository::create(

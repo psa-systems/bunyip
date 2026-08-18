@@ -28,5 +28,10 @@ pub async fn events_stream(
     user: AuthenticatedUser,
     bus: web::Data<Arc<EventBus>>,
 ) -> Result<HttpResponse, AppError> {
-    Ok(dunite_events::sse::sse_response(&bus, user.0.sub))
+    // BUNYIP-559 F12: exempt from the `Compress` middleware. actix's Compress
+    // has no content-type predicate and would run this stream through deflate,
+    // which holds an event back until it has enough bytes to emit.
+    Ok(crate::compress::mark_uncompressed(
+        dunite_events::sse::sse_response(&bus, user.0.sub),
+    ))
 }

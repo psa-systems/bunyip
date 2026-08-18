@@ -467,6 +467,28 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// BUNYIP-559 F12: the BFF hop is only compressed while reqwest carries the
+    /// `gzip` feature, which is what makes `Client::new()` advertise
+    /// `Accept-Encoding: gzip` and decode the reply. Nothing in this crate's
+    /// code references it, so dropping the feature would silently un-compress
+    /// every /v1 call with no compile error and no test failure. A cargo
+    /// feature is not visible to `cfg!` from the dependent crate, so assert on
+    /// the manifest.
+    #[test]
+    fn the_api_client_still_advertises_gzip() {
+        let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+            .expect("readable manifest");
+        let line = manifest
+            .lines()
+            .find(|l| l.trim_start().starts_with("reqwest ="))
+            .expect("bunyip-web declares reqwest");
+        assert!(
+            line.contains("\"gzip\""),
+            "reqwest lost its gzip feature, so the BFF stopped asking bunyip-api \
+             to compress /v1 responses (BUNYIP-559 F12): {line}"
+        );
+    }
+
     // BUNYIP-314: humanizer boundaries (minute / minutes / hour).
     #[test]
     fn humanize_under_a_minute_says_a_minute() {
