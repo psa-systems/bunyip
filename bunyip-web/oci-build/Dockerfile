@@ -12,13 +12,39 @@
 #
 #   docker build -f bunyip-web/oci-build/Dockerfile -t bunyip-web:latest .
 
-# ---- Stage 1: build ---------------------------------------------------------
-# bun + cargo ship in the builder image; nothing to install.
+# ---- Stage 1: build (cargo-chef) --------------------------------------------
+# Dependency caching via cargo-chef (BUNYIP-558), the same three-stage shape
+# bunyip-api uses (BUNYIP-389): `chef` carries the toolchain + cargo-chef;
+# `planner` distils the dependency recipe from the manifests; `build` cooks the
+# dependencies (a layer cached unless the recipe changes) then compiles the real
+# workspace. Without it a one-line source edit recompiled axum, tower-http,
+# reqwest, rustls and their transitive set from scratch, because the cargo cache
+# mounts below hold downloads, not compiled artifacts.
+#
+# bun + cargo ship in the builder image; only cargo-chef is installed.
 # Base images carry both the human-readable tag and the immutable digest
 # (BUNYIP-426 F10), so two builds of the same commit cannot pick up different
 # layers and a bump is a deliberate, reviewable edit. Re-resolve a digest with
 # `docker buildx imagetools inspect <ref> --raw | sha256sum` when bumping a tag.
-FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie@sha256:f075f2433e3ba90ad9210794786d6e9b6e3dcc5c647061a468dc773c1a2789f2 AS build
+FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie@sha256:f075f2433e3ba90ad9210794786d6e9b6e3dcc5c647061a468dc773c1a2789f2 AS chef
+WORKDIR /app
+# The cargo cache mounts here and below carry a per-image `id` and
+# `sharing=locked` (BUNYIP-534): an unnamed, shared mount is keyed by target path
+# alone, so concurrent builds (a release fires both a main push and a tag push
+# onto one buildkit) unpack crates into the same directory and die with
+# `.cargo-ok: File exists`. Cargo's own `.package-cache` lock lives outside the
+# mount and cannot serialise them. The web ids differ from bunyip-api's, so the
+# two images still build in parallel.
+RUN --mount=type=cache,id=bunyip-web-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    cargo install cargo-chef --locked
+
+# ---- Planner: distil the dependency recipe from the manifests ----
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# ---- Builder: cook dependencies, then build the web binary + its CSS ----
+FROM chef AS build
 
 # nproc/2 concurrency cap (per governance CI.md).
 ARG CARGO_BUILD_JOBS=2
@@ -33,18 +59,22 @@ ARG GIT_TAG=unknown
 ARG BUILD_DATE=unknown
 ENV GIT_COMMIT=${GIT_COMMIT} GIT_TAG=${GIT_TAG} BUILD_DATE=${BUILD_DATE}
 
-WORKDIR /app
-
 # Cache JS deps (tailwindcss). bunyip-web/package.json declares the tailwind CLI.
 COPY bunyip-web/package.json /app/bunyip-web/package.json
 RUN cd bunyip-web && bun install
 
-# Copy the whole workspace and build only the web binary + its CSS.
-# The cargo cache mounts carry a per-image `id` and `sharing=locked` (BUNYIP-534):
-# an unnamed, shared mount is keyed by target path alone, so concurrent builds
-# (a release fires both a main push and a tag push onto one buildkit) unpack
-# crates into the same directory and die with `.cargo-ok: File exists`. Cargo's
-# own `.package-cache` lock lives outside the mount and cannot serialise them.
+# Cook dependencies only, from the recipe. Scoped to `--bin bunyip-web` so it
+# builds exactly the dependency set the final build below needs, not the api
+# verticals' as well. The dunite git dependency is anonymously readable, so this
+# needs no token even though the recipe reaches it through bunyip-domain.
+COPY --from=planner /app/recipe.json recipe.json
+RUN --mount=type=cache,id=bunyip-web-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=bunyip-web-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json --bin bunyip-web
+
+# Real sources + real build: cargo-chef already compiled every dependency above,
+# so this only builds bunyip-web itself. build:css stays AFTER the source copy
+# because Tailwind scans the Rust sources for class names.
 COPY . /app
 RUN --mount=type=cache,id=bunyip-web-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=bunyip-web-cargo-git,target=/usr/local/cargo/git,sharing=locked \
