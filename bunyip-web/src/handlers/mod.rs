@@ -16,7 +16,6 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use maud::Markup;
 
-use crate::api::calls;
 use crate::api::types::{Application, PricingResponse, User, UserRole};
 use crate::auth::{self, AuthCtx};
 use crate::views::layout::{admin_shell, dashboard_shell, document, public_shell};
@@ -56,31 +55,20 @@ pub fn rotating_index(len: usize) -> usize {
 /// page rendering without its pricing or its app list is a deployment fault, and
 /// the operator has no other witness (the visitor sees a page that merely looks
 /// thin, and the admin sees /pricing 404 with nothing to explain it).
+///
+/// BUNYIP-518/555: both payloads drive chrome on EVERY public render, so both go
+/// through a short-TTL cache (`AppState::public_applications` / `pricing`):
+/// renders coalesce into one upstream call each, keeping the per-render fetches
+/// off the rate-limit floor that used to 404 `/pricing` and empty the footer. A
+/// cache miss on both runs the two fetches CONCURRENTLY - neither consumes the
+/// other's result - so the render costs the slower of the two, not their sum.
+/// `join!`, not `try_join!`: each payload degrades independently.
 pub async fn public_ctx(
     st: &AppState,
     headers: &HeaderMap,
 ) -> (AuthCtx, Vec<Application>, PricingResponse) {
-    let (c, fwd) = ctx(st, headers).await;
-    let apps = calls::applications(&st.api, fwd.as_deref())
-        .await
-        .unwrap_or_else(|e| {
-            tracing::error!(
-                endpoint = "/v1/applications",
-                error = %e.message,
-                code = %e.code,
-                "public chrome falling back to an empty application list"
-            );
-            Vec::new()
-        });
-    // BUNYIP-518: the pricing payload drives the nav/footer links on EVERY public
-    // render, so it goes through a short-TTL cache: renders coalesce into one
-    // upstream call, keeping the per-render fetch off the rate-limit floor that
-    // used to 404 /pricing. The cache logs a fetch failure (with status + target)
-    // and serves the last good payload rather than silently unpublishing.
-    let pricing = st
-        .pricing_cache
-        .get_or_fetch(|| calls::pricing(&st.api))
-        .await;
+    let (c, _fwd) = ctx(st, headers).await;
+    let (apps, pricing) = tokio::join!(st.public_applications(), st.pricing());
     (c, apps, pricing)
 }
 
@@ -188,14 +176,14 @@ pub async fn needs_onboarding(st: &AppState, user: &User) -> bool {
     // BUNYIP-515: "could not evaluate" defaulted to "email is off" with nothing
     // logged, which is the same answer as a genuinely mail-less deployment. The
     // default stays (it keeps the user off a verification wall they cannot
-    // clear), but the failure is now named.
-    let email_enabled = match crate::api::auth::setup_status(&st.api).await {
-        Ok(s) => s.email_enabled,
-        Err(e) => {
+    // clear), but the failure is now named. BUNYIP-555: the flags come from the
+    // shared TTL cache, which logs the failed fetch itself and serves the last
+    // good flags rather than letting a transient 429 decide the gate.
+    let email_enabled = match st.setup_status().await {
+        Some(s) => s.email_enabled,
+        None => {
             tracing::warn!(
                 endpoint = "/v1/auth/setup/status",
-                error = %e.message,
-                code = %e.code,
                 "onboarding gate assuming email delivery is unavailable"
             );
             false

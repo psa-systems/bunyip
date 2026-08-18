@@ -82,8 +82,8 @@ impl BrandingCache {
     /// A failure is never silent and never substitutes copy: the first one
     /// (startup, nothing cached) logs at `error` because the deployment then
     /// serves unbranded chrome; a later one logs at `warn` because the last
-    /// good values still stand, the way `PricingCache` serves `StaleOnError`
-    /// rather than flipping to a default.
+    /// good values still stand, the way `TtlCache` serves `StaleOnError` rather
+    /// than flipping to a default.
     pub async fn refresh<F, Fut>(&self, fetch: F) -> BrandingSource
     where
         F: FnOnce() -> Fut,

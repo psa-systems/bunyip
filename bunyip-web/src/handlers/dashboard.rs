@@ -41,13 +41,13 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
     // BUNYIP-546: an unreadable catalog and an empty one are different facts,
     // so the grid is told which it is rather than rendering a heading over
     // empty space in both cases.
-    let apps_data = calls::applications(&st.api, fwd).await;
+    // BUNYIP-555: neither fetch consumes the other's result, so they run
+    // concurrently once the guard has resolved the forward cookie. `join!`, not
+    // `try_join!`: each keeps its own fallback below.
+    let (apps_data, stripe_enabled) =
+        tokio::join!(calls::applications(&st.api, fwd), st.stripe_enabled());
     let apps_reachable = apps_data.is_ok();
     let apps = apps_data.unwrap_or_default();
-    let stripe_enabled = auth_api::setup_status(&st.api)
-        .await
-        .map(|s| s.stripe_enabled)
-        .unwrap_or(true);
     let is_member = has_active_membership(Some(&user));
     let tagline = TAGLINES[rotating_index(TAGLINES.len())];
     let base_domain = st.cfg.domain_or_localhost();
@@ -353,44 +353,47 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
         Err(r) => return r,
     };
     let fwd = c.forward.as_deref();
+    // BUNYIP-555: four independent fetches, none consuming another's result, so
+    // they run concurrently once the guard has resolved the forward cookie: the
+    // page costs the slowest of the four rather than their sum. `join!`, not
+    // `try_join!` - each fetch keeps the independent fallback and log line it
+    // had when they ran serially, so one failure still degrades only its own
+    // part of the page.
     // BUNYIP-546: the catalog fetch outcome decides between the error box and
     // the empty state below; both used to render as a bare page.
-    let apps_data = calls::applications(&st.api, fwd).await;
+    let (apps_data, groups_data, downloads_data, stripe) = tokio::join!(
+        calls::applications(&st.api, fwd),
+        calls::application_groups(&st.api, fwd),
+        calls::downloads_all(&st.api, fwd),
+        st.stripe_enabled(),
+    );
     let apps_reachable = apps_data.is_ok();
     let apps = apps_data.unwrap_or_default();
     // Groups (BUNYIP-100). A failed fetch degrades to a flat ungrouped list,
     // which is a usable page rather than an error, so it is logged rather than
     // surfaced (BUNYIP-546).
-    let groups = calls::application_groups(&st.api, fwd)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(
-                endpoint = "/v1/application-groups",
-                error = %e.message,
-                code = %e.code,
-                "applications page falling back to a flat, ungrouped list"
-            );
-            Vec::new()
-        });
+    let groups = groups_data.unwrap_or_else(|e| {
+        tracing::warn!(
+            endpoint = "/v1/application-groups",
+            error = %e.message,
+            code = %e.code,
+            "applications page falling back to a flat, ungrouped list"
+        );
+        Vec::new()
+    });
     // Per-product downloads (BUNYIP-100), joined onto each card by slug so
     // downloads live on the Applications page (the standalone Downloads page is
     // retired). A failed fetch degrades to cards with no Download affordance;
     // same reasoning as the groups fetch above.
-    let download_groups = calls::downloads_all(&st.api, fwd)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(
-                endpoint = "/v1/downloads",
-                error = %e.message,
-                code = %e.code,
-                "applications page rendering cards with no download affordance"
-            );
-            Vec::new()
-        });
-    let stripe = auth_api::setup_status(&st.api)
-        .await
-        .map(|s| s.stripe_enabled)
-        .unwrap_or(true);
+    let download_groups = downloads_data.unwrap_or_else(|e| {
+        tracing::warn!(
+            endpoint = "/v1/downloads",
+            error = %e.message,
+            code = %e.code,
+            "applications page rendering cards with no download affordance"
+        );
+        Vec::new()
+    });
     let is_member = has_active_membership(Some(&user));
     let domain = st.cfg.domain_or_localhost();
 
@@ -965,23 +968,26 @@ pub async fn membership(
         Err(r) => return r,
     };
     let fwd = c.forward.as_deref();
-    let current: Option<Membership> = calls::membership(&st.api, fwd).await.unwrap_or(None);
+    // BUNYIP-555: four independent fetches, run concurrently after the guard.
+    // `join!`, not `try_join!`: each keeps its own fallback below, so an
+    // unreadable invoice list still renders the plan card.
     // BUNYIP-546: "no payments yet" and "we could not read your payments" are
     // different answers to the same question, so each list keeps its fetch
     // outcome and renders an error box rather than the empty state.
-    let payments_data = calls::payment_history(&st.api, fwd).await;
-    let payments_reachable = payments_data.is_ok();
-    let payments = payments_data.unwrap_or_default();
     // The page now absorbs the invoices table that used to live on /billing;
     // /billing is a 308 redirect into this page. See docs/bunyip-upgrade/
     // 01-membership-plan-data.md.
-    let invoices_data = calls::invoices(&st.api, fwd).await;
+    let (membership_data, payments_data, invoices_data, stripe) = tokio::join!(
+        calls::membership(&st.api, fwd),
+        calls::payment_history(&st.api, fwd),
+        calls::invoices(&st.api, fwd),
+        st.stripe_enabled(),
+    );
+    let current: Option<Membership> = membership_data.unwrap_or(None);
+    let payments_reachable = payments_data.is_ok();
+    let payments = payments_data.unwrap_or_default();
     let invoices_reachable = invoices_data.is_ok();
     let invoices = invoices_data.unwrap_or_default();
-    let stripe = auth_api::setup_status(&st.api)
-        .await
-        .map(|s| s.stripe_enabled)
-        .unwrap_or(true);
     let tier = user.membership_tier.clone();
     let status = current.as_ref().map(|m| m.status.clone());
     // Lifetime members get a stripped-down card: plan name + an explanatory
@@ -1316,11 +1322,6 @@ pub async fn settings(
         Err(r) => return r,
     };
     let fwd = c.forward.as_deref();
-    let twofa = auth_api::status_2fa(&st.api, fwd).await.ok();
-    let twofa_enabled = twofa
-        .as_ref()
-        .map(|s| s.enabled)
-        .unwrap_or(user.two_factor_enabled);
     let is_admin = matches!(user.role, crate::api::types::UserRole::Admin);
     // Active sessions (BUNYIP-137), paginated (BUNYIP-177). A failure here must
     // not break the rest of the settings page, so it stays local to the card:
@@ -1328,19 +1329,32 @@ pub async fn settings(
     // the account has no sessions (BUNYIP-546).
     let session_page = q.session_page.unwrap_or(1).max(1);
     let device_page = q.device_page.unwrap_or(1).max(1);
-    let sessions = calls::list_sessions(&st.api, fwd, session_page, SETTINGS_PAGE_SIZE)
-        .await
-        .ok();
-    // Trusted devices (BUNYIP-138). Only 2FA users have any, and the card below
-    // renders under the same condition, so `None` here can only mean a failed
-    // fetch.
-    let trusted_devices = if twofa_enabled {
-        auth_api::list_trusted_devices(&st.api, fwd, device_page, SETTINGS_PAGE_SIZE)
-            .await
-            .ok()
-    } else {
-        None
-    };
+    // BUNYIP-555: the 2FA status and the trusted-device list are a genuine
+    // dependency - devices are fetched ONLY when 2FA is enabled, and that is
+    // still true here - so that pair stays sequential inside one branch of the
+    // join and runs alongside the independent sessions fetch.
+    let ((twofa_enabled, trusted_devices), sessions_data) = tokio::join!(
+        async {
+            let twofa = auth_api::status_2fa(&st.api, fwd).await.ok();
+            let twofa_enabled = twofa
+                .as_ref()
+                .map(|s| s.enabled)
+                .unwrap_or(user.two_factor_enabled);
+            // Trusted devices (BUNYIP-138). Only 2FA users have any, and the
+            // card below renders under the same condition, so `None` here can
+            // only mean a failed fetch.
+            let trusted_devices = if twofa_enabled {
+                auth_api::list_trusted_devices(&st.api, fwd, device_page, SETTINGS_PAGE_SIZE)
+                    .await
+                    .ok()
+            } else {
+                None
+            };
+            (twofa_enabled, trusted_devices)
+        },
+        calls::list_sessions(&st.api, fwd, session_page, SETTINGS_PAGE_SIZE),
+    );
+    let sessions = sessions_data.ok();
 
     let content = html! {
         div class="space-y-6" {
@@ -2861,6 +2875,40 @@ mod fetch_state_tests {
         assert!(
             empty.contains("No trusted devices.") && !empty.contains("Could not reach"),
             "genuinely empty keeps the empty state: {empty}"
+        );
+    }
+
+    /// BUNYIP-555: `/settings` fans its fetches out concurrently, but the
+    /// trusted-device list is NOT independent - only a 2FA user has devices, and
+    /// the card renders under the same condition. The pair therefore stays
+    /// sequential inside one arm of the join: the fetch must remain behind the
+    /// `twofa_enabled` check, and must not be pulled up into the join's own
+    /// argument list (which would issue it for every user and change what the
+    /// page requests).
+    #[test]
+    fn settings_still_skips_the_trusted_device_fetch_without_2fa() {
+        let src = include_str!("dashboard.rs");
+        let start = src
+            .find("pub async fn settings(")
+            .expect("the settings handler still exists");
+        let body = &src[start..];
+        let body = &body[..body
+            .find("\npub async fn ")
+            .expect("the handler is followed by another")];
+        assert_eq!(
+            body.matches("list_trusted_devices(").count(),
+            1,
+            "exactly one trusted-devices fetch on the settings page"
+        );
+        let guard = body
+            .find("if twofa_enabled {")
+            .expect("the 2FA condition still guards the fetch");
+        let fetch = body
+            .find("list_trusted_devices(")
+            .expect("the fetch is still issued");
+        assert!(
+            guard < fetch,
+            "the trusted-devices fetch must stay behind the 2FA check, not run for every user"
         );
     }
 

@@ -6,7 +6,6 @@ use axum::response::Response;
 use maud::{html, Markup, PreEscaped};
 use serde::Deserialize;
 
-use crate::api::auth as auth_api;
 use crate::api::calls::{self, FeedbackAttachment, FeedbackInput};
 use crate::api::types::{PricingResponse, User};
 use crate::handlers::dashboard::tier_name;
@@ -209,18 +208,9 @@ pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response
     // BUNYIP-515: an unreadable setup status defaults to "payment configured"
     // so a working Stripe account is never hidden behind a disabled button, but
     // it says so first: without the log the CTA silently flips behaviour.
-    let stripe = match auth_api::setup_status(&st.api).await {
-        Ok(s) => s.stripe_enabled,
-        Err(e) => {
-            tracing::warn!(
-                endpoint = "/v1/auth/setup/status",
-                error = %e.message,
-                code = %e.code,
-                "pricing page assuming payment is configured"
-            );
-            true
-        }
-    };
+    // BUNYIP-555: read through the shared TTL cache, so the flags are fetched at
+    // most once per TTL instead of once per public render.
+    let stripe = st.stripe_enabled().await;
     let content = pricing_content(&pricing, stripe, c.is_signed_in());
     public_response(&st, &c, &apps, &pricing, "Pricing", true, content)
 }

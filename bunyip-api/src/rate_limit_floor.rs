@@ -54,6 +54,14 @@ const EXEMPT_PATHS: &[&str] = &[
     // the 429 was swallowed into an unpublished payload, which 404'd `/pricing`
     // and hid its links with the switch on and every tier resolving.
     "/v1/pricing",
+    // BUNYIP-555: the feature-flags probe. It is unauthenticated, read-only, and
+    // answered entirely from process state (`config.email.enabled` plus
+    // `StripeService::is_configured()`), so it touches no table and drives no
+    // downstream traffic: the floor buys nothing and costs two rate-limit
+    // queries per call. `bunyip-web` reads it for the subscribe CTA and the
+    // onboarding email gate on five surfaces and now caches it (`TtlCache`), so
+    // the remaining calls are one per TTL per web process.
+    "/v1/auth/setup/status",
 ];
 
 /// Whether the floor applies to this request.
@@ -186,6 +194,9 @@ mod tests {
         // and is server-side TTL-cached, so it is exempt from the per-IP floor
         // that was silently 404'ing /pricing after a few page loads.
         assert!(is_exempt("/v1/pricing", &Method::GET));
+        // BUNYIP-555: the feature-flags probe touches no table and is read on
+        // every BFF render, so it is exempt and TTL-cached web-side.
+        assert!(is_exempt("/v1/auth/setup/status", &Method::GET));
     }
 
     #[test]
@@ -202,6 +213,7 @@ mod tests {
             "/v1/auth/register-challenge/extra",
             &Method::GET
         ));
+        assert!(!is_exempt("/v1/auth/setup/status/extra", &Method::GET));
     }
 
     /// Regression guard: this middleware must never hold a cloned
