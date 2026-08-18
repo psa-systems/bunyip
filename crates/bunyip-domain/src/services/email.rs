@@ -1243,6 +1243,110 @@ impl Default for EmailService {
 mod tests {
     use super::*;
 
+    /// Build a fully-templated service (every template parses through
+    /// `EmailService::new`) for palette/rendering assertions.
+    fn service_all_templates() -> EmailService {
+        EmailService::new(EmailConfig {
+            smtp_host: "localhost".to_string(),
+            smtp_port: 587,
+            smtp_tls: SmtpTls::Starttls,
+            smtp_username: String::new(),
+            smtp_password: String::new(),
+            smtp_ehlo_name: None,
+            from_email: "noreply@a8n.run".to_string(),
+            from_name: "PSA Staging".to_string(),
+            base_url: "http://localhost:5173".to_string(),
+            enabled: false,
+            log_tokens: false,
+            app_name: "PSA Staging".to_string(),
+            admin_notification_emails: Vec::new(),
+        })
+        .expect("email service builds and all templates parse")
+    }
+
+    /// BUNYIP-569: transactional emails render on a layered dark palette, not a
+    /// single black fill. The shared shell gives three visually distinct tones
+    /// (outer page, raised card, footer panel) and keeps green for accents and
+    /// CTAs only, so body copy never renders green-on-near-black. Covers the
+    /// welcome, the login-location alert, and the new-device (login approval)
+    /// email per the acceptance criteria.
+    #[test]
+    fn transactional_emails_use_the_layered_palette() {
+        let service = service_all_templates();
+        let config = service.config();
+
+        // Palette tokens locked by BUNYIP-569. Update these only when the
+        // palette is deliberately revised (they are the redesign's contract).
+        const PAGE_BG: &str = "#0c0f0c";
+        const CARD_BG: &str = "#232b22";
+        const FOOTER_BG: &str = "#141a13";
+        const ACCENT_GREEN: &str = "#74c47c";
+        // Retired by BUNYIP-569: the flat near-black card fill and the
+        // a8n-tools blue heading that leaked in from the visual reference.
+        const RETIRED_CARD_BG: &str = "#1c211c";
+        const RETIRED_BLUE: &str = "#e0e0e8";
+
+        let welcome = {
+            let mut ctx = service.base_context(&config);
+            ctx.insert("price", &"29.00");
+            ctx.insert("dashboard_url", &"http://localhost:5173/dashboard");
+            service
+                .render_template("welcome", &ctx)
+                .expect("welcome renders")
+                .0
+        };
+        let login_location = {
+            let mut ctx = service.base_context(&config);
+            ctx.insert("country", &"Germany");
+            ctx.insert("ip", &"203.0.113.7");
+            ctx.insert("when", &"2026-08-18 14:00 UTC");
+            ctx.insert("user_agent", &"Firefox on Linux");
+            ctx.insert("dashboard_url", &"http://localhost:5173/dashboard");
+            service
+                .render_template("new_login_location", &ctx)
+                .expect("login-location renders")
+                .0
+        };
+        let login_approval = {
+            let mut ctx = service.base_context(&config);
+            ctx.insert("code", &"482913");
+            ctx.insert("location", &"Germany");
+            ctx.insert("ttl_minutes", &15);
+            ctx.insert("dashboard_url", &"http://localhost:5173/dashboard");
+            service
+                .render_template("login_approval", &ctx)
+                .expect("login-approval renders")
+                .0
+        };
+
+        for (name, html) in [
+            ("welcome", &welcome),
+            ("new_login_location", &login_location),
+            ("login_approval", &login_approval),
+        ] {
+            // Three visually distinct layer tones, not a single black fill.
+            assert!(html.contains(PAGE_BG), "{name}: outer page tone present");
+            assert!(html.contains(CARD_BG), "{name}: raised card tone present");
+            assert!(html.contains(FOOTER_BG), "{name}: footer tone present");
+            // Green kept for accents/CTAs.
+            assert!(html.contains(ACCENT_GREEN), "{name}: accent green present");
+            // The retired flat palette and the a8n-tools blue are gone.
+            assert!(
+                !html.contains(RETIRED_CARD_BG),
+                "{name}: flat near-black card retired"
+            );
+            assert!(
+                !html.contains(RETIRED_BLUE),
+                "{name}: a8n-tools blue heading retired"
+            );
+        }
+
+        // Sanity: the three layer tones are actually distinct from one another.
+        assert_ne!(PAGE_BG, CARD_BG);
+        assert_ne!(CARD_BG, FOOTER_BG);
+        assert_ne!(PAGE_BG, FOOTER_BG);
+    }
+
     fn service_with_from(from_email: &str) -> EmailService {
         let config = EmailConfig {
             smtp_host: "localhost".to_string(),
