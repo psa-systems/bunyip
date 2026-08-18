@@ -11,7 +11,9 @@ pub use bunyip_domain::{
 };
 
 pub mod access_log;
+pub mod compress;
 pub mod db;
+pub mod db_metrics;
 pub mod error_log;
 pub mod extractors;
 pub mod handlers;

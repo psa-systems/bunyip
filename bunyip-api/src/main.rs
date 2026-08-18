@@ -50,6 +50,28 @@ use bunyip_oidc::services::{oidc_keys::OidcKeySet, oidc_provider::OidcProvider};
 /// the change reach the others.
 const BRANDING_REFRESH_SECS: u64 = 60;
 
+/// Connections in each database pool (BUNYIP-559 F10).
+///
+/// Deliberately NOT a function of the actix worker count. actix opens one
+/// arbiter per logical CPU, and 32 arbiters multiplexing onto 10 connections
+/// sounds like a bottleneck, but a connection is held only for the duration of
+/// one query: the measured cost is sub-millisecond, so throughput is bounded by
+/// the query rate, not by the arbiter count. The load run in
+/// `docs/api-performance-measurements.md` (32 arbiters, 250 concurrent browse
+/// sessions, 406 req/s of real 200s) never took a connection out of the idle
+/// queue at sample time and logged zero acquire timeouts; the pool only
+/// saturated under a 6,500 req/s hammer, and even fully checked out it still
+/// drained inside the 5 s `acquire_timeout`.
+///
+/// The upper bound is PostgreSQL's own `max_connections` (100 by default, minus
+/// `superuser_reserved_connections`), shared by every api replica: bunyip-api
+/// opens TWO pools of this size (the primary and the RLS `bunyip_app` pool), so
+/// one replica costs `2 * DB_POOL_MAX_CONNECTIONS` and N replicas must fit under
+/// that server limit. Raise this only when `acquire_timeouts` in the pool
+/// samples is non-zero (enable them with `DB_POOL_METRICS_INTERVAL_SECS`), and
+/// raise PostgreSQL's `max_connections` in the same change.
+const DB_POOL_MAX_CONNECTIONS: u32 = 10;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Load a local .env if present (dev convenience; no-op in containers that
@@ -110,7 +132,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Create database connection pool
     let pool = PgPoolOptions::new()
-        .max_connections(10)
+        .max_connections(DB_POOL_MAX_CONNECTIONS)
         .acquire_timeout(Duration::from_secs(5))
         .connect(&config.database_url)
         .await
@@ -195,7 +217,7 @@ async fn main() -> anyhow::Result<()> {
     let app_pool = match config.app_database_url.as_deref() {
         Some(url) => {
             let p = PgPoolOptions::new()
-                .max_connections(10)
+                .max_connections(DB_POOL_MAX_CONNECTIONS)
                 .acquire_timeout(Duration::from_secs(5))
                 .connect(url)
                 .await
@@ -212,6 +234,15 @@ async fn main() -> anyhow::Result<()> {
             pool.clone()
         }
     };
+    // BUNYIP-559 F10: opt-in pool sampling for a load run. The RLS pool is only
+    // sampled when it is a pool of its own; when APP_DATABASE_URL is unset it
+    // is a clone of the primary and a second line would double-count it.
+    let mut sampled = vec![("primary", pool.clone())];
+    if config.app_database_url.is_some() {
+        sampled.push(("rls", app_pool.clone()));
+    }
+    bunyip_api::db_metrics::spawn_sampler(sampled);
+
     let app_pool = bunyip_api::db::AppPool(app_pool);
 
     // Seed default admin if SETUP_DEFAULT_ADMIN is set and no admin exists.
@@ -1101,6 +1132,13 @@ async fn main() -> anyhow::Result<()> {
         };
 
         App::new()
+            // BUNYIP-559 F12: gzip /v1 responses. Measured on the three largest
+            // real payloads, the admin lists compress ~10:1 (users?per_page=100:
+            // 56,974 -> 5,391 bytes; audit-logs: 31,974 -> 4,919), far past the
+            // 10 KB threshold the issue set. Innermost of the middleware stack
+            // so it sees the final body. The two streamed responses on this
+            // stack opt out via `compress::mark_uncompressed`; see that module.
+            .wrap(actix_web::middleware::Compress::default())
             // Add middleware (order matters - executed in reverse order)
             // Root span records the trusted external client IP in
             // `http.client_ip` (BUNYIP-310), not the spoofable actix realip.
@@ -1629,5 +1667,8 @@ fn init_tracing(log_level: &str, error_log: bunyip_api::error_log::ErrorLogBuffe
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer().compact())
         .with(bunyip_api::error_log::ErrorLogLayer::new(error_log))
+        // BUNYIP-559 F10: count pool acquire timeouts as they cross the error
+        // path, so exhaustion is a number rather than a scroll through logs.
+        .with(bunyip_api::db_metrics::AcquireTimeoutLayer)
         .init();
 }

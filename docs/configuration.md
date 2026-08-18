@@ -251,6 +251,13 @@ Every variable below has a working default; set it only to tune the deployment.
   `OIDC_CODE_TTL_SECONDS`, `OIDC_LIFECYCLE_EVENT_KEY`, `OIDC_RS_AUDIENCE`.
 - **Infisical**: `INFISICAL_SECRET_PATH`, `INFISICAL_ENVIRONMENT`,
   `INFISICAL_ENV` (legacy alias).
+- **Diagnostics**: `DB_POOL_METRICS_INTERVAL_SECS` - seconds between database
+  pool samples (`size` / `idle` / `in_use` / `acquire_timeouts`, one `INFO` line
+  per pool). Unset, empty or `0` means no sampling, which is the normal
+  posture; set it (30 is a sensible value) while investigating database
+  contention. The acquire-timeout counter is collected either way; only the
+  periodic line is gated. See
+  [`api-performance-measurements.md`](api-performance-measurements.md).
 - **Non-production tooling**: `BUNYIP_E2E_BOOTSTRAP_ALLOW`,
   `BUNYIP_E2E_TOTP_SECRET`, `BUNYIP_SEED_ALLOW`, `BUNYIP_GIT_SHA`.
 
