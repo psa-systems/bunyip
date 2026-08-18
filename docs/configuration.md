@@ -224,7 +224,9 @@ Every variable below has a working default; set it only to tune the deployment.
 - **At-rest keys**: `APP_ENCRYPTION_KEY_PREV`, `APP_KEY_VERSION` (see
   [`encryption-key-rotation.md`](encryption-key-rotation.md)).
 - **Email**: `EMAIL_ENABLED`, `EMAIL_LOG_TOKENS`, `SMTP_PORT`, `SMTP_TLS`,
-  `SMTP_USERNAME`, `SMTP_EHLO_NAME`, `SMTP_FROM`.
+  `SMTP_USERNAME`, `SMTP_EHLO_NAME`, `SMTP_FROM`, `SUPPORT_INBOX_EMAIL` (Reply-To
+  for system mail: the monitored support inbox replies are ingested into,
+  BUNYIP-571).
 - **Governed secrets** (read only when `SECRETS_STORAGE=environment`, and only
   as `{NAME}_FILE`): `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`,
   `STRIPE_WEBHOOK_SECRET`.

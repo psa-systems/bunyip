@@ -395,6 +395,10 @@ pub struct EmailConfig {
     pub app_name: String,
     /// Admin recipients for operational notifications
     pub admin_notification_emails: Vec<String>,
+    /// Reply-To for all system mail: the monitored support inbox that inbound
+    /// replies are ingested from (BUNYIP-571). `None` emits no Reply-To, so a
+    /// reply falls back to `from_email` (typically an unattended noreply@).
+    pub support_inbox_email: Option<String>,
 }
 
 impl EmailConfig {
@@ -468,6 +472,12 @@ impl EmailConfig {
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
                 .collect(),
+            // BUNYIP-571: the monitored support inbox, emitted as Reply-To so
+            // replies to system mail land where the inbound poller ingests them.
+            support_inbox_email: env::var("SUPPORT_INBOX_EMAIL")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty()),
         }
     }
 
@@ -585,6 +595,9 @@ impl EmailConfig {
             log_tokens: env.log_tokens,
             app_name: env.app_name,
             admin_notification_emails,
+            // Env-derived like `smtp_ehlo_name`: no per-tenant DB column, the
+            // support inbox is deployment identity (BUNYIP-571).
+            support_inbox_email: env.support_inbox_email,
         }
     }
 
@@ -2051,6 +2064,10 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
         "EHLO name; falls back to the APP_URL host",
     ),
     EnvVarSpec::defaulted("SMTP_FROM", "From address"),
+    EnvVarSpec::defaulted(
+        "SUPPORT_INBOX_EMAIL",
+        "Reply-To for system mail: the monitored support inbox (BUNYIP-571)",
+    ),
     EnvVarSpec::defaulted("AUTO_BAN_ENABLED", "auto-ban switch"),
     EnvVarSpec::defaulted("AUTO_BAN_THRESHOLD", "auto-ban failure threshold"),
     EnvVarSpec::defaulted("AUTO_BAN_WINDOW_SECS", "auto-ban window"),
@@ -3026,6 +3043,7 @@ mod tests {
             log_tokens: false,
             app_name: "PSA".to_string(),
             admin_notification_emails: Vec::new(),
+            support_inbox_email: None,
         }
     }
 
