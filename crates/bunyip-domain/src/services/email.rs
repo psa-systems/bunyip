@@ -567,6 +567,7 @@ impl EmailService {
             log_tokens: false,
             app_name: "localhost".to_string(),
             admin_notification_emails: Vec::new(),
+            support_inbox_email: None,
         };
 
         // Create with minimal template setup for dev
@@ -609,7 +610,7 @@ impl EmailService {
             .unwrap_or("a8n.run");
         let message_id = format!("<{}@{}>", uuid::Uuid::new_v4(), domain);
 
-        Message::builder()
+        let mut builder = Message::builder()
             .from(
                 from.parse()
                     .map_err(|e| AppError::internal(format!("Invalid from address: {}", e)))?,
@@ -618,7 +619,18 @@ impl EmailService {
                 .parse()
                 .map_err(|e| AppError::internal(format!("Invalid to address: {}", e)))?)
             .subject(subject)
-            .message_id(Some(message_id))
+            .message_id(Some(message_id));
+
+        // BUNYIP-571: point replies at the monitored support inbox so a reply to
+        // any system mail lands where the inbound poller ingests it, not at the
+        // unattended from_email (noreply@).
+        if let Some(support) = config.support_inbox_email.as_deref() {
+            builder = builder.reply_to(support.parse().map_err(|e| {
+                AppError::internal(format!("Invalid support inbox address: {}", e))
+            })?);
+        }
+
+        builder
             .multipart(
                 lettre::message::MultiPart::alternative()
                     .singlepart(
@@ -1260,6 +1272,7 @@ mod tests {
             log_tokens: false,
             app_name: "PSA Staging".to_string(),
             admin_notification_emails: Vec::new(),
+            support_inbox_email: None,
         })
         .expect("email service builds and all templates parse")
     }
@@ -1362,6 +1375,7 @@ mod tests {
             log_tokens: false,
             app_name: "PSA Staging".to_string(),
             admin_notification_emails: Vec::new(),
+            support_inbox_email: None,
         };
 
         EmailService {
@@ -1497,6 +1511,47 @@ mod tests {
         assert_ne!(first[0], second[0], "Message-IDs must differ per send");
     }
 
+    /// BUNYIP-571: system mail carries a Reply-To pointing at the monitored
+    /// support inbox when one is configured, so a reply lands where the inbound
+    /// poller ingests it instead of the unattended from_email. With no support
+    /// inbox set the header is absent (unchanged behaviour).
+    #[test]
+    fn build_message_sets_reply_to_from_support_inbox() {
+        let service = service_with_from("noreply@a8n.run");
+
+        let mut config = service.config();
+        config.support_inbox_email = None;
+        let email = service
+            .build_message(&config, "u@example.com", "s", "<p>h</p>".into(), "h".into())
+            .expect("message builds");
+        let wire = String::from_utf8(email.formatted()).expect("message is valid UTF-8");
+        assert!(
+            !wire.contains("Reply-To:"),
+            "no Reply-To header when the support inbox is unset"
+        );
+
+        let mut config = service.config();
+        config.support_inbox_email = Some("support@a8n.run".to_string());
+        let email = service
+            .build_message(&config, "u@example.com", "s", "<p>h</p>".into(), "h".into())
+            .expect("message builds");
+        let wire = String::from_utf8(email.formatted()).expect("message is valid UTF-8");
+        let reply_to: Vec<&str> = wire
+            .split("\r\n")
+            .filter(|line| line.starts_with("Reply-To:"))
+            .collect();
+        assert_eq!(
+            reply_to.len(),
+            1,
+            "exactly one Reply-To header, got {reply_to:?}"
+        );
+        assert!(
+            reply_to[0].contains("support@a8n.run"),
+            "Reply-To carries the support inbox: {:?}",
+            reply_to[0]
+        );
+    }
+
     /// BUNYIP-397: the reset email drops the alarming "Someone asked" wording and
     /// shows the request country only when one is provided. Building the service
     /// through `EmailService::new` also proves the reworded templates parse (Tera
@@ -1517,6 +1572,7 @@ mod tests {
             log_tokens: false,
             app_name: "PSA Staging".to_string(),
             admin_notification_emails: Vec::new(),
+            support_inbox_email: None,
         })
         .expect("email service builds and all templates parse");
         let config = service.config();
@@ -1568,6 +1624,7 @@ mod tests {
             log_tokens: false,
             app_name: "PSA".to_string(),
             admin_notification_emails: Vec::new(),
+            support_inbox_email: None,
         }
     }
 
