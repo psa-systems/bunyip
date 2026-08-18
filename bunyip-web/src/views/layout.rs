@@ -1202,6 +1202,54 @@ mod tests {
         );
     }
 
+    /// The same rule for every OTHER page, which the render-level scan above
+    /// cannot reach: a `src=` / `href=` whose value is a bare `/assets/`
+    /// literal is served `immutable` for a year and can never be updated.
+    /// Route it through [`asset`] (BUNYIP-554 F9).
+    #[test]
+    fn no_view_writes_a_bare_assets_url_into_markup() {
+        // Split so this test's own source does not match the scan. The
+        // compliant form is `src=(asset("/assets/..."))`, where the attribute
+        // is followed by `(`, so only the bare-literal form matches.
+        let needles = [
+            concat!("src=", "\"/assets/"),
+            concat!("href=", "\"/assets/"),
+        ];
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![src];
+        let mut offenders = Vec::new();
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("readable source dir") {
+                let path = entry.expect("readable dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let body = std::fs::read_to_string(&path).expect("readable source file");
+                // Fixtures below the test marker assert on rendered output and
+                // are not themselves markup.
+                let prod = match body.find("#[cfg(test)]") {
+                    Some(i) => &body[..i],
+                    None => &body[..],
+                };
+                for (n, line) in prod.lines().enumerate() {
+                    if needles.iter().any(|n| line.contains(n)) {
+                        offenders.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "unversioned /assets URL under an immutable one-year lifetime; wrap it in \
+             layout::asset():\n{}",
+            offenders.join("\n")
+        );
+    }
+
     /// BUNYIP-554 F6: the avatar picker renders on exactly one page, so its
     /// stylesheet and controller ship on that page alone. The shell's avatar
     /// slot keeps its one rule everywhere, or every other page loses the
