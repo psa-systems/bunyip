@@ -19,6 +19,17 @@ use super::with_attachment_hardening;
 /// Matches the API's restore body limit (8 MiB).
 const BACKUP_MAX_UPLOAD_BYTES: usize = 8 * 1024 * 1024;
 
+/// BUNYIP-561: what the bundle covers, naming the platform from the
+/// admin-managed brand record. Unbranded, it says "the account's own state".
+fn bundle_note(brand_name: &str) -> String {
+    let state = if brand_name.is_empty() {
+        "the account's own state".to_string()
+    } else {
+        format!("the account's {brand_name} state")
+    };
+    format!("One JSON bundle covering {state} plus each entitled app.")
+}
+
 /// The Integrations "Backup" surface: explains what an account backup contains,
 /// offers a one-click download, and accepts an upload to restore. Reached from
 /// the Backup add-on tile on `/applications`; admin-gated like the other
@@ -37,7 +48,8 @@ fn backup_settings_content(report: Option<&RestoreReport>, error: Option<&str>) 
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" {
                     h3 class="text-2xl font-semibold leading-none tracking-tight" { "What's included" }
-                    p class="text-sm text-muted-foreground" { "One JSON bundle covering the account's Bunyip state plus each entitled app." }
+                    // BUNYIP-561: named from the admin-managed brand record.
+                    p class="text-sm text-muted-foreground" { (bundle_note(&crate::views::layout::brand_name())) }
                 }
                 div class="p-6 pt-0" {
                     ul class="list-disc space-y-2 pl-5 text-sm text-muted-foreground" {

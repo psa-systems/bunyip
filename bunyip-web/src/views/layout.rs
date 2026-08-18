@@ -9,11 +9,11 @@
 //! in an inline block now lives in `assets/js/*.js` and is wired to the markup
 //! through `data-*` attributes.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 
-use crate::api::types::{Application, User, UserRole};
+use crate::api::types::{Application, Branding, User, UserRole};
 use crate::config::Config;
 use crate::util::app_link;
 use crate::views::ui::{button_class, icon};
@@ -104,37 +104,20 @@ fn theme_color_dark() -> &'static str {
         .unwrap_or(crate::config::DEFAULT_THEME_COLOR_DARK)
 }
 
-/// BUNYIP-499: the app/brand name for the nav brand mark and the browser-title
-/// suffix. Set once from `main` out of `Config::app_name` (same `OnceLock`
-/// pattern as [`SSE_API_ORIGIN`]). Defaults to `"Bunyip"` so output is
-/// unchanged until a skin sets `APP_NAME`.
-static APP_NAME: OnceLock<String> = OnceLock::new();
-
-/// Install the app/brand name. Called once from `main` before serving.
-/// Idempotent (the underlying `OnceLock` ignores subsequent sets).
-pub fn install_app_name(name: impl Into<String>) {
-    let _ = APP_NAME.set(name.into());
+/// BUNYIP-561: the admin-managed branding record (product name, tagline, meta
+/// description, Open Graph image), fetched from bunyip-api and refreshed on an
+/// interval by [`crate::branding`]. It replaced the `APP_NAME` /
+/// `BRAND_DESCRIPTION` `OnceLock`s and their compiled-in fallback literals: an
+/// empty field here omits its markup, and no copy is ever substituted.
+pub fn branding() -> Arc<Branding> {
+    crate::branding::current()
 }
 
-fn app_name() -> &'static str {
-    APP_NAME.get().map(String::as_str).unwrap_or("Bunyip")
-}
-
-/// BUNYIP-501: the `<meta name="description">` copy, from `Config::brand_description`.
-/// Skin marketing text; set once from `main` (same `OnceLock` pattern as
-/// [`SSE_API_ORIGIN`]) so the framework `document()` carries no hardcoded copy.
-static BRAND_DESCRIPTION: OnceLock<String> = OnceLock::new();
-
-/// Install the meta-description copy. Called once from `main` before serving.
-/// Idempotent (the underlying `OnceLock` ignores subsequent sets).
-pub fn install_brand_description(description: impl Into<String>) {
-    let _ = BRAND_DESCRIPTION.set(description.into());
-}
-
-fn brand_description() -> &'static str {
-    BRAND_DESCRIPTION.get().map(String::as_str).unwrap_or(
-        "Bunyip - the SaaS layer for your PSA. Auth, billing, members, and identity for Mokosh.",
-    )
+/// The product name for the nav mark, the browser-title suffix and
+/// `og:site_name`. Empty when nothing has been branded and nothing has loaded,
+/// in which case every site that renders it omits it.
+pub fn brand_name() -> String {
+    branding().brand_name.clone()
 }
 
 /// BUNYIP-145 / BUNYIP-424: the browser-facing origin the dashboard's
@@ -147,19 +130,69 @@ fn sse_subscriber_script() -> Markup {
     }
 }
 
+/// BUNYIP-561: the browser-title string, `"<page> · <brand>"`, or the bare page
+/// title when nothing has been branded. Also what `og:title` carries, so the
+/// two never disagree. Pure, so the omission rule is unit-testable.
+fn document_title(page_title: &str, branding: &Branding) -> String {
+    if branding.brand_name.is_empty() {
+        page_title.to_string()
+    } else {
+        format!("{page_title} · {}", branding.brand_name)
+    }
+}
+
+/// BUNYIP-561: the sharing metadata. Every tag is omitted when its source value
+/// is empty, so an unbranded deployment emits none of them rather than
+/// advertising a placeholder. There is deliberately no `og:url`: `document()`
+/// has no request context, and a wrong canonical URL is worse than none.
+///
+/// `twitter:card` is `summary_large_image` only when an image URL is set;
+/// without one the large-image card renders as a blank rectangle.
+fn social_meta(page_title: &str, branding: &Branding) -> Markup {
+    let has_any = !branding.brand_name.is_empty()
+        || !branding.meta_description.is_empty()
+        || !branding.og_image_url.is_empty();
+    html! {
+        @if has_any {
+            meta property="og:type" content="website";
+            meta name="twitter:card" content=(if branding.og_image_url.is_empty() { "summary" } else { "summary_large_image" });
+            meta property="og:title" content=(document_title(page_title, branding));
+            meta name="twitter:title" content=(document_title(page_title, branding));
+        }
+        @if !branding.brand_name.is_empty() {
+            meta property="og:site_name" content=(branding.brand_name);
+        }
+        @if !branding.meta_description.is_empty() {
+            meta property="og:description" content=(branding.meta_description);
+            meta name="twitter:description" content=(branding.meta_description);
+        }
+        @if !branding.og_image_url.is_empty() {
+            meta property="og:image" content=(branding.og_image_url);
+            meta name="twitter:image" content=(branding.og_image_url);
+        }
+    }
+}
+
 pub fn document(title: &str, body: Markup) -> Markup {
+    let branding = branding();
     html! {
         (DOCTYPE)
         html lang="en" {
             head {
                 meta charset="UTF-8";
                 meta name="viewport" content="width=device-width, initial-scale=1.0";
-                meta name="description" content=(brand_description());
+                // BUNYIP-561: omitted, not defaulted, when the admin has set no
+                // description. A compiled-in sentence here is exactly the copy
+                // this issue took out of the binary.
+                @if !branding.meta_description.is_empty() {
+                    meta name="description" content=(branding.meta_description);
+                }
                 meta name="theme-color" media="(prefers-color-scheme: light)" content=(theme_color_light());
                 meta name="theme-color" media="(prefers-color-scheme: dark)" content=(theme_color_dark());
-                title { (title) " · " (app_name()) }
-                // BUNYIP-339: favicon set derived from the Bunyip hero art
-                // (face crop, rounded corners). Served from /assets via ServeDir.
+                (social_meta(title, &branding))
+                title { (document_title(title, &branding)) }
+                // BUNYIP-339: favicon set derived from the hero art (face crop,
+                // rounded corners). Served from /assets via ServeDir.
                 link rel="icon" href="/assets/favicon.ico" sizes="any";
                 link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16x16.png";
                 link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png";
@@ -248,7 +281,7 @@ fn brand() -> Markup {
     html! {
         a href="/" class="flex items-center gap-2 group" {
             (brand_mark())
-            span class="text-2xl font-semibold tracking-tight text-brand-primary-900 dark:text-brand-primary-50 group-hover:text-brand-primary-700 dark:group-hover:text-brand-primary-200 transition-colors" { (app_name()) }
+            span class="text-2xl font-semibold tracking-tight text-brand-primary-900 dark:text-brand-primary-50 group-hover:text-brand-primary-700 dark:group-hover:text-brand-primary-200 transition-colors" { (brand_name()) }
         }
     }
 }
@@ -350,8 +383,13 @@ fn footer(cfg: &Config, apps: &[Application], pricing: bool) -> Markup {
                 div class="grid grid-cols-2 gap-8 md:grid-cols-4" {
                     div class="col-span-2 md:col-span-1" {
                         (brand())
-                        p class="mt-4 text-sm text-muted-foreground" { "Surfaces what matters." }
-                        p class="mt-1 text-xs text-muted-foreground" { (app_name()) " · " (cfg.domain_or_localhost()) }
+                        // BUNYIP-561: the tagline is the admin-managed record,
+                        // omitted entirely when unset rather than replaced by a
+                        // compiled-in line.
+                        @if !branding().tagline.is_empty() {
+                            p class="mt-4 text-sm text-muted-foreground" { (branding().tagline) }
+                        }
+                        p class="mt-1 text-xs text-muted-foreground" { (brand_name()) " · " (cfg.domain_or_localhost()) }
                     }
                     div {
                         h3 class="text-sm font-semibold" { "Product" }
@@ -489,6 +527,16 @@ fn admin_items() -> Vec<NavItem> {
             href: "/admin/entitlements",
             icon: "key",
         },
+        // BUNYIP-561: the product name, tagline, meta description and Open
+        // Graph image, so a rebrand is an admin edit rather than a redeploy.
+        NavItem {
+            title: "Branding",
+            href: "/admin/branding",
+            // `views::ui::icon` renders an empty glyph for a name it does not
+            // know, so this stays inside the existing set (BUNYIP-560 brings
+            // the brand assets, and their icon, with it).
+            icon: "globe",
+        },
         NavItem {
             title: "Email",
             href: "/admin/email",
@@ -587,7 +635,7 @@ fn nav_links(sections: &[Vec<NavItem>], active: &str) -> Markup {
             @if i > 0 { div class="my-3 border-t border-border/50" {} }
             @for item in section {
                 // BUNYIP-329: Community launches the external Let's Chat
-                // instance, so open it in a new tab and keep the Bunyip tab.
+                // instance, so open it in a new tab and keep this one.
                 @let external = item.href == "/community";
                 a href=(item.href)
                   target=[external.then_some("_blank")]
@@ -597,7 +645,7 @@ fn nav_links(sections: &[Vec<NavItem>], active: &str) -> Markup {
                     (item.title)
                     // BUNYIP-341: flag the external Community launch with a
                     // trailing external-link glyph (opens in a new tab), so
-                    // the row reads as "leaves Bunyip" before it is clicked.
+                    // the row reads as "leaves this app" before it is clicked.
                     @if external {
                         (icon("external-link", "ml-auto h-3.5 w-3.5 opacity-60"))
                     }
@@ -1190,6 +1238,112 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// BUNYIP-561: a fully populated record emits the whole sharing set, and
+    /// `og:title` matches `<title>` so the two never disagree.
+    #[test]
+    fn a_populated_record_emits_the_whole_sharing_set() {
+        let branding = Branding {
+            brand_name: "Acme".into(),
+            tagline: "Surfaces what matters.".into(),
+            meta_description: "Acme does things.".into(),
+            og_image_url: "https://acme.test/card.png".into(),
+        };
+        assert_eq!(document_title("Dashboard", &branding), "Dashboard · Acme");
+
+        let head = social_meta("Dashboard", &branding).into_string();
+        for expected in [
+            r#"<meta property="og:type" content="website">"#,
+            r#"<meta name="twitter:card" content="summary_large_image">"#,
+            r#"<meta property="og:title" content="Dashboard · Acme">"#,
+            r#"<meta name="twitter:title" content="Dashboard · Acme">"#,
+            r#"<meta property="og:site_name" content="Acme">"#,
+            r#"<meta property="og:description" content="Acme does things.">"#,
+            r#"<meta name="twitter:description" content="Acme does things.">"#,
+            r#"<meta property="og:image" content="https://acme.test/card.png">"#,
+            r#"<meta name="twitter:image" content="https://acme.test/card.png">"#,
+        ] {
+            assert!(head.contains(expected), "missing {expected} in {head}");
+        }
+        // No og:url: `document()` has no request context, and a wrong canonical
+        // URL is worse than none.
+        assert!(!head.contains("og:url"));
+    }
+
+    /// BUNYIP-561: each empty field omits its own markup, and never substitutes
+    /// a literal. That omission is what keeps product copy out of the binary.
+    #[test]
+    fn each_empty_field_omits_its_own_markup() {
+        // Fully empty: no title suffix, no sharing metadata at all.
+        let empty = Branding::default();
+        assert_eq!(document_title("Dashboard", &empty), "Dashboard");
+        assert_eq!(social_meta("Dashboard", &empty).into_string(), "");
+
+        // A name but no image: the small card, and no og:image / twitter:image.
+        let named = Branding {
+            brand_name: "Acme".into(),
+            ..Branding::default()
+        };
+        let head = social_meta("Dashboard", &named).into_string();
+        assert!(head.contains(r#"<meta name="twitter:card" content="summary">"#));
+        assert!(!head.contains("og:image"));
+        assert!(!head.contains("twitter:image"));
+        assert!(!head.contains("og:description"));
+        assert!(!head.contains("twitter:description"));
+
+        // An image but no name: the large card, and no og:site_name.
+        let imaged = Branding {
+            og_image_url: "https://acme.test/card.png".into(),
+            ..Branding::default()
+        };
+        let head = social_meta("Dashboard", &imaged).into_string();
+        assert!(head.contains(r#"<meta name="twitter:card" content="summary_large_image">"#));
+        assert!(!head.contains("og:site_name"));
+    }
+
+    /// BUNYIP-561: the whole `document()` head follows the installed record,
+    /// including `<meta name="description">`, which is omitted rather than
+    /// falling back to the sentence that used to be compiled in.
+    #[test]
+    fn the_document_head_follows_the_installed_branding() {
+        // One test, because the record lives behind a process-wide cache.
+        let unbranded = document("Test", html! {}).into_string();
+        assert!(
+            !unbranded.contains(r#"<meta name="description""#),
+            "an unbranded head omits the description: {unbranded}"
+        );
+        assert!(unbranded.contains("<title>Test</title>"));
+        assert!(!unbranded.contains("og:"));
+
+        crate::branding::install(Branding {
+            brand_name: "Acme".into(),
+            tagline: "Surfaces what matters.".into(),
+            meta_description: "Acme does things.".into(),
+            og_image_url: "https://acme.test/card.png".into(),
+        });
+        let branded = document("Test", html! {}).into_string();
+        assert!(branded.contains(r#"<meta name="description" content="Acme does things.">"#));
+        assert!(branded.contains("<title>Test · Acme</title>"));
+        assert!(
+            branded.contains(r#"<meta property="og:image" content="https://acme.test/card.png">"#)
+        );
+
+        // Leave the cache unbranded again so no other test in this binary
+        // inherits a brand it did not install.
+        crate::branding::install(Branding::default());
+    }
+
+    /// BUNYIP-561: the admin panel has a Branding entry, and it is Title Case
+    /// like every other section (checked in full by the test above).
+    #[test]
+    fn the_admin_nav_carries_the_branding_page() {
+        assert!(
+            admin_items()
+                .iter()
+                .any(|i| i.href == "/admin/branding" && i.title == "Branding"),
+            "the branding record is unreachable without a nav entry"
+        );
     }
 
     /// The SSE subscriber takes its origin as passive markup, never as

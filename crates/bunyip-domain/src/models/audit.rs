@@ -106,6 +106,10 @@ pub enum AuditAction {
     /// sessions were revoked. Gated on the acting admin's 2FA code.
     AdminTierChanged,
     AdminEmailConfigUpdated,
+    /// BUNYIP-561: an admin edited the branding record (product name, tagline,
+    /// meta description, Open Graph image). Metadata carries the four submitted
+    /// values, which are public copy rather than secrets.
+    AdminBrandingUpdated,
     /// BUNYIP-433: an admin ran the SMTP "Test connection" probe. Metadata
     /// carries host/port/tls, the `ok` result, and the failing `stage` (never
     /// the password).
@@ -264,6 +268,7 @@ impl AuditAction {
             AuditAction::AdminTierConfigUpdated => "admin_tier_config_updated",
             AuditAction::AdminTierChanged => "admin_tier_changed",
             AuditAction::AdminEmailConfigUpdated => "admin_email_config_updated",
+            AuditAction::AdminBrandingUpdated => "admin_branding_updated",
             AuditAction::AdminEmailConnectionTested => "admin_email_connection_tested",
             AuditAction::AdminTestEmailSent => "admin_test_email_sent",
             AuditAction::AdminAutoBanConfigUpdated => "admin_auto_ban_config_updated",
@@ -342,6 +347,7 @@ impl AuditAction {
                 | AuditAction::AdminTierConfigUpdated
                 | AuditAction::AdminTierChanged
                 | AuditAction::AdminEmailConfigUpdated
+                | AuditAction::AdminBrandingUpdated
                 | AuditAction::AdminEmailConnectionTested
                 | AuditAction::AdminTestEmailSent
                 | AuditAction::AdminAutoBanConfigUpdated

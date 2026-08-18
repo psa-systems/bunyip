@@ -1,5 +1,6 @@
 mod api;
 mod auth;
+mod branding;
 mod client_ip;
 mod config;
 mod csrf;
@@ -58,11 +59,13 @@ async fn main() {
         cfg.theme_color_light.clone(),
         cfg.theme_color_dark.clone(),
     );
-    // BUNYIP-499: brand name for the nav brand mark and the browser-title suffix
-    // (APP_NAME; defaults to "Bunyip").
-    views::layout::install_app_name(cfg.app_name.clone());
-    // BUNYIP-501: meta-description copy (BRAND_DESCRIPTION); defaults to bunyip's.
-    views::layout::install_brand_description(cfg.brand_description.clone());
+    // BUNYIP-561: the product name, tagline, meta description and Open Graph
+    // image are the admin-managed branding record, not environment variables.
+    // One blocking fetch before the listener binds, so the first render already
+    // carries the brand; a failure logs and serves unbranded while the refresh
+    // task below keeps retrying. Nothing substitutes a compiled-in literal.
+    branding::load_at_startup(&api).await;
+    branding::spawn_refresh(api.clone());
     // BUNYIP-243: while bunyip-api is unreachable, poll its /health on an
     // interval and clear the app-wide "service unavailable" banner on recovery.
     // Idle (no network) while healthy; detection itself is reactive in
@@ -283,9 +286,19 @@ async fn main() {
         .expect("bind");
 
     // Startup banner (the listener is already bound at this point).
+    // BUNYIP-561: the brand line comes from the record fetched above, and is
+    // dropped when there is nothing to say. The binary name is an identifier,
+    // not copy, so it stays.
+    let brand = branding::current();
+    let brand_line = match (brand.brand_name.as_str(), brand.tagline.as_str()) {
+        ("", "") => String::new(),
+        (name, "") => format!("  ({name})"),
+        ("", tagline) => format!("  ({tagline})"),
+        (name, tagline) => format!("  ({name} · {tagline})"),
+    };
     println!();
     println!("  ===================================================");
-    println!("   bunyip-web  (Bunyip · Surfaces what matters.)");
+    println!("   bunyip-web{brand_line}");
     println!("   Web listening on  http://{bind_addr}");
     println!("   API backend       {}", cfg.api_url);
     println!("  ===================================================");

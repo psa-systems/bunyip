@@ -777,7 +777,7 @@ mod two_column_layout_tests {
             "enabled": true, "smtp_host": "smtp.example.com", "smtp_port": 587,
             "smtp_tls": "starttls", "smtp_username": "u", "has_smtp_password": true,
             "from_email": "no-reply@example.com",
-            "from_name": "Bunyip", "admin_notification_emails": ["ops@example.com"],
+            "from_name": "Acme", "admin_notification_emails": ["ops@example.com"],
             "source": "environment"
         }))
         .unwrap()

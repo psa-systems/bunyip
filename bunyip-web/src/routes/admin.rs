@@ -188,6 +188,11 @@ pub fn routes() -> Router<AppState> {
             "/admin/tier-settings/catalog",
             post(admin::stripe_catalog_save),
         )
+        // BUNYIP-561: the product name, tagline and sharing metadata.
+        .route(
+            "/admin/branding",
+            get(admin::branding).post(admin::branding_save),
+        )
         .route("/admin/email", get(admin::email).post(admin::email_save))
         .route("/admin/email/test", post(admin::email_test))
         .route("/admin/email/test-send", post(admin::email_test_send))

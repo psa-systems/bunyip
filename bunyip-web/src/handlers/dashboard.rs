@@ -1292,6 +1292,20 @@ pub struct SettingsQuery {
 /// Page size for the Settings sessions / trusted-device lists (BUNYIP-177).
 const SETTINGS_PAGE_SIZE: i64 = 20;
 
+/// BUNYIP-561: the note under the profile fields names the account from the
+/// admin-managed brand, and leaves it unnamed when nothing is branded.
+fn profile_fields_note(brand_name: &str) -> String {
+    let account = if brand_name.is_empty() {
+        "your account".to_string()
+    } else {
+        format!("your {brand_name} account")
+    };
+    format!(
+        "Apps that connect to {account} can request these fields. You will be asked to confirm \
+         before any new app sees them."
+    )
+}
+
 pub async fn settings(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1367,7 +1381,9 @@ pub async fn settings(
                     div class="space-y-2" { label for="first_name" class="text-sm font-medium" { "First Name" } input id="first_name" name="first_name" type="text" maxlength="64" value=(user.first_name.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
                     div class="space-y-2" { label for="last_name" class="text-sm font-medium" { "Last Name" } input id="last_name" name="last_name" type="text" maxlength="64" value=(user.last_name.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
                     div class="space-y-2" { label for="phone" class="text-sm font-medium" { "Phone " span class="text-xs text-muted-foreground" { "(optional)" } } input id="phone" name="phone" type="tel" maxlength="64" value=(user.phone.as_deref().unwrap_or("")) class=(crate::handlers::dashboard_input()); }
-                    p class="text-xs text-muted-foreground" { "Apps that connect to your Bunyip account can request these fields. You will be asked to confirm before any new app sees them." }
+                    // BUNYIP-561: the account is named from the admin-managed
+                    // brand, and unnamed when nothing is branded.
+                    p class="text-xs text-muted-foreground" { (profile_fields_note(&crate::views::layout::brand_name())) }
                     button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-teal-500 text-white border-0")) { "Save Profile" }
                 }
             }))
@@ -2594,7 +2610,7 @@ mod tests {
     #[test]
     fn rekey_qr_view_points_confirm_at_the_rekey_route() {
         let setup = crate::api::types::TwoFactorSetupResponse {
-            otpauth_uri: "otpauth://totp/Bunyip:u@x?secret=ABCD".into(),
+            otpauth_uri: "otpauth://totp/Acme:u@x?secret=ABCD".into(),
             secret: "ABCDABCDABCD".into(),
         };
         let html = super::twofa_qr_view(
@@ -2632,7 +2648,7 @@ mod tests {
     #[test]
     fn twofa_qr_view_masks_the_setup_key_by_default() {
         let setup = crate::api::types::TwoFactorSetupResponse {
-            otpauth_uri: "otpauth://totp/Bunyip:u@x?secret=JBSWY3DP".into(),
+            otpauth_uri: "otpauth://totp/Acme:u@x?secret=JBSWY3DP".into(),
             secret: "JBSWY3DPEHPK3PXP".into(),
         };
         let html = super::twofa_qr_view(&setup, None, "h", "s", "/a", "b").into_string();

@@ -217,8 +217,10 @@ belongs in the same runbook.
 Every variable below has a working default; set it only to tune the deployment.
 
 - **Identity and transport**: `ENVIRONMENT` (unset means `production`),
-  `APP_NAME`, `APP_URL`, `HOST_IP`, `APP_PORT`, `RUST_LOG`, `CORS_ORIGIN`,
-  `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`, `BUNYIP_COOKIE_SHARED_DOMAIN`.
+  `APP_NAME` (the BOOTSTRAP product name only: see
+  [Branding](#branding-branding-admin-page-branding)), `APP_URL`, `HOST_IP`,
+  `APP_PORT`, `RUST_LOG`, `CORS_ORIGIN`, `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`,
+  `BUNYIP_COOKIE_SHARED_DOMAIN`.
 - **At-rest keys**: `APP_ENCRYPTION_KEY_PREV`, `APP_KEY_VERSION` (see
   [`encryption-key-rotation.md`](encryption-key-rotation.md)).
 - **Email**: `EMAIL_ENABLED`, `EMAIL_LOG_TOKENS`, `SMTP_PORT`, `SMTP_TLS`,
@@ -300,7 +302,7 @@ the only way to change them.
 
 bunyip-web's own variables (below) are passed by the `web` service, except
 `BRAND_THEME_CSS`, `BRAND_THEME_COLOR_LIGHT`, `BRAND_THEME_COLOR_DARK`,
-`BRAND_DESCRIPTION`, `CSP_CONNECT_SRC` and `CSP_FORM_ACTION`.
+`CSP_CONNECT_SRC` and `CSP_FORM_ACTION`.
 
 ## Settings that are not environment variables
 
@@ -337,6 +339,44 @@ identifiers and the publish switch have **no env source at all**.
 | `lifetime_product_id`, `early_adopter_product_id`, `standard_product_id`                     | Stripe product ids per tier                                                |
 | `lifetime_slots`, `early_adopter_slots`                                                      | capacity per tier. Env seeds exist                                         |
 | `early_adopter_trial_days`, `standard_trial_days`                                            | trial length per tier. Env seeds exist                                     |
+
+### Branding (`branding`, admin page: Branding)
+
+Singleton row (`id = 1`), the source of truth for every occurrence of the
+product name and for the sharing metadata (BUNYIP-561). It ships EMPTY: a
+migration is committed code, and the point of the record is that product copy is
+not committed code.
+
+| Column             | Meaning                                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `brand_name`       | the nav mark, the browser-title suffix, `og:site_name`, every email subject, and the TOTP issuer for NEW enrolments |
+| `tagline`          | the hero caption, the footer line and the bunyip-web startup banner                                         |
+| `meta_description` | `<meta name="description">` and `og:description`                                                            |
+| `og_image_url`     | `og:image` / `twitter:image`; must be an absolute `http(s)://` URL                                          |
+
+Resolution, stated once:
+
+- `brand_name` is the row value when non-empty, otherwise `APP_NAME`. `APP_NAME`
+  is therefore a **bootstrap default for a database that has never been
+  branded**, not a way to rename a running deployment.
+- `tagline`, `meta_description` and `og_image_url` are the row value when
+  non-empty, otherwise **empty**, and an empty value means the markup is
+  **omitted**: no `<meta name="description">`, no `og:description`, no
+  `og:image`, no tagline line, and no title suffix when `brand_name` is empty.
+  No literal is ever substituted.
+
+A save writes the row and refreshes the api-side cache in the same request, so
+email subjects and the TOTP issuer follow immediately. Every other api process
+re-reads the row every **60 seconds**, and bunyip-web fetches `GET /v1/branding`
+once at startup (before it binds) and then every **60 seconds**, so an admin edit
+is visible in the browser within one interval. A startup fetch failure logs at
+`error` and serves unbranded chrome; a later refresh failure logs at `warn` and
+keeps the last good values.
+
+bunyip-web has **no** brand-text environment variables. `APP_NAME` and
+`BRAND_DESCRIPTION` were removed from it (BUNYIP-561); brand ASSETS (mark,
+favicon set, mascot art, palette) are BUNYIP-560 and still come from
+`BRAND_THEME_*`.
 
 ### Email (`email_config`, admin page: Email)
 
@@ -379,11 +419,15 @@ deployment configuration, and are listed here only so the boundary is explicit.
 bunyip-web is a separate binary with its own configuration
 (`bunyip-web/src/config.rs`): `BUNYIP_BIND_ADDR`, `BUNYIP_API_URL`,
 `BUNYIP_API_PUBLIC_ORIGIN`, `BUNYIP_OIDC_ISSUER`, `BUNYIP_APP_DOMAIN`,
-`BUNYIP_COMMUNITY_URL`, `TRUSTED_PROXY_CIDR`, `APP_NAME`, `BRAND_THEME_CSS`,
-`BRAND_THEME_COLOR_LIGHT`, `BRAND_THEME_COLOR_DARK`, `BRAND_DESCRIPTION`,
-`CSP_CONNECT_SRC`, `CSP_FORM_ACTION`, `RUST_LOG`. Every one has a working
-default. It holds no secrets and reads none of the api variables above, so the
-api's inventory does not cover it.
+`BUNYIP_COMMUNITY_URL`, `TRUSTED_PROXY_CIDR`, `BRAND_THEME_CSS`,
+`BRAND_THEME_COLOR_LIGHT`, `BRAND_THEME_COLOR_DARK`, `CSP_CONNECT_SRC`,
+`CSP_FORM_ACTION`, `RUST_LOG`. Every one has a working default. It holds no
+secrets and reads none of the api variables above, so the api's inventory does
+not cover it.
+
+It has no `APP_NAME` and no `BRAND_DESCRIPTION`: the product name, tagline, meta
+description and Open Graph image are the admin-managed `branding` record above
+(BUNYIP-561), fetched from bunyip-api rather than read from the environment.
 
 `BRAND_THEME_COLOR_LIGHT` and `BRAND_THEME_COLOR_DARK` are the two
 `<meta name="theme-color">` values that paint the browser chrome (Android

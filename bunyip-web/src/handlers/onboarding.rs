@@ -169,12 +169,23 @@ fn name_present(v: &Option<String>) -> bool {
     matches!(v.as_deref().map(str::trim), Some(s) if !s.is_empty())
 }
 
+/// BUNYIP-561: the welcome heading names the brand from the admin-managed
+/// record. An unbranded deployment gets the bare greeting rather than a
+/// compiled-in product name.
+fn welcome_heading(brand_name: &str) -> String {
+    if brand_name.is_empty() {
+        "Welcome".to_string()
+    } else {
+        format!("Welcome to {brand_name}")
+    }
+}
+
 fn onboarding_content(user: &User, error: Option<&str>, ok: Option<&str>) -> Markup {
     let name_done = name_present(&user.first_name) && name_present(&user.last_name);
     html! {
         div class="mx-auto max-w-2xl space-y-6" {
             div {
-                h1 class="text-3xl font-bold" { "Welcome to Bunyip" }
+                h1 class="text-3xl font-bold" { (welcome_heading(&crate::views::layout::brand_name())) }
                 p class="mt-2 text-muted-foreground" { "Two quick steps and your account is ready." }
             }
             @if let Some(ok) = ok { (success_box(ok)) }
@@ -227,8 +238,16 @@ fn step_card(icon_name: &str, gradient: &str, title: &str, done: bool, body: Mar
 
 #[cfg(test)]
 mod tests {
-    use super::onboarding_content;
+    use super::{onboarding_content, welcome_heading};
     use crate::api::types::{MembershipStatus, MembershipTier, User, UserRole};
+
+    /// BUNYIP-561: the greeting names the admin-managed brand, and drops the
+    /// name rather than substituting one when nothing is branded.
+    #[test]
+    fn the_welcome_heading_follows_the_brand() {
+        assert_eq!(welcome_heading("Acme"), "Welcome to Acme");
+        assert_eq!(welcome_heading(""), "Welcome");
+    }
 
     /// A named-but-unverified user: the state in which the onboarding page shows
     /// the "Resend verification email" control whose feedback BUNYIP-324 routes
