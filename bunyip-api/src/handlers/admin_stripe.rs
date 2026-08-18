@@ -44,9 +44,9 @@ use crate::services::{
 /// The tiers and prices that make up one archivable plan, resolved from
 /// `tier_config`. `price_ids` is what the member guard checks `locked_price_id`
 /// against; `tiers` is what it checks active memberships against.
-struct PlanScope {
-    tiers: Vec<String>,
-    price_ids: Vec<String>,
+pub(crate) struct PlanScope {
+    pub(crate) tiers: Vec<String>,
+    pub(crate) price_ids: Vec<String>,
 }
 
 /// Every `tier_config` mapping as `(tier name, price-id column, product-id
@@ -95,7 +95,7 @@ fn plan_for_product(
 
 /// Resolve the plan for a single-price archive: every tier whose price id is
 /// this price, and this one price id. A lone price has nothing to cascade to.
-fn plan_for_price(t: &TierConfigRow, price_id: &str) -> PlanScope {
+pub(crate) fn plan_for_price(t: &TierConfigRow, price_id: &str) -> PlanScope {
     let tiers = tier_mappings(t)
         .into_iter()
         .filter(|(_, price_col, _)| *price_col == Some(price_id))
@@ -135,12 +135,12 @@ fn refuse_archive(kind: &str, members: i64) -> AppError {
 /// The identity two active prices on one product must not share. `interval` is
 /// `month`/`year`/... or `None` for a one-time price, which forms its own
 /// bucket. Currency is lowercased so `USD` and `usd` compare equal.
-#[derive(PartialEq, Eq, Clone, Debug)]
-struct ActivePriceKey {
-    product_id: String,
-    currency: String,
-    interval: Option<String>,
-    interval_count: Option<u64>,
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub(crate) struct ActivePriceKey {
+    pub(crate) product_id: String,
+    pub(crate) currency: String,
+    pub(crate) interval: Option<String>,
+    pub(crate) interval_count: Option<u64>,
 }
 
 impl ActivePriceKey {
@@ -148,7 +148,7 @@ impl ActivePriceKey {
     /// `recurring_interval_count` is normalized to `1`: Stripe always defaults a
     /// recurring price's `interval_count` to 1, but dunite may leave it unset,
     /// and bunyip's own create sends `Some(1)`, so the two must compare equal.
-    fn of(p: &StripePriceResponse) -> Self {
+    pub(crate) fn of(p: &StripePriceResponse) -> Self {
         let interval = p.recurring_interval.clone();
         let interval_count = interval
             .as_ref()
@@ -178,7 +178,7 @@ fn find_active_conflict<'a>(
 /// Format a price amount for a message: "$9.00" / "€9.00" / "£9.00", else
 /// "9.00 XXX". Mirrors `bunyip-web`'s `format_stripe_amount` so the admin sees
 /// one amount format across the page and the refusal it triggers.
-fn format_price_amount(unit_amount: Option<i64>, currency: &str) -> String {
+pub(crate) fn format_price_amount(unit_amount: Option<i64>, currency: &str) -> String {
     match unit_amount {
         None => "--".to_string(),
         Some(cents) => {
