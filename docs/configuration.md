@@ -406,6 +406,14 @@ One row per action, keyed by the action name, with `max_requests` and
 `window_seconds`. A present row overrides both the constant and the env seed.
 Super-admin-only (BUNYIP-413).
 
+The enforcement path reads a process-wide 30-second snapshot of the whole table
+rather than one row per rate-limit decision (BUNYIP-556). A save invalidates the
+snapshot in the api process that took the write, so the new cap is in force on
+the next request there; another api process picks it up within the 30 seconds.
+If the table cannot be read, the last good snapshot keeps being enforced and the
+failure is logged at `error`: a refresh failure never silently reverts the
+platform to its compile-time caps.
+
 ### Applications and OAuth clients
 
 | Table                                                              | Set from                                             | Notes                                                                       |
