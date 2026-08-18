@@ -9,7 +9,6 @@ use maud::{html, Markup};
 use serde::Deserialize;
 
 use crate::api::auth::{self as auth_api, LoginOutcome};
-use crate::api::calls;
 use crate::config::Config;
 use crate::handlers::{auth_page, cookie_of, cookie_value, ctx, dashboard_input, password_ok};
 use crate::views::common::{auth_card, auth_card_plain};
@@ -19,11 +18,13 @@ use crate::views::layout::{document, public_shell};
 /// auth cards render the public shell directly (they need to attach their own
 /// cookies), so they resolve the flag themselves rather than through
 /// `public_ctx`. A failed fetch hides the link, never offers a dead one.
+///
+/// BUNYIP-555: through the shared TTL cache, like `public_ctx`. These pages are
+/// public renders too, so an uncached fetch here reopened the amplification
+/// BUNYIP-518 closed, and it swallowed the error into "unpublished" with nothing
+/// logged; the cache logs the failure and serves the last good payload.
 async fn pricing_published(st: &AppState) -> bool {
-    calls::pricing(&st.api)
-        .await
-        .map(|p| p.published())
-        .unwrap_or(false)
+    st.pricing().await.published()
 }
 
 /// BUNYIP-255: 2FA challenge-token TTL aligned with the JWT exp set in
@@ -340,7 +341,7 @@ pub async fn login_get(
     headers: HeaderMap,
     Query(q): Query<RedirectQuery>,
 ) -> Response {
-    let (c, fwd) = ctx(&st, &headers).await;
+    let (c, _fwd) = ctx(&st, &headers).await;
     // `checked` is set only when `/oauth2/authorize` redirected here after
     // finding no valid OP session. In that case a hub session can still look
     // "signed in" (the 30-day refresh cookie outlives the 7-day OP session),
@@ -354,18 +355,11 @@ pub async fn login_get(
             &c.set_cookies,
         );
     }
-    let apps = calls::applications(&st.api, fwd.as_deref())
-        .await
-        .unwrap_or_default();
+    // BUNYIP-555: the two chrome payloads come from the shared TTL caches and
+    // are fetched concurrently on a miss; neither consumes the other's result.
+    let (apps, pricing) = tokio::join!(st.public_applications(), pricing_published(&st));
     let content = login_content(None, q.redirect.as_deref().unwrap_or("/dashboard"));
-    let body = public_shell(
-        &st.cfg,
-        None,
-        &apps,
-        pricing_published(&st).await,
-        false,
-        content,
-    );
+    let body = public_shell(&st.cfg, None, &apps, pricing, false, content);
     html(document("Sign in", body))
 }
 
@@ -407,16 +401,9 @@ pub async fn login_post(
             redirect_cookies(&path, &cookies)
         }
         Err(e) => {
-            let apps = calls::applications(&st.api, None).await.unwrap_or_default();
+            let (apps, pricing) = tokio::join!(st.public_applications(), pricing_published(&st));
             let content = login_content(Some(&e.user_message()), &target);
-            let body = public_shell(
-                &st.cfg,
-                None,
-                &apps,
-                pricing_published(&st).await,
-                false,
-                content,
-            );
+            let body = public_shell(&st.cfg, None, &apps, pricing, false, content);
             html(document("Sign in", body))
         }
     }
@@ -1258,19 +1245,10 @@ pub async fn verify_email(
         // The celebration card needs to ride out on a response that carries
         // the rotated `Set-Cookie` headers; `auth_page`'s shell doesn't
         // accept extra cookies, so render through the lower-level path
-        // directly here. Apps list is hydrated identically (signed-out call
-        // because the rotated cookie isn't visible yet on this response).
-        let apps = calls::applications(&st.api, session_cookie.as_deref())
-            .await
-            .unwrap_or_default();
-        let body = public_shell(
-            &st.cfg,
-            None,
-            &apps,
-            pricing_published(&st).await,
-            false,
-            card,
-        );
+        // directly here. The chrome payloads come from the same shared TTL
+        // caches `public_ctx` reads (BUNYIP-555).
+        let (apps, pricing) = tokio::join!(st.public_applications(), pricing_published(&st));
+        let body = public_shell(&st.cfg, None, &apps, pricing, false, card);
         html_cookies(document("Verify email", body), &rotated_cookies)
     }
 }

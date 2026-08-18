@@ -5,11 +5,11 @@ mod client_ip;
 mod config;
 mod csrf;
 mod handlers;
-mod pricing_cache;
 mod routes;
 mod security;
 mod server_status;
 mod skin;
+mod ttl_cache;
 mod util;
 mod views;
 mod web;
@@ -76,8 +76,25 @@ async fn main() {
         api,
         cfg: Arc::clone(&cfg),
         // BUNYIP-518: coalesce the per-render /v1/pricing fetch behind a short TTL.
-        pricing_cache: Arc::new(pricing_cache::PricingCache::new(
-            std::time::Duration::from_secs(pricing_cache::PRICING_CACHE_TTL_SECS),
+        pricing_cache: Arc::new(ttl_cache::TtlCache::new(
+            "/v1/pricing",
+            "PricingResponse",
+            "the /pricing page and its nav and footer links",
+            std::time::Duration::from_secs(ttl_cache::PRICING_CACHE_TTL_SECS),
+        )),
+        // BUNYIP-555: the same treatment for the other two near-static payloads
+        // the chrome reads on every render.
+        applications_cache: Arc::new(ttl_cache::TtlCache::new(
+            "/v1/applications",
+            "Vec<Application>",
+            "the public footer's application links",
+            std::time::Duration::from_secs(ttl_cache::APPLICATIONS_CACHE_TTL_SECS),
+        )),
+        setup_status_cache: Arc::new(ttl_cache::TtlCache::new(
+            "/v1/auth/setup/status",
+            "SetupStatus",
+            "the subscribe CTA and the onboarding email gate",
+            std::time::Duration::from_secs(ttl_cache::SETUP_STATUS_CACHE_TTL_SECS),
         )),
     };
 
