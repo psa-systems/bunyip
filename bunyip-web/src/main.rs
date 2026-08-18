@@ -17,10 +17,47 @@ mod web;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::http::header::{HeaderValue, CACHE_CONTROL};
 use axum::routing::get;
 use axum::Router;
-use tower_http::compression::CompressionLayer;
+use tower::ServiceBuilder;
+use tower_http::compression::predicate::{DefaultPredicate, NotForContentType};
+use tower_http::compression::{CompressionLayer, Predicate};
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::set_header::SetResponseHeaderLayer;
+
+/// BUNYIP-554 F9: `/assets/*` is immutable for a year. Every reference in the
+/// markup carries a build-derived `?v=` (`views::layout::asset`), so a deploy
+/// gets fresh URLs and a repeat navigation issues zero asset requests. Without
+/// `Cache-Control` the file service sends only `Last-Modified`, and in a
+/// container built from a fresh checkout those mtimes are as young as the
+/// deploy, so heuristic freshness starts near zero and every reference was
+/// revalidated on the next navigation.
+const ASSET_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
+
+/// The root `/favicon.ico` probe is issued by URL, not from markup, so it
+/// cannot carry a `?v=` and must not be `immutable`. One day.
+const FAVICON_CACHE_CONTROL: &str = "public, max-age=86400";
+
+/// BUNYIP-554 F4: `DefaultPredicate` compresses everything except gRPC,
+/// `image/*`, `text/event-stream` and bodies under 32 bytes, so the BFF ran
+/// gzip over every byte of an already-compressed multi-megabyte installer
+/// relayed by `handlers::dashboard::download_asset` for a ratio near 1.0 - and
+/// engaging the encoder drops the forwarded `Content-Length`, which is what
+/// killed the browser's download progress bar. Content type is the property
+/// that actually decides whether compression helps, so exempt the types the
+/// release pipeline emits rather than splitting the router by route.
+fn compression_predicate() -> impl Predicate {
+    DefaultPredicate::new()
+        .and(NotForContentType::const_new("application/octet-stream"))
+        .and(NotForContentType::const_new("application/gzip"))
+        .and(NotForContentType::const_new("application/zip"))
+        .and(NotForContentType::const_new("application/x-tar"))
+        .and(NotForContentType::const_new("application/x-xz"))
+        // The vendored webfonts BUNYIP-554 self-hosted are already compressed;
+        // `DefaultPredicate` exempts `image/*` but has no equivalent for fonts.
+        .and(NotForContentType::const_new("font/"))
+}
 
 #[tokio::main]
 async fn main() {
@@ -269,12 +306,28 @@ async fn main() {
         // Admin (DEV-517: the table lives in `routes::admin`).
         .merge(routes::admin::routes())
         // Static + fallback
-        .nest_service("/assets", ServeDir::new("assets"))
+        .nest_service(
+            "/assets",
+            ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::if_not_present(
+                    CACHE_CONTROL,
+                    HeaderValue::from_static(ASSET_CACHE_CONTROL),
+                ))
+                .service(ServeDir::new("assets")),
+        )
         // BUNYIP-339: browsers probe the root /favicon.ico regardless of the
         // <link rel="icon"> tags in <head>, so serve it at the web root too
         // (ServeDir above only answers under /assets). Without this the apex
         // a8n.systems logs a 404 on every page load.
-        .route_service("/favicon.ico", ServeFile::new("assets/favicon.ico"))
+        .route_service(
+            "/favicon.ico",
+            ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::if_not_present(
+                    CACHE_CONTROL,
+                    HeaderValue::from_static(FAVICON_CACHE_CONTROL),
+                ))
+                .service(ServeFile::new("assets/favicon.ico")),
+        )
         .fallback(public::not_found)
         // BUNYIP-259: Origin / Referer CSRF defense on every state-
         // changing POST. Refuses cross-origin form submissions before
@@ -295,7 +348,7 @@ async fn main() {
         // BUNYIP-232: stamp a Content-Security-Policy onto every response (the
         // remaining security header the edge proxy does not set for bunyip-web).
         .layer(security::csp_layer(&cfg))
-        .layer(CompressionLayer::new())
+        .layer(CompressionLayer::new().compress_when(compression_predicate()))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr)
@@ -332,4 +385,54 @@ async fn main() {
     )
     .await
     .expect("serve");
+}
+
+#[cfg(test)]
+mod compression_tests {
+    use super::compression_predicate;
+    use axum::body::Body;
+    use axum::http::{header::CONTENT_TYPE, Response};
+    use tower_http::compression::Predicate;
+
+    fn should_compress(content_type: &str) -> bool {
+        let body = Body::from(vec![0u8; 4096]);
+        let response = Response::builder()
+            .header(CONTENT_TYPE, content_type)
+            .body(body)
+            .expect("valid test response");
+        compression_predicate().should_compress(&response)
+    }
+
+    /// BUNYIP-554 F4: gzip over an already-compressed release asset buys a
+    /// ratio near 1.0 and costs the forwarded `Content-Length` (and with it the
+    /// browser's download progress bar), so every binary content type the
+    /// download proxy relays is exempt while the text assets still compress.
+    #[test]
+    fn already_compressed_payloads_are_never_gzipped() {
+        for exempt in [
+            "application/octet-stream",
+            "application/gzip",
+            "application/zip",
+            "application/x-tar",
+            "application/x-xz",
+            "font/woff2",
+            "image/webp",
+        ] {
+            assert!(
+                !should_compress(exempt),
+                "{exempt} is already compressed and must cross the BFF untouched"
+            );
+        }
+        for compressible in [
+            "text/html; charset=utf-8",
+            "text/css",
+            "text/javascript",
+            "application/json",
+        ] {
+            assert!(
+                should_compress(compressible),
+                "{compressible} is worth roughly 73 percent and must still compress"
+            );
+        }
+    }
 }

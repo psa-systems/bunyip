@@ -18,13 +18,14 @@
 
   // Tailwind utility classes for the three visual states. The leading
   // indicator glyph + the row text color flip together so the row reads as
-  // pass/fail at a glance. BUNYIP-250: glyphs use the self-hosted Font Awesome
-  // build so the icons match the rest of the SaaS shell instead of bare
-  // Unicode bullets.
+  // pass/fail at a glance. BUNYIP-554: the three glyphs are pre-rendered inline
+  // SVGs (handlers::auth_pages::pw_state_glyphs); the `pw-<state>` class this
+  // sets is what input.css uses to reveal the matching one, so no markup is
+  // built here.
   var STATES = {
-    pending: { cls: 'text-muted-foreground',            icon: 'fa-regular fa-circle' },
-    pass:    { cls: 'text-teal-600 dark:text-teal-400', icon: 'fa-solid fa-circle-check' },
-    fail:    { cls: 'text-destructive',                 icon: 'fa-solid fa-circle-xmark' }
+    pending: { cls: 'text-muted-foreground' },
+    pass:    { cls: 'text-teal-600 dark:text-teal-400' },
+    fail:    { cls: 'text-destructive' }
   };
   // BUNYIP-250: when a row carries data-label-{pass,fail,pending}, the visible
   // label flips per state. The breach row uses this so a ✗ stops appearing next
@@ -43,13 +44,6 @@
     row.className = (row.className || '')
       .replace(/\b(text-muted-foreground|text-teal-600|dark:text-teal-400|text-destructive|pw-pending|pw-pass|pw-fail)\b/g, '')
       .trim() + ' pw-' + state + ' ' + s.cls;
-    var ind = row.querySelector('.pw-indicator');
-    if (ind) {
-      ind.textContent = '';
-      var glyph = document.createElement('i');
-      glyph.className = s.icon;
-      ind.appendChild(glyph);
-    }
     syncRowLabel(row, state);
     // BUNYIP-250: the breach row carries a follow-up help paragraph
     // (#pw-breach-help) that explains what to do; surface it only when the row
@@ -194,8 +188,9 @@
 })();
 
 // BUNYIP-282: every [data-pw-toggle] button flips its target input's `type`
-// between password and text, swaps the Font Awesome eye glyph, and updates
-// aria-pressed + aria-label so the reveal state is announced.
+// between password and text and updates aria-pressed + aria-label so the reveal
+// state is announced. BUNYIP-554: both eye glyphs are pre-rendered inline SVGs
+// and input.css picks one off `aria-pressed`, so nothing is swapped here.
 (function () {
   var buttons = document.querySelectorAll('[data-pw-toggle]');
   buttons.forEach(function (btn) {
@@ -209,10 +204,6 @@
       input.type = revealed ? 'password' : 'text';
       btn.setAttribute('aria-pressed', revealed ? 'false' : 'true');
       btn.setAttribute('aria-label', revealed ? 'Show password' : 'Hide password');
-      var icon = btn.querySelector('i');
-      if (icon) {
-        icon.className = revealed ? 'fa-regular fa-eye' : 'fa-regular fa-eye-slash';
-      }
     });
   });
 })();

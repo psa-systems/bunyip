@@ -256,7 +256,7 @@ pub async fn users(
             (panel)
         }
         style { (maud::PreEscaped(USERS_FILTER_CSS)) }
-        script src="/assets/js/admin-users.js" defer {}
+        script src=(crate::views::layout::asset("/assets/js/admin-users.js")) defer {}
     };
     admin_response(&c, &user, "/admin/users", "Users", content)
 }

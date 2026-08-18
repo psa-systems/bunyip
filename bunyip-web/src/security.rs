@@ -10,7 +10,8 @@
 //! The policy is deliberately scoped to what `views::layout` actually pulls in:
 //!
 //! - JavaScript: `script-src 'self'` and nothing else. BUNYIP-424 vendored htmx
-//!   and the Font Awesome webfont build into `assets/` and moved every inline
+//!   (and, at the time, the Font Awesome webfont build) into `assets/` and
+//!   moved every inline
 //!   `<script>` body and `on*=` handler into `assets/js/*.js`, so no CDN host
 //!   and no `'unsafe-inline'` is needed. The two CDNs that were allowlisted
 //!   before (`unpkg.com`, `kit.fontawesome.com`) were a standing
@@ -18,13 +19,14 @@
 //!   `'unsafe-inline'` meant CSP was no barrier to a reflected-XSS bug either.
 //!   Keep it that way - server values reach the client as `data-*` attributes,
 //!   never as executable JavaScript.
-//! - the Google Fonts stylesheet from `fonts.googleapis.com` plus Tailwind's
-//!   inline `style=` usage -> `'unsafe-inline'` + host in `style-src`. Styles
-//!   are a much smaller exposure than scripts, so BUNYIP-424 deliberately left
-//!   this host remote; self-hosting the two Google font families is a separate
-//!   change.
-//! - font files from `fonts.gstatic.com` (Font Awesome's are now same-origin)
-//!   -> `font-src`
+//! - Tailwind's inline `style=` usage plus the skin's `:root` block ->
+//!   `'unsafe-inline'` in `style-src`, and nothing else. BUNYIP-554 vendored
+//!   Inter and JetBrains Mono under `assets/vendor/fonts/`, which is what let
+//!   `https://fonts.googleapis.com` come out of `style-src` and
+//!   `https://fonts.gstatic.com` out of `font-src`.
+//! - font files -> `font-src 'self'`, all same-origin (BUNYIP-424 for Font
+//!   Awesome, which BUNYIP-554 then deleted outright; BUNYIP-554 for the two
+//!   text families)
 //! - the browser-facing bunyip-api origin the dashboard `EventSource` subscribes
 //!   to (`/v1/events`), which is a distinct origin from bunyip-web even in dev
 //!   (different port) -> added to `connect-src`
@@ -96,8 +98,8 @@ fn policy(api_public_origin: &str, app_domain: &str, csp: &CspConfig) -> String 
          frame-ancestors 'none'; \
          form-action 'self' {api_public_origin}{app_callbacks} https://checkout.stripe.com https://billing.stripe.com{form_extra}; \
          img-src 'self' data: https:; \
-         font-src 'self' https://fonts.gstatic.com; \
-         style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
+         font-src 'self'; \
+         style-src 'self' 'unsafe-inline'; \
          script-src 'self'; \
          connect-src 'self' {api_public_origin} https://api.pwnedpasswords.com{connect_extra}"
     )
@@ -217,6 +219,71 @@ mod tests {
             !p.contains("unpkg.com"),
             "no unpkg source anywhere in the policy; got: {p}"
         );
+    }
+
+    /// BUNYIP-554 guard: both Google Fonts origins are gone from the policy.
+    /// They were the only remote hosts left in `style-src` / `font-src`, and
+    /// they cost two DNS lookups plus two TLS handshakes on the critical path
+    /// of every first load. Inter and JetBrains Mono are vendored under
+    /// `assets/vendor/fonts/`, so re-adding either grant means a `<link>` to
+    /// Google came back with them.
+    #[test]
+    fn policy_grants_no_google_fonts_origin() {
+        let p = policy(
+            "https://api.example.com",
+            "example.com",
+            &crate::config::CspConfig::default(),
+        );
+        for banned in ["fonts.googleapis.com", "fonts.gstatic.com"] {
+            assert!(
+                !p.contains(banned),
+                "the font families are self-hosted; {banned} must not be granted. got: {p}"
+            );
+        }
+        assert!(p.contains("font-src 'self';"), "got: {p}");
+        assert!(p.contains("style-src 'self' 'unsafe-inline';"), "got: {p}");
+    }
+
+    /// BUNYIP-554 guard: the render-blocking Google Fonts stylesheet and the
+    /// three Font Awesome stylesheets are out of the shared document head, and
+    /// the webfont build is deleted from the tree. A `<link>` to either is the
+    /// regression this issue removed.
+    #[test]
+    fn document_head_pulls_no_remote_font_or_icon_stylesheet() {
+        let html = crate::views::layout::document("Test", maud::html! {}).into_string();
+        // The Font Awesome class needles are assembled at run time so this
+        // file's own source does not answer the tree-wide grep that proves
+        // those class prefixes are gone.
+        for banned in [
+            "fonts.googleapis.com".to_string(),
+            "fonts.gstatic.com".to_string(),
+            "fontawesome".to_string(),
+            format!("fa-{}", "solid"),
+            format!("fa-{}", "regular"),
+            format!("fa-{}", "brands"),
+        ] {
+            assert!(
+                !html.contains(&banned),
+                "`{banned}` is back in the shared document head"
+            );
+        }
+        assert!(
+            !std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("assets/vendor/fontawesome-6.7.2")
+                .exists(),
+            "the Font Awesome webfont build is vendored again; views::ui::icon renders the set inline"
+        );
+        for font in [
+            "assets/vendor/fonts/inter-v20-latin.woff2",
+            "assets/vendor/fonts/jetbrains-mono-v24-latin.woff2",
+        ] {
+            assert!(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join(font)
+                    .exists(),
+                "{font} is missing; the CSP no longer allows the Google fallback"
+            );
+        }
     }
 
     // BUNYIP-503: a skin's extra hosts append to connect-src / form-action only,

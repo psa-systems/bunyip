@@ -24,6 +24,15 @@ FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie@sha256:f075f243
 ARG CARGO_BUILD_JOBS=2
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
+# BUNYIP-554: build.rs turns these into the `?v=` every /assets reference
+# carries, which is what invalidates the immutable one-year Cache-Control on
+# that directory. .dockerignore excludes .git, so the build stage cannot derive
+# them itself and they MUST be passed in or every deploy reuses one version.
+ARG GIT_COMMIT=unknown
+ARG GIT_TAG=unknown
+ARG BUILD_DATE=unknown
+ENV GIT_COMMIT=${GIT_COMMIT} GIT_TAG=${GIT_TAG} BUILD_DATE=${BUILD_DATE}
+
 WORKDIR /app
 
 # Cache JS deps (tailwindcss). bunyip-web/package.json declares the tailwind CLI.

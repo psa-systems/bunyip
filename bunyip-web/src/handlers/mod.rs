@@ -284,6 +284,28 @@ pub fn dashboard_response(
     )
 }
 
+/// BUNYIP-554: `dashboard_response` for the one page that renders
+/// `views::avatar_picker::avatar_picker` (`/settings`). Only this response
+/// carries the picker's stylesheet and `assets/js/avatar-picker.js`; every
+/// other page ships the slot rule alone. Rendering the picker through the plain
+/// `dashboard_response` leaves it unstyled and inert.
+pub fn dashboard_response_with_avatar_picker(
+    c: &AuthCtx,
+    user: &User,
+    active: &str,
+    title: &str,
+    content: Markup,
+) -> Response {
+    html_cookies(
+        crate::views::layout::document_with_avatar_picker(
+            title,
+            dashboard_shell(user, active, title, content),
+            true,
+        ),
+        &c.set_cookies,
+    )
+}
+
 pub fn admin_response(
     c: &AuthCtx,
     user: &User,

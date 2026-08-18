@@ -50,9 +50,11 @@ export default defineConfig({
     // free-v4-font-face). All "downloaded a font/icon CSS, didn't
     // make it to first paint". The lighter /membership page survives
     // because it uses fewer icons + fewer forms. (BUNYIP-424 later
-    // self-hosted htmx + Font Awesome, so the trail is now same-origin
-    // /assets requests; the icon-heavy render is unchanged and the
-    // flags below are still needed.)
+    // self-hosted htmx + Font Awesome, so the trail became same-origin
+    // /assets requests; BUNYIP-554 then deleted the icon webfont and the
+    // Google Fonts hop entirely - every glyph is inline SVG now. The
+    // flags below are still needed: they defend against renderer crashes
+    // on a form-heavy page, not against the icon CSS specifically.)
     //
     // Two args, both defensive:
     //

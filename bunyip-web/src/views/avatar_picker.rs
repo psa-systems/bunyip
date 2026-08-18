@@ -32,8 +32,16 @@ use crate::views::ui::{button_class, icon};
 /// on the theme tokens so light / dark / high-contrast all adapt. The markup
 /// leans only on utilities that already exist in `styles.css`; everything novel
 /// and structural lives here.
-pub const AVATAR_PICKER_CSS: &str = r#".avatar-slot__img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:9999px}
-.avatar-picker{display:flex;align-items:center;gap:1rem}
+///
+/// BUNYIP-554: split in two. `AVATAR_SLOT_CSS` is the one rule the shared shell
+/// needs (the avatar image in the topbar / profile menu, on every page);
+/// `AVATAR_PICKER_CSS` is the rest, which only `/settings` renders and which
+/// therefore only that page ships.
+pub const AVATAR_SLOT_CSS: &str = ".avatar-slot__img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:9999px}";
+
+/// The picker's own rules. Shipped by `layout::document_with_avatar_picker`
+/// only, alongside `assets/js/avatar-picker.js`. See `AVATAR_SLOT_CSS`.
+pub const AVATAR_PICKER_CSS: &str = r#".avatar-picker{display:flex;align-items:center;gap:1rem}
 .avatar-picker__form{margin:0}
 .avatar-picker__trigger{position:relative;display:inline-flex;align-items:center;justify-content:center;width:4rem;height:4rem;border-radius:9999px;cursor:pointer;flex:none}
 .avatar-picker__input{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
@@ -173,6 +181,45 @@ mod tests {
         assert!(html.contains(">A</span>") || html.contains(">A<"));
         assert!(html.contains(r#"data-has-avatar="0""#));
         assert!(!html.contains(r#"action="/settings/avatar/remove""#));
+    }
+
+    /// BUNYIP-554: the picker's stylesheet and controller no longer ship in the
+    /// shared head, so a page that renders `avatar_picker` through the plain
+    /// `dashboard_response` gets an unstyled, inert component. Every handler
+    /// file that renders it must also reach for the picker-carrying response.
+    #[test]
+    fn every_handler_that_renders_the_picker_asks_for_its_assets() {
+        let handlers = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/handlers");
+        let mut stack = vec![handlers];
+        let (mut renderers, mut offenders) = (0, Vec::new());
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("readable handler dir") {
+                let path = entry.expect("readable dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let body = std::fs::read_to_string(&path).expect("readable source file");
+                if !body.contains("avatar_picker::avatar_picker(") {
+                    continue;
+                }
+                renderers += 1;
+                if !body.contains("dashboard_response_with_avatar_picker(") {
+                    offenders.push(path.display().to_string());
+                }
+            }
+        }
+        assert_eq!(
+            renderers, 1,
+            "expected exactly one page to render the picker"
+        );
+        assert!(
+            offenders.is_empty(),
+            "these render the avatar picker without shipping its CSS / JS: {offenders:?}"
+        );
     }
 
     #[test]

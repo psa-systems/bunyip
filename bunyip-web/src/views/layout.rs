@@ -33,6 +33,21 @@ pub fn install_sse_api_origin(origin: impl Into<String>) {
     let _ = SSE_API_ORIGIN.set(origin.into().trim_end_matches('/').to_string());
 }
 
+/// BUNYIP-554: the build-derived cache buster every `/assets/*` reference
+/// carries. `main.rs` serves that directory with `max-age=31536000, immutable`,
+/// so the query string is the only thing that lets a deploy reach a warm cache;
+/// without it the year-long lifetime would pin the old bytes. Set by
+/// `build.rs` from the short commit (or the build timestamp when git is absent).
+pub fn asset_version() -> &'static str {
+    env!("ASSET_VERSION")
+}
+
+/// A versioned `/assets/*` URL. Every reference in the markup goes through
+/// this - an unversioned one is served `immutable` and can never be updated.
+pub fn asset(path: &str) -> String {
+    format!("{path}?v={}", asset_version())
+}
+
 fn sse_api_origin() -> &'static str {
     SSE_API_ORIGIN
         .get()
@@ -126,7 +141,7 @@ pub fn brand_name() -> String {
 /// never as executable JavaScript.
 fn sse_subscriber_script() -> Markup {
     html! {
-        script src="/assets/js/sse.js" data-api-origin=(sse_api_origin()) defer {}
+        script src=(asset("/assets/js/sse.js")) data-api-origin=(sse_api_origin()) defer {}
     }
 }
 
@@ -174,6 +189,15 @@ fn social_meta(page_title: &str, branding: &Branding) -> Markup {
 }
 
 pub fn document(title: &str, body: Markup) -> Markup {
+    document_with_avatar_picker(title, body, false)
+}
+
+/// BUNYIP-554: `document()` plus the avatar picker's stylesheet and controller.
+/// The picker renders on exactly one page (`/settings`), so the shared shell
+/// carries only `AVATAR_SLOT_CSS` - the one rule its avatar image needs - and
+/// the remaining rules plus `avatar-picker.js` ship on that page alone.
+/// Reached through `handlers::dashboard_response_with_avatar_picker`.
+pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker: bool) -> Markup {
     let branding = branding();
     html! {
         (DOCTYPE)
@@ -193,25 +217,21 @@ pub fn document(title: &str, body: Markup) -> Markup {
                 title { (document_title(title, &branding)) }
                 // BUNYIP-339: favicon set derived from the hero art (face crop,
                 // rounded corners). Served from /assets via ServeDir.
-                link rel="icon" href="/assets/favicon.ico" sizes="any";
-                link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16x16.png";
-                link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png";
-                link rel="icon" type="image/png" sizes="48x48" href="/assets/favicon-48x48.png";
-                link rel="icon" type="image/png" sizes="192x192" href="/assets/favicon-192x192.png";
-                link rel="icon" type="image/png" sizes="512x512" href="/assets/favicon-512x512.png";
-                link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png";
-                link rel="preconnect" href="https://fonts.googleapis.com";
-                link rel="preconnect" href="https://fonts.gstatic.com" crossorigin;
-                link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet";
-                // BUNYIP-424: Font Awesome is the self-hosted free webfont build,
-                // not the kit loader. The kit rotates its own contents by design
-                // and cannot carry SRI, so it was a standing remote-code grant to
-                // a third party. Vendored under assets/vendor/, version in the
-                // path so an upgrade is a visible diff.
-                link rel="stylesheet" href="/assets/vendor/fontawesome-6.7.2/css/fontawesome.min.css";
-                link rel="stylesheet" href="/assets/vendor/fontawesome-6.7.2/css/solid.min.css";
-                link rel="stylesheet" href="/assets/vendor/fontawesome-6.7.2/css/regular.min.css";
-                link rel="stylesheet" href="/assets/styles.css";
+                link rel="icon" href=(asset("/assets/favicon.ico")) sizes="any";
+                link rel="icon" type="image/png" sizes="16x16" href=(asset("/assets/favicon-16x16.png"));
+                link rel="icon" type="image/png" sizes="32x32" href=(asset("/assets/favicon-32x32.png"));
+                link rel="icon" type="image/png" sizes="48x48" href=(asset("/assets/favicon-48x48.png"));
+                link rel="icon" type="image/png" sizes="192x192" href=(asset("/assets/favicon-192x192.png"));
+                // BUNYIP-554: the 512 icon is WebP. The artwork is a dense
+                // illustration, and PNG cannot encode it under the 30 KB budget
+                // without destroying it (measured: 30,723 bytes only at blur 3.0
+                // and 16 colours); WebP holds it at 28,228. Browsers that do not
+                // decode WebP skip the candidate and fall back to the 192 PNG.
+                link rel="icon" type="image/webp" sizes="512x512" href=(asset("/assets/favicon-512x512.webp"));
+                // apple-touch-icon stays PNG: iOS home-screen icons are not
+                // fetched as WebP.
+                link rel="apple-touch-icon" sizes="180x180" href=(asset("/assets/apple-touch-icon.png"));
+                link rel="stylesheet" href=(asset("/assets/styles.css"));
                 // BUNYIP-500: per-skin theme override. The brand `@theme` tokens
                 // read `var(--skin-*, <default>)`, so a skin recolors the UI by
                 // setting `--skin-*` here. Config-supplied (trusted), and CSP
@@ -232,20 +252,24 @@ pub fn document(title: &str, body: Markup) -> Markup {
                 // htmx 2.0.3 dist, sha384-0895/pl2MU10Hqc6jd4RvrthNlDiE9U1tWmX7WRESftEDRosgxNsQG/Ze9YMRzHq)
                 // instead of pulled from unpkg, which resolves from npm at request
                 // time and so is replaceable by an upstream account compromise.
-                script src="/assets/vendor/htmx-2.0.3.min.js" defer {}
+                script src=(asset("/assets/vendor/htmx-2.0.3.min.js")) defer {}
                 // theme.js is NOT deferred: the stored theme has to land on
                 // <html> before first paint or the page flashes the wrong theme.
-                script src="/assets/js/theme.js" {}
-                script src="/assets/js/app.js" defer {}
+                script src=(asset("/assets/js/theme.js")) {}
+                script src=(asset("/assets/js/app.js")) defer {}
                 // BUNYIP-473: drag-and-drop / keyboard reordering for admin
                 // lists. Inert on pages without a `[data-reorder-list]`.
-                script src="/assets/js/app-reorder.js" defer {}
-                // BUNYIP-408: avatar picker CSS shipped inline (not via the
-                // separately-cached styles.css) so a stale stylesheet can never
-                // leave the component's structural rules undefined. See
-                // `avatar_picker::AVATAR_PICKER_CSS`.
-                style { (PreEscaped(crate::views::avatar_picker::AVATAR_PICKER_CSS)) }
-                script src="/assets/js/avatar-picker.js" defer {}
+                script src=(asset("/assets/js/app-reorder.js")) defer {}
+                // BUNYIP-408: avatar CSS shipped inline (not via the separately
+                // cached styles.css) so a stale stylesheet can never leave the
+                // component's structural rules undefined. BUNYIP-554: only the
+                // slot rule is shared; the picker's own rules and controller
+                // ship on the one page that renders it.
+                style { (PreEscaped(crate::views::avatar_picker::AVATAR_SLOT_CSS)) }
+                @if with_avatar_picker {
+                    style { (PreEscaped(crate::views::avatar_picker::AVATAR_PICKER_CSS)) }
+                    script src=(asset("/assets/js/avatar-picker.js")) defer {}
+                }
             }
             body {
                 // BUNYIP-243: app-wide "service unavailable" banner. Renders
@@ -1128,9 +1152,9 @@ mod tests {
     fn document_head_loads_only_first_party_scripts() {
         let html = document("Test", html! {}).into_string();
 
-        assert!(html.contains(r#"src="/assets/vendor/htmx-2.0.3.min.js""#));
-        assert!(html.contains(r#"src="/assets/js/theme.js""#));
-        assert!(html.contains(r#"src="/assets/js/app.js""#));
+        assert!(html.contains(r#"src="/assets/vendor/htmx-2.0.3.min.js?v="#));
+        assert!(html.contains(r#"src="/assets/js/theme.js?v="#));
+        assert!(html.contains(r#"src="/assets/js/app.js?v="#));
         assert!(!html.contains("kit.fontawesome.com"));
         assert!(!html.contains("unpkg.com"));
 
@@ -1146,6 +1170,58 @@ mod tests {
                 "script with an inline body: <script{attrs}>"
             );
         }
+    }
+
+    /// BUNYIP-554 F9: `/assets` is served `max-age=31536000, immutable`, so an
+    /// unversioned reference in the head is permanently un-updatable. Every
+    /// `/assets/*` URL the shared document emits must carry the build-derived
+    /// `?v=`; a reference added without `asset()` fails here.
+    #[test]
+    fn every_shared_asset_reference_carries_the_build_version() {
+        let html = document_with_avatar_picker("Test", html! {}, true).into_string();
+        let version = asset_version();
+        assert!(!version.is_empty(), "build.rs must emit ASSET_VERSION");
+
+        let mut refs = 0;
+        for (attr, quote) in [("src=\"", '"'), ("href=\"", '"')] {
+            for piece in html.split(attr).skip(1) {
+                let url = piece.split(quote).next().expect("attribute closes");
+                if !url.starts_with("/assets/") {
+                    continue;
+                }
+                refs += 1;
+                assert!(
+                    url.ends_with(&format!("?v={version}")),
+                    "unversioned /assets reference: {url} - route it through layout::asset()"
+                );
+            }
+        }
+        assert!(
+            refs >= 12,
+            "expected the whole head to be scanned, saw {refs} /assets references"
+        );
+    }
+
+    /// BUNYIP-554 F6: the avatar picker renders on exactly one page, so its
+    /// stylesheet and controller ship on that page alone. The shell's avatar
+    /// slot keeps its one rule everywhere, or every other page loses the
+    /// topbar avatar.
+    #[test]
+    fn the_avatar_picker_ships_only_where_it_renders() {
+        let plain = document("Test", html! {}).into_string();
+        assert!(
+            !plain.contains("avatar-picker"),
+            "the picker's CSS / controller must not ship on pages that do not render it"
+        );
+        assert!(
+            plain.contains(".avatar-slot__img"),
+            "the shell avatar still needs its slot rule on every page"
+        );
+
+        let with_picker = document_with_avatar_picker("Test", html! {}, true).into_string();
+        assert!(with_picker.contains(".avatar-picker__trigger"));
+        assert!(with_picker.contains("/assets/js/avatar-picker.js?v="));
+        assert!(with_picker.contains(".avatar-slot__img"));
     }
 
     /// BUNYIP-549: the browser-chrome colour used to be two hex literals in
@@ -1351,7 +1427,7 @@ mod tests {
     #[test]
     fn sse_subscriber_passes_origin_as_a_data_attribute() {
         let markup = sse_subscriber_script().into_string();
-        assert!(markup.contains(r#"src="/assets/js/sse.js""#));
+        assert!(markup.contains(r#"src="/assets/js/sse.js?v="#));
         assert!(markup.contains("data-api-origin="));
         assert!(markup.ends_with("></script>"));
     }
