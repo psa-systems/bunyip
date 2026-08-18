@@ -147,8 +147,8 @@ mod tests {
             community_url: String::new(),
             trusted_proxies: Vec::new(),
             theme_css: None,
-            theme_color_light: crate::config::DEFAULT_THEME_COLOR_LIGHT.into(),
-            theme_color_dark: crate::config::DEFAULT_THEME_COLOR_DARK.into(),
+            theme_color_light: None,
+            theme_color_dark: None,
             csp: crate::config::CspConfig::default(),
         }
     }

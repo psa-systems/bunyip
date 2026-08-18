@@ -1298,6 +1298,12 @@ mod tests {
             tagline: String::new(),
             meta_description: String::new(),
             og_image_url: String::new(),
+            theme_css: String::new(),
+            theme_color_light: String::new(),
+            theme_color_dark: String::new(),
+            mark_updated_at: None,
+            favicon_updated_at: None,
+            mascot_updated_at: None,
             updated_at: Utc::now(),
             updated_by: None,
         });

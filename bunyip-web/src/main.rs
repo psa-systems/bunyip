@@ -23,7 +23,7 @@ use axum::Router;
 use tower::ServiceBuilder;
 use tower_http::compression::predicate::{DefaultPredicate, NotForContentType};
 use tower_http::compression::{CompressionLayer, Predicate};
-use tower_http::services::{ServeDir, ServeFile};
+use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 /// BUNYIP-554 F9: `/assets/*` is immutable for a year. Every reference in the
@@ -34,10 +34,6 @@ use tower_http::set_header::SetResponseHeaderLayer;
 /// deploy, so heuristic freshness starts near zero and every reference was
 /// revalidated on the next navigation.
 const ASSET_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
-
-/// The root `/favicon.ico` probe is issued by URL, not from markup, so it
-/// cannot carry a `?v=` and must not be `immutable`. One day.
-const FAVICON_CACHE_CONTROL: &str = "public, max-age=86400";
 
 /// BUNYIP-554 F4: `DefaultPredicate` compresses everything except gRPC,
 /// `image/*`, `text/event-stream` and bodies under 32 bytes, so the BFF ran
@@ -90,8 +86,9 @@ async fn main() {
     // BUNYIP-500: per-skin brand theme override (BRAND_THEME_CSS); None keeps
     // the default palette.
     views::layout::install_skin_theme_css(cfg.theme_css.clone());
-    // BUNYIP-549: browser-chrome colours (BRAND_THEME_COLOR_LIGHT / _DARK);
-    // the defaults keep unskinned output byte-identical.
+    // BUNYIP-549/560: browser-chrome colours (BRAND_THEME_COLOR_LIGHT /
+    // _DARK), bootstrap defaults for a database that has never been branded.
+    // The branding record wins; with neither set the meta is omitted.
     views::layout::install_theme_colors(
         cfg.theme_color_light.clone(),
         cfg.theme_color_dark.clone(),
@@ -247,6 +244,10 @@ async fn main() {
             axum::routing::post(dash::settings_avatar_remove),
         )
         .route("/me/avatar", get(dash::me_avatar))
+        // BUNYIP-560: same-origin proxy for the admin-managed brand images
+        // (mark, mascot, derived favicon set). Unauthenticated, like the
+        // upstream endpoint: this is site chrome.
+        .route("/brand/:kind", get(branding::brand_asset))
         // BUNYIP-140: OIDC consent screen (rendered when /oauth2/authorize
         // on bunyip-api detects a (user, client, scope) combination that has
         // not been consented to yet).
@@ -318,16 +319,9 @@ async fn main() {
         // BUNYIP-339: browsers probe the root /favicon.ico regardless of the
         // <link rel="icon"> tags in <head>, so serve it at the web root too
         // (ServeDir above only answers under /assets). Without this the apex
-        // a8n.systems logs a 404 on every page load.
-        .route_service(
-            "/favicon.ico",
-            ServiceBuilder::new()
-                .layer(SetResponseHeaderLayer::if_not_present(
-                    CACHE_CONTROL,
-                    HeaderValue::from_static(FAVICON_CACHE_CONTROL),
-                ))
-                .service(ServeFile::new("assets/favicon.ico")),
-        )
+        // a8n.systems logs a 404 on every page load. BUNYIP-560: it follows the
+        // branding record, falling back to the committed file.
+        .route("/favicon.ico", get(branding::favicon_ico))
         .fallback(public::not_found)
         // BUNYIP-259: Origin / Referer CSRF defense on every state-
         // changing POST. Refuses cross-origin form submissions before

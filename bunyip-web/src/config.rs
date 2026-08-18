@@ -2,13 +2,11 @@
 //! read `window.__RUNTIME_CONFIG__`), this is a normal server process, so plain
 //! env vars are the source of truth.
 
-/// BUNYIP-549: default `theme-color` for the light scheme, bunyip's reed-700
-/// (the default value of `--skin-primary-700`). Lives here rather than in
-/// `views::layout` so the framework shell carries no colour literal.
-pub const DEFAULT_THEME_COLOR_LIGHT: &str = "#2f4e2e";
-
-/// BUNYIP-549: default `theme-color` for the dark scheme, bunyip's dark surface.
-pub const DEFAULT_THEME_COLOR_DARK: &str = "#161a16";
+// BUNYIP-560: the compiled-in `#2f4e2e` / `#161a16` pair is gone. The palette
+// is a field of the admin-managed branding record; `BRAND_THEME_COLOR_LIGHT` /
+// `_DARK` below are bootstrap defaults for a database that has never been
+// branded, and with neither set the `theme-color` meta is OMITTED rather than
+// painting every deployment's browser chrome one product's green.
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -61,22 +59,28 @@ pub struct Config {
     /// `TRUSTED_PROXY_CIDR` (comma-separated), analogous to bunyip-api's own
     /// `TRUSTED_PROXY_CIDR`. Empty = trust no forwarding headers.
     pub trusted_proxies: Vec<ipnetwork::IpNetwork>,
-    /// BUNYIP-500: optional per-skin theme override. Raw CSS custom-property
+    /// BUNYIP-500: optional theme override. Raw CSS custom-property
     /// declarations (e.g. `--skin-primary-500: #123456; ...`) emitted into a
     /// `:root { ... }` block in the document head, overriding the default brand
-    /// ramp the `@theme` tokens fall back to. `BRAND_THEME_CSS`; `None` (default)
-    /// emits nothing, so the default (Bunyip) palette is unchanged.
+    /// ramp the `@theme` tokens fall back to. `BRAND_THEME_CSS`; `None`
+    /// (default) emits nothing, so the default palette is unchanged.
+    ///
+    /// BUNYIP-560: this is a BOOTSTRAP DEFAULT only. The palette is a field of
+    /// the admin-managed branding record, which wins whenever it is set; the
+    /// variable answers solely for a database that has never been branded and
+    /// is removed in 0.16.0 (BUNYIP-568; `docs/configuration.md`).
     pub theme_css: Option<String>,
     /// BUNYIP-549: the `<meta name="theme-color">` value for the light scheme
     /// (the browser chrome: Android address bar, iOS status bar, PWA splash).
-    /// A skin recolours every in-page token through `theme_css`, so the chrome
-    /// colour is config-driven too rather than a framework literal.
-    /// `BRAND_THEME_COLOR_LIGHT`; defaults to bunyip's reed-700 so unskinned
-    /// output is unchanged.
-    pub theme_color_light: String,
+    /// `BRAND_THEME_COLOR_LIGHT`.
+    ///
+    /// BUNYIP-560: bootstrap default only, like [`Config::theme_css`], and
+    /// removed with it. `None` and an empty record field mean the meta is
+    /// omitted; no colour is compiled in.
+    pub theme_color_light: Option<String>,
     /// BUNYIP-549: the dark-scheme twin of [`Config::theme_color_light`].
-    /// `BRAND_THEME_COLOR_DARK`; defaults to bunyip's dark surface.
-    pub theme_color_dark: String,
+    /// `BRAND_THEME_COLOR_DARK`.
+    pub theme_color_dark: Option<String>,
     // BUNYIP-561: `app_name` (`APP_NAME`) and `brand_description`
     // (`BRAND_DESCRIPTION`) are gone. The product name, tagline, meta
     // description and Open Graph image are the admin-managed branding record
@@ -155,10 +159,8 @@ impl Config {
             // end-user IP. Same comma-separated CIDR form bunyip-api parses.
             trusted_proxies: parse_trusted_proxies(&var("TRUSTED_PROXY_CIDR").unwrap_or_default()),
             theme_css: var("BRAND_THEME_CSS"),
-            theme_color_light: var("BRAND_THEME_COLOR_LIGHT")
-                .unwrap_or_else(|| DEFAULT_THEME_COLOR_LIGHT.into()),
-            theme_color_dark: var("BRAND_THEME_COLOR_DARK")
-                .unwrap_or_else(|| DEFAULT_THEME_COLOR_DARK.into()),
+            theme_color_light: var("BRAND_THEME_COLOR_LIGHT"),
+            theme_color_dark: var("BRAND_THEME_COLOR_DARK"),
             csp: CspConfig {
                 connect_src: parse_csp_hosts(&var("CSP_CONNECT_SRC").unwrap_or_default()),
                 form_action: parse_csp_hosts(&var("CSP_FORM_ACTION").unwrap_or_default()),

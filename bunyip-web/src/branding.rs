@@ -17,10 +17,15 @@ use std::future::Future;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
+use axum::body::Body;
+use axum::extract::{Path, State};
+use axum::http::{header, StatusCode};
+use axum::response::{IntoResponse, Response};
 use serde_json::Value;
 
 use crate::api::types::Branding;
 use crate::api::{ok_data, parse, Api, ApiError};
+use crate::web::AppState;
 
 /// How often the BFF re-reads `/v1/branding`. An admin edit is visible within
 /// one interval; that is documented rather than worked around.
@@ -205,6 +210,202 @@ pub async fn admin_update(api: &Api, cookie: Option<&str>, body: Value) -> Resul
     ok_data(&r).map(|_| ())
 }
 
+/// BUNYIP-560: upload one brand asset (`mark`, `favicon` or `mascot`). The
+/// bytes are relayed as a multipart file part; bunyip-api sniffs the real type
+/// from content, so the declared `mime` is advisory, and it derives the whole
+/// favicon set from the favicon slot's source.
+pub async fn admin_upload_asset(
+    api: &Api,
+    cookie: Option<&str>,
+    slot: &str,
+    filename: &str,
+    mime: &str,
+    bytes: Vec<u8>,
+) -> Result<(), ApiError> {
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(filename.to_string())
+        .mime_str(mime)
+        .map_err(|e| ApiError {
+            status: 0,
+            code: "NETWORK_ERROR".into(),
+            message: format!("invalid brand asset mime: {e}"),
+            retry_after: None,
+            request_id: None,
+        })?;
+    let form = reqwest::multipart::Form::new().part("asset", part);
+    let r = api
+        .post_form(&format!("/admin/branding/assets/{slot}"), cookie, form)
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-560: clear one brand asset slot. Idempotent.
+pub async fn admin_clear_asset(
+    api: &Api,
+    cookie: Option<&str>,
+    slot: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .delete(&format!("/admin/branding/assets/{slot}"), cookie, None)
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-560: stream one brand asset's bytes for the `/brand/{kind}` BFF
+/// proxy, so the browser loads every brand image from bunyip-web's own origin
+/// (the same shape the avatar proxy uses). No cookie is forwarded: these are
+/// site chrome, identical for every visitor and for none.
+pub async fn fetch_asset(api: &Api, kind: &str) -> Result<reqwest::Response, ApiError> {
+    api.get_stream(&format!("/branding/assets/{kind}"), None)
+        .await
+}
+
+/// BUNYIP-560: every asset key the BFF will relay.
+///
+/// The path segment is interpolated into the upstream URL, and a percent-encoded
+/// `../` in it would otherwise walk out of `/v1/branding/assets/` and address
+/// another endpoint entirely, so the parameter is matched against this fixed
+/// list before any request is made. It mirrors `is_servable_asset_kind` in
+/// bunyip-domain; bunyip-web is a standalone binary and shares no crate with it.
+pub const BRAND_ASSET_KINDS: &[&str] = &[
+    "mark",
+    "mascot",
+    "favicon-ico",
+    "favicon-16",
+    "favicon-32",
+    "favicon-48",
+    "favicon-192",
+    "favicon-512",
+    "apple-touch-icon",
+];
+
+/// GET /brand/{kind} - same-origin proxy of one brand image, so the favicon
+/// links, the nav mark and the hero mascot all load from bunyip-web's own
+/// origin rather than needing the api origin in the CSP.
+///
+/// Unauthenticated, like the upstream endpoint. Any non-2xx is a 404 rather
+/// than a redirect, so a missing image never navigates an `<img>` to an HTML
+/// page.
+pub async fn brand_asset(State(st): State<AppState>, Path(kind): Path<String>) -> Response {
+    if !BRAND_ASSET_KINDS.contains(&kind.as_str()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match fetch_asset(&st.api, &kind).await {
+        Ok(resp) if resp.status().is_success() => {
+            let content_type = relayed_content_type(&resp, "application/octet-stream");
+            // Public and a day long; every reference carries the record's
+            // version as `?v=`, so a re-upload is a new URL rather than a day of
+            // the old logo.
+            image_response(
+                &kind,
+                content_type,
+                BRAND_ASSET_CACHE_CONTROL,
+                Body::from_stream(resp.bytes_stream()),
+            )
+        }
+        // A 404 upstream (the slot is unset) and an unreachable api are the same
+        // thing to an `<img>`, but not to the operator: only the second is a
+        // fault, and it is already logged with its cause by `Api::send`.
+        Ok(resp) => {
+            tracing::debug!(kind, status = resp.status().as_u16(), "brand asset missing");
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Err(e) => {
+            tracing::warn!(
+                kind,
+                status = e.status,
+                error = %e.message,
+                "could not relay a brand asset; the page renders without it"
+            );
+            StatusCode::NOT_FOUND.into_response()
+        }
+    }
+}
+
+/// The committed favicon the root probe falls back to. Relative to the working
+/// directory, exactly like the `ServeDir` that answers `/assets`.
+const COMMITTED_FAVICON: &str = "assets/favicon.ico";
+
+/// Brand images are relayed with a day-long lifetime; the `?v=` in every
+/// reference is what makes a re-upload visible immediately.
+const BRAND_ASSET_CACHE_CONTROL: &str = "public, max-age=86400";
+
+/// The upstream `Content-Type`, or `fallback` when the header is absent or not
+/// text. An absent optional header is not a failure; a wrong one would be, and
+/// the api always sets the stored MIME.
+fn relayed_content_type(resp: &reqwest::Response, fallback: &str) -> String {
+    resp.headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or(fallback)
+        .to_string()
+}
+
+/// Build one image response. A builder failure is logged with its cause rather
+/// than collapsing into a bare 404: every input here is server-controlled, so a
+/// failure is a defect in this file and there would otherwise be no trace of it.
+fn image_response(kind: &str, content_type: String, cache: &str, body: Body) -> Response {
+    match Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CACHE_CONTROL, cache)
+        .body(body)
+    {
+        Ok(response) => response,
+        Err(e) => {
+            tracing::error!(kind, error = %e, "could not build the brand asset response");
+            StatusCode::NOT_FOUND.into_response()
+        }
+    }
+}
+
+/// GET /favicon.ico - the root probe browsers issue regardless of the
+/// `<link rel="icon">` tags in `<head>`.
+///
+/// BUNYIP-560: it follows the branding record like every other icon. It cannot
+/// carry a `?v=` (the URL is fixed by the browser, not by the markup), so it is
+/// cacheable for a day rather than `immutable`; with the slot unset, or the api
+/// unreachable, it serves the committed file.
+pub async fn favicon_ico(State(st): State<AppState>) -> Response {
+    if !current().favicon_version.is_empty() {
+        // Never silent: the record says an icon IS set, so failing to relay it
+        // means every browser tab shows the build's icon instead of the
+        // deployment's, and the cause is the only way to tell why.
+        match fetch_asset(&st.api, "favicon-ico").await {
+            Ok(resp) if resp.status().is_success() => {
+                let content_type = relayed_content_type(&resp, "image/x-icon");
+                return image_response(
+                    "favicon-ico",
+                    content_type,
+                    BRAND_ASSET_CACHE_CONTROL,
+                    Body::from_stream(resp.bytes_stream()),
+                );
+            }
+            Ok(resp) => tracing::warn!(
+                status = resp.status().as_u16(),
+                "the uploaded favicon.ico is unavailable; serving the committed one"
+            ),
+            Err(e) => tracing::warn!(
+                status = e.status,
+                error = %e.message,
+                "could not relay the uploaded favicon.ico; serving the committed one"
+            ),
+        }
+    }
+    match tokio::fs::read(COMMITTED_FAVICON).await {
+        Ok(bytes) => image_response(
+            "favicon-ico",
+            "image/x-icon".to_string(),
+            BRAND_ASSET_CACHE_CONTROL,
+            Body::from(bytes),
+        ),
+        Err(e) => {
+            tracing::error!(path = COMMITTED_FAVICON, error = %e, "the committed favicon is unreadable");
+            StatusCode::NOT_FOUND.into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +416,7 @@ mod tests {
             tagline: "Surfaces what matters.".into(),
             meta_description: "Acme does things.".into(),
             og_image_url: "https://acme.test/card.png".into(),
+            ..Branding::default()
         }
     }
 

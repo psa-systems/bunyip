@@ -76,6 +76,11 @@ fn community_enabled() -> bool {
 /// (same `OnceLock` pattern as [`SSE_API_ORIGIN`]); emitted into a `:root`
 /// block in the document head. Unset (the default) emits nothing, so the
 /// `@theme` tokens fall back to the default palette.
+///
+/// BUNYIP-560: this is now the BOOTSTRAP DEFAULT only. The palette is a field
+/// of the admin-managed branding record, and `BRAND_THEME_CSS` answers solely
+/// for a database that has never been branded. The variable is removed in
+/// 0.16.0 (BUNYIP-568; `docs/configuration.md`).
 static SKIN_THEME_CSS: OnceLock<Option<String>> = OnceLock::new();
 
 /// Install the per-skin theme override. Called once from `main` before serving.
@@ -90,33 +95,42 @@ fn skin_theme_css() -> Option<&'static str> {
 
 /// BUNYIP-549: the two `<meta name="theme-color">` values (light scheme, dark
 /// scheme) that paint the browser chrome. A skin recolours every in-page token
-/// through [`SKIN_THEME_CSS`], so the chrome colour is config-supplied too
-/// (`Config::theme_color_light` / `theme_color_dark`) rather than a literal in
-/// this shell. Set once from `main` (same `OnceLock` pattern as
-/// [`SSE_API_ORIGIN`]); unset falls back to the bunyip defaults in
-/// `crate::config`, so unskinned output is byte-identical.
-static THEME_COLOR_LIGHT: OnceLock<String> = OnceLock::new();
-static THEME_COLOR_DARK: OnceLock<String> = OnceLock::new();
+/// through [`SKIN_THEME_CSS`], so the chrome colour never was a literal in this
+/// shell.
+///
+/// BUNYIP-560: both are fields of the admin-managed branding record now, and
+/// `BRAND_THEME_COLOR_LIGHT` / `_DARK` are the BOOTSTRAP DEFAULTS only, held
+/// here and consulted when the record's field is empty. The old compiled-in
+/// `#2f4e2e` / `#161a16` pair is gone: with neither the record nor the
+/// environment set, the meta is OMITTED rather than painting the browser chrome
+/// in one product's green.
+static THEME_COLOR_LIGHT: OnceLock<Option<String>> = OnceLock::new();
+static THEME_COLOR_DARK: OnceLock<Option<String>> = OnceLock::new();
 
-/// Install the browser-chrome colours. Called once from `main` before serving.
-/// Idempotent (the underlying `OnceLock`s ignore subsequent sets).
-pub fn install_theme_colors(light: impl Into<String>, dark: impl Into<String>) {
-    let _ = THEME_COLOR_LIGHT.set(light.into());
-    let _ = THEME_COLOR_DARK.set(dark.into());
+/// Install the bootstrap browser-chrome colours. Called once from `main` before
+/// serving. Idempotent (the underlying `OnceLock`s ignore subsequent sets).
+pub fn install_theme_colors(light: Option<String>, dark: Option<String>) {
+    let _ = THEME_COLOR_LIGHT.set(light);
+    let _ = THEME_COLOR_DARK.set(dark);
 }
 
-fn theme_color_light() -> &'static str {
-    THEME_COLOR_LIGHT
-        .get()
-        .map(String::as_str)
-        .unwrap_or(crate::config::DEFAULT_THEME_COLOR_LIGHT)
+fn bootstrap_theme_color_light() -> Option<&'static str> {
+    THEME_COLOR_LIGHT.get().and_then(Option::as_deref)
 }
 
-fn theme_color_dark() -> &'static str {
-    THEME_COLOR_DARK
-        .get()
-        .map(String::as_str)
-        .unwrap_or(crate::config::DEFAULT_THEME_COLOR_DARK)
+fn bootstrap_theme_color_dark() -> Option<&'static str> {
+    THEME_COLOR_DARK.get().and_then(Option::as_deref)
+}
+
+/// BUNYIP-560: resolve one palette value: the branding record, else the
+/// bootstrap environment default, else nothing at all. Pure, so the
+/// omission rule is unit-testable.
+fn palette_value<'a>(record: &'a str, bootstrap: Option<&'a str>) -> Option<&'a str> {
+    if !record.is_empty() {
+        Some(record)
+    } else {
+        bootstrap.filter(|v| !v.is_empty())
+    }
 }
 
 /// BUNYIP-561: the admin-managed branding record (product name, tagline, meta
@@ -188,6 +202,108 @@ fn social_meta(page_title: &str, branding: &Branding) -> Markup {
     }
 }
 
+/// BUNYIP-560: the icon set, from the branding record when an admin has
+/// uploaded a favicon source, and from the committed files under
+/// `bunyip-web/assets/` when they have not.
+///
+/// The two halves are the same ladder of sizes; only the origin and the 512's
+/// encoding differ (the derived set is PNG throughout, the committed 512 is a
+/// hand-tuned WebP). The record's URLs carry the record's own version as `?v=`
+/// rather than the build's, because they change when an admin uploads, not when
+/// the binary is rebuilt.
+fn favicon_links(branding: &Branding) -> Markup {
+    html! {
+        @for icon in FAVICON_LINKS {
+            @let derived = branding.favicon_src(icon.derived_kind);
+            @let mime = if derived.is_some() { icon.derived_type } else { icon.committed_type };
+            link rel=(icon.rel)
+                 sizes=(icon.sizes)
+                 type=[mime]
+                 href=(derived.unwrap_or_else(|| asset(icon.committed_path)));
+        }
+    }
+}
+
+/// One entry of the icon ladder, in both of its origins.
+struct IconLink {
+    rel: &'static str,
+    sizes: &'static str,
+    /// Storage key of the derived icon, when a favicon source is uploaded.
+    derived_kind: &'static str,
+    derived_type: Option<&'static str>,
+    /// BUNYIP-339: the committed fallback, derived from the hero art (face
+    /// crop, rounded corners) and served from /assets via ServeDir.
+    committed_path: &'static str,
+    committed_type: Option<&'static str>,
+}
+
+/// The icon set every page references, ordered as browsers read it.
+///
+/// The derived 512 is PNG while the committed one is WebP: BUNYIP-554 measured
+/// that this repo's dense hero art cannot survive PNG under the 30 KB budget
+/// (30,723 bytes only at blur 3.0 and 16 colours; WebP holds it at 28,228),
+/// while a derived icon is admin-uploaded, so a format every browser decodes
+/// beats a smaller file. `apple-touch-icon` is PNG in both: iOS home-screen
+/// icons are not fetched as WebP.
+const FAVICON_LINKS: &[IconLink] = &[
+    IconLink {
+        rel: "icon",
+        sizes: "any",
+        derived_kind: "favicon-ico",
+        derived_type: None,
+        committed_path: "/assets/favicon.ico",
+        committed_type: None,
+    },
+    IconLink {
+        rel: "icon",
+        sizes: "16x16",
+        derived_kind: "favicon-16",
+        derived_type: Some("image/png"),
+        committed_path: "/assets/favicon-16x16.png",
+        committed_type: Some("image/png"),
+    },
+    IconLink {
+        rel: "icon",
+        sizes: "32x32",
+        derived_kind: "favicon-32",
+        derived_type: Some("image/png"),
+        committed_path: "/assets/favicon-32x32.png",
+        committed_type: Some("image/png"),
+    },
+    IconLink {
+        rel: "icon",
+        sizes: "48x48",
+        derived_kind: "favicon-48",
+        derived_type: Some("image/png"),
+        committed_path: "/assets/favicon-48x48.png",
+        committed_type: Some("image/png"),
+    },
+    IconLink {
+        rel: "icon",
+        sizes: "192x192",
+        derived_kind: "favicon-192",
+        derived_type: Some("image/png"),
+        committed_path: "/assets/favicon-192x192.png",
+        committed_type: Some("image/png"),
+    },
+    IconLink {
+        rel: "icon",
+        sizes: "512x512",
+        derived_kind: "favicon-512",
+        derived_type: Some("image/png"),
+        committed_path: "/assets/favicon-512x512.webp",
+        committed_type: Some("image/webp"),
+    },
+    IconLink {
+        rel: "apple-touch-icon",
+        sizes: "180x180",
+        derived_kind: "apple-touch-icon",
+        derived_type: Some("image/png"),
+        committed_path: "/assets/apple-touch-icon.png",
+        committed_type: Some("image/png"),
+    },
+];
+
 pub fn document(title: &str, body: Markup) -> Markup {
     document_with_avatar_picker(title, body, false)
 }
@@ -211,33 +327,29 @@ pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker
                 @if !branding.meta_description.is_empty() {
                     meta name="description" content=(branding.meta_description);
                 }
-                meta name="theme-color" media="(prefers-color-scheme: light)" content=(theme_color_light());
-                meta name="theme-color" media="(prefers-color-scheme: dark)" content=(theme_color_dark());
+                // BUNYIP-560: the record, else the bootstrap environment
+                // default, else omitted. Nothing compiled in.
+                @if let Some(c) = palette_value(&branding.theme_color_light, bootstrap_theme_color_light()) {
+                    meta name="theme-color" media="(prefers-color-scheme: light)" content=(c);
+                }
+                @if let Some(c) = palette_value(&branding.theme_color_dark, bootstrap_theme_color_dark()) {
+                    meta name="theme-color" media="(prefers-color-scheme: dark)" content=(c);
+                }
                 (social_meta(title, &branding))
                 title { (document_title(title, &branding)) }
-                // BUNYIP-339: favicon set derived from the hero art (face crop,
-                // rounded corners). Served from /assets via ServeDir.
-                link rel="icon" href=(asset("/assets/favicon.ico")) sizes="any";
-                link rel="icon" type="image/png" sizes="16x16" href=(asset("/assets/favicon-16x16.png"));
-                link rel="icon" type="image/png" sizes="32x32" href=(asset("/assets/favicon-32x32.png"));
-                link rel="icon" type="image/png" sizes="48x48" href=(asset("/assets/favicon-48x48.png"));
-                link rel="icon" type="image/png" sizes="192x192" href=(asset("/assets/favicon-192x192.png"));
-                // BUNYIP-554: the 512 icon is WebP. The artwork is a dense
-                // illustration, and PNG cannot encode it under the 30 KB budget
-                // without destroying it (measured: 30,723 bytes only at blur 3.0
-                // and 16 colours); WebP holds it at 28,228. Browsers that do not
-                // decode WebP skip the candidate and fall back to the 192 PNG.
-                link rel="icon" type="image/webp" sizes="512x512" href=(asset("/assets/favicon-512x512.webp"));
-                // apple-touch-icon stays PNG: iOS home-screen icons are not
-                // fetched as WebP.
-                link rel="apple-touch-icon" sizes="180x180" href=(asset("/assets/apple-touch-icon.png"));
+                (favicon_links(&branding))
                 link rel="stylesheet" href=(asset("/assets/styles.css"));
-                // BUNYIP-500: per-skin theme override. The brand `@theme` tokens
-                // read `var(--skin-*, <default>)`, so a skin recolors the UI by
-                // setting `--skin-*` here. Config-supplied (trusted), and CSP
-                // already allows `style-src 'unsafe-inline'`. Unset -> no block ->
-                // the default palette.
-                @if let Some(css) = skin_theme_css() {
+                // BUNYIP-500: theme override. The brand `@theme` tokens read
+                // `var(--skin-*, <default>)`, so a palette recolors the UI by
+                // setting `--skin-*` here. CSP already allows
+                // `style-src 'unsafe-inline'`. Unset -> no block -> the default
+                // palette.
+                //
+                // BUNYIP-560: the branding record wins; `BRAND_THEME_CSS` is the
+                // bootstrap default for a database that has never been branded.
+                // The record's value is validated api-side to carry no angle
+                // bracket, so it cannot close this element.
+                @if let Some(css) = palette_value(&branding.theme_css, skin_theme_css()) {
                     style { ":root{" (PreEscaped(css)) "}" }
                 }
                 // BUNYIP-294: `defer` so no script blocks HTML parsing. A
@@ -290,13 +402,23 @@ pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker
     }
 }
 
-/// Reed-and-eyes brand mark, ported from the Dioxus `BrandMark` component.
-fn brand_mark() -> Markup {
+/// The nav mark: the uploaded brand image when one is set (BUNYIP-560),
+/// otherwise the reed-and-eyes glyph ported from the Dioxus `BrandMark`
+/// component. The glyph is a shape drawn in the theme's own `currentColor`, not
+/// a product's artwork, so it stays as the unbranded default.
+///
+/// The `alt` is empty on purpose: the mark sits inside a link whose text is the
+/// product name, so naming it again would announce the brand twice.
+fn brand_mark(branding: &Branding) -> Markup {
     html! {
-        svg class="w-7 h-7 text-brand-primary-700 dark:text-brand-primary-200" viewBox="0 0 32 32" fill="none" {
-            path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M8 28 V14 M16 28 V8 M24 28 V14" {}
-            circle cx="12.5" cy="18" r="2" fill="currentColor" {}
-            circle cx="19.5" cy="18" r="2" fill="currentColor" {}
+        @if let Some(src) = branding.mark_src() {
+            img src=(src) alt="" width="28" height="28" class="w-7 h-7 object-contain";
+        } @else {
+            svg class="w-7 h-7 text-brand-primary-700 dark:text-brand-primary-200" viewBox="0 0 32 32" fill="none" {
+                path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M8 28 V14 M16 28 V8 M24 28 V14" {}
+                circle cx="12.5" cy="18" r="2" fill="currentColor" {}
+                circle cx="19.5" cy="18" r="2" fill="currentColor" {}
+            }
         }
     }
 }
@@ -304,7 +426,7 @@ fn brand_mark() -> Markup {
 fn brand() -> Markup {
     html! {
         a href="/" class="flex items-center gap-2 group" {
-            (brand_mark())
+            (brand_mark(&branding()))
             span class="text-2xl font-semibold tracking-tight text-brand-primary-900 dark:text-brand-primary-50 group-hover:text-brand-primary-700 dark:group-hover:text-brand-primary-200 transition-colors" { (brand_name()) }
         }
     }
@@ -1272,44 +1394,103 @@ mod tests {
         assert!(with_picker.contains(".avatar-slot__img"));
     }
 
-    /// BUNYIP-549: the browser-chrome colour used to be two hex literals in
-    /// `document()`, so a skin recoloured every in-page token and left the
-    /// Android address bar / iOS status bar reed-green. Both metas now come
-    /// from config: unset renders the bunyip defaults byte-for-byte, and an
-    /// installed pair moves both. One test, because the values live behind a
-    /// process-wide `OnceLock` that can only be set once.
+    /// BUNYIP-549/560: the browser-chrome colour used to be two hex literals in
+    /// `document()`, then two environment variables, and is now a field of the
+    /// admin-managed record. The order is: the record, else the bootstrap
+    /// environment default, else NOTHING - never a compiled-in colour, which is
+    /// what left a rebranded deployment's address bar reed-green.
     #[test]
-    fn theme_color_metas_default_to_bunyip_and_follow_the_skin() {
-        let unskinned = document("Test", html! {}).into_string();
-        assert!(
-            unskinned.contains(&format!(
-                r#"<meta name="theme-color" media="(prefers-color-scheme: light)" content="{}">"#,
-                crate::config::DEFAULT_THEME_COLOR_LIGHT
-            )),
-            "unskinned head is unchanged: {unskinned}"
+    fn the_palette_prefers_the_record_then_the_bootstrap_default_then_nothing() {
+        assert_eq!(palette_value("#abcdef", Some("#123456")), Some("#abcdef"));
+        assert_eq!(palette_value("", Some("#123456")), Some("#123456"));
+        assert_eq!(palette_value("", None), None);
+        assert_eq!(
+            palette_value("", Some("")),
+            None,
+            "an empty environment value is unset, not a colour"
         );
+    }
+
+    /// BUNYIP-560: the icon set comes from the record when a favicon source is
+    /// uploaded, and from the committed files when it is not. A derived link
+    /// that kept pointing at `/assets` would show the previous product's icon
+    /// in every browser tab.
+    #[test]
+    fn the_favicon_set_follows_the_record_and_falls_back_to_the_committed_files() {
+        let committed = favicon_links(&Branding::default()).into_string();
+        for path in [
+            "/assets/favicon.ico?v=",
+            "/assets/favicon-16x16.png?v=",
+            "/assets/favicon-32x32.png?v=",
+            "/assets/favicon-48x48.png?v=",
+            "/assets/favicon-192x192.png?v=",
+            "/assets/favicon-512x512.webp?v=",
+            "/assets/apple-touch-icon.png?v=",
+        ] {
+            assert!(
+                committed.contains(path),
+                "an unset favicon slot serves the committed {path}: {committed}"
+            );
+        }
+
+        let derived = favicon_links(&Branding {
+            favicon_version: "1755500000000".into(),
+            ..Branding::default()
+        })
+        .into_string();
         assert!(
-            unskinned.contains(&format!(
-                r#"<meta name="theme-color" media="(prefers-color-scheme: dark)" content="{}">"#,
-                crate::config::DEFAULT_THEME_COLOR_DARK
-            )),
-            "unskinned head is unchanged: {unskinned}"
+            !derived.contains("/assets/"),
+            "an uploaded source replaces the whole set, not part of it: {derived}"
+        );
+        for kind in [
+            "favicon-ico",
+            "favicon-16",
+            "favicon-32",
+            "favicon-48",
+            "favicon-192",
+            "favicon-512",
+            "apple-touch-icon",
+        ] {
+            assert!(
+                derived.contains(&format!("/brand/{kind}?v=1755500000000")),
+                "{kind} is derived from the uploaded source: {derived}"
+            );
+        }
+        assert!(
+            derived.contains(r#"rel="apple-touch-icon" sizes="180x180""#),
+            "{derived}"
         );
 
-        install_theme_colors("#123456", "#654321");
-        let skinned = document("Test", html! {}).into_string();
+        // The proxy relays only the keys on its allow-list, so a link naming a
+        // key that is not on it would render a broken icon.
+        for icon in FAVICON_LINKS {
+            assert!(
+                crate::branding::BRAND_ASSET_KINDS.contains(&icon.derived_kind),
+                "`{}` is referenced from the head but not relayed by /brand/{{kind}}",
+                icon.derived_kind
+            );
+        }
+    }
+
+    /// BUNYIP-560: an uploaded mark replaces the built-in glyph. The glyph is a
+    /// shape in `currentColor`, not artwork, so it stays as the unbranded
+    /// default rather than being dropped.
+    #[test]
+    fn the_nav_mark_is_the_uploaded_image_when_one_is_set() {
+        let default_mark = brand_mark(&Branding::default()).into_string();
+        assert!(default_mark.contains("<svg"), "{default_mark}");
+        assert!(!default_mark.contains("<img"), "{default_mark}");
+
+        let uploaded = brand_mark(&Branding {
+            mark_version: "1755500000000".into(),
+            ..Branding::default()
+        })
+        .into_string();
         assert!(
-            skinned.contains(
-                r##"<meta name="theme-color" media="(prefers-color-scheme: light)" content="#123456">"##
-            ),
-            "the light meta follows the skin: {skinned}"
+            uploaded.contains(r#"src="/brand/mark?v=1755500000000""#),
+            "{uploaded}"
         );
-        assert!(
-            skinned.contains(
-                r##"<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#654321">"##
-            ),
-            "the dark meta follows the skin: {skinned}"
-        );
+        assert!(!uploaded.contains("<svg"), "{uploaded}");
     }
 
     /// BUNYIP-487: `/pricing` 404s unless an admin published it, so the nav and
@@ -1373,6 +1554,7 @@ mod tests {
             tagline: "Surfaces what matters.".into(),
             meta_description: "Acme does things.".into(),
             og_image_url: "https://acme.test/card.png".into(),
+            ..Branding::default()
         };
         assert_eq!(document_title("Dashboard", &branding), "Dashboard · Acme");
 
@@ -1439,18 +1621,52 @@ mod tests {
         );
         assert!(unbranded.contains("<title>Test</title>"));
         assert!(!unbranded.contains("og:"));
+        // BUNYIP-560: with neither the record nor the environment set, the
+        // browser chrome and the `:root` ramp are OMITTED, not painted one
+        // product's green. `BRAND_THEME_*` is unset in the test process, so
+        // this also proves nothing is compiled in.
+        assert!(
+            !unbranded.contains("theme-color"),
+            "an unbranded head carries no chrome colour: {unbranded}"
+        );
+        assert!(
+            !unbranded.contains(":root{"),
+            "an unbranded head carries no palette block: {unbranded}"
+        );
 
         crate::branding::install(Branding {
             brand_name: "Acme".into(),
             tagline: "Surfaces what matters.".into(),
             meta_description: "Acme does things.".into(),
             og_image_url: "https://acme.test/card.png".into(),
+            theme_css: "--skin-primary-700: #abcdef;".into(),
+            theme_color_light: "#abcdef".into(),
+            theme_color_dark: "#123456".into(),
+            ..Branding::default()
         });
         let branded = document("Test", html! {}).into_string();
         assert!(branded.contains(r#"<meta name="description" content="Acme does things.">"#));
         assert!(branded.contains("<title>Test · Acme</title>"));
         assert!(
             branded.contains(r#"<meta property="og:image" content="https://acme.test/card.png">"#)
+        );
+        // BUNYIP-560: the palette comes from the record, both metas and the
+        // `:root` block together.
+        assert!(
+            branded.contains(
+                r##"<meta name="theme-color" media="(prefers-color-scheme: light)" content="#abcdef">"##
+            ),
+            "{branded}"
+        );
+        assert!(
+            branded.contains(
+                r##"<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#123456">"##
+            ),
+            "{branded}"
+        );
+        assert!(
+            branded.contains("<style>:root{--skin-primary-700: #abcdef;}</style>"),
+            "{branded}"
         );
 
         // Leave the cache unbranded again so no other test in this binary

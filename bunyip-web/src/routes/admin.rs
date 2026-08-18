@@ -189,9 +189,24 @@ pub fn routes() -> Router<AppState> {
             post(admin::stripe_catalog_save),
         )
         // BUNYIP-561: the product name, tagline and sharing metadata.
+        // BUNYIP-560: plus the palette (same form) and the brand images (one
+        // multipart form per slot).
         .route(
             "/admin/branding",
             get(admin::branding).post(admin::branding_save),
+        )
+        .route(
+            "/admin/branding/assets/:slot",
+            post(admin::branding_asset_upload).layer(
+                // Raise the default axum 2 MB body limit so a 2 MiB image plus
+                // multipart overhead fits. The API's own ImagePolicy is the
+                // authoritative cap.
+                axum::extract::DefaultBodyLimit::max(3 * 1024 * 1024),
+            ),
+        )
+        .route(
+            "/admin/branding/assets/:slot/clear",
+            post(admin::branding_asset_clear),
         )
         .route("/admin/email", get(admin::email).post(admin::email_save))
         .route("/admin/email/test", post(admin::email_test))

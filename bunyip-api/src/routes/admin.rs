@@ -297,6 +297,16 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             // request, so email subjects follow without a restart.
             .route("/branding", web::get().to(handlers::get_branding))
             .route("/branding", web::put().to(handlers::update_branding))
+            // BUNYIP-560: one uploadable image per brand slot (mark, favicon
+            // source, mascot), replaced or cleared whole.
+            .route(
+                "/branding/assets/{slot}",
+                web::post().to(handlers::upload_branding_asset),
+            )
+            .route(
+                "/branding/assets/{slot}",
+                web::delete().to(handlers::delete_branding_asset),
+            )
             // Email config (BUNYIP-351)
             .route("/email", web::get().to(handlers::get_email_config))
             .route("/email", web::put().to(handlers::update_email_config))
