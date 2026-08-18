@@ -5,8 +5,7 @@ Welcome to {{ app_name }}
 Your account is ready. {{ app_name }} is your single sign-on for the whole
 PSA Systems suite. Sign in here once and every connected app follows.
 
-Head to your dashboard to finish setting up your profile, verify your
-email, and connect your first app.
+Head to your dashboard to{% if not email_verified %} verify your email and{% endif %} connect your first app.
 
 Dashboard: {{ dashboard_url }}
 

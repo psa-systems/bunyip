@@ -369,7 +369,9 @@ pub async fn register(
     // still logs and continues, because the register itself has already
     // committed and the user's dashboard access does not depend on the
     // welcome. BUNYIP-265 rule holds: do not log the raw email address.
-    if let Err(e) = email_service.send_account_created(&body.email).await {
+    // Password signup: the address is not verified yet (the onboarding page
+    // fires the verify step), so the email keeps its "verify your email" prompt.
+    if let Err(e) = email_service.send_account_created(&body.email, false).await {
         tracing::error!(error = %e, "Failed to send account created email");
     }
 
@@ -644,7 +646,9 @@ pub async fn verify_magic_link(
             // signup paths behave identically. BUNYIP-265 rule holds: do
             // not log the raw email address.
             if is_new_user {
-                if let Err(e) = email_service.send_account_created(&user.email).await {
+                // Magic-link signup already verified the address (above), so
+                // pass true to suppress the email's "verify your email" prompt.
+                if let Err(e) = email_service.send_account_created(&user.email, true).await {
                     tracing::error!(error = %e, "Failed to send account created email");
                 }
             }
