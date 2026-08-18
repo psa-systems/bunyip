@@ -1,24 +1,24 @@
 <!--
-  BUNYIP-288: palette resolved from bunyip-web's dark-mode tokens in
-  bunyip-web/input.css so the email visual matches the live dashboard the
-  CTA lands on. HSL -> HEX resolution table (documented here so a future
-  palette refresh has a greppable trail):
+  BUNYIP-569: layered dark email palette. Replaces the flat single-fill scheme
+  from BUNYIP-288 that rendered as one near-black olive mass with green-on-green
+  accents. Three distinct tones separate the layers so the card stands out, and
+  green is reserved for accents and CTAs, never body copy. Baked HEX (mail
+  clients cannot evaluate CSS variables):
 
-    --background:         hsl(120,  8%,  9%) -> #151915  (body)
-    --card / bg elevated: hsl(120,  8%, 12%) -> #1c211c  (card)
-    --foreground:         hsl(120, 21%, 96%) -> #f3f7f3  (near-white)
-    --primary:            hsl(116, 28%, 31%) -> #395f39  (forest green)
-    --primary bright:     hsl(116, 34%, 46%) -> #4d9a54  (gradient end / hover)
-    --primary-foreground: hsl(  0,  0%,100%) -> #ffffff
-    --muted-foreground:   hsl(113, 15%, 60%) -> #93a795  (footer, muted body)
-    accent border:        primary at 20% alpha -> rgba(57, 95, 57, 0.20)
+    Outer page (darkest):      #0c0f0c  (+ subtle top gradient to #111710)
+    Message card (raised):     #232b22
+    Header band:               #1a211a
+    Footer panel:              #141a13
+    Card top accent strip:     #4d9a54  (3px)
+    Body copy:                 #d4ddd4  (neutral light, not green)
+    Headings / strong:         #f4f8f4
+    Muted (footer, hints):     #95a596
+    CTA button:                #3f6f3f -> #4d9a54 gradient, #ffffff text
+    Accent / highlight / link: #74c47c  (bright green, reads on the raised card)
+    Hairline borders:          primary green at low alpha, rgba(77,154,84, a)
 
-  Email clients cannot evaluate CSS variables; the palette is baked in as
-  resolved HEX. Dark palette only: the live dashboard defaults to dark and a
-  single confident palette renders more predictably across mail clients than
-  a `prefers-color-scheme` swap (some clients render the dark CSS inside a
-  light shell). Follow-up ticket can add light-mode support if user
-  feedback warrants.
+  Dark only: one confident palette renders more predictably across mail clients
+  than a prefers-color-scheme swap. Light mode is a follow-up if feedback warrants.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -30,8 +30,9 @@
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       line-height: 1.6;
-      color: #cbd6cc;
-      background-color: #151915;
+      color: #d4ddd4;
+      background-color: #0c0f0c;
+      background-image: linear-gradient(180deg, #111710 0%, #0a0c0a 55%);
       margin: 0;
       padding: 0;
     }
@@ -41,14 +42,16 @@
       padding: 40px 20px;
     }
     .card {
-      background: #1c211c;
+      background: #232b22;
       border-radius: 12px;
-      border: 1px solid rgba(57, 95, 57, 0.20);
+      border: 1px solid rgba(77, 154, 84, 0.22);
+      border-top: 3px solid #4d9a54;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
       overflow: hidden;
     }
     .header {
-      background: #151915;
-      border-bottom: 1px solid rgba(57, 95, 57, 0.24);
+      background: #1a211a;
+      border-bottom: 1px solid rgba(77, 154, 84, 0.24);
       padding: 24px;
       text-align: center;
     }
@@ -59,31 +62,32 @@
     }
     .logo-brand {
       font-weight: 800;
-      color: #f3f7f3;
+      color: #f4f8f4;
     }
     .logo-tld {
       font-weight: 300;
-      color: #93a795;
+      color: #95a596;
     }
     .content {
       padding: 32px;
     }
     h1 {
-      color: #f3f7f3;
+      color: #f4f8f4;
       font-size: 24px;
       margin-top: 0;
       margin-bottom: 16px;
     }
     h2 {
-      color: #e5efe6;
+      color: #e8f0e9;
     }
     p {
-      color: #cbd6cc;
+      color: #d4ddd4;
       margin: 0 0 16px;
     }
     .button {
       display: inline-block;
-      background: #395f39;
+      background-color: #3f6f3f;
+      background-image: linear-gradient(135deg, #3f6f3f 0%, #4d9a54 100%);
       color: #ffffff !important;
       text-decoration: none;
       padding: 14px 28px;
@@ -96,26 +100,29 @@
       margin: 24px 0;
     }
     .muted {
-      color: #93a795;
+      color: #95a596;
       font-size: 14px;
     }
     .link-fallback {
-      color: #93a795;
+      color: #95a596;
       font-size: 12px;
       word-break: break-all;
     }
     .highlight {
-      color: #4d9a54;
+      color: #74c47c;
       font-weight: 600;
     }
     .footer {
+      background: #141a13;
+      border-radius: 10px;
       text-align: center;
-      padding: 24px;
-      color: #93a795;
+      margin-top: 20px;
+      padding: 20px 24px;
+      color: #95a596;
       font-size: 14px;
     }
     .footer a {
-      color: #4d9a54;
+      color: #74c47c;
       text-decoration: none;
     }
     .footer a:hover {
@@ -126,15 +133,15 @@
       margin: 16px 0;
     }
     li {
-      color: #cbd6cc;
+      color: #d4ddd4;
       margin-bottom: 8px;
     }
     strong {
-      color: #f3f7f3;
+      color: #f4f8f4;
     }
     .divider {
       border: none;
-      border-top: 1px solid rgba(57, 95, 57, 0.18);
+      border-top: 1px solid rgba(77, 154, 84, 0.16);
       margin: 24px 0;
     }
   </style>
