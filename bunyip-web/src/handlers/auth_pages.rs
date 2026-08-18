@@ -108,7 +108,7 @@ fn bunyip_auth_cookie_clears(cfg: &Config) -> Vec<String> {
     }
     out
 }
-use crate::views::ui::{back_link, button_class, error_box};
+use crate::views::ui::{back_link, button_class, error_box, icon};
 use crate::web::{html, html_cookies, redirect, redirect_cookies, AppState};
 
 fn field(id: &str, label: &str, ty: &str, placeholder: &str, autocomplete: &str) -> Markup {
@@ -155,11 +155,34 @@ fn submit_btn(label: &str) -> Markup {
     html! { button type="submit" class=(button_class("default", "default", "w-full")) { (label) } }
 }
 
+/// BUNYIP-554: both eye states, pre-rendered. `input.css` shows exactly one per
+/// the button's `aria-pressed`, so `assets/js/password.js` never builds markup -
+/// SVG generation stays in Rust and the script only flips the ARIA state.
+fn pw_toggle_glyphs() -> Markup {
+    html! {
+        span data-pw-icon="eye" aria-hidden="true" { (icon("eye", "h-4 w-4")) }
+        span data-pw-icon="eye-off" aria-hidden="true" { (icon("eye-off", "h-4 w-4")) }
+    }
+}
+
+/// BUNYIP-554: the three indicator states of a `pw_reqs()` row, pre-rendered.
+/// `input.css` reveals the one matching the row's `pw-pending` / `pw-pass` /
+/// `pw-fail` class, so the script flips a class instead of writing markup.
+fn pw_state_glyphs() -> Markup {
+    html! {
+        span class="pw-indicator inline-flex justify-center w-4" aria-hidden="true" {
+            span data-pw-state="pending" { (icon("circle", "h-3.5 w-3.5")) }
+            span data-pw-state="pass" { (icon("circle-check", "h-3.5 w-3.5")) }
+            span data-pw-state="fail" { (icon("circle-x", "h-3.5 w-3.5")) }
+        }
+    }
+}
+
 /// BUNYIP-282: password input with an inline show/hide eye toggle.
-/// Default state is hidden (`type=password`, `fa-eye` icon, `aria-pressed=false`,
+/// Default state is hidden (`type=password`, eye glyph, `aria-pressed=false`,
 /// `aria-label="Show password"`); `assets/js/password.js` flips
-/// `type`, swaps the glyph between `fa-eye` and `fa-eye-slash`, updates
-/// `aria-pressed`, and rewrites `aria-label` on click. The `pr-10` padding
+/// `type`, `aria-pressed` and `aria-label` on click, and the CSS in
+/// `pw_toggle_glyphs()` swaps which glyph is visible. The `pr-10` padding
 /// on the input keeps the typed text from running under the button. Scoped
 /// strictly to the signup card; login / reset / change-password fields keep
 /// using `field()`.
@@ -175,7 +198,7 @@ fn password_field(id: &str, label: &str, autocomplete: &str) -> Markup {
                     aria-label="Show password"
                     aria-pressed="false"
                     class="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center w-7 h-7 rounded text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring" {
-                    i class="fa-regular fa-eye" aria-hidden="true" {}
+                    (pw_toggle_glyphs())
                 }
             }
         }
@@ -201,30 +224,22 @@ fn pw_reqs() -> Markup {
     html! {
         ul id="pw-reqs" class="text-sm text-muted-foreground space-y-1.5 mt-2" {
             li id="pw-len" class="pw-pending flex items-center gap-2" {
-                span class="pw-indicator inline-flex justify-center w-4" aria-hidden="true" {
-                    i class="fa-regular fa-circle" {}
-                }
+                (pw_state_glyphs())
                 span class="pw-label" { "At least 12 characters" }
             }
             li id="pw-case" class="pw-pending flex items-center gap-2" {
-                span class="pw-indicator inline-flex justify-center w-4" aria-hidden="true" {
-                    i class="fa-regular fa-circle" {}
-                }
+                (pw_state_glyphs())
                 span class="pw-label" { "Upper and lowercase letters" }
             }
             li id="pw-digit" class="pw-pending flex items-center gap-2" {
-                span class="pw-indicator inline-flex justify-center w-4" aria-hidden="true" {
-                    i class="fa-regular fa-circle" {}
-                }
+                (pw_state_glyphs())
                 span class="pw-label" { "At least one digit and one special character" }
             }
             li id="pw-breach" class="pw-pending flex items-center gap-2"
                 data-label-pass="Not found in a known data breach"
                 data-label-fail="Found in a known data breach. Pick a different password."
                 data-label-pending="Not found in a known data breach" {
-                span class="pw-indicator inline-flex justify-center w-4" aria-hidden="true" {
-                    i class="fa-regular fa-circle" {}
-                }
+                (pw_state_glyphs())
                 span class="pw-label" { "Not found in a known data breach" }
             }
         }
@@ -244,7 +259,7 @@ fn pw_reqs() -> Markup {
 /// code lives in `assets/js/password.js` and is loaded from `'self'`, so
 /// bunyip-web's CSP no longer needs `script-src 'unsafe-inline'`.
 fn password_script() -> Markup {
-    html! { script src="/assets/js/password.js" defer {} }
+    html! { script src=(crate::views::layout::asset("/assets/js/password.js")) defer {} }
 }
 
 /// Validate and normalise a post-login redirect target.

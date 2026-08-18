@@ -7,6 +7,69 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ---------------------------------------------------------------------------
+   Self-hosted web fonts (BUNYIP-554). These replace the render-blocking
+   `fonts.googleapis.com` stylesheet, which pulled up to 7 woff2 files from a
+   second origin: two DNS lookups, two TLS handshakes and two round trips on the
+   critical path, plus the `font-src`/`style-src` grants to Google that
+   `src/security.rs` only carried for them.
+
+   Both families are the VARIABLE builds, so one file per subset covers every
+   weight the UI uses (Inter 400-700, JetBrains Mono 400-500) instead of the
+   five and two static instances the Google URL requested. `unicode-range`
+   keeps the `latin-ext` files off the wire until a page needs them, so the
+   normal cost is inter latin (48 KB) plus, on pages with code, jetbrains latin
+   (31 KB). The version is in the filename because /assets is served
+   `immutable` for a year and stylesheet URLs carry no `?v=`.
+
+   Licence: both are SIL Open Font License 1.1, same as the Font Awesome free
+   build BUNYIP-424 vendored.
+   --------------------------------------------------------------------------- */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/assets/vendor/fonts/inter-v20-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6,
+    U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+    U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/assets/vendor/fonts/inter-v20-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F,
+    U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url("/assets/vendor/fonts/jetbrains-mono-v24-latin.woff2")
+    format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6,
+    U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+    U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url("/assets/vendor/fonts/jetbrains-mono-v24-latin-ext.woff2")
+    format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F,
+    U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+
+/* ---------------------------------------------------------------------------
    Bunyip reed/water design tokens. The shadcn semantic token names are kept
    (so every existing `bg-background` / `text-foreground` / `from-primary`
    utility keeps resolving), but the raw `H S% L%` triples are remapped to
@@ -490,6 +553,34 @@
   opacity: 1;
   transform: translateY(0);
   transition-delay: 0.5s;
+}
+
+/* Password UX glyph states (BUNYIP-554). The show/hide eye and the three
+   per-requirement indicators used to be Font Awesome `<i>` elements whose class
+   `assets/js/password.js` rewrote. Every state is now a pre-rendered inline SVG
+   (handlers::auth_pages::pw_toggle_glyphs / pw_state_glyphs) and CSS picks
+   which one is visible, so SVG generation stays in Rust and the script only
+   flips ARIA state and a class. Each default reveals the resting glyph, so a
+   row with no state class still renders. */
+[data-pw-icon="eye-off"] {
+  display: none;
+}
+[data-pw-toggle][aria-pressed="true"] [data-pw-icon="eye"] {
+  display: none;
+}
+[data-pw-toggle][aria-pressed="true"] [data-pw-icon="eye-off"] {
+  display: inline-flex;
+}
+
+.pw-indicator [data-pw-state="pass"],
+.pw-indicator [data-pw-state="fail"],
+.pw-pass .pw-indicator [data-pw-state="pending"],
+.pw-fail .pw-indicator [data-pw-state="pending"] {
+  display: none;
+}
+.pw-pass .pw-indicator [data-pw-state="pass"],
+.pw-fail .pw-indicator [data-pw-state="fail"] {
+  display: inline-flex;
 }
 
 /* Always-visible scrollbars (BUNYIP-509). These rules replace a global

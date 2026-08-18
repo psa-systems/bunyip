@@ -147,8 +147,31 @@ fn inner(name: &str) -> &'static str {
         "help-circle" => {
             r#"<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>"#
         }
+        // BUNYIP-554: the last glyphs that still came from the Font Awesome
+        // webfont. Adding them here retired 240 KB of CSS + woff2 from every
+        // page; the rest of the set already had an inline equivalent.
+        "circle" => r#"<circle cx="12" cy="12" r="10"/>"#,
+        "circle-check" => r#"<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>"#,
+        "circle-x" => {
+            r#"<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>"#
+        }
+        "eye" => {
+            r#"<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>"#
+        }
+        "eye-off" => {
+            r#"<path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/>"#
+        }
         _ => "",
     }
+}
+
+/// Whether `name` resolves to real SVG. `inner()` answers an empty string for
+/// an unknown name, which renders an invisible `<svg>` instead of failing, so
+/// the guards that keep a typo (or a retired Font Awesome name) from shipping
+/// blank need to ask (BUNYIP-554).
+#[cfg(test)]
+pub(crate) fn icon_is_known(name: &str) -> bool {
+    !inner(name).is_empty()
 }
 
 pub fn icon(name: &str, class: &str) -> Markup {
@@ -853,9 +876,10 @@ mod tests {
 
     /// BUNYIP-550: an arrow written as a literal character renders in the body
     /// font and cannot be sized or coloured with the surrounding icon classes,
-    /// so it is never the arrow. In-app views use [`icon`] (`arrow-left` /
-    /// `arrow-right`), the marketing skin uses its Font Awesome `<i>`. The
-    /// needles are `\u{}` escapes so this file's own source does not match.
+    /// so it is never the arrow. Every view, marketing skin included, uses
+    /// [`icon`] (`arrow-left` / `arrow-right`); BUNYIP-554 retired the Font
+    /// Awesome `<i>` the skin used to carry. The needles are `\u{}` escapes so
+    /// this file's own source does not match.
     #[test]
     fn no_view_hardcodes_an_arrow_character() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -877,7 +901,63 @@ mod tests {
         assert!(
             offenders.is_empty(),
             "literal arrow characters render in the body font; use `icon(\"arrow-left\")` / \
-             `icon(\"arrow-right\")`, or the Font Awesome glyph in the marketing skin: {offenders:?}"
+             `icon(\"arrow-right\")`: {offenders:?}"
+        );
+    }
+
+    /// BUNYIP-554: `inner()` answers `""` for a name it does not know, so a
+    /// typo renders an empty `<svg>` - the icon just vanishes, with nothing in
+    /// a log and nothing on screen to say why. Every literal name passed to
+    /// [`icon`] anywhere in the tree must resolve. This is what keeps the
+    /// glyphs the Font Awesome removal moved inline from silently disappearing.
+    #[test]
+    fn every_icon_name_used_in_the_views_resolves() {
+        // Split so this file's own `icon(` definition does not match the scan.
+        let needle = concat!("icon", "(\"");
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![src];
+        let (mut checked, mut offenders) = (0, Vec::new());
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("readable source dir") {
+                let path = entry.expect("readable dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let body = std::fs::read_to_string(&path).expect("readable source file");
+                for (n, line) in body.lines().enumerate() {
+                    // Comments and assertion prose name the shape; only code
+                    // emits it (same cut as the security scan).
+                    if line.trim_start().starts_with("//") {
+                        continue;
+                    }
+                    for piece in line.split(needle).skip(1) {
+                        let Some(name) = piece.split('"').next() else {
+                            continue;
+                        };
+                        checked += 1;
+                        if !super::icon_is_known(name) {
+                            offenders.push(format!(
+                                "{}:{}: icon(\"{name}\")",
+                                path.display(),
+                                n + 1
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            checked > 20,
+            "the icon scan matched {checked} sites; needle is stale"
+        );
+        assert!(
+            offenders.is_empty(),
+            "unknown icon name renders an empty <svg>; add it to `inner()`:\n{}",
+            offenders.join("\n")
         );
     }
 

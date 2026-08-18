@@ -515,6 +515,8 @@ build-api-image tag="latest":
 build-web-image tag="latest":
     docker build \
         --file bunyip-web/oci-build/Dockerfile \
+        --build-arg GIT_COMMIT="$(git rev-parse --short HEAD)" \
+        --build-arg GIT_TAG="$(git describe --tags --always --dirty)" \
         --tag bunyip-web:{{ tag }} \
         .
 

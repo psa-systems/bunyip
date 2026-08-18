@@ -7,7 +7,7 @@ use maud::html;
 
 use crate::handlers::public_ctx;
 use crate::util::{app_gradient, app_link};
-use crate::views::layout::{document, public_shell};
+use crate::views::layout::{asset, document, public_shell};
 use crate::views::ui::{button_class, icon};
 use crate::web::{html_cookies, html_status, AppState};
 
@@ -53,15 +53,15 @@ fn try_phrase(brand_name: &str) -> String {
 fn features(brand_name: &str) -> Vec<Feature> {
     let brand = brand_or_platform(brand_name);
     vec![
-        Feature { icon: "fa-solid fa-key", title: "Single sign-on", desc: format!("{brand} is the OIDC entry point. Your team logs in once and lands in Mokosh.") },
-        Feature { icon: "fa-solid fa-credit-card", title: "Stripe-ready billing", desc: "Multi-tier memberships, trials, dunning, and an admin override for the cases that don't fit.".to_string() },
+        Feature { icon: "key", title: "Single sign-on", desc: format!("{brand} is the OIDC entry point. Your team logs in once and lands in Mokosh.") },
+        Feature { icon: "credit-card", title: "Stripe-ready billing", desc: "Multi-tier memberships, trials, dunning, and an admin override for the cases that don't fit.".to_string() },
         // BUNYIP-487: replaced the "Orgs and members" card. The product has no
         // orgs table, no invitations, and no role switching, so the old copy
         // advertised three features that do not exist.
-        Feature { icon: "fa-solid fa-users", title: "Membership and entitlements", desc: format!("Tier, trial, and per-application entitlements resolved in one place and honored everywhere {brand} signs you in.") },
-        Feature { icon: "fa-solid fa-shield", title: "MFA, magic links, trusted devices", desc: "All the SSO niceties out of the box - TOTP, recovery codes, password reset, magic links.".to_string() },
-        Feature { icon: "fa-solid fa-chart-line", title: "Admin console", desc: "Audit logs, rate limits, tier config, manual membership overrides. The bits you only need but really need.".to_string() },
-        Feature { icon: "fa-solid fa-comment-dots", title: "In-app feedback", desc: "A floating widget lets your team report bugs and ideas without leaving the app. Optionally pipes to Forgejo.".to_string() },
+        Feature { icon: "users", title: "Membership and entitlements", desc: format!("Tier, trial, and per-application entitlements resolved in one place and honored everywhere {brand} signs you in.") },
+        Feature { icon: "shield", title: "MFA, magic links, trusted devices", desc: "All the SSO niceties out of the box - TOTP, recovery codes, password reset, magic links.".to_string() },
+        Feature { icon: "trending-up", title: "Admin console", desc: "Audit logs, rate limits, tier config, manual membership overrides. The bits you only need but really need.".to_string() },
+        Feature { icon: "message-square-quote", title: "In-app feedback", desc: "A floating widget lets your team report bugs and ideas without leaving the app. Optionally pipes to Forgejo.".to_string() },
     ]
 }
 
@@ -78,7 +78,20 @@ fn hero_mascot(tagline: &str) -> maud::Markup {
             // BUNYIP-216: the illustration is self-contained (creature, reeds,
             // and water on a transparent background), so it replaces both the
             // old inline-SVG creature and the separate water-gradient disc.
-            img src="/assets/bunyip-hero.png"
+            //
+            // BUNYIP-554: WebP at the two sizes the layout uses, down from one
+            // 825,885-byte PNG (the 448 candidate is 50,750, the 2x 129,248).
+            // Re-encode with:
+            //   magick <src>.png -resize 448x -define webp:method=6 \
+            //     -define webp:alpha-quality=80 -quality 80 bunyip-hero-448.webp
+            // The 2x candidate is the source's native 718 px: the art has no
+            // more detail than that, so upscaling to a true 896 only added
+            // bytes (218 KB, measured). `width`/`height` reserve the box so the
+            // hero text does not reflow when the image lands, and the image is
+            // deliberately NOT lazy - it is the LCP element.
+            img src=(asset("/assets/bunyip-hero-448.webp"))
+                srcset=(format!("{} 1x, {} 2x", asset("/assets/bunyip-hero-448.webp"), asset("/assets/bunyip-hero-718.webp")))
+                width="718" height="760"
                 alt="A shaggy creature with wide, friendly eyes peering through the reeds over a pond"
                 class="relative w-full h-full object-contain drop-shadow-2xl" {}
             @if !tagline.is_empty() {
@@ -130,7 +143,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                     }
                     div class="mt-10 flex flex-col gap-4 sm:flex-row hero-fade-up-3" {
                         a href=(cta_href) class=(button_class("default", "lg", "w-full sm:w-auto gap-2 bg-brand-primary-700 hover:bg-brand-primary-800 border-0 text-white shadow-lg shadow-primary/25")) {
-                            (cta_label) " " i class="fa-solid fa-arrow-right text-[1rem]" {}
+                            (cta_label) " " (icon("arrow-right", "h-4 w-4"))
                         }
                         // BUNYIP-487: /pricing 404s when pricing is unpublished,
                         // so the hero button follows the same condition as the
@@ -158,7 +171,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                         @for f in &features {
                             div class="h-full flex flex-col rounded-xl border border-brand-primary-100 dark:border-brand-primary-700 bg-brand-primary-50 dark:bg-brand-primary-900 p-6 transition-colors hover:border-brand-primary-300 dark:hover:border-brand-primary-500 hover:bg-white dark:hover:bg-brand-primary-800" {
                                 div class="flex h-10 w-10 items-center justify-center rounded-lg border border-brand-primary-200 dark:border-brand-primary-700 bg-white dark:bg-brand-primary-800 text-brand-primary-700 dark:text-brand-primary-100" {
-                                    i class={ (f.icon) " text-base" } {}
+                                    (icon(f.icon, "h-4 w-4"))
                                 }
                                 h3 class="mt-4 text-lg font-semibold text-brand-primary-900 dark:text-brand-primary-50" { (f.title) }
                                 p class="mt-2 text-sm leading-relaxed text-brand-primary-700 dark:text-brand-primary-200" { (f.desc) }
@@ -180,7 +193,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                                         div class="flex items-center gap-4" {
                                             div class={ "flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-to-br " (app_gradient(i)) } {
                                                 @if let Some(icon) = &app.icon_url { img src=(icon) alt=(app.display_name) class="h-6 w-6"; }
-                                                @else { i class="fa-solid fa-cube text-xl text-white" {} }
+                                                @else { (icon("package", "h-5 w-5 text-white")) }
                                             }
                                             div { h3 class="text-2xl font-semibold leading-none tracking-tight" { (app.display_name) } }
                                         }
@@ -189,7 +202,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                                         p class="text-base text-muted-foreground" { (app.description.clone().unwrap_or_default()) }
                                         a href=(app_link(app, &st.cfg.app_domain)) target="_blank" rel="noopener noreferrer"
                                           class="mt-4 inline-flex items-center gap-1 text-sm font-medium text-brand-primary-700 dark:text-brand-primary-200 hover:underline" {
-                                            "Learn more " i class="fa-solid fa-arrow-right text-xs" {}
+                                            "Learn more " (icon("arrow-right", "h-3 w-3"))
                                         }
                                     }
                                 }
@@ -211,7 +224,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                             // inverted-on-gradient colouring is bespoke.
                             a href=(cta_href) class=(button_class("default", "lg", "whitespace-nowrap gap-2 bg-white hover:bg-white text-brand-primary-800 border-0 shadow-sm hover:shadow-md")) {
                                 (if signed_in { "Go to Membership" } else { "Create your account" })
-                                i class="fa-solid fa-arrow-right text-[1rem]" {}
+                                (icon("arrow-right", "h-4 w-4"))
                             }
                         }
                     }
@@ -345,6 +358,52 @@ mod copy_tests {
             assert!(
                 !markup.contains("Bunyip"), // brand-literal-ok: the assertion that the codename is gone
                 "the alt text describes the illustration only: {markup}"
+            );
+        }
+    }
+
+    /// BUNYIP-554: the hero is the LCP element. It ships WebP at the two sizes
+    /// the layout uses, reserves its box with intrinsic dimensions so the hero
+    /// text does not reflow when it lands, and stays eager - `loading="lazy"`
+    /// here would make the metric worse, not better.
+    #[test]
+    fn the_hero_is_responsive_sized_and_eager() {
+        let markup = hero_mascot("Surfaces what matters.").into_string();
+        assert!(markup.contains("bunyip-hero-448.webp"), "{markup}");
+        assert!(
+            markup.contains(" 1x,"),
+            "srcset needs a 1x candidate: {markup}"
+        );
+        assert!(
+            markup.contains(" 2x\""),
+            "srcset needs a 2x candidate: {markup}"
+        );
+        assert!(markup.contains(r#"width="718""#), "{markup}");
+        assert!(markup.contains(r#"height="760""#), "{markup}");
+        assert!(
+            !markup.contains("loading="),
+            "the LCP image stays eagerly loaded: {markup}"
+        );
+        assert!(
+            !markup.contains(".png"),
+            "the 825 KB PNG hero is gone: {markup}"
+        );
+    }
+
+    /// The feature cards name their glyph through a struct field, so the
+    /// literal icon-name scan in `views::ui` cannot see them. An unknown
+    /// name renders an empty `<svg>`, which is how a retired Font Awesome
+    /// class string would ship as a blank card (BUNYIP-554).
+    #[test]
+    fn every_feature_card_glyph_resolves() {
+        let cards = features("Brand");
+        assert!(!cards.is_empty());
+        for f in &cards {
+            assert!(
+                crate::views::ui::icon_is_known(f.icon),
+                "feature card `{}` names an unknown glyph `{}`",
+                f.title,
+                f.icon
             );
         }
     }

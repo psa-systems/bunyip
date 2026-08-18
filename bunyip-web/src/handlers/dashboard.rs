@@ -16,7 +16,10 @@ use crate::api::types::{
     AppDownloadGroup, Application, Membership, MembershipStatus, MembershipTier, OciImage,
     TwoFactorSetupResponse, User,
 };
-use crate::handlers::{dashboard_response, guard, needs_onboarding, password_ok, rotating_index};
+use crate::handlers::{
+    dashboard_response, dashboard_response_with_avatar_picker, guard, needs_onboarding,
+    password_ok, rotating_index,
+};
 use crate::util::{app_gradient, days_until, has_active_membership, rel_time, urlenc};
 use crate::views::ui::{
     back_link, badge, button_class, empty_state, error_box, icon, pager, success_box,
@@ -540,9 +543,11 @@ pub async fn download_asset(
                     format!("attachment; filename=\"{safe}\"")
                 });
             // Forward the upstream status (always 200 here) and Content-Length so
-            // the browser can show download progress. When the CompressionLayer
-            // compresses for the browser it drops the stale length itself; on the
-            // identity path the forwarded length is correct.
+            // the browser can show download progress. BUNYIP-554: the compression
+            // layer's predicate exempts the archive / octet-stream types the
+            // release pipeline emits, so this path is always identity and the
+            // forwarded length always survives - gzip over an already-compressed
+            // installer bought a ratio near 1.0 and cost the progress bar.
             let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
             let content_length = resp
                 .headers()
@@ -1499,7 +1504,9 @@ pub async fn settings(
             }
         }
     };
-    dashboard_response(&c, &user, "/settings", "Settings", content)
+    // BUNYIP-554: the only page that renders `avatar_picker`, so the only one
+    // that ships its stylesheet and controller.
+    dashboard_response_with_avatar_picker(&c, &user, "/settings", "Settings", content)
 }
 
 fn settings_card(icon_name: &str, gradient: &str, title: &str, body: Markup) -> Markup {
@@ -2124,7 +2131,7 @@ fn sensitive_reveal(id: &str, label: &str, content: Markup) -> Markup {
             div class="mb-2 flex justify-end" {
                 label for=(id)
                     class="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded px-2 text-xs text-muted-foreground hover:text-foreground peer-focus-visible:ring-2 peer-focus-visible:ring-ring" {
-                    i class="fa-regular fa-eye" aria-hidden="true" {}
+                    (icon("eye", "h-3.5 w-3.5"))
                     span { "Show / hide " (label) }
                 }
             }
