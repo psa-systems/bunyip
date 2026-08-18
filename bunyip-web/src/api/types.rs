@@ -1146,6 +1146,53 @@ pub struct Branding {
     pub meta_description: String,
     #[serde(default)]
     pub og_image_url: String,
+    /// BUNYIP-560: the palette. `theme_css` is the raw custom-property block
+    /// emitted into `:root`; the two colours are the `theme-color` metas. Empty
+    /// means omitted, exactly like the copy above.
+    #[serde(default)]
+    pub theme_css: String,
+    #[serde(default)]
+    pub theme_color_light: String,
+    #[serde(default)]
+    pub theme_color_dark: String,
+    /// BUNYIP-560: the asset slots, as the version string their `<img src>`
+    /// carries as a cache buster. Empty means the slot is unset, which is what
+    /// sends the favicon links back to the committed fallback set and drops the
+    /// mark image and the hero mascot from the page entirely.
+    #[serde(default)]
+    pub mark_version: String,
+    #[serde(default)]
+    pub favicon_version: String,
+    #[serde(default)]
+    pub mascot_version: String,
+}
+
+impl Branding {
+    /// BUNYIP-560: the same-origin URL for a brand asset, or `None` when the
+    /// slot is unset. `version` is the record's marker for that slot, so a
+    /// re-upload changes the URL and the browser refetches instead of showing
+    /// the previous logo until its cache expires.
+    fn asset_src(kind: &str, version: &str) -> Option<String> {
+        (!version.is_empty()).then(|| format!("/brand/{kind}?v={}", urlencoding::encode(version)))
+    }
+
+    /// The uploaded brand mark, or `None` to render the built-in reed-and-eyes
+    /// glyph (a shape, not a product's artwork).
+    pub fn mark_src(&self) -> Option<String> {
+        Self::asset_src("mark", &self.mark_version)
+    }
+
+    /// The uploaded hero illustration, or `None`, in which case the hero
+    /// renders without one rather than with another product's mascot.
+    pub fn mascot_src(&self) -> Option<String> {
+        Self::asset_src("mascot", &self.mascot_version)
+    }
+
+    /// One derived favicon, or `None` when no source has been uploaded (the
+    /// committed set under `assets/` answers instead).
+    pub fn favicon_src(&self, kind: &str) -> Option<String> {
+        Self::asset_src(kind, &self.favicon_version)
+    }
 }
 
 /// BUNYIP-351: email / SMTP configuration surfaced to the admin settings form.

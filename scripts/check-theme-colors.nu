@@ -13,8 +13,11 @@
 #   - `document()` in `bunyip-web/src/views/layout.rs` hardcoded the two
 #     `theme-color` metas as hex. BUNYIP-500 made the whole ramp skinnable, so a
 #     skin recoloured the page and left the browser chrome bunyip reed-green.
-#     The shell now reads the pair from config; the defaults live in
-#     `bunyip-web/src/config.rs`, which is where a colour literal belongs.
+#     BUNYIP-560 moved the palette into the admin-managed branding record and
+#     deleted the `#2f4e2e` / `#161a16` defaults that had moved to
+#     `bunyip-web/src/config.rs`, so NEITHER file may carry a colour literal
+#     now: unset means the meta is omitted, and a re-introduced default would
+#     paint every deployment's chrome one product's green again.
 #
 # `amber` (the warning role) and `violet` are allowed alongside the two remapped
 # scales, matching the server-rendered side.
@@ -24,7 +27,12 @@
 #   scripts/check-theme-colors.nu --self-test
 
 const JS_GLOB = "bunyip-web/assets/js/*.js"
-const SHELL_RS = "bunyip-web/src/views/layout.rs"
+# The framework shell and its configuration. BUNYIP-560: the palette is the
+# branding record's, so both files are colour-free.
+const SHELL_SOURCES = [
+    "bunyip-web/src/views/layout.rs"
+    "bunyip-web/src/config.rs"
+]
 
 # Where the shipped shell ends and its tests begin. The tests install sentinel
 # hex values on purpose, to prove the metas follow config.
@@ -84,7 +92,7 @@ def check-shell [path: string]: nothing -> list<string> {
         if ($text | str trim | str starts-with "//") { continue }
         for rule in $COLOR_LITERALS {
             for hit in ($text | parse --regex ('(?<lit>' + $rule.pattern + ')') | get lit) {
-                $problems = ($problems | append $"($path):($row.index + 1): `($hit)` - ($rule.why) in the framework shell; take it from config so a skin moves it.")
+                $problems = ($problems | append $"($path):($row.index + 1): `($hit)` - ($rule.why) in the framework shell; take it from the branding record so a rebrand moves it.")
             }
         }
     }
@@ -215,16 +223,17 @@ def main [
         exit 1
     }
 
-    let problems = (($js_files | each {|f| check-js $f } | flatten) | append (check-shell $SHELL_RS))
+    let problems = (($js_files | each {|f| check-js $f } | flatten) | append ($SHELL_SOURCES | each {|f| check-shell $f } | flatten))
     if ($problems | is-not-empty) {
         for p in $problems { print --stderr $"error: ($p)" }
         print --stderr ""
         print --stderr "Every surface is painted from the theme tokens (BUNYIP-549): the client-side"
         print --stderr "palettes use the same semantic tokens as their server-rendered counterparts,"
-        print --stderr $"and ($SHELL_RS) carries no colour literal - the"
-        print --stderr "theme-color defaults live in bunyip-web/src/config.rs so a skin can move them."
+        print --stderr $"and neither ($SHELL_SOURCES | str join ' nor ') carries a colour literal -"
+        print --stderr "the palette is the admin-managed branding record (BUNYIP-560), and unset means"
+        print --stderr "the markup is omitted rather than painted a compiled-in colour."
         exit 1
     }
 
-    print $"check-theme-colors: ($js_files | length) client scripts carry no unmapped stock palette, and ($SHELL_RS) carries no colour literal"
+    print $"check-theme-colors: ($js_files | length) client scripts carry no unmapped stock palette, and ($SHELL_SOURCES | length) shell sources carry no colour literal"
 }

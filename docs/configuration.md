@@ -360,6 +360,20 @@ not committed code.
 | `tagline`          | the hero caption, the footer line and the bunyip-web startup banner                                         |
 | `meta_description` | `<meta name="description">` and `og:description`                                                            |
 | `og_image_url`     | `og:image` / `twitter:image`; must be an absolute `http(s)://` URL                                          |
+| `theme_css`        | CSS custom-property declarations emitted into `:root` (the brand ramp). No `<` or `>`; 4096 characters       |
+| `theme_color_light`, `theme_color_dark` | the two `<meta name="theme-color">` values (browser chrome). Hex colours (`#rgb`, `#rrggbb`, `#rrggbbaa`) |
+| `mark_updated_at`, `favicon_updated_at`, `mascot_updated_at` | version markers for the three image slots. NULL means the slot is unset |
+
+The images themselves live in `branding_assets`, one row per key, as bytes in a
+Postgres `BYTEA` (the same storage `user_avatars` uses; bunyip-api has no static
+mount, so an uploaded image can never be served from an origin where it could
+execute). The admin uploads three: `mark`, `favicon` and `mascot`. The favicon
+upload is kept as `favicon-source` and the whole icon set is DERIVED from it in
+the same transaction (`favicon-16`, `favicon-32`, `favicon-48`, `favicon-192`,
+`favicon-512`, `apple-touch-icon`, `favicon-ico`), so an operator uploads once
+and a partially replaced icon set is not a state the deployment can reach.
+Each is served unauthenticated from `GET /v1/branding/assets/{kind}` and proxied
+same-origin by bunyip-web at `/brand/{kind}?v=<version>`.
 
 Resolution, stated once:
 
@@ -371,6 +385,20 @@ Resolution, stated once:
   **omitted**: no `<meta name="description">`, no `og:description`, no
   `og:image`, no tagline line, and no title suffix when `brand_name` is empty.
   No literal is ever substituted.
+- `theme_css`, `theme_color_light` and `theme_color_dark` are the row value when
+  non-empty, otherwise the matching **bootstrap** environment variable
+  (`BRAND_THEME_CSS`, `BRAND_THEME_COLOR_LIGHT`, `BRAND_THEME_COLOR_DARK`),
+  otherwise **omitted**: no `:root` block and no `theme-color` meta. The
+  `#2f4e2e` / `#161a16` defaults that used to be compiled into bunyip-web are
+  gone (BUNYIP-560).
+- The **mark** falls back to a built-in glyph drawn in the theme's own colour (a
+  shape, not artwork). The **favicon** falls back to the icon set committed under
+  `bunyip-web/assets/`, root `/favicon.ico` included. The **mascot** has no
+  fallback at all: with the slot unset the hero renders **without** an
+  illustration, rather than with the previous product's.
+- An upload that fails validation (not an image, over 2 MiB, over 4096 px, or a
+  source the icon set cannot be derived from) writes **nothing** and renders its
+  reason above the form.
 
 A save writes the row and refreshes the api-side cache in the same request, so
 email subjects and the TOTP issuer follow immediately. Every other api process
@@ -381,9 +409,10 @@ is visible in the browser within one interval. A startup fetch failure logs at
 keeps the last good values.
 
 bunyip-web has **no** brand-text environment variables. `APP_NAME` and
-`BRAND_DESCRIPTION` were removed from it (BUNYIP-561); brand ASSETS (mark,
-favicon set, mascot art, palette) are BUNYIP-560 and still come from
-`BRAND_THEME_*`.
+`BRAND_DESCRIPTION` were removed from it (BUNYIP-561). The brand ASSETS (mark,
+favicon set, mascot art) and the palette are columns of this record too
+(BUNYIP-560); the three `BRAND_THEME_*` variables survive as bootstrap defaults
+for one release and are **removed in 0.16.0** (tracked in BUNYIP-568).
 
 ### Email (`email_config`, admin page: Email)
 
@@ -447,6 +476,14 @@ description and Open Graph image are the admin-managed `branding` record above
 `BRAND_THEME_COLOR_LIGHT` and `BRAND_THEME_COLOR_DARK` are the two
 `<meta name="theme-color">` values that paint the browser chrome (Android
 address bar, iOS status bar, PWA splash) under `prefers-color-scheme: light` and
-`dark`. `BRAND_THEME_CSS` recolours every in-page token, so a skin sets these
-alongside it or the chrome stays bunyip reed-green. Defaults `#2f4e2e` and
-`#161a16`, so unskinned output is unchanged (BUNYIP-549).
+`dark`. `BRAND_THEME_CSS` recolours every in-page token, so a deployment sets
+these alongside it or the chrome does not follow the rest of the palette
+(BUNYIP-549).
+
+All three are **bootstrap defaults only** (BUNYIP-560). The palette is part of
+the admin-managed `branding` record above, which wins whenever its field is set;
+these variables answer solely for a database that has never been branded, and
+they carry **no compiled-in default**, so with neither source set the `:root`
+block and the `theme-color` metas are omitted rather than painted one product's
+green. They are kept for one release and **removed in 0.16.0** (BUNYIP-568):
+set the palette on the admin Branding page instead.

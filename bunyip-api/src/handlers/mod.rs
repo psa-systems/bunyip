@@ -193,7 +193,7 @@ pub use auth::{
 };
 pub use avatar::{delete_avatar, get_avatar, upload_avatar};
 pub use billing::{create_setup_intent, download_invoice, list_invoices};
-pub use branding::public_branding;
+pub use branding::{public_branding, public_branding_asset};
 pub use download::{
     admin_refresh_release, download_asset, download_asset_versioned, list_all_downloads,
     list_app_downloads,
@@ -240,7 +240,9 @@ pub use admin::{
     update_email_config, update_stripe_config, update_tier_config, update_user_email,
     update_user_role, update_user_status, verify_user_email,
 };
-pub use admin_branding::{get_branding, update_branding};
+pub use admin_branding::{
+    delete_branding_asset, get_branding, update_branding, upload_branding_asset,
+};
 pub use admin_entitlements::{
     add_price_mapping, grant_entitlement, list_user_entitlements, remove_price_mapping,
     revoke_entitlement, set_application_restricted,

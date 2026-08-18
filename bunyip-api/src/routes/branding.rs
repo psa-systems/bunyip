@@ -9,5 +9,12 @@ use actix_web::web;
 use crate::handlers;
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
-    cfg.route("/branding", web::get().to(handlers::public_branding));
+    cfg.route("/branding", web::get().to(handlers::public_branding))
+        // BUNYIP-560: the brand images (mark, mascot, derived favicon set).
+        // Unauthenticated for the same reason: they are the chrome every
+        // visitor already sees.
+        .route(
+            "/branding/assets/{kind}",
+            web::get().to(handlers::public_branding_asset),
+        );
 }

@@ -125,6 +125,12 @@ dunite-events = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "1f536a2
 # DEV-531.
 infer = "0.16"
 imagesize = "0.13"
+# BUNYIP-560: derive the favicon set (five PNG sizes + apple-touch-icon +
+# favicon.ico) from the one image an admin uploads on the Branding page. Only
+# the four decoders `ImagePolicy::avatar()` admits plus the two encoders the set
+# needs; the default feature set pulls in a dozen formats nothing here accepts.
+# Pure Rust, so the musl-static build needs no system library.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "ico"] }
 
 [dev-dependencies]
 actix-rt = "2"
