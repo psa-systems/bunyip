@@ -4,7 +4,7 @@
 <h1>Welcome to {{ app_name }}</h1>
 <p>Your account is ready. {{ app_name }} is your single sign-on for the whole PSA Systems suite. Sign in here once and every connected app follows.</p>
 
-<p>Head to your dashboard to finish setting up your profile, verify your email, and connect your first app.</p>
+<p>Head to your dashboard to{% if not email_verified %} verify your email and{% endif %} connect your first app.</p>
 
 <div class="button-container">
   <a href="{{ dashboard_url }}" class="button">Go to Dashboard</a>

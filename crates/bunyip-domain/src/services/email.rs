@@ -771,8 +771,16 @@ impl EmailService {
         .await
     }
 
-    /// Send account creation email
-    pub async fn send_account_created(&self, email: &str) -> Result<(), AppError> {
+    /// Send account creation email. `email_verified` gates the "verify your
+    /// email" clause: password signup leaves the address unverified (the
+    /// onboarding page fires the verify step), while magic-link signup verifies
+    /// it as part of the flow, so that path passes `true` to suppress the prompt
+    /// (BUNYIP-570).
+    pub async fn send_account_created(
+        &self,
+        email: &str,
+        email_verified: bool,
+    ) -> Result<(), AppError> {
         let config = self.config();
         if !config.enabled {
             tracing::info!(email = %email, "Account created email (dev mode - not sending)");
@@ -781,6 +789,7 @@ impl EmailService {
 
         let mut context = self.base_context(&config);
         context.insert("dashboard_url", &format!("{}/dashboard", config.base_url));
+        context.insert("email_verified", &email_verified);
 
         let (html, text) = self.render_template("account_created", &context)?;
         self.send_email(
@@ -1358,6 +1367,52 @@ mod tests {
         assert_ne!(PAGE_BG, CARD_BG);
         assert_ne!(CARD_BG, FOOTER_BG);
         assert_ne!(PAGE_BG, FOOTER_BG);
+    }
+
+    /// BUNYIP-570: the account-created email prompts "verify your email" only on
+    /// the password path; magic-link signup verifies the address in its own flow
+    /// and passes `email_verified = true` to suppress the clause. The stale
+    /// "finish setting up your profile" instruction is gone from both paths (it
+    /// belongs in the in-app onboarding walkthrough, not the email).
+    #[test]
+    fn account_created_verify_clause_tracks_signup_method() {
+        let service = service_all_templates();
+        let config = service.config();
+
+        let render = |verified: bool| {
+            let mut ctx = service.base_context(&config);
+            ctx.insert("dashboard_url", &"http://localhost:5173/dashboard");
+            ctx.insert("email_verified", &verified);
+            service
+                .render_template("account_created", &ctx)
+                .expect("account_created renders")
+        };
+
+        let (html_pwd, text_pwd) = render(false);
+        let (html_magic, text_magic) = render(true);
+
+        for body in [&html_pwd, &text_pwd] {
+            assert!(
+                body.contains("verify your email"),
+                "password signup keeps the verify-your-email prompt"
+            );
+        }
+        for body in [&html_magic, &text_magic] {
+            assert!(
+                !body.contains("verify your email"),
+                "magic-link signup suppresses the verify-your-email prompt"
+            );
+        }
+        for body in [&html_pwd, &text_pwd, &html_magic, &text_magic] {
+            assert!(
+                !body.contains("finish setting up your profile"),
+                "the stale profile-setup instruction is dropped on both paths"
+            );
+            assert!(
+                body.contains("connect your first app"),
+                "the actionable next step remains on both paths"
+            );
+        }
     }
 
     fn service_with_from(from_email: &str) -> EmailService {
