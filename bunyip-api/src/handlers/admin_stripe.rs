@@ -120,6 +120,94 @@ fn refuse_archive(kind: &str, members: i64) -> AppError {
     ))
 }
 
+// =============================================================================
+// BUNYIP-514: refuse a second active price with the same currency and interval
+//
+// An active price is keyed by (product_id, currency, recurring_interval,
+// recurring_interval_count). Two ACTIVE prices sharing that key are the case
+// with no answer to "which one is charged", so creating or restoring one is
+// refused. Currency stays in the key (a multi-currency catalog is legitimate);
+// interval_count separates monthly from an externally created quarterly. The
+// check runs on the create and unarchive paths; the BUNYIP-511 replace path is
+// exempt because it archives the price it supersedes in the same operation.
+// =============================================================================
+
+/// The identity two active prices on one product must not share. `interval` is
+/// `month`/`year`/... or `None` for a one-time price, which forms its own
+/// bucket. Currency is lowercased so `USD` and `usd` compare equal.
+#[derive(PartialEq, Eq, Clone, Debug)]
+struct ActivePriceKey {
+    product_id: String,
+    currency: String,
+    interval: Option<String>,
+    interval_count: Option<u64>,
+}
+
+impl ActivePriceKey {
+    /// Build the key from a price. When the price is recurring, a missing
+    /// `recurring_interval_count` is normalized to `1`: Stripe always defaults a
+    /// recurring price's `interval_count` to 1, but dunite may leave it unset,
+    /// and bunyip's own create sends `Some(1)`, so the two must compare equal.
+    fn of(p: &StripePriceResponse) -> Self {
+        let interval = p.recurring_interval.clone();
+        let interval_count = interval
+            .as_ref()
+            .map(|_| p.recurring_interval_count.unwrap_or(1));
+        Self {
+            product_id: p.product_id.clone(),
+            currency: p.currency.to_ascii_lowercase(),
+            interval,
+            interval_count,
+        }
+    }
+}
+
+/// The first ACTIVE price in `existing` whose key matches `key`, skipping
+/// `ignore` (the price being restored, so it never conflicts with itself).
+/// Returns `None` when no active price holds the key.
+fn find_active_conflict<'a>(
+    existing: &'a [StripePriceResponse],
+    key: &ActivePriceKey,
+    ignore: Option<&str>,
+) -> Option<&'a StripePriceResponse> {
+    existing
+        .iter()
+        .find(|p| p.active && Some(p.id.as_str()) != ignore && ActivePriceKey::of(p) == *key)
+}
+
+/// Format a price amount for a message: "$9.00" / "€9.00" / "£9.00", else
+/// "9.00 XXX". Mirrors `bunyip-web`'s `format_stripe_amount` so the admin sees
+/// one amount format across the page and the refusal it triggers.
+fn format_price_amount(unit_amount: Option<i64>, currency: &str) -> String {
+    match unit_amount {
+        None => "--".to_string(),
+        Some(cents) => {
+            let whole = cents / 100;
+            let frac = (cents % 100).abs();
+            match currency.to_ascii_lowercase().as_str() {
+                "usd" => format!("${whole}.{frac:02}"),
+                "eur" => format!("€{whole}.{frac:02}"),
+                "gbp" => format!("£{whole}.{frac:02}"),
+                _ => format!("{whole}.{frac:02} {}", currency.to_uppercase()),
+            }
+        }
+    }
+}
+
+/// The 409 a create/unarchive is refused with when `existing` already holds the
+/// requested key. Names the conflicting price and its amount and points at the
+/// two ways forward (Archive, or Replace to change the amount).
+fn refuse_duplicate_price(existing: &StripePriceResponse) -> AppError {
+    let interval = existing.recurring_interval.as_deref().unwrap_or("one-time");
+    let amount = format_price_amount(existing.unit_amount, &existing.currency);
+    AppError::conflict(format!(
+        "This product already has an active {interval} {currency} price ({id}, {amount}). \
+         Archive it or use Replace to change its amount.",
+        currency = existing.currency.to_uppercase(),
+        id = existing.id,
+    ))
+}
+
 /// BUNYIP-512: a Stripe product plus the members-on-its-plan count the admin
 /// list renders. `#[serde(flatten)]` keeps the wire shape the shared
 /// `StripeProductResponse` with one field added.
@@ -441,6 +529,25 @@ pub async fn create_stripe_price(
     body: web::Json<CreateStripePriceRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
+
+    // BUNYIP-514: refuse a second active price with the same currency and
+    // interval on this product BEFORE calling Stripe. bunyip's create form only
+    // makes recurring month/year prices, so the requested key is always
+    // `interval = Some(..)`, `interval_count = Some(1)`.
+    let existing = stripe
+        .list_prices(Some(body.product_id.as_str()))
+        .await
+        .map_err(stripe_err_for(StripePermission::Prices))?;
+    let requested = ActivePriceKey {
+        product_id: body.product_id.clone(),
+        currency: body.currency.to_ascii_lowercase(),
+        interval: Some(body.interval.to_ascii_lowercase()),
+        interval_count: Some(1),
+    };
+    if let Some(conflict) = find_active_conflict(&existing, &requested, None) {
+        return Err(refuse_duplicate_price(conflict));
+    }
+
     let price = stripe
         .create_price(
             &body.product_id,
@@ -518,6 +625,24 @@ pub async fn unarchive_stripe_price(
     let request_id = get_request_id(&req);
     let price_id = path.into_inner();
 
+    // BUNYIP-514: restoring an archived price can recreate a same-currency,
+    // same-interval conflict, so it runs the same check as create. Recover the
+    // price's key from the catalog (list_prices returns active AND archived),
+    // then refuse if another ACTIVE price already holds it. Ignore the price's
+    // own id: it is archived now, but be explicit so it never self-conflicts.
+    let all = stripe
+        .list_prices(None)
+        .await
+        .map_err(stripe_err_for(StripePermission::Prices))?;
+    let target = all
+        .iter()
+        .find(|p| p.id == price_id)
+        .ok_or_else(|| AppError::not_found("Stripe price"))?;
+    let key = ActivePriceKey::of(target);
+    if let Some(conflict) = find_active_conflict(&all, &key, Some(&price_id)) {
+        return Err(refuse_duplicate_price(conflict));
+    }
+
     stripe
         .unarchive_price(&price_id)
         .await
@@ -579,6 +704,12 @@ pub async fn replace_stripe_price(
     let product_id = old.product_id.clone();
 
     // 1. Create the replacement on the same product.
+    // BUNYIP-514-exempt: a replace is the sanctioned way to end up with one
+    // active price for a key. It archives the price it supersedes below (step 3),
+    // so the duplicate the create/unarchive check refuses is transient by
+    // construction here; running that check would refuse the very fix it points
+    // admins at. The new price is created via `create_price` directly, not the
+    // `create_stripe_price` handler, so the check does not run on this path.
     let new_price = stripe
         .create_price(
             &product_id,
@@ -944,6 +1075,178 @@ mod tests {
             );
         }
         assert!(checked >= 2, "the scan matched the price handlers");
+    }
+
+    // -- BUNYIP-514: duplicate active price guard --
+
+    use super::{
+        find_active_conflict, refuse_duplicate_price, ActivePriceKey, StripePriceResponse,
+    };
+
+    /// Every handler that CREATES or RESTORES a price into the active set must
+    /// run the duplicate-price check (`find_active_conflict`) or carry an
+    /// explicit `BUNYIP-514-exempt` comment saying why it may skip it. Scanning
+    /// the source is what makes the next price-activating handler fail the build
+    /// instead of silently reopening the hole this issue closes.
+    #[test]
+    fn every_price_activating_handler_runs_the_duplicate_check() {
+        let src = include_str!("admin_stripe.rs");
+        let mut checked = 0;
+        for chunk in src.split("\npub async fn ").skip(1) {
+            let (name, rest) = chunk.split_once('(').expect("handler signature");
+            let body = rest.split("\n}").next().unwrap_or(rest);
+            let activates = ["create", "unarchive", "restore", "replace"]
+                .iter()
+                .any(|verb| name.starts_with(verb));
+            if !name.contains("price") || !activates {
+                continue;
+            }
+            checked += 1;
+            assert!(
+                body.contains("find_active_conflict") || body.contains("BUNYIP-514-exempt"),
+                "{name} creates or restores a price but neither runs find_active_conflict \
+                 nor carries a BUNYIP-514-exempt comment"
+            );
+        }
+        assert!(
+            checked >= 3,
+            "the scan matched create, unarchive and replace"
+        );
+    }
+
+    /// The replace endpoint must stay exempt: a same-currency, same-interval
+    /// replace is exactly the fix the conflict message points admins at, so it
+    /// must never run the duplicate check (which would refuse it). Proven by the
+    /// handler body carrying the exemption marker and NOT calling the check.
+    #[test]
+    fn replace_is_exempt_from_the_duplicate_check() {
+        let src = include_str!("admin_stripe.rs");
+        let body = src
+            .split("\npub async fn replace_stripe_price(")
+            .nth(1)
+            .expect("replace_stripe_price handler")
+            .split("\n}")
+            .next()
+            .expect("handler body");
+        assert!(
+            body.contains("BUNYIP-514-exempt"),
+            "replace_stripe_price must state why it skips the duplicate check"
+        );
+        assert!(
+            !body.contains("find_active_conflict"),
+            "replace_stripe_price must not run the duplicate check, or a same-key replace would 409"
+        );
+    }
+
+    fn price_row(id: &str, product_id: &str, currency: &str, active: bool) -> StripePriceResponse {
+        StripePriceResponse {
+            id: id.into(),
+            product_id: product_id.into(),
+            unit_amount: Some(900),
+            currency: currency.into(),
+            recurring_interval: Some("month".into()),
+            recurring_interval_count: Some(1),
+            active,
+        }
+    }
+
+    #[test]
+    fn same_key_conflicts_and_currency_or_interval_differences_do_not() {
+        let existing = price_row("price_a", "prod_1", "usd", true);
+        let same = ActivePriceKey::of(&price_row("price_b", "prod_1", "usd", true));
+        assert_eq!(
+            ActivePriceKey::of(&existing),
+            same,
+            "same key must compare equal"
+        );
+
+        let other_currency = ActivePriceKey::of(&price_row("price_b", "prod_1", "eur", true));
+        assert_ne!(ActivePriceKey::of(&existing), other_currency);
+
+        let mut yearly = price_row("price_b", "prod_1", "usd", true);
+        yearly.recurring_interval = Some("year".into());
+        assert_ne!(ActivePriceKey::of(&existing), ActivePriceKey::of(&yearly));
+
+        let mut quarterly = price_row("price_b", "prod_1", "usd", true);
+        quarterly.recurring_interval_count = Some(3);
+        assert_ne!(
+            ActivePriceKey::of(&existing),
+            ActivePriceKey::of(&quarterly)
+        );
+
+        let other_product = ActivePriceKey::of(&price_row("price_b", "prod_2", "usd", true));
+        assert_ne!(ActivePriceKey::of(&existing), other_product);
+    }
+
+    #[test]
+    fn missing_interval_count_normalizes_to_one_for_recurring() {
+        let mut existing = price_row("price_a", "prod_1", "usd", true);
+        existing.recurring_interval_count = None; // dunite left it unset
+        let requested = ActivePriceKey {
+            product_id: "prod_1".into(),
+            currency: "usd".into(),
+            interval: Some("month".into()),
+            interval_count: Some(1),
+        };
+        assert_eq!(ActivePriceKey::of(&existing), requested);
+    }
+
+    #[test]
+    fn one_time_prices_bucket_separately_from_recurring() {
+        let mut one_time = price_row("price_a", "prod_1", "usd", true);
+        one_time.recurring_interval = None;
+        one_time.recurring_interval_count = None;
+        let key = ActivePriceKey::of(&one_time);
+        assert_eq!(key.interval, None);
+        assert_eq!(key.interval_count, None);
+
+        let recurring = ActivePriceKey::of(&price_row("price_b", "prod_1", "usd", true));
+        assert_ne!(key, recurring, "one-time and monthly must not collide");
+
+        let second_one_time = ActivePriceKey::of(&{
+            let mut p = price_row("price_c", "prod_1", "usd", true);
+            p.recurring_interval = None;
+            p.recurring_interval_count = None;
+            p
+        });
+        assert_eq!(
+            key, second_one_time,
+            "two one-time same-currency prices collide"
+        );
+    }
+
+    #[test]
+    fn find_active_conflict_ignores_archived_and_the_ignored_id() {
+        let key = ActivePriceKey::of(&price_row("price_active", "prod_1", "usd", true));
+
+        // An archived row with the same key does not conflict.
+        let archived_only = [price_row("price_arch", "prod_1", "usd", false)];
+        assert!(find_active_conflict(&archived_only, &key, None).is_none());
+
+        // An active row with the same key does.
+        let with_active = [
+            price_row("price_arch", "prod_1", "usd", false),
+            price_row("price_live", "prod_1", "usd", true),
+        ];
+        assert_eq!(
+            find_active_conflict(&with_active, &key, None).map(|p| p.id.as_str()),
+            Some("price_live")
+        );
+
+        // Ignoring the only active match clears the conflict (unarchive of self).
+        assert!(find_active_conflict(&with_active, &key, Some("price_live")).is_none());
+    }
+
+    #[test]
+    fn refusal_message_names_the_price_and_amount() {
+        let existing = price_row("price_1U33Rl", "prod_1", "usd", true);
+        let msg = refuse_duplicate_price(&existing).to_string();
+        assert!(
+            msg.contains("price_1U33Rl"),
+            "names the conflicting id: {msg}"
+        );
+        assert!(msg.contains("$9.00"), "names the formatted amount: {msg}");
+        assert!(msg.contains("Replace"), "points at Replace: {msg}");
     }
 
     // -- BUNYIP-532: permission report assembly --

@@ -1323,6 +1323,7 @@ mod stripe_admin_tests {
             unit_amount: amount,
             currency: "usd".into(),
             recurring_interval: Some("month".into()),
+            recurring_interval_count: Some(1),
             active,
             member_count: 0,
         }
@@ -1542,6 +1543,61 @@ mod stripe_admin_tests {
         assert!(
             !html.contains("price_gone/archive"),
             "archived price has no Archive control"
+        );
+    }
+
+    // BUNYIP-514: two active prices sharing currency + interval on one product
+    // are flagged, once per row, naming the conflicting sibling id.
+    #[test]
+    fn prices_block_warns_on_duplicate_active_prices() {
+        let products = [product("prod_dup", "Membership", true)];
+        let prices = [
+            price("price_nine", "prod_dup", Some(900), true),
+            price("price_three", "prod_dup", Some(300), true),
+        ];
+        let html = stripe_prices_block(Ok(&prices), Ok(&products)).into_string();
+        assert!(
+            html.contains("Only one should stay active"),
+            "duplicate warning rendered"
+        );
+        // One warning per active row in the group, each naming its sibling.
+        assert_eq!(
+            html.matches("same currency and interval").count(),
+            2,
+            "each of the two rows warns about the other"
+        );
+        assert!(
+            html.contains("price_three") && html.contains("price_nine"),
+            "both conflicting ids appear"
+        );
+    }
+
+    // BUNYIP-514: an archived same-key price never counts, and prices that differ
+    // by currency or interval are a legitimate catalog, so neither warns.
+    #[test]
+    fn prices_block_no_duplicate_warning_when_keys_differ_or_archived() {
+        let products = [product("prod_ok", "Catalog", true)];
+        let prices = [
+            price("price_usd_month", "prod_ok", Some(900), true),
+            // Same key but archived: superseded, not a conflict.
+            StripePrice {
+                ..price("price_usd_month_old", "prod_ok", Some(500), false)
+            },
+            // Same interval, different currency: a normal multi-currency catalog.
+            StripePrice {
+                currency: "eur".into(),
+                ..price("price_eur_month", "prod_ok", Some(900), true)
+            },
+            // Same currency, different interval.
+            StripePrice {
+                recurring_interval: Some("year".into()),
+                ..price("price_usd_year", "prod_ok", Some(9000), true)
+            },
+        ];
+        let html = stripe_prices_block(Ok(&prices), Ok(&products)).into_string();
+        assert!(
+            !html.contains("Only one should stay active"),
+            "no duplicate warning when every active key is unique"
         );
     }
 

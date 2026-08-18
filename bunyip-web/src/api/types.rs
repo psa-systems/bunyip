@@ -1066,6 +1066,12 @@ pub struct StripePrice {
     pub currency: String,
     #[serde(default)]
     pub recurring_interval: Option<String>,
+    /// BUNYIP-514: the recurring interval multiplier (monthly = 1, quarterly = 3).
+    /// Part of the uniqueness key the duplicate-price warning groups on, so a
+    /// monthly and an externally created quarterly price are not flagged as a
+    /// pair. `#[serde(default)]` keeps `scripts/check-serde-compat.nu` green.
+    #[serde(default)]
+    pub recurring_interval_count: Option<i64>,
     #[serde(default)]
     pub active: bool,
     /// BUNYIP-512: members on the tier this price maps to (plus anyone who

@@ -1,5 +1,7 @@
 //! Admin panel: Stripe: config + setup docs + products + prices (BUNYIP-416).
 
+use std::collections::HashMap;
+
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
@@ -270,6 +272,69 @@ fn price_replace_details(pr: &crate::api::types::StripePrice) -> Markup {
 /// product entitlements onto it, and archives the old price. Existing Stripe
 /// subscriptions and grandfathered (locked) prices are deliberately left on the
 /// old price; the control's confirm and the block caption say so.
+/// BUNYIP-514: `(product_id, currency, interval, interval_count)` - the tuple
+/// form of the api's `ActivePriceKey`, used to group the rendered price rows.
+type PriceDupKey = (String, String, Option<String>, Option<i64>);
+
+/// BUNYIP-514: the uniqueness key two active prices on one product must not
+/// share, mirroring the api's `ActivePriceKey`. A one-time price
+/// (`recurring_interval = None`) buckets separately; a recurring price's missing
+/// interval count normalizes to 1 so a monthly and a `count = 1` monthly match.
+fn price_dup_key(p: &crate::api::types::StripePrice) -> PriceDupKey {
+    let interval = p.recurring_interval.clone();
+    let interval_count = interval
+        .as_ref()
+        .map(|_| p.recurring_interval_count.unwrap_or(1));
+    (
+        p.product_id.clone(),
+        p.currency.to_ascii_lowercase(),
+        interval,
+        interval_count,
+    )
+}
+
+/// BUNYIP-514: for each ACTIVE price that shares its key with another active
+/// price, the ids of its conflicting siblings. Prices not in a duplicate group
+/// are absent from the map. Archived prices never take part.
+fn duplicate_price_siblings<'a>(
+    prices: &'a [crate::api::types::StripePrice],
+) -> HashMap<&'a str, Vec<&'a str>> {
+    let mut groups: HashMap<PriceDupKey, Vec<&'a str>> = HashMap::new();
+    for p in prices.iter().filter(|p| p.active) {
+        groups.entry(price_dup_key(p)).or_default().push(&p.id);
+    }
+    let mut out: HashMap<&'a str, Vec<&'a str>> = HashMap::new();
+    for ids in groups.values().filter(|ids| ids.len() > 1) {
+        for &id in ids {
+            let siblings = ids.iter().copied().filter(|&other| other != id).collect();
+            out.insert(id, siblings);
+        }
+    }
+    out
+}
+
+/// BUNYIP-514: the inline warning shown next to a price that shares its currency
+/// and interval with another active price on the same product. Names the
+/// conflicting sibling ids and states only one should stay active.
+fn duplicate_price_warning(siblings: &[&str]) -> Markup {
+    let label = if siblings.len() == 1 {
+        "price"
+    } else {
+        "prices"
+    };
+    html! {
+        div class="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300" {
+            (icon("alert-triangle", "inline-block h-3.5 w-3.5 mr-1"))
+            "Duplicate: same currency and interval as active " (label) " "
+            @for (i, s) in siblings.iter().enumerate() {
+                @if i > 0 { ", " }
+                span class="font-mono" { (s) }
+            }
+            ". Only one should stay active. Archive the others or use Replace."
+        }
+    }
+}
+
 pub(super) fn stripe_prices_block(
     prices: Loaded<'_, crate::api::types::StripePrice>,
     products: Loaded<'_, crate::api::types::StripeProduct>,
@@ -288,7 +353,7 @@ pub(super) fn stripe_prices_block(
     };
     admin_block(
         "Prices",
-        Some("Pricing for your products. A lifetime plan is a $0.00 price. Prices cannot be edited in Stripe, so Replace creates a new price and archives the old one, moving the catalog mapping and entitlements across; existing subscriptions and locked-in prices stay on the old price."),
+        Some("Pricing for your products. A lifetime plan is a $0.00 price. Each product may have only one active price per currency and interval, so a product cannot end up with two monthly USD prices to choose between; creating a duplicate is refused. Prices cannot be edited in Stripe, so Replace creates a new price and archives the old one, moving the catalog mapping and entitlements across; existing subscriptions and locked-in prices stay on the old price."),
         html! {
             form method="post" action="/admin/stripe/prices" class="flex flex-wrap items-end gap-3 mb-4" {
                 div class="space-y-1 min-w-[11rem]" {
@@ -319,7 +384,11 @@ pub(super) fn stripe_prices_block(
                     "This usually means the restricted key lacks the Prices permission, or no valid key is saved above.",
                 )),
                 Ok([]) => (empty_state("banknote", "No prices yet. Create one to get started.", None)),
-                Ok(list) => div class="divide-y" {
+                Ok(list) => {
+                  // BUNYIP-514: which active prices share a currency+interval key,
+                  // so each such row can warn next to its own Archive control.
+                  @let dup_siblings = duplicate_price_siblings(list);
+                  div class="divide-y" {
                     @for pr in list {
                         div class={ "py-3 space-y-3 " (if pr.active { "" } else { "opacity-50" }) } {
                             div class="flex items-center justify-between gap-4" {
@@ -347,12 +416,19 @@ pub(super) fn stripe_prices_block(
                                     }
                                 }
                             }
+                            // BUNYIP-514: this active price shares its currency
+                            // and interval with another active one, so warn right
+                            // here, next to its Archive control.
+                            @if let Some(sibs) = dup_siblings.get(pr.id.as_str()) {
+                                (duplicate_price_warning(sibs))
+                            }
                             // BUNYIP-511: change what this plan costs. A replace, not
                             // an edit (Stripe prices are immutable), so it is offered
                             // only on an active price.
                             @if pr.active { (price_replace_details(pr)) }
                         }
                     }
+                  }
                 }
             }
         },
