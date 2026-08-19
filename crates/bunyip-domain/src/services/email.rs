@@ -568,6 +568,12 @@ impl EmailService {
             app_name: "localhost".to_string(),
             admin_notification_emails: Vec::new(),
             support_inbox_email: None,
+            imap_host: String::new(),
+            imap_port: 993,
+            imap_username: String::new(),
+            imap_mailbox: "INBOX".to_string(),
+            imap_enabled: false,
+            imap_poll_secs: 60,
         };
 
         // Create with minimal template setup for dev
@@ -1282,6 +1288,12 @@ mod tests {
             app_name: "PSA Staging".to_string(),
             admin_notification_emails: Vec::new(),
             support_inbox_email: None,
+            imap_host: String::new(),
+            imap_port: 993,
+            imap_username: String::new(),
+            imap_mailbox: "INBOX".to_string(),
+            imap_enabled: false,
+            imap_poll_secs: 60,
         })
         .expect("email service builds and all templates parse")
     }
@@ -1431,6 +1443,12 @@ mod tests {
             app_name: "PSA Staging".to_string(),
             admin_notification_emails: Vec::new(),
             support_inbox_email: None,
+            imap_host: String::new(),
+            imap_port: 993,
+            imap_username: String::new(),
+            imap_mailbox: "INBOX".to_string(),
+            imap_enabled: false,
+            imap_poll_secs: 60,
         };
 
         EmailService {
@@ -1628,6 +1646,12 @@ mod tests {
             app_name: "PSA Staging".to_string(),
             admin_notification_emails: Vec::new(),
             support_inbox_email: None,
+            imap_host: String::new(),
+            imap_port: 993,
+            imap_username: String::new(),
+            imap_mailbox: "INBOX".to_string(),
+            imap_enabled: false,
+            imap_poll_secs: 60,
         })
         .expect("email service builds and all templates parse");
         let config = service.config();
@@ -1680,6 +1704,12 @@ mod tests {
             app_name: "PSA".to_string(),
             admin_notification_emails: Vec::new(),
             support_inbox_email: None,
+            imap_host: String::new(),
+            imap_port: 993,
+            imap_username: String::new(),
+            imap_mailbox: "INBOX".to_string(),
+            imap_enabled: false,
+            imap_poll_secs: 60,
         }
     }
 

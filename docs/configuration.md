@@ -24,7 +24,7 @@ default and the database row wins; those are marked as such.
 
 Secrets resolve through the `{NAME}_FILE` convention first (a compose secret
 under `/run/secrets/*`), then the plain variable (a dev `.env`). An empty value
-counts as unset everywhere. The exception is the three governed integration
+counts as unset everywhere. The exception is the four governed integration
 secrets below, which are `{NAME}_FILE`-only and are read only when
 `SECRETS_STORAGE=environment`.
 
@@ -78,6 +78,7 @@ The governed set is exactly the secrets with more than one possible store:
 | `SMTP_PASSWORD`         | `email_config.smtp_password`     | `SMTP_PASSWORD_FILE`         | `<path>/SMTP_PASSWORD`    |
 | `STRIPE_SECRET_KEY`     | `stripe_config.secret_key`       | `STRIPE_SECRET_KEY_FILE`     | `<path>/STRIPE_SECRET_KEY` |
 | `STRIPE_WEBHOOK_SECRET` | `stripe_config.webhook_secret`   | `STRIPE_WEBHOOK_SECRET_FILE` | `<path>/STRIPE_WEBHOOK_SECRET` |
+| `SUPPORT_IMAP_PASSWORD` | `email_config.imap_password`     | `SUPPORT_IMAP_PASSWORD_FILE` | `<path>/SUPPORT_IMAP_PASSWORD` |
 
 The declared store is the ONLY one consulted. There is no fallback and no
 precedence chain: in `database` mode the environment slot and Infisical are not
@@ -226,10 +227,12 @@ Every variable below has a working default; set it only to tune the deployment.
 - **Email**: `EMAIL_ENABLED`, `EMAIL_LOG_TOKENS`, `SMTP_PORT`, `SMTP_TLS`,
   `SMTP_USERNAME`, `SMTP_EHLO_NAME`, `SMTP_FROM`, `SUPPORT_INBOX_EMAIL` (Reply-To
   for system mail: the monitored support inbox replies are ingested into,
-  BUNYIP-571).
+  BUNYIP-571), and the inbound IMAP poller settings `SUPPORT_IMAP_HOST`,
+  `SUPPORT_IMAP_PORT`, `SUPPORT_IMAP_USERNAME`, `SUPPORT_IMAP_MAILBOX`,
+  `SUPPORT_IMAP_ENABLED`, `SUPPORT_IMAP_POLL_SECS` (BUNYIP-571).
 - **Governed secrets** (read only when `SECRETS_STORAGE=environment`, and only
   as `{NAME}_FILE`): `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`,
-  `STRIPE_WEBHOOK_SECRET`.
+  `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`.
 - **Abuse controls**: `AUTO_BAN_ENABLED`, `AUTO_BAN_THRESHOLD`,
   `AUTO_BAN_WINDOW_SECS`, `AUTO_BAN_DURATION_SECS`, `LOGIN_APPROVAL_ENABLED`,
   `SIGNUP_BOT_GUARD_ENABLED`.

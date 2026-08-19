@@ -119,4 +119,61 @@ impl EmailConfigRepository {
 
         Ok(row)
     }
+
+    /// Write the encrypted IMAP password (ciphertext + nonce) under
+    /// `key_version` as an operator edit (BUNYIP-571), mirroring how `update`
+    /// writes the SMTP password. Non-password IMAP columns are left untouched.
+    pub async fn update_imap_password(
+        pool: &PgPool,
+        imap_password: &[u8],
+        imap_password_nonce: &[u8],
+        key_version: i16,
+        updated_by: Uuid,
+    ) -> Result<EmailConfigRow, AppError> {
+        let row = sqlx::query_as::<_, EmailConfigRow>(
+            r#"
+            UPDATE email_config
+            SET imap_password       = $1,
+                imap_password_nonce = $2,
+                key_version         = $3,
+                updated_at          = NOW(),
+                updated_by          = $4
+            WHERE id = 1
+            RETURNING *
+            "#,
+        )
+        .bind(imap_password)
+        .bind(imap_password_nonce)
+        .bind(key_version)
+        .bind(updated_by)
+        .fetch_one(pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// Rewrite the stored IMAP password ciphertext under a new key version
+    /// (re-encrypt / secrets-migrate pass), touching nothing else.
+    pub async fn update_imap_password_encryption(
+        pool: &PgPool,
+        imap_password: &[u8],
+        imap_password_nonce: &[u8],
+        key_version: i16,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            UPDATE email_config
+            SET imap_password       = $1,
+                imap_password_nonce = $2,
+                key_version         = $3,
+                updated_at          = NOW()
+            WHERE id = 1
+            "#,
+        )
+        .bind(imap_password)
+        .bind(imap_password_nonce)
+        .bind(key_version)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
 }

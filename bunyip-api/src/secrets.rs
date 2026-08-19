@@ -158,6 +158,9 @@ pub async fn survey(
                 stripe_row.webhook_secret_nonce.as_deref(),
                 stripe_row.key_version,
             ),
+            GovernedSecret::SupportImapPassword => {
+                bunyip_domain::config::EmailConfig::db_imap_password(&email_row, key_set)
+            }
         }
     };
 
@@ -261,6 +264,12 @@ pub async fn read_secret(
                     row.webhook_secret.as_deref(),
                     row.webhook_secret_nonce.as_deref(),
                     row.key_version,
+                ))
+            }
+            GovernedSecret::SupportImapPassword => {
+                let row = EmailConfigRepository::get(pool).await?;
+                Ok(bunyip_domain::config::EmailConfig::db_imap_password(
+                    &row, key_set,
                 ))
             }
         },
@@ -458,6 +467,25 @@ pub async fn write_secret(
                     )
                     .await?;
                 }
+                (GovernedSecret::SupportImapPassword, Some(admin)) => {
+                    EmailConfigRepository::update_imap_password(
+                        pool,
+                        &ciphertext,
+                        &nonce,
+                        key_version,
+                        admin,
+                    )
+                    .await?;
+                }
+                (GovernedSecret::SupportImapPassword, None) => {
+                    EmailConfigRepository::update_imap_password_encryption(
+                        pool,
+                        &ciphertext,
+                        &nonce,
+                        key_version,
+                    )
+                    .await?;
+                }
                 (_, Some(admin)) => {
                     StripeConfigRepository::update(
                         pool,
@@ -553,6 +581,10 @@ async fn clear_database_secret(pool: &PgPool, secret: GovernedSecret) -> Result<
         }
         GovernedSecret::StripeWebhookSecret => {
             "UPDATE stripe_config SET webhook_secret = NULL, webhook_secret_nonce = NULL, \
+             updated_at = NOW() WHERE id = 1"
+        }
+        GovernedSecret::SupportImapPassword => {
+            "UPDATE email_config SET imap_password = NULL, imap_password_nonce = NULL, \
              updated_at = NOW() WHERE id = 1"
         }
     };
