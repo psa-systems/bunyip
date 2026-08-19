@@ -79,10 +79,10 @@ more than that:
 
 ## Group-2: the governed integration secrets
 
-Three secrets are **governed** by `SECRETS_STORAGE`, because each has more than
-one possible store: `SMTP_PASSWORD`, `STRIPE_SECRET_KEY` and
-`STRIPE_WEBHOOK_SECRET`. The declared store is the only one bunyip reads. There
-is no precedence chain and no fallback.
+Four secrets are **governed** by `SECRETS_STORAGE`, because each has more than
+one possible store: `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
+and `SUPPORT_IMAP_PASSWORD`. The declared store is the only one bunyip reads.
+There is no precedence chain and no fallback.
 
 bunyip-api reads the Infisical store itself, in Rust
 (`crates/bunyip-domain/src/services/infisical.rs`, BUNYIP-525), using a Universal
@@ -107,7 +107,7 @@ Only Group-2 (and the separate E2E credential) live in Infisical. Paths are
 ```
 bunyip (project)
 ├── staging
-│   ├── /runtime      <- the governed secrets (SMTP_PASSWORD, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET)
+│   ├── /runtime      <- the governed secrets (SMTP_PASSWORD, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, SUPPORT_IMAP_PASSWORD)
 │   └── /bunyip/e2e   <- the E2E account password (docs/e2e.md)
 └── prod
     └── /runtime

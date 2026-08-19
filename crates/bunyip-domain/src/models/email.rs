@@ -25,6 +25,16 @@ pub struct EmailConfigRow {
     pub from_email: Option<String>,
     pub from_name: Option<String>,
     pub admin_notification_emails: Option<String>,
+    // BUNYIP-571: inbound IMAP settings. `imap_password` is the governed secret
+    // (ciphertext + nonce, versioned by the shared `key_version`); the rest are
+    // regular config columns.
+    pub imap_host: Option<String>,
+    pub imap_port: Option<i32>,
+    pub imap_username: Option<String>,
+    pub imap_password: Option<Vec<u8>>,
+    pub imap_password_nonce: Option<Vec<u8>>,
+    pub imap_mailbox: Option<String>,
+    pub imap_enabled: Option<bool>,
     pub updated_at: DateTime<Utc>,
     pub updated_by: Option<Uuid>,
 }

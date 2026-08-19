@@ -188,7 +188,7 @@ fn the_database_only_stripe_readers_have_no_request_or_boot_callers() {
 /// `secrets-migrate --to environment`.
 #[test]
 fn every_governed_secret_is_fully_described() {
-    assert_eq!(GovernedSecret::ALL.len(), 3);
+    assert_eq!(GovernedSecret::ALL.len(), 4);
     for secret in GovernedSecret::ALL {
         assert!(!secret.name().is_empty());
         assert!(
@@ -204,7 +204,8 @@ fn every_governed_secret_is_fully_described() {
         [
             "SMTP_PASSWORD",
             "STRIPE_SECRET_KEY",
-            "STRIPE_WEBHOOK_SECRET"
+            "STRIPE_WEBHOOK_SECRET",
+            "SUPPORT_IMAP_PASSWORD"
         ]
     );
 }

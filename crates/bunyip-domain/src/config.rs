@@ -200,14 +200,17 @@ pub enum GovernedSecret {
     StripeSecretKey,
     /// `stripe_config.webhook_secret` / `STRIPE_WEBHOOK_SECRET`.
     StripeWebhookSecret,
+    /// `email_config.imap_password` / `SUPPORT_IMAP_PASSWORD` (BUNYIP-571).
+    SupportImapPassword,
 }
 
 impl GovernedSecret {
     /// Every governed secret, in report order.
-    pub const ALL: [Self; 3] = [
+    pub const ALL: [Self; 4] = [
         Self::SmtpPassword,
         Self::StripeSecretKey,
         Self::StripeWebhookSecret,
+        Self::SupportImapPassword,
     ];
 
     /// The variable name in the `environment` store, which is also the key name
@@ -217,6 +220,7 @@ impl GovernedSecret {
             Self::SmtpPassword => "SMTP_PASSWORD",
             Self::StripeSecretKey => "STRIPE_SECRET_KEY",
             Self::StripeWebhookSecret => "STRIPE_WEBHOOK_SECRET",
+            Self::SupportImapPassword => "SUPPORT_IMAP_PASSWORD",
         }
     }
 
@@ -234,6 +238,10 @@ impl GovernedSecret {
                 "Stripe webhook verification: /v1/webhooks/stripe fails closed and every event \
                  is rejected"
             }
+            Self::SupportImapPassword => {
+                "support-queue ingestion: replies to the system mailbox are not polled into \
+                 support tickets"
+            }
         }
     }
 
@@ -244,6 +252,7 @@ impl GovernedSecret {
             Self::SmtpPassword => "smtp_password",
             Self::StripeSecretKey => "secret_key",
             Self::StripeWebhookSecret => "webhook_secret",
+            Self::SupportImapPassword => "imap_password",
         }
     }
 
@@ -254,6 +263,7 @@ impl GovernedSecret {
             Self::SmtpPassword => "smtp_password",
             Self::StripeSecretKey => "stripe_secret_key",
             Self::StripeWebhookSecret => "stripe_webhook_secret",
+            Self::SupportImapPassword => "support_imap_password",
         }
     }
 
@@ -399,6 +409,16 @@ pub struct EmailConfig {
     /// replies are ingested from (BUNYIP-571). `None` emits no Reply-To, so a
     /// reply falls back to `from_email` (typically an unattended noreply@).
     pub support_inbox_email: Option<String>,
+    /// BUNYIP-571: inbound IMAP poller settings. An empty host/username or
+    /// `imap_enabled == false` means the support-queue poller does not run. The
+    /// password is the governed secret [`GovernedSecret::SupportImapPassword`],
+    /// resolved separately at the call site.
+    pub imap_host: String,
+    pub imap_port: u16,
+    pub imap_username: String,
+    pub imap_mailbox: String,
+    pub imap_enabled: bool,
+    pub imap_poll_secs: u64,
 }
 
 impl EmailConfig {
@@ -478,6 +498,25 @@ impl EmailConfig {
                 .ok()
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty()),
+            // BUNYIP-571: inbound IMAP poller config (env bootstrap; the DB row
+            // overrides host/port/username/mailbox/enabled in from_db_row).
+            imap_host: env::var("SUPPORT_IMAP_HOST").unwrap_or_default(),
+            imap_port: env::var("SUPPORT_IMAP_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(993),
+            imap_username: env::var("SUPPORT_IMAP_USERNAME").unwrap_or_default(),
+            imap_mailbox: env::var("SUPPORT_IMAP_MAILBOX")
+                .ok()
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| "INBOX".to_string()),
+            imap_enabled: env::var("SUPPORT_IMAP_ENABLED")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false),
+            imap_poll_secs: env::var("SUPPORT_IMAP_POLL_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60),
         }
     }
 
@@ -507,6 +546,32 @@ impl EmailConfig {
                     "email_config.smtp_password does not decrypt with APP_ENCRYPTION_KEY or any \
                      APP_ENCRYPTION_KEY_PREV entry; treating the database store as holding no \
                      SMTP password"
+                );
+                None
+            }
+        }
+    }
+
+    /// Decrypt the governed IMAP password from the DB row (BUNYIP-571),
+    /// mirroring [`Self::db_smtp_password`]. A ciphertext no key decrypts is
+    /// treated as no password, not a fatal, so a stale row never blocks boot.
+    pub fn db_imap_password(
+        row: &crate::models::email::EmailConfigRow,
+        key_set: &crate::services::AppKeySet,
+    ) -> Option<String> {
+        let (ciphertext, nonce) = match (&row.imap_password, &row.imap_password_nonce) {
+            (Some(ct), Some(nonce)) => (ct, nonce),
+            _ => return None,
+        };
+        match crate::models::stripe::decrypt_secret(key_set, ciphertext, nonce, row.key_version) {
+            Ok(password) => Some(password),
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    key_version = row.key_version,
+                    "email_config.imap_password does not decrypt with APP_ENCRYPTION_KEY or any \
+                     APP_ENCRYPTION_KEY_PREV entry; treating the database store as holding no \
+                     IMAP password"
                 );
                 None
             }
@@ -598,6 +663,25 @@ impl EmailConfig {
             // Env-derived like `smtp_ehlo_name`: no per-tenant DB column, the
             // support inbox is deployment identity (BUNYIP-571).
             support_inbox_email: env.support_inbox_email,
+            // BUNYIP-571: the DB row overrides the IMAP connection config; the
+            // poll interval stays env-only operational tuning.
+            imap_host: row
+                .imap_host
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or(env.imap_host),
+            imap_port: row
+                .imap_port
+                .and_then(|p| u16::try_from(p).ok())
+                .unwrap_or(env.imap_port),
+            imap_username: row.imap_username.clone().unwrap_or(env.imap_username),
+            imap_mailbox: row
+                .imap_mailbox
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or(env.imap_mailbox),
+            imap_enabled: row.imap_enabled.unwrap_or(env.imap_enabled),
+            imap_poll_secs: env.imap_poll_secs,
         }
     }
 
@@ -648,6 +732,12 @@ impl EmailConfig {
             || row.from_email.is_some()
             || row.from_name.is_some()
             || row.admin_notification_emails.is_some()
+            || row.imap_host.is_some()
+            || row.imap_port.is_some()
+            || row.imap_username.is_some()
+            || row.imap_password.is_some()
+            || row.imap_mailbox.is_some()
+            || row.imap_enabled.is_some()
     }
 }
 
@@ -2068,6 +2158,29 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
         "SUPPORT_INBOX_EMAIL",
         "Reply-To for system mail: the monitored support inbox (BUNYIP-571)",
     ),
+    EnvVarSpec::defaulted(
+        "SUPPORT_IMAP_HOST",
+        "inbound IMAP host for the support-queue poller (BUNYIP-571)",
+    ),
+    EnvVarSpec::defaulted("SUPPORT_IMAP_PORT", "inbound IMAP port (default 993)"),
+    EnvVarSpec::defaulted("SUPPORT_IMAP_USERNAME", "inbound IMAP username"),
+    EnvVarSpec::defaulted(
+        "SUPPORT_IMAP_MAILBOX",
+        "inbound IMAP mailbox to poll (default INBOX)",
+    ),
+    EnvVarSpec::defaulted(
+        "SUPPORT_IMAP_ENABLED",
+        "enable the support-queue inbound poller",
+    ),
+    EnvVarSpec::defaulted(
+        "SUPPORT_IMAP_POLL_SECS",
+        "support-queue poll interval in seconds (default 60)",
+    ),
+    EnvVarSpec::defaulted(
+        "SUPPORT_IMAP_PASSWORD",
+        "inbound IMAP password; governed by SECRETS_STORAGE, read only as \
+         SUPPORT_IMAP_PASSWORD_FILE",
+    ),
     EnvVarSpec::defaulted("AUTO_BAN_ENABLED", "auto-ban switch"),
     EnvVarSpec::defaulted("AUTO_BAN_THRESHOLD", "auto-ban failure threshold"),
     EnvVarSpec::defaulted("AUTO_BAN_WINDOW_SECS", "auto-ban window"),
@@ -3005,6 +3118,13 @@ mod tests {
             from_email: None,
             from_name: None,
             admin_notification_emails: None,
+            imap_host: None,
+            imap_port: None,
+            imap_username: None,
+            imap_password: None,
+            imap_password_nonce: None,
+            imap_mailbox: None,
+            imap_enabled: None,
             updated_at: chrono::Utc::now(),
             updated_by: None,
         }
@@ -3044,6 +3164,12 @@ mod tests {
             app_name: "PSA".to_string(),
             admin_notification_emails: Vec::new(),
             support_inbox_email: None,
+            imap_host: String::new(),
+            imap_port: 993,
+            imap_username: String::new(),
+            imap_mailbox: "INBOX".to_string(),
+            imap_enabled: false,
+            imap_poll_secs: 60,
         }
     }
 
