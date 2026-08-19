@@ -27,6 +27,7 @@ pub mod root_span;
 pub mod routes;
 pub mod secrets;
 pub mod seed;
+pub mod support_ingest;
 pub mod version;
 
 // Re-export commonly used types
