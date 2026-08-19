@@ -213,6 +213,15 @@ belongs in the same runbook.
 | `MOKOSH_WEBHOOK_URL`                    | -                           | `account_deleted` events are never dispatched to mokosh       |
 | `MOKOSH_BACKUP_API_URL`                 | -                           | account backup/restore falls back to the pending stub         |
 
+## System-config YAML layer (BUNYIP-579)
+
+A subset of the deployment-level settings below also resolves through a file-based YAML layer, so they can be reviewed and edited in one place (and, in a later change, from an admin screen) rather than only as environment variables. Today this covers `CORS_ORIGIN`, `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`, `LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`, and the country allow/deny list. Branding and every per-tenant value stay in the database (BUNYIP-561), so they remain live-editable without a restart.
+
+- **File location**: `BUNYIP_CONFIG_FILE`, default `/app/config/config.yaml` (mount `/app/config` as a volume so edits persist).
+- **First run**: the file is generated from the built-in defaults on first start and is **never overwritten** afterwards, so operator edits survive a restart (the Forgejo `app.ini` precedent).
+- **Precedence**: environment variable, then the YAML file, then the built-in default. The environment variable's `{NAME}_FILE` indirection is honoured too, so a secret-bearing value can be sourced from a mounted file rather than inlined, keeping the Infisical path intact.
+- **Apply**: edits to the YAML take effect on the next application restart. This is the documented, supported path.
+
 ## Defaulted (no boot-time log)
 
 Every variable below has a working default; set it only to tune the deployment.

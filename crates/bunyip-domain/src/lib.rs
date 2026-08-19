@@ -18,6 +18,7 @@ pub mod middleware;
 pub mod models;
 pub mod repositories;
 pub mod services;
+pub mod sys_config;
 
 // Shared test utilities (env-var lock); test builds only.
 #[cfg(test)]
