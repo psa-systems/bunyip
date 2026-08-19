@@ -68,6 +68,33 @@ pub(super) fn email_settings_content(
                             },
                         ),
                         admin_block(
+                            "Inbound IMAP (support queue)",
+                            Some("Replies to system mail are polled from this mailbox into the support queue (BUNYIP-571). Leave a field blank to keep the existing value."),
+                            html! {
+                                div class="space-y-4" {
+                                    div class="space-y-2" {
+                                        label for="imap_enabled" class="text-sm font-medium" { "Polling" }
+                                        select id="imap_enabled" name="imap_enabled" class=(dashboard_input()) {
+                                            option value="true" selected[e.imap_enabled] { "Enabled" }
+                                            option value="false" selected[!e.imap_enabled] { "Disabled" }
+                                        }
+                                    }
+                                    div class="space-y-2" { label for="imap_host" class="text-sm font-medium" { "IMAP host" } input id="imap_host" name="imap_host" value=(e.imap_host) placeholder="imap.example.com" class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="imap_port" class="text-sm font-medium" { "IMAP port" } input id="imap_port" name="imap_port" type="number" min="1" max="65535" value=(e.imap_port) class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="imap_username" class="text-sm font-medium" { "IMAP username" } input id="imap_username" name="imap_username" value=(e.imap_username) autocomplete="off" class=(dashboard_input()); }
+                                    div class="space-y-2" {
+                                        label for="imap_password" class="text-sm font-medium" { "IMAP password" }
+                                        // Write-only, same rules as the SMTP password (BUNYIP-432/542).
+                                        input id="imap_password" name="imap_password" type="password" autocomplete="new-password" readonly[!e.imap_password_editable] disabled[!e.imap_password_editable] placeholder=(if e.has_imap_password { "••••••••" } else { "Not set" }) class=(dashboard_input());
+                                        p class="text-xs text-muted-foreground" {
+                                            (secret_field_note(e.imap_password_editable, &e.secrets_storage, e.has_imap_password, "SUPPORT_IMAP_PASSWORD", "support_imap_password"))
+                                        }
+                                    }
+                                    div class="space-y-2" { label for="imap_mailbox" class="text-sm font-medium" { "Mailbox" } input id="imap_mailbox" name="imap_mailbox" value=(e.imap_mailbox) placeholder="INBOX" class=(dashboard_input()); }
+                                }
+                            },
+                        ),
+                        admin_block(
                             "Sender & Notifications",
                             Some("Who transactional mail comes from, and where operational notices go."),
                             html! {
@@ -133,6 +160,18 @@ pub struct EmailSettingsForm {
     pub from_name: String,
     #[serde(default)]
     pub admin_notification_emails: String,
+    #[serde(default)]
+    pub imap_host: String,
+    #[serde(default)]
+    pub imap_port: String,
+    #[serde(default)]
+    pub imap_username: String,
+    #[serde(default)]
+    pub imap_password: String,
+    #[serde(default)]
+    pub imap_mailbox: String,
+    #[serde(default)]
+    pub imap_enabled: String,
 }
 
 /// Build the PUT body from the submitted form. `enabled` and `smtp_tls` (both
@@ -142,6 +181,10 @@ pub struct EmailSettingsForm {
 pub(super) fn email_update_body(f: &EmailSettingsForm) -> Result<serde_json::Value, String> {
     let mut body = serde_json::Map::new();
     body.insert("enabled".into(), json!(f.enabled.trim() == "true"));
+    body.insert(
+        "imap_enabled".into(),
+        json!(f.imap_enabled.trim() == "true"),
+    );
 
     let port = f.smtp_port.trim();
     if !port.is_empty() {
@@ -152,6 +195,17 @@ pub(super) fn email_update_body(f: &EmailSettingsForm) -> Result<serde_json::Val
             return Err("SMTP port must be between 1 and 65535.".to_string());
         }
         body.insert("smtp_port".into(), json!(n));
+    }
+
+    let imap_port = f.imap_port.trim();
+    if !imap_port.is_empty() {
+        let n: i32 = imap_port
+            .parse()
+            .map_err(|_| "IMAP port must be a whole number.".to_string())?;
+        if !(1..=65535).contains(&n) {
+            return Err("IMAP port must be between 1 and 65535.".to_string());
+        }
+        body.insert("imap_port".into(), json!(n));
     }
 
     let tls = f.smtp_tls.trim();
@@ -168,6 +222,10 @@ pub(super) fn email_update_body(f: &EmailSettingsForm) -> Result<serde_json::Val
         ("smtp_host", &f.smtp_host),
         ("smtp_username", &f.smtp_username),
         ("smtp_password", &f.smtp_password),
+        ("imap_host", &f.imap_host),
+        ("imap_username", &f.imap_username),
+        ("imap_password", &f.imap_password),
+        ("imap_mailbox", &f.imap_mailbox),
         ("from_email", &f.from_email),
         ("from_name", &f.from_name),
         ("admin_notification_emails", &f.admin_notification_emails),

@@ -40,6 +40,12 @@ mod request_body_tests {
             from_email: String::new(),
             from_name: String::new(),
             admin_notification_emails: String::new(),
+            imap_host: String::new(),
+            imap_port: String::new(),
+            imap_username: String::new(),
+            imap_password: String::new(),
+            imap_mailbox: String::new(),
+            imap_enabled: "false".into(),
         }
     }
 

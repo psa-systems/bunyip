@@ -151,6 +151,43 @@ impl EmailConfigRepository {
         Ok(row)
     }
 
+    /// Update only the non-secret IMAP settings that are `Some` (COALESCE);
+    /// `None` leaves the existing value (BUNYIP-571). The password is written
+    /// separately through the governed-secret path.
+    pub async fn update_imap_settings(
+        pool: &PgPool,
+        imap_host: Option<String>,
+        imap_port: Option<i32>,
+        imap_username: Option<String>,
+        imap_mailbox: Option<String>,
+        imap_enabled: Option<bool>,
+        updated_by: Uuid,
+    ) -> Result<EmailConfigRow, AppError> {
+        let row = sqlx::query_as::<_, EmailConfigRow>(
+            r#"
+            UPDATE email_config
+            SET imap_host     = COALESCE($1, imap_host),
+                imap_port     = COALESCE($2, imap_port),
+                imap_username = COALESCE($3, imap_username),
+                imap_mailbox  = COALESCE($4, imap_mailbox),
+                imap_enabled  = COALESCE($5, imap_enabled),
+                updated_at    = NOW(),
+                updated_by    = $6
+            WHERE id = 1
+            RETURNING *
+            "#,
+        )
+        .bind(imap_host)
+        .bind(imap_port)
+        .bind(imap_username)
+        .bind(imap_mailbox)
+        .bind(imap_enabled)
+        .bind(updated_by)
+        .fetch_one(pool)
+        .await?;
+        Ok(row)
+    }
+
     /// Rewrite the stored IMAP password ciphertext under a new key version
     /// (re-encrypt / secrets-migrate pass), touching nothing else.
     pub async fn update_imap_password_encryption(

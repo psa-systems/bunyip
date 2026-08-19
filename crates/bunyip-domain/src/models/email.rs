@@ -69,6 +69,15 @@ pub struct EmailConfigResponse {
     /// `environment` mode, where there is no writable store, so the field
     /// renders read-only instead of reporting a save that lands nowhere.
     pub smtp_password_editable: bool,
+    /// BUNYIP-571: inbound IMAP settings. The password is write-only like the
+    /// SMTP one - only `has_imap_password` is surfaced, never the value.
+    pub imap_host: String,
+    pub imap_port: i32,
+    pub imap_username: String,
+    pub imap_mailbox: String,
+    pub imap_enabled: bool,
+    pub has_imap_password: bool,
+    pub imap_password_editable: bool,
     pub updated_at: Option<DateTime<Utc>>,
     pub updated_by: Option<Uuid>,
 }
