@@ -2530,6 +2530,13 @@ pub struct UpdateEmailConfigRequest {
     pub from_email: Option<String>,
     pub from_name: Option<String>,
     pub admin_notification_emails: Option<String>,
+    // BUNYIP-571: inbound IMAP settings.
+    pub imap_host: Option<String>,
+    pub imap_port: Option<i32>,
+    pub imap_username: Option<String>,
+    pub imap_mailbox: Option<String>,
+    pub imap_enabled: Option<bool>,
+    pub imap_password: Option<String>,
 }
 
 /// Render an [`SmtpTls`](crate::config::SmtpTls) as its wire string.
@@ -2548,6 +2555,7 @@ fn email_config_response(
     resolved: crate::config::EmailConfig,
     source: &'static str,
     secrets_storage: crate::config::SecretsStorage,
+    has_imap_password: bool,
     updated_at: chrono::DateTime<chrono::Utc>,
     updated_by: Option<uuid::Uuid>,
 ) -> crate::models::email::EmailConfigResponse {
@@ -2564,6 +2572,13 @@ fn email_config_response(
         from_name: resolved.from_name,
         admin_notification_emails: resolved.admin_notification_emails,
         source,
+        imap_host: resolved.imap_host,
+        imap_port: resolved.imap_port as i32,
+        imap_username: resolved.imap_username,
+        imap_mailbox: resolved.imap_mailbox,
+        imap_enabled: resolved.imap_enabled,
+        has_imap_password,
+        imap_password_editable: secrets_storage.is_writable(),
         updated_at: Some(updated_at),
         updated_by,
     }
@@ -2600,11 +2615,21 @@ pub async fn get_email_config(
     .await?;
     let resolved = EmailConfig::from_db_row(&row, smtp_password, config.is_production());
 
+    let has_imap_password = crate::secrets::read_secret(
+        &pool,
+        &config,
+        &app_key_set,
+        crate::config::GovernedSecret::SupportImapPassword,
+    )
+    .await?
+    .is_some();
+
     Ok(success(
         email_config_response(
             resolved,
             source,
             config.secrets_storage,
+            has_imap_password,
             row.updated_at,
             row.updated_by,
         ),
@@ -2668,6 +2693,21 @@ pub async fn update_email_config(
             crate::config::GovernedSecret::SmtpPassword,
         ));
     }
+    // BUNYIP-571: the IMAP password follows the same governed-store rules.
+    let imap_password_plain = body.imap_password.as_deref().filter(|s| !s.is_empty());
+    if imap_password_plain.is_some() && !storage.is_writable() {
+        return Err(crate::secrets::read_only_store_error(
+            crate::config::GovernedSecret::SupportImapPassword,
+        ));
+    }
+    if let Some(port) = body.imap_port {
+        if !(1..=65535).contains(&port) {
+            return Err(AppError::validation(
+                "imap_port",
+                "Must be between 1 and 65535",
+            ));
+        }
+    }
     // The ciphertext columns are written ONLY when the database IS the declared
     // store; in `infisical` mode the row's secret columns are left untouched.
     let (pw_enc, pw_nonce, key_version) = match (smtp_password_plain, storage) {
@@ -2693,7 +2733,7 @@ pub async fn update_email_config(
         .await?;
     }
 
-    let updated = EmailConfigRepository::update(
+    EmailConfigRepository::update(
         &pool,
         body.enabled,
         smtp_host,
@@ -2709,6 +2749,37 @@ pub async fn update_email_config(
         admin.0.sub,
     )
     .await?;
+
+    // BUNYIP-571: IMAP password to the declared store (Infisical write-through
+    // first, DB ciphertext only in database mode), then the non-secret IMAP
+    // settings, then re-read so the resolved config reflects all of it.
+    if let (Some(pw), crate::config::SecretsStorage::Infisical) = (imap_password_plain, storage) {
+        crate::secrets::write_secret(
+            &pool,
+            &config,
+            &app_key_set,
+            storage,
+            crate::config::GovernedSecret::SupportImapPassword,
+            pw,
+            Some(admin.0.sub),
+        )
+        .await?;
+    }
+    if let (Some(pw), crate::config::SecretsStorage::Database) = (imap_password_plain, storage) {
+        let (ct, nonce, ver) = encrypt_secret(&app_key_set, pw)?;
+        EmailConfigRepository::update_imap_password(&pool, &ct, &nonce, ver, admin.0.sub).await?;
+    }
+    EmailConfigRepository::update_imap_settings(
+        &pool,
+        nonempty(&body.imap_host),
+        body.imap_port,
+        nonempty(&body.imap_username),
+        nonempty(&body.imap_mailbox),
+        body.imap_enabled,
+        admin.0.sub,
+    )
+    .await?;
+    let updated = EmailConfigRepository::get(&pool).await?;
 
     // The password just written is the live one; otherwise re-read the declared
     // store so the hot reload uses exactly what the next boot will.
@@ -2762,11 +2833,24 @@ pub async fn update_email_config(
     )
     .await?;
 
+    let has_imap_password = match imap_password_plain {
+        Some(_) => true,
+        None => crate::secrets::read_secret(
+            &pool,
+            &config,
+            &app_key_set,
+            crate::config::GovernedSecret::SupportImapPassword,
+        )
+        .await?
+        .is_some(),
+    };
+
     Ok(success(
         email_config_response(
             resolved,
             "database",
             storage,
+            has_imap_password,
             updated.updated_at,
             updated.updated_by,
         ),
@@ -3838,6 +3922,13 @@ mod tests {
             source: "database",
             secrets_storage: "database",
             smtp_password_editable: true,
+            imap_host: "imap.example.com".into(),
+            imap_port: 993,
+            imap_username: "support@example.com".into(),
+            imap_mailbox: "INBOX".into(),
+            imap_enabled: false,
+            has_imap_password: false,
+            imap_password_editable: true,
             updated_at: None,
             updated_by: None,
         };
@@ -3851,12 +3942,13 @@ mod tests {
             "no masked-password field is serialized"
         );
         // The only `password` tokens are the two boolean keys (BUNYIP-432's
-        // has_smtp_password and BUNYIP-542's smtp_password_editable); any
-        // password value or masked field would add another.
+        // has_smtp_password / smtp_password_editable, plus BUNYIP-571's
+        // has_imap_password / imap_password_editable); any password value or
+        // masked field would add another.
         assert_eq!(
             body.matches("password").count(),
-            2,
-            "the only password tokens are has_smtp_password and smtp_password_editable: {body}"
+            4,
+            "the only password tokens are the four boolean flags (SMTP + IMAP): {body}"
         );
     }
 

@@ -1234,6 +1234,22 @@ pub struct EmailConfigResponse {
     /// the authority either way and answers 409 when the store is read-only.
     #[serde(default = "default_true")]
     pub smtp_password_editable: bool,
+    /// BUNYIP-571: inbound IMAP settings. `imap_password_editable` defaults true
+    /// so a response from an older api keeps the form usable.
+    #[serde(default)]
+    pub imap_host: String,
+    #[serde(default)]
+    pub imap_port: i32,
+    #[serde(default)]
+    pub imap_username: String,
+    #[serde(default)]
+    pub imap_mailbox: String,
+    #[serde(default)]
+    pub imap_enabled: bool,
+    #[serde(default)]
+    pub has_imap_password: bool,
+    #[serde(default = "default_true")]
+    pub imap_password_editable: bool,
     #[serde(default)]
     pub updated_at: Option<String>,
     #[serde(default)]
