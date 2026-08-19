@@ -601,6 +601,8 @@ async fn main() -> anyhow::Result<()> {
         email_service.clone(),
         geoip,
         config.login_approval_enabled,
+        config.country_allow.clone(),
+        config.country_deny.clone(),
     ));
 
     info!("Auth service initialized");

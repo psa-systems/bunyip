@@ -45,7 +45,17 @@ fn build_auth_service(pool: PgPool, login_approval_enabled: bool) -> AuthService
     let jwt = JwtService::new(JwtConfig::from_secret(JWT_SECRET, "bunyip-test"));
     let tier = Arc::new(RwLock::new(TierConfig::from_env()));
     let email = Arc::new(EmailService::new_dev());
-    AuthService::new(pool, jwt, tier, None, email, None, login_approval_enabled)
+    AuthService::new(
+        pool,
+        jwt,
+        tier,
+        None,
+        email,
+        None,
+        login_approval_enabled,
+        Vec::new(),
+        Vec::new(),
+    )
 }
 
 /// Seed a password user directly (bypassing `register`, which runs a network
