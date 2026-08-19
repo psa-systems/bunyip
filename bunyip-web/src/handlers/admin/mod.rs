@@ -22,6 +22,7 @@ mod memberships;
 mod rate_limits;
 mod seed;
 mod stripe;
+mod system_config;
 mod tier_settings;
 mod users;
 
@@ -44,6 +45,7 @@ pub use memberships::*;
 pub use rate_limits::*;
 pub use seed::*;
 pub use stripe::*;
+pub use system_config::*;
 pub use tier_settings::*;
 pub use users::*;
 

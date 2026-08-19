@@ -1256,6 +1256,27 @@ pub struct EmailConfigResponse {
     pub updated_by: Option<String>,
 }
 
+/// BUNYIP-580: the system-config YAML values, for the admin System settings page.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SystemConfigResponse {
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub cors_origin: String,
+    #[serde(default)]
+    pub web_origin: String,
+    #[serde(default)]
+    pub cookie_domain: String,
+    #[serde(default)]
+    pub login_approval_enabled: bool,
+    #[serde(default)]
+    pub signup_bot_guard_enabled: bool,
+    #[serde(default)]
+    pub country_allow: String,
+    #[serde(default)]
+    pub country_deny: String,
+}
+
 /// BUNYIP-433: result of the SMTP "Test connection" probe. `ok` is the headline
 /// pass/fail; on failure `stage` is one of `connect` / `tls` / `auth` and
 /// `message` is the admin-facing reason.

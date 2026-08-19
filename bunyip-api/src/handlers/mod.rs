@@ -177,6 +177,7 @@ pub mod feedback;
 pub mod membership;
 pub mod pricing;
 pub mod support;
+pub mod system_config;
 pub mod totp;
 pub mod user;
 pub mod webhook;
@@ -262,3 +263,4 @@ pub use admin_stripe::{
     unarchive_stripe_product, update_stripe_product,
 };
 pub use support::{reply_to_support_ticket, SupportReplyRequest};
+pub use system_config::{get_system_config, update_system_config};

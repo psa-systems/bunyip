@@ -1042,6 +1042,24 @@ pub async fn update_email_config(
     ok_data(&r).map(|_| ())
 }
 
+/// BUNYIP-580: read the system-config YAML values for the admin settings page.
+pub async fn system_config(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<crate::api::types::SystemConfigResponse, ApiError> {
+    parse(api.get("/admin/system-config", cookie).await?)
+}
+
+/// BUNYIP-580: write the edited system-config values back to the YAML file.
+pub async fn update_system_config(
+    api: &Api,
+    cookie: Option<&str>,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api.put("/admin/system-config", cookie, Some(body)).await?;
+    ok_data(&r).map(|_| ())
+}
+
 /// BUNYIP-433: run the SMTP "Test connection" probe against the saved config.
 /// The API returns 200 with `{ ok, stage, message }` for a reached target
 /// (pass or fail); a non-2xx (e.g. 429 rate limit) becomes an `ApiError`.
