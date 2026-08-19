@@ -1,6 +1,6 @@
 # Downloading apps
 
-Bunyip publishes apps in two forms: a **container image** you pull with Docker, or a **binary release** you download for your platform. Each app's page on the **Applications** catalog shows whichever ones it offers.
+Apps come in two forms: a **container image** you pull with Docker, or a **binary release** you download for your platform. Each app's page on the **Applications** catalog shows whichever ones it offers.
 
 You need to be signed in, and for members-only apps you need an active membership. See [Membership & access](/docs/membership).
 
@@ -8,13 +8,13 @@ You need to be signed in, and for members-only apps you need an active membershi
 
 If the app offers a container image, its page shows the exact pull details: the registry host, the image reference, and the current version tag.
 
-1. Log in to the registry once. Use the host shown on the app's page in place of `<registry>`, and your Bunyip account email for the `--username`. Docker prompts for your Bunyip password:
+1. Log in to the registry once. Use the host shown on the app's page in place of `<registry>`, and your account email for the `--username`. Docker prompts for your password:
 
    ```
    docker login <registry> --username <username>
    ```
 
-2. Pull the image using the reference shown for the app. Bunyip displays the full reference so you can copy it directly:
+2. Pull the image using the reference shown for the app. The full reference is shown so you can copy it directly:
 
    ```
    docker pull <registry>/<app>:<tag>
@@ -22,7 +22,7 @@ If the app offers a container image, its page shows the exact pull details: the 
 
 3. Run it following the app's own instructions. For Mokosh, see the Mokosh documentation.
 
-You always get the version Bunyip currently publishes for that app, and each published version stays available at its own tag, so pulling a specific tag keeps working after a newer one is released.
+You always get the version currently published for that app, and each published version stays available at its own tag, so pulling a specific tag keeps working after a newer one is released.
 
 ## Option 2: download the binary
 

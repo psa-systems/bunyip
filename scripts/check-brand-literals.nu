@@ -9,9 +9,9 @@
 # sites now interpolates the brand name fetched from `/v1/branding`.
 #
 # This gate fails the build when the standalone word `Bunyip` reappears in the
-# three trees that render copy. It scans Rust sources only: the `.md` files
-# under `bunyip-web/src/skin/docs/` are prose documents outside this issue's
-# file set.
+# trees that render copy: the Rust views, handlers and skin, plus the `/docs`
+# help pages (BUNYIP-576). The BUNYIP-561 sweep had excluded those `.md` files,
+# and they still leaked the codename to end users, so they are gated now too.
 #
 # An occurrence that is legitimately NOT copy (a test fixture asserting the
 # fallback, a `BUNYIP-nnn` issue reference in prose, an identifier that would
@@ -31,6 +31,9 @@ const GUARDED_GLOBS = [
     "bunyip-web/src/views/**/*.rs"
     "bunyip-web/src/handlers/**/*.rs"
     "bunyip-web/src/skin/**/*.rs"
+    # BUNYIP-576: the /docs help pages leaked the codename (they were excluded
+    # from the BUNYIP-561 sweep). Gate them too so it cannot come back.
+    "bunyip-web/src/skin/docs/**/*.md"
 ]
 
 # The standalone codename. `(?-i)` keeps it case-sensitive, so the crate,
