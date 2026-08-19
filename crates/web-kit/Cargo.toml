@@ -1,0 +1,22 @@
+[package]
+name = "web-kit"
+description = "Branding-free shared SSR web-kit (Maud + htmx building blocks) for PSA Systems front-ends."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+maud = "0.26"
+axum = { version = "0.7", features = ["macros"] }
+url = "2"
+tracing = { workspace = true }
+
+# Mirrors bunyip-web: the toolkit exposes a wider surface than any single
+# consumer wires up, so pub-but-unused helpers must not fail the build.
+[lints.rust]
+dead_code = "allow"
+
+[lints.clippy]
+too_many_arguments = "allow"

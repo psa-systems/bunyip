@@ -22,6 +22,12 @@ tower-http = { version = "0.6", features = ["fs", "compression-gzip", "set-heade
 # in axum::response::Html, so no version coupling with a maud "axum" feature.
 maud = "0.26"
 
+# BUNYIP-502: the branding-free shared SSR web-kit (icons/buttons/badges/boxes,
+# the auth-card shell, the Origin/Referer CSRF middleware). Re-exported through
+# crate::views::ui / crate::views::common / crate::csrf so call sites are
+# unchanged. A second front-end (menkent web) consumes the same crate.
+web-kit = { path = "../crates/web-kit" }
+
 # BUNYIP-385: render the embedded top-level docs (src/docs/*.md) to HTML for the
 # public /docs pages. `html` feature only (no CLI / default features).
 pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
