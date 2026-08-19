@@ -34,6 +34,10 @@ const GUARDED_GLOBS = [
     # BUNYIP-576: the /docs help pages leaked the codename (they were excluded
     # from the BUNYIP-561 sweep). Gate them too so it cannot come back.
     "bunyip-web/src/skin/docs/**/*.md"
+    # BUNYIP-502: the shared web-kit crate holds the UI toolkit lifted out of
+    # bunyip-web/src/views. Gate it so a brand literal cannot enter the layer
+    # a second front-end also consumes.
+    "crates/web-kit/src/**/*.rs"
 ]
 
 # The standalone codename. `(?-i)` keeps it case-sensitive, so the crate,

@@ -21,7 +21,9 @@
 #   scripts/check-ui-copy.nu
 #   scripts/check-ui-copy.nu --self-test
 
-const SRC_GLOB = "bunyip-web/src/**/*.rs"
+# BUNYIP-502: also scan the shared web-kit crate, which now holds UI toolkit
+# code (icons/buttons/badges/boxes) lifted out of bunyip-web/src/views.
+const SRC_GLOB = "{bunyip-web/src,crates/web-kit/src}/**/*.rs"
 
 # One double-quoted Rust string literal, escapes included.
 const LITERAL = '"(?<lit>(?:[^"\\]|\\.)*)"'

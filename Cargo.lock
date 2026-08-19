@@ -912,6 +912,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "urlencoding",
+ "web-kit",
 ]
 
 [[package]]
@@ -5648,6 +5649,16 @@ dependencies = [
  "hashbrown 0.15.5",
  "indexmap 2.14.0",
  "semver",
+]
+
+[[package]]
+name = "web-kit"
+version = "0.14.1"
+dependencies = [
+ "axum",
+ "maud",
+ "tracing",
+ "url",
 ]
 
 [[package]]

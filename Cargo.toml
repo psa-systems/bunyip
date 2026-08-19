@@ -5,6 +5,7 @@ members = [
     "crates/bunyip-domain",
     "crates/bunyip-oci",
     "crates/bunyip-oidc",
+    "crates/web-kit",
 ]
 resolver = "2"
 
