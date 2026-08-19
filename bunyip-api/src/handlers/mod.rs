@@ -176,6 +176,7 @@ pub mod events;
 pub mod feedback;
 pub mod membership;
 pub mod pricing;
+pub mod support;
 pub mod totp;
 pub mod user;
 pub mod webhook;
@@ -260,3 +261,4 @@ pub use admin_stripe::{
     list_stripe_products, list_stripe_webhooks, replace_stripe_price, unarchive_stripe_price,
     unarchive_stripe_product, update_stripe_product,
 };
+pub use support::{reply_to_support_ticket, SupportReplyRequest};

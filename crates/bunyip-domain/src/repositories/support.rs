@@ -169,6 +169,26 @@ impl SupportRepository {
         Ok(ticket)
     }
 
+    /// The most recent message on a ticket, used to thread a new outbound reply
+    /// (In-Reply-To its Message-ID, References its chain plus itself).
+    pub async fn latest_message(
+        pool: &PgPool,
+        ticket_id: Uuid,
+    ) -> Result<Option<SupportMessage>, AppError> {
+        let message = sqlx::query_as::<_, SupportMessage>(
+            r#"
+            SELECT * FROM support_messages
+            WHERE ticket_id = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(ticket_id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(message)
+    }
+
     /// All messages on a ticket, oldest first (thread order).
     pub async fn list_messages(
         pool: &PgPool,

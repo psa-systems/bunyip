@@ -517,6 +517,19 @@ impl EmailService {
 
         templates
             .add_raw_template(
+                "support_reply.html",
+                include_str!("../../templates/emails/support_reply.html"),
+            )
+            .map_err(|e| AppError::internal(format!("Template error: {}", e)))?;
+        templates
+            .add_raw_template(
+                "support_reply.txt",
+                include_str!("../../templates/emails/support_reply.txt"),
+            )
+            .map_err(|e| AppError::internal(format!("Template error: {}", e)))?;
+
+        templates
+            .add_raw_template(
                 "admin_invite.html",
                 include_str!("../../templates/emails/admin_invite.html"),
             )
@@ -605,7 +618,9 @@ impl EmailService {
         subject: &str,
         html_body: String,
         text_body: String,
-    ) -> Result<Message, AppError> {
+        in_reply_to: Option<&str>,
+        references: Option<&str>,
+    ) -> Result<(Message, String), AppError> {
         let from = format!("{} <{}>", config.from_name, config.from_email);
 
         let domain = config
@@ -614,7 +629,10 @@ impl EmailService {
             .next()
             .filter(|d| !d.is_empty())
             .unwrap_or("a8n.run");
-        let message_id = format!("<{}@{}>", uuid::Uuid::new_v4(), domain);
+        // The bare id (no angle brackets) is returned for storage; the header
+        // carries the angle-bracket form.
+        let message_id_bare = format!("{}@{}", uuid::Uuid::new_v4(), domain);
+        let message_id = format!("<{}>", message_id_bare);
 
         let mut builder = Message::builder()
             .from(
@@ -636,7 +654,16 @@ impl EmailService {
             })?);
         }
 
-        builder
+        // BUNYIP-571 slice 4: thread an app-composed reply back onto the
+        // original (angle-bracket header form; the caller formats the ids).
+        if let Some(irt) = in_reply_to {
+            builder = builder.in_reply_to(irt.to_string());
+        }
+        if let Some(refs) = references {
+            builder = builder.references(refs.to_string());
+        }
+
+        let email = builder
             .multipart(
                 lettre::message::MultiPart::alternative()
                     .singlepart(
@@ -650,7 +677,8 @@ impl EmailService {
                             .body(html_body),
                     ),
             )
-            .map_err(|e| AppError::internal(format!("Email build error: {}", e)))
+            .map_err(|e| AppError::internal(format!("Email build error: {}", e)))?;
+        Ok((email, message_id_bare))
     }
 
     /// Send an email
@@ -664,7 +692,8 @@ impl EmailService {
     ) -> Result<(), AppError> {
         let transport = self.transport();
         if let Some(transport) = transport {
-            let email = self.build_message(config, to, subject, html_body, text_body)?;
+            let (email, _message_id) =
+                self.build_message(config, to, subject, html_body, text_body, None, None)?;
 
             // BUNYIP-309: log the handoff to the transport so an attempt is
             // visible even when the send below fails. Pairs with the
@@ -686,6 +715,43 @@ impl EmailService {
         }
 
         Ok(())
+    }
+
+    /// Send an app-composed reply to a support ticket, threaded onto the
+    /// original via In-Reply-To / References. Returns the bare Message-ID of the
+    /// sent reply, to store on the outbound support message (BUNYIP-571).
+    pub async fn send_support_reply(
+        &self,
+        to: &str,
+        subject: &str,
+        message: &str,
+        in_reply_to: Option<String>,
+        references: Option<String>,
+    ) -> Result<String, AppError> {
+        let config = self.config();
+        let mut context = self.base_context(&config);
+        context.insert("response_message", &message);
+        let (html, text) = self.render_template("support_reply", &context)?;
+        let (email, message_id) = self.build_message(
+            &config,
+            to,
+            subject,
+            html,
+            text,
+            in_reply_to.as_deref(),
+            references.as_deref(),
+        )?;
+        if let Some(transport) = self.transport() {
+            tracing::info!(to = %to, subject = %subject, "Support reply queued for delivery");
+            transport
+                .send(email)
+                .await
+                .map_err(|e| AppError::internal(format!("Email send error: {}", e)))?;
+            tracing::info!(to = %to, subject = %subject, "Support reply sent");
+        } else {
+            tracing::info!(to = %to, subject = %subject, "Support reply not sent (dev mode)");
+        }
+        Ok(message_id)
     }
 
     /// Render a template
@@ -1531,13 +1597,15 @@ mod tests {
     fn build_message_sets_single_message_id_with_from_domain() {
         let service = service_with_from("dmarc-reporter-staging@a8n.run");
         let config = service.config();
-        let email = service
+        let (email, _id) = service
             .build_message(
                 &config,
                 "recipient@gmail.com",
                 "Verify your PSA Staging email address",
                 "<p>hello</p>".to_string(),
                 "hello".to_string(),
+                None,
+                None,
             )
             .expect("message builds");
 
@@ -1573,13 +1641,31 @@ mod tests {
         let config = service.config();
         let first = message_id_lines(
             &service
-                .build_message(&config, "a@example.com", "s", "h".into(), "t".into())
-                .unwrap(),
+                .build_message(
+                    &config,
+                    "a@example.com",
+                    "s",
+                    "h".into(),
+                    "t".into(),
+                    None,
+                    None,
+                )
+                .unwrap()
+                .0,
         );
         let second = message_id_lines(
             &service
-                .build_message(&config, "b@example.com", "s", "h".into(), "t".into())
-                .unwrap(),
+                .build_message(
+                    &config,
+                    "b@example.com",
+                    "s",
+                    "h".into(),
+                    "t".into(),
+                    None,
+                    None,
+                )
+                .unwrap()
+                .0,
         );
         assert_ne!(first[0], second[0], "Message-IDs must differ per send");
     }
@@ -1594,8 +1680,16 @@ mod tests {
 
         let mut config = service.config();
         config.support_inbox_email = None;
-        let email = service
-            .build_message(&config, "u@example.com", "s", "<p>h</p>".into(), "h".into())
+        let (email, _id) = service
+            .build_message(
+                &config,
+                "u@example.com",
+                "s",
+                "<p>h</p>".into(),
+                "h".into(),
+                None,
+                None,
+            )
             .expect("message builds");
         let wire = String::from_utf8(email.formatted()).expect("message is valid UTF-8");
         assert!(
@@ -1605,8 +1699,16 @@ mod tests {
 
         let mut config = service.config();
         config.support_inbox_email = Some("support@a8n.run".to_string());
-        let email = service
-            .build_message(&config, "u@example.com", "s", "<p>h</p>".into(), "h".into())
+        let (email, _id) = service
+            .build_message(
+                &config,
+                "u@example.com",
+                "s",
+                "<p>h</p>".into(),
+                "h".into(),
+                None,
+                None,
+            )
             .expect("message builds");
         let wire = String::from_utf8(email.formatted()).expect("message is valid UTF-8");
         let reply_to: Vec<&str> = wire
@@ -1622,6 +1724,39 @@ mod tests {
             reply_to[0].contains("support@a8n.run"),
             "Reply-To carries the support inbox: {:?}",
             reply_to[0]
+        );
+    }
+
+    /// BUNYIP-571 slice 4: a reply carries In-Reply-To and References so the
+    /// recipient's client threads it under the original, and build_message
+    /// returns the bare Message-ID for storage on the outbound support message.
+    #[test]
+    fn build_message_threads_a_reply() {
+        let service = service_with_from("noreply@a8n.run");
+        let config = service.config();
+        let (email, message_id) = service
+            .build_message(
+                &config,
+                "user@example.com",
+                "Re: Help",
+                "<p>done</p>".into(),
+                "done".into(),
+                Some("<welcome-1@psa.systems>"),
+                Some("<welcome-1@psa.systems> <ack-0@psa.systems>"),
+            )
+            .expect("message builds");
+        let wire = String::from_utf8(email.formatted()).expect("message is valid UTF-8");
+        assert!(
+            wire.contains("In-Reply-To: <welcome-1@psa.systems>"),
+            "threaded reply carries In-Reply-To: {wire}"
+        );
+        assert!(
+            wire.contains("References:") && wire.contains("<ack-0@psa.systems>"),
+            "threaded reply carries the References chain: {wire}"
+        );
+        assert!(
+            !message_id.contains('<') && message_id.contains('@'),
+            "returns the bare Message-ID for storage: {message_id}"
         );
     }
 
