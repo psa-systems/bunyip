@@ -114,6 +114,12 @@ pub struct Config {
     /// web and the mokosh-apps SPA) carries the hidden honeypot + timing token,
     /// then is flipped on per deployment.
     pub signup_bot_guard_enabled: bool,
+    /// BUNYIP-579/581: ISO 3166-1 alpha-2 country codes allowed / denied to sign
+    /// in, resolved through the YAML system-config layer. `country_allow` empty
+    /// means allow all; `country_deny` is applied after allow. Enforced in the
+    /// login path.
+    pub country_allow: Vec<String>,
+    pub country_deny: Vec<String>,
     /// BUNYIP-525: how to reach the Infisical store of the Group-2 integration
     /// secrets. Group-1 startup secrets stay file/SOPS-based and are never held
     /// here. Whether the store is read at all is `secrets_storage`.
@@ -1275,6 +1281,12 @@ impl Config {
         // the single `finish_startup_audit` at the end of this function decides.
         let mut failures = audit_required(is_production);
 
+        // BUNYIP-579: system-level settings (origins, feature toggles, country
+        // access) resolve through the file-based YAML layer: an env var (or its
+        // {NAME}_FILE indirection) over the YAML file over the built-in default.
+        // Generated on first run, never overwritten, loaded once here.
+        let sys = crate::sys_config::SysConfig::load();
+
         // DATABASE_URL embeds the postgres password, so it supports the
         // DATABASE_URL_FILE secret convention like every other secret. Its
         // absence is already recorded by the audit above; the placeholder here
@@ -1310,8 +1322,7 @@ impl Config {
 
         let log_level = env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
 
-        let cors_origin =
-            env::var("CORS_ORIGIN").unwrap_or_else(|_| "http://localhost:5173".to_string());
+        let cors_origin = sys.cors_origin.clone();
 
         // BUNYIP_WEB_ORIGIN is the single absolute URL of the bunyip-web login
         // UI. Falls back to the first entry of CORS_ORIGIN for ergonomics on
@@ -1319,18 +1330,15 @@ impl Config {
         // deployment (c-01: bunyip + mokosh-apps + drillmark) the operator MUST
         // set it explicitly so the OIDC authorize handler doesn't try to
         // concatenate a comma-list onto `/login`.
-        let web_origin = env::var("BUNYIP_WEB_ORIGIN")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| {
-                cors_origin
-                    .split(',')
-                    .next()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or("http://localhost:5173")
-                    .to_string()
-            });
+        let web_origin = sys.web_origin.clone().unwrap_or_else(|| {
+            cors_origin
+                .split(',')
+                .next()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("http://localhost:5173")
+                .to_string()
+        });
 
         let app_name = env::var("APP_NAME").unwrap_or_else(|_| "localhost".to_string());
         let email = EmailConfig::from_env(is_production);
@@ -1368,7 +1376,7 @@ impl Config {
 
         // Cookie domain: must be set explicitly via COOKIE_DOMAIN env var.
         // None means cookies are scoped to the exact hostname (suitable for localhost).
-        let cookie_domain = env::var("COOKIE_DOMAIN").ok().filter(|s| !s.is_empty());
+        let cookie_domain = sys.cookie_domain.clone();
         // BUNYIP-266: opt-in cross-subdomain cookie sharing. When unset,
         // the OP session cookie is host-scoped even if `cookie_domain` is
         // set. Mismatch (cookie_domain Some + shared false) logs a warn so
@@ -1458,16 +1466,12 @@ impl Config {
 
         // BUNYIP-373: opt-in switch for the suspicious-login approval gate.
         // Default false (the gate can withhold a login; enable per deployment).
-        let login_approval_enabled = env::var("LOGIN_APPROVAL_ENABLED")
-            .map(|v| v.trim().eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
+        let login_approval_enabled = sys.login_approval_enabled;
 
         // BUNYIP-377: opt-in switch for the signup bot guard. Default false;
         // enable only once every register form carries the honeypot + timing
         // token, or real signups without those fields are rejected.
-        let signup_bot_guard_enabled = env::var("SIGNUP_BOT_GUARD_ENABLED")
-            .map(|v| v.trim().eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
+        let signup_bot_guard_enabled = sys.signup_bot_guard_enabled;
 
         // BUNYIP-525: app-native Infisical fetch settings for Group-2 secrets.
         let infisical = InfisicalSettings::from_env();
@@ -1500,6 +1504,8 @@ impl Config {
             ip2proxy_db_path,
             login_approval_enabled,
             signup_bot_guard_enabled,
+            country_allow: sys.country_allow.clone(),
+            country_deny: sys.country_deny.clone(),
             infisical,
             secrets_storage,
         };
@@ -2085,6 +2091,11 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
     EnvVarSpec::defaulted(
         "ENVIRONMENT",
         "deployment environment name; unset means production",
+    ),
+    EnvVarSpec::defaulted(
+        "BUNYIP_CONFIG_FILE",
+        "path to the system-config YAML layer (BUNYIP-579); default \
+         /app/config/config.yaml, generated on first run and never overwritten",
     ),
     // BUNYIP-561: demoted to a bootstrap default. The product name is the
     // admin-managed `branding.brand_name`; this value is used only while that

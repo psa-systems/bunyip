@@ -85,6 +85,8 @@ futures-util = "0.3"
 # Serialization.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# BUNYIP-579: the file-based system-config layer (sys_config.rs) reads/writes YAML.
+serde_yaml = "0.9"
 
 # Config / logging.
 dotenvy = "0.15"

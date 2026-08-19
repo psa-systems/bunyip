@@ -133,7 +133,10 @@ COPY --from=builder /build/crates/bunyip-domain/templates /app/templates
 # Distribution cache dirs: pre-created WITH ownership so named volumes mounted
 # here inherit it on first use; root-owned mounts would fail every blob/asset
 # write with Permission denied (found during BUNYIP-31 verification).
-RUN mkdir -p /var/cache/bunyip-oci /var/cache/bunyip-downloads \
+# BUNYIP-579: /app/config holds the system-config YAML, generated on first run
+# and edited by the operator, so it must be appuser-writable (and normally a
+# mounted volume so edits persist across restarts).
+RUN mkdir -p /var/cache/bunyip-oci /var/cache/bunyip-downloads /app/config \
  && chown -R appuser:appuser /app /var/cache/bunyip-oci /var/cache/bunyip-downloads
 USER appuser
 
