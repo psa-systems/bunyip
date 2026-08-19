@@ -209,6 +209,10 @@ pub fn routes() -> Router<AppState> {
             post(admin::branding_asset_clear),
         )
         .route("/admin/email", get(admin::email).post(admin::email_save))
+        .route(
+            "/admin/system-config",
+            get(admin::system_config).post(admin::system_config_save),
+        )
         .route("/admin/email/test", post(admin::email_test))
         .route("/admin/email/test-send", post(admin::email_test_send))
         .route(

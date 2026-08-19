@@ -75,6 +75,48 @@ impl SysConfig {
         Self::resolve(&file, &|name| env_layered(name))
     }
 
+    /// The active config file path, for the admin screen and diagnostics.
+    pub fn file_path() -> PathBuf {
+        config_path()
+    }
+
+    /// Read the current on-disk config file WITHOUT generating it. Returns the
+    /// built-in defaults when the file is absent or unparseable, so the admin
+    /// screen always has a shape to render (BUNYIP-580).
+    pub fn read_file() -> SysConfigFile {
+        match std::fs::read_to_string(config_path()) {
+            Ok(contents) => serde_yaml::from_str(&contents).unwrap_or_default(),
+            Err(_) => SysConfigFile::default(),
+        }
+    }
+
+    /// Write the config file atomically (a sibling temp file renamed over the
+    /// target), so a failed or partial write never leaves the file broken
+    /// (BUNYIP-580 AC4). Comments are NOT preserved: serde_yaml is a data
+    /// serializer, so an operator's inline comments are lost on an admin save.
+    pub fn write_file(file: &SysConfigFile) -> std::io::Result<()> {
+        let path = config_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let yaml = serde_yaml::to_string(file)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let body = format!(
+            "# BUNYIP-579/580: system configuration. An environment variable (or its\n\
+             # {{NAME}}_FILE indirection) overrides the value here; edit and restart to\n\
+             # apply. Written by the admin System settings page.\n{yaml}"
+        );
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, body)?;
+        std::fs::rename(&tmp, &path)
+    }
+
+    /// Whether an environment variable (`{NAME}` or `{NAME}_FILE`) overrides the
+    /// file for this setting, so the admin screen can mark it read-only.
+    pub fn env_overrides(name: &str) -> bool {
+        env_layered(name).is_some()
+    }
+
     /// The pure resolution, with the env layer injected so precedence is
     /// unit-tested without touching the process environment. `env` returns the
     /// value of a setting's `{NAME}` (or `{NAME}_FILE`) variable, or `None`.

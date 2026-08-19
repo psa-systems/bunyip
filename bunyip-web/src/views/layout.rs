@@ -689,6 +689,11 @@ fn admin_items() -> Vec<NavItem> {
             icon: "mail",
         },
         NavItem {
+            title: "System",
+            href: "/admin/system-config",
+            icon: "settings",
+        },
+        NavItem {
             title: "Stripe",
             href: "/admin/stripe",
             icon: "banknote",

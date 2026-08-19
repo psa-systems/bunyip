@@ -215,12 +215,13 @@ belongs in the same runbook.
 
 ## System-config YAML layer (BUNYIP-579)
 
-A subset of the deployment-level settings below also resolves through a file-based YAML layer, so they can be reviewed and edited in one place (and, in a later change, from an admin screen) rather than only as environment variables. Today this covers `CORS_ORIGIN`, `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`, `LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`, and the country allow/deny list. Branding and every per-tenant value stay in the database (BUNYIP-561), so they remain live-editable without a restart.
+A subset of the deployment-level settings below also resolves through a file-based YAML layer, so they can be reviewed and edited in one place, by hand or from the admin **System** screen (BUNYIP-580), rather than only as environment variables. Today this covers `CORS_ORIGIN`, `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`, `LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`, and the country allow/deny list. Branding and every per-tenant value stay in the database (BUNYIP-561), so they remain live-editable without a restart.
 
 - **File location**: `BUNYIP_CONFIG_FILE`, default `/app/config/config.yaml` (mount `/app/config` as a volume so edits persist).
 - **First run**: the file is generated from the built-in defaults on first start and is **never overwritten** afterwards, so operator edits survive a restart (the Forgejo `app.ini` precedent).
 - **Precedence**: environment variable, then the YAML file, then the built-in default. The environment variable's `{NAME}_FILE` indirection is honoured too, so a secret-bearing value can be sourced from a mounted file rather than inlined, keeping the Infisical path intact.
-- **Apply**: edits to the YAML take effect on the next application restart. This is the documented, supported path.
+- **Admin screen** (BUNYIP-580): **Admin -> System** (`/admin/system-config`) edits the same file through a form. A save validates the values (origins contain a scheme, country codes are 2-letter) and rewrites the whole file atomically; a cleared field clears the setting. The screen edits the file layer only, so a value an environment variable also sets shows the file value but the effective value stays the environment one until that variable is removed.
+- **Apply**: edits to the YAML (by hand or from the admin screen) take effect on the next application restart. This is the documented, supported path.
 
 ## Defaulted (no boot-time log)
 
