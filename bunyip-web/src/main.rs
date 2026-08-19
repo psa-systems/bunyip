@@ -79,6 +79,9 @@ async fn main() {
     // so the EventSource was Mixed-Content-blocked. `api_public_origin`
     // defaults to `api_url` to preserve dev behaviour and overrides via
     // `BUNYIP_API_PUBLIC_ORIGIN` in production.
+    // BUNYIP-589: web-kit's asset() helper reads the consumer's build version
+    // through an installed cell (web-kit has no build script of its own).
+    views::layout::install_asset_version(env!("ASSET_VERSION"));
     views::layout::install_sse_api_origin(cfg.api_public_origin.clone());
     // BUNYIP-329: gate the Community nav entry on whether a Let's Chat instance
     // is configured (BUNYIP_COMMUNITY_URL).
@@ -336,7 +339,8 @@ async fn main() {
         // Needs the socket peer, so `serve` below uses
         // `into_make_service_with_connect_info` to surface `ConnectInfo`.
         .layer(axum::middleware::from_fn_with_state(
-            Arc::clone(&cfg),
+            // BUNYIP-589: the moved middleware takes just the trusted-proxy CIDRs.
+            Arc::new(cfg.trusted_proxies.clone()),
             client_ip::forward_client_ip,
         ))
         // BUNYIP-232: stamp a Content-Security-Policy onto every response (the

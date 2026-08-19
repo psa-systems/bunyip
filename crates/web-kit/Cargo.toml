@@ -12,6 +12,10 @@ maud = "0.26"
 axum = { version = "0.7", features = ["macros"] }
 url = "2"
 tracing = { workspace = true }
+# BUNYIP-589: the client-IP forwarding middleware.
+ipnetwork = "0.20"
+tower = { version = "0.5", features = ["util"] }
+tokio = { workspace = true }
 
 # Mirrors bunyip-web: the toolkit exposes a wider surface than any single
 # consumer wires up, so pub-but-unused helpers must not fail the build.
