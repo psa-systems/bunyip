@@ -342,6 +342,10 @@ fn login_content(error: Option<&str>, redirect: &str) -> Markup {
                 }
             }
             a href="/magic-link" class=(button_class("outline", "default", "mt-4 w-full")) { "Sign in with Magic Link" }
+            // BUNYIP-574: the two methods differ in email verification, so say so.
+            p class="mt-3 text-center text-xs text-muted-foreground" {
+                "A magic link verifies your email as you sign in. Signing up with a password verifies it in a separate step."
+            }
         }
         p class="mt-6 text-center text-sm text-muted-foreground" {
             "Don't have an account? "
@@ -573,6 +577,10 @@ fn register_card(errors: &RegisterErrors, email: &str, signup_token: &str) -> Ma
             }
             div class="mt-6" {
                 a href="/magic-link" class=(button_class("outline", "default", "w-full")) { "Sign up with Magic Link" }
+                // BUNYIP-574: the two methods differ in email verification, so say so.
+                p class="mt-3 text-center text-xs text-muted-foreground" {
+                    "A magic link verifies your email as you sign up. Creating a password account verifies it in a separate step."
+                }
             }
             p class="mt-6 text-center text-sm text-muted-foreground" {
                 "Already have an account? " a href="/login" class="text-primary-text hover:underline" { "Sign in" }
