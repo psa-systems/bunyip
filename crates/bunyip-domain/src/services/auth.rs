@@ -248,6 +248,24 @@ pub struct AuthService {
     /// gate. Off by default (from `Config::login_approval_enabled`); when off,
     /// login behaves exactly as before (BUNYIP-366 alert only).
     login_approval_enabled: bool,
+    /// BUNYIP-581: ISO 3166-1 alpha-2 country allow/deny for sign-in, from the
+    /// YAML system-config layer. `country_allow` empty means allow all; a
+    /// country in `country_deny`, or absent from a non-empty `country_allow`, is
+    /// refused before any credential work. Empty lists disable the gate.
+    country_allow: Vec<String>,
+    country_deny: Vec<String>,
+}
+
+/// BUNYIP-581: whether a resolved country is refused sign-in. A country in
+/// `deny` is always refused; when `allow` is non-empty, only countries in it are
+/// permitted. Codes compare case-insensitively as ISO 3166-1 alpha-2. Pure, so
+/// the allow/deny decision is unit-tested without a geoip database.
+pub fn country_blocked(country: &str, allow: &[String], deny: &[String]) -> bool {
+    let c = country.trim();
+    if deny.iter().any(|d| d.eq_ignore_ascii_case(c)) {
+        return true;
+    }
+    !allow.is_empty() && !allow.iter().any(|a| a.eq_ignore_ascii_case(c))
 }
 
 impl AuthService {
@@ -260,6 +278,8 @@ impl AuthService {
         email_service: Arc<EmailService>,
         geoip: Option<Arc<GeoIpService>>,
         login_approval_enabled: bool,
+        country_allow: Vec<String>,
+        country_deny: Vec<String>,
     ) -> Self {
         Self {
             pool,
@@ -270,6 +290,8 @@ impl AuthService {
             email_service,
             geoip,
             login_approval_enabled,
+            country_allow,
+            country_deny,
         }
     }
 
@@ -813,6 +835,24 @@ impl AuthService {
         // `create_tokens`. Both mint paths below (trusted-device skip and the
         // normal 2FA-cleared path) use it.
         let refresh_deadline = Some(Utc::now() + refresh_absolute_ttl(remember));
+
+        // BUNYIP-581: country allow/deny gate for spam prevention. The client IP
+        // resolves to a country through the same IP2Location resolver as the
+        // new-location alert; a refused country is a 403 before any credential
+        // work. No-op when no list is configured or no geoip DB is present.
+        if !self.country_deny.is_empty() || !self.country_allow.is_empty() {
+            if let (Some(geoip), Some(ip)) = (&self.geoip, ip_address) {
+                if !is_non_public_ip(&ip) {
+                    if let Some(country) = geoip.country_code(ip) {
+                        if country_blocked(&country, &self.country_allow, &self.country_deny) {
+                            tracing::warn!(country = %country, "sign-in refused by the country allow/deny list (BUNYIP-581)");
+                            return Err(AppError::Forbidden);
+                        }
+                    }
+                }
+            }
+        }
+
         // Find user
         let mut user = UserRepository::find_by_email(&self.pool, &email)
             .await?
@@ -2376,6 +2416,39 @@ mod tests {
         // BUNYIP-381: uniform across roles - 30 days with "remember me", else 1 day.
         assert_eq!(refresh_absolute_ttl(true), Duration::days(30));
         assert_eq!(refresh_absolute_ttl(false), Duration::days(1));
+    }
+
+    /// BUNYIP-581: the country allow/deny decision. An empty pair allows all; a
+    /// denied country is refused; a non-empty allow permits only its members;
+    /// deny wins over allow.
+    #[test]
+    fn country_gate_allows_and_denies() {
+        assert!(!country_blocked("US", &[], &[]), "no lists: allow all");
+
+        let deny = vec!["RU".to_string(), "KP".to_string()];
+        assert!(
+            country_blocked("ru", &[], &deny),
+            "a denied country is refused (case-insensitive)"
+        );
+        assert!(
+            !country_blocked("US", &[], &deny),
+            "an unlisted country passes the deny gate"
+        );
+
+        let allow = vec!["US".to_string(), "GB".to_string()];
+        assert!(
+            !country_blocked("gb", &allow, &[]),
+            "an allowed country passes"
+        );
+        assert!(
+            country_blocked("FR", &allow, &[]),
+            "a country absent from a non-empty allow is refused"
+        );
+
+        assert!(
+            country_blocked("US", &["US".to_string()], &["US".to_string()]),
+            "deny wins over allow"
+        );
     }
 
     // ── BUNYIP-377: signup submit-timing guard ─────────────────────────────
