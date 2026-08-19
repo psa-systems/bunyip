@@ -502,6 +502,11 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // BUNYIP-571: poll the support IMAP mailbox and ingest replies into the
+    // support queue. Always spawned; it re-reads the config each tick and
+    // no-ops while IMAP is disabled or unconfigured.
+    bunyip_api::support_ingest::spawn(pool.clone(), config.clone(), app_key_set.clone());
+
     // Initialize Email service: non-secret settings prefer the DB row (admin
     // UI) and fall back to the environment (BUNYIP-351); the SMTP password
     // comes from the declared store alone (BUNYIP-542). The auth service (built
