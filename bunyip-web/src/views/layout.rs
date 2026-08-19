@@ -9,7 +9,7 @@
 //! in an inline block now lives in `assets/js/*.js` and is wired to the markup
 //! through `data-*` attributes.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 
@@ -18,120 +18,11 @@ use crate::config::Config;
 use crate::util::app_link;
 use crate::views::ui::{button_class, icon};
 
-/// BUNYIP-145: the public-facing origin of bunyip-api the browser's
-/// `EventSource` connects to. Set once at startup from `Config::api_url`;
-/// read by every authenticated shell so the dashboard / admin pages can
-/// open a long-lived SSE stream without threading the config through 45
-/// handler call sites.
-static SSE_API_ORIGIN: OnceLock<String> = OnceLock::new();
-
-/// BUNYIP-145: install the public-facing bunyip-api origin used by the SSE
-/// subscriber injected into the dashboard / admin shells. Called once from
-/// `main` before any request is served. Idempotent (the underlying
-/// `OnceLock` ignores subsequent sets).
-pub fn install_sse_api_origin(origin: impl Into<String>) {
-    let _ = SSE_API_ORIGIN.set(origin.into().trim_end_matches('/').to_string());
-}
-
-/// BUNYIP-554: the build-derived cache buster every `/assets/*` reference
-/// carries. `main.rs` serves that directory with `max-age=31536000, immutable`,
-/// so the query string is the only thing that lets a deploy reach a warm cache;
-/// without it the year-long lifetime would pin the old bytes. Set by
-/// `build.rs` from the short commit (or the build timestamp when git is absent).
-pub fn asset_version() -> &'static str {
-    env!("ASSET_VERSION")
-}
-
-/// A versioned `/assets/*` URL. Every reference in the markup goes through
-/// this - an unversioned one is served `immutable` and can never be updated.
-pub fn asset(path: &str) -> String {
-    format!("{path}?v={}", asset_version())
-}
-
-fn sse_api_origin() -> &'static str {
-    SSE_API_ORIGIN
-        .get()
-        .map(String::as_str)
-        .unwrap_or("http://localhost:4401")
-}
-
-/// BUNYIP-329: whether the Community (Let's Chat) nav entry is shown. Set once
-/// from `main` out of `Config::community_enabled()`, so the sidebar can gate
-/// the item without threading config through every `dashboard_response` caller
-/// (same pattern as [`SSE_API_ORIGIN`]).
-static COMMUNITY_ENABLED: OnceLock<bool> = OnceLock::new();
-
-/// Install the Community feature flag. Called once from `main` before serving.
-/// Idempotent (the underlying `OnceLock` ignores subsequent sets).
-pub fn install_community_enabled(enabled: bool) {
-    let _ = COMMUNITY_ENABLED.set(enabled);
-}
-
-fn community_enabled() -> bool {
-    *COMMUNITY_ENABLED.get().unwrap_or(&false)
-}
-
-/// BUNYIP-500: optional per-skin theme override (raw CSS custom-property
-/// declarations for the brand ramp, `Config::theme_css`). Set once from `main`
-/// (same `OnceLock` pattern as [`SSE_API_ORIGIN`]); emitted into a `:root`
-/// block in the document head. Unset (the default) emits nothing, so the
-/// `@theme` tokens fall back to the default palette.
-///
-/// BUNYIP-560: this is now the BOOTSTRAP DEFAULT only. The palette is a field
-/// of the admin-managed branding record, and `BRAND_THEME_CSS` answers solely
-/// for a database that has never been branded. The variable is removed in
-/// 0.16.0 (BUNYIP-568; `docs/configuration.md`).
-static SKIN_THEME_CSS: OnceLock<Option<String>> = OnceLock::new();
-
-/// Install the per-skin theme override. Called once from `main` before serving.
-/// Idempotent (the underlying `OnceLock` ignores subsequent sets).
-pub fn install_skin_theme_css(css: Option<String>) {
-    let _ = SKIN_THEME_CSS.set(css);
-}
-
-fn skin_theme_css() -> Option<&'static str> {
-    SKIN_THEME_CSS.get().and_then(Option::as_deref)
-}
-
-/// BUNYIP-549: the two `<meta name="theme-color">` values (light scheme, dark
-/// scheme) that paint the browser chrome. A skin recolours every in-page token
-/// through [`SKIN_THEME_CSS`], so the chrome colour never was a literal in this
-/// shell.
-///
-/// BUNYIP-560: both are fields of the admin-managed branding record now, and
-/// `BRAND_THEME_COLOR_LIGHT` / `_DARK` are the BOOTSTRAP DEFAULTS only, held
-/// here and consulted when the record's field is empty. The old compiled-in
-/// `#2f4e2e` / `#161a16` pair is gone: with neither the record nor the
-/// environment set, the meta is OMITTED rather than painting the browser chrome
-/// in one product's green.
-static THEME_COLOR_LIGHT: OnceLock<Option<String>> = OnceLock::new();
-static THEME_COLOR_DARK: OnceLock<Option<String>> = OnceLock::new();
-
-/// Install the bootstrap browser-chrome colours. Called once from `main` before
-/// serving. Idempotent (the underlying `OnceLock`s ignore subsequent sets).
-pub fn install_theme_colors(light: Option<String>, dark: Option<String>) {
-    let _ = THEME_COLOR_LIGHT.set(light);
-    let _ = THEME_COLOR_DARK.set(dark);
-}
-
-fn bootstrap_theme_color_light() -> Option<&'static str> {
-    THEME_COLOR_LIGHT.get().and_then(Option::as_deref)
-}
-
-fn bootstrap_theme_color_dark() -> Option<&'static str> {
-    THEME_COLOR_DARK.get().and_then(Option::as_deref)
-}
-
-/// BUNYIP-560: resolve one palette value: the branding record, else the
-/// bootstrap environment default, else nothing at all. Pure, so the
-/// omission rule is unit-testable.
-fn palette_value<'a>(record: &'a str, bootstrap: Option<&'a str>) -> Option<&'a str> {
-    if !record.is_empty() {
-        Some(record)
-    } else {
-        bootstrap.filter(|v| !v.is_empty())
-    }
-}
+// BUNYIP-589: the generic shell scaffolding (asset, install_*, palette_value,
+// sse_subscriber_script, theme_controls, admin_block(_grid), NavItem, nav_links,
+// the APP_* consts) moved to the shared web-kit crate; re-exported so this
+// module's kept builders and every handler call site resolve them unchanged.
+pub use web_kit::shell::*;
 
 /// BUNYIP-561: the admin-managed branding record (product name, tagline, meta
 /// description, Open Graph image), fetched from bunyip-api and refreshed on an
@@ -147,16 +38,6 @@ pub fn branding() -> Arc<Branding> {
 /// in which case every site that renders it omits it.
 pub fn brand_name() -> String {
     branding().brand_name.clone()
-}
-
-/// BUNYIP-145 / BUNYIP-424: the browser-facing origin the dashboard's
-/// `EventSource` connects to, handed to `assets/js/sse.js` as a `data-` attribute
-/// on its own `<script>` tag. Server values reach the client as passive markup,
-/// never as executable JavaScript.
-fn sse_subscriber_script() -> Markup {
-    html! {
-        script src=(asset("/assets/js/sse.js")) data-api-origin=(sse_api_origin()) defer {}
-    }
 }
 
 /// BUNYIP-561: the browser-title string, `"<page> · <brand>"`, or the bare page
@@ -432,20 +313,6 @@ fn brand() -> Markup {
     }
 }
 
-fn theme_controls(icon_class: &str) -> Markup {
-    html! {
-        // BUNYIP-424: `data-theme-toggle` / `data-contrast-toggle` replace the
-        // old inline click handlers; `assets/js/theme.js` binds them.
-        button type="button" aria-label="Toggle theme" class=(button_class("ghost", "icon", "")) data-theme-toggle {
-            span class="rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" { (icon("sun", icon_class)) }
-            span class="absolute rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" { (icon("moon", icon_class)) }
-        }
-        button type="button" aria-label="Toggle high contrast" class=(button_class("ghost", "icon", "")) data-contrast-toggle {
-            (icon("contrast", icon_class))
-        }
-    }
-}
-
 /// Floating "open feedback" launcher pinned to the bottom-right of the
 /// viewport. BUNYIP-370: mounted by EVERY authenticated shell -
 /// `dashboard_shell` and `admin_shell` - so feedback can be sent from any
@@ -595,17 +462,12 @@ pub fn public_shell(
     }
 }
 
-struct NavItem {
-    title: &'static str,
-    href: &'static str,
-    icon: &'static str,
-}
-
 fn dashboard_items(is_member: bool) -> Vec<NavItem> {
     let mut items = vec![NavItem {
         title: "Dashboard",
         href: "/dashboard",
         icon: "layout-dashboard",
+        external: false,
     }];
     // BUNYIP-329: Community (Let's Chat) sits high in the nav so it is front
     // and centre, but only for members and only when an instance is configured
@@ -615,6 +477,8 @@ fn dashboard_items(is_member: bool) -> Vec<NavItem> {
             title: "Community",
             href: "/community",
             icon: "message-square-quote",
+            // BUNYIP-329: Community launches the external Let's Chat instance.
+            external: true,
         });
     }
     items.extend([
@@ -622,6 +486,7 @@ fn dashboard_items(is_member: bool) -> Vec<NavItem> {
             title: "Applications",
             href: "/applications",
             icon: "app-window",
+            external: false,
         },
         // Downloads moved onto each application card (BUNYIP-100); the
         // standalone /downloads page is now a redirect to /applications.
@@ -633,11 +498,13 @@ fn dashboard_items(is_member: bool) -> Vec<NavItem> {
             title: "Membership & Billing",
             href: "/membership",
             icon: "credit-card",
+            external: false,
         },
         NavItem {
             title: "Settings",
             href: "/settings",
             icon: "settings",
+            external: false,
         },
     ]);
     items
@@ -649,6 +516,7 @@ fn admin_items() -> Vec<NavItem> {
             title: "Admin Dashboard",
             href: "/admin",
             icon: "layout-dashboard",
+            external: false,
         },
         // BUNYIP-410: Memberships folded into the Users page (tier column +
         // filter bar); its nav entry is removed and /admin/memberships redirects
@@ -657,21 +525,25 @@ fn admin_items() -> Vec<NavItem> {
             title: "Users",
             href: "/admin/users",
             icon: "users",
+            external: false,
         },
         NavItem {
             title: "Applications",
             href: "/admin/applications",
             icon: "app-window",
+            external: false,
         },
         NavItem {
             title: "Application Groups",
             href: "/admin/application-groups",
             icon: "layers",
+            external: false,
         },
         NavItem {
             title: "Entitlements",
             href: "/admin/entitlements",
             icon: "key",
+            external: false,
         },
         // BUNYIP-561: the product name, tagline, meta description and Open
         // Graph image, so a rebrand is an admin edit rather than a redeploy.
@@ -682,21 +554,25 @@ fn admin_items() -> Vec<NavItem> {
             // know, so this stays inside the existing set (BUNYIP-560 brings
             // the brand assets, and their icon, with it).
             icon: "globe",
+            external: false,
         },
         NavItem {
             title: "Email",
             href: "/admin/email",
             icon: "mail",
+            external: false,
         },
         NavItem {
             title: "System",
             href: "/admin/system-config",
             icon: "settings",
+            external: false,
         },
         NavItem {
             title: "Stripe",
             href: "/admin/stripe",
             icon: "banknote",
+            external: false,
         },
         NavItem {
             // BUNYIP-487: label only. The route stays /admin/tier-settings so
@@ -704,48 +580,52 @@ fn admin_items() -> Vec<NavItem> {
             title: "Pricing Tiers",
             href: "/admin/tier-settings",
             icon: "settings",
+            external: false,
         },
         NavItem {
             title: "Feedback",
             href: "/admin/feedback",
             icon: "message-square-quote",
+            external: false,
         },
         NavItem {
             title: "Audit Logs",
             href: "/admin/audit-logs",
             icon: "file-text",
+            external: false,
         },
         NavItem {
             title: "Error Logs",
             href: "/admin/logs",
             icon: "alert-triangle",
+            external: false,
         },
         NavItem {
             title: "Seed Data",
             href: "/admin/seed",
             icon: "layers",
+            external: false,
         },
         NavItem {
             title: "IP Bans",
             href: "/admin/ip-bans",
             icon: "shield-off",
+            external: false,
         },
         NavItem {
             title: "Auto-ban Settings",
             href: "/admin/auto-ban-settings",
             icon: "shield-alert",
+            external: false,
         },
         NavItem {
             title: "Rate Limits",
             href: "/admin/rate-limits",
             icon: "gauge",
+            external: false,
         },
     ]
 }
-
-const NAV_ACTIVE: &str =
-    "bg-gradient-to-r from-primary to-indigo-500 text-white shadow-md shadow-primary/20";
-const NAV_INACTIVE: &str = "text-muted-foreground hover:bg-accent hover:text-accent-foreground";
 
 /// BUNYIP-547: the complete nav destination list of an authenticated shell,
 /// grouped into the sections a divider separates. The cross-shell switch
@@ -761,12 +641,14 @@ fn shell_nav_sections(admin: bool, is_admin: bool, is_member: bool) -> Vec<Vec<N
             title: "User Dashboard",
             href: "/dashboard",
             icon: "layout-dashboard",
+            external: false,
         }]);
     } else if is_admin {
         sections.push(vec![NavItem {
             title: "Admin Panel",
             href: "/admin",
             icon: "shield",
+            external: false,
         }]);
     }
     sections.push(if admin {
@@ -775,35 +657,6 @@ fn shell_nav_sections(admin: bool, is_admin: bool, is_member: bool) -> Vec<Vec<N
         dashboard_items(is_member)
     });
     sections
-}
-
-/// The nav rows themselves, shared by the sidebar and the below-`md` disclosure
-/// (BUNYIP-547) so the two cannot drift in destinations, active styling, or
-/// external-link handling.
-fn nav_links(sections: &[Vec<NavItem>], active: &str) -> Markup {
-    html! {
-        @for (i, section) in sections.iter().enumerate() {
-            @if i > 0 { div class="my-3 border-t border-border/50" {} }
-            @for item in section {
-                // BUNYIP-329: Community launches the external Let's Chat
-                // instance, so open it in a new tab and keep this one.
-                @let external = item.href == "/community";
-                a href=(item.href)
-                  target=[external.then_some("_blank")]
-                  rel=[external.then_some("noopener noreferrer")]
-                  class={ "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-all " (if active == item.href { NAV_ACTIVE } else { NAV_INACTIVE }) } {
-                    (icon(item.icon, "h-4 w-4"))
-                    (item.title)
-                    // BUNYIP-341: flag the external Community launch with a
-                    // trailing external-link glyph (opens in a new tab), so
-                    // the row reads as "leaves this app" before it is clicked.
-                    @if external {
-                        (icon("external-link", "ml-auto h-3.5 w-3.5 opacity-60"))
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// BUNYIP-547: the authenticated navigation below the `md` breakpoint, where
@@ -927,17 +780,6 @@ fn app_topbar(title: &str, user: &User, nav: Markup) -> Markup {
     }
 }
 
-/// BUNYIP-368: the authenticated shells pin themselves to the viewport from the
-/// `md` breakpoint up (the breakpoint at which the sidebar is rendered at all),
-/// so the sidebar and `<main>` are each their own scroll container and neither
-/// drags the document with it. Below `md` there is no sidebar, so the page keeps
-/// its natural full-document scroll (`min-h-screen`).
-const APP_SHELL_CLASS: &str = "flex min-h-screen md:h-screen md:overflow-hidden";
-/// The content column next to the sidebar: the topbar stays put and only
-/// `<main>` inside it scrolls.
-const APP_COLUMN_CLASS: &str = "flex flex-1 flex-col overflow-hidden";
-const APP_MAIN_CLASS: &str = "relative flex-1 overflow-y-auto p-6";
-
 /// `topbar_title` is the heading rendered in the top bar (NOT the browser
 /// `<title>`). BUNYIP-499: it is the bare page title; the browser tab's
 /// " · {app_name}" suffix is appended separately in `document()`, so the header
@@ -978,39 +820,6 @@ pub fn admin_shell(user: &User, active: &str, topbar_title: &str, content: Marku
             (feedback_launcher())
         }
         (sse)
-    }
-}
-
-/// A single settings/content block: a card with a title, an optional subtitle,
-/// and a body. The building unit of the two-column admin block layout
-/// (BUNYIP-415), so sparse full-width admin screens group related controls into
-/// blocks instead of one long narrow column. Matches the inline card markup
-/// already used across the admin screens (rounded border + card surface, a
-/// header stack, and a padded body).
-pub fn admin_block(title: &str, subtitle: Option<&str>, body: Markup) -> Markup {
-    html! {
-        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-            div class="flex flex-col space-y-1.5 p-6" {
-                h3 class="text-2xl font-semibold leading-none tracking-tight" { (title) }
-                @if let Some(s) = subtitle {
-                    p class="text-sm text-muted-foreground" { (s) }
-                }
-            }
-            div class="p-6 pt-0" { (body) }
-        }
-    }
-}
-
-/// Lay a set of blocks out in a responsive two-column grid that collapses to a
-/// single column below the `lg` breakpoint (BUNYIP-415). `items-start` so
-/// blocks of unequal height top-align rather than stretching to match the
-/// tallest, and `gap-6` matches the vertical rhythm of the single-column
-/// `space-y-6` stacks these screens use elsewhere.
-pub fn admin_block_grid(blocks: Vec<Markup>) -> Markup {
-    html! {
-        div class="grid gap-6 items-start lg:grid-cols-2" {
-            @for b in blocks { (b) }
-        }
     }
 }
 

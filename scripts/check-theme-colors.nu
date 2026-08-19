@@ -32,6 +32,9 @@ const JS_GLOB = "bunyip-web/assets/js/*.js"
 const SHELL_SOURCES = [
     "bunyip-web/src/views/layout.rs"
     "bunyip-web/src/config.rs"
+    # BUNYIP-589: the theme-colour install/getters and theme_controls moved into
+    # the shared web-kit shell; gate it so a colour literal cannot enter there.
+    "crates/web-kit/src/shell.rs"
 ]
 
 # Where the shipped shell ends and its tests begin. The tests install sentinel
