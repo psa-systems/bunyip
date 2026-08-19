@@ -1,6 +1,6 @@
 # Getting started with Bunyip
 
-This guide covers the developer fast path: clone, run, sign in, click around. Self-hosting instructions live in the README under "Self-host".
+This guide covers the developer fast path: clone, run, sign in, click around. Self-hosting instructions live in [self-hosting.md](self-hosting.md).
 
 ## Prerequisites
 
@@ -17,98 +17,77 @@ This guide covers the developer fast path: clone, run, sign in, click around. Se
 just dev
 ```
 
-This brings up two containers (`dev-bunyip-api-${USER}`, `dev-bunyip-web-${USER}`) and a private network (`dev-bunyip-private-${USER}`). The `${USER}` postfix lets multiple developers share a host without name collisions.
+This brings up two app containers (`dev-bunyip-api-${USER}`, `dev-bunyip-web-${USER}`) plus PostgreSQL on a private network (`dev-bunyip-private-${USER}`). The `${USER}` postfix lets multiple developers share a host without name collisions.
 
 Then visit:
 
-- Frontend: <http://localhost:4400>
-- API health: <http://localhost:4401/healthz>
-- OIDC discovery (against the mock backend, returns 404 in pure-mock mode): <http://localhost:4401/.well-known/openid-configuration>
+- Front-end: <http://localhost:4400>
+- API health: <http://localhost:4401/health>
+- OIDC discovery: <http://localhost:4401/.well-known/openid-configuration>
 
-## Sign in (mock backend)
+## Sign in
 
-Out of the box, `just dev` runs `bunyip-api` in mock mode. It serves seeded JSON from `seeds/` and accepts a fixed mock password.
+`bunyip-api` is the real backend: PostgreSQL persistence, real password and TOTP crypto, and its own OIDC issuer. There is no mock mode.
 
-1. Open <http://localhost:4400/signup>, enter any email, click "Send link". You'll see "Check your email" - the mock backend skips actual email delivery and treats the next visit to `/signup/<token>` as the next step (link printed in the api container logs).
-2. Or skip signup: open <http://localhost:4400/login>, enter any seeded email (see `seeds/users.json`) and the password `demo` (default; configurable via `MOCK_PASSWORD` env). MFA prompt uses `000000` as the code (configurable via `MOCK_TOTP_CODE` env).
-3. After sign-in you land on `/dashboard` - the App Launcher. Tiles drive cross-app OIDC handoff, but with no other apps deployed in dev there's nothing to launch.
+**As the default admin.** On first start, when no admin exists, `bunyip-api` creates one from `SETUP_DEFAULT_ADMIN` (`email:password`). The `.env.example` default is `admin@bunyip.local` / `ChangeMeBunyip2026`. Open <http://localhost:4400/login> and sign in with those.
 
-## Sign in with SSO (overlay)
+**As a new signup.** Email sending is off in dev (`EMAIL_ENABLED=false`), so the magic link is not delivered. Set `EMAIL_LOG_TOKENS=true` in your `.env` (it logs the full link at DEBUG, and is forced off in production), restart, then:
 
-If you want bunyip to talk to a real mokosh-server (running locally or behind Traefik), use the `compose.dev-sso.yml` overlay:
+1. Open <http://localhost:4400/signup>, enter an email, submit.
+2. Read the magic link from the api logs: `docker logs dev-bunyip-api-${USER}`, and open it.
+
+After sign-in you land on `/dashboard`, the App Launcher. Tiles drive cross-app OIDC handoff; with no other apps deployed in dev there is nothing to launch.
+
+## SSO and Google sign-in (overlay)
+
+To exercise SSO end to end, bunyip runs behind Traefik with TLS against the other repos in the stack:
 
 ```nu
 just dev-sso
 ```
 
-This requires:
-
-1. A mokosh-server reachable at the `BUNYIP_OIDC_ISSUER` URL in your `.env`.
-2. A registered OAuth client UUID at `BUNYIP_OIDC_CLIENT_ID` (run `just register-bunyip-client` inside mokosh-server's repo, paste the UUID into bunyip's `.env`).
-3. A `BUNYIP_OIDC_REDIRECT_URI` matching the client's registered redirect URI (typically `https://${USER}-bunyip.a8n.run/auth/callback`).
-
-The SSO overlay routes via Traefik with TLS, which is why it needs a real hostname + cert. Plain `just dev` does not.
-
-## Sign in with Google
-
-The login page has a "Continue with Google" button (visible when `BUNYIP_OIDC_ISSUER` is set). It triggers the existing PKCE OIDC flow against mokosh-server with `&idp_hint=google` appended. Mokosh-server's IdP UI decides whether to honor the hint (skip its chooser and go straight to Google) or render the chooser. Either way, end-to-end auth uses the same OIDC code-exchange flow.
-
-For this to work end to end you need:
-
-- mokosh-server's Google OAuth client configured with the right redirect URIs (see `mokosh-server/docs/dev-docs/CHANGELOG.md`).
-- The bunyip OAuth client (in mokosh_auth.oauth_clients) registered with `<bunyip-origin>/auth/callback`.
+This is a cross-repo setup (bunyip + mokosh-server + mokosh-apps) with its own Nebula topology, OIDC client registration (`just register-dev-clients`), and certificate requirements. The authoritative, step-by-step guide - including the Google sign-in path and every spin-up obstacle - is [dev-sso-three-repo-runbook.md](dev-sso-three-repo-runbook.md). Read it before touching dev-sso infra. Plain `just dev` needs none of it.
 
 ## Cross-project domain layout
 
-Once cutover lands at psa.systems (see [PSA-7](https://niceguyit.myjetbrains.com/youtrack/issue/PSA-7)):
-
-| URL | Service | Notes |
-|-----|---------|-------|
-| `https://psa.systems` | bunyip-web | SaaS shell / marketing / account mgmt |
-| `https://psa.systems/api/*` | bunyip-api | mock backend (M1) |
-| `https://msp.psa.systems` | mokosh-clients | actual PSA application |
-| `https://msp-api.psa.systems` | mokosh-server | real backend + OIDC issuer |
-
-Staging mirrors this layout on `a8n.systems`. The wildcard certs (`*.a8n.systems`, `*.psa.systems`) are already in Cloudflare.
+Staging runs on `a8n.systems`, production on `psa.systems`. In both, `bunyip-web` serves the apex and `bunyip-api` serves `api.<host>`. `bunyip-api` is bunyip's OIDC issuer (`/.well-known/*`, `/oauth2/*`): it signs users in and issues tokens to the apps bunyip fronts. The full three-repo layout (bunyip, mokosh-server, mokosh-apps) and how the pieces wire together is in [dev-sso-three-repo-runbook.md](dev-sso-three-repo-runbook.md).
 
 ## Common commands
 
 ```nu
 just dev               # bring up the dev stack
-just dev-down          # stop it
+just dev-stop          # stop it
 just dev-clean         # stop + drop volumes (fresh state)
 just dev-sso           # SSO overlay (real mokosh-server target)
-just check             # cargo fmt --check + clippy + check + tests
-just fmt               # cargo fmt --all
-just create-release minor   # bump Cargo.toml, branch, push, print PR URL
+just dev-logs          # tail the container logs
+just check-container   # fmt + clippy + workspace tests, inside the pinned builder (no host toolchain)
+just create-release minor   # bump the workspace version, branch, push, open the release PR
 ```
 
-All cargo runs inside the dev container; never `cargo build` on the host.
+`just check` runs the fuller fmt + clippy + build + docker-builder-stage sequence, but it needs a host toolchain; on a toolchain-less dev box use `just check-container`. Never `cargo build` on the host.
 
 ## Where things live
 
-- `bunyip-api/` - Axum mock backend (no DB; reads JSON from `seeds/`).
-- `bunyip-web/` - Dioxus WASM SPA served by Caddy in production.
-- `crates/bunyip-mocks/` - shared mock-data types between api + web.
-- `seeds/` - JSON fixtures the api serves and the web SPA mirrors for fallback rendering.
-- `compose.yml` - production / self-host reference deployment (pulls published images).
-- `compose.dev.yml` - dev stack (bind-mount source, cargo watch / dx serve).
-- `compose.dev-sso.yml` - overlay for testing against a real mokosh-server.
-- `docs/dev-docs/CHANGELOG.md` - the May 15 snapshot of M1 architecture + open asks.
-- `For AI/` - gitignored AI working context; not part of the codebase.
-- `docs/` - this folder; user / operator documentation.
+- `bunyip-api/` - the actix-web backend and OIDC issuer. Owns `main.rs`, the wiring, and the migrations in `bunyip-api/migrations/` (they run on startup).
+- `bunyip-web/` - the Axum server-rendered front-end (Maud + htmx), the browser-facing BFF. No SPA.
+- `crates/bunyip-domain/` - models, repositories, services, the app `Config`, and the email templates.
+- `crates/bunyip-oci/`, `crates/bunyip-oidc/` - the OCI-registry and OIDC / OAuth 2.1 verticals.
+- `compose.yml` - the production / self-host reference deployment (pulls the published images).
+- `compose.dev.yml` - the dev stack (builds from source).
+- `compose.dev-sso.yml` - the overlay for testing SSO against a real mokosh-server.
+- `docs/` - this folder; developer and operator documentation.
 
 ## When something does not work
 
-1. `just dev-down && just dev` - 90% of dev hiccups clear with a stack restart.
-2. `just dev-clean && just dev` - resets volumes (use when seeds change or the auth state is wedged).
+1. `just dev-stop && just dev` - most dev hiccups clear with a stack restart.
+2. `just dev-clean && just dev` - resets volumes (use when the database or auth state is wedged).
 3. Check `docker logs dev-bunyip-api-${USER}` for backend errors.
-4. Check the browser dev tools network panel for `4xx` / `5xx` from `/v1/auth/*`.
-5. Confirm your `.env` (if using SSO overlay) matches the mokosh-server it points at.
+4. Check the browser dev-tools network panel for `4xx` / `5xx` from `/v1/auth/*`.
+5. Confirm your `.env` (if using the SSO overlay) matches the mokosh-server it points at.
 
 ## Next steps
 
-- For the M1 architecture deep dive: `docs/dev-docs/CHANGELOG.md`.
-- For the bunyip / mokosh ownership split: `For AI/bunyip-mokosh-boundaries.md` (local-only).
-- For deployment / self-host: README "Self-host" section.
-- For YouTrack tickets: filter by Milestone 1 in the PSA Systems project, or look at [PSA-1](https://niceguyit.myjetbrains.com/youtrack/issue/PSA-1).
+- Configuration reference (every variable): [configuration.md](configuration.md).
+- Self-hosting the published images: [self-hosting.md](self-hosting.md).
+- The three-repo SSO topology: [dev-sso-three-repo-runbook.md](dev-sso-three-repo-runbook.md).
+- Repository conventions for AI agents: [`CLAUDE.md`](../CLAUDE.md).
