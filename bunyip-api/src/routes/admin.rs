@@ -243,6 +243,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 web::post().to(handlers::respond_to_feedback),
             )
             .route(
+                "/support/tickets/{id}/reply",
+                web::post().to(handlers::reply_to_support_ticket),
+            )
+            .route(
                 "/feedback/{feedback_id}/status",
                 web::put().to(handlers::update_feedback_status),
             )
