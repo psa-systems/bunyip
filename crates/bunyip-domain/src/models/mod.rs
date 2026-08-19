@@ -16,6 +16,7 @@ pub mod membership;
 pub mod oauth_client_user_tenant;
 pub mod rate_limit;
 pub mod stripe;
+pub mod support;
 pub mod tier;
 pub mod token;
 pub mod totp;
@@ -62,6 +63,9 @@ pub use stripe::{
     StripeConfig, StripeConfigResponse, StripeInvoiceResponse, StripePriceResponse,
     StripeProductResponse, StripeSubscriptionItemResponse, StripeSubscriptionResponse,
     StripeWebhookEndpointResponse,
+};
+pub use support::{
+    MessageDirection, NewInboundMessage, NewMessage, SupportMessage, SupportTicket, TicketStatus,
 };
 pub use tier::{TierConfigResponse, TierConfigRow, TierConfigWithPricing};
 pub use token::{
