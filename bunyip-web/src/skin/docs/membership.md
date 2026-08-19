@@ -1,10 +1,10 @@
 # Membership & access
 
-Some apps on Bunyip are open to anyone with an account; others need an active membership. This page explains how membership works and how to start one.
+Some apps are open to anyone with an account; others need an active membership. This page explains how membership works and how to start one.
 
 ## Do I need a membership?
 
-If you open a members-only app without an active membership, Bunyip sends you to the **Membership** page instead of the download. Apps that do not require membership are available as soon as you are signed in.
+If you open a members-only app without an active membership, you are sent to the **Membership** page instead of the download. Apps that do not require membership are available as soon as you are signed in.
 
 ## Start a membership
 
