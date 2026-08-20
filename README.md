@@ -68,3 +68,7 @@ Contributor-facing conventions for AI agents working in this repository are in [
 - Dev container names follow `dev-bunyip-<service>-${USER}` on network `dev-bunyip-private-${USER}`; the production stack (`compose.yml`) drops the `dev-` prefix.
 - Releases: `just create-release <major|minor|hotfix>` bumps the workspace version and opens a release PR; merging it tags `vX.Y.Z` and publishes the images (see [`.forgejo/workflows/create-release.yml`](.forgejo/workflows/create-release.yml)).
 - CI reads a fixed set of repository-level Forgejo Actions secrets and variables; the authoritative list is in [`e2e/README.md`](e2e/README.md#forgejo-actions-secrets-and-variables), and values are never recorded in the repo.
+
+## Development happens on Forgejo
+
+The development home for this repository is <https://dev.a8n.run/psa-systems/bunyip>. The [GitHub](https://github.com/psa-systems/bunyip) and [Codeberg](https://codeberg.org/psa-systems/bunyip) copies are read-only mirrors that exist for visibility only: issues and pull requests are disabled there, and no community support runs on the mirrors. File issues and open pull requests on Forgejo.
