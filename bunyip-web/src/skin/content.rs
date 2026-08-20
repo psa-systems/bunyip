@@ -18,7 +18,7 @@ use crate::web::AppState;
 /// COMMIT you review the policy body for accuracy - do not bump it reflexively
 /// to make the page look fresh. The bump is a signal to anyone reading the
 /// commit that the policy text was re-read and confirmed current.
-const POLICY_LAST_UPDATED: &str = "June 2026";
+const POLICY_LAST_UPDATED: &str = "August 2026";
 
 // --- pricing ----------------------------------------------------------------
 
@@ -126,7 +126,7 @@ fn pricing_card(
                 }
                 // Policy constant, not tier configuration: it matches the Terms
                 // of Service text further down this module.
-                p class="mt-4 text-center text-sm text-muted-foreground" { "30-day grace period if payment fails" }
+                p class="mt-4 text-center text-sm text-muted-foreground" { "Grace period if payment fails" }
             }
         }
     }
@@ -383,14 +383,14 @@ pub async fn terms(State(st): State<AppState>, headers: HeaderMap) -> Response {
                 (legal_p("1. Acceptance of Terms", html! { "By accessing or using " (d) " (\"the Service\"), you agree to be bound by these Terms of Service. If you do not agree to these terms, please do not use the Service." }))
                 (legal_p("2. Description of Service", html! { (d) " provides a membership-based platform offering access to developer productivity tools." }))
                 (legal_ul("3. Membership and Payment", &[
-                    "The Service is offered at a flat rate of $3/month for all applications.",
-                    "Early adopters who join at this rate will have their price locked for life.",
+                    "The Service is offered as a paid monthly membership; current pricing is shown on our pricing page.",
+                    "Early adopters who join now will have their price locked for life.",
                     "Payments are processed through Stripe. By joining, you also agree to Stripe's terms of service.",
                     "Memberships renew automatically each month unless cancelled.",
                     "You may cancel your membership at any time through your account settings.",
                     "Upon cancellation, you retain access until the end of your current billing period.",
                 ]))
-                (legal_p("4. Grace Period", html! { "If a payment fails, you will be granted a 30-day grace period during which you retain full access to the Service. If payment is not resolved within this period, your membership will be cancelled and access will be revoked." }))
+                (legal_p("4. Grace Period", html! { "If a payment fails, you will be granted a grace period during which you retain full access to the Service. If payment is not resolved within that period, your membership will be cancelled and access will be revoked." }))
                 (legal_ul("5. Acceptable Use", &[
                     "Do not use the Service for any illegal or unauthorized purpose.",
                     "Do not attempt to gain unauthorized access to any part of the Service.",
