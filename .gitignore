@@ -4,6 +4,13 @@
 
 data
 
+# System config file (BUNYIP-579), generated on first start at
+# BUNYIP_CONFIG_FILE or /app/config/config.yaml. compose.dev.yml bind-mounts the
+# repo at /app, so the dev api writes it here; it holds local operator state
+# (cookie_domain, web_origin, country allow/deny) and is never committed. Rooted
+# so it ignores only that directory, not one a crate might add later.
+/config/
+
 # Tailwind output: committed (built by `bun run build:css`) so the SSR server
 # serves it without a build step on host runs / fresh clones, matching menkent.
 # The dev container + prod image rebuild it; commit the regenerated file.

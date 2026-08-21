@@ -2397,6 +2397,55 @@ mod tests {
     use crate::test_support::env_lock;
     use std::env;
 
+    /// BUNYIP-592: point the system config file at a throwaway temp path before
+    /// any call that reaches `SysConfig::load()`, which GENERATES the file when
+    /// it is absent. Unset, the path is the in-container default under `/app`,
+    /// which `compose.dev.yml` bind-mounts to the repo, so the generation lands
+    /// in the developer's working tree. Callers hold `env_lock()`, so the
+    /// variable cannot leak into a parallel test.
+    fn redirect_sys_config_to_temp() {
+        let path = env::temp_dir().join(format!("bunyip-test-config-{}.yaml", std::process::id()));
+        env::set_var(crate::sys_config::PATH_ENV, path);
+    }
+
+    /// BUNYIP-592: a test reaching `from_env_inner` without the redirect above
+    /// writes `config/config.yaml` into the working tree, so `git status` is
+    /// dirty after `just test`. Fails the build on a new call site that skips it.
+    #[test]
+    fn every_test_that_loads_the_config_redirects_the_sys_config_file() {
+        let module = include_str!("config.rs")
+            .split_once("\nmod tests {")
+            .expect("the test module")
+            .1;
+
+        fn check(name: &str, body: &str, offenders: &mut Vec<String>) {
+            if body.contains("from_env_inner(") && !body.contains("redirect_sys_config_to_temp()") {
+                offenders.push(name.to_string());
+            }
+        }
+
+        let mut offenders: Vec<String> = Vec::new();
+        let mut name = String::from("<module prologue>");
+        let mut body = String::new();
+        for line in module.lines() {
+            if let Some(rest) = line.strip_prefix("    fn ") {
+                check(&name, &body, &mut offenders);
+                name = rest.split('(').next().unwrap_or(rest).to_string();
+                body.clear();
+            }
+            body.push_str(line);
+            body.push('\n');
+        }
+        check(&name, &body, &mut offenders);
+
+        assert!(
+            offenders.is_empty(),
+            "these tests call Config::from_env_inner without redirecting BUNYIP_CONFIG_FILE \
+             to a temp path first, so they generate config/config.yaml in the working tree: \
+             {offenders:?}"
+        );
+    }
+
     #[test]
     fn e2e_env_allows_purge_only_for_real_non_prod_names() {
         // Real non-production names permit the e2e hard-delete path.
@@ -2488,6 +2537,7 @@ mod tests {
         // can no longer re-inject values after the removals below and clobber the
         // code defaults asserted here. This keeps the test deterministic regardless
         // of the working tree's `.env` (BUNYIP-102).
+        redirect_sys_config_to_temp();
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
         // Use development to avoid requiring APP_ENCRYPTION_KEY
         env::set_var("ENVIRONMENT", "development");
@@ -2519,6 +2569,7 @@ mod tests {
         // The email check runs before the TOTP/Stripe key loading, so no
         // encryption keys are required to exercise it.
         let _env = env_lock();
+        redirect_sys_config_to_temp();
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
         env::set_var("ENVIRONMENT", "production");
         env::set_var("SECRETS_STORAGE", "database");
@@ -2544,6 +2595,7 @@ mod tests {
     #[test]
     fn missing_required_variables_are_reported_in_one_run() {
         let _env = env_lock();
+        redirect_sys_config_to_temp();
         env::set_var("ENVIRONMENT", "production");
         for var in [
             "DATABASE_URL",
@@ -2679,6 +2731,7 @@ mod tests {
     #[test]
     fn feature_gating_variables_are_reported_and_defaulted_ones_are_not() {
         let _env = env_lock();
+        redirect_sys_config_to_temp();
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
         env::set_var("ENVIRONMENT", "development");
         env::set_var("SECRETS_STORAGE", "database");
@@ -2824,6 +2877,7 @@ mod tests {
     #[test]
     fn an_unrecognised_secrets_storage_is_a_startup_failure() {
         let _env = env_lock();
+        redirect_sys_config_to_temp();
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
         env::set_var("ENVIRONMENT", "development");
         env::set_var("SECRETS_STORAGE", "vault");
@@ -3461,6 +3515,7 @@ mod tests {
         );
 
         env::set_var("TRUSTED_PROXY_CIDR", "");
+        redirect_sys_config_to_temp();
         let cfg = Config::from_env_inner().expect("development config must load");
         assert!(
             !cfg.trusts_forwarded_client_ip(),
@@ -3473,6 +3528,7 @@ mod tests {
 
     /// A `development` config whose only trusted proxy is `10.0.0.0/8`.
     fn dev_config_with_trusted_proxy() -> Config {
+        redirect_sys_config_to_temp();
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
         env::set_var("ENVIRONMENT", "development");
         env::set_var("SECRETS_STORAGE", "database");

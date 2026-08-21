@@ -355,4 +355,28 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
     }
+
+    /// BUNYIP-592: generation follows `BUNYIP_CONFIG_FILE`, so a caller that
+    /// sets it (every test reaching `Config::from_env_inner`) writes there and
+    /// not into the working tree, and the generated file carries every default
+    /// key an operator edits.
+    #[test]
+    fn load_generates_at_the_configured_path_with_the_default_keys() {
+        let _env = crate::test_support::env_lock();
+        let path = unique_temp_path();
+        let _ = std::fs::remove_file(&path);
+        std::env::set_var(PATH_ENV, &path);
+        assert_eq!(SysConfig::file_path(), path);
+
+        SysConfig::load();
+
+        let contents =
+            std::fs::read_to_string(&path).expect("first run generates at the configured path");
+        for key in ["hostnames:", "features:", "country_access:"] {
+            assert!(contents.contains(key), "{key} missing from {contents}");
+        }
+
+        std::env::remove_var(PATH_ENV);
+        let _ = std::fs::remove_file(&path);
+    }
 }
