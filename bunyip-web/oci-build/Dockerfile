@@ -59,9 +59,12 @@ ARG GIT_TAG=unknown
 ARG BUILD_DATE=unknown
 ENV GIT_COMMIT=${GIT_COMMIT} GIT_TAG=${GIT_TAG} BUILD_DATE=${BUILD_DATE}
 
-# Cache JS deps (tailwindcss). bunyip-web/package.json declares the tailwind CLI.
-COPY bunyip-web/package.json /app/bunyip-web/package.json
-RUN cd bunyip-web && bun install
+# Cache JS deps (tailwindcss). The lockfile is copied with the manifest and the
+# install is frozen (BUNYIP-566): without it bun re-resolved `^4.0.0` against the
+# registry on every build, so two builds of the same commit could ship CSS from
+# different Tailwind patch releases with no diff anywhere in the repo.
+COPY bunyip-web/package.json bunyip-web/bun.lock /app/bunyip-web/
+RUN cd bunyip-web && bun install --frozen-lockfile
 
 # Cook dependencies only, from the recipe. Scoped to `--bin bunyip-web` so it
 # builds exactly the dependency set the final build below needs, not the api
