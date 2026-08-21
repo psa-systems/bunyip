@@ -24,6 +24,7 @@ use crate::util::{
     app_gradient, days_until, entry_price, format_stripe_amount, has_active_membership,
     pricing_currency, rel_time, tier_price, urlenc,
 };
+use crate::views::password::{guard_message, password_field, PwRole};
 use crate::views::ui::{
     back_link, badge, button_class, empty_state, error_box, icon, pager, success_box,
 };
@@ -1491,19 +1492,7 @@ pub async fn settings(
                 }
             }))
 
-            // Change password. This is the one Settings form where the
-            // password manager SHOULD help: current-password lets it fill
-            // the saved value, new-password lets it offer to save the
-            // updated credential after submit.
-            (settings_card("lock", "from-indigo-500 to-teal-500", "Change Password", html! {
-                form method="post" action="/settings/password" class="space-y-4 max-w-md" {
-                    div class="space-y-2" { label for="password-current_password" class="text-sm font-medium" { "Current Password" } input id="password-current_password" name="current_password" type="password" autocomplete="current-password" class=(crate::handlers::dashboard_input()); }
-                    div class="space-y-2" { label for="new_password" class="text-sm font-medium" { "New Password" } input id="new_password" name="new_password" type="password" autocomplete="new-password" class=(crate::handlers::dashboard_input()); }
-                    div class="space-y-2" { label for="confirm" class="text-sm font-medium" { "Confirm Password" } input id="confirm" name="confirm" type="password" autocomplete="new-password" class=(crate::handlers::dashboard_input()); }
-                    @if twofa_enabled { div class="space-y-2" { label for="password-totp_code" class="text-sm font-medium" { "Two-Factor Code" } input id="password-totp_code" name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
-                    button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Update Password" }
-                }
-            }))
+            (settings_card("lock", "from-indigo-500 to-teal-500", "Change Password", password_card_body(twofa_enabled)))
 
             // 2FA
             (settings_card("shield", "from-teal-500 to-indigo-500", "Two-Factor Authentication", html! {
@@ -1571,6 +1560,31 @@ pub async fn settings(
     // BUNYIP-554: the only page that renders `avatar_picker`, so the only one
     // that ships its stylesheet and controller.
     dashboard_response_with_avatar_picker(&c, &user, "/settings", "Settings", content)
+}
+
+/// Body of the "Change Password" card. This is the one Settings form where the
+/// password manager SHOULD help: current-password lets it fill the saved value,
+/// new-password lets it offer to save the updated credential after submit.
+///
+/// BUNYIP-575: every input carries the shared reveal toggle, and the form
+/// carries `data-pw-guard` so a password that breaks a rule is reported inline
+/// instead of posted. `settings_password` answers a failed check with a
+/// redirect to `/settings?error=...`, and that re-render necessarily returns
+/// three empty password inputs - retyping everything blind on each attempt is
+/// what pushed users toward weaker passwords. The redirect stays the backstop
+/// for a client with no JS, and for the checks only the API can make.
+fn password_card_body(twofa_enabled: bool) -> Markup {
+    html! {
+        form method="post" action="/settings/password" class="space-y-4 max-w-md" data-pw-guard {
+            (password_field("password-current_password", "current_password", "Current Password", PwRole::Current, false))
+            (password_field("new_password", "new_password", "New Password", PwRole::New, false))
+            (password_field("confirm", "confirm", "Confirm Password", PwRole::Confirm, false))
+            (guard_message())
+            @if twofa_enabled { div class="space-y-2" { label for="password-totp_code" class="text-sm font-medium" { "Two-Factor Code" } input id="password-totp_code" name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
+            button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Update Password" }
+        }
+        (crate::views::password::script())
+    }
 }
 
 fn settings_card(icon_name: &str, gradient: &str, title: &str, body: Markup) -> Markup {
@@ -2921,6 +2935,42 @@ mod tests {
         assert!(!super::twofa_recovery_form(None)
             .into_string()
             .contains("Invalid password"));
+    }
+
+    /// BUNYIP-575: every input of the change-password form can be revealed, so
+    /// the user can check what they typed instead of guessing.
+    #[test]
+    fn change_password_form_reveals_every_password_input() {
+        let html = super::password_card_body(true).into_string();
+        for id in ["password-current_password", "new_password", "confirm"] {
+            assert!(
+                html.contains(&format!(r#"data-pw-toggle="{id}""#)),
+                "no show/hide toggle on {id}: {html}"
+            );
+        }
+        // The posted field names are unchanged by the id namespacing above.
+        for name in ["current_password", "new_password", "confirm"] {
+            assert!(html.contains(&format!(r#"name="{name}""#)), "{html}");
+        }
+    }
+
+    /// BUNYIP-575: `settings_password` answers a failed check with a redirect,
+    /// and that re-render returns three empty inputs. The guard is what stops
+    /// the round trip, so the form must carry every marker the controller
+    /// (`assets/js/password-field.js`) looks for, and the controller must ship
+    /// with the card.
+    #[test]
+    fn change_password_form_guards_the_submit_that_would_wipe_it() {
+        let html = super::password_card_body(false).into_string();
+        for marker in [
+            "data-pw-guard",
+            "data-pw-new",
+            "data-pw-confirm",
+            "data-pw-guard-msg",
+        ] {
+            assert!(html.contains(marker), "form lost {marker}: {html}");
+        }
+        assert!(html.contains("/assets/js/password-field.js"), "{html}");
     }
 
     #[test]

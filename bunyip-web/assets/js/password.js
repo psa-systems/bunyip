@@ -1,15 +1,18 @@
-// Password UX for the auth pages (BUNYIP-240 live validation + HIBP breach
-// check, BUNYIP-282 show/hide toggle). Loaded with `defer` by the pages that
+// Live password validation for the auth pages: the BUNYIP-240 per-rule
+// indicators plus the HIBP breach check. Loaded with `defer` by the pages that
 // render the signup / reset password cards.
 //
-// BUNYIP-424: extracted from the `password_live_validation_script()` and
-// `password_toggle_script()` inline <script> blocks in handlers::auth_pages so
-// script-src can be 'self' with no 'unsafe-inline'.
+// BUNYIP-424: extracted from the `password_live_validation_script()` inline
+// <script> block in handlers::auth_pages so script-src can be 'self' with no
+// 'unsafe-inline'. BUNYIP-575: the show/hide toggle moved to
+// `password-field.js`, which every password form loads - this file gates its
+// submit button on a HaveIBeenPwned lookup, and a form wanting only the toggle
+// and the no-wipe guard must not inherit that.
 //
-// Both halves are idempotent: they attach listeners only once per element, so a
-// second render (e.g. a future htmx swap) does not double-bind. Graceful
-// degradation: with no JS the static rules list still renders and the
-// server-side `password_ok()` remains the final backstop.
+// Idempotent: listeners attach only once per element, so a second render (e.g.
+// a future htmx swap) does not double-bind. Graceful degradation: with no JS
+// the static rules list still renders and the server-side `password_ok()`
+// remains the final backstop.
 (function () {
   var pw = document.getElementById('password');
   var cf = document.getElementById('confirm');
@@ -185,25 +188,4 @@
   }
   refreshConfirm();
   refreshSubmit();
-})();
-
-// BUNYIP-282: every [data-pw-toggle] button flips its target input's `type`
-// between password and text and updates aria-pressed + aria-label so the reveal
-// state is announced. BUNYIP-554: both eye glyphs are pre-rendered inline SVGs
-// and input.css picks one off `aria-pressed`, so nothing is swapped here.
-(function () {
-  var buttons = document.querySelectorAll('[data-pw-toggle]');
-  buttons.forEach(function (btn) {
-    if (btn.dataset.pwToggleInit === '1') return;
-    btn.dataset.pwToggleInit = '1';
-    var targetId = btn.getAttribute('data-pw-toggle');
-    var input = document.getElementById(targetId);
-    if (!input) return;
-    btn.addEventListener('click', function () {
-      var revealed = input.type === 'text';
-      input.type = revealed ? 'password' : 'text';
-      btn.setAttribute('aria-pressed', revealed ? 'false' : 'true');
-      btn.setAttribute('aria-label', revealed ? 'Show password' : 'Hide password');
-    });
-  });
 })();

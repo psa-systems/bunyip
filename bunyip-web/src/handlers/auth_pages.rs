@@ -14,6 +14,7 @@ use crate::handlers::{auth_page, cookie_of, cookie_value, ctx, dashboard_input, 
 use crate::util::entry_price;
 use crate::views::common::{auth_card, auth_card_plain};
 use crate::views::layout::{document, public_shell};
+use crate::views::password::{guard_message, password_field, PwRole};
 
 /// BUNYIP-487: whether the header and footer should carry a Pricing link. The
 /// auth cards render the public shell directly (they need to attach their own
@@ -112,11 +113,7 @@ fn bunyip_auth_cookie_clears(cfg: &Config) -> Vec<String> {
 use crate::views::ui::{back_link, button_class, error_box, icon};
 use crate::web::{html, html_cookies, redirect, redirect_cookies, AppState};
 
-fn field(id: &str, label: &str, ty: &str, placeholder: &str, autocomplete: &str) -> Markup {
-    field_with_value(id, label, ty, placeholder, autocomplete, "", false)
-}
-
-/// BUNYIP-486: `field` for the FIRST editable field of a single-purpose auth
+/// BUNYIP-486: `field_with_value` for the FIRST editable field of a single-purpose auth
 /// card, which takes keyboard focus on load so the user can type without
 /// tabbing past the site nav. Native `autofocus`, so it works with JS off.
 /// Only ever one per rendered page.
@@ -156,16 +153,6 @@ fn submit_btn(label: &str) -> Markup {
     html! { button type="submit" class=(button_class("default", "default", "w-full")) { (label) } }
 }
 
-/// BUNYIP-554: both eye states, pre-rendered. `input.css` shows exactly one per
-/// the button's `aria-pressed`, so `assets/js/password.js` never builds markup -
-/// SVG generation stays in Rust and the script only flips the ARIA state.
-fn pw_toggle_glyphs() -> Markup {
-    html! {
-        span data-pw-icon="eye" aria-hidden="true" { (icon("eye", "h-4 w-4")) }
-        span data-pw-icon="eye-off" aria-hidden="true" { (icon("eye-off", "h-4 w-4")) }
-    }
-}
-
 /// BUNYIP-554: the three indicator states of a `pw_reqs()` row, pre-rendered.
 /// `input.css` reveals the one matching the row's `pw-pending` / `pw-pass` /
 /// `pw-fail` class, so the script flips a class instead of writing markup.
@@ -175,33 +162,6 @@ fn pw_state_glyphs() -> Markup {
             span data-pw-state="pending" { (icon("circle", "h-3.5 w-3.5")) }
             span data-pw-state="pass" { (icon("circle-check", "h-3.5 w-3.5")) }
             span data-pw-state="fail" { (icon("circle-x", "h-3.5 w-3.5")) }
-        }
-    }
-}
-
-/// BUNYIP-282: password input with an inline show/hide eye toggle.
-/// Default state is hidden (`type=password`, eye glyph, `aria-pressed=false`,
-/// `aria-label="Show password"`); `assets/js/password.js` flips
-/// `type`, `aria-pressed` and `aria-label` on click, and the CSS in
-/// `pw_toggle_glyphs()` swaps which glyph is visible. The `pr-10` padding
-/// on the input keeps the typed text from running under the button. Scoped
-/// strictly to the signup card; login / reset / change-password fields keep
-/// using `field()`.
-fn password_field(id: &str, label: &str, autocomplete: &str) -> Markup {
-    let input_class = format!("{} pr-10", dashboard_input());
-    html! {
-        div class="space-y-2" {
-            label for=(id) class="text-sm font-medium leading-none" { (label) }
-            div class="relative" {
-                input id=(id) name=(id) type="password" autocomplete=(autocomplete) class=(input_class);
-                button type="button"
-                    data-pw-toggle=(id)
-                    aria-label="Show password"
-                    aria-pressed="false"
-                    class="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center w-7 h-7 rounded text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring" {
-                    (pw_toggle_glyphs())
-                }
-            }
         }
     }
 }
@@ -255,10 +215,12 @@ fn pw_reqs() -> Markup {
     }
 }
 
-/// BUNYIP-240 / BUNYIP-282: the password UX script (per-rule indicators, the
-/// HaveIBeenPwned breach check, and the show/hide eye toggle). BUNYIP-424: the
-/// code lives in `assets/js/password.js` and is loaded from `'self'`, so
-/// bunyip-web's CSP no longer needs `script-src 'unsafe-inline'`.
+/// BUNYIP-240: the live password-validation script (per-rule indicators and the
+/// HaveIBeenPwned breach check). BUNYIP-424: the code lives in
+/// `assets/js/password.js` and is loaded from `'self'`, so bunyip-web's CSP no
+/// longer needs `script-src 'unsafe-inline'`. BUNYIP-575: the show/hide toggle
+/// and the no-wipe guard ship separately, in `views::password::script()`, so a
+/// form can take them without the breach-gated submit button.
 fn password_script() -> Markup {
     html! { script src=(crate::views::layout::asset("/assets/js/password.js")) defer {} }
 }
@@ -545,7 +507,10 @@ fn register_card(
         "Create your account",
         &subtitle,
         html! {
-            form method="post" action="/register" class="space-y-4" {
+            // BUNYIP-575: `data-pw-guard` refuses the submit while the typed
+            // pair breaks a rule the browser can check, so a rejected attempt
+            // never round-trips and never comes back with the fields cleared.
+            form method="post" action="/register" class="space-y-4" data-pw-guard {
                 // BUNYIP-271: the top banner is reserved for a non-field error
                 // (e.g. an API failure). Rule-specific messages render next to
                 // their input below via `field_error_msg`.
@@ -570,12 +535,11 @@ fn register_card(
                     // BUNYIP-271: surface an invalid-email rule next to the input.
                     @if let Some(e) = errors.email.as_deref() { (field_error_msg(e)) }
                 }
-                // BUNYIP-282: signup uses the password_field helper so each
-                // input carries an inline eye toggle. Other auth surfaces
-                // (login, reset, change-password) deliberately stay on the
-                // plain `field` helper - reveal toggles are sign-up only.
+                // BUNYIP-282 / BUNYIP-575: every form where a user types a
+                // password uses the shared `password_field`, so each input
+                // carries an inline eye toggle.
                 div {
-                    (password_field("password", "Password", "new-password"))
+                    (password_field("password", "password", "Password", PwRole::New, false))
                     @if let Some(e) = errors.password.as_deref() { (field_error_msg(e)) }
                     // BUNYIP-271: on any rejected submit the cleared password
                     // fields need re-entry; say so explicitly.
@@ -583,10 +547,11 @@ fn register_card(
                 }
                 (pw_reqs())
                 div {
-                    (password_field("confirm", "Confirm Password", "new-password"))
+                    (password_field("confirm", "confirm", "Confirm Password", PwRole::Confirm, false))
                     // BUNYIP-271: surface a passwords-don't-match rule inline.
                     @if let Some(e) = errors.confirm.as_deref() { (field_error_msg(e)) }
                 }
+                (guard_message())
                 (submit_btn("Sign up"))
             }
             div class="mt-6" {
@@ -605,9 +570,10 @@ fn register_card(
                 a href="/privacy" class="underline hover:text-foreground" { "Privacy Policy" } "."
             }
             // BUNYIP-240 live per-rule feedback + HIBP breach check, and the
-            // BUNYIP-282 eye toggle on every `[data-pw-toggle]` button rendered
-            // by `password_field` above.
+            // BUNYIP-282 eye toggle / BUNYIP-575 no-wipe guard on the fields
+            // rendered by `password_field` above.
             (password_script())
+            (crate::views::password::script())
         },
     )
 }
@@ -866,18 +832,23 @@ fn reset_confirm_card(token: &str, error: Option<&str>) -> Markup {
         "Set new password",
         "Choose a strong password for your account.",
         html! {
-            form method="post" action="/password-reset/confirm" class="space-y-4" {
+            // BUNYIP-575: the reveal toggle and the no-wipe guard, same as the
+            // signup card - a rejected reset re-renders this card with both
+            // fields empty, so the guard is what keeps the typed characters.
+            form method="post" action="/password-reset/confirm" class="space-y-4" data-pw-guard {
                 input type="hidden" name="token" value=(token);
                 @if let Some(e) = error { (error_box(e)) }
-                (field_autofocus("password", "New Password", "password", "", "new-password"))
+                (password_field("password", "password", "New Password", PwRole::New, true))
                 (pw_reqs())
-                (field("confirm", "Confirm Password", "password", "", "new-password"))
+                (password_field("confirm", "confirm", "Confirm Password", PwRole::Confirm, false))
+                (guard_message())
                 (submit_btn("Reset Password"))
             }
             // BUNYIP-240: same live-feedback script as /register. The
             // pw_reqs() rows + the script's id-based binding are identical
             // across the two forms, so the script is reusable as-is.
             (password_script())
+            (crate::views::password::script())
         },
     )
 }
@@ -1064,14 +1035,21 @@ fn invite_password_card(token: &str, email: &str, error: Option<&str>) -> Markup
         "Create your account",
         &format!("Set a password for {email} to complete your account setup."),
         html! {
-            form method="post" action="/invite/accept" class="space-y-4" {
+            // BUNYIP-575: the reveal toggle and the no-wipe guard. A rejected
+            // invite re-renders this card with both fields empty, which is the
+            // same wipe the change-password form had.
+            form method="post" action="/invite/accept" class="space-y-4" data-pw-guard {
                 input type="hidden" name="token" value=(token);
                 @if let Some(e) = error { (error_box(e)) }
-                (field_autofocus("password", "Password", "password", "At least 12 characters", "new-password"))
-                (field("confirm", "Confirm Password", "password", "Re-enter your password", "new-password"))
+                (password_field("password", "password", "Password", PwRole::New, true))
+                (password_field("confirm", "confirm", "Confirm Password", PwRole::Confirm, false))
                 (pw_reqs())
+                (guard_message())
                 (submit_btn("Sign up"))
             }
+            // The per-rule indicators above have no controller on this card
+            // (#BUNYIP-596); the guard below reports the broken rule instead.
+            (crate::views::password::script())
         },
     )
 }
@@ -1562,10 +1540,16 @@ mod register_card_tests {
         // The success/first-load path (register_get) renders with default
         // errors: no inline alerts, no banner, no re-entry hint.
         let html = register_card(&RegisterErrors::default(), "", "", None).into_string();
-        assert!(
-            !html.contains(r#"role="alert""#),
-            "clean render must have no field alerts: {html}"
-        );
+        // BUNYIP-575: the guard's message region is an empty, hidden live
+        // region on every render (the controller fills it in place), so the
+        // rule is that no alert SAYS anything, not that none exists.
+        for piece in html.split(r#"role="alert""#).skip(1) {
+            let (attrs, rest) = piece.split_once('>').expect("element closes");
+            assert!(
+                attrs.contains("hidden") && rest.starts_with("</"),
+                "clean render must have no field alerts: {html}"
+            );
+        }
         assert!(
             !html.to_lowercase().contains("re-enter your password"),
             "clean render must not nag about re-entry: {html}"
@@ -1686,6 +1670,44 @@ mod autofocus_tests {
             &invite_password_card("tok", "user@example.com", Some("Try again.")).into_string(),
             "password",
         );
+    }
+
+    /// BUNYIP-575: wherever a user CHOOSES a password, they can reveal what
+    /// they typed, and a rule the browser can check itself never costs them the
+    /// typed characters - a rejected submit re-renders the card with every
+    /// `type=password` input empty, so the guard refuses that round trip and
+    /// reports the broken rule inline instead.
+    #[test]
+    fn every_card_that_sets_a_password_reveals_it_and_guards_the_submit() {
+        for (card, html) in [
+            (
+                "register",
+                register_card(&RegisterErrors::default(), "", "", None).into_string(),
+            ),
+            (
+                "reset-confirm",
+                reset_confirm_card("tok", None).into_string(),
+            ),
+            (
+                "invite",
+                invite_password_card("tok", "user@example.com", None).into_string(),
+            ),
+        ] {
+            assert!(
+                html.contains(r#"autocomplete="new-password""#),
+                "{card} no longer sets a password - drop it from this scan"
+            );
+            for marker in [
+                "data-pw-toggle",
+                "data-pw-guard",
+                "data-pw-new",
+                "data-pw-confirm",
+                "data-pw-guard-msg",
+                "/assets/js/password-field.js",
+            ] {
+                assert!(html.contains(marker), "{card} card lost {marker}: {html}");
+            }
+        }
     }
 
     #[test]
