@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+/* Tailwind's automatic source detection is rooted at this crate, so it stops at
+   bunyip-web/ and never sees the shared SSR components. Declare them (BUNYIP-566):
+   the web-kit extraction moved shell/ui/common/avatar out of bunyip-web/src, and
+   because nobody rebuilt styles.css afterwards the classes those files use (the
+   theme toggle's rotate/scale pair, the switch, the button variants) survived only
+   in the stale committed output. Any rebuild without this dropped them. */
+@source "../crates/web-kit/src";
+
 /* Class-based dark mode: any descendant of `.dark` gets the dark variants.
    The class is set on <html> by the early script in index.html (and kept in
    sync at runtime by stores::theme). Mirrors the React tailwind.config

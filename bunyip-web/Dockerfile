@@ -14,9 +14,11 @@ ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 WORKDIR /app
 
 # Cache JS deps (tailwindcss). bun ships in the builder image. bunyip-web is a
-# workspace member, so the package.json lives under bunyip-web/.
-COPY bunyip-web/package.json /app/bunyip-web/package.json
-RUN cd /app/bunyip-web && bun install
+# workspace member, so the package.json lives under bunyip-web/. The lockfile
+# travels with it and the install is frozen (BUNYIP-566) so dev builds the CSS
+# with the pinned Tailwind rather than whatever `^4.0.0` resolves to today.
+COPY bunyip-web/package.json bunyip-web/bun.lock /app/bunyip-web/
+RUN cd /app/bunyip-web && bun install --frozen-lockfile
 
 # Run as the host user (per governance CHECKLIST) so bind-mounted source and the
 # target volume stay writable. CARGO_HOME moves to the user's home for writes.
@@ -41,5 +43,7 @@ EXPOSE 4400
 # bind mount plus the `web-node-modules` named volume mounted at
 # /app/bunyip-web/node_modules both shadow the image's build-time install, so
 # node_modules must be (re)populated inside the running container before
-# build:css can find the tailwind CLI.
-CMD ["sh", "-c", "cd /app/bunyip-web && bun install && bun run build:css && (bun run watch:css &) && cargo watch -w . -x 'run -p bunyip-web'"]
+# build:css can find the tailwind CLI. That shadowing is exactly why this
+# install is frozen too: it, not the build-time one, decides which Tailwind the
+# running dev container uses.
+CMD ["sh", "-c", "cd /app/bunyip-web && bun install --frozen-lockfile && bun run build:css && (bun run watch:css &) && cargo watch -w . -x 'run -p bunyip-web'"]
