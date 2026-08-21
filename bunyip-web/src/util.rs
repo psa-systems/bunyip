@@ -3,7 +3,9 @@
 use chrono::{DateTime, Utc};
 use maud::{html, Markup};
 
-use crate::api::types::{Application, MembershipStatus, User, UserRole};
+use crate::api::types::{
+    Application, MembershipStatus, MembershipTier, PricingResponse, User, UserRole,
+};
 
 /// Format a Stripe price amount for display. A zero-amount lifetime price is
 /// `Some(0)` -> "$0.00" (not "--"); a null amount -> "--".
@@ -25,6 +27,54 @@ pub fn format_stripe_amount(unit_amount: Option<i64>, currency: &str) -> String 
             }
         }
     }
+}
+
+/// BUNYIP-590: the cheapest monthly price a visitor can still sign up for,
+/// formatted, or `None` when nothing is published. Lifetime is skipped (it is
+/// not a monthly price) and so is a sold-out tier, so every number this returns
+/// is one the reader can actually buy. Callers phrase the sentence and render a
+/// non-numeric line on `None`: the marketing copy used to carry a hardcoded
+/// `$3/month` that no configuration backed.
+pub fn entry_price(pricing: &PricingResponse) -> Option<String> {
+    if !pricing.published() {
+        return None;
+    }
+    pricing
+        .tiers
+        .iter()
+        .filter(|t| t.available && !matches!(t.tier, MembershipTier::Lifetime))
+        .min_by_key(|t| t.amount)
+        .map(|t| format_stripe_amount(Some(t.amount), &t.currency))
+}
+
+/// BUNYIP-590: the published price of ONE tier, formatted, or `None` when that
+/// tier is not published. Availability is ignored on purpose: a sold-out tier
+/// still prices the members already on it.
+pub fn tier_price(pricing: &PricingResponse, tier: &MembershipTier) -> Option<String> {
+    // `Unknown` is every tier this build cannot name, so matching it to an
+    // `Unknown` on the wire would price one unrecognised tier from another.
+    if !pricing.published() || matches!(tier, MembershipTier::Unknown) {
+        return None;
+    }
+    pricing
+        .tiers
+        .iter()
+        .find(|t| t.tier == *tier)
+        .map(|t| format_stripe_amount(Some(t.amount), &t.currency))
+}
+
+/// BUNYIP-590: the currency the published tiers are priced in, for the amounts
+/// that arrive without one of their own (the per-user locked price, which
+/// bunyip-api stores as bare cents). `usd` when nothing is published, matching
+/// what `format_stripe_amount` renders for an unknown currency.
+pub fn pricing_currency(pricing: &PricingResponse) -> String {
+    pricing
+        .tiers
+        .iter()
+        .map(|t| t.currency.as_str())
+        .find(|c| !c.is_empty())
+        .unwrap_or("usd")
+        .to_string()
 }
 
 /// External URL for an app: `https://{subdomain|slug}.{domain}`, or `#` when no
@@ -278,5 +328,97 @@ mod tests {
         assert_eq!(fnv1a(""), 0xcbf2_9ce4_8422_2325);
         assert_eq!(fnv1a("a"), 0xaf63_dc4c_8601_ec8c);
         assert_eq!(fnv1a("foobar"), 0x8594_4171_f739_67e8);
+    }
+
+    mod pricing {
+        use super::super::{entry_price, pricing_currency, tier_price};
+        use crate::api::types::{MembershipTier, PricingResponse, PricingTier};
+
+        fn tier(t: MembershipTier, amount: i64, available: bool) -> PricingTier {
+            PricingTier {
+                tier: t,
+                amount,
+                currency: "usd".into(),
+                interval: Some("month".into()),
+                trial_days: 14,
+                available,
+                slots_remaining: None,
+            }
+        }
+
+        fn published(tiers: Vec<PricingTier>) -> PricingResponse {
+            PricingResponse {
+                enabled: true,
+                trial_days: 14,
+                tiers,
+            }
+        }
+
+        /// BUNYIP-590: the marketing price is the cheapest one a visitor can
+        /// still buy. Lifetime is not a monthly price and a sold-out tier is not
+        /// purchasable, so neither can become the advertised number.
+        #[test]
+        fn entry_price_is_the_cheapest_purchasable_monthly_tier() {
+            let p = published(vec![
+                tier(MembershipTier::Lifetime, 9_900, true),
+                tier(MembershipTier::EarlyAdopter, 500, true),
+                tier(MembershipTier::Standard, 900, true),
+            ]);
+            assert_eq!(entry_price(&p).as_deref(), Some("$5.00"));
+
+            // Early adopter sold out -> the honest entry price is Standard.
+            let p = published(vec![
+                tier(MembershipTier::EarlyAdopter, 500, false),
+                tier(MembershipTier::Standard, 900, true),
+            ]);
+            assert_eq!(entry_price(&p).as_deref(), Some("$9.00"));
+
+            // Lifetime alone publishes no monthly price at all.
+            let p = published(vec![tier(MembershipTier::Lifetime, 9_900, true)]);
+            assert_eq!(entry_price(&p), None);
+        }
+
+        /// Nothing published means no number: the copy that used to hardcode
+        /// `$3/month` renders its non-numeric form instead of a wrong price.
+        #[test]
+        fn an_unpublished_payload_yields_no_price() {
+            assert_eq!(entry_price(&PricingResponse::default()), None);
+            let off = PricingResponse {
+                enabled: false,
+                trial_days: 14,
+                tiers: vec![tier(MembershipTier::Standard, 900, true)],
+            };
+            assert_eq!(entry_price(&off), None);
+            assert_eq!(tier_price(&off, &MembershipTier::Standard), None);
+        }
+
+        /// A member's own tier prices their plan card, sold out or not; a tier
+        /// that publishes nothing prices nothing.
+        #[test]
+        fn tier_price_reads_the_members_own_tier() {
+            let p = published(vec![
+                tier(MembershipTier::EarlyAdopter, 500, false),
+                tier(MembershipTier::Standard, 900, true),
+            ]);
+            assert_eq!(
+                tier_price(&p, &MembershipTier::EarlyAdopter).as_deref(),
+                Some("$5.00")
+            );
+            assert_eq!(tier_price(&p, &MembershipTier::Free), None);
+            // `Unknown` is every tier this build cannot name, so it never
+            // borrows the price of another unrecognised one.
+            let unknown = published(vec![tier(MembershipTier::Unknown, 100, true)]);
+            assert_eq!(tier_price(&unknown, &MembershipTier::Unknown), None);
+        }
+
+        /// The per-user locked amount arrives as bare cents, so it is formatted
+        /// in the currency the published tiers use.
+        #[test]
+        fn pricing_currency_follows_the_published_tiers() {
+            let mut eur = tier(MembershipTier::Standard, 900, true);
+            eur.currency = "eur".into();
+            assert_eq!(pricing_currency(&published(vec![eur])), "eur");
+            assert_eq!(pricing_currency(&PricingResponse::default()), "usd");
+        }
     }
 }

@@ -168,6 +168,18 @@ jobs:
           ./scripts/check-ui-copy.nu --self-test
           ./scripts/check-ui-copy.nu
 
+      - name: Check no price or deadline is compiled into bunyip-web
+        # A price is the tier's Stripe amount and a dunning deadline is the
+        # member's grace_period_end, so neither is a literal: no price per
+        # period and no `within N days` in any string literal under
+        # bunyip-web/src, and every legitimate non-copy occurrence carries a
+        # `// price-literal-ok:` reason (BUNYIP-590).
+        # --self-test first, so a gate that stopped detecting anything fails the
+        # build instead of passing vacuously.
+        run: |
+          ./scripts/check-price-literals.nu --self-test
+          ./scripts/check-price-literals.nu
+
       - name: Check no product name is compiled into bunyip-web
         # The brand is an admin-managed database record, not a literal: no
         # standalone `Bunyip` in bunyip-web/src/{views,handlers,skin}, and every

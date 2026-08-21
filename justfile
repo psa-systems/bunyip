@@ -42,7 +42,7 @@ pre-commit: ensure-env
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-argon2-offload check-no-bash check-scrollbars check-ui-copy check-theme-colors check-cache-mounts check-build check-clippy check-fmt check-docker
+check: check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-argon2-offload check-no-bash check-scrollbars check-ui-copy check-price-literals check-theme-colors check-cache-mounts check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -113,6 +113,13 @@ check-scrollbars:
 check-ui-copy:
     ./scripts/check-ui-copy.nu --self-test
     ./scripts/check-ui-copy.nu
+
+# Gate prices and deadlines: no price per period and no fixed day count in any
+# string literal under bunyip-web/src (BUNYIP-590).
+[group: 'checks']
+check-price-literals:
+    ./scripts/check-price-literals.nu --self-test
+    ./scripts/check-price-literals.nu
 
 # Gate the theme tokens: no unmapped stock Tailwind scale in the client-side
 # scripts and no colour literal in the framework shell (BUNYIP-549).

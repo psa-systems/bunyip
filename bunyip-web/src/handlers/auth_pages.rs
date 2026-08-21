@@ -11,6 +11,7 @@ use serde::Deserialize;
 use crate::api::auth::{self as auth_api, LoginOutcome};
 use crate::config::Config;
 use crate::handlers::{auth_page, cookie_of, cookie_value, ctx, dashboard_input, password_ok};
+use crate::util::entry_price;
 use crate::views::common::{auth_card, auth_card_plain};
 use crate::views::layout::{document, public_shell};
 
@@ -524,12 +525,25 @@ fn password_reentry_hint() -> Markup {
     }
 }
 
-fn register_card(errors: &RegisterErrors, email: &str, signup_token: &str) -> Markup {
+/// BUNYIP-590: `entry_price` is the cheapest published monthly price
+/// (`util::entry_price`), not a compile-time figure. The subtitle used to quote
+/// a hardcoded `$3/month` that no configuration backed; with nothing published
+/// it now states the offer without a number rather than a wrong one.
+fn register_card(
+    errors: &RegisterErrors,
+    email: &str,
+    signup_token: &str,
+    entry_price: Option<&str>,
+) -> Markup {
+    let subtitle = match entry_price {
+        Some(p) => format!("Get access to all tools from {p}/month"),
+        None => "Get access to all tools".to_string(),
+    };
     auth_card(
         "shield",
         "bg-primary/10 text-primary-text",
         "Create your account",
-        "Get access to all tools for $3/month",
+        &subtitle,
         html! {
             form method="post" action="/register" class="space-y-4" {
                 // BUNYIP-271: the top banner is reserved for a non-field error
@@ -605,14 +619,20 @@ pub async fn register_get(State(st): State<AppState>, headers: HeaderMap) -> Res
         return redirect_cookies("/dashboard", &c.set_cookies);
     }
     // BUNYIP-377: mint a fresh submit-timing token to embed in the form.
-    let signup_token = auth_api::register_challenge(&st.api)
-        .await
-        .unwrap_or_default();
+    // BUNYIP-590: the price the card quotes comes from the cached pricing
+    // payload; the two fetches are independent, so they run concurrently.
+    let (signup_token, pricing) = tokio::join!(auth_api::register_challenge(&st.api), st.pricing());
+    let signup_token = signup_token.unwrap_or_default();
     auth_page(
         &st,
         &headers,
         "Sign up",
-        register_card(&RegisterErrors::default(), "", &signup_token),
+        register_card(
+            &RegisterErrors::default(),
+            "",
+            &signup_token,
+            entry_price(&pricing).as_deref(),
+        ),
     )
     .await
 }
@@ -638,11 +658,17 @@ pub async fn register_post(
         errs.confirm = Some("Passwords don't match.".to_string());
     }
     if errs.any() {
+        let pricing = st.pricing().await;
         return auth_page(
             &st,
             &headers,
             "Sign up",
-            register_card(&errs, f.email.trim(), &f.signup_token),
+            register_card(
+                &errs,
+                f.email.trim(),
+                &f.signup_token,
+                entry_price(&pricing).as_deref(),
+            ),
         )
         .await;
     }
@@ -667,11 +693,17 @@ pub async fn register_post(
                 general: Some(e.user_message()),
                 ..Default::default()
             };
+            let pricing = st.pricing().await;
             auth_page(
                 &st,
                 &headers,
                 "Sign up",
-                register_card(&errs, f.email.trim(), &f.signup_token),
+                register_card(
+                    &errs,
+                    f.email.trim(),
+                    &f.signup_token,
+                    entry_price(&pricing).as_deref(),
+                ),
             )
             .await
         }
@@ -1453,7 +1485,7 @@ mod register_card_tests {
             email: Some("Enter a valid email address.".into()),
             ..Default::default()
         };
-        let html = register_card(&errs, "user@example.com", "").into_string();
+        let html = register_card(&errs, "user@example.com", "", None).into_string();
         assert!(
             input_tag(&html, "email").contains(r#"value="user@example.com""#),
             "typed email not preserved: {html}"
@@ -1466,7 +1498,7 @@ mod register_card_tests {
             email: Some("Enter a valid email address.".into()),
             ..Default::default()
         };
-        let html = register_card(&errs, "nope", "").into_string();
+        let html = register_card(&errs, "nope", "", None).into_string();
         assert!(
             html.contains("Enter a valid email address."),
             "email rule not surfaced inline: {html}"
@@ -1486,7 +1518,7 @@ mod register_card_tests {
             confirm: Some("Passwords don't match.".into()),
             ..Default::default()
         };
-        let html = register_card(&errs, "user@example.com", "").into_string();
+        let html = register_card(&errs, "user@example.com", "", None).into_string();
         assert!(
             html.contains("Password does not meet the requirements below."),
             "password rule missing: {html}"
@@ -1503,7 +1535,7 @@ mod register_card_tests {
             confirm: Some("Passwords don't match.".into()),
             ..Default::default()
         };
-        let html = register_card(&errs, "user@example.com", "").into_string();
+        let html = register_card(&errs, "user@example.com", "", None).into_string();
         assert!(
             html.to_lowercase().contains("re-enter your password"),
             "missing password re-entry hint: {html}"
@@ -1514,7 +1546,8 @@ mod register_card_tests {
     fn never_echoes_a_password_value_into_the_html() {
         // register_card takes no password argument, so a password can never
         // reach the HTML. Pin it: neither password input carries a value=.
-        let html = register_card(&RegisterErrors::default(), "user@example.com", "").into_string();
+        let html =
+            register_card(&RegisterErrors::default(), "user@example.com", "", None).into_string();
         for name in ["password", "confirm"] {
             assert!(
                 !input_tag(&html, name).contains("value="),
@@ -1528,7 +1561,7 @@ mod register_card_tests {
     fn clean_render_has_no_errors_or_reentry_hint() {
         // The success/first-load path (register_get) renders with default
         // errors: no inline alerts, no banner, no re-entry hint.
-        let html = register_card(&RegisterErrors::default(), "", "").into_string();
+        let html = register_card(&RegisterErrors::default(), "", "", None).into_string();
         assert!(
             !html.contains(r#"role="alert""#),
             "clean render must have no field alerts: {html}"
@@ -1536,6 +1569,28 @@ mod register_card_tests {
         assert!(
             !html.to_lowercase().contains("re-enter your password"),
             "clean render must not nag about re-entry: {html}"
+        );
+    }
+
+    /// BUNYIP-590: the signup card quotes the configured entry price, and with
+    /// nothing published it states the offer without a number. The old subtitle
+    /// hardcoded `$3/month`, a figure no configuration backed.
+    #[test]
+    fn signup_subtitle_quotes_the_configured_price() {
+        let priced = register_card(&RegisterErrors::default(), "", "", Some("$9.00")).into_string();
+        assert!(
+            priced.contains("Get access to all tools from $9.00/month"), // price-literal-ok: asserts the configured price reaches the copy
+            "the subtitle must carry the configured price: {priced}"
+        );
+
+        let unpriced = register_card(&RegisterErrors::default(), "", "", None).into_string();
+        assert!(
+            unpriced.contains("Get access to all tools"),
+            "the offer still stands without a price: {unpriced}"
+        );
+        assert!(
+            !unpriced.contains("/month"),
+            "no price may be invented when none is published: {unpriced}"
         );
     }
 }
@@ -1577,7 +1632,7 @@ mod autofocus_tests {
     fn every_auth_card_focuses_its_first_field() {
         assert_focuses(&login_content(None, "/dashboard").into_string(), "email");
         assert_focuses(
-            &register_card(&RegisterErrors::default(), "", "").into_string(),
+            &register_card(&RegisterErrors::default(), "", "", None).into_string(),
             "email",
         );
         assert_focuses(&magic_form(None, false).into_string(), "email");
@@ -1610,6 +1665,7 @@ mod autofocus_tests {
                 },
                 "user@example.com",
                 "",
+                None,
             )
             .into_string(),
             "email",

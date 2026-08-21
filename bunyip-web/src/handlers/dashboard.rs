@@ -14,13 +14,16 @@ use crate::api::auth as auth_api;
 use crate::api::calls;
 use crate::api::types::{
     AppDownloadGroup, Application, Membership, MembershipStatus, MembershipTier, OciImage,
-    TwoFactorSetupResponse, User,
+    PricingResponse, TwoFactorSetupResponse, User,
 };
 use crate::handlers::{
     dashboard_response, dashboard_response_with_avatar_picker, guard, needs_onboarding,
     password_ok, rotating_index,
 };
-use crate::util::{app_gradient, days_until, has_active_membership, rel_time, urlenc};
+use crate::util::{
+    app_gradient, days_until, entry_price, format_stripe_amount, has_active_membership,
+    pricing_currency, rel_time, tier_price, urlenc,
+};
 use crate::views::ui::{
     back_link, badge, button_class, empty_state, error_box, icon, pager, success_box,
 };
@@ -47,8 +50,13 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
     // BUNYIP-555: neither fetch consumes the other's result, so they run
     // concurrently once the guard has resolved the forward cookie. `join!`, not
     // `try_join!`: each keeps its own fallback below.
-    let (apps_data, stripe_enabled) =
-        tokio::join!(calls::applications(&st.api, fwd), st.stripe_enabled());
+    // BUNYIP-590: the pricing payload rides along because the membership panel
+    // renders the locked price in the currency the published tiers use.
+    let (apps_data, stripe_enabled, pricing) = tokio::join!(
+        calls::applications(&st.api, fwd),
+        st.stripe_enabled(),
+        st.pricing()
+    );
     let apps_reachable = apps_data.is_ok();
     let apps = apps_data.unwrap_or_default();
     let is_member = has_active_membership(Some(&user));
@@ -83,7 +91,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                 div class="p-6 pt-0" {
                     @if is_member {
                         div class="flex items-center justify-between" {
-                            div { (membership_status(&user)) }
+                            div { (membership_status(&user, &pricing_currency(&pricing))) }
                             a href="/membership" class=(button_class("outline", "sm", "border-indigo-300/30 text-indigo-600 hover:bg-indigo-500/10 dark:border-indigo-500/30 dark:text-indigo-400")) { "Manage" }
                         }
                     } @else {
@@ -235,7 +243,12 @@ fn membership_prompt(user: &User) -> Markup {
     }
 }
 
-fn membership_status(user: &User) -> Markup {
+/// BUNYIP-590: `currency` is the one the published tiers are priced in
+/// (`util::pricing_currency`), because the per-user locked amount arrives as
+/// bare cents. A locked price whose amount is absent says only "Price locked":
+/// the number it used to print (`$3/month`) was a compile-time literal, and a
+/// locked price is exactly the one a current tier price may not equal.
+fn membership_status(user: &User, currency: &str) -> Markup {
     if user.lifetime_member {
         return html! { p class="text-sm font-medium text-teal-600 dark:text-teal-400" { "Lifetime member 🎉" } };
     }
@@ -244,11 +257,17 @@ fn membership_status(user: &User) -> Markup {
         return html! { p class="text-sm text-muted-foreground" { "Trial ends in " (days) " day" (plural) } };
     }
     if user.membership_status == MembershipStatus::Active {
+        let locked = user
+            .locked_price_amount
+            .map(|a| format_stripe_amount(Some(a), currency));
         return html! {
             p class="text-sm text-muted-foreground" {
                 "You have access to all applications."
                 @if user.price_locked {
-                    span class="ml-2 text-teal-600 dark:text-teal-400 font-medium" { "Price locked at $3/month" }
+                    span class="ml-2 text-teal-600 dark:text-teal-400 font-medium" {
+                        "Price locked"
+                        @if let Some(p) = &locked { " at " (p) "/month" }
+                    }
                 }
             }
         };
@@ -907,6 +926,8 @@ pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap)
         Ok(v) => v,
         Err(r) => return r,
     };
+    // BUNYIP-590: the cheapest published monthly price, or no number at all.
+    let price = entry_price(&st.pricing().await);
     let content = html! {
         div class="flex min-h-[60vh] items-center justify-center px-4" {
             div class="rounded-lg border bg-card text-card-foreground shadow-sm w-full max-w-md" {
@@ -916,7 +937,11 @@ pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap)
                     p class="text-sm text-muted-foreground" { "You need an active membership to access this content." }
                 }
                 div class="p-6 pt-0 space-y-4" {
-                    p class="text-center text-muted-foreground" { "Subscribe to get access to all applications for just $3/month." }
+                    p class="text-center text-muted-foreground" {
+                        "Subscribe to get access to all applications"
+                        @if let Some(p) = &price { " from " (p) "/month" }
+                        "."
+                    }
                     div class="flex flex-col gap-4" {
                         a href="/membership" class=(button_class("default", "default", "w-full")) { "Subscribe Now" }
                         div class="flex justify-center" { (back_link("/dashboard", "Back to Dashboard")) }
@@ -953,6 +978,44 @@ fn status_label(s: &MembershipStatus) -> &'static str {
     s.as_str()
 }
 
+/// BUNYIP-590: the past-due banner names THIS user's grace deadline, which
+/// Stripe drives through the webhook that writes `grace_period_end`. It used to
+/// promise a fixed "within 30 days", a number nothing in the system enforces,
+/// so it could tell a member the wrong deadline. With no date on the membership
+/// (the webhook has not written one yet) it names the grace period rather than
+/// inventing a date.
+fn dunning_banner(grace_period_end: Option<&str>) -> Markup {
+    let deadline = grace_period_end.map(fmt_date_iso);
+    html! {
+        div class="rounded-lg border border-destructive/50 p-4 text-sm text-destructive-text flex items-center gap-2" {
+            (icon("alert-triangle", "h-4 w-4"))
+            span {
+                "Your payment failed. Update your payment method "
+                @if let Some(d) = &deadline { "by " (d) } @else { "before your grace period ends" }
+                " to avoid losing access."
+            }
+        }
+    }
+}
+
+/// BUNYIP-590: the price on the plan card, from configuration rather than a
+/// compile-time figure. A locked price is the amount the member locked in, so
+/// it is never re-read from the tier's current price; `None` (a locked price
+/// whose amount is absent, or a tier that publishes no price) renders the
+/// neutral line the caller supplies instead of a wrong number.
+fn plan_price(
+    current: Option<&Membership>,
+    pricing: &PricingResponse,
+    tier: &MembershipTier,
+) -> Option<String> {
+    match current {
+        Some(m) if m.price_locked => m
+            .locked_price_amount
+            .map(|a| format_stripe_amount(Some(a), &pricing_currency(pricing))),
+        _ => tier_price(pricing, tier),
+    }
+}
+
 /// BUNYIP-187: flash-banner query for the membership page. Mirrors
 /// `SettingsQuery::{ok, error}`; the values are produced by
 /// `membership_subscribe`, `membership_cancel`, etc., and rendered
@@ -973,7 +1036,7 @@ pub async fn membership(
         Err(r) => return r,
     };
     let fwd = c.forward.as_deref();
-    // BUNYIP-555: four independent fetches, run concurrently after the guard.
+    // BUNYIP-555: five independent fetches, run concurrently after the guard.
     // `join!`, not `try_join!`: each keeps its own fallback below, so an
     // unreadable invoice list still renders the plan card.
     // BUNYIP-546: "no payments yet" and "we could not read your payments" are
@@ -982,11 +1045,14 @@ pub async fn membership(
     // The page now absorbs the invoices table that used to live on /billing;
     // /billing is a 308 redirect into this page. See docs/bunyip-upgrade/
     // 01-membership-plan-data.md.
-    let (membership_data, payments_data, invoices_data, stripe) = tokio::join!(
+    // BUNYIP-590: the pricing payload is the fifth: the Price cell renders the
+    // configured price for the member's tier, never a compile-time figure.
+    let (membership_data, payments_data, invoices_data, stripe, pricing) = tokio::join!(
         calls::membership(&st.api, fwd),
         calls::payment_history(&st.api, fwd),
         calls::invoices(&st.api, fwd),
         st.stripe_enabled(),
+        st.pricing(),
     );
     let current: Option<Membership> = membership_data.unwrap_or(None);
     let payments_reachable = payments_data.is_ok();
@@ -1009,6 +1075,8 @@ pub async fn membership(
                 | Some(MembershipStatus::GracePeriod)
         );
     let past_due = matches!(status, Some(MembershipStatus::PastDue));
+    let grace_end = current.as_ref().and_then(|m| m.grace_period_end.as_deref());
+    let price = plan_price(current.as_ref(), &pricing, &tier);
     let will_cancel = current
         .as_ref()
         .map(|m| m.cancel_at_period_end)
@@ -1022,11 +1090,7 @@ pub async fn membership(
             // user sees why a click "did nothing".
             @if let Some(ok) = &q.ok { (success_box(ok)) }
             @if let Some(e) = &q.error { (error_box(e)) }
-            @if past_due {
-                div class="rounded-lg border border-destructive/50 p-4 text-sm text-destructive-text flex items-center gap-2" {
-                    (icon("alert-triangle", "h-4 w-4")) "Your payment failed. Update your payment method within 30 days to avoid losing access."
-                }
-            }
+            @if past_due { (dunning_banner(grace_end)) }
             // BUNYIP-291 AC2: label the applied signup trial by tier
             // (early-adopter vs standard) so the member sees which trial they
             // received, not just an unlabeled "Trial" badge.
@@ -1071,7 +1135,7 @@ pub async fn membership(
                         @if let Some(m) = current.clone() {
                             div class="grid gap-4 md:grid-cols-2" {
                                 div { p class="text-sm text-muted-foreground" { "Plan" } p class="font-medium" { (tier_name(&tier)) } }
-                                div { p class="text-sm text-muted-foreground" { "Price" } p class="font-medium" { @if m.price_locked { @if let Some(a)=m.locked_price_amount { "$" (a/100) "/month" } @else { "$3/month" } } @else { "$3/month" } } }
+                                div { p class="text-sm text-muted-foreground" { "Price" } p class="font-medium" { @if let Some(p) = &price { (p) "/month" } @else { "See pricing" } } }
                                 div { p class="text-sm text-muted-foreground" { "Status" } p class="font-medium" { (status_label(&m.status)) } }
                                 div { p class="text-sm text-muted-foreground" { "Next Billing" } p class="font-medium" {
                                     // BUNYIP-330: current_period_end is None until the
@@ -2692,6 +2756,127 @@ mod tests {
         // dead external link and return to the dashboard.
         assert_eq!(community_redirect_target("", true), "/dashboard");
         assert_eq!(community_redirect_target("", false), "/membership");
+    }
+
+    fn membership_row(price_locked: bool, locked_price_amount: Option<i64>) -> Membership {
+        Membership {
+            status: MembershipStatus::Active,
+            price_locked,
+            locked_price_amount,
+            current_period_end: None,
+            cancel_at_period_end: false,
+            grace_period_end: None,
+        }
+    }
+
+    fn standard_pricing(amount: i64) -> PricingResponse {
+        PricingResponse {
+            enabled: true,
+            trial_days: 14,
+            tiers: vec![crate::api::types::PricingTier {
+                tier: MembershipTier::Standard,
+                amount,
+                currency: "usd".into(),
+                interval: Some("month".into()),
+                trial_days: 14,
+                available: true,
+                slots_remaining: None,
+            }],
+        }
+    }
+
+    /// BUNYIP-590: the past-due banner carries the member's own Stripe-driven
+    /// deadline. It used to promise a fixed "within 30 days", which nothing in
+    /// the system enforces, so it could name a date that was not the real one.
+    #[test]
+    fn dunning_banner_names_the_real_grace_deadline() {
+        let html = dunning_banner(Some("2026-09-04T12:00:00Z")).into_string();
+        assert!(
+            html.contains("by September 4, 2026"),
+            "the banner must state the grace deadline: {html}"
+        );
+        assert!(
+            !html.contains("30 days"),
+            "no fixed grace period may survive: {html}"
+        );
+    }
+
+    /// No date on the membership (the webhook has not written one yet) means no
+    /// date in the copy - never a substituted number.
+    #[test]
+    fn dunning_banner_without_a_deadline_states_no_number() {
+        let html = dunning_banner(None).into_string();
+        assert!(
+            html.contains("before your grace period ends"),
+            "the fallback must be non-numeric: {html}"
+        );
+        assert!(!html.contains("30 days"), "{html}");
+        assert!(
+            !html.contains("days"),
+            "no day count may be invented: {html}"
+        );
+    }
+
+    /// BUNYIP-590: the plan card prices from configuration. A locked price is
+    /// the amount the member locked in, so it never re-reads the current tier.
+    #[test]
+    fn plan_price_prefers_the_locked_amount() {
+        let pricing = standard_pricing(900);
+        let locked = membership_row(true, Some(500));
+        assert_eq!(
+            plan_price(Some(&locked), &pricing, &MembershipTier::Standard).as_deref(),
+            Some("$5.00")
+        );
+        let unlocked = membership_row(false, None);
+        assert_eq!(
+            plan_price(Some(&unlocked), &pricing, &MembershipTier::Standard).as_deref(),
+            Some("$9.00")
+        );
+    }
+
+    /// A locked price with no amount, and a tier that publishes no price, both
+    /// yield `None` so the cell renders its neutral line instead of a figure
+    /// that no configuration backs.
+    #[test]
+    fn plan_price_is_absent_rather_than_wrong() {
+        let pricing = standard_pricing(900);
+        assert_eq!(
+            plan_price(
+                Some(&membership_row(true, None)),
+                &pricing,
+                &MembershipTier::Standard
+            ),
+            None
+        );
+        assert_eq!(
+            plan_price(
+                Some(&membership_row(false, None)),
+                &pricing,
+                &MembershipTier::EarlyAdopter
+            ),
+            None
+        );
+        assert_eq!(
+            plan_price(None, &PricingResponse::default(), &MembershipTier::Standard),
+            None
+        );
+    }
+
+    /// BUNYIP-590: the dashboard membership panel states the locked price from
+    /// the user's own locked amount, and says only "Price locked" when the
+    /// amount is absent rather than printing the old `$3/month` literal.
+    #[test]
+    fn membership_panel_renders_the_locked_amount() {
+        let mut u = user(UserRole::Subscriber, MembershipStatus::Active);
+        u.price_locked = true;
+        u.locked_price_amount = Some(500);
+        let html = membership_status(&u, "usd").into_string();
+        assert!(html.contains("Price locked at $5.00/month"), "{html}"); // price-literal-ok: asserts the locked amount reaches the copy
+
+        u.locked_price_amount = None;
+        let html = membership_status(&u, "usd").into_string();
+        assert!(html.contains("Price locked"), "{html}");
+        assert!(!html.contains("/month"), "no invented price: {html}");
     }
 
     #[test]
