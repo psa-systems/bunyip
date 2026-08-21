@@ -43,7 +43,7 @@ pub fn app_link(app: &Application, domain: &str) -> String {
     }
 }
 
-/// Tailwind gradient class pairs cycled across application cards.
+/// Tailwind gradient class pairs an application card's accent is drawn from.
 pub const APP_GRADIENTS: [&str; 4] = [
     "from-indigo-500 to-primary",
     "from-teal-400 to-indigo-600",
@@ -51,8 +51,31 @@ pub const APP_GRADIENTS: [&str; 4] = [
     "from-violet-500 to-indigo-500",
 ];
 
-pub fn app_gradient(index: usize) -> &'static str {
-    APP_GRADIENTS[index % APP_GRADIENTS.len()]
+/// Accent for an application that belongs to no group: flat primary, so "no
+/// group" reads as its own state instead of borrowing a group's colour.
+pub const UNGROUPED_APP_GRADIENT: &str = "from-primary to-primary";
+
+/// Accent for one application card, keyed to its group (BUNYIP-495). Colour
+/// means "these belong together", so it only moves when an admin regroups the
+/// application. It is deliberately NOT a function of the card's position: a
+/// position-keyed accent repainted every tile whenever one was added, removed
+/// or reordered, and taught nothing.
+pub fn app_gradient(group_id: Option<&str>) -> &'static str {
+    match group_id.filter(|g| !g.is_empty()) {
+        None => UNGROUPED_APP_GRADIENT,
+        Some(id) => APP_GRADIENTS[(fnv1a(id) % APP_GRADIENTS.len() as u64) as usize],
+    }
+}
+
+/// FNV-1a. A fixed hash, not `DefaultHasher`, whose `RandomState` seed changes
+/// per process and would repaint every tile on restart.
+fn fnv1a(s: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in s.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 fn is_future(iso: &str) -> bool {
@@ -159,7 +182,7 @@ pub fn days_until(iso: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::app_link;
+    use super::{app_gradient, app_link, fnv1a, APP_GRADIENTS, UNGROUPED_APP_GRADIENT};
     use crate::api::types::Application;
 
     fn app(slug: &str, subdomain: Option<&str>) -> Application {
@@ -201,5 +224,59 @@ mod tests {
 
         // No apex domain configured -> a neutral href, never a broken absolute.
         assert_eq!(app_link(&with, ""), "#");
+    }
+
+    /// BUNYIP-495: the accent follows the group, so every member of a group is
+    /// painted alike and an application keeps its colour when the catalog is
+    /// reordered. The old `app_gradient(index)` moved every tile's colour on any
+    /// insert, delete or reorder.
+    #[test]
+    fn app_gradient_follows_the_group_not_the_position() {
+        let a = "5f2b1c8e-0000-4000-8000-000000000001";
+        let b = "9d7e4a11-0000-4000-8000-000000000002";
+
+        // Same group -> same accent, however far apart the two cards render.
+        assert_eq!(app_gradient(Some(a)), app_gradient(Some(a)));
+        // Different groups -> the accent is drawn from the palette.
+        assert!(APP_GRADIENTS.contains(&app_gradient(Some(b))));
+        // Ungrouped is its own state, never a palette entry borrowed from a group.
+        assert_eq!(app_gradient(None), UNGROUPED_APP_GRADIENT);
+        assert_eq!(app_gradient(Some("")), UNGROUPED_APP_GRADIENT);
+        assert!(!APP_GRADIENTS.contains(&UNGROUPED_APP_GRADIENT));
+    }
+
+    /// Every accent call site keys off the group, and nothing else. A source
+    /// scan, because the signature alone would also accept the card's position
+    /// converted to a string, which is the shape BUNYIP-495 removed.
+    #[test]
+    fn every_app_gradient_call_site_keys_off_the_group() {
+        let sources = [
+            (
+                "handlers/dashboard.rs",
+                include_str!("handlers/dashboard.rs"),
+            ),
+            ("skin/public.rs", include_str!("skin/public.rs")),
+        ];
+        for (name, src) in sources {
+            for (n, line) in src.lines().enumerate() {
+                let Some((_, arg)) = line.split_once("app_gradient(") else {
+                    continue;
+                };
+                assert!(
+                    arg.starts_with("app.group_id.as_deref()"),
+                    "{name}:{} paints a tile from something other than its group",
+                    n + 1
+                );
+            }
+        }
+    }
+
+    /// The accent must survive a restart, so the hash is fixed rather than
+    /// `DefaultHasher`, whose seed is randomised per process.
+    #[test]
+    fn app_gradient_is_stable_across_processes() {
+        assert_eq!(fnv1a(""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(fnv1a("a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(fnv1a("foobar"), 0x8594_4171_f739_67e8);
     }
 }

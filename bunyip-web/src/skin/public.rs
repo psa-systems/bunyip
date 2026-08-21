@@ -190,18 +190,18 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                         h2 class="text-center text-3xl font-bold text-brand-primary-900 dark:text-brand-primary-50" { "Wired into your stack" }
                         p class="mx-auto mt-4 max-w-2xl text-center text-muted-foreground" { (format!("{brand} is the front door to the products your team already runs.")) }
                         div class="mt-12 grid gap-8 md:grid-cols-2 max-w-3xl mx-auto scroll-fade-up-child in-view" {
-                            @for (i, app) in apps.iter().enumerate() {
-                                div class="rounded-lg border bg-card text-card-foreground shadow-sm transition-all hover:shadow-lg border-border/50" {
+                            @for app in &apps {
+                                div class="rounded-lg border bg-card text-card-foreground shadow-sm flex h-full flex-col transition-all hover:shadow-lg border-border/50" {
                                     div class="flex flex-col space-y-1.5 p-6" {
                                         div class="flex items-center gap-4" {
-                                            div class={ "flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-to-br " (app_gradient(i)) } {
+                                            div class={ "flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-to-br " (app_gradient(app.group_id.as_deref())) } {
                                                 @if let Some(icon) = &app.icon_url { img src=(icon) alt=(app.display_name) class="h-6 w-6"; }
                                                 @else { (icon("package", "h-5 w-5 text-white")) }
                                             }
                                             div { h3 class="text-2xl font-semibold leading-none tracking-tight" { (app.display_name) } }
                                         }
                                     }
-                                    div class="p-6 pt-0" {
+                                    div class="p-6 pt-0 mt-auto" {
                                         p class="text-base text-muted-foreground" { (app.description.clone().unwrap_or_default()) }
                                         a href=(app_link(app, &st.cfg.app_domain)) target="_blank" rel="noopener noreferrer"
                                           class="mt-4 inline-flex items-center gap-1 text-sm font-medium text-brand-primary-700 dark:text-brand-primary-200 hover:underline" {

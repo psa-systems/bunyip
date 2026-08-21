@@ -138,7 +138,7 @@ fn dashboard_apps_grid(
             (empty_state("app-window", "No applications are available yet.", None))
         } @else {
             div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
-                @for (i, app) in apps.iter().enumerate() {
+                @for app in apps {
                     @let subdomain = app.subdomain.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| app.slug.clone());
                     @let app_url = format!("{subdomain}.{base_domain}");
                     div class="rounded-lg border bg-card text-card-foreground shadow-sm flex h-full flex-col border-border/50 transition-all hover:shadow-lg hover:shadow-indigo-500/5" {
@@ -154,7 +154,7 @@ fn dashboard_apps_grid(
                         div class="p-6 pt-0 mt-auto" {
                             @if app.is_accessible {
                                 a href=(format!("https://{app_url}/dashboard")) target="_blank" rel="noopener noreferrer" {
-                                    span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md shadow-indigo-500/15 hover:shadow-lg hover:shadow-indigo-500/25 transition-shadow", app_gradient(i)))) {
+                                    span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md shadow-indigo-500/15 hover:shadow-lg hover:shadow-indigo-500/25 transition-shadow", app_gradient(app.group_id.as_deref())))) {
                                         "Open " (app.display_name) (icon("external-link", "ml-2 h-4 w-4"))
                                     }
                                 }
@@ -286,10 +286,12 @@ fn format_size(bytes: i64) -> String {
 // Applications
 // ===========================================================================
 
-/// One application card on the Applications page. `idx` only drives the
-/// gradient accent so cards stay visually varied across groups.
+/// One application card on the Applications page. BUNYIP-495: `h-full` plus a
+/// column flex layout makes the card fill its grid cell and `mt-auto` drops the
+/// action block to the bottom, so a card carrying an optional block (downloads,
+/// release notes, the Backup link) lines up with one that carries none. The
+/// accent comes from the application's group, never from its position.
 fn app_card(
-    idx: usize,
     app: &Application,
     domain: &str,
     is_member: bool,
@@ -301,11 +303,12 @@ fn app_card(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| app.slug.clone());
     let app_url = format!("{subdomain}.{domain}");
+    let gradient = app_gradient(app.group_id.as_deref());
     html! {
-        div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50 transition-all hover:shadow-lg" {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm flex h-full flex-col border-border/50 transition-all hover:shadow-lg" {
             div class="flex flex-col space-y-1.5 p-6" {
                 div class="flex items-start justify-between" {
-                    div class={ "flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-to-br " (app_gradient(idx)) } {
+                    div class={ "flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-to-br " (gradient) } {
                         @if let Some(ic) = &app.icon_url { img src=(ic) alt=(app.display_name) class="h-6 w-6"; } @else { (icon("link-2", "h-6 w-6 text-white")) }
                     }
                     @if app.maintenance_mode { (badge("warning", "Maintenance")) }
@@ -313,7 +316,7 @@ fn app_card(
                 h3 class="text-2xl font-semibold leading-none tracking-tight mt-4" { (app.display_name) }
                 p class="text-sm text-muted-foreground" { (app.description.clone().unwrap_or_default()) }
             }
-            div class="p-6 pt-0" {
+            div class="p-6 pt-0 mt-auto" {
                 p class="text-sm text-muted-foreground mb-4" { (app_url) }
                 @if app.is_accessible {
                     // `/dashboard`, not `/`, so the child app's AuthGuard sees a
@@ -322,7 +325,7 @@ fn app_card(
                     // homepage instead just shows the marketing page; the user
                     // has to click "Sign in" before the SSO bridge fires.
                     a href=(format!("https://{app_url}/dashboard")) target="_blank" rel="noopener noreferrer" {
-                        span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md", app_gradient(idx)))) { "Launch" (icon("external-link", "ml-2 h-4 w-4")) }
+                        span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {gradient} text-white border-0 shadow-md"))) { "Launch" (icon("external-link", "ml-2 h-4 w-4")) }
                     }
                 } @else {
                     button type="button" disabled class=(button_class("default", "default", "w-full")) {
@@ -401,29 +404,25 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
     let domain = st.cfg.domain_or_localhost();
 
     // Build display sections: each group (in API sort order) with its members,
-    // then an "ungrouped" bucket. The global enumerate index is carried into
-    // each card so gradient accents stay varied across sections. An app whose
-    // group_id references a missing group falls into the ungrouped bucket.
-    let indexed: Vec<(usize, &Application)> = apps.iter().enumerate().collect();
-    let mut group_sections: Vec<(&str, Vec<(usize, &Application)>)> = Vec::new();
+    // then an "ungrouped" bucket. An app whose group_id references a missing
+    // group falls into the ungrouped bucket.
+    let mut group_sections: Vec<(&str, Vec<&Application>)> = Vec::new();
     for g in &groups {
-        let members: Vec<(usize, &Application)> = indexed
+        let members: Vec<&Application> = apps
             .iter()
-            .filter(|(_, a)| a.group_id.as_deref() == Some(g.id.as_str()))
-            .copied()
+            .filter(|a| a.group_id.as_deref() == Some(g.id.as_str()))
             .collect();
         if !members.is_empty() {
             group_sections.push((g.display_name.as_str(), members));
         }
     }
-    let ungrouped: Vec<(usize, &Application)> = indexed
+    let ungrouped: Vec<&Application> = apps
         .iter()
-        .filter(|(_, a)| {
+        .filter(|a| {
             !groups
                 .iter()
                 .any(|g| Some(g.id.as_str()) == a.group_id.as_deref())
         })
-        .copied()
         .collect();
     let has_groups = !group_sections.is_empty();
     // Catalog-only products: download groups whose slug matches no hosted app.
@@ -463,7 +462,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                     section class="space-y-3" {
                         h2 class="text-xl font-semibold tracking-tight" { (name) }
                         div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
-                            @for &(idx, app) in members { (app_card(idx, app, &domain, is_member, download_groups.iter().find(|g| g.app_slug == app.slug))) }
+                            @for &app in members { (app_card(app, &domain, is_member, download_groups.iter().find(|g| g.app_slug == app.slug))) }
                         }
                     }
                 }
@@ -471,7 +470,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                     section class="space-y-3" {
                         @if has_groups { h2 class="text-xl font-semibold tracking-tight" { "Other" } }
                         div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
-                            @for &(idx, app) in &ungrouped { (app_card(idx, app, &domain, is_member, download_groups.iter().find(|g| g.app_slug == app.slug))) }
+                            @for &app in &ungrouped { (app_card(app, &domain, is_member, download_groups.iter().find(|g| g.app_slug == app.slug))) }
                         }
                     }
                 }
@@ -710,17 +709,18 @@ fn download_affordance(g: &AppDownloadGroup, is_member: bool) -> Markup {
 /// A download-only card for a catalog product that is not a hosted hub tile
 /// (so it has no Launch action). Keeps catalog-only distribution products
 /// visible on the Applications page now that the standalone Downloads page is
-/// retired. BUNYIP-100.
+/// retired. BUNYIP-100. Fills its grid cell and bottom-anchors its actions for
+/// the same reason `app_card` does (BUNYIP-495): the docs link is optional.
 fn download_only_card(g: &AppDownloadGroup, is_member: bool) -> Markup {
     html! {
-        div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50 transition-all hover:shadow-lg" {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm flex h-full flex-col border-border/50 transition-all hover:shadow-lg" {
             div class="flex flex-col space-y-1.5 p-6" {
                 div class="flex h-12 w-12 items-center justify-center rounded-lg bg-muted" {
                     @if let Some(ic) = &g.icon_url { img src=(ic) alt=(g.app_display_name) class="h-6 w-6"; } @else { (icon("package", "h-6 w-6 text-muted-foreground")) }
                 }
                 h3 class="text-2xl font-semibold leading-none tracking-tight mt-4" { (g.app_display_name) }
             }
-            div class="p-6 pt-0" {
+            div class="p-6 pt-0 mt-auto" {
                 @if g.has_access {
                     (download_affordance(g, is_member))
                 } @else {
@@ -2524,14 +2524,8 @@ mod tests {
     fn app_card_links_release_notes_when_present() {
         // BUNYIP-343: the card links to the app's Forgejo releases page.
         let notes = "https://dev.a8n.run/psa-systems/mokosh-server/releases";
-        let html = app_card(
-            0,
-            &app_with_release_notes(Some(notes)),
-            "a8n.run",
-            true,
-            None,
-        )
-        .into_string();
+        let html =
+            app_card(&app_with_release_notes(Some(notes)), "a8n.run", true, None).into_string();
         assert!(html.contains(notes), "release-notes URL must be linked");
         assert!(
             html.contains("Release notes"),
@@ -2542,10 +2536,135 @@ mod tests {
     #[test]
     fn app_card_omits_release_notes_when_absent() {
         // No repo association -> no link (not an empty/dead affordance).
-        let html = app_card(0, &app_with_release_notes(None), "a8n.run", true, None).into_string();
+        let html = app_card(&app_with_release_notes(None), "a8n.run", true, None).into_string();
         assert!(
             !html.contains("Release notes"),
             "no release-notes link when the URL is unset"
+        );
+    }
+
+    /// The class list of a card's root element, which is the first `class="..."`
+    /// in its markup.
+    fn root_classes(html: &str) -> &str {
+        html.split('"').nth(1).expect("a class attribute")
+    }
+
+    /// The palette entry a named card paints itself with. Cards are split on the
+    /// shared card-root class, so each fragment is one card.
+    fn accent_of(html: &str, display_name: &str) -> &'static str {
+        let card = html
+            .split("rounded-lg border bg-card")
+            .find(|card| card.contains(display_name))
+            .expect("a card for that application");
+        crate::util::APP_GRADIENTS
+            .iter()
+            .chain(std::iter::once(&crate::util::UNGROUPED_APP_GRADIENT))
+            .find(|g| card.contains(**g))
+            .copied()
+            .expect("the card paints an accent")
+    }
+
+    /// BUNYIP-495: a card carrying optional blocks (release notes, the Backup
+    /// link) and one carrying none render the same root class set, so both fill
+    /// their grid cell and both bottom-anchor their action block. Cards used to
+    /// be as tall as their content, so a row of them did not line up.
+    #[test]
+    fn app_cards_share_a_height_class_set_whatever_optional_blocks_they_carry() {
+        let bare = app_card(&app_with_release_notes(None), "a8n.run", true, None).into_string();
+        let mut loaded = app_with_release_notes(Some("https://dev.a8n.run/x/releases"));
+        loaded.slug = "backup".into();
+        loaded.display_name = "Backup".into();
+        let loaded = app_card(&loaded, "a8n.run", true, None).into_string();
+
+        assert!(
+            loaded.contains("Release notes") && loaded.contains("Backup &amp; Restore"),
+            "the fixture must actually carry the optional blocks"
+        );
+        assert_eq!(
+            root_classes(&bare),
+            root_classes(&loaded),
+            "both cards must fill their grid cell with the same class set"
+        );
+        for class in ["h-full", "flex-col"] {
+            assert!(
+                root_classes(&bare).contains(class),
+                "the card root must carry {class} so it fills its grid cell"
+            );
+        }
+        for html in [&bare, &loaded] {
+            assert!(
+                html.contains("p-6 pt-0 mt-auto"),
+                "the action block must be pushed to the bottom of the card"
+            );
+        }
+    }
+
+    /// BUNYIP-495: the accent is keyed to the application's group, so members of
+    /// a group are painted alike and reordering the catalog repaints nothing.
+    /// The accent used to be `APP_GRADIENTS[position]`, which moved on every
+    /// insert, delete and reorder and so meant nothing.
+    #[test]
+    fn app_accent_follows_the_group_not_the_list_position() {
+        let mut alpha = app_with_release_notes(None);
+        alpha.display_name = "Alpha".into();
+        alpha.group_id = Some("g1".into());
+        let mut beta = app_with_release_notes(None);
+        beta.slug = "beta".into();
+        beta.display_name = "Beta".into();
+        beta.group_id = Some("g2".into());
+        let mut gamma = app_with_release_notes(None);
+        gamma.slug = "gamma".into();
+        gamma.display_name = "Gamma".into();
+        gamma.group_id = Some("g1".into());
+
+        let forward = dashboard_apps_grid(
+            &[alpha.clone(), beta.clone(), gamma.clone()],
+            true,
+            "a8n.run",
+            true,
+        )
+        .into_string();
+        let reversed = dashboard_apps_grid(
+            &[gamma.clone(), beta.clone(), alpha.clone()],
+            true,
+            "a8n.run",
+            true,
+        )
+        .into_string();
+
+        for name in ["Alpha", "Beta", "Gamma"] {
+            assert_eq!(
+                accent_of(&forward, name),
+                accent_of(&reversed, name),
+                "{name} must keep its accent when the catalog is reordered"
+            );
+        }
+        assert_eq!(
+            accent_of(&forward, "Alpha"),
+            accent_of(&forward, "Gamma"),
+            "same group -> same accent"
+        );
+        assert_ne!(
+            accent_of(&forward, "Alpha"),
+            accent_of(&forward, "Beta"),
+            "these two groups fall in different palette slots"
+        );
+
+        // The Applications-page card reads the same property.
+        assert_eq!(
+            accent_of(
+                &app_card(&alpha, "a8n.run", true, None).into_string(),
+                "Alpha"
+            ),
+            accent_of(&forward, "Alpha"),
+            "both surfaces paint an application from its group"
+        );
+        let ungrouped =
+            app_card(&app_with_release_notes(None), "a8n.run", true, None).into_string();
+        assert_eq!(
+            accent_of(&ungrouped, "Mokosh"),
+            crate::util::UNGROUPED_APP_GRADIENT,
+            "an ungrouped application does not borrow a group's colour"
         );
     }
 
