@@ -77,11 +77,13 @@ affected database. Instead `migrate_reconcile::backfill_entitlement_source_check
 runs at startup, **after** the checksum reconcile and **before** the migrator, and
 adds the missing constraint so the migrator's `DROP` + `ADD` then succeeds and
 widens it to include `'seed'`. It is tightly scoped and idempotent: it acts only
-when `20260802000010` is not yet applied, the table exists, and the constraint is
-absent, so it is a no-op on already-migrated databases (802 applied), on fresh
-databases (table created in order by the migrator), and on every boot after it has
-run once, and it can never fight a future migration that deliberately alters the
-constraint. `20260802000010` itself is left unedited (immutable), so databases
+when the `_sqlx_migrations` ledger exists, `20260802000010` is not yet applied, the
+table exists, and the constraint is absent, so it is a no-op on already-migrated
+databases (802 applied), on virgin databases (no ledger yet), on fresh databases
+(table created in order by the migrator), and on every boot after it has run once,
+and it can never fight a future migration that deliberately alters the constraint.
+Both reconcilers check `to_regclass` before reading any relation, because they run
+before the migrator and a virgin database has none of them (BUNYIP-563). `20260802000010` itself is left unedited (immutable), so databases
 that already applied it need no checksum reconciliation.
 
 This is a deliberate exception to "deliver un-retro-applied guards via forward

@@ -128,6 +128,8 @@ pub async fn reconcile_legacy_migration_checksums(pool: &PgPool) -> Result<(), s
 /// exactly as 605 would have. Tightly scoped so it can only ever act on a
 /// database stuck BEFORE `20260802000010`:
 ///
+/// - no ledger -> return (virgin database; the migrator creates the schema in
+///   order, and reading the ledger here would abort startup, BUNYIP-563).
 /// - `20260802000010` already applied -> return (never fight a future migration
 ///   that legitimately alters this constraint).
 /// - `application_entitlements` absent -> return (fresh database; the migrator
@@ -140,7 +142,17 @@ pub async fn reconcile_legacy_migration_checksums(pool: &PgPool) -> Result<(), s
 /// fresh databases, and every boot after it has run once. Must run BEFORE
 /// `Migrator::run`.
 pub async fn backfill_entitlement_source_check(pool: &PgPool) -> Result<(), sqlx::Error> {
-    // 1. Already past 20260802000010? Never touch the constraint again, so a
+    // 1. Virgin database: the ledger does not exist yet (the migrator creates
+    //    it), so nothing has been applied, there is nothing to backfill, and
+    //    step 2 would abort startup on a missing relation.
+    let ledger: Option<String> = sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations')::text")
+        .fetch_one(pool)
+        .await?;
+    if ledger.is_none() {
+        return Ok(());
+    }
+
+    // 2. Already past 20260802000010? Never touch the constraint again, so a
     //    future migration that deliberately alters it is not fought.
     let applied: Option<i64> =
         sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE version = 20260802000010")
@@ -150,9 +162,9 @@ pub async fn backfill_entitlement_source_check(pool: &PgPool) -> Result<(), sqlx
         return Ok(());
     }
 
-    // 2. Fresh database (or one stuck before 20260605000010): the table does not
+    // 3. Fresh database (or one stuck before 20260605000010): the table does not
     //    exist yet, so there is nothing to backfill and the `::regclass` cast in
-    //    step 3 would raise "relation does not exist".
+    //    step 4 would raise "relation does not exist".
     let table: Option<String> =
         sqlx::query_scalar("SELECT to_regclass('application_entitlements')::text")
             .fetch_one(pool)
@@ -161,7 +173,7 @@ pub async fn backfill_entitlement_source_check(pool: &PgPool) -> Result<(), sqlx
         return Ok(());
     }
 
-    // 3. Constraint already present (post-edit 605 body, or a prior backfill)?
+    // 4. Constraint already present (post-edit 605 body, or a prior backfill)?
     let has_constraint: bool = sqlx::query_scalar(
         "SELECT EXISTS ( \
              SELECT 1 FROM pg_constraint \
@@ -174,7 +186,7 @@ pub async fn backfill_entitlement_source_check(pool: &PgPool) -> Result<(), sqlx
         return Ok(());
     }
 
-    // 4. Deliver the guard 20260605000010's in-place edit should have applied.
+    // 5. Deliver the guard 20260605000010's in-place edit should have applied.
     //    Every existing source value is one of these three (the loader's 'seed'
     //    grants only exist once 20260802000010 has widened the constraint, which
     //    has not happened on a database reaching this branch), so it validates.
@@ -233,6 +245,55 @@ mod tests {
                 "version {version}: embedded checksum equals the listed pre-edit checksum, so the \
                  allowlist entry is stale (the file was reverted or never edited); drop it"
             );
+        }
+    }
+
+    /// BUNYIP-563: both reconcilers run BEFORE the migrator, so on a virgin
+    /// database every relation they touch (the `_sqlx_migrations` ledger
+    /// included) is absent and an unguarded read aborts startup. The first
+    /// mention of a relation in either body must be the one inside its own
+    /// `to_regclass` guard.
+    #[test]
+    fn every_pre_migration_reconciler_guards_each_relation_it_reads() {
+        const RECONCILERS: &[(&str, &[&str])] = &[
+            (
+                "pub async fn reconcile_legacy_migration_checksums",
+                &["_sqlx_migrations"],
+            ),
+            (
+                "pub async fn backfill_entitlement_source_check",
+                &["_sqlx_migrations", "application_entitlements"],
+            ),
+        ];
+        const CALL: &str = "to_regclass('";
+
+        let src = include_str!("migrate_reconcile.rs");
+        for (signature, relations) in RECONCILERS {
+            let from = src.find(signature).unwrap_or_else(|| {
+                panic!("{signature} not found; a rename must be reflected in this test")
+            });
+            let body = &src[from..];
+            let body = &body[..body.find("\n}\n").expect("unterminated function body")];
+            // Comments name relations without reading them; SQL has no `//`.
+            let code = body
+                .lines()
+                .map(|line| line.split("//").next().unwrap_or_default())
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            for relation in *relations {
+                let guard = format!("{CALL}{relation}')");
+                let guard_at = code.find(&guard).unwrap_or_else(|| {
+                    panic!("{signature} reads {relation} but never guards it with {guard}")
+                });
+                assert_eq!(
+                    code.find(relation),
+                    Some(guard_at + CALL.len()),
+                    "{signature} touches {relation} before its {guard} guard; a pre-migration \
+                     reconciler must prove a relation exists before reading it, or a virgin \
+                     database cannot boot (BUNYIP-563)"
+                );
+            }
         }
     }
 
