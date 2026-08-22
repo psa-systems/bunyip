@@ -49,10 +49,10 @@ default; pass `--apply` to archive.
 
 ```nu
 # Dry run: print the plan, change nothing.
-docker compose exec bunyip-api bunyip-api reconcile-duplicate-prices
+docker compose exec api /app/bunyip-api reconcile-duplicate-prices
 
 # Apply: archive the orphans and write an audit log for each.
-docker compose exec bunyip-api bunyip-api reconcile-duplicate-prices --apply
+docker compose exec api /app/bunyip-api reconcile-duplicate-prices --apply
 ```
 
 Dry-run output names, per product, the price it would archive and the keeper,
