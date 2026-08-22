@@ -95,7 +95,7 @@ bunyip (project)
 ├── staging
 │   ├── /runtime      <- the governed secrets (SMTP_PASSWORD, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, SUPPORT_IMAP_PASSWORD)
 │   └── /bunyip/e2e   <- the E2E account password (docs/e2e.md)
-└── prod
+└── production
     └── /runtime
 ```
 
@@ -110,7 +110,7 @@ environment, project id, secret path, and the two credentials) lives in the SOPS
 | `INFISICAL_ENABLED`       | no      | plain env    | `false` | whether the Infisical store is inspected outside `SECRETS_STORAGE=infisical` (which always inspects it) |
 | `INFISICAL_ADDRESS`       | no      | plain env    | `""`    | Infisical base URL (e.g. `https://infisical.a8n.systems`)                                               |
 | `INFISICAL_PROJECT_ID`    | no      | plain env    | `""`    | the Infisical project (workspace) id                                                                    |
-| `INFISICAL_ENVIRONMENT`   | no      | plain env    | `""`    | environment slug (`staging`/`prod`); `production` (any case) normalizes to `prod`                       |
+| `INFISICAL_ENVIRONMENT`   | no      | plain env    | `""`    | environment slug, read verbatim (`staging`/`production`); must match the Infisical project's slug exactly |
 | `INFISICAL_SECRET_PATH`   | no      | plain env    | `/`     | the folder to read (`/runtime`, project-relative)                                                       |
 | `INFISICAL_CLIENT_ID`     | yes     | `secret_env` | `""`    | Universal Auth machine-identity client id                                                               |
 | `INFISICAL_CLIENT_SECRET` | yes     | `secret_env` | `""`    | Universal Auth machine-identity client secret                                                           |

@@ -328,8 +328,10 @@ pub struct InfisicalSettings {
     pub address: String,
     /// Infisical project id (`INFISICAL_PROJECT_ID`).
     pub project_id: String,
-    /// Infisical environment slug (`INFISICAL_ENVIRONMENT`), e.g. `staging` / `prod`.
-    /// `production` (any case) normalizes to `prod`; see [`normalize_infisical_environment`].
+    /// Infisical environment slug (`INFISICAL_ENVIRONMENT`), e.g. `staging` / `production`.
+    /// Read verbatim (trimmed only): the value must match the environment slug
+    /// configured in the Infisical project exactly, so the Infisical project's
+    /// slug is named `production`, not `prod`.
     pub environment: String,
     /// Secret folder path (`INFISICAL_SECRET_PATH`), e.g. `/runtime` (project-relative).
     pub secret_path: String,
@@ -350,7 +352,7 @@ impl InfisicalSettings {
             address: env::var("INFISICAL_ADDRESS").unwrap_or_default(),
             project_id: env::var("INFISICAL_PROJECT_ID").unwrap_or_default(),
             environment: env::var("INFISICAL_ENVIRONMENT")
-                .map(|v| normalize_infisical_environment(&v))
+                .map(|v| v.trim().to_string())
                 .unwrap_or_default(),
             secret_path: env::var("INFISICAL_SECRET_PATH").unwrap_or_else(|_| "/".to_string()),
             client_id: secret_env("INFISICAL_CLIENT_ID").unwrap_or_default(),
@@ -2251,7 +2253,7 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
     ),
     EnvVarSpec::defaulted(
         "INFISICAL_ENVIRONMENT",
-        "Infisical environment slug (BUNYIP-600 normalizes production to prod)",
+        "Infisical environment slug, e.g. staging / production (BUNYIP-600)",
     ),
     EnvVarSpec::defaulted(
         "BUNYIP_E2E_BOOTSTRAP_ALLOW",
@@ -2379,20 +2381,6 @@ fn parse_encryption_key(env_var: &'static str, hex_str: &str) -> Result<[u8; 32]
     })
 }
 
-/// Normalize an `INFISICAL_ENVIRONMENT` value: `production` (any case) is the
-/// same environment as `prod`, matching the equivalence [`e2e_env_allows_purge`]
-/// already applies to the general environment name (BUNYIP-600). Any other
-/// value passes through trimmed and otherwise unchanged, so slugs like
-/// `staging` are forwarded to Infisical exactly as configured.
-pub(crate) fn normalize_infisical_environment(environment: &str) -> String {
-    let trimmed = environment.trim();
-    if trimmed.eq_ignore_ascii_case("production") {
-        "prod".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
 /// Pure half of [`Config::e2e_purge_enabled`]: the environment must be a real
 /// non-production name. Empty / unset (which `Config` treats as production) and
 /// `production` / `prod` all forbid e2e hard-deletes (BUNYIP-246).
@@ -2479,20 +2467,18 @@ mod tests {
         }
     }
 
-    /// BUNYIP-600: `production` (any case) normalizes to `prod`; other slugs
-    /// pass through unchanged; the legacy `INFISICAL_ENV` alias is no longer read.
+    /// BUNYIP-600: `INFISICAL_ENVIRONMENT` is read verbatim (trimmed only), with
+    /// no `prod` normalization or alias; the legacy `INFISICAL_ENV` is no longer read.
     #[test]
-    fn infisical_environment_normalizes_production_and_drops_legacy_alias() {
+    fn infisical_environment_reads_verbatim_and_drops_legacy_alias() {
         let _env = env_lock();
-        for env_name in ["production", "Production", "PRODUCTION"] {
-            env::set_var("INFISICAL_ENVIRONMENT", env_name);
-            assert_eq!(InfisicalSettings::from_env().environment, "prod");
-        }
-        env::set_var("INFISICAL_ENVIRONMENT", "staging");
+        env::set_var("INFISICAL_ENVIRONMENT", "production");
+        assert_eq!(InfisicalSettings::from_env().environment, "production");
+        env::set_var("INFISICAL_ENVIRONMENT", "  staging  ");
         assert_eq!(InfisicalSettings::from_env().environment, "staging");
         // The legacy alias is no longer read, even when it holds a value.
         env::remove_var("INFISICAL_ENVIRONMENT");
-        env::set_var("INFISICAL_ENV", "prod");
+        env::set_var("INFISICAL_ENV", "production");
         assert_eq!(InfisicalSettings::from_env().environment, "");
         env::remove_var("INFISICAL_ENV");
         assert_eq!(InfisicalSettings::from_env().environment, "");
