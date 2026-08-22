@@ -295,9 +295,9 @@ pub fn seed_guard(environment: &str, allow: bool) -> Result<(), SeedError> {
         ));
     }
     let env = environment.trim();
-    let prod_like = env.is_empty()
-        || env.eq_ignore_ascii_case("production")
-        || env.eq_ignore_ascii_case("prod");
+    // `ENVIRONMENT` has exactly one production spelling, `production`
+    // (BUNYIP-600); there is no `prod` variant to recognize.
+    let prod_like = env.is_empty() || env.eq_ignore_ascii_case("production");
     if prod_like {
         return Err(SeedError::Guard(format!(
             "refusing to run: ENVIRONMENT is '{environment}' (production-like or unset); seeding is non-production only"
@@ -1086,9 +1086,12 @@ mod tests {
     }
 
     #[test]
-    fn guard_blocks_prod_and_unset_allows_nonprod() {
+    fn guard_blocks_production_and_unset_allows_nonprod() {
         assert!(seed_guard("development", true).is_ok());
         assert!(seed_guard("staging", true).is_ok());
+        // `prod` is not a recognized production spelling (BUNYIP-600):
+        // `ENVIRONMENT` has exactly one production value, `production`.
+        assert!(seed_guard("prod", true).is_ok());
         // allow flag missing
         assert!(matches!(
             seed_guard("development", false),
@@ -1099,7 +1102,6 @@ mod tests {
             seed_guard("production", true),
             Err(SeedError::Guard(_))
         ));
-        assert!(matches!(seed_guard("prod", true), Err(SeedError::Guard(_))));
         assert!(matches!(seed_guard("", true), Err(SeedError::Guard(_))));
         assert!(matches!(seed_guard("  ", true), Err(SeedError::Guard(_))));
     }

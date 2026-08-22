@@ -2383,12 +2383,12 @@ fn parse_encryption_key(env_var: &'static str, hex_str: &str) -> Result<[u8; 32]
 
 /// Pure half of [`Config::e2e_purge_enabled`]: the environment must be a real
 /// non-production name. Empty / unset (which `Config` treats as production) and
-/// `production` / `prod` all forbid e2e hard-deletes (BUNYIP-246).
+/// `production` both forbid e2e hard-deletes (BUNYIP-246). `ENVIRONMENT` has
+/// exactly one production spelling, `production` (BUNYIP-600); there is no
+/// `prod` variant to recognize.
 pub(crate) fn e2e_env_allows_purge(environment: &str) -> bool {
     let env_name = environment.trim();
-    !env_name.is_empty()
-        && !env_name.eq_ignore_ascii_case("production")
-        && !env_name.eq_ignore_ascii_case("prod")
+    !env_name.is_empty() && !env_name.eq_ignore_ascii_case("production")
 }
 
 #[cfg(test)]
@@ -2449,17 +2449,28 @@ mod tests {
     }
 
     #[test]
-    fn e2e_env_allows_purge_only_for_real_non_prod_names() {
-        // Real non-production names permit the e2e hard-delete path.
-        for env_name in ["staging", "Staging", "dev", "development", "test", "ci"] {
+    fn e2e_env_allows_purge_only_for_real_non_production_names() {
+        // Real non-production names permit the e2e hard-delete path. `prod` is
+        // not a recognized production spelling (BUNYIP-600): `ENVIRONMENT` has
+        // exactly one production value, `production`.
+        for env_name in [
+            "staging",
+            "Staging",
+            "dev",
+            "development",
+            "test",
+            "ci",
+            "prod",
+            "PROD",
+        ] {
             assert!(
                 e2e_env_allows_purge(env_name),
                 "{env_name} should allow purge"
             );
         }
-        // Production-like and empty/unset names forbid it, so `?purge` and the
-        // reaper can never hard-delete on prod (BUNYIP-246).
-        for env_name in ["production", "Production", "PROD", "prod", "", "   "] {
+        // `production` and empty/unset forbid it, so `?purge` and the reaper
+        // can never hard-delete on production (BUNYIP-246).
+        for env_name in ["production", "Production", "PRODUCTION", "", "   "] {
             assert!(
                 !e2e_env_allows_purge(env_name),
                 "{env_name:?} must forbid purge"
