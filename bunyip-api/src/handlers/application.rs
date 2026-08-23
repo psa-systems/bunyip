@@ -6,7 +6,7 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use sqlx::PgPool;
 
 use crate::errors::AppError;
-use crate::middleware::OptionalUser;
+use crate::middleware::{request_user, OptionalUser};
 use crate::models::ApplicationResponse;
 use crate::repositories::{
     ApplicationGroupRepository, ApplicationRepository, EntitlementRepository, UserRepository,
@@ -27,10 +27,24 @@ use crate::services::AccessTokenClaims;
 /// Anonymous callers (no claims) get `false` per existing semantics. A DB
 /// read failure for an authenticated user falls back to the JWT cache so the
 /// endpoint never errors out for a transient outage.
-async fn resolve_has_member_access(pool: &PgPool, user: &OptionalUser) -> bool {
+///
+/// BUNYIP-557: an at+jwt caller's row was already read from the database while
+/// verifying the token, earlier in THIS request, so that copy answers here
+/// instead of an identical third `SELECT`. This does not weaken the freshness
+/// BUNYIP-229 is about: the row is still read per request, microseconds
+/// before this call, never carried over from an earlier one.
+async fn resolve_has_member_access(req: &HttpRequest, pool: &PgPool, user: &OptionalUser) -> bool {
     let Some(claims) = user.0.as_ref() else {
         return false;
     };
+    if let Some(u) = request_user(req) {
+        return AccessTokenClaims::has_member_access_static(
+            &u.role,
+            u.lifetime_member,
+            u.trial_ends_at.map(|t| t.timestamp()),
+            &u.membership_status,
+        );
+    }
     match UserRepository::find_by_id(pool, claims.sub).await {
         Ok(Some(u)) => AccessTokenClaims::has_member_access_static(
             &u.role,
@@ -38,7 +52,17 @@ async fn resolve_has_member_access(pool: &PgPool, user: &OptionalUser) -> bool {
             u.trial_ends_at.map(|t| t.timestamp()),
             &u.membership_status,
         ),
-        Ok(None) | Err(_) => claims.has_member_access(),
+        Ok(None) => claims.has_member_access(),
+        Err(e) => {
+            // Best effort by design (above), but never silent: the answer here
+            // is the stale claim, and that has to be diagnosable.
+            tracing::warn!(
+                error = %e,
+                user_id = %claims.sub,
+                "member access fell back to the token claim: user row read failed"
+            );
+            claims.has_member_access()
+        }
     }
 }
 
@@ -68,7 +92,7 @@ pub async fn list_applications(
 
     // BUNYIP-229: read fresh from DB instead of trusting the JWT claim
     // cache. See `resolve_has_member_access` for why.
-    let has_access = resolve_has_member_access(&pool, &user).await;
+    let has_access = resolve_has_member_access(&req, &pool, &user).await;
 
     let apps = ApplicationRepository::list_active_hosted(&pool).await?;
 
@@ -95,7 +119,7 @@ pub async fn get_application(
     let slug = path.into_inner();
 
     // BUNYIP-229: read fresh from DB instead of trusting the JWT claim cache.
-    let has_access = resolve_has_member_access(&pool, &user).await;
+    let has_access = resolve_has_member_access(&req, &pool, &user).await;
 
     let app = ApplicationRepository::find_active_by_slug(&pool, &slug)
         .await?
@@ -117,4 +141,178 @@ pub async fn get_application(
     let app_response = ApplicationResponse::from_application(app, has_access);
 
     Ok(success(app_response, request_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::middleware::auth::{verify_once, AtJwtVerifier};
+    use crate::models::User;
+    use actix_web::http::header;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use sqlx::postgres::PgPoolOptions;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    /// Stands in for `OidcProvider`. Each call is one EdDSA verification plus
+    /// one `SELECT ... FROM users` in the real implementation
+    /// (`resolve_user_for_atjwt`), so the counter is the statement count
+    /// BUNYIP-557 is about.
+    struct CountingVerifier {
+        claims: AccessTokenClaims,
+        user: User,
+        calls: Mutex<u32>,
+    }
+
+    #[async_trait::async_trait]
+    impl AtJwtVerifier for CountingVerifier {
+        async fn verify_and_resolve(
+            &self,
+            _token: &str,
+        ) -> Result<(AccessTokenClaims, User), AppError> {
+            *self.calls.lock().unwrap() += 1;
+            Ok((self.claims.clone(), self.user.clone()))
+        }
+    }
+
+    /// An at+jwt shell: only the header `typ` is decoded when routing.
+    fn atjwt() -> String {
+        let header = r#"{"alg":"EdDSA","typ":"at+jwt","kid":"k1"}"#;
+        format!(
+            "{}.{}.{}",
+            URL_SAFE_NO_PAD.encode(header),
+            URL_SAFE_NO_PAD.encode(r#"{"sub":"x"}"#),
+            URL_SAFE_NO_PAD.encode("filler"),
+        )
+    }
+
+    fn stale_claims(user: &User) -> AccessTokenClaims {
+        AccessTokenClaims {
+            sub: user.id,
+            email: user.email.clone(),
+            role: user.role.clone(),
+            // The staleness BUNYIP-229 exists for: the token was minted before
+            // the membership was granted.
+            membership_status: "canceled".to_string(),
+            price_locked: false,
+            price_id: None,
+            lifetime_member: false,
+            trial_ends_at: None,
+            iat: 0,
+            exp: i64::MAX,
+            jti: "jti-557".to_string(),
+            iss: "https://api.example.test".to_string(),
+        }
+    }
+
+    fn member_row() -> User {
+        User {
+            id: uuid::Uuid::from_u128(557),
+            email: "member@example.test".to_string(),
+            email_verified: true,
+            password_hash: None,
+            role: "subscriber".to_string(),
+            stripe_customer_id: None,
+            stripe_payment_method_id: None,
+            membership_status: "active".to_string(),
+            price_locked: false,
+            locked_price_id: None,
+            locked_price_amount: None,
+            grace_period_start: None,
+            grace_period_end: None,
+            two_factor_enabled: false,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            last_login_at: None,
+            last_login_country: None,
+            login_location_alerts: true,
+            deleted_at: None,
+            membership_tier: "standard".to_string(),
+            trial_ends_at: None,
+            lifetime_member: false,
+            membership_override_by: None,
+            first_name: None,
+            last_name: None,
+            phone: None,
+            has_used_trial: false,
+            avatar_updated_at: None,
+            is_super_admin: false,
+        }
+    }
+
+    /// A pool that can never answer a query, so any read this handler still
+    /// issues fails fast instead of being mistaken for a cache hit.
+    fn unreachable_pool() -> PgPool {
+        PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_millis(200))
+            .connect_lazy("postgres://user:pw@127.0.0.1:1/none")
+            .expect("lazy pool builds without connecting")
+    }
+
+    /// BUNYIP-557: the third `SELECT ... FROM users` is gone. The row the
+    /// at+jwt verification read earlier in this request answers the access
+    /// question, and it is the DB row (active), not the stale claim
+    /// (canceled), so BUNYIP-229's freshness is intact.
+    #[actix_rt::test]
+    async fn member_access_reads_the_row_the_verification_already_read() {
+        let user = member_row();
+        let claims = stale_claims(&user);
+        let counting = Arc::new(CountingVerifier {
+            claims: claims.clone(),
+            user,
+            calls: Mutex::new(0),
+        });
+        let verifier: Arc<dyn AtJwtVerifier> = counting.clone();
+        let token = atjwt();
+        let req = actix_web::test::TestRequest::default()
+            .app_data(verifier)
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .to_http_request();
+
+        // The floor, then the extractor: one verification between them.
+        assert!(crate::middleware::resolve_rate_limit_subject(&req)
+            .await
+            .is_some());
+        let extracted = OptionalUser(Some(verify_once(&req, &token).await.unwrap().claims));
+
+        let pool = unreachable_pool();
+        assert!(
+            resolve_has_member_access(&req, &pool, &extracted).await,
+            "the handler must answer from the row this request already read, \
+             not from the stale claim and not from a third query"
+        );
+        assert_eq!(
+            *counting.calls.lock().unwrap(),
+            1,
+            "one at+jwt request reads the users row exactly once"
+        );
+        pool.close().await;
+    }
+
+    /// The HS256 cookie path caches no row (it reads none while verifying), so
+    /// this handler still queries, exactly as before BUNYIP-557.
+    #[actix_rt::test]
+    async fn member_access_still_queries_when_no_row_was_cached() {
+        let user = member_row();
+        let claims = stale_claims(&user);
+        let req = actix_web::test::TestRequest::default().to_http_request();
+        let pool = unreachable_pool();
+
+        // The query fails against the dead pool, so the answer falls back to
+        // the claim. That it is the CLAIM's value proves a query was attempted.
+        assert!(
+            !resolve_has_member_access(&req, &pool, &OptionalUser(Some(claims))).await,
+            "with nothing cached the handler must fall back to its own query"
+        );
+        pool.close().await;
+    }
+
+    #[actix_rt::test]
+    async fn anonymous_callers_have_no_member_access() {
+        let req = actix_web::test::TestRequest::default().to_http_request();
+        let pool = unreachable_pool();
+        assert!(!resolve_has_member_access(&req, &pool, &OptionalUser(None)).await);
+        pool.close().await;
+    }
 }

@@ -11,7 +11,8 @@ pub use dunite_core::middleware::{CspConfig, RequestIdMiddleware, SecurityHeader
 
 // Domain extractors / middleware.
 pub use auth::{
-    extract_client_ip, extract_device_info, resolve_rate_limit_subject, super_admin_allowed,
-    AdminUser, AuthCookies, AuthenticatedUser, MemberUser, OptionalUser, SuperAdminUser,
+    extract_client_ip, extract_device_info, request_user, resolve_rate_limit_subject,
+    super_admin_allowed, verify_once, AdminUser, AuthCookies, AuthenticatedUser, MemberUser,
+    OptionalUser, SuperAdminUser, VerifiedIdentity,
 };
 pub use auto_ban::{AutoBanMiddleware, AutoBanService, BanInfo};
