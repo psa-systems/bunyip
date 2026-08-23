@@ -119,25 +119,19 @@ impl RateLimitConfig {
         key_kind: KeyKind::Ip,
     };
 
-    /// Registration: 3 requests per hour per IP
+    /// Registration: 3 requests per hour per IP.
+    ///
+    /// One cap for every environment (BUNYIP-601): the enforcement path resolves
+    /// the value actually in force through the const -> env -> persisted chain
+    /// (see [`with_env_defaults`] / `RateLimitConfigRepository::effective`), so a
+    /// non-production instance loosens it by setting
+    /// `RATE_LIMIT_REGISTRATION_MAX_REQUESTS` (the deployed-instance e2e suite
+    /// self-provisions disposable accounts from one CI egress IP and would trip
+    /// the 3/hour production cap). The handler no longer branches on
+    /// `Config::is_production()` to pick a second preset; there is only this one.
     pub const REGISTRATION: Self = Self {
         action: "registration",
         max_requests: 3,
-        window_seconds: 3600,
-        key_kind: KeyKind::Ip,
-    };
-
-    /// Registration outside production: 30 requests per hour per IP
-    /// (BUNYIP-426 F7).
-    ///
-    /// The production cap used to be skipped entirely below production, which
-    /// left `/v1/auth/register` unthrottled on the publicly reachable dev-sso
-    /// stack. The budget is loosened rather than dropped because the e2e suite
-    /// registers a fresh disposable account per run from one shared CI egress
-    /// IP and would trip the 3/hour production cap.
-    pub const REGISTRATION_NON_PROD: Self = Self {
-        action: "registration_non_prod",
-        max_requests: 30,
         window_seconds: 3600,
         key_kind: KeyKind::Ip,
     };
@@ -280,7 +274,6 @@ impl RateLimitConfig {
         Self::API_AUTH,
         Self::API_UNAUTH,
         Self::REGISTRATION,
-        Self::REGISTRATION_NON_PROD,
         Self::OCI_TOKEN_FAILURES,
         Self::OCI_TOKEN_THROUGHPUT,
         Self::TWO_FACTOR_VERIFY_FAILURES,

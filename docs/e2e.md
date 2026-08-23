@@ -170,24 +170,31 @@ PR gate is a separate workflow that declares only the two base URLs (see
   bunyip-api that hourly hard-deletes any disposable row (email matching the
   `+e2e-` subaddress marker) older than 6h, a safety net for a crashed run whose
   `finally` never ran. The reaper is never spawned in production.
-- **Registration rate limit (BUNYIP-150 / 196 / 197):** `/v1/auth/register` is
-  capped 3/hour/IP as a production anti-abuse control. The deployed-instance
+- **Registration rate limit (BUNYIP-150 / 196 / 197, BUNYIP-601):** `/v1/auth/register`
+  is capped 3/hour/IP as a production anti-abuse control. The deployed-instance
   e2e suite self-provisions disposable accounts from the single CI runner egress
   IP, so registrations accumulate across serial runs in the one-hour window and
-  trip a spurious 429. Root-cause fix (`bunyip-api/src/handlers/auth.rs::register`):
-  the budget varies by environment, not whether one exists. Production keeps
-  `RateLimitConfig::REGISTRATION` (3/hour/IP); staging/dev use
-  `REGISTRATION_NON_PROD` (30/hour/IP), which is loose enough for serial e2e runs
-  from one egress IP. BUNYIP-426 F7 replaced the earlier
-  `if config.is_production()` skip, which left `/v1/auth/register` completely
-  unthrottled on the publicly reachable dev-sso stack. Since BUNYIP-426 F7 the
+  trip a spurious 429. The budget varies by environment, but the code does NOT:
+  there is one preset, `RateLimitConfig::REGISTRATION` (3/hour/IP), and a
+  non-production instance loosens it with the standard rate-limit env override
+  `RATE_LIMIT_REGISTRATION_MAX_REQUESTS` / `RATE_LIMIT_REGISTRATION_WINDOW_SECONDS`
+  (e.g. 30 / 3600), resolved by `check_rate_limit` through the const -> env ->
+  persisted `rate_limit_configs` chain, or an admin-set override row for the
+  `registration` action. The long-running non-production deployment the e2e suite
+  provisions against (staging) sets those variables in its own bunyip-api server
+  environment; there is no in-repo compose knob and no code branch. BUNYIP-601
+  removed the earlier `if config.is_production()` branch (and its
+  `REGISTRATION_NON_PROD` preset), which selected a second compile-time preset
+  instead of using the env override that already existed; BUNYIP-426 F7 had itself
+  replaced a still-earlier below-prod skip that left the endpoint unthrottled.
+  Since BUNYIP-426 F7 the
   `RateLimitFloor` middleware also caps every non-exempt endpoint at
   `API_UNAUTH` (20/min/IP) for anonymous callers, so a burst-heavy spec can trip
-  that floor even where the per-endpoint cap is generous. No env knob, no
-  per-run workaround. NOTE: because the suite tests the
-  DEPLOYED instance, this fix only takes effect after the new image is deployed
-  to staging, so a PR's own pre-merge e2e run can still 429 against the not-yet-
-  redeployed staging; it goes green on the post-merge run.
+  that floor even where the per-endpoint cap is generous. NOTE: because the suite
+  tests the DEPLOYED instance, loosening the cap only takes effect after the
+  staging environment carries `RATE_LIMIT_REGISTRATION_MAX_REQUESTS` and the new
+  image is deployed, so a PR's own pre-merge e2e run can still 429 against a
+  not-yet-redeployed staging; it goes green on the post-merge run.
 - **JMAP apiUrl origin (BUNYIP-150):** Stalwart advertises its session `apiUrl`
   as the internal `http://mail.a8n.run:8080/jmap/`, which the CI runner cannot
   reach. `lib/mail-sink.ts:jmapSession` keeps only the apiUrl PATH and forces the
