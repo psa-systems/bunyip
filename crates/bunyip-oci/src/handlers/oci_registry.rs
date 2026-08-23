@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use uuid::Uuid;
 
-use crate::errors::OciError;
+use crate::errors::{internal_fault, OciError, OciErrorContext};
 use crate::middleware::{extract_client_ip, OciBearerUser};
 use crate::models::oci::CachedManifest;
 use crate::models::{AuditAction, CreateAuditLog};
@@ -73,12 +73,12 @@ pub async fn get_manifest(
     let cache = manifest_cache
         .as_ref()
         .as_ref()
-        .ok_or(OciError::Internal)?
+        .ok_or_else(|| internal_fault("resolve the manifest cache from the app data"))?
         .clone();
 
     let app = ApplicationRepository::find_active_by_slug(pool.get_ref(), &slug)
         .await
-        .map_err(|_| OciError::Internal)?
+        .internal_ctx(|| format!("load the application for manifest slug {slug}"))?
         .ok_or(OciError::NameUnknown)?;
     if !app.is_pullable() {
         return Err(OciError::NameUnknown);
@@ -100,7 +100,12 @@ pub async fn get_manifest(
         && reference != pinned
         && !ApplicationRepository::is_pullable_version(pool.get_ref(), app.id, &reference)
             .await
-            .map_err(|_| OciError::Internal)?
+            .internal_ctx(|| {
+                format!(
+                    "check the recorded versions of application {} for reference {reference}",
+                    app.id
+                )
+            })?
     {
         return Err(OciError::ManifestUnknown);
     }
@@ -127,7 +132,7 @@ pub async fn get_manifest(
         match limiter
             .acquire(counter.get_ref().as_ref(), user.claims.sub)
             .await
-            .map_err(|_| OciError::Internal)?
+            .internal_ctx(|| format!("meter the daily pull cap for user {}", user.claims.sub))?
         {
             Ok(g) => g,
             Err(OciLimitDenial::Concurrency) => {
@@ -279,12 +284,12 @@ pub async fn get_blob(
     let blob_cache = blob_cache
         .as_ref()
         .as_ref()
-        .ok_or(OciError::Internal)?
+        .ok_or_else(|| internal_fault("resolve the blob cache from the app data"))?
         .clone();
 
     let app = ApplicationRepository::find_active_by_slug(pool.get_ref(), &slug)
         .await
-        .map_err(|_| OciError::Internal)?
+        .internal_ctx(|| format!("load the application for blob slug {slug}"))?
         .ok_or(OciError::NameUnknown)?;
     if !app.is_pullable() {
         return Err(OciError::NameUnknown);
@@ -341,10 +346,14 @@ pub async fn get_blob(
 
     let file = tokio::fs::File::open(&handle.path)
         .await
-        .map_err(|_| OciError::Internal)?;
-    let stream = FramedRead::new(file, BytesCodec::new()).map(|r| {
-        r.map(|b: bytes::BytesMut| b.freeze())
-            .map_err(|_| actix_web::error::ErrorInternalServerError("io"))
+        .internal_ctx(|| format!("open the cached blob {digest} at {}", handle.path.display()))?;
+    let stream = FramedRead::new(file, BytesCodec::new()).map(move |r| {
+        r.map(|b: bytes::BytesMut| b.freeze()).map_err(|e| {
+            // Mid-stream, so the status is already sent: the log line is the
+            // only report the operator gets.
+            tracing::error!(error = %e, slug = %slug, digest = %digest, "oci blob stream read failed");
+            actix_web::error::ErrorInternalServerError("io")
+        })
     });
     Ok(resp.streaming(stream))
 }
@@ -493,7 +502,12 @@ async fn assert_entitled(
 ) -> Result<(), OciError> {
     let allowed = EntitlementRepository::is_allowed(pool, user.claims.sub, user.is_admin(), app)
         .await
-        .map_err(|_| OciError::Internal)?;
+        .internal_ctx(|| {
+            format!(
+                "check user {}'s entitlement to application {}",
+                user.claims.sub, app.slug
+            )
+        })?;
     if allowed {
         return Ok(());
     }
