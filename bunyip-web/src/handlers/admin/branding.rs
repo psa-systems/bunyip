@@ -65,9 +65,9 @@ const ASSET_SLOTS: &[AssetSlot] = &[
     AssetSlot {
         slot: "mascot",
         title: "Hero illustration",
-        help: "The picture beside the headline on the landing page. Left unset, the hero renders without one.",
+        help: "The picture beside the headline on the landing page. Left unset, the illustration that ships with the build is served.",
         preview_src: Branding::mascot_src,
-        empty: "No illustration uploaded. The hero renders without one.",
+        empty: "No illustration uploaded. The illustration that ships with the build is served.",
     },
 ];
 
