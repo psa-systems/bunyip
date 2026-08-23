@@ -35,18 +35,30 @@ enum MailTransport {
 impl MailTransport {
     /// Hand `message` to the transport. Both arms map a transport failure to the
     /// same error, so no caller can tell a stub apart by its error shape.
-    async fn send(&self, message: Message) -> Result<(), AppError> {
-        match self {
-            MailTransport::Smtp(t) => t
-                .send(message)
-                .await
-                .map(|_| ())
-                .map_err(|e| AppError::internal(format!("Email send error: {}", e))),
-            MailTransport::Stub(t) => t
-                .send(message)
-                .await
-                .map_err(|e| AppError::internal(format!("Email send error: {}", e))),
-        }
+    ///
+    /// BUNYIP-612: every failure names the non-secret config of the transport
+    /// that attempted it (host, port, TLS mode, username, EHLO name), so a relay
+    /// rejection such as `500 5.5.6 Invalid challenge` says which relay and
+    /// which credential it came from instead of arriving as a bare lettre
+    /// string. `smtp_password` is never formatted in. Taking `config` here
+    /// rather than at each call site is what makes the context unskippable: a
+    /// new send site cannot compile without passing it.
+    async fn send(&self, config: &EmailConfig, message: Message) -> Result<(), AppError> {
+        let sent = match self {
+            MailTransport::Smtp(t) => t.send(message).await.map(|_| ()).map_err(|e| e.to_string()),
+            MailTransport::Stub(t) => t.send(message).await.map_err(|e| e.to_string()),
+        };
+        sent.map_err(|e| {
+            AppError::internal(format!(
+                "Email send error (relay={}:{}, tls={:?}, user={}, ehlo={}): {}",
+                config.smtp_host,
+                config.smtp_port,
+                config.smtp_tls,
+                config.smtp_username,
+                config.ehlo_name(),
+                e
+            ))
+        })
     }
 }
 
@@ -738,7 +750,7 @@ impl EmailService {
         };
 
         tracing::info!(to = %to, subject = %subject, "Relayed message queued for delivery");
-        transport.send(email).await?;
+        transport.send(&config, email).await?;
         tracing::info!(to = %to, subject = %subject, message_id = %message_id_bare, "Relayed message sent");
         Ok(message_id_bare)
     }
@@ -834,7 +846,7 @@ impl EmailService {
             // "Email sent successfully" line to bracket every delivery.
             tracing::info!(to = %to, subject = %subject, "Email queued for delivery");
 
-            transport.send(email).await?;
+            transport.send(config, email).await?;
 
             tracing::info!(to = %to, subject = %subject, "Email sent successfully");
         } else {
@@ -874,7 +886,7 @@ impl EmailService {
         )?;
         if let Some(transport) = self.transport() {
             tracing::info!(to = %to, subject = %subject, "Support reply queued for delivery");
-            transport.send(email).await?;
+            transport.send(&config, email).await?;
             tracing::info!(to = %to, subject = %subject, "Support reply sent");
         } else {
             tracing::info!(to = %to, subject = %subject, "Support reply not sent (dev mode)");
@@ -2152,5 +2164,69 @@ mod tests {
             src.matches("::relay(").count(),
             "every SMTP relay builder must announce the resolved EHLO name"
         );
+    }
+
+    /// BUNYIP-612: a rejected send names the transport that attempted it, so an
+    /// operator reading `Failed to send magic link email` can tell which relay,
+    /// port, TLS mode, credential and EHLO name produced the rejection (the
+    /// production symptom was a bare `500 5.5.6 Invalid challenge` with none of
+    /// that). The password must never ride along into a log line. Both send
+    /// paths are asserted: the shared `send_email` behind every transactional
+    /// template, and `send_support_reply`.
+    #[tokio::test]
+    async fn a_failed_send_names_the_relay_and_never_the_password() {
+        const PASSWORD: &str = "correct-horse-battery-staple";
+
+        let mut config = config_with_smtp("relay.example.net", 2525, SmtpTls::Starttls);
+        config.smtp_username = "postmaster@example.net".to_string();
+        config.smtp_password = PASSWORD.to_string();
+        config.smtp_ehlo_name = Some("mail.example.net".to_string());
+
+        let service = EmailService::new(config.clone()).expect("email service builds");
+        // Stand in for a relay that rejects every message (the stub fails
+        // without opening a connection), so the failure path is exercised.
+        service
+            .runtime
+            .write()
+            .expect("EmailService lock poisoned")
+            .transport = Some(MailTransport::Stub(AsyncStubTransport::new_error()));
+
+        let from_send_email = service
+            .send_email(
+                &config,
+                "user@example.com",
+                "Your magic link",
+                "<p>link</p>".to_string(),
+                "link".to_string(),
+            )
+            .await
+            .expect_err("the stub transport rejects every send");
+        let from_support_reply = service
+            .send_support_reply("user@example.com", "Re: ticket", "body", None, None)
+            .await
+            .expect_err("the stub transport rejects every send");
+
+        for (path, error) in [
+            ("send_email", from_send_email),
+            ("send_support_reply", from_support_reply),
+        ] {
+            let message = error.to_string();
+            for context in [
+                "relay.example.net",
+                "2525",
+                "Starttls",
+                "postmaster@example.net",
+                "mail.example.net",
+            ] {
+                assert!(
+                    message.contains(context),
+                    "{path}: send failure must name {context}, got: {message}"
+                );
+            }
+            assert!(
+                !message.contains(PASSWORD),
+                "{path}: the SMTP password must never reach the error message, got: {message}"
+            );
+        }
     }
 }
