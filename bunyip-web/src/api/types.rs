@@ -1157,8 +1157,9 @@ pub struct Branding {
     pub theme_color_dark: String,
     /// BUNYIP-560: the asset slots, as the version string their `<img src>`
     /// carries as a cache buster. Empty means the slot is unset, which is what
-    /// sends the favicon links back to the committed fallback set and drops the
-    /// mark image and the hero mascot from the page entirely.
+    /// sends the favicon links and (since BUNYIP-605) the hero mascot back to
+    /// the committed fallback files, and drops the mark image from the page
+    /// entirely.
     #[serde(default)]
     pub mark_version: String,
     #[serde(default)]
@@ -1182,8 +1183,9 @@ impl Branding {
         Self::asset_src("mark", &self.mark_version)
     }
 
-    /// The uploaded hero illustration, or `None`, in which case the hero
-    /// renders without one rather than with another product's mascot.
+    /// The uploaded hero illustration, or `None` to render the committed
+    /// illustration under `assets/` (BUNYIP-605), the same shape the favicon
+    /// set uses.
     pub fn mascot_src(&self) -> Option<String> {
         Self::asset_src("mascot", &self.mascot_version)
     }
