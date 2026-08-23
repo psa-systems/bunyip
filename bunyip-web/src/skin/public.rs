@@ -7,7 +7,7 @@ use maud::html;
 
 use crate::handlers::public_ctx;
 use crate::util::{app_gradient, app_link};
-use crate::views::layout::{document, public_shell};
+use crate::views::layout::{asset, document, public_shell};
 use crate::views::ui::{button_class, icon};
 use crate::web::{html_cookies, html_status, AppState};
 
@@ -75,34 +75,44 @@ fn features(brand_name: &str) -> Vec<Feature> {
 
 /// The hero illustration, captioned with the admin-managed tagline.
 ///
-/// BUNYIP-560: the mascot is an admin-managed asset. An uploaded one is served
-/// from the record; with the slot unset the hero renders WITHOUT an
-/// illustration, because a deployment that renamed itself must not keep showing
-/// another product's mascot. Returns `None` in that case so the hero column is
-/// dropped rather than reserving an empty square, and the caption rides with
-/// the artwork it captions.
+/// BUNYIP-560: the mascot is an admin-managed asset, served from the record
+/// when the slot is set. BUNYIP-605: with the slot unset it falls back to the
+/// committed artwork, the same shape the favicon set and the nav mark already
+/// use, so an unbranded install still gets a hero rather than an empty column.
 ///
 /// BUNYIP-561: the `alt` text describes the illustration and does not name the
 /// product, and the caption is omitted entirely when the tagline is unset.
-fn hero_mascot(branding: &crate::api::types::Branding) -> Option<maud::Markup> {
-    let src = branding.mascot_src()?;
+fn hero_mascot(branding: &crate::api::types::Branding) -> maud::Markup {
+    let src = branding.mascot_src();
     let tagline = branding.tagline.as_str();
-    Some(maud::html! {
+    maud::html! {
         div class="relative aspect-square w-full max-w-md mx-auto" {
-            // No `width`/`height`: an uploaded illustration has no dimensions
-            // the server knows, and the square `aspect-square` box above already
-            // reserves the space, so the hero text does not reflow when the
-            // image lands. Deliberately NOT lazy - it is the LCP element.
-            img src=(src)
-                alt="Product illustration"
-                class="relative w-full h-full object-contain drop-shadow-2xl" {}
+            @if let Some(src) = &src {
+                // No `width`/`height`: an uploaded illustration has no dimensions
+                // the server knows, and the square `aspect-square` box above already
+                // reserves the space, so the hero text does not reflow when the
+                // image lands. Deliberately NOT lazy - it is the LCP element.
+                img src=(src)
+                    alt="Product illustration"
+                    class="relative w-full h-full object-contain drop-shadow-2xl" {}
+            } @else {
+                // BUNYIP-554: WebP at the two sizes the layout uses (the 448
+                // candidate is 50,750 bytes, the 2x 129,248). `width`/`height`
+                // reserve the box, and the image is NOT lazy for the same
+                // reason the uploaded branch is not: it is the LCP element.
+                img src=(asset("/assets/bunyip-hero-448.webp"))
+                    srcset=(format!("{} 1x, {} 2x", asset("/assets/bunyip-hero-448.webp"), asset("/assets/bunyip-hero-718.webp")))
+                    width="718" height="760"
+                    alt="A shaggy creature with wide, friendly eyes peering through the reeds over a pond"
+                    class="relative w-full h-full object-contain drop-shadow-2xl" {}
+            }
             @if !tagline.is_empty() {
                 p class="absolute bottom-16 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-white dark:bg-brand-primary-800 border border-brand-primary-100 dark:border-brand-primary-700 text-xs italic text-brand-primary-700 dark:text-brand-primary-200 shadow-lg whitespace-nowrap" {
                     "\"" (tagline) "\""
                 }
             }
         }
-    })
+    }
 }
 
 pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response {
@@ -121,15 +131,11 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
     let branding = crate::views::layout::branding();
     let brand = brand_or_platform(&branding.brand_name);
     let features = features(&branding.brand_name);
-    // BUNYIP-560: the hero is a two-column grid only when there is an
-    // illustration to fill the second column. With the mascot slot unset the
-    // copy takes the full width rather than sitting beside an empty half.
+    // BUNYIP-605: the hero column always has an illustration to fill it (the
+    // uploaded mascot, else the committed artwork), so the grid is always two
+    // columns.
     let mascot = hero_mascot(&branding);
-    let hero_grid = if mascot.is_some() {
-        "container relative grid items-center gap-12 md:grid-cols-2"
-    } else {
-        "container relative grid items-center gap-12"
-    };
+    let hero_grid = "container relative grid items-center gap-12 md:grid-cols-2";
 
     let content = html! {
         div {
@@ -167,7 +173,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                         }
                     }
                   }
-                  @if let Some(mascot) = &mascot { (mascot) }
+                  (mascot)
                 }
             }
             // Features
@@ -363,19 +369,30 @@ mod copy_tests {
         }
     }
 
-    /// BUNYIP-560: the whole point of the mascot slot. With no asset the hero
-    /// renders NOTHING - not a placeholder, and above all not the previous
-    /// product's artwork, which is what a rebranded deployment used to keep.
+    /// BUNYIP-605: the mascot slot follows the favicon/mark shape - an upload
+    /// overrides, an unset slot falls back to the committed artwork. The hero
+    /// is never empty, which is the default first-run appearance BUNYIP-560
+    /// regressed by deleting the fallback outright.
     #[test]
-    fn the_hero_renders_no_illustration_when_no_mascot_is_set() {
+    fn an_unset_mascot_slot_falls_back_to_the_committed_illustration() {
+        let fallback = hero_mascot(&branding("Surfaces what matters.", "")).into_string();
+        assert!(fallback.contains("bunyip-hero-448.webp"), "{fallback}");
+        assert!(fallback.contains("bunyip-hero-718.webp"), "{fallback}");
+        assert!(fallback.contains("srcset="), "{fallback}");
         assert!(
-            hero_mascot(&branding("Surfaces what matters.", "")).is_none(),
-            "an unset mascot slot renders no illustration at all"
+            fallback.contains("width=\"718\"") && fallback.contains("height=\"760\""),
+            "the committed pair reserves its intrinsic box: {fallback}"
         );
-        let markup = hero_mascot(&branding("", "1755500000000"))
-            .expect("an uploaded mascot renders")
-            .into_string();
-        assert!(markup.contains("/brand/mascot?v=1755500000000"), "{markup}");
+
+        let uploaded = hero_mascot(&branding("", "1755500000000")).into_string();
+        assert!(
+            uploaded.contains("/brand/mascot?v=1755500000000"),
+            "{uploaded}"
+        );
+        assert!(
+            !uploaded.contains("bunyip-hero-"),
+            "an uploaded mascot overrides the committed fallback: {uploaded}"
+        );
     }
 
     /// BUNYIP-561: the hero caption is the record's tagline, dropped entirely
@@ -383,13 +400,9 @@ mod copy_tests {
     /// the product.
     #[test]
     fn the_hero_caption_is_the_tagline_and_the_alt_names_no_product() {
-        let with = hero_mascot(&branding("Surfaces what matters.", "1"))
-            .expect("a mascot is set")
-            .into_string();
+        let with = hero_mascot(&branding("Surfaces what matters.", "1")).into_string();
         assert!(with.contains("Surfaces what matters."));
-        let without = hero_mascot(&branding("", "1"))
-            .expect("a mascot is set")
-            .into_string();
+        let without = hero_mascot(&branding("", "1")).into_string();
         assert!(
             !without.contains("<p"),
             "an unset tagline omits the caption entirely: {without}"
@@ -408,17 +421,20 @@ mod copy_tests {
     /// `aspect-square` box reserves the space an uploaded image will fill,
     /// which is what stops the hero text reflowing when it lands (BUNYIP-560
     /// dropped the intrinsic `width`/`height`: the server does not know an
-    /// uploaded image's dimensions).
+    /// uploaded image's dimensions). BUNYIP-605: the committed fallback is the
+    /// LCP element on an unbranded install, so it takes the same rule.
     #[test]
     fn the_hero_reserves_its_box_and_stays_eager() {
-        let markup = hero_mascot(&branding("Surfaces what matters.", "1"))
-            .expect("a mascot is set")
-            .into_string();
-        assert!(markup.contains("aspect-square"), "{markup}");
-        assert!(
-            !markup.contains("loading="),
-            "the LCP image stays eagerly loaded: {markup}"
-        );
+        for markup in [
+            hero_mascot(&branding("Surfaces what matters.", "1")).into_string(),
+            hero_mascot(&branding("Surfaces what matters.", "")).into_string(),
+        ] {
+            assert!(markup.contains("aspect-square"), "{markup}");
+            assert!(
+                !markup.contains("loading="),
+                "the LCP image stays eagerly loaded: {markup}"
+            );
+        }
     }
 
     /// The feature cards name their glyph through a struct field, so the
