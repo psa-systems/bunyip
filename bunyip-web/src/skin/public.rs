@@ -11,6 +11,14 @@ use crate::views::layout::{document, public_shell};
 use crate::views::ui::{button_class, icon};
 use crate::web::{html_cookies, html_status, AppState};
 
+/// BUNYIP-606: the landing page's browser-title label. `document()` formats its
+/// argument into `"<page> · <brand>"`, so every call site passes a short
+/// navigation label and never marketing copy. The tagline is admin-managed and
+/// drives the hero caption alone; a sentence compiled in here kept the old
+/// codename in the tab title and in every shared-link preview however the
+/// admin rebranded.
+const LANDING_PAGE_TITLE: &str = "Home";
+
 /// Hero trust-chip for the trial length, from `tier_config.standard_trial_days`.
 /// Drops the number when the length is unknown rather than printing "0-day".
 fn trial_chip(days: i64) -> String {
@@ -244,7 +252,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
         true,
         content,
     );
-    html_cookies(document("Surfaces what matters.", body), &c.set_cookies)
+    html_cookies(document(LANDING_PAGE_TITLE, body), &c.set_cookies)
 }
 
 /// The branded 404 body. Shared so a route that decides it has nothing to serve
@@ -277,7 +285,10 @@ pub async fn not_found(State(st): State<AppState>, headers: HeaderMap) -> Respon
 
 #[cfg(test)]
 mod copy_tests {
-    use super::{brand_or_platform, features, hero_mascot, trial_chip, try_phrase};
+    use super::{
+        brand_or_platform, document, features, hero_mascot, trial_chip, try_phrase,
+        LANDING_PAGE_TITLE,
+    };
 
     /// BUNYIP-487: the homepage no longer advertises org switching, role
     /// management, or inviting teammates. None of the three exist.
@@ -414,6 +425,60 @@ mod copy_tests {
     /// literal icon-name scan in `views::ui` cannot see them. An unknown
     /// name renders an empty `<svg>`, which is how a retired Font Awesome
     /// class string would ship as a blank card (BUNYIP-554).
+    /// BUNYIP-606: the landing page's `<title>` / `og:title` / `twitter:title`
+    /// is the fixed page label, never the tagline. The tagline is an
+    /// admin-managed field that drives the hero caption; a marketing sentence
+    /// passed to `document()` here is copy compiled into the binary, so it
+    /// showed the old wording in the tab and in every shared-link preview
+    /// whatever the admin set. The scan covers this file's production half, so
+    /// the literal cannot return as a page-title argument.
+    #[test]
+    fn the_landing_page_title_is_a_fixed_label_and_never_the_tagline() {
+        let tagline = "Surfaces what matters.";
+
+        // The label is short and reads as navigation, not as a sentence.
+        assert_eq!(LANDING_PAGE_TITLE, "Home");
+        assert_ne!(LANDING_PAGE_TITLE, tagline);
+
+        // `document_title` is private, so assert on what it renders: the label
+        // leads, whatever brand suffix the current record adds, and the tagline
+        // is nowhere in the head.
+        let head = document(LANDING_PAGE_TITLE, maud::html! {}).into_string();
+        let title = head
+            .split_once("<title>")
+            .and_then(|(_, rest)| rest.split_once("</title>"))
+            .map(|(t, _)| t.to_string())
+            .expect("the document renders a title");
+        assert!(title.starts_with(LANDING_PAGE_TITLE), "{title}");
+        assert!(!head.contains(tagline), "{head}");
+
+        // Every `document()` call in this file's production half passes a short
+        // label, so a sentence cannot slip back in beside the one above.
+        let body = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/skin/public.rs"),
+        )
+        .expect("readable source file");
+        let prod = &body[..body.find("#[cfg(test)]").expect("the test marker")];
+        assert!(
+            !prod.contains(tagline),
+            "the tagline literal is back in the production half of this file"
+        );
+        let mut checked = 0;
+        for (n, line) in prod.lines().enumerate() {
+            let Some((_, rest)) = line.split_once("document(\"") else {
+                continue;
+            };
+            let arg = rest.split_once('"').expect("a closed string literal").0;
+            assert!(
+                arg.len() <= 24 && !arg.ends_with('.'),
+                "public.rs:{}: `document()` takes a short page label, not copy: {arg:?}",
+                n + 1
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "the document() scan matched nothing");
+    }
+
     #[test]
     fn every_feature_card_glyph_resolves() {
         let cards = features("Brand");
