@@ -11,9 +11,9 @@ use tokio;
 use crate::config::TierConfig;
 use crate::errors::AppError;
 use crate::handlers::live_free_price_id;
-use crate::middleware::{extract_client_ip, AuthCookies, AuthenticatedUser};
+use crate::middleware::{extract_client_ip, request_user, AuthCookies, AuthenticatedUser};
 use crate::models::{
-    Application, AuditAction, CreateAuditLog, MembershipTier, TrustedDeviceInfo, UserResponse,
+    Application, AuditAction, CreateAuditLog, MembershipTier, TrustedDeviceInfo, User, UserResponse,
 };
 use crate::repositories::{
     AccountDeleteDispatchFailureRepository, ApplicationRepository, AuditLogRepository,
@@ -28,6 +28,33 @@ use crate::validation::validate_email;
 use bunyip_domain::device::device_label;
 use bunyip_domain::services::{BunyipEvent, EventBus};
 use uuid::Uuid;
+
+/// The CALLER'S OWN `users` row, served from the copy this request already
+/// read when there is one (BUNYIP-564).
+///
+/// The at+jwt path reads the row while verifying the token, microseconds
+/// before the handler runs, so a second identical `SELECT` here buys nothing:
+/// `middleware::request_user` hands that copy over (BUNYIP-557). The HS256
+/// cookie path verifies an HMAC and reads no row, so it returns `None` and the
+/// query below is still the request's only read; the browser path is
+/// unchanged. The id guard means a request carrying another subject's row can
+/// never be answered from it.
+///
+/// Only for a read that may predate the handler. A read that must observe a
+/// write made LATER in the same handler keeps its own query, because this
+/// snapshot was taken before the handler started.
+pub(crate) async fn self_user(
+    req: &HttpRequest,
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<User, AppError> {
+    if let Some(cached) = request_user(req).filter(|u| u.id == id) {
+        return Ok(cached);
+    }
+    UserRepository::find_by_id(pool, id)
+        .await?
+        .ok_or(AppError::not_found("User"))
+}
 
 /// Request body for deleting account
 #[derive(Debug, Deserialize)]
@@ -98,10 +125,8 @@ pub async fn get_current_user(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
-    // Get fresh user data from database
-    let user = UserRepository::find_by_id(&pool, user.0.sub)
-        .await?
-        .ok_or(AppError::not_found("User"))?;
+    // Fresh user data: the row this request already read, else a query.
+    let user = self_user(&req, &pool, user.0.sub).await?;
 
     Ok(success(UserResponse::from(user), request_id))
 }
@@ -268,9 +293,7 @@ pub async fn update_current_user_profile(
     let last_name = normalize_profile_field("last_name", &body.last_name)?;
     let phone = normalize_profile_field("phone", &body.phone)?;
 
-    let current = UserRepository::find_by_id(&pool, user.0.sub)
-        .await?
-        .ok_or(AppError::not_found("User"))?;
+    let current = self_user(&req, &pool, user.0.sub).await?;
 
     let next_first = first_name.unwrap_or(current.first_name.clone());
     let next_last = last_name.unwrap_or(current.last_name.clone());
@@ -831,9 +854,7 @@ pub async fn delete_account(
     let ip_address = extract_client_ip(&req);
 
     // Look up the full user record
-    let db_user = UserRepository::find_by_id(&pool, user.0.sub)
-        .await?
-        .ok_or(AppError::not_found("User"))?;
+    let db_user = self_user(&req, &pool, user.0.sub).await?;
 
     // Verify password
     let password_hash = db_user.password_hash.clone().ok_or(AppError::validation(
@@ -1050,4 +1071,222 @@ pub async fn revoke_trusted_device(
     TrustedDeviceRepository::revoke(&mut *tx, id).await?;
     tx.commit().await?;
     Ok(success_no_data(request_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::middleware::auth::AtJwtVerifier;
+    use crate::middleware::verify_once;
+    use crate::services::{AccessTokenClaims, JwtConfig, JwtService};
+    use actix_web::http::header;
+    use actix_web::test::TestRequest;
+    use base64::Engine;
+    use std::sync::Mutex;
+
+    /// A pool pointed at a port nothing listens on. Every query issued through
+    /// it fails, so a handler that answers 200 provably issued none. This is
+    /// what makes "reads the row once" testable without a database.
+    fn unreachable_pool() -> PgPool {
+        sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(250))
+            .connect_lazy("postgres://nobody:nobody@127.0.0.1:1/nowhere")
+            .expect("a lazy pool never connects at build time")
+    }
+
+    fn stub_user() -> User {
+        User {
+            id: Uuid::from_u128(564),
+            email: "member@example.test".to_string(),
+            email_verified: true,
+            password_hash: None,
+            role: "member".to_string(),
+            stripe_customer_id: None,
+            stripe_payment_method_id: None,
+            membership_status: "active".to_string(),
+            price_locked: false,
+            locked_price_id: None,
+            locked_price_amount: None,
+            grace_period_start: None,
+            grace_period_end: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            two_factor_enabled: false,
+            last_login_at: None,
+            last_login_country: None,
+            login_location_alerts: true,
+            deleted_at: None,
+            membership_tier: "standard".to_string(),
+            trial_ends_at: None,
+            lifetime_member: false,
+            membership_override_by: None,
+            first_name: None,
+            last_name: None,
+            phone: None,
+            has_used_trial: false,
+            avatar_updated_at: None,
+            is_super_admin: false,
+        }
+    }
+
+    fn stub_claims(user: &User) -> AccessTokenClaims {
+        AccessTokenClaims::from_atjwt_and_user(
+            "https://api.example.test",
+            1_700_000_000,
+            1_700_000_900,
+            "jti-564",
+            user,
+        )
+    }
+
+    /// An at+jwt-shaped token. Only the header is ever parsed before the
+    /// verifier is consulted, and the stub verifier below ignores the rest.
+    fn at_jwt_token() -> String {
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(br#"{"alg":"EdDSA","typ":"at+jwt"}"#);
+        format!("{header}.eyJzdWIiOiJzdHViIn0.c2ln")
+    }
+
+    /// Stands in for `OidcProvider`: resolves the at+jwt by handing back the
+    /// claims AND the `users` row it would have read, counting how often it was
+    /// asked to do so.
+    struct RecordingVerifier {
+        claims: AccessTokenClaims,
+        user: User,
+        calls: Mutex<u32>,
+    }
+
+    #[async_trait::async_trait]
+    impl AtJwtVerifier for RecordingVerifier {
+        async fn verify_and_resolve(
+            &self,
+            _token: &str,
+        ) -> Result<(AccessTokenClaims, User), AppError> {
+            *self.calls.lock().expect("uncontended") += 1;
+            Ok((self.claims.clone(), self.user.clone()))
+        }
+    }
+
+    /// BUNYIP-564: the at+jwt path already read the caller's row to build its
+    /// claims, so `GET /v1/users/me` must answer from that copy rather than
+    /// issue a second identical `SELECT`. Proven by a pool that cannot connect:
+    /// a query here could not have succeeded.
+    #[actix_rt::test]
+    async fn one_at_jwt_request_verifies_once_and_reads_the_user_row_once() {
+        let user = stub_user();
+        let claims = stub_claims(&user);
+        let verifier = Arc::new(RecordingVerifier {
+            claims: claims.clone(),
+            user: user.clone(),
+            calls: Mutex::new(0),
+        });
+        let token = at_jwt_token();
+        let req = TestRequest::default()
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .app_data(verifier.clone() as Arc<dyn AtJwtVerifier>)
+            .to_http_request();
+
+        // The rate-limit floor, underneath the route: one verification, one row.
+        verify_once(&req, &token).await.expect("the token verifies");
+
+        let response = get_current_user(
+            req.clone(),
+            AuthenticatedUser(claims),
+            web::Data::new(unreachable_pool()),
+        )
+        .await
+        .expect("the handler answers from the row this request already read");
+
+        assert_eq!(response.status(), actix_web::http::StatusCode::OK);
+        assert_eq!(
+            *verifier.calls.lock().expect("uncontended"),
+            1,
+            "the users row must be read exactly once per at+jwt request"
+        );
+    }
+
+    /// The browser path is unchanged: the HS256 cookie is verified without
+    /// touching the database, so it hands no row on and every site still
+    /// queries for itself. Proven by the same unreachable pool, which now
+    /// fails, because the query the browser path needs was actually issued.
+    #[actix_rt::test]
+    async fn the_hs256_session_still_reads_the_row_at_each_site() {
+        let user = stub_user();
+        let jwt_service = Arc::new(JwtService::new(JwtConfig::from_secret(
+            "test-secret-that-is-long-enough-for-hs256",
+            "https://api.example.test",
+        )));
+        let token = jwt_service
+            .create_access_token(&user)
+            .expect("mint an HS256 access token");
+        let req = TestRequest::default()
+            .app_data(jwt_service)
+            .cookie(actix_web::cookie::Cookie::new(
+                "access_token",
+                token.clone(),
+            ))
+            .to_http_request();
+
+        let identity = verify_once(&req, &token).await.expect("HS256 verifies");
+        assert!(
+            identity.user.is_none(),
+            "the HS256 path reads no users row while verifying"
+        );
+
+        self_user(&req, &unreachable_pool(), user.id)
+            .await
+            .expect_err("with no request-scoped row, the site must query for it");
+    }
+
+    /// The cached row is only ever an answer for its OWN subject. A handler
+    /// asking for a different id falls through to the query.
+    #[actix_rt::test]
+    async fn a_cached_row_never_answers_for_another_subject() {
+        let user = stub_user();
+        let verifier = Arc::new(RecordingVerifier {
+            claims: stub_claims(&user),
+            user: user.clone(),
+            calls: Mutex::new(0),
+        });
+        let token = at_jwt_token();
+        let req = TestRequest::default()
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .app_data(verifier as Arc<dyn AtJwtVerifier>)
+            .to_http_request();
+        verify_once(&req, &token).await.expect("the token verifies");
+
+        self_user(&req, &unreachable_pool(), Uuid::from_u128(999))
+            .await
+            .expect_err("another subject's id must not be served from this row");
+    }
+
+    /// BUNYIP-564: every handler reading the CALLER'S OWN row goes through
+    /// [`self_user`], which answers from the row this request already read. The
+    /// only exceptions are the two post-write reads in `cancel_membership` and
+    /// `cancel_membership_immediate`, which exist to observe a write made
+    /// earlier in the same handler and so must stay plain queries. A new
+    /// self-read that queries directly fails this test.
+    #[test]
+    fn every_self_read_goes_through_the_request_scoped_row() {
+        for (name, src, post_write_reads) in [
+            ("handlers/user.rs", include_str!("user.rs"), 0),
+            ("handlers/membership.rs", include_str!("membership.rs"), 2),
+            ("handlers/billing.rs", include_str!("billing.rs"), 0),
+            ("handlers/totp.rs", include_str!("totp.rs"), 0),
+            ("handlers/admin.rs", include_str!("admin.rs"), 0),
+        ] {
+            let body = src.split("\n#[cfg(test)]").next().expect("non-test body");
+            let direct = body
+                .matches("UserRepository::find_by_id(&pool, user.0.sub)")
+                .count()
+                + body
+                    .matches("UserRepository::find_by_id(&pool, admin.0.sub)")
+                    .count();
+            assert_eq!(
+                direct, post_write_reads,
+                "{name} reads the caller's own row directly {direct} time(s); \
+                 only {post_write_reads} post-write read(s) may bypass self_user (BUNYIP-564)"
+            );
+        }
+    }
 }

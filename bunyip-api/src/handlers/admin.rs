@@ -1078,10 +1078,9 @@ pub async fn delete_application(
     let request_id = get_request_id(&req);
     let app_id = path.into_inner();
 
-    // Look up the admin user to get password hash
-    let admin_user = UserRepository::find_by_id(&pool, admin.0.sub)
-        .await?
-        .ok_or(AppError::not_found("User"))?;
+    // Look up the acting admin to get their password hash: the row this request
+    // already read, else a query.
+    let admin_user = crate::handlers::user::self_user(&req, &pool, admin.0.sub).await?;
 
     // Verify password
     let password_hash = admin_user

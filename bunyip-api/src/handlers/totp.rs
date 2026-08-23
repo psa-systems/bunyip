@@ -16,6 +16,7 @@ use crate::responses::{get_request_id, success};
 use crate::services::{argon2_offload, AuthService, TotpService};
 
 use super::check_rate_limit;
+use super::user::self_user;
 
 // --- Request/Response types ---
 
@@ -310,10 +311,8 @@ pub async fn disable_2fa(
         return Err(AppError::Forbidden);
     }
 
-    // Verify password
-    let db_user = UserRepository::find_by_id(&pool, user.0.sub)
-        .await?
-        .ok_or(AppError::not_found("User"))?;
+    // Verify password against the row this request already read, else a query.
+    let db_user = self_user(&req, &pool, user.0.sub).await?;
 
     let password_hash = db_user.password_hash.clone().ok_or(AppError::validation(
         "password",
@@ -375,10 +374,8 @@ pub async fn regenerate_recovery_codes(
     let request_id = get_request_id(&req);
     let ip_address = extract_client_ip(&req);
 
-    // Verify password
-    let db_user = UserRepository::find_by_id(&pool, user.0.sub)
-        .await?
-        .ok_or(AppError::not_found("User"))?;
+    // Verify password against the row this request already read, else a query.
+    let db_user = self_user(&req, &pool, user.0.sub).await?;
 
     let password_hash = db_user.password_hash.clone().ok_or(AppError::validation(
         "password",
@@ -420,10 +417,8 @@ pub async fn begin_rekey(
     let request_id = get_request_id(&req);
     let ip_address = extract_client_ip(&req);
 
-    // Verify password.
-    let db_user = UserRepository::find_by_id(&pool, user.0.sub)
-        .await?
-        .ok_or(AppError::not_found("User"))?;
+    // Verify password against the row this request already read, else a query.
+    let db_user = self_user(&req, &pool, user.0.sub).await?;
     let password_hash = db_user.password_hash.clone().ok_or(AppError::validation(
         "password",
         "No password set for this account",
