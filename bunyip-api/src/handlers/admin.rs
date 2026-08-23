@@ -3086,6 +3086,35 @@ fn derive_product_for_price(
     }
 }
 
+/// BUNYIP-609: "Show this tier on the pricing page" only means something for a
+/// tier that has a price mapped. `pricing::resolve` builds the public payload
+/// from the three price ids and drops any tier whose id is empty, so a visible
+/// tier with no price was silently omitted from `/pricing` while the save
+/// reported success. `tiers` is `(display name, visible, has a price)` for each
+/// tier, already resolved to the values the row will hold. Every offending tier
+/// is named in one message rather than stopping at the first, so an admin who
+/// left two of them unmapped fixes both in one pass.
+fn visible_without_price_error(tiers: &[(&str, bool, bool)]) -> Option<AppError> {
+    let offenders: Vec<&str> = tiers
+        .iter()
+        .filter(|(_, visible, has_price)| *visible && !*has_price)
+        .map(|(label, _, _)| *label)
+        .collect();
+    let (names, is, has) = match offenders.as_slice() {
+        [] => return None,
+        [one] => ((*one).to_string(), "is", "has"),
+        [rest @ .., last] => (format!("{} and {last}", rest.join(", ")), "are", "have"),
+    };
+    Some(AppError::validation(
+        "tier_visible",
+        format!(
+            "{names} {is} set to show on the pricing page but {has} no price selected. \
+             Select a Stripe price for each named tier (a free or lifetime tier uses a \
+             $0.00 price), or untick \"Show this tier on the pricing page\"."
+        ),
+    ))
+}
+
 /// GET /v1/admin/tier-config
 pub async fn get_tier_config(
     req: HttpRequest,
@@ -3212,6 +3241,54 @@ pub async fn update_tier_config(
         ("Early adopter", price_op(&body.early_adopter_price_id)),
         ("Standard", price_op(&body.standard_price_id)),
     ];
+    // BUNYIP-609: refuse a mapping that shows a tier on the public page with no
+    // price. Either half can be omitted from a request, so a tier is judged on
+    // its EFFECTIVE values (this request merged onto the stored row), and only a
+    // tier this request actually touches is judged at all: the slots and trials
+    // form sends neither half, so it is validated on what it submitted, exactly
+    // as the numeric fields above are. Checked before Stripe is consulted, so a
+    // rejected save costs no API call.
+    let submitted_visible = [
+        body.lifetime_visible,
+        body.early_adopter_visible,
+        body.standard_visible,
+    ];
+    let touched = |i: usize| !matches!(ops[i].1, PriceOp::Keep) || submitted_visible[i].is_some();
+    if (0..3).any(touched) {
+        let stored = TierConfigRepository::get(&pool).await?;
+        let stored_price = [
+            &stored.free_price_id,
+            &stored.early_adopter_price_id,
+            &stored.standard_price_id,
+        ];
+        let stored_visible = [
+            stored.lifetime_visible,
+            stored.early_adopter_visible,
+            stored.standard_visible,
+        ];
+        let has_price = |op: &PriceOp, current: &Option<String>| match op {
+            PriceOp::Set(_) => true,
+            PriceOp::Clear => false,
+            PriceOp::Keep => current
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|s| !s.is_empty()),
+        };
+        let pairs: Vec<(&str, bool, bool)> = (0..3)
+            .filter(|&i| touched(i))
+            .map(|i| {
+                (
+                    ops[i].0,
+                    submitted_visible[i].unwrap_or(stored_visible[i]),
+                    has_price(&ops[i].1, stored_price[i]),
+                )
+            })
+            .collect();
+        if let Some(e) = visible_without_price_error(&pairs) {
+            return Err(e);
+        }
+    }
+
     let need_stripe = ops.iter().any(|(_, op)| matches!(op, PriceOp::Set(_)));
     let prices = if need_stripe {
         Some(stripe.list_prices(None).await.map_err(stripe_err)?)
@@ -3862,6 +3939,101 @@ mod tests {
             msg.contains("app tag `bunyip`"),
             "names the app tag so the admin can fix product metadata: {msg}"
         );
+    }
+
+    // BUNYIP-609: a tier shown on the public pricing page must have a price
+    // mapped, or `pricing::resolve` drops it and the save reports success on a
+    // config the page silently ignores.
+
+    /// The three tiers, all mapped and all shown: the valid state.
+    fn all_mapped() -> [(&'static str, bool, bool); 3] {
+        [
+            ("Free / lifetime", true, true),
+            ("Early adopter", true, true),
+            ("Standard", true, true),
+        ]
+    }
+
+    #[test]
+    fn visible_tier_with_no_price_is_refused_by_name() {
+        for i in 0..3 {
+            let mut tiers = all_mapped();
+            tiers[i].2 = false;
+            let msg = visible_without_price_error(&tiers)
+                .unwrap_or_else(|| panic!("{} visible with no price must be refused", tiers[i].0))
+                .to_string();
+            assert!(msg.contains(tiers[i].0), "names the tier: {msg}");
+            assert!(
+                msg.contains("is set to show") && msg.contains("has no price selected"),
+                "reads as one tier: {msg}"
+            );
+            for other in all_mapped().iter().filter(|t| t.0 != tiers[i].0) {
+                assert!(
+                    !msg.contains(other.0),
+                    "does not name a mapped tier ({}): {msg}",
+                    other.0
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_offending_tier_is_named_in_one_message() {
+        let tiers = [
+            ("Free / lifetime", true, false),
+            ("Early adopter", true, true),
+            ("Standard", true, false),
+        ];
+        let msg = visible_without_price_error(&tiers).unwrap().to_string();
+        assert!(
+            msg.contains("Free / lifetime and Standard"),
+            "names both offenders in one message: {msg}"
+        );
+        assert!(
+            !msg.contains("Early adopter"),
+            "does not name the mapped tier: {msg}"
+        );
+        assert!(
+            msg.contains("are set to show") && msg.contains("have no price selected"),
+            "reads as more than one tier: {msg}"
+        );
+
+        let all_bad = [
+            ("Free / lifetime", true, false),
+            ("Early adopter", true, false),
+            ("Standard", true, false),
+        ];
+        let msg = visible_without_price_error(&all_bad).unwrap().to_string();
+        assert!(
+            msg.contains("Free / lifetime, Early adopter and Standard"),
+            "names all three: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_mapped_or_hidden_tier_is_accepted() {
+        assert!(
+            visible_without_price_error(&all_mapped()).is_none(),
+            "visible with a price is the valid state"
+        );
+        // Unmapped is fine as long as the tier is not advertised: that is how a
+        // tier is taken off the pricing page.
+        let hidden = [
+            ("Free / lifetime", false, false),
+            ("Early adopter", false, false),
+            ("Standard", false, false),
+        ];
+        assert!(
+            visible_without_price_error(&hidden).is_none(),
+            "hidden with no price is a valid state"
+        );
+    }
+
+    #[test]
+    fn a_refused_mapping_answers_400() {
+        use actix_web::ResponseError;
+        let err = visible_without_price_error(&[("Standard", true, false)]).unwrap();
+        assert_eq!(err.status_code(), actix_web::http::StatusCode::BAD_REQUEST);
     }
 
     // BUNYIP-474: a dataset is stale only once it is past the refresh cadence;
