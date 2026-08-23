@@ -428,6 +428,94 @@ mod tests {
         );
     }
 
+    /// BUNYIP-615 guard: an empty `catch` body drops the failure with no log,
+    /// which the `Error Visibility` rule forbids. BUNYIP-596 removed the shape
+    /// from `password.js` and BUNYIP-613 removed the last six from its siblings;
+    /// this fails the build on a seventh. The scripts are listed from disk, so a
+    /// new one is covered without editing this test.
+    #[test]
+    fn no_empty_catch_block_in_browser_scripts() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/js");
+        let mut scripts: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+            .expect("assets/js is readable")
+            .map(|entry| entry.expect("readable dir entry").path())
+            .filter(|path| path.extension().is_some_and(|e| e == "js"))
+            .collect();
+        scripts.sort();
+        assert!(
+            scripts.len() > 5,
+            "expected to scan every browser script, found {}",
+            scripts.len()
+        );
+
+        let mut offences = Vec::new();
+        for path in &scripts {
+            let text = std::fs::read_to_string(path).expect("script is readable");
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            for (offset, _) in text.match_indices("catch") {
+                // Word boundary, so an identifier ending in `catch` is not the
+                // keyword. A leading `.` is kept: `.catch(...)` is a handler too.
+                let preceded_by_ident = text[..offset]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$');
+                if preceded_by_ident {
+                    continue;
+                }
+                if let Some(shape) = empty_catch_handler(&text[offset + "catch".len()..]) {
+                    offences.push(format!("{name}: {shape} at byte offset {offset}"));
+                }
+            }
+        }
+        assert!(
+            offences.is_empty(),
+            "a swallowed failure is worse than the failure it hides; log the cause \
+             (see the `report` helper in these scripts) instead of an empty catch:\n{}",
+            offences.join("\n")
+        );
+    }
+
+    /// Classify the text following a `catch` keyword: `Some(shape)` when the
+    /// handler body is empty, covering `catch (e) {}`, bare `catch {}`, and the
+    /// promise form `.catch(function (e) {})` / `.catch(() => {})`.
+    fn empty_catch_handler(rest: &str) -> Option<&'static str> {
+        let rest = rest.trim_start();
+        let after_binding = match rest.strip_prefix('(') {
+            Some(inner) => {
+                let (arg, tail) = split_balanced_parens(inner)?;
+                if arg.trim_end().ends_with("{}") {
+                    return Some("empty `catch` callback");
+                }
+                tail
+            }
+            None => rest,
+        };
+        let inner = after_binding.trim_start().strip_prefix('{')?;
+        inner
+            .trim_start()
+            .starts_with('}')
+            .then_some("empty `catch` body")
+    }
+
+    /// Split the text after an opening `(` into its parenthesised content and
+    /// the tail after the matching `)`. `None` when the parens never close.
+    fn split_balanced_parens(s: &str) -> Option<(&str, &str)> {
+        let mut depth = 1usize;
+        for (i, c) in s.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((&s[..i], &s[i + 1..]));
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         for entry in std::fs::read_dir(dir).expect("src directory is readable") {
             let path = entry.expect("readable dir entry").path();
