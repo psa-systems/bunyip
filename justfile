@@ -42,7 +42,7 @@ pre-commit: ensure-env
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-argon2-offload check-no-bash check-scrollbars check-ui-copy check-price-literals check-theme-colors check-cache-mounts check-build check-clippy check-fmt check-docker
+check: check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-theme-colors check-cache-mounts check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -106,6 +106,14 @@ check-no-bash:
 check-scrollbars:
     ./scripts/check-scrollbars.nu --self-test
     ./scripts/check-scrollbars.nu
+
+# Gate the committed Tailwind output: it must equal a fresh `bun run build:css`,
+# and every crates/*/src directory that emits markup must be named by an
+# `@source` line in bunyip-web/input.css (BUNYIP-598).
+[group: 'checks']
+check-css-current:
+    ./scripts/check-css-current.nu --self-test
+    ./scripts/check-css-current.nu
 
 # Gate user-facing copy: no three-dot ellipsis and no emoticon in any string
 # literal under bunyip-web/src (BUNYIP-551).

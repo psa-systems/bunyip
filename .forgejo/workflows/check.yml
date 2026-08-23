@@ -157,6 +157,19 @@ jobs:
           ./scripts/check-scrollbars.nu --self-test
           ./scripts/check-scrollbars.nu
 
+      - name: Check the committed Tailwind output is current
+        # bunyip-web/assets/styles.css is committed and served as-is, so a
+        # missed rebuild ships a stylesheet thinner than the markup needs and
+        # nothing reports it. Rebuild to a temporary path and compare byte for
+        # byte, and check every crates/*/src that emits markup is named by an
+        # `@source` line in input.css (BUNYIP-598). Uses the runner's bun, else
+        # the rust-builder-glibc image; it never installs a toolchain.
+        # --self-test first, so a gate that stopped detecting anything fails the
+        # build instead of passing vacuously.
+        run: |
+          ./scripts/check-css-current.nu --self-test
+          ./scripts/check-css-current.nu
+
       - name: Check user-facing copy stays on one glyph and one voice
         # No three-dot ellipsis and no emoticon in any string literal under
         # bunyip-web/src: the ellipsis is the single-character glyph everywhere
