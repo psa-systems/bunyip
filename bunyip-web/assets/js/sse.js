@@ -24,26 +24,46 @@
 // BUNYIP-424: this used to be an inline <script> with the origin interpolated
 // server-side. The origin now arrives as data-api-origin on this script's own
 // tag, so no server value is ever emitted as executable JavaScript.
+//
+// BUNYIP-613: only the EventSource construction is wrapped. It is the one
+// statement here that can throw (a malformed data-api-origin, a connection the
+// browser refuses to open); the getAttribute and addEventListener calls around
+// it cannot, so a bug in this file surfaces as a real error instead of being
+// filed away as a hostile browser.
 (function () {
+  function report(level, what, e) {
+    if (window.console && console[level]) console[level]('bunyip: ' + what, e || '');
+  }
+
+  var tag = document.currentScript || document.querySelector('script[data-api-origin]');
+  var origin = tag && tag.getAttribute('data-api-origin');
+  if (!origin || !window.EventSource) return;
+  var es;
   try {
-    var tag = document.currentScript || document.querySelector('script[data-api-origin]');
-    var origin = tag && tag.getAttribute('data-api-origin');
-    if (!origin || !window.EventSource) return;
-    var es = new EventSource(origin + '/v1/events', { withCredentials: true });
-    window.addEventListener('pagehide', function () {
-      try {
-        es.close();
-      } catch (e) {}
-    });
-    var reload = function () {
-      window.location.reload();
-    };
-    es.addEventListener('claims_changed', reload);
-    es.addEventListener('profile_changed', reload);
-    es.addEventListener('applications_changed', reload);
-    es.addEventListener('resync', reload);
-    es.addEventListener('session_revoked', function () {
-      window.location.href = '/login?toast_err=Session%20ended%20by%20an%20administrator.';
-    });
-  } catch (e) {}
+    es = new EventSource(origin + '/v1/events', { withCredentials: true });
+  } catch (e) {
+    // No live stream: claims changes and revocations are picked up on the next
+    // navigation instead of immediately. That is a lost feature, not a nicety.
+    report('error', 'live event stream could not be opened; this tab updates only on navigation', e);
+    return;
+  }
+  window.addEventListener('pagehide', function () {
+    try {
+      es.close();
+    } catch (e) {
+      // The document is unloading, so the stream dies with it either way; a
+      // failure here only brings back the browser's "interrupted" console noise.
+      report('warn', 'live event stream could not be closed on pagehide', e);
+    }
+  });
+  var reload = function () {
+    window.location.reload();
+  };
+  es.addEventListener('claims_changed', reload);
+  es.addEventListener('profile_changed', reload);
+  es.addEventListener('applications_changed', reload);
+  es.addEventListener('resync', reload);
+  es.addEventListener('session_revoked', function () {
+    window.location.href = '/login?toast_err=Session%20ended%20by%20an%20administrator.';
+  });
 })();

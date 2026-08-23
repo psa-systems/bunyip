@@ -5,6 +5,9 @@
 // BUNYIP-424: moved out of the AVATAR_PICKER_JS inline <script> constant so
 // script-src can be 'self' with no 'unsafe-inline'.
 (function () {
+// BUNYIP-613: a suppressed failure still has to be visible somewhere. Guarded
+// so a console-less environment does not throw inside the handler.
+function report(level,what,e){if(window.console&&console[level])console[level]('bunyip: '+what,e||'');}
 var ALLOWED={'image/png':1,'image/jpeg':1,'image/webp':1,'image/gif':1};
 function fmtSize(b){if(b>=1048576)return (b/1048576).toFixed(1)+' MB';if(b>=1024)return Math.round(b/1024)+' KB';return b+' B';}
 function sniff(buf){var b=new Uint8Array(buf);
@@ -60,7 +63,7 @@ var fr=new FileReader();fr.onload=function(){renderSlot(circle,fr.result);};fr.r
 // the API accepts png/jpeg/webp/gif and re-validates either way.
 processImage(file,maxEdge).then(function(blob){
 if(blob&&blob.size>0){upload(blob,'avatar.jpg');}else{upload(file,file.name||'avatar');}
-}).catch(function(){upload(file,file.name||'avatar');});
+}).catch(function(e){report('warn','image could not be re-encoded; uploading the original file',e);upload(file,file.name||'avatar');});
 });}
 function upload(payload,name){if(!payload||!payload.size){setErr('That image could not be read. Please try a different file.');return;}
 busy(true);setProgress(0);
@@ -69,7 +72,9 @@ var xhr=new XMLHttpRequest();xhr.open('POST',uploadUrl);xhr.setRequestHeader('Ac
 if(xhr.upload)xhr.upload.onprogress=function(e){if(e.lengthComputable)setProgress(e.loaded/e.total*100);};
 xhr.onload=function(){busy(false);
 if(xhr.status>=200&&xhr.status<300){updateAllSlots('/me/avatar?v='+Date.now());syncRemove(true);setErr('');if(window.bunyipToast)window.bunyipToast('Profile photo updated','success');}
-else{var msg='Upload failed. Please try again.';try{var j=JSON.parse(xhr.responseText);if(j&&j.error)msg=j.error;}catch(e){}setErr(msg);}};
+// A non-JSON error body (a proxy page, an empty response) leaves the generic
+// message in place, which is what the user should read either way.
+else{var msg='Upload failed. Please try again.';try{var j=JSON.parse(xhr.responseText);if(j&&j.error)msg=j.error;}catch(e){report('warn','upload error body was not JSON ('+xhr.status+'); showing the generic message',e);}setErr(msg);}};
 xhr.onerror=function(){busy(false);setErr('Upload failed. Check your connection and try again.');};
 xhr.send(fd);}
 if(input)input.addEventListener('change',function(){if(input.files&&input.files[0])handleFile(input.files[0]);});

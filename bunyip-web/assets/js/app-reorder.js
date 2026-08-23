@@ -13,6 +13,12 @@
   var lists = document.querySelectorAll('[data-reorder-list]');
   Array.prototype.forEach.call(lists, initList);
 
+  // BUNYIP-613: a suppressed failure still has to be visible somewhere. Guarded
+  // so a console-less environment does not throw inside the handler.
+  function report(level, what, e) {
+    if (window.console && console[level]) console[level]('bunyip: ' + what, e || '');
+  }
+
   function items(list) {
     return Array.prototype.slice.call(list.querySelectorAll('[data-reorder-item]'));
   }
@@ -31,7 +37,9 @@
         if (!r.ok) throw new Error('reorder failed');
         if (window.bunyipToast) window.bunyipToast('Order saved', 'success');
       })
-      .catch(function () {
+      .catch(function (e) {
+        // The user sees the toast; the console keeps the cause the toast cannot carry.
+        report('error', 'the new order could not be saved', e);
         if (window.bunyipToast) window.bunyipToast('Could not save the new order', 'error');
         // The server is the source of truth; reload to show the real order.
         setTimeout(function () { window.location.reload(); }, 900);
@@ -56,8 +64,10 @@
       row.classList.add('opacity-50');
       if (e.dataTransfer) {
         e.dataTransfer.effectAllowed = 'move';
-        // Firefox will not start a drag unless some data is set.
-        try { e.dataTransfer.setData('text/plain', row.getAttribute('data-app-id') || ''); } catch (_) {}
+        // Firefox will not start a drag unless some data is set. If that is
+        // refused the keyboard reorder path still works, so carry on.
+        try { e.dataTransfer.setData('text/plain', row.getAttribute('data-app-id') || ''); }
+        catch (err) { report('warn', 'drag payload could not be set; drag-and-drop may not start in this browser', err); }
       }
     });
 

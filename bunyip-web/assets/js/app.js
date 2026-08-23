@@ -61,21 +61,44 @@
     }, 2500);
   };
 
+  // BUNYIP-613: a suppressed failure still has to be visible somewhere. Guarded
+  // so a console-less environment does not throw inside the handler.
+  var report = function (level, what, e) {
+    if (window.console && console[level]) console[level]('bunyip: ' + what, e || '');
+  };
+
   // Drain ?toast_ok= / ?toast_err= so a handler can surface a confirmation via
   // a 302 (`Location: /settings?toast_ok=Email%20updated`). The params are
   // stripped with history.replaceState so a reload does not re-fire the toast.
+  //
+  // BUNYIP-613: each try wraps only the statement that can throw (the URL parse,
+  // the replaceState), so a bug in the toast call itself is not swallowed as a
+  // browser quirk.
+  var url = null;
   try {
-    var url = new URL(window.location.href);
+    url = new URL(window.location.href);
+  } catch (e) {
+    // Nothing to drain without a parsed URL: the toast the redirect carried is
+    // lost and the params stay in the address bar.
+    report('warn', 'location could not be parsed; a redirect toast may be lost', e);
+  }
+  if (url) {
     var ok = url.searchParams.get('toast_ok');
     var err = url.searchParams.get('toast_err');
     if (ok || err) {
       url.searchParams.delete('toast_ok');
       url.searchParams.delete('toast_err');
-      history.replaceState(null, '', url.pathname + (url.search || '') + url.hash);
+      try {
+        history.replaceState(null, '', url.pathname + (url.search || '') + url.hash);
+      } catch (e) {
+        // Still show the toast: the params survive, so a reload repeats it, and
+        // a duplicate confirmation beats a missing one.
+        report('warn', 'toast parameters could not be stripped; a reload will repeat the toast', e);
+      }
       if (ok) window.bunyipToast(ok, 'success');
       if (err) window.bunyipToast(err, 'error');
     }
-  } catch (e) {}
+  }
 
   // ------------------------------------------------------- OTP autosubmit --
   // BUNYIP-331: submit a 2FA form the moment its six-digit TOTP field is
