@@ -1677,7 +1677,7 @@ impl bunyip_domain::middleware::auth::AtJwtVerifier for OidcProvider {
     async fn verify_and_resolve(
         &self,
         token: &str,
-    ) -> Result<bunyip_domain::services::AccessTokenClaims, AppError> {
+    ) -> Result<(bunyip_domain::services::AccessTokenClaims, User), AppError> {
         // BUNYIP-252: enforce aud == OidcConfig::rs_audience on the RS path.
         // The userinfo endpoint keeps the permissive `verify_at_jwt_claims`
         // because the OIDC spec REQUIRES it to accept any at+jwt this OP
@@ -1686,15 +1686,17 @@ impl bunyip_domain::middleware::auth::AtJwtVerifier for OidcProvider {
         let claims = self.verify_at_jwt_for_rs(token)?;
         let user = bunyip_domain::middleware::auth::resolve_user_for_atjwt(&self.pool, &claims.sub)
             .await?;
-        Ok(
-            bunyip_domain::services::AccessTokenClaims::from_atjwt_and_user(
-                &claims.iss,
-                claims.iat,
-                claims.exp,
-                &claims.jti,
-                &user,
-            ),
-        )
+        // BUNYIP-557: hand the row back with the claims. It is the only `users`
+        // read this request needs, and the caller caches it for the extractor
+        // and the handler instead of each of them repeating the same `SELECT`.
+        let resolved = bunyip_domain::services::AccessTokenClaims::from_atjwt_and_user(
+            &claims.iss,
+            claims.iat,
+            claims.exp,
+            &claims.jti,
+            &user,
+        );
+        Ok((resolved, user))
     }
 }
 

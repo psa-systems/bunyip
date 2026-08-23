@@ -1171,9 +1171,16 @@ pub async fn userinfo(
     let user_id = Uuid::parse_str(&at_claims.sub)
         .map_err(|_| AppError::OidcInvalidToken("invalid sub in access token".into()))?;
 
-    let user = UserRepository::find_by_id(&pool, user_id)
-        .await?
-        .ok_or_else(|| AppError::OidcInvalidToken("user not found".into()))?;
+    // BUNYIP-557: the rate-limit floor verified this same bearer underneath the
+    // route and read the row to do it. That copy is only there when the token
+    // also passed the floor's stricter RS-audience check, so guard on the id
+    // and keep the query for the cross-RP tokens userinfo must still accept.
+    let user = match crate::middleware::auth::request_user(&req) {
+        Some(cached) if cached.id == user_id => cached,
+        _ => UserRepository::find_by_id(&pool, user_id)
+            .await?
+            .ok_or_else(|| AppError::OidcInvalidToken("user not found".into()))?,
+    };
 
     // BUNYIP-140: extend the userinfo response with `profile` and `phone`
     // standard OIDC claims when (a) the access token's scope set covers them

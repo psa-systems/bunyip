@@ -35,7 +35,7 @@ use actix_web::{
     cookie::{Cookie, SameSite},
     dev::Payload,
     http::header,
-    FromRequest, HttpRequest,
+    FromRequest, HttpMessage, HttpRequest,
 };
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -63,10 +63,13 @@ use uuid::Uuid;
 ///    claims, so the DB lookup is the only way to fill them in.
 ///
 /// Returns the same [`AccessTokenClaims`] shape `JwtService` returns,
-/// so downstream extractors (`AdminUser`, `MemberUser`) are unchanged.
+/// so downstream extractors (`AdminUser`, `MemberUser`) are unchanged,
+/// paired with the `User` row step 3 read. Handing the row back lets
+/// [`verify_once`] cache it for the rest of the request instead of every
+/// later reader querying it again (BUNYIP-557).
 #[async_trait]
 pub trait AtJwtVerifier: Send + Sync {
-    async fn verify_and_resolve(&self, token: &str) -> Result<AccessTokenClaims, AppError>;
+    async fn verify_and_resolve(&self, token: &str) -> Result<(AccessTokenClaims, User), AppError>;
 }
 
 /// Stub verifier that rejects every at+jwt with `Unauthorized`. Wired
@@ -80,7 +83,10 @@ pub struct DisabledAtJwtVerifier;
 
 #[async_trait]
 impl AtJwtVerifier for DisabledAtJwtVerifier {
-    async fn verify_and_resolve(&self, _token: &str) -> Result<AccessTokenClaims, AppError> {
+    async fn verify_and_resolve(
+        &self,
+        _token: &str,
+    ) -> Result<(AccessTokenClaims, User), AppError> {
         Err(AppError::Unauthorized)
     }
 }
@@ -146,6 +152,87 @@ fn token_is_atjwt(token: &str) -> bool {
 /// so both extractors compose under one [`FromRequest::Future`].
 type ExtractorFuture<T> = Pin<Box<dyn Future<Output = Result<T, AppError>>>>;
 
+/// A successfully verified access token, plus the caller's `users` row when
+/// the verifying path had to read it (BUNYIP-557).
+///
+/// `user` is `Some` only on the at+jwt path, whose verification reads the row
+/// to fill in the RFC 9068 claims it does not carry. The HS256 cookie path
+/// never touches the database, so it leaves `None` and every later reader
+/// keeps its own query.
+#[derive(Debug, Clone)]
+pub struct VerifiedIdentity {
+    pub claims: AccessTokenClaims,
+    pub user: Option<User>,
+}
+
+/// The verified identity stashed in the request extensions, tagged with the
+/// token it came from so a request presenting a different token can never be
+/// answered out of another token's verification.
+struct CachedIdentity {
+    token: String,
+    identity: VerifiedIdentity,
+}
+
+/// Verify `token` at most once per request (BUNYIP-557).
+///
+/// The rate-limit floor resolves the caller's identity underneath every
+/// non-exempt route and the handler's extractor resolves it again. For an
+/// at+jwt that was two EdDSA verifications and two identical `users` reads
+/// before the handler even ran. The first verification stashes its result in
+/// the request extensions and every later call in the same request reads it
+/// back.
+///
+/// The fallback is not optional: the floor exempts some paths
+/// (`rate_limit_floor::EXEMPT_PATHS`) and never runs on them, so the extractor
+/// is the first caller there and must verify for itself.
+///
+/// Only successes are cached. A failed verification is cheap to repeat (the
+/// at+jwt path rejects before it reads any row) and caching it would mean
+/// deciding which error to replay.
+pub async fn verify_once(req: &HttpRequest, token: &str) -> Result<VerifiedIdentity, AppError> {
+    if let Some(hit) = cached_identity(req, token) {
+        return Ok(hit);
+    }
+
+    let jwt_service = req.app_data::<Arc<JwtService>>().cloned();
+    let at_jwt_verifier = req.app_data::<Arc<dyn AtJwtVerifier>>().cloned();
+    let identity = verify_either(token, jwt_service.as_ref(), at_jwt_verifier.as_ref()).await?;
+
+    // Take the extensions borrow only after the await; holding a `RefMut`
+    // across one would panic the worker on the next borrow.
+    req.extensions_mut().insert(CachedIdentity {
+        token: token.to_string(),
+        identity: identity.clone(),
+    });
+
+    Ok(identity)
+}
+
+/// The identity already verified for this request, if it came from `token`.
+fn cached_identity(req: &HttpRequest, token: &str) -> Option<VerifiedIdentity> {
+    req.extensions()
+        .get::<CachedIdentity>()
+        .filter(|cached| cached.token == token)
+        .map(|cached| cached.identity.clone())
+}
+
+/// The caller's `users` row when a verification earlier in THIS request
+/// already read it, else `None` (BUNYIP-557).
+///
+/// This does not weaken the freshness guarantee BUNYIP-229 added. The row is
+/// still read from the database on every request; the reader is just served
+/// the copy this request read microseconds earlier instead of issuing an
+/// identical `SELECT`. Nothing is carried across requests: actix clears the
+/// extensions when the request ends.
+///
+/// A reader that must observe a write made LATER in the same request must
+/// keep its own query; this snapshot predates the handler.
+pub fn request_user(req: &HttpRequest) -> Option<User> {
+    req.extensions()
+        .get::<CachedIdentity>()
+        .and_then(|cached| cached.identity.user.clone())
+}
+
 /// Extractor for authenticated users - returns 401 if not authenticated
 #[derive(Debug, Clone)]
 pub struct AuthenticatedUser(pub AccessTokenClaims);
@@ -155,15 +242,12 @@ impl FromRequest for AuthenticatedUser {
     type Future = ExtractorFuture<Self>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        let jwt_service = req.app_data::<Arc<JwtService>>().cloned();
-        let at_jwt_verifier = req.app_data::<Arc<dyn AtJwtVerifier>>().cloned();
-        let token = extract_token(req);
+        let req = req.clone();
 
         Box::pin(async move {
-            let token = token.ok_or(AppError::Unauthorized)?;
-            let claims =
-                verify_either(&token, jwt_service.as_ref(), at_jwt_verifier.as_ref()).await?;
-            Ok(AuthenticatedUser(claims))
+            let token = extract_token(&req).ok_or(AppError::Unauthorized)?;
+            let identity = verify_once(&req, &token).await?;
+            Ok(AuthenticatedUser(identity.claims))
         })
     }
 }
@@ -177,18 +261,15 @@ impl FromRequest for OptionalUser {
     type Future = ExtractorFuture<Self>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        let jwt_service = req.app_data::<Arc<JwtService>>().cloned();
-        let at_jwt_verifier = req.app_data::<Arc<dyn AtJwtVerifier>>().cloned();
-        let token = extract_token(req);
         let req = req.clone();
 
         Box::pin(async move {
-            let Some(token) = token else {
+            let Some(token) = extract_token(&req) else {
                 tracing::debug!(path = %req.path(), "OptionalUser: no token in request");
                 return Ok(OptionalUser(None));
             };
-            match verify_either(&token, jwt_service.as_ref(), at_jwt_verifier.as_ref()).await {
-                Ok(claims) => Ok(OptionalUser(Some(claims))),
+            match verify_once(&req, &token).await {
+                Ok(identity) => Ok(OptionalUser(Some(identity.claims))),
                 Err(e) => {
                     tracing::debug!(error = %e, path = %req.path(), "OptionalUser: token present but verification failed");
                     Ok(OptionalUser(None))
@@ -207,14 +288,11 @@ impl FromRequest for AdminUser {
     type Future = ExtractorFuture<Self>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        let jwt_service = req.app_data::<Arc<JwtService>>().cloned();
-        let at_jwt_verifier = req.app_data::<Arc<dyn AtJwtVerifier>>().cloned();
-        let token = extract_token(req);
+        let req = req.clone();
 
         Box::pin(async move {
-            let token = token.ok_or(AppError::Unauthorized)?;
-            let claims =
-                verify_either(&token, jwt_service.as_ref(), at_jwt_verifier.as_ref()).await?;
+            let token = extract_token(&req).ok_or(AppError::Unauthorized)?;
+            let claims = verify_once(&req, &token).await?.claims;
             if claims.role != "admin" {
                 return Err(AppError::Forbidden);
             }
@@ -246,22 +324,30 @@ impl FromRequest for SuperAdminUser {
     type Future = ExtractorFuture<Self>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        let jwt_service = req.app_data::<Arc<JwtService>>().cloned();
-        let at_jwt_verifier = req.app_data::<Arc<dyn AtJwtVerifier>>().cloned();
         let pool = req
             .app_data::<actix_web::web::Data<PgPool>>()
             .map(|p| p.get_ref().clone());
-        let token = extract_token(req);
+        let req = req.clone();
 
         Box::pin(async move {
-            let token = token.ok_or(AppError::Unauthorized)?;
-            let claims =
-                verify_either(&token, jwt_service.as_ref(), at_jwt_verifier.as_ref()).await?;
-            let pool = pool.ok_or_else(|| AppError::internal("Database pool not available"))?;
-            let is_super_admin = UserRepository::find_by_id(&pool, claims.sub)
-                .await?
-                .map(|u| u.is_super_admin)
-                .unwrap_or(false);
+            let token = extract_token(&req).ok_or(AppError::Unauthorized)?;
+            let identity = verify_once(&req, &token).await?;
+            let claims = identity.claims;
+            // BUNYIP-557: on the at+jwt path the verification read this row
+            // microseconds ago in THIS request, so the flag is exactly as fresh
+            // as a second `SELECT` would make it. The HS256 cookie path reads
+            // no row while verifying, so it still queries here.
+            let is_super_admin = match identity.user {
+                Some(user) => user.is_super_admin,
+                None => {
+                    let pool =
+                        pool.ok_or_else(|| AppError::internal("Database pool not available"))?;
+                    UserRepository::find_by_id(&pool, claims.sub)
+                        .await?
+                        .map(|u| u.is_super_admin)
+                        .unwrap_or(false)
+                }
+            };
             if !super_admin_allowed(&claims.role, is_super_admin) {
                 return Err(AppError::Forbidden);
             }
@@ -279,14 +365,11 @@ impl FromRequest for MemberUser {
     type Future = ExtractorFuture<Self>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        let jwt_service = req.app_data::<Arc<JwtService>>().cloned();
-        let at_jwt_verifier = req.app_data::<Arc<dyn AtJwtVerifier>>().cloned();
-        let token = extract_token(req);
+        let req = req.clone();
 
         Box::pin(async move {
-            let token = token.ok_or(AppError::Unauthorized)?;
-            let claims =
-                verify_either(&token, jwt_service.as_ref(), at_jwt_verifier.as_ref()).await?;
+            let token = extract_token(&req).ok_or(AppError::Unauthorized)?;
+            let claims = verify_once(&req, &token).await?.claims;
             if !claims.has_member_access() {
                 return Err(AppError::Forbidden);
             }
@@ -316,10 +399,16 @@ async fn verify_either(
     token: &str,
     jwt_service: Option<&Arc<JwtService>>,
     at_jwt_verifier: Option<&Arc<dyn AtJwtVerifier>>,
-) -> Result<AccessTokenClaims, AppError> {
+) -> Result<VerifiedIdentity, AppError> {
     if token_is_atjwt(token) {
         match at_jwt_verifier {
-            Some(v) => v.verify_and_resolve(token).await,
+            Some(v) => {
+                let (claims, user) = v.verify_and_resolve(token).await?;
+                Ok(VerifiedIdentity {
+                    claims,
+                    user: Some(user),
+                })
+            }
             None => {
                 tracing::debug!(
                     "at+jwt token presented but no AtJwtVerifier registered; \
@@ -330,7 +419,12 @@ async fn verify_either(
         }
     } else {
         match jwt_service {
-            Some(svc) => svc.verify_access_token(token),
+            // The HS256 path verifies an HMAC and reads no row, so there is no
+            // `User` to hand on; later readers keep their own query.
+            Some(svc) => Ok(VerifiedIdentity {
+                claims: svc.verify_access_token(token)?,
+                user: None,
+            }),
             None => {
                 tracing::error!("JwtService not found in app data");
                 Err(AppError::internal("Authentication service not available"))
@@ -342,19 +436,22 @@ async fn verify_either(
 /// BUNYIP-426 F7: the verified subject of `req`, if it carries a usable access
 /// token by either scheme.
 ///
-/// Shares [`extract_token`] and [`verify_either`] with the extractors, so the
+/// Shares [`extract_token`] and [`verify_once`] with the extractors, so the
 /// rate-limit floor keys on exactly the identity the handler will later see.
 /// `None` means anonymous (no token) or unverifiable, and the caller must fall
 /// back to the tighter per-IP budget rather than trusting the token.
+///
+/// BUNYIP-557: going through [`verify_once`] means the extractor that runs
+/// next reuses this verification instead of repeating it. An unverifiable
+/// token caches nothing, so it buys neither the larger budget here nor a
+/// skipped check later.
 pub async fn resolve_rate_limit_subject(req: &HttpRequest) -> Option<Uuid> {
-    let jwt_service = req.app_data::<Arc<JwtService>>().cloned();
-    let at_jwt_verifier = req.app_data::<Arc<dyn AtJwtVerifier>>().cloned();
     let token = extract_token(req)?;
 
-    verify_either(&token, jwt_service.as_ref(), at_jwt_verifier.as_ref())
+    verify_once(req, &token)
         .await
         .ok()
-        .map(|claims| claims.sub)
+        .map(|identity| identity.claims.sub)
 }
 
 /// Extract JWT token from request
@@ -933,16 +1030,24 @@ mod tests {
     /// a stub).
     struct RecordingOkVerifier {
         claims: AccessTokenClaims,
+        user: User,
         calls: std::sync::Mutex<u32>,
     }
 
     impl RecordingOkVerifier {
         fn new(claims: AccessTokenClaims) -> Self {
+            let user = stub_user(&claims);
             Self {
                 claims,
+                user,
                 calls: std::sync::Mutex::new(0),
             }
         }
+        /// How many times the at+jwt path ran. Each call is one EdDSA
+        /// verification AND one `SELECT ... FROM users` in the real
+        /// implementation (`OidcProvider::verify_and_resolve` ->
+        /// `resolve_user_for_atjwt`), so this counter is the statement count
+        /// BUNYIP-557 is about.
         fn call_count(&self) -> u32 {
             *self.calls.lock().unwrap()
         }
@@ -950,10 +1055,58 @@ mod tests {
 
     #[async_trait]
     impl AtJwtVerifier for RecordingOkVerifier {
-        async fn verify_and_resolve(&self, _token: &str) -> Result<AccessTokenClaims, AppError> {
+        async fn verify_and_resolve(
+            &self,
+            _token: &str,
+        ) -> Result<(AccessTokenClaims, User), AppError> {
             *self.calls.lock().unwrap() += 1;
-            Ok(self.claims.clone())
+            Ok((self.claims.clone(), self.user.clone()))
         }
+    }
+
+    /// The `users` row the at+jwt verification would have read for `claims`.
+    fn stub_user(claims: &AccessTokenClaims) -> User {
+        User {
+            id: claims.sub,
+            email: claims.email.clone(),
+            email_verified: true,
+            password_hash: None,
+            role: claims.role.clone(),
+            stripe_customer_id: None,
+            stripe_payment_method_id: None,
+            membership_status: claims.membership_status.clone(),
+            price_locked: claims.price_locked,
+            locked_price_id: claims.price_id.clone(),
+            locked_price_amount: None,
+            grace_period_start: None,
+            grace_period_end: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            two_factor_enabled: false,
+            last_login_at: None,
+            last_login_country: None,
+            login_location_alerts: true,
+            deleted_at: None,
+            membership_tier: "standard".to_string(),
+            trial_ends_at: None,
+            lifetime_member: claims.lifetime_member,
+            membership_override_by: None,
+            first_name: None,
+            last_name: None,
+            phone: None,
+            has_used_trial: false,
+            avatar_updated_at: None,
+            is_super_admin: false,
+        }
+    }
+
+    /// A request carrying `token` as a bearer credential, with `verifier`
+    /// registered exactly as `main.rs` registers the OIDC provider.
+    fn atjwt_request(token: &str, verifier: Arc<dyn AtJwtVerifier>) -> HttpRequest {
+        actix_web::test::TestRequest::default()
+            .app_data(verifier)
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .to_http_request()
     }
 
     fn stub_claims(role: &str) -> AccessTokenClaims {
@@ -981,10 +1134,14 @@ mod tests {
         // reads the counter through afterwards.
         let verifier: Arc<dyn AtJwtVerifier> = recording.clone();
         let token = jwt_with_typ("at+jwt");
-        let claims = verify_either(&token, None, Some(&verifier))
+        let identity = verify_either(&token, None, Some(&verifier))
             .await
             .expect("at+jwt verifier returns claims");
-        assert_eq!(claims.role, "admin");
+        assert_eq!(identity.claims.role, "admin");
+        assert!(
+            identity.user.is_some(),
+            "the at+jwt path read a users row and must hand it back (BUNYIP-557)"
+        );
         assert_eq!(
             recording.call_count(),
             1,
@@ -1091,5 +1248,185 @@ mod tests {
         assert_eq!(claims.iat, 1_700_000_000);
         assert_eq!(claims.exp, 1_700_000_900);
         assert_eq!(claims.jti, "jti-99");
+    }
+
+    // ── BUNYIP-557: one verification, one user row read, per request ───────
+
+    /// The floor and the extractor both resolve the caller. On the at+jwt path
+    /// each resolution is an EdDSA verification plus a `SELECT ... FROM users`,
+    /// so the pair must run once, not twice, and the row must still be there
+    /// for the handler that would otherwise query it a third time.
+    #[actix_rt::test]
+    async fn one_request_verifies_the_atjwt_once_and_keeps_the_user_row() {
+        let recording = Arc::new(RecordingOkVerifier::new(stub_claims("member")));
+        let token = jwt_with_typ("at+jwt");
+        let req = atjwt_request(&token, recording.clone());
+
+        // 1. the rate-limit floor, underneath the route
+        let subject = resolve_rate_limit_subject(&req).await;
+        assert_eq!(subject, Some(stub_claims("member").sub));
+
+        // 2. the handler's extractor
+        let claims = verify_once(&req, &token)
+            .await
+            .expect("the extractor still resolves the caller")
+            .claims;
+        assert_eq!(claims.role, "member");
+
+        // 3. the handler's own read of the caller's row
+        let user = request_user(&req).expect("the verified row is on the request");
+        assert_eq!(user.id, claims.sub);
+
+        assert_eq!(
+            recording.call_count(),
+            1,
+            "the at+jwt must be verified (and its users row read) exactly once per request"
+        );
+    }
+
+    /// The freshness guarantee BUNYIP-229 added: the row is cached for the
+    /// request, never beyond it. Two requests verify twice and read twice.
+    #[actix_rt::test]
+    async fn the_verified_identity_is_never_carried_across_requests() {
+        let recording = Arc::new(RecordingOkVerifier::new(stub_claims("member")));
+        let token = jwt_with_typ("at+jwt");
+
+        for _ in 0..2 {
+            let req = atjwt_request(&token, recording.clone());
+            resolve_rate_limit_subject(&req).await;
+            verify_once(&req, &token).await.expect("verifies");
+        }
+
+        assert_eq!(
+            recording.call_count(),
+            2,
+            "each request must read the users row for itself"
+        );
+    }
+
+    /// The floor exempts some paths and never runs on them, so the extractor is
+    /// the first caller there and must verify for itself rather than assume a
+    /// cache entry exists.
+    #[actix_rt::test]
+    async fn an_extractor_verifies_for_itself_when_the_floor_did_not_run() {
+        let recording = Arc::new(RecordingOkVerifier::new(stub_claims("admin")));
+        let token = jwt_with_typ("at+jwt");
+        let req = atjwt_request(&token, recording.clone());
+
+        // No `resolve_rate_limit_subject` call: this is an exempt path.
+        let identity = verify_once(&req, &token)
+            .await
+            .expect("an exempt path still authenticates");
+        assert_eq!(identity.claims.role, "admin");
+        assert_eq!(recording.call_count(), 1);
+    }
+
+    /// An unverifiable token caches nothing: the floor falls back to the
+    /// tighter per-IP budget and the extractor still rejects it.
+    #[actix_rt::test]
+    async fn an_unverifiable_token_caches_nothing_and_buys_no_authenticated_budget() {
+        // No verifier registered, so the at+jwt cannot be verified.
+        let token = jwt_with_typ("at+jwt");
+        let req = actix_web::test::TestRequest::default()
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .to_http_request();
+
+        assert_eq!(
+            resolve_rate_limit_subject(&req).await,
+            None,
+            "an unverifiable token must fall back to the unauthenticated budget"
+        );
+        assert!(
+            request_user(&req).is_none(),
+            "a failed verification must leave nothing on the request"
+        );
+        assert!(
+            matches!(verify_once(&req, &token).await, Err(AppError::Unauthorized)),
+            "the extractor must still reject the token the floor could not verify"
+        );
+    }
+
+    /// The cache is keyed by the token it came from, so a second credential
+    /// presented in the same request is verified on its own merits.
+    #[actix_rt::test]
+    async fn a_different_token_is_never_answered_from_the_cache() {
+        let recording = Arc::new(RecordingOkVerifier::new(stub_claims("member")));
+        let token = jwt_with_typ("at+jwt");
+        let req = atjwt_request(&token, recording.clone());
+
+        verify_once(&req, &token).await.expect("first token");
+        verify_once(&req, &jwt_with_typ("At+Jwt"))
+            .await
+            .expect("second token");
+
+        assert_eq!(
+            recording.call_count(),
+            2,
+            "a token the request has not verified must not reuse another's result"
+        );
+    }
+
+    /// The super-admin flag comes from the row the at+jwt verification already
+    /// read, so the extractor issues no second query. Proven by registering NO
+    /// pool: a query here could not even be attempted.
+    #[actix_rt::test]
+    async fn super_admin_reads_the_flag_from_the_row_this_request_already_read() {
+        let claims = stub_claims("admin");
+        let mut user = stub_user(&claims);
+        user.is_super_admin = true;
+        let verifier: Arc<dyn AtJwtVerifier> = Arc::new(RecordingOkVerifier {
+            claims,
+            user,
+            calls: std::sync::Mutex::new(0),
+        });
+        let token = jwt_with_typ("at+jwt");
+        let req = atjwt_request(&token, verifier);
+
+        let extracted = SuperAdminUser::from_request(&req, &mut Payload::None)
+            .await
+            .expect("the cached row carries is_super_admin, so no pool is needed");
+        assert_eq!(extracted.0.role, "admin");
+    }
+
+    /// Every verification goes through [`verify_once`], so the request cache
+    /// can never be bypassed by a new extractor calling the raw helper.
+    #[test]
+    fn nothing_calls_verify_either_outside_verify_once() {
+        let src = include_str!("auth.rs");
+        let body = src.split("\n#[cfg(test)]").next().unwrap();
+        assert_eq!(
+            body.matches("verify_either(").count(),
+            2,
+            "verify_either must have exactly two mentions: its definition and \
+             the single call inside verify_once (BUNYIP-557)"
+        );
+    }
+
+    /// The HS256 cookie path reads no row while verifying, so it hands none on
+    /// and every later reader keeps its own query.
+    #[actix_rt::test]
+    async fn the_hs256_path_caches_claims_but_no_user_row() {
+        let jwt_service = Arc::new(JwtService::new(crate::services::JwtConfig::from_secret(
+            "test-secret-that-is-long-enough-for-hs256",
+            "https://api.example.test",
+        )));
+        let token = jwt_service
+            .create_access_token(&stub_user(&stub_claims("member")))
+            .expect("mint an HS256 access token");
+        let req = actix_web::test::TestRequest::default()
+            .app_data(jwt_service)
+            .cookie(actix_web::cookie::Cookie::new(
+                "access_token",
+                token.clone(),
+            ))
+            .to_http_request();
+
+        let identity = verify_once(&req, &token).await.expect("HS256 verifies");
+        assert_eq!(identity.claims.role, "member");
+        assert!(
+            identity.user.is_none(),
+            "the HS256 path reads no users row, so it must not claim to have one"
+        );
+        assert!(request_user(&req).is_none());
     }
 }
