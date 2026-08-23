@@ -369,8 +369,9 @@ Resolution, stated once:
   `#2f4e2e` / `#161a16` defaults that used to be compiled into bunyip-web are gone (BUNYIP-560).
 - The **mark** falls back to a built-in glyph drawn in the theme's own colour (a shape, not artwork). The **favicon**
   falls back to the icon set committed under
-  `bunyip-web/assets/`, root `/favicon.ico` included. The **mascot** has no fallback at all: with the slot unset the
-  hero renders **without** an illustration, rather than with the previous product's.
+  `bunyip-web/assets/`, root `/favicon.ico` included. The **mascot** falls back to the hero illustration committed under
+  `bunyip-web/assets/` (`bunyip-hero-448.webp` / `bunyip-hero-718.webp`), the same "committed file, admin upload
+  overrides" shape as the favicon set (BUNYIP-605).
 - An upload that fails validation (not an image, over 2 MiB, over 4096 px, or a source the icon set cannot be derived
   from) writes **nothing** and renders its reason above the form.
 
