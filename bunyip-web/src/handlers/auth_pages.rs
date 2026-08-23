@@ -1049,8 +1049,10 @@ fn invite_password_card(token: &str, email: &str, error: Option<&str>) -> Markup
                 (guard_message())
                 (submit_btn("Sign up"))
             }
-            // The per-rule indicators above have no controller on this card
-            // (#BUNYIP-596); the guard below reports the broken rule instead.
+            // BUNYIP-596: the per-rule indicators need their controller, or
+            // they sit frozen in `pw-pending` and read as a live check that
+            // already passed.
+            (password_script())
             (crate::views::password::script())
         },
     )
@@ -1710,6 +1712,48 @@ mod autofocus_tests {
                 assert!(html.contains(marker), "{card} card lost {marker}: {html}");
             }
         }
+    }
+
+    /// BUNYIP-596: `pw_reqs()` rows are inert markup without
+    /// `assets/js/password.js` - they stay in `pw-pending` for the whole
+    /// session, and the breach row claims "Not found in a known data breach"
+    /// with no lookup ever having run. A card renders both or neither.
+    #[test]
+    fn every_card_that_renders_the_password_rules_ships_their_controller() {
+        let cards = [
+            ("login", login_content(None, "/dashboard").into_string()),
+            (
+                "register",
+                register_card(&RegisterErrors::default(), "", "", None).into_string(),
+            ),
+            ("magic-link", magic_form(None, false).into_string()),
+            ("reset-request", reset_form(None, false).into_string()),
+            (
+                "reset-confirm",
+                reset_confirm_card("tok", None).into_string(),
+            ),
+            ("2fa", twofa_card(None, None).into_string()),
+            (
+                "invite",
+                invite_password_card("tok", "user@example.com", None).into_string(),
+            ),
+        ];
+        let mut with_rules = 0;
+        for (card, html) in &cards {
+            if !html.contains(r#"id="pw-reqs""#) {
+                continue;
+            }
+            with_rules += 1;
+            assert!(
+                html.contains("/assets/js/password.js"),
+                "{card} card renders the pw_reqs() indicators with no controller: {html}"
+            );
+        }
+        assert_eq!(
+            with_rules, 3,
+            "expected register / reset-confirm / invite to render pw_reqs(); \
+             a card gained or lost the rules list, so update this scan"
+        );
     }
 
     /// BUNYIP-597: the sign-in password is an identity confirmation, so it gets
