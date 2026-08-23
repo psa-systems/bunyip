@@ -270,22 +270,17 @@ pub async fn register(
     let ip_address = extract_client_ip(&req);
     let device_info = extract_device_info(&req);
 
-    // Rate limit by IP address. BUNYIP-426 F7: the cap now applies in EVERY
-    // environment, because skipping it below production left `/v1/auth/register`
-    // entirely unthrottled on the publicly reachable dev-sso stack. What varies
-    // is the budget, not whether one exists: non-production uses the looser
-    // REGISTRATION_NON_PROD preset, because the deployed-instance e2e suite
-    // self-provisions disposable accounts from the single CI runner egress IP
-    // and accumulates registrations across serial runs inside the one-hour
-    // window, which tripped a spurious 429 on the production budget
-    // (BUNYIP-150 / BUNYIP-196 / BUNYIP-197).
-    let registration_limit = if config.is_production() {
-        &RateLimitConfig::REGISTRATION
-    } else {
-        &RateLimitConfig::REGISTRATION_NON_PROD
-    };
+    // Rate limit by IP address. BUNYIP-426 F7: the cap applies in EVERY
+    // environment (skipping it below production once left `/v1/auth/register`
+    // unthrottled on the publicly reachable dev-sso stack). BUNYIP-601: the cap
+    // no longer branches on the environment in code. There is one preset, and a
+    // non-production instance that needs a looser budget (the deployed-instance
+    // e2e suite self-provisions disposable accounts from one CI egress IP and
+    // would trip the 3/hour production cap: BUNYIP-150 / 196 / 197) sets
+    // `RATE_LIMIT_REGISTRATION_MAX_REQUESTS`, resolved by `check_rate_limit` via
+    // the const -> env -> persisted chain.
     let ip_key = ip_address.map(|ip| ip.to_string()).unwrap_or_default();
-    check_rate_limit(&pool, &ip_key, registration_limit).await?;
+    check_rate_limit(&pool, &ip_key, &RateLimitConfig::REGISTRATION).await?;
 
     // BUNYIP-377: bot guard (honeypot + submit timing). Opt-in via
     // SIGNUP_BOT_GUARD_ENABLED, off until every register form carries the hidden
