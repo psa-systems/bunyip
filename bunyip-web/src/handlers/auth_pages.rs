@@ -14,7 +14,7 @@ use crate::handlers::{auth_page, cookie_of, cookie_value, ctx, dashboard_input, 
 use crate::util::entry_price;
 use crate::views::common::{auth_card, auth_card_plain};
 use crate::views::layout::{document, public_shell};
-use crate::views::password::{guard_message, password_field, PwRole};
+use crate::views::password::{guard_message, password_field, PwField, PwRole};
 
 /// BUNYIP-487: whether the header and footer should carry a Pricing link. The
 /// auth cards render the public shell directly (they need to attach their own
@@ -283,14 +283,14 @@ fn login_content(error: Option<&str>, redirect: &str) -> Markup {
                 input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="email"
                     autofocus class=(dashboard_input());
             }
-            div class="space-y-2" {
-                div class="flex items-center justify-between" {
-                    label for="password" class="text-sm font-medium leading-none" { "Password" }
+            // BUNYIP-597: the shared field, with the "Forgot password?" link
+            // kept on the label row via `label_suffix`.
+            (password_field("password", "password", "Password", PwRole::Current, PwField {
+                label_suffix: Some(html! {
                     a href="/password-reset" class="text-sm text-primary-text hover:underline" { "Forgot password?" }
-                }
-                input id="password" name="password" type="password" autocomplete="current-password"
-                    class=(dashboard_input());
-            }
+                }),
+                ..Default::default()
+            }))
             div class="flex items-center space-x-2" {
                 input id="remember" name="remember" type="checkbox" value="on" class="h-4 w-4 rounded border-border";
                 label for="remember" class="text-sm font-normal cursor-pointer" { "Remember me for 30 days" }
@@ -314,6 +314,8 @@ fn login_content(error: Option<&str>, redirect: &str) -> Markup {
             "Don't have an account? "
             a href="/register" class="text-primary-text hover:underline" { "Sign up" }
         }
+        // Without the controller the eye button is dead markup.
+        (crate::views::password::script())
     };
     auth_card_plain("Welcome back", "Sign in to your account to continue", body)
 }
@@ -539,7 +541,7 @@ fn register_card(
                 // password uses the shared `password_field`, so each input
                 // carries an inline eye toggle.
                 div {
-                    (password_field("password", "password", "Password", PwRole::New, false))
+                    (password_field("password", "password", "Password", PwRole::New, PwField::default()))
                     @if let Some(e) = errors.password.as_deref() { (field_error_msg(e)) }
                     // BUNYIP-271: on any rejected submit the cleared password
                     // fields need re-entry; say so explicitly.
@@ -547,7 +549,7 @@ fn register_card(
                 }
                 (pw_reqs())
                 div {
-                    (password_field("confirm", "confirm", "Confirm Password", PwRole::Confirm, false))
+                    (password_field("confirm", "confirm", "Confirm Password", PwRole::Confirm, PwField::default()))
                     // BUNYIP-271: surface a passwords-don't-match rule inline.
                     @if let Some(e) = errors.confirm.as_deref() { (field_error_msg(e)) }
                 }
@@ -838,9 +840,9 @@ fn reset_confirm_card(token: &str, error: Option<&str>) -> Markup {
             form method="post" action="/password-reset/confirm" class="space-y-4" data-pw-guard {
                 input type="hidden" name="token" value=(token);
                 @if let Some(e) = error { (error_box(e)) }
-                (password_field("password", "password", "New Password", PwRole::New, true))
+                (password_field("password", "password", "New Password", PwRole::New, PwField { autofocus: true, ..Default::default() }))
                 (pw_reqs())
-                (password_field("confirm", "confirm", "Confirm Password", PwRole::Confirm, false))
+                (password_field("confirm", "confirm", "Confirm Password", PwRole::Confirm, PwField::default()))
                 (guard_message())
                 (submit_btn("Reset Password"))
             }
@@ -1041,8 +1043,8 @@ fn invite_password_card(token: &str, email: &str, error: Option<&str>) -> Markup
             form method="post" action="/invite/accept" class="space-y-4" data-pw-guard {
                 input type="hidden" name="token" value=(token);
                 @if let Some(e) = error { (error_box(e)) }
-                (password_field("password", "password", "Password", PwRole::New, true))
-                (password_field("confirm", "confirm", "Confirm Password", PwRole::Confirm, false))
+                (password_field("password", "password", "Password", PwRole::New, PwField { autofocus: true, ..Default::default() }))
+                (password_field("confirm", "confirm", "Confirm Password", PwRole::Confirm, PwField::default()))
                 (pw_reqs())
                 (guard_message())
                 (submit_btn("Sign up"))
@@ -1707,6 +1709,26 @@ mod autofocus_tests {
             ] {
                 assert!(html.contains(marker), "{card} card lost {marker}: {html}");
             }
+        }
+    }
+
+    /// BUNYIP-597: the sign-in password is an identity confirmation, so it gets
+    /// the reveal toggle too, and it must keep the "Forgot password?" link the
+    /// shared helper knows nothing about - the link lives on the label row via
+    /// `PwField::label_suffix`. The controller has to ship with the card or the
+    /// eye button is dead markup.
+    #[test]
+    fn sign_in_card_reveals_the_password_and_keeps_the_reset_link() {
+        let html = login_content(None, "/dashboard").into_string();
+        for marker in [
+            r#"data-pw-toggle="password""#,
+            r#"aria-label="Show password""#,
+            "/assets/js/password-field.js",
+            r#"href="/password-reset""#,
+            "Forgot password?",
+            r#"autocomplete="current-password""#,
+        ] {
+            assert!(html.contains(marker), "sign-in card lost {marker}: {html}");
         }
     }
 

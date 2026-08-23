@@ -33,6 +33,28 @@ pub enum PwRole {
     Confirm,
 }
 
+/// The per-field extras a form may need on top of the role. `Default` is the
+/// chosen-password shape (BUNYIP-575), so the signup, reset and invite cards
+/// pass `PwField::default()`; the identity confirmations added by BUNYIP-597
+/// use it to keep the attributes their hand-rolled inputs already carried.
+#[derive(Default)]
+pub struct PwField<'a> {
+    /// Focus this input on load (BUNYIP-486).
+    pub autofocus: bool,
+    /// Keep the `required` the form already had. The helper never adds one on
+    /// its own, since three of the seven confirmation forms deliberately omit it.
+    pub required: bool,
+    /// Overrides the role's `autocomplete` hint. `Some("off")` is how the
+    /// change-email and delete-account forms stop the password manager
+    /// pre-filling an identity confirmation (settings audit findings 3 and 4);
+    /// a control-level hint beats the `autocomplete="off"` on the form, so the
+    /// role default would silently undo it.
+    pub autocomplete: Option<&'a str>,
+    /// Rendered opposite the label, on the label's own row. The sign-in card
+    /// puts its "Forgot password?" link there.
+    pub label_suffix: Option<Markup>,
+}
+
 /// BUNYIP-554: both eye states, pre-rendered. `input.css` shows exactly one per
 /// the button's `aria-pressed`, so the script never builds markup - SVG
 /// generation stays in Rust and the script only flips the ARIA state.
@@ -51,18 +73,30 @@ fn toggle_glyphs() -> Markup {
 /// under the button. `id` and `name` are separate because the dashboard form
 /// namespaces its ids (`password-current_password`) while posting the plain
 /// field name.
-pub fn password_field(id: &str, name: &str, label: &str, role: PwRole, autofocus: bool) -> Markup {
+///
+/// BUNYIP-597: every `type=password` input a user TYPES INTO renders here, the
+/// identity confirmations included, so none of them is left blind. `PwField`
+/// carries whatever else the form needs.
+pub fn password_field(id: &str, name: &str, label: &str, role: PwRole, opts: PwField) -> Markup {
     let input_class = format!("{} pr-10", dashboard_input());
-    let autocomplete = match role {
+    let autocomplete = opts.autocomplete.unwrap_or(match role {
         PwRole::Current => "current-password",
         PwRole::New | PwRole::Confirm => "new-password",
-    };
+    });
     html! {
         div class="space-y-2" {
-            label for=(id) class="text-sm font-medium leading-none" { (label) }
+            @if let Some(suffix) = &opts.label_suffix {
+                div class="flex items-center justify-between" {
+                    label for=(id) class="text-sm font-medium leading-none" { (label) }
+                    (suffix)
+                }
+            } @else {
+                label for=(id) class="text-sm font-medium leading-none" { (label) }
+            }
             div class="relative" {
                 input id=(id) name=(name) type="password" autocomplete=(autocomplete)
-                    autofocus[autofocus]
+                    autofocus[opts.autofocus]
+                    required[opts.required]
                     data-pw-new[role == PwRole::New]
                     data-pw-confirm[role == PwRole::Confirm]
                     class=(input_class);
@@ -102,10 +136,22 @@ mod tests {
     /// a dead guard is invisible (the form just wipes again).
     #[test]
     fn the_controller_reads_every_marker_the_markup_emits() {
-        let field =
-            password_field("new_password", "new_password", "New", PwRole::New, false).into_string();
-        let confirm =
-            password_field("confirm", "confirm", "Confirm", PwRole::Confirm, false).into_string();
+        let field = password_field(
+            "new_password",
+            "new_password",
+            "New",
+            PwRole::New,
+            PwField::default(),
+        )
+        .into_string();
+        let confirm = password_field(
+            "confirm",
+            "confirm",
+            "Confirm",
+            PwRole::Confirm,
+            PwField::default(),
+        )
+        .into_string();
         assert!(
             field.contains(r#"data-pw-toggle="new_password""#),
             "{field}"
@@ -143,10 +189,85 @@ mod tests {
     #[test]
     fn every_role_renders_a_reveal_toggle() {
         for role in [PwRole::Current, PwRole::New, PwRole::Confirm] {
-            let html = password_field("f", "f", "Field", role, false).into_string();
+            let html = password_field("f", "f", "Field", role, PwField::default()).into_string();
             assert!(html.contains("data-pw-toggle=\"f\""), "{html}");
             assert!(html.contains(r#"aria-label="Show password""#), "{html}");
             assert!(html.contains(r#"type="password""#), "{html}");
+        }
+    }
+
+    /// BUNYIP-597: the three `PwField` extras the identity confirmations need.
+    /// `autocomplete` is the one that silently reverses a decision if it is
+    /// dropped: the change-email and delete-account forms suppress the manager
+    /// pre-fill, and a control-level `current-password` would override it.
+    #[test]
+    fn pw_field_carries_required_autocomplete_and_the_label_suffix() {
+        let html = password_field(
+            "p",
+            "password",
+            "Password",
+            PwRole::Current,
+            PwField {
+                required: true,
+                autocomplete: Some("off"),
+                label_suffix: Some(html! { a href="/password-reset" { "Forgot password?" } }),
+                ..Default::default()
+            },
+        )
+        .into_string();
+        assert!(html.contains(" required"), "{html}");
+        assert!(html.contains(r#"autocomplete="off""#), "{html}");
+        assert!(!html.contains("current-password"), "{html}");
+        assert!(html.contains("Forgot password?"), "{html}");
+
+        let plain = password_field(
+            "p",
+            "password",
+            "Password",
+            PwRole::Current,
+            PwField::default(),
+        )
+        .into_string();
+        assert!(!plain.contains(" required"), "{plain}");
+        assert!(
+            plain.contains(r#"autocomplete="current-password""#),
+            "{plain}"
+        );
+    }
+
+    /// BUNYIP-597: no handler hand-rolls a `type=password` input. One that does
+    /// renders with no reveal control, and it is invisible in review because
+    /// the markup looks ordinary - that is exactly how the seven identity
+    /// confirmations stayed blind after BUNYIP-282 and BUNYIP-575.
+    ///
+    /// The masked secret displays in `admin/email_config.rs` and
+    /// `admin/stripe.rs` are deliberately not scanned: they are `readonly` /
+    /// `disabled` masks of a STORED secret, not of what the user is typing, so
+    /// a reveal there is a different decision.
+    #[test]
+    fn no_handler_hand_rolls_a_password_input() {
+        for (path, source) in [
+            (
+                "bunyip-web/src/handlers/auth_pages.rs",
+                include_str!("../handlers/auth_pages.rs"),
+            ),
+            (
+                "bunyip-web/src/handlers/dashboard.rs",
+                include_str!("../handlers/dashboard.rs"),
+            ),
+            (
+                "bunyip-web/src/handlers/admin/applications.rs",
+                include_str!("../handlers/admin/applications.rs"),
+            ),
+        ] {
+            for (n, line) in source.lines().enumerate() {
+                assert!(
+                    !line.contains(r#"type="password""#),
+                    "{path}:{} hand-rolls a password input. Render it through \
+                     views::password::password_field so it keeps the show/hide toggle.",
+                    n + 1
+                );
+            }
         }
     }
 }
