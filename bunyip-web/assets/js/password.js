@@ -93,10 +93,35 @@
     }
     return out.toUpperCase();
   }
-  async function checkBreach(v) {
-    if (!v || !window.crypto || !window.crypto.subtle) {
+  // BUNYIP-596: whether the LAST breach lookup could actually run. It is false
+  // only once a lookup has FAILED (outage, blocked request, no WebCrypto); a
+  // lookup that is scheduled or still in flight leaves it true, so the gate
+  // stays shut until the answer arrives instead of opening on the way there.
+  var breachAvailable = true;
+  // Only the newest lookup may touch the row or the flag: a late failure from a
+  // superseded request must not open the gate while a fresh check is pending.
+  var breachSeq = 0;
+
+  function breachUnavailable(why, err) {
+    breachAvailable = false;
+    // Falling open on an outage is still a hole in the check, so say so out
+    // loud rather than passing silently.
+    if (window.console && console.warn) {
+      console.warn('bunyip: HaveIBeenPwned lookup unavailable (' + why + '); breach check skipped', err || '');
+    }
+    setState(rowBreach, 'pending');
+    refreshSubmit();
+  }
+
+  async function checkBreach(v, seq) {
+    if (seq !== breachSeq) return;
+    if (!v) {
       setState(rowBreach, 'pending');
       refreshSubmit();
+      return;
+    }
+    if (!window.crypto || !window.crypto.subtle) {
+      breachUnavailable('WebCrypto unavailable');
       return;
     }
     try {
@@ -106,20 +131,20 @@
       var prefix = hash.slice(0, 5);
       var suffix = hash.slice(5);
       var resp = await fetch('https://api.pwnedpasswords.com/range/' + prefix);
+      if (seq !== breachSeq) return;
       if (!resp.ok) {
-        // Network / API hiccup is non-fatal; leave the row pending so the user
-        // isn't blocked on an outage.
-        setState(rowBreach, 'pending');
-        refreshSubmit();
+        breachUnavailable('HTTP ' + resp.status);
         return;
       }
       var body = await resp.text();
+      if (seq !== breachSeq) return;
       var lines = body.split(/\r?\n/);
       var seen = false;
       for (var i = 0; i < lines.length; i++) {
         var s = lines[i].split(':')[0];
         if (s && s.toUpperCase() === suffix) { seen = true; break; }
       }
+      breachAvailable = true;
       setState(rowBreach, seen ? 'fail' : 'pass');
       // BUNYIP-283: refresh the submit gate so the button flips state when the
       // breach result lands. The input-event refresh ran 500 ms ago with
@@ -127,9 +152,9 @@
       // pass leaves the gate computed against the stale pending state and the
       // button stays disabled.
       refreshSubmit();
-    } catch (_e) {
-      setState(rowBreach, 'pending');
-      refreshSubmit();
+    } catch (e) {
+      if (seq !== breachSeq) return;
+      breachUnavailable('request failed', e);
     }
   }
 
@@ -139,18 +164,29 @@
   var breachTimer = null;
   function scheduleBreach(v) {
     if (breachTimer) clearTimeout(breachTimer);
+    // A new password means the previous verdict no longer applies: close the
+    // gate again until this lookup answers (or fails).
+    breachSeq++;
+    breachAvailable = true;
     if (!v) { setState(rowBreach, 'pending'); return; }
     setState(rowBreach, 'pending');
-    breachTimer = setTimeout(function () { checkBreach(v); }, 500);
+    var seq = breachSeq;
+    breachTimer = setTimeout(function () { checkBreach(v, seq); }, 500);
   }
 
   function refreshSubmit() {
     if (!submit) return;
-    var all = ['pw-len','pw-case','pw-digit','pw-breach']
+    var local = ['pw-len','pw-case','pw-digit']
       .map(function (id) { return document.getElementById(id); })
       .every(function (r) { return rowState(r) === 'pass'; });
+    // BUNYIP-596: a confirmed breach hit (`fail`) blocks; a lookup that could
+    // not run does NOT, or a HaveIBeenPwned outage would block every sign-up
+    // and password reset. `pending` still blocks while the lookup is in flight,
+    // so the gate never opens ahead of the answer.
+    var breach = rowState(rowBreach);
+    var breachOk = breach === 'pass' || (breach === 'pending' && !breachAvailable);
     var match = cf && cf.value.length > 0 && cf.value === pw.value;
-    submit.disabled = !(all && match);
+    submit.disabled = !(local && breachOk && match);
   }
   function refreshConfirm() {
     if (!cf || !confirmMsg) return;
