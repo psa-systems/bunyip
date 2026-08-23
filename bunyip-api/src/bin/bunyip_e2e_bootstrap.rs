@@ -213,9 +213,9 @@ fn enforce_guards(config: &Config) -> anyhow::Result<()> {
     }
 
     let env_name = config.environment.trim();
-    let prod_like = env_name.is_empty()
-        || env_name.eq_ignore_ascii_case("production")
-        || env_name.eq_ignore_ascii_case("prod");
+    // `ENVIRONMENT` has exactly one production spelling, `production`
+    // (BUNYIP-600); there is no `prod` variant to recognize.
+    let prod_like = env_name.is_empty() || env_name.eq_ignore_ascii_case("production");
     if prod_like {
         bail!(
             "refusing to run: ENVIRONMENT is '{}' (production-like or unset); E2E bootstrap is non-production only",

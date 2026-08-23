@@ -264,8 +264,8 @@ Every variable below has a working default; set it only to tune the deployment.
 - **OIDC**: `OIDC_JWT_PUBLIC_KEYS_DIR`, `OIDC_ACCESS_TOKEN_TTL_SECONDS`,
   `OIDC_REFRESH_TOKEN_TTL_SECONDS`, `OIDC_REFRESH_IDLE_TTL_SECONDS`,
   `OIDC_CODE_TTL_SECONDS`, `OIDC_LIFECYCLE_EVENT_KEY`, `OIDC_RS_AUDIENCE`.
-- **Infisical**: `INFISICAL_SECRET_PATH`, `INFISICAL_ENVIRONMENT`,
-  `INFISICAL_ENV` (legacy alias).
+- **Infisical**: `INFISICAL_SECRET_PATH`, `INFISICAL_ENVIRONMENT` (read verbatim;
+  must match the Infisical project's environment slug exactly, e.g. `production`).
 - **Diagnostics**: `DB_POOL_METRICS_INTERVAL_SECS` - seconds between database
   pool samples (`size` / `idle` / `in_use` / `acquire_timeouts`, one `INFO` line
   per pool). Unset, empty or `0` means no sampling, which is the normal

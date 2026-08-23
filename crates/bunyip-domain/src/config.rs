@@ -328,7 +328,10 @@ pub struct InfisicalSettings {
     pub address: String,
     /// Infisical project id (`INFISICAL_PROJECT_ID`).
     pub project_id: String,
-    /// Infisical environment slug (`INFISICAL_ENVIRONMENT`, legacy `INFISICAL_ENV`), e.g. `staging` / `prod`.
+    /// Infisical environment slug (`INFISICAL_ENVIRONMENT`), e.g. `staging` / `production`.
+    /// Read verbatim (trimmed only): the value must match the environment slug
+    /// configured in the Infisical project exactly, so the Infisical project's
+    /// slug is named `production`, not `prod`.
     pub environment: String,
     /// Secret folder path (`INFISICAL_SECRET_PATH`), e.g. `/runtime` (project-relative).
     pub secret_path: String,
@@ -349,7 +352,7 @@ impl InfisicalSettings {
             address: env::var("INFISICAL_ADDRESS").unwrap_or_default(),
             project_id: env::var("INFISICAL_PROJECT_ID").unwrap_or_default(),
             environment: env::var("INFISICAL_ENVIRONMENT")
-                .or_else(|_| env::var("INFISICAL_ENV"))
+                .map(|v| v.trim().to_string())
                 .unwrap_or_default(),
             secret_path: env::var("INFISICAL_SECRET_PATH").unwrap_or_else(|_| "/".to_string()),
             client_id: secret_env("INFISICAL_CLIENT_ID").unwrap_or_default(),
@@ -2250,9 +2253,8 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
     ),
     EnvVarSpec::defaulted(
         "INFISICAL_ENVIRONMENT",
-        "Infisical environment slug (BUNYIP-535)",
+        "Infisical environment slug, e.g. staging / production (BUNYIP-600)",
     ),
-    EnvVarSpec::defaulted("INFISICAL_ENV", "legacy alias of INFISICAL_ENVIRONMENT"),
     EnvVarSpec::defaulted(
         "BUNYIP_E2E_BOOTSTRAP_ALLOW",
         "non-production e2e hard-delete switch (BUNYIP-246)",
@@ -2381,12 +2383,12 @@ fn parse_encryption_key(env_var: &'static str, hex_str: &str) -> Result<[u8; 32]
 
 /// Pure half of [`Config::e2e_purge_enabled`]: the environment must be a real
 /// non-production name. Empty / unset (which `Config` treats as production) and
-/// `production` / `prod` all forbid e2e hard-deletes (BUNYIP-246).
+/// `production` both forbid e2e hard-deletes (BUNYIP-246). `ENVIRONMENT` has
+/// exactly one production spelling, `production` (BUNYIP-600); there is no
+/// `prod` variant to recognize.
 pub(crate) fn e2e_env_allows_purge(environment: &str) -> bool {
     let env_name = environment.trim();
-    !env_name.is_empty()
-        && !env_name.eq_ignore_ascii_case("production")
-        && !env_name.eq_ignore_ascii_case("prod")
+    !env_name.is_empty() && !env_name.eq_ignore_ascii_case("production")
 }
 
 #[cfg(test)]
@@ -2447,17 +2449,28 @@ mod tests {
     }
 
     #[test]
-    fn e2e_env_allows_purge_only_for_real_non_prod_names() {
-        // Real non-production names permit the e2e hard-delete path.
-        for env_name in ["staging", "Staging", "dev", "development", "test", "ci"] {
+    fn e2e_env_allows_purge_only_for_real_non_production_names() {
+        // Real non-production names permit the e2e hard-delete path. `prod` is
+        // not a recognized production spelling (BUNYIP-600): `ENVIRONMENT` has
+        // exactly one production value, `production`.
+        for env_name in [
+            "staging",
+            "Staging",
+            "dev",
+            "development",
+            "test",
+            "ci",
+            "prod",
+            "PROD",
+        ] {
             assert!(
                 e2e_env_allows_purge(env_name),
                 "{env_name} should allow purge"
             );
         }
-        // Production-like and empty/unset names forbid it, so `?purge` and the
-        // reaper can never hard-delete on prod (BUNYIP-246).
-        for env_name in ["production", "Production", "PROD", "prod", "", "   "] {
+        // `production` and empty/unset forbid it, so `?purge` and the reaper
+        // can never hard-delete on production (BUNYIP-246).
+        for env_name in ["production", "Production", "PRODUCTION", "", "   "] {
             assert!(
                 !e2e_env_allows_purge(env_name),
                 "{env_name:?} must forbid purge"
@@ -2465,19 +2478,19 @@ mod tests {
         }
     }
 
-    /// BUNYIP-535: the environment slug reads canonical INFISICAL_ENVIRONMENT
-    /// first, falling back to the legacy INFISICAL_ENV for one release.
+    /// BUNYIP-600: `INFISICAL_ENVIRONMENT` is read verbatim (trimmed only), with
+    /// no `prod` normalization or alias; the legacy `INFISICAL_ENV` is no longer read.
     #[test]
-    fn infisical_environment_prefers_canonical_then_legacy() {
+    fn infisical_environment_reads_verbatim_and_drops_legacy_alias() {
         let _env = env_lock();
-        // Canonical wins when both are present.
-        env::set_var("INFISICAL_ENVIRONMENT", "staging");
-        env::set_var("INFISICAL_ENV", "prod");
+        env::set_var("INFISICAL_ENVIRONMENT", "production");
+        assert_eq!(InfisicalSettings::from_env().environment, "production");
+        env::set_var("INFISICAL_ENVIRONMENT", "  staging  ");
         assert_eq!(InfisicalSettings::from_env().environment, "staging");
-        // Legacy still resolves when only it is set.
+        // The legacy alias is no longer read, even when it holds a value.
         env::remove_var("INFISICAL_ENVIRONMENT");
-        assert_eq!(InfisicalSettings::from_env().environment, "prod");
-        // Neither set yields the empty default.
+        env::set_var("INFISICAL_ENV", "production");
+        assert_eq!(InfisicalSettings::from_env().environment, "");
         env::remove_var("INFISICAL_ENV");
         assert_eq!(InfisicalSettings::from_env().environment, "");
     }
