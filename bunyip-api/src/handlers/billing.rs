@@ -8,10 +8,11 @@ use sqlx::PgPool;
 use std::sync::Arc;
 
 use crate::errors::AppError;
+use crate::handlers::user::self_user;
 use crate::middleware::extract_client_ip;
 use crate::middleware::AuthenticatedUser;
 use crate::models::RateLimitConfig;
-use crate::repositories::{RateLimitRepository, UserRepository};
+use crate::repositories::RateLimitRepository;
 use crate::responses::{get_request_id, success};
 use crate::services::{stripe_err, AuthService, StripeService};
 
@@ -93,9 +94,8 @@ pub async fn list_invoices(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
-    let db_user = UserRepository::find_by_id(&pool, user.0.sub)
-        .await?
-        .ok_or(AppError::not_found("User"))?;
+    // The row this request already read, else a query.
+    let db_user = self_user(&req, &pool, user.0.sub).await?;
 
     let invoices = if let Some(ref customer_id) = db_user.stripe_customer_id {
         stripe
@@ -112,7 +112,7 @@ pub async fn list_invoices(
 /// GET /v1/billing/invoices/{invoice_id}/download
 /// Redirect to the Stripe-hosted PDF for an invoice
 pub async fn download_invoice(
-    _req: HttpRequest,
+    req: HttpRequest,
     user: AuthenticatedUser,
     pool: web::Data<PgPool>,
     stripe: web::Data<Arc<StripeService>>,
@@ -120,9 +120,8 @@ pub async fn download_invoice(
 ) -> Result<HttpResponse, AppError> {
     let invoice_id = path.into_inner();
 
-    let db_user = UserRepository::find_by_id(&pool, user.0.sub)
-        .await?
-        .ok_or(AppError::not_found("User"))?;
+    // The row this request already read, else a query.
+    let db_user = self_user(&req, &pool, user.0.sub).await?;
 
     let customer_id = db_user
         .stripe_customer_id

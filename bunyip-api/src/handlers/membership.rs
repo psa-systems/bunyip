@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::errors::AppError;
+use crate::handlers::user::self_user;
 use crate::middleware::{AuthCookies, AuthenticatedUser};
 use crate::models::MembershipResponse;
 use crate::repositories::UserRepository;
@@ -57,10 +58,8 @@ pub async fn get_membership(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
-    // Get user from database for fresh data
-    let db_user = UserRepository::find_by_id(&pool, user.0.sub)
-        .await?
-        .ok_or(AppError::not_found("User"))?;
+    // Fresh user data: the row this request already read, else a query.
+    let db_user = self_user(&req, &pool, user.0.sub).await?;
 
     // If user has a Stripe customer, fetch live subscription data
     let (current_period_end, cancel_at_period_end) =
@@ -189,10 +188,9 @@ pub async fn cancel_membership(
         .app_data::<Arc<JwtService>>()
         .ok_or_else(|| AppError::internal("JWT service not configured"))?;
 
-    // Get current user to check status
-    let db_user = UserRepository::find_by_id(&pool, user.0.sub)
-        .await?
-        .ok_or(AppError::not_found("User"))?;
+    // Get current user to check status: the row this request already read, else
+    // a query. This read precedes every write below, so the snapshot is valid.
+    let db_user = self_user(&req, &pool, user.0.sub).await?;
 
     if db_user.membership_status == "canceled" || db_user.membership_status == "none" {
         return Err(AppError::conflict("No active membership to cancel"));
@@ -221,7 +219,9 @@ pub async fn cancel_membership(
         UserRepository::reset_membership_tier(pool.get_ref(), user.0.sub).await?;
     }
 
-    // Fetch updated user
+    // Fetch updated user. NOT served from the request-scoped row (BUNYIP-564):
+    // this read exists to observe the status/tier writes made above, and that
+    // snapshot was taken before the handler ran, so it would be stale.
     let updated_user = UserRepository::find_by_id(&pool, user.0.sub)
         .await?
         .ok_or(AppError::not_found("User"))?;
@@ -269,9 +269,9 @@ pub async fn cancel_membership_immediate(
         .app_data::<Arc<JwtService>>()
         .ok_or_else(|| AppError::internal("JWT service not configured"))?;
 
-    let db_user = UserRepository::find_by_id(&pool, user.0.sub)
-        .await?
-        .ok_or(AppError::not_found("User"))?;
+    // The row this request already read, else a query. This read precedes every
+    // write below, so the snapshot is valid.
+    let db_user = self_user(&req, &pool, user.0.sub).await?;
 
     if db_user.membership_status == "canceled" || db_user.membership_status == "none" {
         return Err(AppError::conflict("No active membership to cancel"));
@@ -300,6 +300,9 @@ pub async fn cancel_membership_immediate(
     .await?;
     UserRepository::reset_membership_tier(pool.get_ref(), user.0.sub).await?;
 
+    // NOT served from the request-scoped row (BUNYIP-564): this read exists to
+    // observe the status/tier writes made above, and that snapshot was taken
+    // before the handler ran, so it would be stale.
     let updated_user = UserRepository::find_by_id(&pool, user.0.sub)
         .await?
         .ok_or(AppError::not_found("User"))?;
@@ -336,10 +339,9 @@ pub async fn reactivate_membership(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
-    // Get user to find Stripe customer
-    let db_user = UserRepository::find_by_id(&pool, user.0.sub)
-        .await?
-        .ok_or(AppError::not_found("User"))?;
+    // Get user to find Stripe customer: the row this request already read, else
+    // a query.
+    let db_user = self_user(&req, &pool, user.0.sub).await?;
 
     let customer_id = db_user
         .stripe_customer_id
@@ -377,10 +379,8 @@ pub async fn billing_portal(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
-    // Get user from database
-    let db_user = UserRepository::find_by_id(&pool, user.0.sub)
-        .await?
-        .ok_or(AppError::not_found("User"))?;
+    // The row this request already read, else a query.
+    let db_user = self_user(&req, &pool, user.0.sub).await?;
 
     let customer_id = db_user
         .stripe_customer_id
@@ -405,9 +405,8 @@ pub async fn get_payment_history(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
-    let db_user = UserRepository::find_by_id(&pool, user.0.sub)
-        .await?
-        .ok_or(AppError::not_found("User"))?;
+    // The row this request already read, else a query.
+    let db_user = self_user(&req, &pool, user.0.sub).await?;
 
     let payments = if let Some(ref customer_id) = db_user.stripe_customer_id {
         let limit = query.per_page.map(|p| p.clamp(1, 100) as u64);
