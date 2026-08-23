@@ -328,10 +328,9 @@ pub struct InfisicalSettings {
     pub address: String,
     /// Infisical project id (`INFISICAL_PROJECT_ID`).
     pub project_id: String,
-    /// Infisical environment slug (`INFISICAL_ENVIRONMENT`), e.g. `staging` / `production`.
-    /// Read verbatim (trimmed only): the value must match the environment slug
-    /// configured in the Infisical project exactly, so the Infisical project's
-    /// slug is named `production`, not `prod`.
+    /// Infisical environment slug (`INFISICAL_ENVIRONMENT`), e.g. `staging` / `prod`.
+    /// Read verbatim (trimmed only): the value must match the slug configured
+    /// under Infisical > Secrets > Project > Settings > Environments exactly.
     pub environment: String,
     /// Secret folder path (`INFISICAL_SECRET_PATH`), e.g. `/runtime` (project-relative).
     pub secret_path: String,
@@ -2253,7 +2252,7 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
     ),
     EnvVarSpec::defaulted(
         "INFISICAL_ENVIRONMENT",
-        "Infisical environment slug, e.g. staging / production (BUNYIP-600)",
+        "Infisical environment slug, e.g. staging / prod (BUNYIP-600)",
     ),
     EnvVarSpec::defaulted(
         "BUNYIP_E2E_BOOTSTRAP_ALLOW",
@@ -2478,8 +2477,8 @@ mod tests {
         }
     }
 
-    /// BUNYIP-600: `INFISICAL_ENVIRONMENT` is read verbatim (trimmed only), with
-    /// no `prod` normalization or alias; the legacy `INFISICAL_ENV` is no longer read.
+    /// BUNYIP-600: `INFISICAL_ENVIRONMENT` is read verbatim (trimmed only).
+    /// Must match the slug under Infisical > Secrets > Project > Settings > Environments.
     #[test]
     fn infisical_environment_reads_verbatim_and_drops_legacy_alias() {
         let _env = env_lock();
