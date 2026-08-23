@@ -11,7 +11,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::errors::OciError;
+use crate::errors::{internal_fault, OciError, OciErrorContext};
 use crate::repositories::UserRepository;
 use crate::services::{OciTokenService, RegistryTokenClaims};
 
@@ -53,8 +53,10 @@ impl FromRequest for OciBearerUser {
         let pool = req.app_data::<actix_web::web::Data<PgPool>>().cloned();
 
         Box::pin(async move {
-            let svc = token_svc.ok_or(OciError::Internal)?;
-            let pool = pool.ok_or(OciError::Internal)?;
+            let svc = token_svc
+                .ok_or_else(|| internal_fault("resolve the OCI token service from the app data"))?;
+            let pool =
+                pool.ok_or_else(|| internal_fault("resolve the database pool from the app data"))?;
 
             let raw = header
                 .and_then(|v| v.to_str().ok().map(str::to_string))
@@ -64,7 +66,7 @@ impl FromRequest for OciBearerUser {
 
             let user = UserRepository::find_by_id(pool.get_ref(), claims.sub)
                 .await
-                .map_err(|_| OciError::Internal)?
+                .internal_ctx(|| format!("load the bearer's user row {}", claims.sub))?
                 .ok_or(OciError::Unauthorized)?;
             if user.deleted_at.is_some() {
                 return Err(OciError::Unauthorized);

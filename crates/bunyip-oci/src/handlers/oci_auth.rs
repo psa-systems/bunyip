@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::sync::{Arc, OnceLock};
 
-use crate::errors::OciError;
+use crate::errors::{OciError, OciErrorContext};
 use crate::middleware::extract_client_ip;
 use crate::models::{AuditAction, CreateAuditLog, RateLimitConfig};
 use crate::repositories::{
@@ -139,7 +139,7 @@ pub async fn issue_token(
         &RateLimitConfig::OCI_TOKEN_THROUGHPUT,
     )
     .await
-    .map_err(|_| OciError::Internal)?;
+    .internal_ctx(|| "count a token request against the throughput cap")?;
     if throughput_exceeded {
         return Err(too_many(
             pool.get_ref(),
@@ -154,7 +154,7 @@ pub async fn issue_token(
 
     let user = UserRepository::find_by_email(pool.get_ref(), &email)
         .await
-        .map_err(|_| OciError::Internal)?;
+        .internal_ctx(|| "look up the account behind a registry token request")?;
 
     let user = match user {
         Some(u) => u,
@@ -183,7 +183,7 @@ pub async fn issue_token(
 
     let password_ok = argon2_offload::verify_password(password, password_hash)
         .await
-        .map_err(|_| OciError::Internal)?;
+        .internal_ctx(|| format!("verify the registry password of user {}", user.id))?;
     if !password_ok {
         return Err(fail_credential(pool.get_ref(), &rate_key, &email, ip, "bad_password").await);
     }
@@ -200,7 +200,7 @@ pub async fn issue_token(
         let slug = parse_repository_pull_scope(raw_scope).ok_or(OciError::Denied)?;
         let app = ApplicationRepository::find_active_by_slug(pool.get_ref(), &slug)
             .await
-            .map_err(|_| OciError::Internal)?
+            .internal_ctx(|| format!("load the application for token scope slug {slug}"))?
             .ok_or(OciError::NameUnknown)?;
         if !app.is_pullable() {
             return Err(OciError::NameUnknown);
@@ -211,7 +211,12 @@ pub async fn issue_token(
         let allowed =
             EntitlementRepository::is_allowed(pool.get_ref(), user.id, user.is_admin(), &app)
                 .await
-                .map_err(|_| OciError::Internal)?;
+                .internal_ctx(|| {
+                    format!(
+                        "check user {}'s entitlement to application {}",
+                        user.id, app.slug
+                    )
+                })?;
         if !allowed {
             audit_failed(pool.get_ref(), &email, ip, "no_entitlement").await;
             return Err(OciError::NameUnknown);
@@ -294,10 +299,10 @@ async fn failures_at_cap(
     // rather than comparing against the caller's compile-time preset.
     let config = RateLimitConfigRepository::effective(pool, config)
         .await
-        .map_err(|_| OciError::Internal)?;
+        .internal_ctx(|| format!("resolve the effective {} limit", config.action))?;
     let (count, _) = RateLimitRepository::check(pool, key, &config)
         .await
-        .map_err(|_| OciError::Internal)?;
+        .internal_ctx(|| format!("read the {} failure counter", config.action))?;
     Ok(count >= config.max_requests)
 }
 
@@ -317,9 +322,18 @@ async fn too_many(
     // MUST get the config that actually tripped. Passing a fixed FAILURES config
     // for a throughput or per-IP denial looked up the wrong (key, action) pair,
     // found no row, and returned Retry-After: 0.
+    // A read failure keeps the 429 (the denial is already decided), but the
+    // advertised window is then a guess, so log it rather than pass it off.
     let retry_after = RateLimitRepository::get_retry_after(pool, key, config)
         .await
-        .unwrap_or(60);
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                error = %e,
+                action = config.action,
+                "oci retry-after lookup failed; advertising the 60s default"
+            );
+            60
+        });
     audit_failed(pool, email, ip, reason).await;
     OciError::TooManyRequests {
         retry_after_secs: Some(retry_after),
