@@ -17,8 +17,8 @@
 //! `branding_assets` whose presence is reported as a version string
 //! (`*_updated_at`, or empty when the slot is unset). An empty version means the
 //! caller falls back to the committed file under `bunyip-web/assets/` (the
-//! favicon set) or renders nothing at all (the mascot, the mark image, both
-//! `theme-color` metas, the `:root` block).
+//! favicon set, and the hero mascot since BUNYIP-605) or renders nothing at all
+//! (the mark image, both `theme-color` metas, the `:root` block).
 
 use std::sync::{Arc, RwLock};
 
@@ -554,9 +554,10 @@ mod tests {
     // --- BUNYIP-560: the palette and the asset slots ------------------------
 
     /// An unset slot resolves to an EMPTY version, which is the signal every
-    /// reader uses to fall back (the favicon set) or render nothing (the mark
-    /// image, the mascot). A set slot carries a version so the browser refetches
-    /// after a re-upload instead of showing the previous logo forever.
+    /// reader uses to fall back (the favicon set, and the mascot since
+    /// BUNYIP-605) or render nothing (the mark image). A set slot carries a
+    /// version so the browser refetches after a re-upload instead of showing
+    /// the previous logo forever.
     #[test]
     fn an_unset_asset_slot_resolves_to_an_empty_version() {
         let cache = BrandingCache::new("PSA Systems");
