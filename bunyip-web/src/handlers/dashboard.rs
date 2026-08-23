@@ -24,7 +24,7 @@ use crate::util::{
     app_gradient, days_until, entry_price, format_stripe_amount, has_active_membership,
     pricing_currency, rel_time, tier_price, urlenc,
 };
-use crate::views::password::{guard_message, password_field, PwRole};
+use crate::views::password::{guard_message, password_field, PwField, PwRole};
 use crate::views::ui::{
     back_link, badge, button_class, empty_state, error_box, icon, pager, success_box,
 };
@@ -1486,7 +1486,7 @@ pub async fn settings(
                     // browser's own shape check). Authoritative validation
                     // is still in `services::auth::request_email_change`.
                     div class="space-y-2" { label for="new_email" class="text-sm font-medium" { "New Email Address" } input id="new_email" name="new_email" type="email" value="" autocomplete="off" maxlength="254" required placeholder="Enter your new email" class=(crate::handlers::dashboard_input()); }
-                    div class="space-y-2" { label for="email-current_password" class="text-sm font-medium" { "Current Password" } input id="email-current_password" name="current_password" type="password" autocomplete="off" required placeholder="Enter your current password" class=(crate::handlers::dashboard_input()); }
+                    (password_field("email-current_password", "current_password", "Current Password", PwRole::Current, PwField { required: true, autocomplete: Some("off"), ..Default::default() }))
                     @if twofa_enabled { div class="space-y-2" { label for="email-totp_code" class="text-sm font-medium" { "Two-Factor Code" } input id="email-totp_code" name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
                     button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-teal-500 text-white border-0")) { "Change Email" }
                 }
@@ -1501,7 +1501,7 @@ pub async fn settings(
                         div class="flex items-center gap-2" { (icon("shield-check", "h-5 w-5 text-teal-600 dark:text-teal-400")) span class="font-medium" { "Enabled" } (badge("success", "Active")) }
                         @if !is_admin {
                             form method="post" action="/settings/2fa/disable" class="space-y-2 max-w-md" {
-                                div class="space-y-2" { label for="disable-2fa-password" class="text-sm font-medium" { "Password" } input id="disable-2fa-password" name="password" type="password" class=(crate::handlers::dashboard_input()); }
+                                (password_field("disable-2fa-password", "password", "Password", PwRole::Current, PwField::default()))
                                 div class="space-y-2" { label for="disable-2fa-totp_code" class="text-sm font-medium" { "Two-Factor Code" } input id="disable-2fa-totp_code" name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); }
                                 button type="submit" class=(button_class("outline", "sm", "text-destructive-text hover:text-destructive-text")) { (icon("shield-off", "mr-2 h-4 w-4")) "Disable 2FA" }
                             }
@@ -1549,7 +1549,7 @@ pub async fn settings(
                     // surface a freshly-arrived SMS / TOTP code from a sibling
                     // tab WITHOUT pre-filling the password field.
                     form method="post" action="/settings/account/delete" autocomplete="off" class="space-y-3 max-w-md" data-confirm="Permanently delete your account AND all of your data in Mokosh and any other connected app? This cannot be undone." {
-                        div class="space-y-2" { label for="delete-account-password" class="text-sm font-medium" { "Password" } input id="delete-account-password" name="password" type="password" autocomplete="off" placeholder="Enter your password to confirm" class=(crate::handlers::dashboard_input()); }
+                        (password_field("delete-account-password", "password", "Password", PwRole::Current, PwField { autocomplete: Some("off"), ..Default::default() }))
                         @if user.two_factor_enabled { div class="space-y-2" { label for="delete-account-totp_code" class="text-sm font-medium" { "Two-Factor Code" } input id="delete-account-totp_code" name="totp_code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
                         button type="submit" class=(button_class("destructive", "default", "")) { (icon("trash", "mr-2 h-4 w-4")) "Delete My Account" }
                     }
@@ -1576,9 +1576,9 @@ pub async fn settings(
 fn password_card_body(twofa_enabled: bool) -> Markup {
     html! {
         form method="post" action="/settings/password" class="space-y-4 max-w-md" data-pw-guard {
-            (password_field("password-current_password", "current_password", "Current Password", PwRole::Current, false))
-            (password_field("new_password", "new_password", "New Password", PwRole::New, false))
-            (password_field("confirm", "confirm", "Confirm Password", PwRole::Confirm, false))
+            (password_field("password-current_password", "current_password", "Current Password", PwRole::Current, PwField::default()))
+            (password_field("new_password", "new_password", "New Password", PwRole::New, PwField::default()))
+            (password_field("confirm", "confirm", "Confirm Password", PwRole::Confirm, PwField::default()))
             (guard_message())
             @if twofa_enabled { div class="space-y-2" { label for="password-totp_code" class="text-sm font-medium" { "Two-Factor Code" } input id="password-totp_code" name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
             button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Update Password" }
@@ -2365,7 +2365,7 @@ fn twofa_recovery_form(err: Option<&str>) -> Markup {
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="p-6" {
                     form method="post" action="/settings/2fa/recovery-codes" class="space-y-4 max-w-md" {
-                        div class="space-y-2" { label for="password" class="text-sm font-medium" { "Password" } input id="password" name="password" type="password" autocomplete="current-password" required class=(crate::handlers::dashboard_input()); }
+                        (password_field("password", "password", "Password", PwRole::Current, PwField { required: true, ..Default::default() }))
                         div class="flex gap-2" {
                             button type="submit" class=(button_class("default", "default", "")) { (icon("key", "mr-2 h-4 w-4")) "Regenerate codes" }
                             a href="/settings" class=(button_class("outline", "default", "")) { "Cancel" }
@@ -2373,6 +2373,8 @@ fn twofa_recovery_form(err: Option<&str>) -> Markup {
                     }
                 }
             }
+            // Without the controller the eye button is dead markup.
+            (crate::views::password::script())
         }
     }
 }
@@ -2446,7 +2448,7 @@ fn twofa_rekey_stepup_form(err: Option<&str>) -> Markup {
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="p-6" {
                     form method="post" action="/settings/2fa/rekey" class="space-y-4 max-w-md" {
-                        div class="space-y-2" { label for="password" class="text-sm font-medium" { "Password" } input id="password" name="password" type="password" autocomplete="current-password" required class=(crate::handlers::dashboard_input()); }
+                        (password_field("password", "password", "Password", PwRole::Current, PwField { required: true, ..Default::default() }))
                         div class="space-y-2" { label for="totp_code" class="text-sm font-medium" { "Current two-factor code" } input id="totp_code" name="totp_code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6-digit or recovery code" class=(crate::handlers::dashboard_input()); }
                         div class="flex gap-2" {
                             button type="submit" class=(button_class("default", "default", "")) { (icon("shield", "mr-2 h-4 w-4")) "Continue" }
@@ -2455,6 +2457,8 @@ fn twofa_rekey_stepup_form(err: Option<&str>) -> Markup {
                     }
                 }
             }
+            // Without the controller the eye button is dead markup.
+            (crate::views::password::script())
         }
     }
 }
@@ -2971,6 +2975,29 @@ mod tests {
             assert!(html.contains(marker), "form lost {marker}: {html}");
         }
         assert!(html.contains("/assets/js/password-field.js"), "{html}");
+    }
+
+    /// BUNYIP-597: the two 2FA step-up pages are their own documents, so they
+    /// have to ship the controller themselves; `password_card_body` only covers
+    /// the Settings page. Without it the eye button renders and does nothing.
+    #[test]
+    fn every_step_up_form_reveals_the_password_it_asks_for() {
+        for (page, html) in [
+            (
+                "recovery-codes",
+                super::twofa_recovery_form(None).into_string(),
+            ),
+            ("rekey", super::twofa_rekey_stepup_form(None).into_string()),
+        ] {
+            for marker in [
+                r#"data-pw-toggle="password""#,
+                r#"aria-label="Show password""#,
+                "/assets/js/password-field.js",
+                " required",
+            ] {
+                assert!(html.contains(marker), "{page} form lost {marker}: {html}");
+            }
+        }
     }
 
     #[test]

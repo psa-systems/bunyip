@@ -13,6 +13,7 @@ use crate::api::types::{AdminApplication, AppDoc};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::urlenc;
 use crate::views::layout::{admin_block, admin_block_grid};
+use crate::views::password::{password_field, PwField, PwRole};
 use crate::views::ui::{
     back_link, badge, button_class, empty_state, error_box, icon, toggle_switch,
 };
@@ -601,11 +602,13 @@ fn app_danger_zone(id: &str, error: Option<&str>) -> Markup {
             div class="p-6 pt-0" {
                 @if let Some(e) = error { (error_box(e)) }
                 form method="post" action=(format!("/admin/applications/{id}/delete")) class="space-y-3 max-w-md mt-2" data-confirm="Permanently delete this application? This cannot be undone." {
-                    div class="space-y-2" { label for="password" class="text-sm font-medium" { "Password" } input id="password" name="password" type="password" placeholder="Enter your password to confirm" class=(dashboard_input()); }
+                    (password_field("password", "password", "Password", PwRole::Current, PwField::default()))
                     div class="space-y-2" { label for="totp_code" class="text-sm font-medium" { "Two-Factor Code" } input id="totp_code" name="totp_code" placeholder="6-digit code" class=(dashboard_input()); }
                     button type="submit" class=(button_class("destructive", "default", "")) { (icon("trash", "mr-2 h-4 w-4")) "Delete application" }
                 }
             }
+            // Without the controller the eye button is dead markup.
+            (crate::views::password::script())
         }
     }
 }
@@ -1148,7 +1151,23 @@ pub async fn application_doc_delete(
 
 #[cfg(test)]
 mod tests {
-    use super::{doc_fields, AppDoc};
+    use super::{app_danger_zone, doc_fields, AppDoc};
+
+    /// BUNYIP-597: the admin confirms a hard delete by typing their password,
+    /// so that input gets the reveal toggle, and this page is its own document
+    /// so it ships the controller itself.
+    #[test]
+    fn app_delete_confirmation_reveals_the_password() {
+        let html = app_danger_zone("app-1", None).into_string();
+        for marker in [
+            r#"data-pw-toggle="password""#,
+            r#"aria-label="Show password""#,
+            "/assets/js/password-field.js",
+            r#"name="password""#,
+        ] {
+            assert!(html.contains(marker), "danger zone lost {marker}: {html}");
+        }
+    }
 
     fn doc(id: &str) -> AppDoc {
         AppDoc {
