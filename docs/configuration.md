@@ -417,6 +417,11 @@ the platform to its compile-time caps.
 | `applications.webhook_url`                                           | admin Applications page                                           | also upserted at boot for the `mokosh` row from `MOKOSH_WEBHOOK_URL`                |
 | `oauth_clients`                                                      | migrations, boot-time reconciliation, `just register-dev-clients` | the `MOKOSH_APPS_*`, `DRILLMARK_*` and `LETS_CHAT_*` variables reconcile these rows |
 
+`oauth_clients` is also the suite's machine-identity registry: a registration that is confidential, authenticates with
+`client_secret_basic` and lists `client_credentials` in `allowed_grant_types` may call the mailer relay
+(`POST /v1/mailer/send`, BUNYIP-602). Provisioning, the two rate-limit actions it adds (`mailer_send`,
+`mailer_auth_failures`) and the SMTP/DNS prerequisites are in [`mailer-relay.md`](mailer-relay.md).
+
 ### Per-user settings
 
 Two-factor enrolment (`user_totp`, encrypted under `APP_ENCRYPTION_KEY`), trusted devices, active sessions and

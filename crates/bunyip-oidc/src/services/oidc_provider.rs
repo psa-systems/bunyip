@@ -270,6 +270,43 @@ pub struct OidcProvider {
     pub pool: PgPool,
 }
 
+/// Load an active OAuth client registration by its UUID `client_id`.
+///
+/// A free function over the pool rather than a method, because the registration
+/// table is also the suite's machine-identity registry (BUNYIP-602): a machine
+/// endpoint authenticates a calling app against it with no issuer, no key
+/// material and no `OidcProvider` involved, and stays usable on an instance
+/// where the OIDC provider itself is switched off.
+///
+/// `disabled_at IS NULL` is part of the predicate, so a disabled registration is
+/// indistinguishable from an unregistered one. Runtime `query_as` so this query
+/// does not need a `.sqlx/` cache regeneration every time the `oauth_clients`
+/// table gains a new column (BUNYIP-61 added `tenant_claim_name` here; further
+/// columns land the same way).
+pub async fn load_client(pool: &PgPool, client_id: Uuid) -> Result<Option<OAuthClient>, AppError> {
+    sqlx::query_as::<_, OAuthClient>(
+        r#"
+        SELECT
+            id, client_id, client_secret_hash, client_type, name, logo_uri,
+            redirect_uris, post_logout_redirect_uris,
+            backchannel_logout_uri, lifecycle_event_uri,
+            allowed_scopes,
+            access_token_ttl_seconds, refresh_token_ttl_seconds,
+            refresh_idle_ttl_seconds, audience,
+            created_at, disabled_at,
+            first_party,
+            tenant_claim_name,
+            allowed_grant_types, token_endpoint_auth_method
+        FROM oauth_clients
+        WHERE client_id = $1 AND disabled_at IS NULL
+        "#,
+    )
+    .bind(client_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| AppError::internal(format!("Failed to load oauth_client: {e}")))
+}
+
 impl OidcProvider {
     pub fn new(config: OidcConfig, keys: Arc<OidcKeySet>, pool: PgPool) -> Self {
         Self { config, keys, pool }
@@ -374,33 +411,9 @@ impl OidcProvider {
 
     // ── OAuth client lookup ───────────────────────────────────────────────────
 
-    /// Load an active OAuth client by its UUID client_id. Runtime
-    /// `query_as` so this query does not need a `.sqlx/` cache
-    /// regeneration every time the `oauth_clients` table gains a new
-    /// column (BUNYIP-61 added `tenant_claim_name` here; further
-    /// columns land the same way).
+    /// Load an active OAuth client by its UUID client_id.
     pub async fn load_client(&self, client_id: Uuid) -> Result<Option<OAuthClient>, AppError> {
-        sqlx::query_as::<_, OAuthClient>(
-            r#"
-            SELECT
-                id, client_id, client_secret_hash, client_type, name, logo_uri,
-                redirect_uris, post_logout_redirect_uris,
-                backchannel_logout_uri, lifecycle_event_uri,
-                allowed_scopes,
-                access_token_ttl_seconds, refresh_token_ttl_seconds,
-                refresh_idle_ttl_seconds, audience,
-                created_at, disabled_at,
-                first_party,
-                tenant_claim_name,
-                allowed_grant_types, token_endpoint_auth_method
-            FROM oauth_clients
-            WHERE client_id = $1 AND disabled_at IS NULL
-            "#,
-        )
-        .bind(client_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| AppError::internal(format!("Failed to load oauth_client: {e}")))
+        load_client(&self.pool, client_id).await
     }
 
     // ── Authorization code ────────────────────────────────────────────────────

@@ -50,6 +50,9 @@ pub enum KeyKind {
     TwoFactorUserId,
     /// The key is a source IP address; there is no user to resolve.
     Ip,
+    /// The key is an `oauth_clients.client_id` UUID: a calling app's machine
+    /// identity, not a person (BUNYIP-602). There is no user to resolve.
+    ClientId,
 }
 
 /// The resolved subject a `rate_limits.key` points at, once interpreted per its
@@ -62,6 +65,9 @@ pub enum KeySubject {
     UserId(Uuid),
     /// IP-keyed: expose the IP, no user to resolve.
     Ip(String),
+    /// Client-id-keyed (BUNYIP-602): a calling app's machine identity. Expose
+    /// the client id; there is no user to resolve.
+    ClientId(Uuid),
     /// The action is unknown, or the key did not parse as expected; expose the
     /// raw key and resolve no user.
     Unknown(String),
@@ -265,6 +271,32 @@ impl RateLimitConfig {
         key_kind: KeyKind::UserId,
     };
 
+    /// BUNYIP-602: the mailer relay, ALL requests, 60 per minute per CALLING
+    /// APP (keyed by its `oauth_clients.client_id`). Per app, not per IP: the
+    /// suite's apps sit behind shared egress, so an IP-keyed cap would make one
+    /// app's burst throttle another's mail. `/v1/mailer/send` is exempt from the
+    /// per-IP `RateLimitFloor` for the same reason, so this cap and
+    /// [`Self::MAILER_AUTH_FAILURES`] are the whole control on that endpoint.
+    pub const MAILER_SEND: Self = Self {
+        action: "mailer_send",
+        max_requests: 60,
+        window_seconds: 60,
+        key_kind: KeyKind::ClientId,
+    };
+
+    /// BUNYIP-602: mailer relay, FAILED client authentications per source IP,
+    /// 10 per minute. Shaped on [`Self::OCI_TOKEN_IP_FAILURES`]: the relay
+    /// verifies an Argon2 client secret (~100 ms of CPU) before it knows which
+    /// app is calling, so an unauthenticated flood cannot be charged to a
+    /// per-app cap. Counting only FAILURES leaves a legitimate app, which never
+    /// fails, entirely unaffected by it.
+    pub const MAILER_AUTH_FAILURES: Self = Self {
+        action: "mailer_auth_failures",
+        max_requests: 10,
+        window_seconds: 60,
+        key_kind: KeyKind::Ip,
+    };
+
     /// Every preset, so the admin read path can look one up by its stored
     /// `action` string (BUNYIP-315). Keep in lock-step with the consts above.
     pub const ALL: &'static [Self] = &[
@@ -285,6 +317,8 @@ impl RateLimitConfig {
         Self::OAUTH_DISCOVERY,
         Self::FEEDBACK_SUBMIT,
         Self::SMTP_TEST,
+        Self::MAILER_SEND,
+        Self::MAILER_AUTH_FAILURES,
     ];
 
     /// Look up the preset for a stored `rate_limits.action` string. Returns
@@ -358,6 +392,10 @@ impl RateLimitConfig {
                 None => KeySubject::Unknown(key.to_string()),
             },
             KeyKind::Ip => KeySubject::Ip(key.to_string()),
+            KeyKind::ClientId => match Uuid::parse_str(key) {
+                Ok(id) => KeySubject::ClientId(id),
+                Err(_) => KeySubject::Unknown(key.to_string()),
+            },
         }
     }
 }

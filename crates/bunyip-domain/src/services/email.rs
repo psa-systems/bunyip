@@ -10,6 +10,9 @@ use lettre::{
 // report the specific stage that failed instead of a generic send error.
 use lettre::transport::smtp::authentication::Mechanism;
 use lettre::transport::smtp::client::{AsyncSmtpConnection, TlsParameters};
+// Re-exported so a consumer driving `EmailService::new_capturing` in a test
+// reads the captured messages without taking a lettre dependency of its own.
+pub use lettre::transport::stub::AsyncStubTransport;
 use std::time::Duration;
 use tera::{Context, Tera};
 
@@ -17,9 +20,39 @@ use crate::config::{EmailConfig, SmtpTls};
 use crate::errors::AppError;
 use crate::models::Feedback;
 
+/// Where a built message is handed off.
+///
+/// `Smtp` is the real relay. `Stub` records the message instead of connecting,
+/// so the mailer-relay path (BUNYIP-602) is provable end to end without an SMTP
+/// server; it is reachable only through [`EmailService::new_capturing`], which
+/// nothing in either binary calls.
+#[derive(Clone)]
+enum MailTransport {
+    Smtp(Box<AsyncSmtpTransport<Tokio1Executor>>),
+    Stub(AsyncStubTransport),
+}
+
+impl MailTransport {
+    /// Hand `message` to the transport. Both arms map a transport failure to the
+    /// same error, so no caller can tell a stub apart by its error shape.
+    async fn send(&self, message: Message) -> Result<(), AppError> {
+        match self {
+            MailTransport::Smtp(t) => t
+                .send(message)
+                .await
+                .map(|_| ())
+                .map_err(|e| AppError::internal(format!("Email send error: {}", e))),
+            MailTransport::Stub(t) => t
+                .send(message)
+                .await
+                .map_err(|e| AppError::internal(format!("Email send error: {}", e))),
+        }
+    }
+}
+
 /// Reloadable SMTP transport + config, swapped on admin update (BUNYIP-351).
 struct EmailRuntime {
-    transport: Option<AsyncSmtpTransport<Tokio1Executor>>,
+    transport: Option<MailTransport>,
     config: EmailConfig,
 }
 
@@ -78,9 +111,7 @@ impl EmailService {
     ///
     /// Host/port/tls/credentials are baked into the transport at build time, so
     /// this is reused by both `new()` and `reload()` to (re)construct it.
-    fn build_transport(
-        config: &EmailConfig,
-    ) -> Result<Option<AsyncSmtpTransport<Tokio1Executor>>, AppError> {
+    fn build_transport(config: &EmailConfig) -> Result<Option<MailTransport>, AppError> {
         if !config.enabled {
             return Ok(None);
         }
@@ -113,7 +144,7 @@ impl EmailService {
                 .build(),
         };
 
-        Ok(Some(transport))
+        Ok(Some(MailTransport::Smtp(Box::new(transport))))
     }
 
     /// BUNYIP-433: verify SMTP settings by opening a real connection,
@@ -272,7 +303,7 @@ impl EmailService {
     }
 
     /// Snapshot the current transport (lettre transports are Clone = cheap Arc bump).
-    fn transport(&self) -> Option<AsyncSmtpTransport<Tokio1Executor>> {
+    fn transport(&self) -> Option<MailTransport> {
         self.runtime
             .read()
             .expect("EmailService lock poisoned")
@@ -602,6 +633,116 @@ impl EmailService {
         }
     }
 
+    /// BUNYIP-602 test seam: a service whose transport RECORDS every message
+    /// instead of connecting to a relay, returned alongside the stub so a test
+    /// can read exactly what was handed off (envelope + formatted bytes).
+    ///
+    /// Not `#[cfg(test)]` because `bunyip-api`'s integration test drives the
+    /// relay through the real HTTP stack from outside this crate. Nothing in
+    /// either binary may call it; `no_binary_wires_the_capturing_transport` in
+    /// `bunyip-api/src/handlers/mailer.rs` fails the build if one does, because
+    /// a stub wired into a running deployment would swallow every email while
+    /// reporting success.
+    pub fn new_capturing(config: EmailConfig) -> (Self, AsyncStubTransport) {
+        let stub = AsyncStubTransport::new_ok();
+        let service = Self {
+            runtime: std::sync::RwLock::new(EmailRuntime {
+                transport: Some(MailTransport::Stub(stub.clone())),
+                config,
+            }),
+            templates: Tera::default(),
+            branding: std::sync::RwLock::new(None),
+        };
+        (service, stub)
+    }
+
+    /// The `<uuid@domain>` Message-ID (header form and bare form), with `domain`
+    /// taken from `config.from_email` so it aligns with the `From:` / DKIM `d=`
+    /// domain (BUNYIP-334).
+    fn new_message_id(config: &EmailConfig) -> (String, String) {
+        let domain = config
+            .from_email
+            .rsplit('@')
+            .next()
+            .filter(|d| !d.is_empty())
+            .unwrap_or("a8n.run");
+        let bare = format!("{}@{}", uuid::Uuid::new_v4(), domain);
+        let header = format!("<{}>", bare);
+        (bare, header)
+    }
+
+    /// Relay a message composed by another app in the suite (BUNYIP-602) and
+    /// return its bare Message-ID.
+    ///
+    /// The `From:` identity is ALWAYS this deployment's configured sending
+    /// identity, never anything the caller supplied, so every relayed message
+    /// is DKIM/SPF/DMARC-aligned with Bunyip's own verified sending domain and
+    /// no calling app can send as another. The caller owns only the recipient,
+    /// the subject and the body.
+    ///
+    /// A disabled or unbuilt transport is an ERROR here, not the silent
+    /// dev-mode no-op the template senders take: the calling app hands off
+    /// responsibility for the message, so "nothing was sent" must never be
+    /// reported to it as success.
+    pub async fn send_relay(
+        &self,
+        to: &str,
+        subject: &str,
+        text: &str,
+        html: Option<&str>,
+    ) -> Result<String, AppError> {
+        let config = self.config();
+        let Some(transport) = self.transport().filter(|_| config.enabled) else {
+            tracing::error!(
+                to = %to,
+                "mailer relay rejected: SMTP is not configured on this deployment"
+            );
+            return Err(AppError::upstream(
+                "The mailer relay has no SMTP transport configured, so no message was sent.",
+            ));
+        };
+
+        let (message_id_bare, message_id) = Self::new_message_id(&config);
+        let from = format!("{} <{}>", config.from_name, config.from_email);
+        let builder = Message::builder()
+            .from(
+                from.parse()
+                    .map_err(|e| AppError::internal(format!("Invalid from address: {}", e)))?,
+            )
+            .to(to.parse().map_err(|e| {
+                AppError::validation("to", format!("Invalid recipient address: {}", e))
+            })?)
+            .subject(subject)
+            .message_id(Some(message_id));
+
+        let email = match html {
+            Some(html) => builder
+                .multipart(
+                    lettre::message::MultiPart::alternative()
+                        .singlepart(
+                            lettre::message::SinglePart::builder()
+                                .header(ContentType::TEXT_PLAIN)
+                                .body(text.to_string()),
+                        )
+                        .singlepart(
+                            lettre::message::SinglePart::builder()
+                                .header(ContentType::TEXT_HTML)
+                                .body(html.to_string()),
+                        ),
+                )
+                .map_err(|e| AppError::internal(format!("Email build error: {}", e)))?,
+            None => builder
+                .header(ContentType::TEXT_PLAIN)
+                .body(text.to_string())
+                .map_err(|e| AppError::internal(format!("Email build error: {}", e)))?,
+        };
+
+        tracing::info!(to = %to, subject = %subject, "Relayed message queued for delivery");
+        transport.send(email).await?;
+        tracing::info!(to = %to, subject = %subject, message_id = %message_id_bare, "Relayed message sent");
+        Ok(message_id_bare)
+    }
+
     /// Build an RFC 5322 message ready for the transport.
     ///
     /// BUNYIP-334: every message carries exactly one `Message-ID` header,
@@ -623,16 +764,9 @@ impl EmailService {
     ) -> Result<(Message, String), AppError> {
         let from = format!("{} <{}>", config.from_name, config.from_email);
 
-        let domain = config
-            .from_email
-            .rsplit('@')
-            .next()
-            .filter(|d| !d.is_empty())
-            .unwrap_or("a8n.run");
         // The bare id (no angle brackets) is returned for storage; the header
         // carries the angle-bracket form.
-        let message_id_bare = format!("{}@{}", uuid::Uuid::new_v4(), domain);
-        let message_id = format!("<{}>", message_id_bare);
+        let (message_id_bare, message_id) = Self::new_message_id(config);
 
         let mut builder = Message::builder()
             .from(
@@ -700,10 +834,7 @@ impl EmailService {
             // "Email sent successfully" line to bracket every delivery.
             tracing::info!(to = %to, subject = %subject, "Email queued for delivery");
 
-            transport
-                .send(email)
-                .await
-                .map_err(|e| AppError::internal(format!("Email send error: {}", e)))?;
+            transport.send(email).await?;
 
             tracing::info!(to = %to, subject = %subject, "Email sent successfully");
         } else {
@@ -743,10 +874,7 @@ impl EmailService {
         )?;
         if let Some(transport) = self.transport() {
             tracing::info!(to = %to, subject = %subject, "Support reply queued for delivery");
-            transport
-                .send(email)
-                .await
-                .map_err(|e| AppError::internal(format!("Email send error: {}", e)))?;
+            transport.send(email).await?;
             tracing::info!(to = %to, subject = %subject, "Support reply sent");
         } else {
             tracing::info!(to = %to, subject = %subject, "Support reply not sent (dev mode)");
