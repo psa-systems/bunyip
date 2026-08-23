@@ -58,6 +58,10 @@ pub mod handlers {
     pub mod oidc;
 }
 
+/// Machine-to-machine caller authentication against the `oauth_clients`
+/// registry, for endpoints outside the OIDC surface (BUNYIP-602).
+pub mod machine_client;
+
 pub mod routes {
     pub mod oidc;
 }

@@ -72,6 +72,10 @@ fn build_table_entry(
 ) -> RateLimitEntry {
     let (user_id, user_email, ip) = match subject {
         KeySubject::Ip(ip) => (None, None, Some(ip.clone())),
+        // A client-id key names a calling app, not a person (BUNYIP-602): there
+        // is no user and no IP to expose, and the raw key is already on the
+        // entry.
+        KeySubject::ClientId(_) => (None, None, None),
         KeySubject::Email(_) | KeySubject::UserId(_) | KeySubject::Unknown(_) => match user {
             Some((id, email)) => (Some(id), Some(email), None),
             None => (None, None, None),
@@ -165,7 +169,7 @@ pub async fn list_rate_limits(
             KeySubject::UserId(id) => UserRepository::find_by_id(pool.get_ref(), *id)
                 .await?
                 .map(|u| (u.id, u.email)),
-            KeySubject::Ip(_) | KeySubject::Unknown(_) => None,
+            KeySubject::Ip(_) | KeySubject::ClientId(_) | KeySubject::Unknown(_) => None,
         };
 
         entries.push(build_table_entry(&row, &cfg, &subject, user, retry_after));
@@ -311,7 +315,7 @@ async fn apply_rate_limit_reset(
                 KeySubject::UserId(id) => UserRepository::find_by_id(pool, id)
                     .await?
                     .map(|u| (u.id, u.email)),
-                KeySubject::Ip(_) | KeySubject::Unknown(_) => None,
+                KeySubject::Ip(_) | KeySubject::ClientId(_) | KeySubject::Unknown(_) => None,
             };
 
             RateLimitRepository::reset(pool, key, action).await?;

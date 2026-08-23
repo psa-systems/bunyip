@@ -28,9 +28,9 @@ use bunyip_api::{
     services::{
         stripe_settings_from_db_model, unconfigured_stripe_config, AppBackupAdapter,
         AppDownloadCache, AuthService, BackupService, DownloadLimiter, EmailService,
-        ForgejoAssetClient, GeoIpService, IpEnrichService, JwtConfig, JwtService,
-        MokoshBackupAdapter, PasswordService, ReleaseCache, StripeService, TotpService,
-        WebhookService,
+        ForgejoAssetClient, GeoIpService, IpEnrichService, JwtConfig, JwtService, MailerRelay,
+        MokoshBackupAdapter, NoSuppression, PasswordService, ReleaseCache, StripeService,
+        TotpService, WebhookService,
     },
     version::UpdateChecker,
 };
@@ -549,6 +549,14 @@ async fn main() -> anyhow::Result<()> {
     email_service.set_branding_cache(Arc::clone(&branding_cache));
 
     info!(enabled = email_enabled, "Email service initialized");
+
+    // BUNYIP-602: the send-only relay other apps in the suite call. The
+    // suppression list is empty until BUNYIP-603 feeds it from bounce and
+    // complaint webhooks; swapping this one argument is all that takes.
+    let mailer_relay = Arc::new(MailerRelay::new(
+        Arc::clone(&email_service),
+        Arc::new(NoSuppression),
+    ));
 
     // BUNYIP-366: IP -> country resolver for login-location alerts. Optional:
     // when IP2LOCATION_DB_PATH is unset or the .BIN fails to load, geoip stays
@@ -1208,6 +1216,7 @@ async fn main() -> anyhow::Result<()> {
             }))
             .app_data(web::Data::new(auth_service.clone()))
             .app_data(web::Data::new(email_service.clone()))
+            .app_data(web::Data::new(mailer_relay.clone()))
             .app_data(web::Data::new(stripe_service.clone()))
             .app_data(web::Data::new(totp_service.clone()))
             .app_data(web::Data::new(webhook_service.clone()))

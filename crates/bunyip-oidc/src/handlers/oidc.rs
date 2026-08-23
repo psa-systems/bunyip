@@ -1536,7 +1536,12 @@ fn extract_client_credentials(
 /// - `private_key_jwt`: the schema accepts this value but the runtime
 ///   does not yet implement JWT client assertion verification. Refuse
 ///   rather than silently fall through; tracked as a follow-up.
-async fn authenticate_client(
+///
+/// BUNYIP-602: also the credential check behind
+/// [`crate::machine_client::verify_machine_client`], so a machine endpoint
+/// outside the OIDC surface applies these same registration rules rather than
+/// growing a second, drifting copy of them.
+pub(crate) async fn authenticate_client(
     client: &OAuthClient,
     provided_secret: Option<&str>,
 ) -> Result<(), AppError> {

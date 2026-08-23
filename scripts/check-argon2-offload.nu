@@ -46,8 +46,9 @@ const ALLOW_DIRECT_CALL = [
 # Files allowed to build an Argon2 directly rather than via PasswordService,
 # because they need a non-password parameter preset.
 const ALLOW_RAW_ARGON2 = [
-    "crates/bunyip-domain/src/services/totp.rs"  # the 19 MiB recovery-code preset
-    "crates/bunyip-oidc/src/handlers/oidc.rs"    # the OIDC client-secret verify
+    "crates/bunyip-domain/src/services/totp.rs"     # the 19 MiB recovery-code preset
+    "crates/bunyip-oidc/src/handlers/oidc.rs"       # the OIDC client-secret verify
+    "crates/bunyip-oidc/src/machine_client.rs"      # client-secret hash, inside an offload closure
 ]
 
 # The one file allowed to call the TOTP recovery-code Argon2 helpers, and the

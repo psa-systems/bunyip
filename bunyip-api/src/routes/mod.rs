@@ -12,6 +12,7 @@ pub mod download;
 pub mod events;
 pub mod feedback;
 pub mod health;
+pub mod mailer;
 pub mod membership;
 pub mod pricing;
 pub mod user;
@@ -34,6 +35,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .configure(application::configure)
             .configure(billing::configure)
             .configure(feedback::configure)
+            .configure(mailer::configure)
             .configure(membership::configure)
             .configure(pricing::configure)
             .configure(branding::configure)

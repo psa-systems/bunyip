@@ -62,6 +62,14 @@ const EXEMPT_PATHS: &[&str] = &[
     // onboarding email gate on five surfaces and now caches it (`TtlCache`), so
     // the remaining calls are one per TTL per web process.
     "/v1/auth/setup/status",
+    // BUNYIP-602: the mailer relay. It authenticates a CALLING APP, not a
+    // browser, and carries its own per-app throughput cap
+    // (`RateLimitConfig::MAILER_SEND`) plus a per-IP failed-authentication cap
+    // (`MAILER_AUTH_FAILURES`). The per-IP floor is the wrong shape here: the
+    // suite's apps sit behind shared egress, so one app's legitimate mail volume
+    // would throttle its neighbours, and 20/minute is far below a transactional
+    // relay's normal rate.
+    "/v1/mailer/send",
 ];
 
 /// Whether the floor applies to this request.
@@ -197,6 +205,8 @@ mod tests {
         // BUNYIP-555: the feature-flags probe touches no table and is read on
         // every BFF render, so it is exempt and TTL-cached web-side.
         assert!(is_exempt("/v1/auth/setup/status", &Method::GET));
+        // BUNYIP-602: the mailer relay is throttled per calling app, not per IP.
+        assert!(is_exempt("/v1/mailer/send", &Method::POST));
     }
 
     #[test]
@@ -214,6 +224,8 @@ mod tests {
             &Method::GET
         ));
         assert!(!is_exempt("/v1/auth/setup/status/extra", &Method::GET));
+        assert!(!is_exempt("/v1/mailer/send/extra", &Method::POST));
+        assert!(!is_exempt("/v1/mailer", &Method::POST));
     }
 
     /// Regression guard: this middleware must never hold a cloned
