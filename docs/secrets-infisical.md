@@ -95,7 +95,7 @@ bunyip (project)
 ├── staging
 │   ├── /runtime      <- the governed secrets (SMTP_PASSWORD, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, SUPPORT_IMAP_PASSWORD)
 │   └── /bunyip/e2e   <- the E2E account password (docs/e2e.md)
-└── production
+└── prod
     └── /runtime
 ```
 
@@ -105,15 +105,15 @@ bunyip keeps its Infisical config together in the docker repo: only
 `INFISICAL_ENABLED` is a plain env in `server/<host>/bunyip-api/compose-variables.yml`; every other key (address,
 environment, project id, secret path, and the two credentials) lives in the SOPS `compose-secrets.yml`.
 
-| Env var                   | Secret? | How read     | Default | Meaning                                                                                                 |
-|---------------------------|---------|--------------|---------|---------------------------------------------------------------------------------------------------------|
-| `INFISICAL_ENABLED`       | no      | plain env    | `false` | whether the Infisical store is inspected outside `SECRETS_STORAGE=infisical` (which always inspects it) |
-| `INFISICAL_ADDRESS`       | no      | plain env    | `""`    | Infisical base URL (e.g. `https://infisical.a8n.systems`)                                               |
-| `INFISICAL_PROJECT_ID`    | no      | plain env    | `""`    | the Infisical project (workspace) id                                                                    |
-| `INFISICAL_ENVIRONMENT`   | no      | plain env    | `""`    | environment slug, read verbatim (`staging`/`production`); must match the Infisical project's slug exactly |
-| `INFISICAL_SECRET_PATH`   | no      | plain env    | `/`     | the folder to read (`/runtime`, project-relative)                                                       |
-| `INFISICAL_CLIENT_ID`     | yes     | `secret_env` | `""`    | Universal Auth machine-identity client id                                                               |
-| `INFISICAL_CLIENT_SECRET` | yes     | `secret_env` | `""`    | Universal Auth machine-identity client secret                                                           |
+| Env var                   | Secret? | How read     | Default | Meaning                                                                                |
+|---------------------------|---------|--------------|---------|----------------------------------------------------------------------------------------|
+| `INFISICAL_ENABLED`       | no      | plain env    | `false` | Enable Infisical store. Used with `SECRETS_STORAGE=infisical`                          |
+| `INFISICAL_ADDRESS`       | no      | plain env    | `""`    | Infisical base URL (e.g. `https://infisical.a8n.systems`)                              |
+| `INFISICAL_PROJECT_ID`    | no      | plain env    | `""`    | the Infisical project (workspace) id                                                   |
+| `INFISICAL_ENVIRONMENT`   | no      | plain env    | `""`    | (`staging`/`prod`); Infisical > Secrets > Project > Settings > Environments slug       |
+| `INFISICAL_SECRET_PATH`   | no      | plain env    | `/`     | the folder to read (`/runtime`, project-relative)                                      |
+| `INFISICAL_CLIENT_ID`     | yes     | `secret_env` | `""`    | Universal Auth machine-identity client id                                              |
+| `INFISICAL_CLIENT_SECRET` | yes     | `secret_env` | `""`    | Universal Auth machine-identity client secret                                          |
 
 The two credentials go through `secret_env`, so they honour the `{NAME}_FILE`
 convention and can themselves be Group-1 file secrets. If either credential is empty the client is not built: in
@@ -185,8 +185,8 @@ Never just repoint `INFISICAL_*` and restart. The new instance is empty, so in
 email and payments off, and the values are stranded on an instance it no longer talks to.
 
 1. **Copy out of the old instance.** Declared store is still `infisical`, pointing at the old instance and healthy. Run
-   `docker compose exec api /app/bunyip-api secrets-migrate --to database --dry-run`, then the same without `--dry-run`. It
-   reads the live values from the old instance and writes the encrypted `email_config` / `stripe_config` columns.
+   `docker compose exec api /app/bunyip-api secrets-migrate --to database --dry-run`, then the same without `--dry-run`.
+   It reads the live values from the old instance and writes the encrypted `email_config` / `stripe_config` columns.
    `bunyip-api secrets-status` must then read `database: ready` for all three.
 
 2. **Cut over to the database.** Set `SECRETS_STORAGE=database` and restart. This is now an ordinary database-mode
