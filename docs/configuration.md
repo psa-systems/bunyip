@@ -328,8 +328,16 @@ source at all**.
 | `pricing_enabled`                                                                   | when false the public `/pricing` page 404s and every link to it is hidden |
 | `free_price_id`, `lifetime_price_id`, `early_adopter_price_id`, `standard_price_id` | Stripe price ids per tier                                                 |
 | `lifetime_product_id`, `early_adopter_product_id`, `standard_product_id`            | Stripe product ids per tier                                               |
+| `lifetime_visible`, `early_adopter_visible`, `standard_visible`                     | per-tier visibility on `/pricing`. A visible tier must have a price id    |
 | `lifetime_slots`, `early_adopter_slots`                                             | capacity per tier. Env seeds exist                                        |
 | `early_adopter_trial_days`, `standard_trial_days`                                   | trial length per tier. Env seeds exist                                    |
+
+`PUT /v1/admin/tier-config` refuses a save that would leave a tier it touches visible with no price id (BUNYIP-609),
+naming every such tier in one message: the public payload is built from the price ids, so a visible tier with no price
+is dropped from `/pricing` silently. A free or lifetime tier is mapped to a real $0.00 Stripe price, so "shown but
+priceless" is never a state the page can render. A request that sends neither half for a tier (the slots and trials
+form) leaves that tier alone, so a row saved in that state before the check existed is corrected by the catalog form,
+not by an unrelated save.
 
 ### Branding (`branding`, admin page: Branding)
 
