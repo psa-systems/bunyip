@@ -627,7 +627,28 @@ pub(super) fn stripe_catalog_section(
     tier: Result<&crate::api::types::TierConfigResponse, &ApiError>,
     prices: Option<&[crate::api::types::StripePrice]>,
     status: Result<&crate::api::types::PricingStatus, &str>,
+    submitted: Option<&CatalogFormValues>,
 ) -> Markup {
+    // BUNYIP-616: the value each control renders is the submitted one when a
+    // rejected save redisplayed it, else the stored row. A price rides back
+    // verbatim (empty = a submitted "(none)"); a flag is three-state, so only a
+    // field the query actually carries overrides the stored value.
+    let eff_price = |sub: Option<&String>, stored: &Option<String>| -> Option<String> {
+        match sub {
+            Some(v) => {
+                let t = v.trim();
+                (!t.is_empty()).then(|| t.to_string())
+            }
+            None => stored.clone(),
+        }
+    };
+    let eff_flag = |sub: Option<&String>, stored: bool| -> bool {
+        match sub.map(String::as_str) {
+            Some("1") => true,
+            Some("0") => false,
+            _ => stored,
+        }
+    };
     // A price <select> populated from the active prices, with the stored value
     // preserved as a selected option even when it is no longer in the list
     // (archived or invisible), so a save does not silently drop it.
@@ -704,36 +725,46 @@ pub(super) fn stripe_catalog_section(
             }
             @match tier {
                 Err(e) => (error_box_detailed("Could not load the tier catalog mapping.", Some(&e.user_message()), e.request_id.as_deref())),
-                Ok(t) => form method="post" action="/admin/tier-settings/catalog" class="space-y-6" {
-                    // BUNYIP-524: the publish switch sits with the price mapping
-                    // it depends on. Ticking it advertises these prices; the
-                    // status line says whether /pricing actually publishes and,
-                    // if not, which tier's price is the reason.
-                    (admin_block(
-                        "Public pricing page",
-                        Some("Off by default. While this is off (or no tier resolves to a usable Stripe price) /pricing returns 404 and every link to it stays hidden."),
-                        html! {
-                            div class="space-y-4" {
-                                (pricing_status_block(status))
-                                label class="flex items-center gap-3 text-sm font-medium" {
-                                    input id="pricing_enabled" name="pricing_enabled" type="checkbox" value="true" checked[t.pricing_enabled] class="h-4 w-4 rounded border-input";
-                                    "Show pricing on the public page"
+                Ok(t) => {
+                    // BUNYIP-616: resolve each control's value once, submitted over stored.
+                    @let free_price = eff_price(submitted.and_then(|s| s.free_price_id.as_ref()), &t.free_price_id);
+                    @let early_adopter_price = eff_price(submitted.and_then(|s| s.early_adopter_price_id.as_ref()), &t.early_adopter_price_id);
+                    @let standard_price = eff_price(submitted.and_then(|s| s.standard_price_id.as_ref()), &t.standard_price_id);
+                    @let pricing_enabled = eff_flag(submitted.and_then(|s| s.pricing_enabled.as_ref()), t.pricing_enabled);
+                    @let lifetime_visible = eff_flag(submitted.and_then(|s| s.lifetime_visible.as_ref()), t.lifetime_visible);
+                    @let early_adopter_visible = eff_flag(submitted.and_then(|s| s.early_adopter_visible.as_ref()), t.early_adopter_visible);
+                    @let standard_visible = eff_flag(submitted.and_then(|s| s.standard_visible.as_ref()), t.standard_visible);
+                    form method="post" action="/admin/tier-settings/catalog" class="space-y-6" {
+                        // BUNYIP-524: the publish switch sits with the price mapping
+                        // it depends on. Ticking it advertises these prices; the
+                        // status line says whether /pricing actually publishes and,
+                        // if not, which tier's price is the reason.
+                        (admin_block(
+                            "Public pricing page",
+                            Some("Off by default. While this is off (or no tier resolves to a usable Stripe price) /pricing returns 404 and every link to it stays hidden."),
+                            html! {
+                                div class="space-y-4" {
+                                    (pricing_status_block(status))
+                                    label class="flex items-center gap-3 text-sm font-medium" {
+                                        input id="pricing_enabled" name="pricing_enabled" type="checkbox" value="true" checked[pricing_enabled] class="h-4 w-4 rounded border-input";
+                                        "Show pricing on the public page"
+                                    }
                                 }
-                            }
-                        },
-                    ))
-                    (admin_block_grid(vec![
-                        admin_block("Free / lifetime", Some("A $0 price. Free and lifetime grants both open a subscription on it."), html! {
-                            div class="space-y-4" { (tier_card("free_price_id", &t.free_price_id, &t.lifetime_product_id, "lifetime_visible", t.lifetime_visible)) }
-                        }),
-                        admin_block("Early adopter", None, html! {
-                            div class="space-y-4" { (tier_card("early_adopter_price_id", &t.early_adopter_price_id, &t.early_adopter_product_id, "early_adopter_visible", t.early_adopter_visible)) }
-                        }),
-                        admin_block("Standard", None, html! {
-                            div class="space-y-4" { (tier_card("standard_price_id", &t.standard_price_id, &t.standard_product_id, "standard_visible", t.standard_visible)) }
-                        }),
-                    ]))
-                    button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save catalog mapping" }
+                            },
+                        ))
+                        (admin_block_grid(vec![
+                            admin_block("Free / lifetime", Some("A $0 price. Free and lifetime grants both open a subscription on it."), html! {
+                                div class="space-y-4" { (tier_card("free_price_id", &free_price, &t.lifetime_product_id, "lifetime_visible", lifetime_visible)) }
+                            }),
+                            admin_block("Early adopter", None, html! {
+                                div class="space-y-4" { (tier_card("early_adopter_price_id", &early_adopter_price, &t.early_adopter_product_id, "early_adopter_visible", early_adopter_visible)) }
+                            }),
+                            admin_block("Standard", None, html! {
+                                div class="space-y-4" { (tier_card("standard_price_id", &standard_price, &t.standard_product_id, "standard_visible", standard_visible)) }
+                            }),
+                        ]))
+                        button type="submit" class=(button_class("default", "default", "")) { (icon("save", "mr-2 h-4 w-4")) "Save catalog mapping" }
+                    }
                 },
             }
         }
@@ -764,6 +795,57 @@ pub struct StripePageQuery {
 /// the form default it is meant to override.
 fn present(s: &str) -> Option<&str> {
     Some(s.trim()).filter(|v| !v.is_empty())
+}
+
+/// BUNYIP-616: the catalog form's submitted values, carried on the `toast_err`
+/// redirect after a rejected save so the re-rendered form shows what the admin
+/// submitted rather than the stored `tier_config` row (BUNYIP-609 made that
+/// discard easy to hit: a tier ticked visible with no price is now refused, and
+/// the redirect used to drop every selection back to the stored values).
+///
+/// Every field is optional and a field ABSENT from the query keeps the stored
+/// value, so a plain page load (no query parameters) renders entirely from the
+/// row. The four checkbox flags are carried as a present `"0"` / `"1"` rather
+/// than the checkbox's own absent-means-off shape, because on redisplay an
+/// unticked box is a real submitted value and must not be filled from the stored
+/// row the way a genuinely absent field is. The price ids ride back verbatim: an
+/// empty one is a submitted "(none)" selection, distinct from an absent field.
+#[derive(Debug, Default, Deserialize)]
+pub struct CatalogFormValues {
+    #[serde(default)]
+    pub free_price_id: Option<String>,
+    #[serde(default)]
+    pub early_adopter_price_id: Option<String>,
+    #[serde(default)]
+    pub standard_price_id: Option<String>,
+    #[serde(default)]
+    pub pricing_enabled: Option<String>,
+    #[serde(default)]
+    pub lifetime_visible: Option<String>,
+    #[serde(default)]
+    pub early_adopter_visible: Option<String>,
+    #[serde(default)]
+    pub standard_visible: Option<String>,
+}
+
+/// BUNYIP-616: the submitted catalog values as query parameters for the
+/// `toast_err` redirect. Prices go back verbatim (an empty one is a real
+/// "(none)" selection); the four checkbox flags go back as `"0"` / `"1"` so an
+/// unticked box is carried as a submitted value the page redisplays, not an
+/// absence it would fill from the stored row.
+pub(super) fn catalog_form_query(f: &StripeCatalogForm) -> String {
+    let flag = |o: &Option<String>| if o.is_some() { "1" } else { "0" };
+    format!(
+        "free_price_id={}&early_adopter_price_id={}&standard_price_id={}\
+         &pricing_enabled={}&lifetime_visible={}&early_adopter_visible={}&standard_visible={}",
+        urlenc(f.free_price_id.trim()),
+        urlenc(f.early_adopter_price_id.trim()),
+        urlenc(f.standard_price_id.trim()),
+        flag(&f.pricing_enabled),
+        flag(&f.lifetime_visible),
+        flag(&f.early_adopter_visible),
+        flag(&f.standard_visible),
+    )
 }
 
 /// BUNYIP-532: the status pill for one probed permission. Colour and wording are
@@ -1455,9 +1537,13 @@ pub async fn stripe_catalog_save(
             .await
         {
             Ok(()) => "/admin/tier-settings?toast_ok=Catalog%20mapping%20saved".to_string(),
+            // BUNYIP-616: carry the submitted values on the failure redirect so the
+            // re-rendered form shows what the admin submitted, not the stored row,
+            // and the only thing left to change is the value that was rejected.
             Err(e) => format!(
-                "/admin/tier-settings?toast_err={}",
-                urlenc(&e.user_message_with_reference())
+                "/admin/tier-settings?toast_err={}&{}",
+                urlenc(&e.user_message_with_reference()),
+                catalog_form_query(&f),
             ),
         };
     redirect_cookies(&target, &c.set_cookies)

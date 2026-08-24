@@ -84,6 +84,10 @@ pub(super) fn tier_settings_content(
     status: Result<&PricingStatus, &str>,
     values: &TierFormValues,
     error: Option<&str>,
+    // BUNYIP-616: the catalog form's submitted values, present only after a
+    // rejected catalog save redirected them back; `None` on a plain load and on
+    // the Tiers & Slots error re-render, which do not touch the catalog form.
+    catalog_submitted: Option<&super::CatalogFormValues>,
 ) -> Markup {
     html! {
         div class="space-y-6" {
@@ -123,7 +127,7 @@ pub(super) fn tier_settings_content(
                     // BUNYIP-527: the catalog mapping (price selects + per-tier
                     // visibility + publish switch + live status), its own form
                     // posting to /admin/tier-settings/catalog.
-                    (super::stripe_catalog_section(Ok(c), prices, status))
+                    (super::stripe_catalog_section(Ok(c), prices, status, catalog_submitted))
                 }
             }
         }
@@ -196,7 +200,15 @@ async fn checkout_trial_days(st: &AppState, cookie: Option<&str>) -> String {
     }
 }
 
-pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Response {
+pub async fn tier_settings(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    // BUNYIP-616: after a rejected catalog save, `stripe_catalog_save` redirects
+    // the submitted price ids and checkbox flags back here so the form can
+    // redisplay them. A plain page load carries none, so every field is absent
+    // and the form renders from the stored row.
+    axum::extract::Query(catalog): axum::extract::Query<super::CatalogFormValues>,
+) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -216,6 +228,7 @@ pub async fn tier_settings(State(st): State<AppState>, headers: HeaderMap) -> Re
         status.as_ref().map_err(String::as_str),
         &values,
         None,
+        Some(&catalog),
     );
     admin_response(&c, &user, "/admin/tier-settings", "Pricing Tiers", content)
 }
@@ -329,6 +342,9 @@ pub async fn tier_settings_save(
         status.as_ref().map_err(String::as_str),
         &values,
         Some(&error),
+        // The Tiers & Slots form does not touch the catalog mapping, so its error
+        // re-render leaves the catalog controls on the stored row.
+        None,
     );
     admin_response(&c, &user, "/admin/tier-settings", "Pricing Tiers", content)
 }
