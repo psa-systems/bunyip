@@ -85,6 +85,21 @@ pub fn skin_theme_css() -> Option<&'static str> {
     SKIN_THEME_CSS.get().and_then(Option::as_deref)
 }
 
+/// Absolute URL of the committed share image, installed once from the
+/// consumer's config. The branding record wins when it carries an uploaded
+/// image; this is what an unbranded deployment falls back to, so the Open
+/// Graph tags are never simply absent.
+static DEFAULT_SHARE_IMAGE: OnceLock<Option<String>> = OnceLock::new();
+
+/// Install the fallback share image. Called once from `main`. Idempotent.
+pub fn install_default_share_image(url: Option<String>) {
+    let _ = DEFAULT_SHARE_IMAGE.set(url);
+}
+
+pub fn default_share_image() -> Option<&'static str> {
+    DEFAULT_SHARE_IMAGE.get().and_then(Option::as_deref)
+}
+
 /// BUNYIP-549: the two `<meta name="theme-color">` values (light, dark) that
 /// paint the browser chrome. Bootstrap defaults only: the consumer resolves the
 /// running value (e.g. from a brand record) and omits the meta when both the

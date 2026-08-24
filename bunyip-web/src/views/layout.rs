@@ -58,14 +58,28 @@ fn document_title(page_title: &str, branding: &Branding) -> String {
 ///
 /// `twitter:card` is `summary_large_image` only when an image URL is set;
 /// without one the large-image card renders as a blank rectangle.
+/// The image the sharing card carries. The record's uploaded image wins;
+/// without one the committed product image stands in, so a deployment that has
+/// branded nothing still shares as a card with a picture rather than as a bare
+/// link. `None` only when neither exists, which is what keeps the tags omitted
+/// rather than pointing at nothing.
+fn share_image(branding: &Branding, fallback: Option<&str>) -> Option<String> {
+    if branding.og_image_url.is_empty() {
+        fallback.map(str::to_string)
+    } else {
+        Some(branding.og_image_url.clone())
+    }
+}
+
 fn social_meta(page_title: &str, branding: &Branding) -> Markup {
+    let share_image = share_image(branding, default_share_image());
     let has_any = !branding.brand_name.is_empty()
         || !branding.meta_description.is_empty()
-        || !branding.og_image_url.is_empty();
+        || share_image.is_some();
     html! {
         @if has_any {
             meta property="og:type" content="website";
-            meta name="twitter:card" content=(if branding.og_image_url.is_empty() { "summary" } else { "summary_large_image" });
+            meta name="twitter:card" content=(if share_image.is_none() { "summary" } else { "summary_large_image" });
             meta property="og:title" content=(document_title(page_title, branding));
             meta name="twitter:title" content=(document_title(page_title, branding));
         }
@@ -76,9 +90,9 @@ fn social_meta(page_title: &str, branding: &Branding) -> Markup {
             meta property="og:description" content=(branding.meta_description);
             meta name="twitter:description" content=(branding.meta_description);
         }
-        @if !branding.og_image_url.is_empty() {
-            meta property="og:image" content=(branding.og_image_url);
-            meta name="twitter:image" content=(branding.og_image_url);
+        @if let Some(image) = &share_image {
+            meta property="og:image" content=(image);
+            meta name="twitter:image" content=(image);
         }
     }
 }
@@ -306,9 +320,19 @@ fn brand_mark(branding: &Branding) -> Markup {
 
 fn brand() -> Markup {
     html! {
-        a href="/" class="flex items-center gap-2 group" {
+        // The wordmark is admin-managed, so its length is unknown at build
+        // time: a fixed step overflowed the 16rem sidebar once the deployment
+        // brand was longer than the one it was sized for. The clamp scales the
+        // type with the viewport and floors it at a readable size; `min-w-0`
+        // lets the span shrink inside the flex row and `truncate` is the
+        // backstop for a name no size can fit: it wraps rather than being cut,
+        // because a clipped brand name is worse than a second line. Container
+        // units are deliberately not used: the link sizes itself from its own
+        // content, so a `cqi` clamp on it resolves against a zero-width
+        // container and the wordmark disappears entirely.
+        a href="/" class="flex min-w-0 max-w-full items-center gap-2 group" {
             (brand_mark(&branding()))
-            span class="text-2xl font-semibold tracking-tight text-brand-primary-900 dark:text-brand-primary-50 group-hover:text-brand-primary-700 dark:group-hover:text-brand-primary-200 transition-colors" { (brand_name()) }
+            span class="min-w-0 break-words text-[clamp(0.95rem,1.35vw,1.25rem)] font-semibold tracking-tight text-brand-primary-900 dark:text-brand-primary-50 group-hover:text-brand-primary-700 dark:group-hover:text-brand-primary-200 transition-colors" { (brand_name()) }
         }
     }
 }
@@ -1391,6 +1415,77 @@ mod tests {
         assert!(!head.contains("og:url"));
     }
 
+    /// The wordmark is admin-managed text in a fixed-width chrome, so it has to
+    /// size itself: a fixed step is what let a longer deployment brand run out
+    /// of the sidebar. It also has to stay able to shrink inside its flex row,
+    /// or the row simply overflows at the same size.
+    #[test]
+    fn the_wordmark_scales_and_can_shrink() {
+        let html = brand().into_string();
+        let span = first_tag(&html, "span");
+        assert!(
+            span.contains("clamp("),
+            "the wordmark needs a fluid size, not a fixed step: {span}"
+        );
+        assert!(
+            !span.contains("text-2xl"),
+            "a fixed step overflows a long brand name: {span}"
+        );
+        assert!(
+            span.contains("min-w-0"),
+            "without min-w-0 the span cannot shrink inside the flex row: {span}"
+        );
+        assert!(
+            first_tag(&html, "a").contains("min-w-0"),
+            "the link has to shrink too, or the row overflows instead: {html}"
+        );
+    }
+
+    /// The committed product image stands in when the record carries none, and
+    /// never displaces an uploaded one. Pure, so it needs none of the
+    /// process-wide cells the rendered head reads.
+    #[test]
+    fn the_committed_share_image_is_the_fallback_not_an_override() {
+        let default = Some("https://psa.test/assets/hero.webp");
+
+        let uploaded = Branding {
+            og_image_url: "https://acme.test/card.png".into(),
+            ..Branding::default()
+        };
+        assert_eq!(
+            share_image(&uploaded, default).as_deref(),
+            Some("https://acme.test/card.png"),
+            "an uploaded image wins over the committed default"
+        );
+
+        assert_eq!(
+            share_image(&Branding::default(), default).as_deref(),
+            default,
+            "an empty record falls back to the committed image"
+        );
+
+        assert_eq!(
+            share_image(&Branding::default(), None),
+            None,
+            "with neither, the tags stay omitted rather than pointing at nothing"
+        );
+    }
+
+    /// The card grows to the large form as soon as an image exists, whichever
+    /// half supplied it: a large-image card with no image renders as a blank
+    /// rectangle.
+    #[test]
+    fn the_card_type_follows_whichever_image_is_used() {
+        let record = Branding {
+            brand_name: "Acme".into(),
+            og_image_url: "https://acme.test/card.png".into(),
+            ..Branding::default()
+        };
+        let head = social_meta("Dashboard", &record).into_string();
+        assert!(head.contains(r#"<meta name="twitter:card" content="summary_large_image">"#));
+        assert!(head.contains(r#"<meta property="og:image" content="https://acme.test/card.png">"#));
+    }
+
     /// BUNYIP-561: each empty field omits its own markup, and never substitutes
     /// a literal. That omission is what keeps product copy out of the binary.
     #[test]
@@ -1400,7 +1495,8 @@ mod tests {
         assert_eq!(document_title("Dashboard", &empty), "Dashboard");
         assert_eq!(social_meta("Dashboard", &empty).into_string(), "");
 
-        // A name but no image: the small card, and no og:image / twitter:image.
+        // A name, no uploaded image, and no committed default installed (the
+        // cell is unset in tests): the small card, and no image tags.
         let named = Branding {
             brand_name: "Acme".into(),
             ..Branding::default()
