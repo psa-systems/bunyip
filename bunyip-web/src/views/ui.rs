@@ -229,6 +229,56 @@ mod tests {
         }
     }
 
+    /// Every semantic foreground token has to stay readable on the surface it
+    /// is paired with, in all four theme blocks. The pairs below are the ones
+    /// the markup actually uses: a foreground token and the surface class it
+    /// is applied over. A palette edit that moves one half of a pair toward
+    /// the other is what makes a page render text the same colour as its
+    /// background, so the whole matrix is asserted rather than the tokens the
+    /// last such regression happened to touch.
+    ///
+    /// `--muted-foreground` is listed against three surfaces because muted
+    /// body copy is painted on cards, on the page background and on its own
+    /// muted panel.
+    #[test]
+    fn every_foreground_token_meets_aa_on_its_surface() {
+        let css = include_str!("../../input.css");
+        // Text only. `--border`, `--input` and `--ring` are deliberately
+        // absent: the card separators are decorative hairlines that sit well
+        // under 3:1 by design, so asserting the non-text bar on them would
+        // encode a rule the design does not follow.
+        let pairs: &[(&str, &str, f64)] = &[
+            ("--foreground", "--background", 4.5),
+            ("--foreground", "--card", 4.5),
+            ("--card-foreground", "--card", 4.5),
+            ("--popover-foreground", "--popover", 4.5),
+            ("--secondary-foreground", "--secondary", 4.5),
+            ("--accent-foreground", "--accent", 4.5),
+            ("--muted-foreground", "--muted", 4.5),
+            ("--muted-foreground", "--card", 4.5),
+            ("--muted-foreground", "--background", 4.5),
+            ("--primary-foreground", "--primary", 4.5),
+            ("--destructive-foreground", "--destructive", 4.5),
+            ("--destructive-text", "--card", 4.5),
+            ("--destructive-text", "--background", 4.5),
+        ];
+        for (selector, theme) in [
+            (":root {", "light"),
+            ("\n.dark {", "dark"),
+            ("\n.high-contrast {", "high-contrast"),
+            (".dark.high-contrast {", "dark.high-contrast"),
+        ] {
+            let block = theme_block(css, selector);
+            for (fg, bg, floor) in pairs {
+                let ratio = contrast(token(block, fg), token(block, bg));
+                assert!(
+                    ratio >= *floor,
+                    "{theme}: {fg} on {bg} is {ratio:.2}:1, below {floor:.1}:1"
+                );
+            }
+        }
+    }
+
     // -- BUNYIP-548: amber text over its own tint ----------------------------
     //
     // The `warning` badge paints amber text on a 15% amber-500 wash. The wash
