@@ -3,6 +3,7 @@
 ################################################################################
 
 data
+For AI/
 
 # System config file (BUNYIP-579), generated on first start at
 # BUNYIP_CONFIG_FILE or /app/config/config.yaml. compose.dev.yml bind-mounts the
