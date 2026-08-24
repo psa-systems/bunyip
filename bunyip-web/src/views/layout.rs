@@ -1509,4 +1509,96 @@ mod tests {
         assert!(markup.contains("data-api-origin="));
         assert!(markup.ends_with("></script>"));
     }
+
+    /// BUNYIP-610: the toast that fills `#bunyip-toast-root` is the last layer a
+    /// failure crosses, so an auto-dismiss that outruns the reader hides it. The
+    /// three parameters are read out of the shipped script and the word-count
+    /// boundary is exercised with them, so moving a constant or the threshold
+    /// fails here instead of shipping a toast nobody can read.
+    #[test]
+    fn error_toasts_wait_for_a_click_and_the_others_scale_with_the_message() {
+        const JS: &str = include_str!("../../assets/js/app.js");
+
+        // The decimal literal that follows `needle` in the script.
+        fn number_after(needle: &str) -> u32 {
+            let rest = JS
+                .split_once(needle)
+                .unwrap_or_else(|| panic!("app.js no longer declares `{needle}`"))
+                .1;
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            digits
+                .parse()
+                .unwrap_or_else(|_| panic!("`{needle}` is not followed by a number"))
+        }
+        let short_ms = number_after("var TOAST_SHORT_MS = ");
+        let long_ms = number_after("var TOAST_LONG_MS = ");
+        let threshold = number_after("return words.length > ");
+
+        // `toastDurationMs`, in Rust: whitespace-split, more words than the
+        // threshold takes the long duration.
+        let duration = |msg: &str| {
+            if msg.split_whitespace().count() as u32 > threshold {
+                long_ms
+            } else {
+                short_ms
+            }
+        };
+        assert_eq!(duration("Saved"), 5000);
+        assert_eq!(
+            duration("Saved OK"),
+            5000,
+            "2 words stay on the short timer"
+        );
+        assert_eq!(
+            duration("Settings were saved"),
+            8000,
+            "past 2 words the toast holds for the long timer"
+        );
+        assert_eq!(
+            number_after("var TOAST_FADE_MS = "),
+            250,
+            "the fade-out after the timer is unchanged"
+        );
+
+        // An error pill is the one kind with no timer: the only scheduling call
+        // sits behind the guard, so nothing before it can start one.
+        let (before_guard, after_guard) = JS
+            .split_once("if (kind !== 'error') {")
+            .expect("an error toast must not schedule an auto-dismiss");
+        assert!(
+            !before_guard.contains("toastDurationMs(msg))"),
+            "an auto-dismiss is scheduled ahead of the non-error guard"
+        );
+        assert_eq!(
+            after_guard.matches("toastDurationMs(msg))").count(),
+            1,
+            "the duration is scheduled once, inside the non-error branch"
+        );
+
+        // A real, labelled button, and one removal path shared with the timer.
+        assert!(JS.contains("createElement('button')"));
+        assert!(JS.contains("close.type = 'button';"));
+        assert!(JS.contains("close.setAttribute('aria-label', 'Dismiss');"));
+        assert_eq!(
+            JS.matches("dismissToast(pill);").count(),
+            2,
+            "the close button and the timer share one removal sequence"
+        );
+        assert_eq!(
+            JS.matches("removeChild(pill)").count(),
+            1,
+            "the pill is detached in exactly one place"
+        );
+
+        // BUNYIP-98's bounded column still governs every kind (BUNYIP-610 4).
+        assert!(JS.contains("while (root.children.length >= 5) root.removeChild(root.firstChild);"));
+
+        // The one site that reloads behind an error toast would wipe the pill
+        // this rule holds open, so it hands the message to the fresh page.
+        const REORDER_JS: &str = include_str!("../../assets/js/app-reorder.js");
+        assert!(
+            REORDER_JS.contains("next.searchParams.set('toast_err', failed);"),
+            "a reload after a failed reorder must carry the message, not drop it"
+        );
+    }
 }

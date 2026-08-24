@@ -40,9 +40,26 @@
       .catch(function (e) {
         // The user sees the toast; the console keeps the cause the toast cannot carry.
         report('error', 'the new order could not be saved', e);
-        if (window.bunyipToast) window.bunyipToast('Could not save the new order', 'error');
-        // The server is the source of truth; reload to show the real order.
-        setTimeout(function () { window.location.reload(); }, 900);
+        var failed = 'Could not save the new order';
+        if (window.bunyipToast) window.bunyipToast(failed, 'error');
+        // The server is the source of truth; reload to show the real order. The
+        // reload wipes the pill an error toast is supposed to hold open, so the
+        // message rides along as ?toast_err= and app.js re-raises it on the
+        // fresh page, where it again waits for a click (BUNYIP-610).
+        setTimeout(function () {
+          var next = null;
+          try {
+            next = new URL(window.location.href);
+          } catch (err) {
+            report('warn', 'location could not be parsed; reloading without the failure message', err);
+          }
+          if (!next) {
+            window.location.reload();
+            return;
+          }
+          next.searchParams.set('toast_err', failed);
+          window.location.replace(next.toString());
+        }, 900);
       });
   }
 

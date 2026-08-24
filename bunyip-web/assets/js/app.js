@@ -18,11 +18,18 @@
 (function () {
   // ---------------------------------------------------------------- toasts --
   // Tiny toast system mounted in every <body>. `kind` is
-  // "success" | "error" | "info" (default "info"); each call appends an
-  // auto-dismissing pill into #bunyip-toast-root. BUNYIP-98: the column is
-  // capped at 5 visible pills, evicting the oldest, so rapid-fire calls (e.g.
-  // spamming a Copy button) cannot grow it without bound. The auto-dismiss
-  // timers guard on pill.parentNode so an evicted pill never double-removes.
+  // "success" | "error" | "info" (default "info"); each call appends a pill
+  // into #bunyip-toast-root. BUNYIP-98: the column is capped at 5 visible
+  // pills, evicting the oldest, so rapid-fire calls (e.g. spamming a Copy
+  // button) cannot grow it without bound. The removal guards on
+  // pill.parentNode so an evicted pill never double-removes.
+  //
+  // BUNYIP-610: an auto-dismiss that outruns reading time hides the failure it
+  // was meant to report, so an error pill gets NO timer - it stays until the
+  // user dismisses it - and success/info scale with the message: past two words
+  // the longer duration, else the shorter one. Every pill carries a real
+  // <button>, so any kind can be closed early, and the button and the timer run
+  // the same `dismissToast`.
   //
   // BUNYIP-549: the palette is the same semantic token pair each kind's
   // server-rendered counterpart uses - success the `success` badge
@@ -35,30 +42,68 @@
     info: 'bg-popover text-popover-foreground border border-border',
   };
 
+  var TOAST_SHORT_MS = 5000;
+  var TOAST_LONG_MS = 8000;
+  var TOAST_FADE_MS = 250;
+
+  // Reading time, approximated by word count: whitespace-split, so "Saved OK"
+  // (2 words) takes the short duration and "Settings were saved" (3) the long.
+  function toastDurationMs(msg) {
+    var words = String(msg == null ? '' : msg)
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    return words.length > 2 ? TOAST_LONG_MS : TOAST_SHORT_MS;
+  }
+
+  // The one removal path: fade out, then detach. Shared by the close button and
+  // the auto-dismiss timer so both look identical on screen.
+  function dismissToast(pill) {
+    pill.style.opacity = '0';
+    pill.style.transform = 'translateY(-8px)';
+    setTimeout(function () {
+      if (pill.parentNode) pill.parentNode.removeChild(pill);
+    }, TOAST_FADE_MS);
+  }
+
   window.bunyipToast = function (msg, kind) {
     var root = document.getElementById('bunyip-toast-root');
     if (!root) return;
     while (root.children.length >= 5) root.removeChild(root.firstChild);
     var palette = TOAST_PALETTE[kind || 'info'] || TOAST_PALETTE.info;
     var pill = document.createElement('div');
-    pill.className = 'pointer-events-auto rounded-md px-4 py-2 text-sm shadow-lg ' + palette;
+    pill.className =
+      'pointer-events-auto flex items-start gap-3 rounded-md px-4 py-2 text-sm shadow-lg ' + palette;
     pill.setAttribute('role', 'status');
-    pill.textContent = msg;
     pill.style.transition = 'opacity 200ms ease, transform 200ms ease';
     pill.style.opacity = '0';
     pill.style.transform = 'translateY(-8px)';
+    var text = document.createElement('span');
+    text.textContent = msg;
+    pill.appendChild(text);
+    // A real <button> so it is reachable by keyboard; the aria-label is what
+    // assistive technology reads instead of the bare glyph.
+    var close = document.createElement('button');
+    close.type = 'button';
+    close.className =
+      '-mr-2 shrink-0 cursor-pointer self-start px-2 text-base leading-5 opacity-70 hover:opacity-100';
+    close.setAttribute('aria-label', 'Dismiss');
+    close.textContent = '×';
+    close.addEventListener('click', function () {
+      dismissToast(pill);
+    });
+    pill.appendChild(close);
     root.appendChild(pill);
     requestAnimationFrame(function () {
       pill.style.opacity = '1';
       pill.style.transform = 'translateY(0)';
     });
-    setTimeout(function () {
-      pill.style.opacity = '0';
-      pill.style.transform = 'translateY(-8px)';
+    // An error is the one kind with no timer: it is dismissed by hand only.
+    if (kind !== 'error') {
       setTimeout(function () {
-        if (pill.parentNode) pill.parentNode.removeChild(pill);
-      }, 250);
-    }, 2500);
+        dismissToast(pill);
+      }, toastDurationMs(msg));
+    }
   };
 
   // BUNYIP-613: a suppressed failure still has to be visible somewhere. Guarded
