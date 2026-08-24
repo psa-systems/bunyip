@@ -1029,7 +1029,7 @@ pub async fn stripe(
                             ),
                             admin_block(
                                 "Checkout",
-                                Some("Where Stripe returns the customer after checkout. The trial length moved to the Pricing tiers page (BUNYIP-527)."),
+                                Some("Where Stripe returns the customer after checkout. The trial length moved to the Pricing tiers page."),
                                 html! {
                                     div class="space-y-4" {
                                         div class="space-y-2" { label for="success_url" class="text-sm font-medium" { "Success URL" } input id="success_url" name="success_url" type="url" value=(s.success_url) placeholder="https://example.com/checkout/success" class=(dashboard_input()); }

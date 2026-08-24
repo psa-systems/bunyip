@@ -11,10 +11,18 @@
 #   - an ASCII emoticon. The app-docs empty state read
 #     `Sorry. No docs for this app yet :(`, the only emoticon in the product and
 #     the only empty state that apologised, against 23 terse sibling messages.
+#   - an internal issue key. The admin System page shipped
+#     `Country allow/deny for sign-in (BUNYIP-581)` as help text, so a tracker id
+#     rendered on screen. Issue keys belong in code and in comments, never in
+#     text a user reads. Log lines, assertions and attributes are exempt: they
+#     are operator and developer output, where the reference is what makes a log
+#     searchable.
 #
-# Only double-quoted string literals are scanned, so a comment or a Rust path
-# (`serde::Deserialize` carries `:D`, `types::PricingResponse` carries `:P`) is
-# never a hit. Whole-line comments are dropped first, so prose quoting a
+# Scanning stops at `#[cfg(test)]`: a test module's literals are assertion
+# messages, not copy. Only double-quoted string literals are scanned, so a
+# comment or a Rust path
+# (`serde::Deserialize` carries `:D`, `types::PricingResponse`
+# carries `:P`) is never a hit. Whole-line comments are dropped first, so prose quoting a
 # forbidden shape to explain it does not read as a violation.
 #
 # Usage:
@@ -28,6 +36,9 @@ const SRC_GLOB = "{bunyip-web/src,crates/web-kit/src}/**/*.rs"
 # One double-quoted Rust string literal, escapes included.
 const LITERAL = '"(?<lit>(?:[^"\\]|\\.)*)"'
 
+# Opens a log or assertion macro, whose message is operator or developer output.
+const MACRO_OPEN = '(tracing::\w+!\(|^\s*(info|warn|error|debug|trace)!\(|assert[a-z_]*!\(|panic!\()'
+
 const FORBIDDEN = [
     {
         pattern: '\.\.\.'
@@ -36,6 +47,13 @@ const FORBIDDEN = [
     {
         pattern: '(^|\s)[:;]-?[()DPp](\s|$|[.,!])'
         why: "ASCII emoticon in user-facing copy; the empty states and banners are terse noun phrases"
+    }
+    {
+        pattern: '\b(BUNYIP|PMS|MAPPS|LC|SF|SFT|DEV|GOV|AUDIT|PSA|A8N|ROCI|CLAUDE)-[0-9]+\b'
+        why: "internal issue key in user-facing copy; keep the sentence and move the reference into a comment"
+        # Operator and developer output. A log line without its issue key is a
+        # log nobody can trace back, so the rule stops at what a user reads.
+        exempt_lines: '(tracing::|^\s*(info|warn|error|debug|trace)!|assert|panic!|expect\(|unreachable!|#\[)'
     }
 ]
 
@@ -47,12 +65,27 @@ def check-rs [path: string]: nothing -> list<string> {
     }
 
     mut problems = []
+    # A log or assertion macro often spans several lines with its message on a
+    # line of its own, so the exemption has to survive to the closing paren
+    # rather than being decided per line.
+    mut in_macro = false
     for row in ($content | lines | enumerate) {
         let text = $row.item
+        if $in_macro {
+            if ($text =~ '\);') { $in_macro = false }
+        } else if (($text =~ $MACRO_OPEN) and not ($text =~ '\);')) {
+            $in_macro = true
+        }
+        # Test modules sit at the end of a file by convention, and their
+        # literals are assertion messages rather than copy. Everything from the
+        # `#[cfg(test)]` line on is developer output.
+        if ($text | str trim | str starts-with "#[cfg(test)]") { break }
         # Whole-line comments are prose about the code, not copy the user reads.
         if ($text | str trim | str starts-with "//") { continue }
         for hit in ($text | parse --regex $LITERAL | get lit) {
             for rule in $FORBIDDEN {
+                let exempt = ($rule | get --optional exempt_lines)
+                if ($exempt != null and (($text =~ $exempt) or $in_macro)) { continue }
                 if ($hit =~ $rule.pattern) {
                     $problems = ($problems | append $"($path):($row.index + 1): \"($hit)\" - ($rule.why).")
                 }
@@ -114,6 +147,54 @@ def self-test []: nothing -> nothing {
             expect_problems: true
             why: "an ASCII emoticon in the middle of a sentence"
         }
+        {
+            name: "issue-key-help-text.rs"
+            body: 'admin_block("Country access", Some("Country allow/deny for sign-in (BUNYIP-581). Restart required."), html! {})'
+            expect_problems: true
+            why: "an issue key in admin help text"
+        }
+        {
+            name: "issue-key-message.rs"
+            body: 'p { "Login withheld pending email approval (BUNYIP-373)" }'
+            expect_problems: true
+            why: "an issue key in a message shown to the user"
+        }
+        {
+            name: "issue-key-multiline-log.rs"
+            body: "tracing::info!(\n    target: \"consent_post\",\n    \"BUNYIP-234: consent saved, redirecting to authorize\"\n);"
+            expect_problems: false
+            why: "an issue key in a log message on its own line inside a multi-line macro"
+        }
+        {
+            name: "issue-key-log.rs"
+            body: 'tracing::warn!("BUNYIP-79 reconcile: rewrote stale migration checksum");'
+            expect_problems: false
+            why: "an issue key in a log line, where it is what makes the log traceable"
+        }
+        {
+            name: "issue-key-in-test-module.rs"
+            body: "#[cfg(test)]\nmod tests {\n    assert!(off.contains(\"x\"), \"matches what stripe_webhook does (BUNYIP-203)\");\n}"
+            expect_problems: false
+            why: "an issue key inside a test module"
+        }
+        {
+            name: "issue-key-assert.rs"
+            body: 'assert!(offenders.is_empty(), "BUNYIP-487 removed these; they must not come back");'
+            expect_problems: false
+            why: "an issue key in an assertion message"
+        }
+        {
+            name: "issue-key-clean-copy.rs"
+            body: 'admin_block("Country access", Some("Country allow/deny for sign-in. Restart required."), html! {})'
+            expect_problems: false
+            why: "the same help text with the reference removed"
+        }
+        {
+            name: "encoding-names.rs"
+            body: 'p { "Encoded as UTF-8 with SHA-256 digests" }'
+            expect_problems: false
+            why: "an encoding name that looks like a key but is not one"
+        }
     ]
 
     let results = ($cases | each {|c|
@@ -143,7 +224,7 @@ def self-test []: nothing -> nothing {
 }
 
 def main [
-    --self-test # prove the gate rejects a three-dot ellipsis and an emoticon, then exit
+    --self-test # prove the gate rejects a three-dot ellipsis, an emoticon and an issue key, then exit
 ]: nothing -> nothing {
     if $self_test {
         self-test
@@ -161,11 +242,11 @@ def main [
         for p in $problems { print --stderr $"error: ($p)" }
         print --stderr ""
         print --stderr "User-facing copy uses one ellipsis glyph and one voice (BUNYIP-551):"
-        print --stderr "the single-character … rather than three dots, and terse noun phrases with"
-        print --stderr "no emoticons. Fix the string literal, or move the text into a comment if it"
-        print --stderr "is not copy."
+        print --stderr "the single-character … rather than three dots, terse noun phrases with no"
+        print --stderr "emoticons, and no internal issue key on screen. Fix the string literal, or"
+        print --stderr "move the text into a comment if it is not copy."
         exit 1
     }
 
-    print $"check-ui-copy: ($files | length) source files carry no three-dot ellipsis and no emoticon"
+    print $"check-ui-copy: ($files | length) source files carry no three-dot ellipsis, no emoticon and no issue key"
 }

@@ -69,7 +69,7 @@ pub(super) fn email_settings_content(
                         ),
                         admin_block(
                             "Inbound IMAP (support queue)",
-                            Some("Replies to system mail are polled from this mailbox into the support queue (BUNYIP-571). Leave a field blank to keep the existing value."),
+                            Some("Replies to system mail are polled from this mailbox into the support queue. Leave a field blank to keep the existing value."),
                             html! {
                                 div class="space-y-4" {
                                     div class="space-y-2" {
