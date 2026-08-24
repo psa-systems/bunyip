@@ -975,8 +975,15 @@ mod two_column_layout_tests {
         // page now carries slots, per-tier trials, the checkout trial, the price
         // mapping (its own form) and the publish switch.
         let vals = tier_vals();
-        let html = tier_settings_content(Some(&tier_cfg()), None, Err("unavailable"), &vals, None)
-            .into_string();
+        let html = tier_settings_content(
+            Some(&tier_cfg()),
+            None,
+            Err("unavailable"),
+            &vals,
+            None,
+            None,
+        )
+        .into_string();
         assert!(html.contains("Pricing Tiers"), "heading present");
         for f in [
             "lifetime_slots",
@@ -1024,10 +1031,10 @@ mod two_column_layout_tests {
             }))
             .unwrap()
         };
-        let on =
-            super::stripe_catalog_section(Ok(&cfg(true)), None, Err("unavailable")).into_string();
-        let off =
-            super::stripe_catalog_section(Ok(&cfg(false)), None, Err("unavailable")).into_string();
+        let on = super::stripe_catalog_section(Ok(&cfg(true)), None, Err("unavailable"), None)
+            .into_string();
+        let off = super::stripe_catalog_section(Ok(&cfg(false)), None, Err("unavailable"), None)
+            .into_string();
         assert!(
             on.contains(r#"name="pricing_enabled""#),
             "publish switch present in the catalog mapping"
@@ -1054,8 +1061,9 @@ mod two_column_layout_tests {
             ],
             "reasons": [],
         }));
-        let html = super::stripe_catalog_section(Ok(&tier_cfg_pricing(true)), None, Ok(&status))
-            .into_string();
+        let html =
+            super::stripe_catalog_section(Ok(&tier_cfg_pricing(true)), None, Ok(&status), None)
+                .into_string();
         assert!(html.contains("/pricing is live and advertising: Lifetime, Standard."));
     }
 
@@ -1071,8 +1079,9 @@ mod two_column_layout_tests {
                   "message": "Early Adopter: price_old is archived in Stripe. Map an active price." },
             ],
         }));
-        let html = super::stripe_catalog_section(Ok(&tier_cfg_pricing(false)), None, Ok(&status))
-            .into_string();
+        let html =
+            super::stripe_catalog_section(Ok(&tier_cfg_pricing(false)), None, Ok(&status), None)
+                .into_string();
         assert!(
             html.contains("app tag `bunyip`"),
             "the app-tag cause is named verbatim, tag included"
@@ -1095,6 +1104,7 @@ mod two_column_layout_tests {
             Ok(&tier_cfg_pricing(false)),
             None,
             Err("Could not reach the server."),
+            None,
         )
         .into_string();
         assert!(html.contains("Could not load the pricing status"));
@@ -1723,8 +1733,9 @@ mod stripe_admin_tests {
         // The mapped free price resolves to the same product that is stored, so
         // no disagreement flag.
         let prices = [price("price_free123", "prod_life123", Some(0), true)];
-        let html = super::stripe_catalog_section(Ok(&tier), Some(&prices), Err("unavailable"))
-            .into_string();
+        let html =
+            super::stripe_catalog_section(Ok(&tier), Some(&prices), Err("unavailable"), None)
+                .into_string();
         assert!(
             html.contains(r#"action="/admin/tier-settings/catalog""#),
             "catalog form present"
@@ -1753,7 +1764,7 @@ mod stripe_admin_tests {
         );
         // Load-error state when the tier config is unavailable.
         assert!(
-            super::stripe_catalog_section(Err(&load_error()), None, Err("unavailable"))
+            super::stripe_catalog_section(Err(&load_error()), None, Err("unavailable"), None)
                 .into_string()
                 .contains("Could not load the tier catalog mapping")
         );
@@ -1774,8 +1785,9 @@ mod stripe_admin_tests {
             .unwrap();
         // The mapped standard price actually belongs to a different product.
         let prices = [price("price_std", "prod_REAL", Some(300), true)];
-        let html = super::stripe_catalog_section(Ok(&tier), Some(&prices), Err("unavailable"))
-            .into_string();
+        let html =
+            super::stripe_catalog_section(Ok(&tier), Some(&prices), Err("unavailable"), None)
+                .into_string();
         assert!(
             html.contains("Stored product differs"),
             "disagreement is flagged"
@@ -1830,7 +1842,8 @@ mod stripe_admin_tests {
                 "lifetime_visible": true, "early_adopter_visible": false, "standard_visible": true
             }))
             .unwrap();
-        let html = super::stripe_catalog_section(Ok(&tier), None, Err("unavailable")).into_string();
+        let html =
+            super::stripe_catalog_section(Ok(&tier), None, Err("unavailable"), None).into_string();
         for name in [
             "lifetime_visible",
             "early_adopter_visible",
@@ -1844,6 +1857,140 @@ mod stripe_admin_tests {
         assert!(
             html.contains("Show this tier on the pricing page"),
             "the visibility control is labelled"
+        );
+    }
+
+    // -- BUNYIP-616: a rejected catalog save redisplays what was submitted --
+
+    /// A stored tier config for the redisplay tests: the free tier is mapped to
+    /// `price_A` and shown, and every other control is off. So on a plain load
+    /// exactly one price is selected and one visibility box is checked, which lets
+    /// a submitted override be told apart from the stored row by presence alone.
+    fn catalog_stored() -> crate::api::types::TierConfigResponse {
+        serde_json::from_value(serde_json::json!({
+            "lifetime_slots": 5, "early_adopter_slots": 5, "early_adopter_trial_days": 90,
+            "standard_trial_days": 30, "source": "database",
+            "lifetime_slots_used": 0, "early_adopter_slots_used": 0,
+            "free_price_id": "price_A", "early_adopter_price_id": null, "standard_price_id": null,
+            "pricing_enabled": false,
+            "lifetime_visible": true, "early_adopter_visible": false, "standard_visible": false
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn catalog_form_query_carries_prices_verbatim_and_flags_as_0_or_1() {
+        // The failure redirect must carry an unticked box as an explicit 0, not by
+        // omission, or the page fills it from the stored row on redisplay. Prices
+        // ride back verbatim, an empty one included ("(none)").
+        let form = super::StripeCatalogForm {
+            free_price_id: "price_free".into(),
+            early_adopter_price_id: "".into(),
+            standard_price_id: "price_std".into(),
+            pricing_enabled: Some("true".into()),
+            lifetime_visible: None,
+            early_adopter_visible: Some("true".into()),
+            standard_visible: None,
+        };
+        let q = super::catalog_form_query(&form);
+        assert!(
+            q.contains("free_price_id=price_free"),
+            "price rides back: {q}"
+        );
+        assert!(
+            q.contains("early_adopter_price_id=&"),
+            "an empty (none) price is an empty value, not omitted: {q}"
+        );
+        assert!(q.contains("standard_price_id=price_std"), "{q}");
+        assert!(q.contains("pricing_enabled=1"), "a ticked switch is 1: {q}");
+        assert!(
+            q.contains("lifetime_visible=0"),
+            "an unticked box is 0, not absent: {q}"
+        );
+        assert!(q.contains("early_adopter_visible=1"), "{q}");
+        assert!(q.contains("standard_visible=0"), "{q}");
+    }
+
+    #[test]
+    fn catalog_with_no_submission_renders_the_stored_row() {
+        // The plain-load case: no query, so every control comes from the row.
+        let prices = [price("price_A", "prod_A", Some(0), true)];
+        let html = super::stripe_catalog_section(
+            Ok(&catalog_stored()),
+            Some(&prices),
+            Err("unavailable"),
+            None,
+        )
+        .into_string();
+        assert!(
+            html.contains(r#"value="price_A" selected"#),
+            "the stored price is selected on a plain load"
+        );
+        assert_eq!(
+            html.matches("checked").count(),
+            1,
+            "exactly the one stored-visible tier is checked on a plain load"
+        );
+    }
+
+    #[test]
+    fn catalog_redisplays_a_submitted_price_and_unticked_box_over_the_stored_row() {
+        // A rejected save redisplays what the admin submitted: a different price
+        // for the free tier, and the free tier's visibility box unticked even
+        // though the stored row has it on.
+        let prices = [
+            price("price_A", "prod_A", Some(0), true),
+            price("price_B", "prod_B", Some(0), true),
+        ];
+        let submitted = super::CatalogFormValues {
+            free_price_id: Some("price_B".into()),
+            lifetime_visible: Some("0".into()),
+            ..Default::default()
+        };
+        let html = super::stripe_catalog_section(
+            Ok(&catalog_stored()),
+            Some(&prices),
+            Err("unavailable"),
+            Some(&submitted),
+        )
+        .into_string();
+        assert!(
+            html.contains(r#"value="price_B" selected"#),
+            "the submitted price id is selected"
+        );
+        assert!(
+            !html.contains(r#"value="price_A" selected"#),
+            "the stored price is no longer selected"
+        );
+        assert_eq!(
+            html.matches("checked").count(),
+            0,
+            "the unticked box is not restored from the stored-visible row"
+        );
+    }
+
+    #[test]
+    fn catalog_redisplays_a_submitted_ticked_switch_and_box_over_a_stored_off_row() {
+        // The reverse: the publish switch and a visibility box the admin ticked
+        // come back ticked even though the stored row has both off. The switch is
+        // part of this form, so a rejected save must not silently drop it either.
+        let submitted = super::CatalogFormValues {
+            pricing_enabled: Some("1".into()),
+            standard_visible: Some("1".into()),
+            lifetime_visible: Some("0".into()),
+            ..Default::default()
+        };
+        let html = super::stripe_catalog_section(
+            Ok(&catalog_stored()),
+            None,
+            Err("unavailable"),
+            Some(&submitted),
+        )
+        .into_string();
+        assert_eq!(
+            html.matches("checked").count(),
+            2,
+            "the submitted ticked switch and box are restored, the stored-on box unticked"
         );
     }
 
