@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::api::admin as admin_api;
 use crate::api::types::{AdminFeedbackDetail, FeedbackAttachmentMeta, FeedbackStatus};
-use crate::handlers::{admin_guard, admin_response};
+use crate::handlers::{admin_guard, admin_response, verification_gate};
 use crate::util::{rel_time, urlenc};
 use crate::views::ui::{back_link, badge, button_class, empty_state, error_box, icon, pager};
 use crate::web::{redirect_cookies, AppState};
@@ -741,10 +741,13 @@ pub async fn feedback_respond(
     Path(id): Path<String>,
     Form(body): Form<RespondForm>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) = verification_gate(&user, &c, &format!("/admin/feedback/{id}")) {
+        return refusal;
+    }
     let response = body.response.trim();
     if response.is_empty() {
         // Empty body: short-circuit and reload the detail page; the user

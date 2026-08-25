@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::api::admin as admin_api;
 use crate::api::types::{AdminRateLimit, AdminUser};
-use crate::handlers::{admin_guard, admin_response, dashboard_input};
+use crate::handlers::{admin_guard, admin_response, dashboard_input, verification_gate};
 use crate::util::{rel_time, urlenc};
 use crate::views::ui::{back_link, badge, button_class, empty_state, icon};
 use crate::web::{redirect_cookies, AppState};
@@ -678,10 +678,13 @@ pub async fn user_role(
     Path(id): Path<String>,
     Form(f): Form<RoleForm>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) = verification_gate(&user, &c, "/admin/users") {
+        return refusal;
+    }
     // Only the known roles are accepted; reject anything else (the UI uses a
     // dropdown, so an arbitrary role string can only come from a crafted
     // request) before forwarding it to the API (BUNYIP-114).
@@ -706,10 +709,13 @@ pub async fn user_delete(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) = verification_gate(&user, &c, "/admin/users") {
+        return refusal;
+    }
     let target = match admin_api::delete_user(&st.api, c.forward.as_deref(), &id).await {
         Ok(_) => "/admin/users".to_string(),
         Err(e) => {
@@ -725,10 +731,13 @@ pub async fn user_suspend(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) = verification_gate(&user, &c, "/admin/users") {
+        return refusal;
+    }
     let target = match admin_api::suspend_user(&st.api, c.forward.as_deref(), &id).await {
         Ok(_) => "/admin/users".to_string(),
         Err(e) => {
@@ -749,10 +758,13 @@ pub async fn user_reactivate(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) = verification_gate(&user, &c, "/admin/users?status=suspended") {
+        return refusal;
+    }
     let _ = admin_api::reactivate_user(&st.api, c.forward.as_deref(), &id).await;
     redirect_cookies("/admin/users?status=suspended", &c.set_cookies)
 }
@@ -762,10 +774,13 @@ pub async fn user_reset_password(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) = verification_gate(&user, &c, &format!("/admin/users/{id}")) {
+        return refusal;
+    }
     let _ = admin_api::admin_reset_password(&st.api, c.forward.as_deref(), &id).await;
     redirect_cookies(&format!("/admin/users/{id}"), &c.set_cookies)
 }
@@ -786,10 +801,13 @@ pub async fn user_email(
     Path(id): Path<String>,
     Form(f): Form<EmailForm>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) = verification_gate(&user, &c, &format!("/admin/users/{id}")) {
+        return refusal;
+    }
     let email = f.email.trim();
     if email.is_empty() {
         return redirect_cookies(
@@ -814,10 +832,13 @@ pub async fn user_verify_email(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) = verification_gate(&user, &c, &format!("/admin/users/{id}")) {
+        return refusal;
+    }
     let target = match admin_api::verify_user_email(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => format!("/admin/users/{id}?toast_ok=Email%20verified"),
         Err(_) => format!("/admin/users/{id}?toast_err=Could%20not%20verify%20email"),
@@ -831,10 +852,13 @@ pub async fn user_reset_2fa(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) = verification_gate(&user, &c, &format!("/admin/users/{id}")) {
+        return refusal;
+    }
     let target = match admin_api::reset_user_two_factor(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => format!("/admin/users/{id}?toast_ok=Two-factor%20cleared"),
         Err(_) => format!("/admin/users/{id}?toast_err=Could%20not%20clear%20two-factor"),
@@ -847,10 +871,13 @@ pub async fn user_grant_lifetime(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) = verification_gate(&user, &c, &format!("/admin/users/{id}")) {
+        return refusal;
+    }
     let _ = admin_api::grant_lifetime(&st.api, c.forward.as_deref(), &id).await;
     redirect_cookies(&format!("/admin/users/{id}"), &c.set_cookies)
 }
@@ -860,10 +887,13 @@ pub async fn user_revoke_lifetime(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) = verification_gate(&user, &c, &format!("/admin/users/{id}")) {
+        return refusal;
+    }
     let target = match admin_api::revoke_lifetime(&st.api, c.forward.as_deref(), &id).await {
         Ok(_) => format!("/admin/users/{id}"),
         Err(e) => {
@@ -896,10 +926,13 @@ pub async fn user_set_tier(
     Path(id): Path<String>,
     Form(f): Form<TierChangeForm>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) = verification_gate(&user, &c, &format!("/admin/users/{id}")) {
+        return refusal;
+    }
     let target = match admin_api::set_user_tier(
         &st.api,
         c.forward.as_deref(),

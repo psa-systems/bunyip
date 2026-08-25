@@ -18,6 +18,7 @@ use maud::Markup;
 
 use crate::api::types::{Application, PricingResponse, User, UserRole};
 use crate::auth::{self, AuthCtx};
+use crate::util::urlenc;
 use crate::views::layout::{admin_shell, dashboard_shell, document, public_shell};
 use crate::web::{html_cookies, redirect_cookies, AppState};
 
@@ -263,6 +264,55 @@ pub async fn admin_guard(st: &AppState, headers: &HeaderMap) -> Result<(User, Au
     Ok((user, c))
 }
 
+/// BUNYIP-619: the message a refused verification-gated action shows. It NAMES
+/// verification (not permission) so an admin knows the wall is their unverified
+/// email, and points at the resend control that clears it. The reason must be
+/// unmistakable, per the acceptance criteria.
+pub const VERIFICATION_REQUIRED_MESSAGE: &str =
+    "Verify your email before performing this action. Use the resend link on your dashboard.";
+
+/// BUNYIP-619: a principal is verification-complete once their name is present
+/// AND their email is verified. This is the property a privileged action
+/// requires, and it is deliberately distinct from the onboarding wall an admin
+/// is allowed to pass ([`needs_onboarding`]).
+pub fn is_verified(user: &User) -> bool {
+    names_present(user) && user.email_verified
+}
+
+/// BUNYIP-619: refuse a verification-gated action when the acting principal is
+/// not verification-complete, ADMIN INCLUDED. `Some(redirect)` bounces back to
+/// `back` carrying a toast that names verification as the reason; `None` lets the
+/// action proceed.
+///
+/// This is not the onboarding wall. BUNYIP-401 lifted the wall for admins so an
+/// admin whose verification mail cannot be delivered can still sign in, reach the
+/// dashboard, and repair SMTP; that same carve-out lifted every verification
+/// requirement, which let an unverified admin edit users, grant tiers and
+/// memberships, and send mail on the account's behalf. This gate restores the
+/// floor at each privileged action without re-trapping the admin at the entry
+/// gate: they still get in, they just cannot exercise a gated action until
+/// verification succeeds. It gates on `email_verified` itself, never on whether
+/// mail delivery is configured, so turning mail off cannot turn the requirement
+/// off.
+pub fn verification_gate(user: &User, c: &AuthCtx, back: &str) -> Option<Response> {
+    if is_verified(user) {
+        return None;
+    }
+    tracing::warn!(
+        user_id = %user.id,
+        back,
+        "refused a verification-gated action: acting admin is unverified (BUNYIP-619)"
+    );
+    let sep = if back.contains('?') { '&' } else { '?' };
+    Some(redirect_cookies(
+        &format!(
+            "{back}{sep}toast_err={}",
+            urlenc(VERIFICATION_REQUIRED_MESSAGE)
+        ),
+        &c.set_cookies,
+    ))
+}
+
 /// Standard form-input class used across dashboard/admin forms.
 pub fn dashboard_input() -> &'static str {
     "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -400,6 +450,238 @@ mod onboarding_gate_tests {
         }
         for p in ["/dashboard", "/settings", "/membership", "/admin", "/"] {
             assert!(!onboarding_allowed(p), "{p} should be gated");
+        }
+    }
+}
+
+/// BUNYIP-619: the verification gate on privileged admin actions.
+///
+/// The escape hatch BUNYIP-401 added lets an unverified admin sign in and reach
+/// the dashboard; this gate stops that same admin from exercising a
+/// verification-gated action until their email is verified. The two behaviours
+/// are tested together so a future edit cannot silently trade one for the other.
+#[cfg(test)]
+mod verification_gate_tests {
+    use super::{is_verified, verification_gate, VERIFICATION_REQUIRED_MESSAGE};
+    use crate::api::types::{MembershipStatus, MembershipTier, User, UserRole};
+    use crate::auth::AuthCtx;
+    use crate::util::urlenc;
+    use axum::http::header::LOCATION;
+
+    fn admin(verified: bool, first: Option<&str>, last: Option<&str>) -> User {
+        User {
+            id: "admin-1".into(),
+            email: "admin@example.com".into(),
+            role: UserRole::Admin,
+            email_verified: verified,
+            two_factor_enabled: true,
+            membership_status: MembershipStatus::None,
+            price_locked: false,
+            locked_price_id: None,
+            locked_price_amount: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+            membership_tier: MembershipTier::Free,
+            trial_ends_at: None,
+            lifetime_member: false,
+            first_name: first.map(str::to_string),
+            last_name: last.map(str::to_string),
+            phone: None,
+            avatar_updated_at: None,
+            is_super_admin: false,
+        }
+    }
+
+    fn ctx() -> AuthCtx {
+        AuthCtx {
+            user: None,
+            set_cookies: Vec::new(),
+            forward: None,
+        }
+    }
+
+    #[test]
+    fn verification_needs_both_name_and_email() {
+        // Only a named AND email-verified principal is verification-complete.
+        assert!(is_verified(&admin(true, Some("Ada"), Some("Lovelace"))));
+        assert!(!is_verified(&admin(false, Some("Ada"), Some("Lovelace"))));
+        assert!(!is_verified(&admin(true, None, None)));
+        assert!(!is_verified(&admin(true, Some("Ada"), None)));
+    }
+
+    #[test]
+    fn an_unverified_admin_still_reaches_the_dashboard() {
+        // AC2 / BUNYIP-401: the gate must not re-trap the admin at the entry
+        // wall. A named, unverified admin still clears onboarding (so sign-in and
+        // the dashboard succeed) whether or not mail delivery is configured - it
+        // is only the privileged ACTIONS above that refuse them.
+        assert!(!super::onboarding_needed(true, false, true, true));
+        assert!(!super::onboarding_needed(true, false, true, false));
+    }
+
+    #[test]
+    fn a_verified_admin_passes_the_gate() {
+        // The gate never stands in the way of a verified admin: the action runs.
+        let user = admin(true, Some("Ada"), Some("Lovelace"));
+        assert!(verification_gate(&user, &ctx(), "/admin/users").is_none());
+    }
+
+    #[test]
+    fn an_unverified_admin_is_refused_with_a_reason_that_names_verification() {
+        // BUNYIP-619: an unverified admin is refused, bounced back to the same
+        // page, and told verification (not permission) is what stands in the way.
+        let user = admin(false, Some("Ada"), Some("Lovelace"));
+        let refusal = verification_gate(&user, &ctx(), "/admin/users/u42")
+            .expect("an unverified admin must be refused");
+        let location = refusal
+            .headers()
+            .get(LOCATION)
+            .expect("a refusal redirects")
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            location.starts_with("/admin/users/u42?toast_err="),
+            "refusal must bounce back to the originating page: {location}"
+        );
+        assert!(
+            location.contains(&urlenc(VERIFICATION_REQUIRED_MESSAGE)),
+            "refusal must carry the verification message: {location}"
+        );
+        // The message itself must actually name verification, not read as a
+        // generic permission error.
+        assert!(
+            VERIFICATION_REQUIRED_MESSAGE
+                .to_lowercase()
+                .contains("verify"),
+            "the refusal message must name verification"
+        );
+    }
+
+    #[test]
+    fn a_back_path_that_already_has_a_query_appends_the_toast() {
+        // `?status=suspended` etc. must keep their query and gain the toast with
+        // `&`, not a second `?`.
+        let user = admin(false, Some("Ada"), Some("Lovelace"));
+        let refusal =
+            verification_gate(&user, &ctx(), "/admin/users?status=suspended").expect("refused");
+        let location = refusal
+            .headers()
+            .get(LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            location.starts_with("/admin/users?status=suspended&toast_err="),
+            "existing query must be preserved with `&`: {location}"
+        );
+    }
+
+    /// The bunyip-web admin handler sources, with the set of gated action
+    /// functions in each. Every listed function MUST refuse an unverified admin
+    /// by calling `verification_gate`; the scan below fails the build if one
+    /// stops doing so, which is exactly how the BUNYIP-401 carve-out silently
+    /// dropped the requirement from every action at once.
+    const GATED_ACTIONS: &[(&str, &str, &[&str])] = &[
+        (
+            "bunyip-web/src/handlers/admin/users.rs",
+            include_str!("admin/users.rs"),
+            &[
+                "user_role",
+                "user_delete",
+                "user_suspend",
+                "user_reactivate",
+                "user_reset_password",
+                "user_email",
+                "user_verify_email",
+                "user_reset_2fa",
+                "user_grant_lifetime",
+                "user_revoke_lifetime",
+                "user_set_tier",
+            ],
+        ),
+        (
+            "bunyip-web/src/handlers/admin/memberships.rs",
+            include_str!("admin/memberships.rs"),
+            &["membership_grant", "membership_revoke"],
+        ),
+        (
+            "bunyip-web/src/handlers/admin/entitlements.rs",
+            include_str!("admin/entitlements.rs"),
+            &["grant_user_entitlement_h", "revoke_user_entitlement_h"],
+        ),
+        (
+            "bunyip-web/src/handlers/admin/feedback.rs",
+            include_str!("admin/feedback.rs"),
+            &["feedback_respond"],
+        ),
+    ];
+
+    /// The escape-hatch handlers an unverified admin MUST still be able to run,
+    /// so a mail-less deployment can repair SMTP and the admin can then verify
+    /// (BUNYIP-401). The scan asserts none of them gates, so the hatch cannot be
+    /// closed by a future edit that gates too broadly.
+    const ESCAPE_HATCH_ACTIONS: &[(&str, &str, &[&str])] = &[
+        (
+            "bunyip-web/src/handlers/admin/email_config.rs",
+            include_str!("admin/email_config.rs"),
+            &["email_save", "email_test", "email_test_send"],
+        ),
+        (
+            "bunyip-web/src/handlers/admin/system_config.rs",
+            include_str!("admin/system_config.rs"),
+            &["system_config_save"],
+        ),
+    ];
+
+    /// Return the source slice of the `async fn {name}` body: from its signature
+    /// to the next top-level item, so a "contains" check cannot leak into the
+    /// next function.
+    fn fn_body<'a>(source: &'a str, name: &str) -> &'a str {
+        let needle = format!("async fn {name}(");
+        let start = source
+            .find(&needle)
+            .unwrap_or_else(|| panic!("async fn {name} not found in source"));
+        let rest = &source[start..];
+        let end = [
+            "\npub async fn ",
+            "\npub fn ",
+            "\npub(super) fn ",
+            "\nasync fn ",
+            "\nfn ",
+        ]
+        .iter()
+        // Skip the signature we start on (offset 0) by searching past it.
+        .filter_map(|m| rest[1..].find(m).map(|i| i + 1))
+        .min()
+        .unwrap_or(rest.len());
+        &rest[..end]
+    }
+
+    #[test]
+    fn every_gated_admin_action_calls_the_verification_gate() {
+        for (path, source, actions) in GATED_ACTIONS {
+            for name in *actions {
+                assert!(
+                    fn_body(source, name).contains("verification_gate("),
+                    "{path}: {name} is a verification-gated action but does not call \
+                     verification_gate, so an unverified admin could still run it (BUNYIP-619)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_escape_hatch_actions_never_gate() {
+        for (path, source, actions) in ESCAPE_HATCH_ACTIONS {
+            for name in *actions {
+                assert!(
+                    !fn_body(source, name).contains("verification_gate("),
+                    "{path}: {name} must NOT call verification_gate - an unverified admin \
+                     needs it to repair mail and then verify, or BUNYIP-401 reopens"
+                );
+            }
         }
     }
 }
