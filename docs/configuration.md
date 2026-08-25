@@ -24,6 +24,41 @@ Secrets resolve through the `{NAME}_FILE` convention first (a compose secret und
 variable (a dev `.env`). An empty value counts as unset everywhere. The exception is the four governed integration
 secrets below, which are `{NAME}_FILE`-only and are read only when `SECRETS_STORAGE=environment`.
 
+## The configuration boundary: system-level vs application-level (BUNYIP-622)
+
+Every configuration key is on one of two sides of a security-led boundary. A key is **system-level** when modifying it
+grants access to the host, other tenants, or the network boundary. Everything else is **application-level**, including
+every integration, because integrations must be manageable in-product by the MSP without a container restart.
+
+The rule matters because of where each side can be written. System-level keys are read from the **environment only** and
+have **no file or admin-API write path**: if the API could write one, any flaw that reached the API would become
+host- or network-level exposure (adding an origin you do not control, repointing the database, moving the secrets
+backend). The split is enforced **structurally, not by a permission check**: the file the admin settings API writes
+(`SysConfigFile` in `crates/bunyip-domain/src/sys_config.rs`) has no field for a system-level key, so there is no code
+path to persist one and no guard a refactor could drop. `SYSTEM_LEVEL_ENV_KEYS` in that file is the machine-checked list;
+`system_level_keys_never_enter_the_file_layer` fails the build if one ever reappears in the file layer.
+
+**System-level (environment only, never API-writable):**
+
+| Key(s)                                                                                             | Why it is system-level          |
+|----------------------------------------------------------------------------------------------------|---------------------------------|
+| `CORS_ORIGIN`, `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`                                                 | origins and domains the deployment trusts |
+| `DATABASE_URL`, `APP_DATABASE_URL`, `BUNYIP_APP_PASSWORD`                                           | database connection             |
+| `SECRETS_STORAGE`, `INFISICAL_HOST`, `INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_PROJECT_ID`, `INFISICAL_ENVIRONMENT` | secrets backend location and credentials |
+| `JWT_SECRET`, `APP_ENCRYPTION_KEY` (+ `_PREV`, `_VERSION`)                                          | signing and at-rest key material |
+
+**Application-level (product-managed):** everything else. This includes every integration (SMTP, Stripe, IMAP, the OCI
+registry, GeoIP), which is managed in the database through the admin pages (see [settings that are not environment
+variables](#settings-that-are-not-environment-variables)), and the deployment toggles the YAML file layer carries
+(`LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`, the country allow/deny list). A corollary the boundary must hold:
+creating a username and password does not depend on any integration, so a self-hosted install with no email configured
+can still create its first account (`account_creation_does_not_depend_on_the_email_integration` in
+`services/auth.rs`).
+
+The remaining environment variables in the tables below (ports, log level, tunables, feature-gating flags for
+integrations) are application-level operational settings: they are read from the environment for operator convenience,
+but none is API-writable, so none can be used to cross a trust boundary.
+
 ## The reporting contract (BUNYIP-537)
 
 | Classification            | At startup                                                                     |
@@ -192,13 +227,16 @@ and belongs in the same runbook.
 | `MOKOSH_WEBHOOK_URL`                    | -                           | `account_deleted` events are never dispatched to mokosh             |
 | `MOKOSH_BACKUP_API_URL`                 | -                           | account backup/restore falls back to the pending stub               |
 
-## System-config YAML layer (BUNYIP-579)
+## Application-level config YAML layer (BUNYIP-579/622)
 
 A subset of the deployment-level settings below also resolves through a file-based YAML layer, so they can be reviewed
 and edited in one place, by hand or from the admin **System** screen (BUNYIP-580), rather than only as environment
-variables. Today this covers `CORS_ORIGIN`, `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`, `LOGIN_APPROVAL_ENABLED`,
-`SIGNUP_BOT_GUARD_ENABLED`, and the country allow/deny list. Branding and every per-tenant value stay in the database
-(BUNYIP-561), so they remain live-editable without a restart.
+variables. This layer carries **application-level settings only** (see [the configuration
+boundary](#the-configuration-boundary-system-level-vs-application-level-bunyip-622)): today `LOGIN_APPROVAL_ENABLED`,
+`SIGNUP_BOT_GUARD_ENABLED`, and the country allow/deny list. BUNYIP-579 originally also carried the system-level origins
+(`CORS_ORIGIN`, `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`); BUNYIP-622 moved those to the environment only, because a setting
+the API can write must not be one whose modification changes which origins the deployment trusts. Branding and every
+per-tenant value stay in the database (BUNYIP-561), so they remain live-editable without a restart.
 
 - **File location**: `BUNYIP_CONFIG_FILE`, default `/app/config/config.yaml` (mount `/app/config` as a volume so edits
   persist).
@@ -208,9 +246,10 @@ variables. Today this covers `CORS_ORIGIN`, `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`
   `{NAME}_FILE` indirection is honoured too, so a secret-bearing value can be sourced from a mounted file rather than
   inlined, keeping the Infisical path intact.
 - **Admin screen** (BUNYIP-580): **Admin -> System** (`/admin/system-config`) edits the same file through a form. A save
-  validates the values (origins contain a scheme, country codes are 2-letter) and rewrites the whole file atomically; a
-  cleared field clears the setting. The screen edits the file layer only, so a value an environment variable also sets
-  shows the file value but the effective value stays the environment one until that variable is removed.
+  validates the values (country codes are 2-letter) and rewrites the whole file atomically; a cleared field clears the
+  setting. The screen edits the file layer only, so a value an environment variable also sets shows the file value but
+  the effective value stays the environment one until that variable is removed. It exposes only application-level keys:
+  there is no field for a system-level origin, so the API has no path to write one (BUNYIP-622).
 - **Apply**: edits to the YAML (by hand or from the admin screen) take effect on the next application restart. This is
   the documented, supported path.
 

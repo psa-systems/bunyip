@@ -2411,6 +2411,36 @@ pub(crate) fn generate_secure_token(length: usize) -> String {
 mod tests {
     use super::*;
 
+    /// BUNYIP-622 AC4: a self-hosted install must be able to create a username and
+    /// password with no email integration configured, so login cannot hard-depend
+    /// on an integration (email is application-level). `register` is the
+    /// account-creation path; this asserts it never touches the email transport,
+    /// so creating an account cannot fail because email is unconfigured. Boot
+    /// without any integration is covered separately by
+    /// `no_integration_variable_is_required_so_a_zero_integration_deployment_boots`
+    /// (config.rs).
+    #[test]
+    fn account_creation_does_not_depend_on_the_email_integration() {
+        let source = include_str!("auth.rs");
+        let start = source
+            .find("pub async fn register(")
+            .expect("register exists");
+        let rest = &source[start..];
+        // The body runs to the next top-level item on this impl block.
+        let end = rest[1..]
+            .find("\n    pub async fn ")
+            .map(|i| i + 1)
+            .unwrap_or(rest.len());
+        let body = &rest[..end];
+        for forbidden in ["email_service", ".send_", ".send("] {
+            assert!(
+                !body.contains(forbidden),
+                "register references {forbidden}: account creation must not depend on the \
+                 email integration (BUNYIP-622 AC4)"
+            );
+        }
+    }
+
     #[test]
     fn refresh_absolute_ttl_is_remember_based() {
         // BUNYIP-381: uniform across roles - 30 days with "remember me", else 1 day.
