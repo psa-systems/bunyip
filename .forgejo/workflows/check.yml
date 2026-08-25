@@ -171,10 +171,11 @@ jobs:
           ./scripts/check-css-current.nu
 
       - name: Check user-facing copy stays on one glyph and one voice
-        # No three-dot ellipsis and no emoticon in any string literal under
-        # bunyip-web/src: the ellipsis is the single-character glyph everywhere
-        # (BUNYIP-472, closed for copy in BUNYIP-551) and the empty states are
-        # terse noun phrases.
+        # No three-dot ellipsis, no emoticon and no internal issue key in any
+        # string literal under bunyip-web/src: the ellipsis is the
+        # single-character glyph everywhere (BUNYIP-472, closed for copy in
+        # BUNYIP-551), the empty states are terse noun phrases, and a tracker id
+        # stays in the code and its comments rather than on screen (BUNYIP-624).
         # --self-test first, so a gate that stopped detecting anything fails the
         # build instead of passing vacuously.
         run: |

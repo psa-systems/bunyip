@@ -83,7 +83,7 @@ pub(super) fn system_settings_content(cfg: Option<&SystemConfigResponse>) -> Mar
                         ),
                         admin_block(
                             "Country access",
-                            Some("Country allow/deny for sign-in (BUNYIP-581). Restart required."),
+                            Some("Country allow/deny for sign-in. Restart required."),
                             html! {
                                 div class="space-y-4" {
                                     (text_field("country_allow", "Allow list", &e.country_allow, "US, GB", "ISO alpha-2 codes; blank allows all."))

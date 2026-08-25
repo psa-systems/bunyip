@@ -115,8 +115,8 @@ check-css-current:
     ./scripts/check-css-current.nu --self-test
     ./scripts/check-css-current.nu
 
-# Gate user-facing copy: no three-dot ellipsis and no emoticon in any string
-# literal under bunyip-web/src (BUNYIP-551).
+# Gate user-facing copy: no three-dot ellipsis, no emoticon and no internal
+# issue key in any string literal under bunyip-web/src (BUNYIP-551, BUNYIP-624).
 [group: 'checks']
 check-ui-copy:
     ./scripts/check-ui-copy.nu --self-test
