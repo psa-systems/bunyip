@@ -125,6 +125,16 @@ pub fn classify(declared: SecretsStorage, holders: &[SecretsStorage]) -> Enforce
     }
 }
 
+/// Empty is absent. A store that holds an empty string for a governed secret is
+/// not holding it, so `Some("")` becomes `None` before it can be counted as a
+/// holder or copied as a value (BUNYIP-621): treating a blank as present is what
+/// let a migration report success while leaving the secret unusable. Applied to
+/// every store read in [`survey`], so the survey, the boot enforcement and the
+/// migration plan all agree on what "present" means.
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|v| !v.is_empty())
+}
+
 /// Read every governed secret from every store this run is allowed to inspect.
 ///
 /// The database read always runs (the pool is already open); the environment
@@ -182,11 +192,15 @@ pub async fn survey(
 
     let mut secrets = Vec::with_capacity(GovernedSecret::ALL.len());
     for secret in GovernedSecret::ALL {
-        let database = db_value(secret);
-        let environment = secret.read_environment();
+        // Empty is absent in every store (BUNYIP-621). `read_environment` already
+        // drops an empty file; the database and Infisical reads did not, so a
+        // present-but-blank value counted as a holder and a migration reported it
+        // "already present" while leaving the secret unusable.
+        let database = non_empty(db_value(secret));
+        let environment = non_empty(secret.read_environment());
         let infisical = match (&client, infisical_error.is_some()) {
             (Some(client), false) => match client.fetch_secret(secret.name()).await {
-                Ok(value) => value,
+                Ok(value) => non_empty(value),
                 Err(e) => {
                     infisical_error = Some(e.to_string());
                     None
@@ -776,7 +790,12 @@ pub fn plan_migration(survey: &Survey, target: SecretsStorage) -> Vec<MigrationS
 
 /// Render a plan as operator-facing lines. For `--to environment` the copy step
 /// is a set of instructions, because a process cannot write that store.
-pub fn render_plan(steps: &[MigrationStep], target: SecretsStorage, dry_run: bool) -> String {
+pub fn render_plan(
+    steps: &[MigrationStep],
+    target: SecretsStorage,
+    dry_run: bool,
+    allow_missing: bool,
+) -> String {
     let verb = if dry_run { "would copy" } else { "copying" };
     let mut out = format!(
         "secrets-migrate --to {}{}\n",
@@ -789,9 +808,17 @@ pub fn render_plan(steps: &[MigrationStep], target: SecretsStorage, dry_run: boo
             MigrationAction::AlreadyPresent => {
                 out.push_str(&format!("  {name}: already present in {target}, skipped\n"));
             }
+            // No value in any store. Left silent it resurfaces later as a broken
+            // feature (BUNYIP-621), so it fails the run unless --allow-missing.
+            MigrationAction::NoSource if allow_missing => {
+                out.push_str(&format!(
+                    "  {name}: no value in any store, skipped (--allow-missing)\n"
+                ));
+            }
             MigrationAction::NoSource => {
                 out.push_str(&format!(
-                    "  {name}: the declared store holds no value, nothing to copy\n"
+                    "  {name}: no value in any store; the migration fails unless you set it or \
+                     pass --allow-missing\n"
                 ));
             }
             MigrationAction::Copy if target == SecretsStorage::Environment => {
@@ -810,11 +837,50 @@ pub fn render_plan(steps: &[MigrationStep], target: SecretsStorage, dry_run: boo
     out
 }
 
+/// The governed secrets a real migration must refuse to proceed past: those with
+/// no value in any store, which cannot be carried across and would leave the
+/// target blank (BUNYIP-621). `--allow-missing` turns this into an explicit skip,
+/// so a deployment that genuinely does not use a feature can migrate the rest.
+fn migration_blockers(steps: &[MigrationStep], allow_missing: bool) -> Vec<&'static str> {
+    if allow_missing {
+        return Vec::new();
+    }
+    steps
+        .iter()
+        .filter(|step| step.action == MigrationAction::NoSource)
+        .map(|step| step.secret.name())
+        .collect()
+}
+
+/// After a migration, the secrets it copied that the target store does not now
+/// hold with a non-empty value. The re-read survey normalises empty to absent, so
+/// a name here means the write reported success without persisting a usable value
+/// (BUNYIP-621): the run must fail rather than invite a cutover to a blank store.
+fn verification_failures(
+    steps: &[MigrationStep],
+    after: &Survey,
+    target: SecretsStorage,
+) -> Vec<&'static str> {
+    steps
+        .iter()
+        .filter(|step| step.action == MigrationAction::Copy)
+        .map(|step| step.secret)
+        .filter(|secret| !after.get(*secret).present_in(target))
+        .map(|secret| secret.name())
+        .collect()
+}
+
 /// Copy every governed secret from its current live source into `target`.
 ///
 /// The old copy is deliberately left in place: it is the rollback path, and
 /// deleting it at the moment of cutover removes that path exactly when it is
 /// most likely to be needed. `secrets-purge` removes it later, explicitly.
+///
+/// A governed secret with no value in any store fails the run (BUNYIP-621) unless
+/// `allow_missing`, so a silent blank can never be reported as a successful
+/// migration. After the copy, the target store is re-read (`probe` inspects
+/// Infisical when it is the target) and any secret that did not land there is a
+/// hard failure too, so "reported success" and "actually usable" cannot diverge.
 pub async fn run_migration(
     pool: &PgPool,
     config: &Config,
@@ -822,9 +888,21 @@ pub async fn run_migration(
     survey: &Survey,
     target: SecretsStorage,
     dry_run: bool,
+    allow_missing: bool,
+    probe: InfisicalProbe,
 ) -> Result<String, AppError> {
     let steps = plan_migration(survey, target);
-    let mut out = render_plan(&steps, target, dry_run);
+    let mut out = render_plan(&steps, target, dry_run, allow_missing);
+
+    let blockers = migration_blockers(&steps, allow_missing);
+    if !blockers.is_empty() {
+        return Err(AppError::BadRequest(format!(
+            "{out}\n{} has no value in any store, so migrating to {target} would leave it blank. \
+             Set it first, or pass --allow-missing to migrate the rest and leave it unset.",
+            blockers.join(", ")
+        )));
+    }
+
     if dry_run || target == SecretsStorage::Environment {
         return Ok(out);
     }
@@ -851,9 +929,26 @@ pub async fn run_migration(
         .await?;
         copied += 1;
     }
+
+    // Re-read the stores and confirm every copied secret actually landed in the
+    // target (`probe` inspects Infisical when it is the target). Path-qualified
+    // because the `survey` parameter shadows the module function here.
+    let after = self::survey(pool, config, key_set, probe).await?;
+    let blank = verification_failures(&steps, &after, target);
+    if !blank.is_empty() {
+        return Err(AppError::Upstream {
+            message: format!(
+                "{out}\nmigration wrote {target} but it still holds no usable value for {}. The \
+                 store did not persist the copy; do NOT set SECRETS_STORAGE={target}.",
+                blank.join(", ")
+            ),
+        });
+    }
+
     out.push_str(&format!(
-        "\n{copied} secret(s) copied into {target}. The source copies are untouched: set \
-         SECRETS_STORAGE={target}, restart, soak, then run `secrets-purge --confirm`.\n"
+        "\n{copied} secret(s) copied into {target} and verified present there. The source copies \
+         are untouched: set SECRETS_STORAGE={target}, restart, soak, then run \
+         `secrets-purge --confirm`.\n"
     ));
     Ok(out)
 }
@@ -1150,7 +1245,12 @@ mod tests {
 
         // `--to environment` cannot write, so the plan is the exact set of
         // {NAME}_FILE entries and secret-file paths to create.
-        let env_plan = render_plan(&plan_migration(&survey, Environment), Environment, false);
+        let env_plan = render_plan(
+            &plan_migration(&survey, Environment),
+            Environment,
+            false,
+            false,
+        );
         assert!(env_plan.contains("SMTP_PASSWORD_FILE: /run/secrets/smtp_password"));
         assert!(env_plan.contains("./secrets/smtp_password"));
         assert!(env_plan.contains("STRIPE_SECRET_KEY_FILE: /run/secrets/stripe_secret_key"));
@@ -1161,9 +1261,89 @@ mod tests {
     #[test]
     fn a_dry_run_plan_reads_as_a_plan() {
         let survey = survey_of(Database, vec![vec![Database], vec![Database], vec![]]);
-        let plan = render_plan(&plan_migration(&survey, Infisical), Infisical, true);
+        let plan = render_plan(&plan_migration(&survey, Infisical), Infisical, true, false);
         assert!(plan.contains("(dry run)"), "{plan}");
         assert!(plan.contains("would copy"), "{plan}");
+    }
+
+    /// Empty is absent in every store (BUNYIP-621): a present-but-blank value is
+    /// dropped before it can be counted as a holder or copied as a source.
+    #[test]
+    fn empty_is_absent_in_every_store() {
+        assert_eq!(non_empty(Some(String::new())), None);
+        assert_eq!(non_empty(None), None);
+        assert_eq!(
+            non_empty(Some("sk_live_x".to_string())),
+            Some("sk_live_x".to_string())
+        );
+    }
+
+    /// A secret with no value in any store (a missing source, an empty source and
+    /// an empty target all normalise to this) plans as `NoSource` and stops the
+    /// run, so a migration can never report success while leaving it blank. The
+    /// operator opts past it explicitly with `--allow-missing`.
+    #[test]
+    fn a_missing_or_empty_source_blocks_the_migration() {
+        let survey = survey_of(
+            Database,
+            vec![vec![], vec![Database], vec![Database], vec![Database]],
+        );
+        let steps = plan_migration(&survey, Infisical);
+        assert_eq!(steps[0].action, MigrationAction::NoSource);
+
+        assert_eq!(migration_blockers(&steps, false), vec!["SMTP_PASSWORD"]);
+        assert!(migration_blockers(&steps, true).is_empty());
+
+        // The plan says which it is: a hard failure by default, an explicit skip
+        // under --allow-missing.
+        let strict = render_plan(&steps, Infisical, true, false);
+        assert!(strict.contains("the migration fails"), "{strict}");
+        let allowed = render_plan(&steps, Infisical, true, true);
+        assert!(allowed.contains("skipped (--allow-missing)"), "{allowed}");
+    }
+
+    /// The post-migration verification pass re-reads the target and flags every
+    /// copied secret that did not land there with a usable value, so "reported
+    /// success" and "actually present" cannot diverge (BUNYIP-621).
+    #[test]
+    fn verification_flags_a_copy_that_did_not_land() {
+        let source = survey_of(
+            Database,
+            vec![
+                vec![Database],
+                vec![Database],
+                vec![Database],
+                vec![Database],
+            ],
+        );
+        let steps = plan_migration(&source, Infisical);
+        assert!(steps.iter().all(|s| s.action == MigrationAction::Copy));
+
+        // Only STRIPE_SECRET_KEY landed in Infisical; SMTP is still blank there.
+        let after = survey_of(
+            Infisical,
+            vec![
+                vec![Database],
+                vec![Database, Infisical],
+                vec![Database],
+                vec![Database],
+            ],
+        );
+        let blank = verification_failures(&steps, &after, Infisical);
+        assert!(blank.contains(&"SMTP_PASSWORD"), "{blank:?}");
+        assert!(!blank.contains(&"STRIPE_SECRET_KEY"), "{blank:?}");
+
+        // A clean migration leaves every copied secret present in the target.
+        let clean = survey_of(
+            Infisical,
+            vec![
+                vec![Database, Infisical],
+                vec![Database, Infisical],
+                vec![Database, Infisical],
+                vec![Database, Infisical],
+            ],
+        );
+        assert!(verification_failures(&steps, &clean, Infisical).is_empty());
     }
 
     /// A failed Infisical write reaches the form with its underlying cause, as a

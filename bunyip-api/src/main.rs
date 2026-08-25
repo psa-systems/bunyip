@@ -1380,8 +1380,21 @@ async fn run_subcommand(
             };
             let survey = secrets::survey(pool, config, &key_set, probe).await?;
             let dry_run = args.iter().any(|arg| arg == "--dry-run");
-            let summary =
-                secrets::run_migration(pool, config, &key_set, &survey, target, dry_run).await?;
+            // A governed secret with no value in any store fails the run rather
+            // than migrating to a blank (BUNYIP-621); --allow-missing skips it
+            // explicitly for a deployment that does not use that feature.
+            let allow_missing = args.iter().any(|arg| arg == "--allow-missing");
+            let summary = secrets::run_migration(
+                pool,
+                config,
+                &key_set,
+                &survey,
+                target,
+                dry_run,
+                allow_missing,
+                probe,
+            )
+            .await?;
             print!("{summary}");
             Ok(())
         }
