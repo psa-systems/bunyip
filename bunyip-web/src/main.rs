@@ -96,6 +96,9 @@ async fn main() {
         cfg.theme_color_light.clone(),
         cfg.theme_color_dark.clone(),
     );
+    // The share image an unbranded deployment falls back to. The branding
+    // record still wins when an admin has uploaded one.
+    views::layout::install_default_share_image(cfg.default_share_image());
     // BUNYIP-561: the product name, tagline, meta description and Open Graph
     // image are the admin-managed branding record, not environment variables.
     // One blocking fetch before the listener binds, so the first render already

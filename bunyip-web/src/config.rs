@@ -193,4 +193,28 @@ impl Config {
     pub fn use_secure_cookies(&self) -> bool {
         self.api_public_origin.starts_with("https://")
     }
+
+    /// Absolute URL of the committed share image, for the Open Graph tags when
+    /// the branding record carries no uploaded one. `None` when no app domain
+    /// is configured: a relative path is not resolvable by every scraper, and
+    /// a wrong absolute one is worse than an omitted tag.
+    pub fn default_share_image(&self) -> Option<String> {
+        if self.app_domain.is_empty() {
+            return None;
+        }
+        let scheme = if self.use_secure_cookies() {
+            "https"
+        } else {
+            "http"
+        };
+        Some(format!(
+            "{scheme}://{}{}",
+            self.app_domain,
+            web_kit::shell::asset(DEFAULT_SHARE_IMAGE_PATH)
+        ))
+    }
 }
+
+/// The committed share image every deployment falls back to. Product identity
+/// ships with the product: a deployment that uploads nothing still has one.
+pub const DEFAULT_SHARE_IMAGE_PATH: &str = "/assets/bunyip-hero-718.webp";
