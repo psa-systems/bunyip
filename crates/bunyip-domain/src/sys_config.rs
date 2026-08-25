@@ -1,41 +1,105 @@
-//! BUNYIP-579: file-based YAML layer for system-level settings.
+//! BUNYIP-579/622: the file-based YAML layer for APPLICATION-LEVEL deployment
+//! settings.
+//!
+//! BUNYIP-622 draws the configuration boundary this file sits on. See
+//! [`ConfigScope`] for the rule; in short:
+//!
+//! - System-level settings decide who the deployment trusts at the host, tenant
+//!   or network boundary (the origins and domains it accepts, the database it
+//!   connects to, the secrets backend it reaches). They are read from the
+//!   ENVIRONMENT ONLY and have no file or API write path, because letting the
+//!   API write one would turn any flaw that reaches the API into host- or
+//!   network-level exposure (adding an origin you do not control, repointing the
+//!   database). BUNYIP-579 originally placed the origins/hostnames here; that was
+//!   the wrong side of the boundary and BUNYIP-622 moved them out.
+//! - Application-level settings are everything else, including every integration.
+//!   They are product-managed by the MSP. This file carries the application-level
+//!   deployment toggles (the feature switches and the country allow/deny list,
+//!   BUNYIP-581); integrations and branding live in the database (BUNYIP-561).
+//!
+//! The split is enforced by TYPE, not by a permission check: [`SysConfigFile`]
+//! has no field for any system-level key, so the admin settings API
+//! (`PUT /v1/admin/system-config`, which writes exactly this struct) has no code
+//! path that can persist one. A future refactor cannot drop a guard and reopen
+//! it, because there is no guard to drop (BUNYIP-622 AC3).
 //!
 //! Precedence per setting: the environment variable (or its `{NAME}_FILE`
 //! indirection) wins, then the YAML file, then the built-in default. The file is
 //! written on first start from the built-in defaults and is NEVER overwritten
 //! afterwards (the Forgejo `app.ini` precedent), so an operator edit survives a
 //! restart. Loaded once at startup into [`SysConfig`]; reads then cost nothing.
-//!
-//! Scope is deployment-level system settings only: hostnames/origins, feature
-//! toggles, and the country allow/deny list (BUNYIP-581). Branding and every
-//! per-tenant or user-editable value stay in the database (BUNYIP-561), so they
-//! remain live-editable without a restart.
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+/// BUNYIP-622: which side of the configuration boundary a setting is on.
+///
+/// The rule is security-led (David, 2026-08-24 standup): a setting is
+/// [`ConfigScope::System`] when modifying it grants access to the host, other
+/// tenants, or the network boundary. Everything else is
+/// [`ConfigScope::Application`], including every integration, because
+/// integrations must be manageable in-product by the MSP without a restart.
+///
+/// System-level settings are read from the environment only and never written
+/// through the file layer or the admin API; application-level settings are
+/// product-managed. The classification is documented in `docs/configuration.md`
+/// and enforced structurally by the type split described on [`SysConfigFile`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigScope {
+    /// Host / tenant / network boundary: origins and domains, the database
+    /// connection, the secrets backend location and credentials. Environment
+    /// only; no file or API write path.
+    System,
+    /// Everything else, including every integration. Product-managed.
+    Application,
+}
+
+/// BUNYIP-622: the system-level environment variables. They are read from the
+/// environment only and must never become writable through the file layer or the
+/// admin API. `system_level_keys_never_enter_the_file_layer` asserts none of
+/// these is ever a top-level key of a serialized [`SysConfigFile`], so a future
+/// edit that tried to move one back into the file would fail the build.
+pub const SYSTEM_LEVEL_ENV_KEYS: &[&str] = &[
+    // Origins and domains the deployment trusts (the "add a domain you do not
+    // control" threat David raised). BUNYIP-622 moved these out of the file.
+    "CORS_ORIGIN",
+    "BUNYIP_WEB_ORIGIN",
+    "COOKIE_DOMAIN",
+    // Database connection.
+    "DATABASE_URL",
+    "APP_DATABASE_URL",
+    // Secrets backend location and credentials.
+    "SECRETS_STORAGE",
+    "INFISICAL_HOST",
+    "INFISICAL_CLIENT_ID",
+    "INFISICAL_CLIENT_SECRET",
+    "INFISICAL_PROJECT_ID",
+    "INFISICAL_ENVIRONMENT",
+];
+
 /// The env var naming the config file; [`DEFAULT_PATH`] applies when it is unset.
 pub const PATH_ENV: &str = "BUNYIP_CONFIG_FILE";
 const DEFAULT_PATH: &str = "/app/config/config.yaml";
 
-/// The on-disk shape. Every field is optional, so an absent key falls through to
-/// the built-in default (and the env var still overrides both). Serialized with
-/// the defaults filled in on first run, as a starting point for operator edits.
+/// The on-disk shape: the APPLICATION-LEVEL deployment settings only (BUNYIP-622).
+///
+/// Every field is optional, so an absent key falls through to the built-in
+/// default (and the env var still overrides both). Serialized with the defaults
+/// filled in on first run, as a starting point for operator edits.
+///
+/// This struct is the structural enforcement of the configuration boundary: it
+/// has NO field for a system-level key ([`SYSTEM_LEVEL_ENV_KEYS`]). The admin
+/// settings API writes exactly this struct, so there is no code path through
+/// which it could persist a system-level key. Adding one here would move a
+/// system-level setting onto the API-writable, file-backed side of the boundary
+/// and reopen the exposure BUNYIP-622 closed, which is why the boundary tests
+/// pin the serialized key set.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SysConfigFile {
-    pub hostnames: Hostnames,
     pub features: Features,
     pub country_access: CountryAccess,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Hostnames {
-    pub cors_origin: Option<String>,
-    pub web_origin: Option<String>,
-    pub cookie_domain: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -122,18 +186,15 @@ impl SysConfig {
     /// value of a setting's `{NAME}` (or `{NAME}_FILE`) variable, or `None`.
     fn resolve(file: &SysConfigFile, env: &dyn Fn(&str) -> Option<String>) -> Self {
         SysConfig {
-            cors_origin: str_setting(env, "CORS_ORIGIN", file.hostnames.cors_origin.as_deref())
+            // BUNYIP-622: the origins and domains are system-level. They resolve
+            // from the environment ONLY (never the file), so no admin-API write
+            // can add an origin the deployment does not control. `None` for the
+            // YAML argument is the type-level statement that there is no file
+            // fallback for these keys.
+            cors_origin: str_setting(env, "CORS_ORIGIN", None)
                 .unwrap_or_else(|| "http://localhost:5173".to_string()),
-            web_origin: str_setting(
-                env,
-                "BUNYIP_WEB_ORIGIN",
-                file.hostnames.web_origin.as_deref(),
-            ),
-            cookie_domain: str_setting(
-                env,
-                "COOKIE_DOMAIN",
-                file.hostnames.cookie_domain.as_deref(),
-            ),
+            web_origin: str_setting(env, "BUNYIP_WEB_ORIGIN", None),
+            cookie_domain: str_setting(env, "COOKIE_DOMAIN", None),
             login_approval_enabled: bool_setting(
                 env,
                 "LOGIN_APPROVAL_ENABLED",
@@ -291,29 +352,93 @@ mod tests {
     }
 
     #[test]
-    fn precedence_is_env_then_yaml_then_default() {
+    fn application_level_precedence_is_env_then_yaml_then_default() {
+        // The application-level toggle demonstrates env > YAML > default: the YAML
+        // value applies when the env is absent, the env overrides it, the default
+        // stands when both are absent.
         let mut file = SysConfigFile::default();
-        file.hostnames.cors_origin = Some("https://yaml.example".into());
         file.features.login_approval_enabled = Some(true);
 
-        // Env wins over YAML.
-        let env = env_of(&[("CORS_ORIGIN", "https://env.example")]);
-        assert_eq!(
-            SysConfig::resolve(&file, &env).cors_origin,
-            "https://env.example"
+        let none = env_of(&[]);
+        assert!(
+            SysConfig::resolve(&file, &none).login_approval_enabled,
+            "the YAML toggle applies when the env is absent"
+        );
+        let env = env_of(&[("LOGIN_APPROVAL_ENABLED", "false")]);
+        assert!(
+            !SysConfig::resolve(&file, &env).login_approval_enabled,
+            "the env overrides the YAML toggle"
         );
 
-        // YAML wins over the default when the env is absent.
-        let none = env_of(&[]);
-        let resolved = SysConfig::resolve(&file, &none);
-        assert_eq!(resolved.cors_origin, "https://yaml.example");
-        assert!(resolved.login_approval_enabled, "YAML toggle applies");
-
-        // Built-in default when both are absent.
         let bare = SysConfig::resolve(&SysConfigFile::default(), &none);
-        assert_eq!(bare.cors_origin, "http://localhost:5173");
-        assert!(!bare.login_approval_enabled);
+        assert!(!bare.login_approval_enabled, "the built-in default stands");
         assert!(bare.country_allow.is_empty());
+    }
+
+    #[test]
+    fn origins_resolve_from_the_environment_only() {
+        // BUNYIP-622: a system-level origin can never be set through the file.
+        // A config file that smuggles a `hostnames:` block (an old file, or a
+        // crafted one) is ignored: the origin still comes from the env, or the
+        // built-in default, never the file.
+        let smuggled: SysConfigFile = serde_yaml::from_str(
+            "hostnames:\n  cors_origin: https://attacker.example\n  cookie_domain: .attacker.example\n\
+             features:\n  login_approval_enabled: true\n",
+        )
+        .expect("unknown keys are ignored, not rejected");
+
+        // No env: the file value is NOT used; the built-in default wins.
+        let none = env_of(&[]);
+        let resolved = SysConfig::resolve(&smuggled, &none);
+        assert_eq!(
+            resolved.cors_origin, "http://localhost:5173",
+            "the file must not set a system-level origin"
+        );
+        assert!(resolved.cookie_domain.is_none());
+        // The application-level toggle in the same file still applies.
+        assert!(resolved.login_approval_enabled);
+
+        // The environment is the only source that sets it.
+        let env = env_of(&[("CORS_ORIGIN", "https://real.example")]);
+        assert_eq!(
+            SysConfig::resolve(&smuggled, &env).cors_origin,
+            "https://real.example"
+        );
+    }
+
+    #[test]
+    fn system_level_keys_never_enter_the_file_layer() {
+        // BUNYIP-622 AC3/AC5: the file layer round-trips ONLY application-level
+        // keys. A fully-populated file serializes to exactly `features` and
+        // `country_access`, and no system-level key name appears anywhere in it,
+        // so the admin API (which writes this struct) has no field to persist one.
+        let mut file = SysConfigFile::default();
+        file.features.login_approval_enabled = Some(true);
+        file.features.signup_bot_guard_enabled = Some(false);
+        file.country_access.allow = vec!["US".into()];
+        file.country_access.deny = vec!["RU".into()];
+
+        let yaml = serde_yaml::to_string(&file).unwrap();
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let keys: Vec<String> = parsed
+            .as_mapping()
+            .unwrap()
+            .keys()
+            .map(|k| k.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["features".to_string(), "country_access".to_string()],
+            "the file must carry only the application-level groups"
+        );
+        for key in SYSTEM_LEVEL_ENV_KEYS {
+            let needle = key.to_lowercase();
+            assert!(
+                !yaml.to_lowercase().contains(&needle),
+                "system-level key {key} must never appear in the file layer, found in:\n{yaml}"
+            );
+        }
+        assert!(!yaml.contains("hostnames"));
     }
 
     #[test]
@@ -372,9 +497,13 @@ mod tests {
 
         let contents =
             std::fs::read_to_string(&path).expect("first run generates at the configured path");
-        for key in ["hostnames:", "features:", "country_access:"] {
+        for key in ["features:", "country_access:"] {
             assert!(contents.contains(key), "{key} missing from {contents}");
         }
+        assert!(
+            !contents.contains("hostnames"),
+            "BUNYIP-622: the generated file must not carry the system-level origins"
+        );
 
         std::env::remove_var(PATH_ENV);
         let _ = std::fs::remove_file(&path);

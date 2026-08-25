@@ -1292,17 +1292,13 @@ pub struct EmailConfigResponse {
     pub updated_by: Option<String>,
 }
 
-/// BUNYIP-580: the system-config YAML values, for the admin System settings page.
+/// BUNYIP-580/622: the application-level config values, for the admin System
+/// settings page. The system-level origins are environment-only (BUNYIP-622) and
+/// are no longer part of this payload.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SystemConfigResponse {
     #[serde(default)]
     pub path: String,
-    #[serde(default)]
-    pub cors_origin: String,
-    #[serde(default)]
-    pub web_origin: String,
-    #[serde(default)]
-    pub cookie_domain: String,
     #[serde(default)]
     pub login_approval_enabled: bool,
     #[serde(default)]

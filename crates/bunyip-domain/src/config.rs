@@ -1283,9 +1283,13 @@ impl Config {
         // the single `finish_startup_audit` at the end of this function decides.
         let mut failures = audit_required(is_production);
 
-        // BUNYIP-579: system-level settings (origins, feature toggles, country
-        // access) resolve through the file-based YAML layer: an env var (or its
-        // {NAME}_FILE indirection) over the YAML file over the built-in default.
+        // BUNYIP-622: the application-level deployment settings (feature toggles,
+        // country access) resolve through the file-based YAML layer: an env var
+        // (or its {NAME}_FILE indirection) over the YAML file over the built-in
+        // default. The system-level origins and domains (cors_origin, web_origin,
+        // cookie_domain) resolve from the environment ONLY inside `SysConfig`;
+        // BUNYIP-579 first placed them in the file, which put them on the
+        // API-writable side of the boundary, and BUNYIP-622 moved them out.
         // Generated on first run, never overwritten, loaded once here.
         let sys = crate::sys_config::SysConfig::load();
 
@@ -2107,7 +2111,7 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
     ),
     EnvVarSpec::defaulted(
         "BUNYIP_CONFIG_FILE",
-        "path to the system-config YAML layer (BUNYIP-579); default \
+        "path to the application-level config YAML layer (BUNYIP-579/622); default \
          /app/config/config.yaml, generated on first run and never overwritten",
     ),
     // BUNYIP-561: demoted to a bootstrap default. The product name is the

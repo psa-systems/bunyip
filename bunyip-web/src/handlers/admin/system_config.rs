@@ -47,7 +47,8 @@ pub(super) fn system_settings_content(cfg: Option<&SystemConfigResponse>) -> Mar
             div {
                 h1 class="text-3xl font-bold" { "System" }
                 p class="mt-2 text-muted-foreground" {
-                    "Deployment-level settings, stored in the config file rather than the database. "
+                    "Application-level deployment settings, stored in the config file rather than the database. "
+                    "System-level origins and domains are set through the environment, not here. "
                     "Every change here applies on the next restart, and an environment variable still overrides the file. See "
                     a href="/docs" class="text-primary-text hover:underline" { "the documentation" } " for the full reference."
                 }
@@ -60,17 +61,6 @@ pub(super) fn system_settings_content(cfg: Option<&SystemConfigResponse>) -> Mar
                     }
                     form method="post" action="/admin/system-config" class="space-y-6" {
                     (admin_block_grid(vec![
-                        admin_block(
-                            "Hostnames",
-                            Some("Public origins the API trusts and links to. Restart required."),
-                            html! {
-                                div class="space-y-4" {
-                                    (text_field("cors_origin", "CORS origin(s)", &e.cors_origin, "https://app.example.com", "Comma-separated allowed browser origins."))
-                                    (text_field("web_origin", "Web origin", &e.web_origin, "https://app.example.com", "Absolute URL of the login UI; blank uses the first CORS origin."))
-                                    (text_field("cookie_domain", "Cookie domain", &e.cookie_domain, ".example.com", "Blank scopes cookies to the exact host."))
-                                }
-                            },
-                        ),
                         admin_block(
                             "Features",
                             Some("Opt-in switches. Restart required."),
@@ -115,12 +105,6 @@ pub async fn system_config(State(st): State<AppState>, headers: HeaderMap) -> Re
 #[derive(Deserialize)]
 pub struct SystemSettingsForm {
     #[serde(default)]
-    pub cors_origin: String,
-    #[serde(default)]
-    pub web_origin: String,
-    #[serde(default)]
-    pub cookie_domain: String,
-    #[serde(default)]
     pub login_approval_enabled: String,
     #[serde(default)]
     pub signup_bot_guard_enabled: String,
@@ -134,9 +118,6 @@ pub struct SystemSettingsForm {
 /// field clears the setting. The API validates before writing (BUNYIP-580 AC4).
 pub(super) fn system_config_update_body(f: &SystemSettingsForm) -> Value {
     json!({
-        "cors_origin": f.cors_origin.trim(),
-        "web_origin": f.web_origin.trim(),
-        "cookie_domain": f.cookie_domain.trim(),
         "login_approval_enabled": f.login_approval_enabled.trim() == "true",
         "signup_bot_guard_enabled": f.signup_bot_guard_enabled.trim() == "true",
         "country_allow": f.country_allow.trim(),
@@ -181,20 +162,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn update_body_sends_the_full_config() {
+    fn update_body_sends_only_application_level_keys() {
         let f = SystemSettingsForm {
-            cors_origin: "  https://app.example  ".into(),
-            web_origin: String::new(),
-            cookie_domain: ".example.com".into(),
             login_approval_enabled: "true".into(),
             signup_bot_guard_enabled: "false".into(),
             country_allow: "US, GB".into(),
             country_deny: String::new(),
         };
         let body = system_config_update_body(&f);
-        assert_eq!(body["cors_origin"], json!("https://app.example"));
         assert_eq!(body["login_approval_enabled"], json!(true));
         assert_eq!(body["signup_bot_guard_enabled"], json!(false));
         assert_eq!(body["country_allow"], json!("US, GB"));
+        // BUNYIP-622: the form and its body cannot carry a system-level origin.
+        assert!(body.get("cors_origin").is_none());
+        assert!(body.get("cookie_domain").is_none());
     }
 }
