@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::Command;
 
 fn main() {
@@ -34,8 +35,46 @@ fn main() {
     println!("cargo:rerun-if-env-changed=GIT_COMMIT");
     println!("cargo:rerun-if-env-changed=GIT_TAG");
     println!("cargo:rerun-if-env-changed=BUILD_DATE");
-    println!("cargo:rerun-if-changed=../.git/HEAD");
-    println!("cargo:rerun-if-changed=../.git/refs");
+    emit_git_rerun_triggers();
+}
+
+// Rerun the script when the checked-out revision moves, and never otherwise. The
+// hardcoded `../.git/HEAD` resolved from a plain clone but named an absent path in
+// a linked worktree or a submodule (where `.git` is a file) and in any context
+// that excludes `.git` (the repo `.dockerignore` does), and cargo treats a
+// `rerun-if-changed` pointing at a missing file as permanently stale, reruning
+// this script on every build. Ask git for the real paths instead, and emit a
+// directive only for the ones that exist. `--git-path` returns the per-worktree
+// HEAD and resolves refs to the common directory, so a linked worktree and a
+// submodule work too. Watch `refs/heads` + `refs/tags`, not all of `refs`, so a
+// `git fetch` that only moves a remote-tracking ref does not recompile the crate.
+fn emit_git_rerun_triggers() {
+    let output = Command::new("git")
+        .args([
+            "rev-parse",
+            "--git-path",
+            "HEAD",
+            "--git-path",
+            "refs/heads",
+            "--git-path",
+            "refs/tags",
+            "--git-path",
+            "packed-refs",
+        ])
+        .output();
+    // No git, or not a repository: emit nothing and let GIT_COMMIT / GIT_TAG fall
+    // back to `unknown` (and ASSET_VERSION to the build timestamp).
+    let Some(output) = output.ok().filter(|o| o.status.success()) else {
+        return;
+    };
+    let Ok(stdout) = String::from_utf8(output.stdout) else {
+        return;
+    };
+    for path in stdout.lines().map(str::trim).filter(|p| !p.is_empty()) {
+        if Path::new(path).exists() {
+            println!("cargo:rerun-if-changed={path}");
+        }
+    }
 }
 
 fn resolve(env_var: &str, cmd: &[&str]) -> String {
