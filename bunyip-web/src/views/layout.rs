@@ -542,6 +542,14 @@ fn admin_items() -> Vec<NavItem> {
             icon: "layout-dashboard",
             external: false,
         },
+        // BUNYIP-623: per-integration Configured / Unconfigured / Failing status,
+        // so a self-hosted deployment can see what is degraded at a glance.
+        NavItem {
+            title: "System Status",
+            href: "/admin/status",
+            icon: "activity",
+            external: false,
+        },
         // BUNYIP-410: Memberships folded into the Users page (tier column +
         // filter bar); its nav entry is removed and /admin/memberships redirects
         // to the filtered users list.

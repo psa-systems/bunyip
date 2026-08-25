@@ -7,10 +7,10 @@ use super::types::{
     AdminFeedbackSummary, AdminIpBan, AdminRateLimit, AdminRateLimitConfig, AdminStatsResponse,
     AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList, ArchivedFeedback,
     AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary,
-    IpEnrichment, PaginatedResponse, PricingStatus, RestoreReport, SeedTemplateInfo,
-    SmtpTestResult, StripeConfigResponse, StripePermissionReport, StripePrice, StripeProduct,
-    StripeWebhookEndpoint, SystemHealth, SystemHealthResponse, TestEmailResult, TierConfigResponse,
-    UserEntitlement,
+    IntegrationStatus, IntegrationStatusResponse, IpEnrichment, PaginatedResponse, PricingStatus,
+    RestoreReport, SeedTemplateInfo, SmtpTestResult, StripeConfigResponse, StripePermissionReport,
+    StripePrice, StripeProduct, StripeWebhookEndpoint, SystemHealth, SystemHealthResponse,
+    TestEmailResult, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -26,6 +26,16 @@ pub async fn stats(api: &Api, cookie: Option<&str>) -> Result<AdminStatsResponse
 pub async fn system_health(api: &Api, cookie: Option<&str>) -> Result<SystemHealth, ApiError> {
     let resp: SystemHealthResponse = parse(api.get("/admin/health", cookie).await?)?;
     Ok(resp.health)
+}
+
+/// Per-integration status (BUNYIP-623): the Configured / Unconfigured / Failing
+/// list the admin System Status page renders. `GET /v1/admin/integrations`.
+pub async fn integration_status(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Vec<IntegrationStatus>, ApiError> {
+    let resp: IntegrationStatusResponse = parse(api.get("/admin/integrations", cookie).await?)?;
+    Ok(resp.integrations)
 }
 
 // --- users ------------------------------------------------------------------

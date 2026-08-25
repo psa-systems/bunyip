@@ -1986,6 +1986,74 @@ pub async fn get_system_health(
     Ok(success(response, request_id))
 }
 
+/// GET /v1/admin/integrations
+///
+/// BUNYIP-623: each integration's Configured / Unconfigured / Failing state for
+/// the admin System Status page. The classification is pure and lives in
+/// `bunyip_domain::services::integration_status`; this handler only gathers the
+/// runtime signals from `Config` and the governed-secrets survey. Secret presence
+/// comes from the declared store (the survey), and an empty value counts as
+/// absent so a blank SMTP password reads as `Failing` rather than `Configured`.
+pub async fn get_integration_status(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+) -> Result<HttpResponse, AppError> {
+    use bunyip_domain::config::{GovernedSecret, SecretsStorage};
+    use bunyip_domain::services::{integration_statuses, InfisicalClient, IntegrationSignals};
+
+    let request_id = get_request_id(&req);
+    let key_set = config.app_key_set();
+
+    // Inspect Infisical only when the deployment has it enabled or declares it as
+    // the store of record, matching the boot / `secrets-status` posture.
+    let probe = if config.infisical.enabled || config.secrets_storage == SecretsStorage::Infisical {
+        crate::secrets::InfisicalProbe::Inspect
+    } else {
+        crate::secrets::InfisicalProbe::Skip
+    };
+    let survey = crate::secrets::survey(pool.get_ref(), config.get_ref(), &key_set, probe).await?;
+    let present =
+        |secret: GovernedSecret| survey.value(secret).is_some_and(|v| !v.trim().is_empty());
+
+    let signals = IntegrationSignals {
+        secrets_store: config.secrets_storage,
+        smtp_host_set: !config.email.smtp_host.trim().is_empty(),
+        smtp_password_present: present(GovernedSecret::SmtpPassword),
+        stripe_secret_present: present(GovernedSecret::StripeSecretKey),
+        stripe_webhook_present: present(GovernedSecret::StripeWebhookSecret),
+        imap_configured: config.email.imap_enabled || !config.email.imap_host.trim().is_empty(),
+        imap_password_present: present(GovernedSecret::SupportImapPassword),
+        infisical_enabled: config.infisical.enabled,
+        infisical_complete: InfisicalClient::from_settings(&config.infisical).is_some(),
+        infisical_is_store: config.secrets_storage == SecretsStorage::Infisical,
+        forgejo_base_set: config
+            .download
+            .forgejo_base_url
+            .as_deref()
+            .is_some_and(|v| !v.trim().is_empty()),
+        forgejo_token_present: config
+            .download
+            .forgejo_api_token
+            .as_deref()
+            .is_some_and(|v| !v.trim().is_empty()),
+        oci_enabled: config.oci.enabled,
+        oci_service_set: !config.oci.service.trim().is_empty(),
+        ip2location_set: config
+            .ip2location_db_path
+            .as_deref()
+            .is_some_and(|v| !v.trim().is_empty()),
+        ip2proxy_set: config
+            .ip2proxy_db_path
+            .as_deref()
+            .is_some_and(|v| !v.trim().is_empty()),
+    };
+
+    let response = serde_json::json!({ "integrations": integration_statuses(&signals) });
+    Ok(success(response, request_id))
+}
+
 // =============================================================================
 // Stripe Config
 // =============================================================================

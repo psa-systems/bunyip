@@ -1367,13 +1367,24 @@ impl Config {
             None => SecretsStorage::Database,
         };
 
-        // Fail fast: a production deployment with email disabled would silently
-        // degrade to the dev-mode path. Before BUNYIP-204 that path logged the
-        // full magic-link / reset / email-change URL (single-use bearer token
-        // included) at INFO, handing account-takeover credentials to anyone with
-        // log read access. Refuse to start instead of degrading silently.
+        // BUNYIP-623: a self-hosted production deployment with email not yet
+        // configured must start, degraded, rather than refuse. A missing
+        // integration key must never disable the application (Yousif, 2026-08-24
+        // standup). This was BUNYIP-204's fatal, whose stated risk was the
+        // disabled dev path logging the single-use magic-link / reset token; that
+        // risk is handled independently by `log_tokens`, which is forced off in
+        // production (above), so the token can never reach a production log
+        // regardless of this branch. What remains is a degraded capability, so it
+        // is a warning here and a named `Failing` / `Unconfigured` row on the
+        // admin System Status page (`GET /v1/admin/integrations`), not a boot
+        // failure.
         if is_production && !email.enabled {
-            failures.push(email_disabled_failure());
+            tracing::warn!(
+                "SMTP is not configured (SMTP_HOST unset or \"localhost\"), so transactional \
+                 email is disabled: magic links, password resets and notifications are not \
+                 delivered. Set SMTP_HOST to a real relay, or EMAIL_ENABLED=true. The admin \
+                 System Status page names this."
+            );
         }
 
         // Cookie domain: must be set explicitly via COOKIE_DOMAIN env var.
@@ -2285,19 +2296,6 @@ fn required_failure(name: &'static str) -> ConfigFailure {
     }
 }
 
-/// The production email gate (BUNYIP-204/351), as an inventory-shaped failure.
-fn email_disabled_failure() -> ConfigFailure {
-    ConfigFailure {
-        var: "SMTP_HOST",
-        reason: "email sending is disabled in a production deployment, and the disabled path \
-                 would log single-use login/reset tokens instead of emailing them (BUNYIP-204)"
-            .to_string(),
-        remedy: "Set SMTP_HOST to a real relay (not \"localhost\") so transactional emails are \
-                 delivered, or set EMAIL_ENABLED=true."
-            .to_string(),
-    }
-}
-
 /// Turn the collected failures into the startup error, one entry per variable.
 /// A variable reported by both the presence audit and a value-level check
 /// (`APP_ENCRYPTION_KEY` absent in production, say) appears once.
@@ -2575,11 +2573,15 @@ mod tests {
     }
 
     #[test]
-    fn test_production_email_disabled_fails_fast() {
-        // A production deployment without SMTP configured must refuse to start
-        // rather than silently degrade to the token-logging dev path (BUNYIP-204).
-        // The email check runs before the TOTP/Stripe key loading, so no
-        // encryption keys are required to exercise it.
+    fn test_production_without_smtp_is_not_a_startup_failure() {
+        // BUNYIP-623: a production deployment with email not yet configured must
+        // start, degraded, not refuse. Yousif's point on the 2026-08-24 standup:
+        // a missing integration key must never disable the application. The
+        // token-leak this once guarded against is handled independently
+        // (`log_tokens` is forced off in production, asserted separately), so
+        // SMTP_HOST is no longer a fatal startup failure. Other required
+        // production vars are absent in this minimal env, so `from_env_inner`
+        // still errors, but SMTP_HOST is never among the failures.
         let _env = env_lock();
         redirect_sys_config_to_temp();
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
@@ -2588,17 +2590,46 @@ mod tests {
         env::remove_var("SMTP_HOST");
         env::remove_var("EMAIL_ENABLED");
 
-        let err = Config::from_env_inner().expect_err("production without SMTP must fail");
-        let ConfigError::Startup(failures) = &err else {
-            panic!("expected a startup report, got {err:?}");
-        };
-        let email = failures
-            .iter()
-            .find(|f| f.var == "SMTP_HOST")
-            .unwrap_or_else(|| panic!("SMTP_HOST not reported in {failures:?}"));
-        assert!(email.reason.contains("single-use login/reset tokens"));
+        match Config::from_env_inner() {
+            Ok(_) => {}
+            Err(ConfigError::Startup(failures)) => assert!(
+                !failures.iter().any(|f| f.var == "SMTP_HOST"),
+                "SMTP_HOST must no longer be a startup failure: {failures:?}"
+            ),
+            Err(other) => panic!("expected a startup report, got {other:?}"),
+        }
 
         env::remove_var("ENVIRONMENT");
+    }
+
+    /// BUNYIP-623: turning every integration off can never fail startup, because
+    /// no integration-gating variable is classified Required. Proven statically
+    /// over the inventory so a new integration cannot be added as Required by
+    /// mistake and quietly break the self-hosting default.
+    #[test]
+    fn no_integration_variable_is_required_so_a_zero_integration_deployment_boots() {
+        let required: Vec<&str> = ENV_INVENTORY
+            .iter()
+            .filter(|s| matches!(s.class, EnvClass::Required | EnvClass::RequiredInProduction))
+            .map(|s| s.name)
+            .collect();
+        for integration_var in [
+            "SMTP_HOST",
+            "FORGEJO_BASE_URL",
+            "FORGEJO_API_TOKEN",
+            "OCI_REGISTRY_ENABLED",
+            "OCI_REGISTRY_SERVICE",
+            "INFISICAL_ENABLED",
+            "IP2LOCATION_DB_PATH",
+            "IP2PROXY_DB_PATH",
+            "BUNYIP_UPDATE_CHECK_URL",
+            "MOKOSH_BACKUP_API_URL",
+        ] {
+            assert!(
+                !required.contains(&integration_var),
+                "{integration_var} must be optional: a self-hosted deployment turns it off"
+            );
+        }
     }
 
     /// BUNYIP-537: several missing required variables are reported in ONE run,
@@ -2639,13 +2670,18 @@ mod tests {
             "JWT_SECRET",
             "APP_ENCRYPTION_KEY",
             "BUNYIP_WEBHOOK_SIGNING_SECRET",
-            "SMTP_HOST",
         ] {
             assert!(
                 reported.contains(&expected),
                 "{expected} missing from {reported:?}"
             );
         }
+        // BUNYIP-623: email is an optional integration now, so an unconfigured
+        // SMTP is a warning, not a startup failure. It must NOT appear here.
+        assert!(
+            !reported.contains(&"SMTP_HOST"),
+            "SMTP_HOST must no longer be a startup failure: {reported:?}"
+        );
         // One entry per variable: APP_ENCRYPTION_KEY is found by both the
         // presence audit and the key loader, and must not be reported twice.
         let mut unique = reported.clone();

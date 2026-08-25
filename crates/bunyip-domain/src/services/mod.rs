@@ -14,6 +14,7 @@ pub mod email;
 pub mod event_bus;
 pub mod geoip;
 pub mod infisical;
+pub mod integration_status;
 pub mod ip_enrich;
 pub mod jwt;
 pub mod mailer_relay;
@@ -63,6 +64,9 @@ pub use email::{AsyncStubTransport, EmailService, SmtpTestError, SmtpTestStage};
 pub use event_bus::{BunyipEvent, EventBus};
 pub use geoip::GeoIpService;
 pub use infisical::{InfisicalClient, InfisicalError};
+pub use integration_status::{
+    integration_statuses, IntegrationSignals, IntegrationState, IntegrationStatus,
+};
 pub use ip_enrich::{IpEnrichService, IpEnrichment, NetworkCategory, VpnLikelihood};
 pub use jwt::{AccessTokenClaims, JwtService, RefreshTokenClaims, TwoFactorChallengeClaims};
 pub use mailer_relay::{
