@@ -528,6 +528,40 @@ pub struct SystemHealthResponse {
     pub health: SystemHealth,
 }
 
+wire_enum! {
+    /// One integration's state on the admin System Status page (BUNYIP-623).
+    /// Mirrors `bunyip_domain::services::IntegrationState`.
+    IntegrationState {
+        Configured = "configured",
+        Unconfigured = "unconfigured",
+        Failing = "failing",
+    }
+}
+
+/// One integration's status (BUNYIP-623). Mirrors
+/// `bunyip_domain::services::IntegrationStatus`: `detail` is the reason in an
+/// operator's words, `remedy` is how to configure it (empty when configured).
+#[derive(Debug, Clone, Deserialize)]
+pub struct IntegrationStatus {
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub state: IntegrationState,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub remedy: String,
+}
+
+/// Envelope of `GET /v1/admin/integrations` (`{ integrations }`).
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct IntegrationStatusResponse {
+    #[serde(default)]
+    pub integrations: Vec<IntegrationStatus>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminUser {
     pub id: String,

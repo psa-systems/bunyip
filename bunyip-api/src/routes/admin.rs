@@ -12,6 +12,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/stats", web::get().to(handlers::get_dashboard_stats))
             // System health
             .route("/health", web::get().to(handlers::get_system_health))
+            // BUNYIP-623: per-integration Configured / Unconfigured / Failing status
+            .route(
+                "/integrations",
+                web::get().to(handlers::get_integration_status),
+            )
             .route("/key-health", web::get().to(handlers::get_key_health))
             .route(
                 "/key-health/{key_id}",
