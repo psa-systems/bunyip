@@ -5,7 +5,7 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 
 use crate::api::admin as admin_api;
-use crate::handlers::admin_guard;
+use crate::handlers::{admin_guard, verification_gate};
 use crate::util::urlenc;
 use crate::web::{redirect, redirect_cookies, AppState};
 
@@ -39,10 +39,13 @@ pub async fn membership_grant(
     headers: HeaderMap,
     Path(user_id): Path<String>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) = verification_gate(&user, &c, &format!("/admin/users/{user_id}")) {
+        return refusal;
+    }
     let _ = admin_api::grant_membership(&st.api, c.forward.as_deref(), &user_id).await;
     // BUNYIP-410: the Memberships page is gone; return to the user detail where
     // the action now lives.
@@ -57,10 +60,13 @@ pub async fn membership_revoke(
     headers: HeaderMap,
     Path(user_id): Path<String>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) = verification_gate(&user, &c, &format!("/admin/users/{user_id}")) {
+        return refusal;
+    }
     // BUNYIP-410: return to the user detail (the Memberships page is gone).
     let target = match admin_api::revoke_membership(&st.api, c.forward.as_deref(), &user_id).await {
         Ok(_) => format!("/admin/users/{user_id}"),

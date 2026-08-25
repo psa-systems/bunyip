@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::api::admin as admin_api;
 use crate::api::types::UserEntitlement;
-use crate::handlers::{admin_guard, admin_response};
+use crate::handlers::{admin_guard, admin_response, verification_gate};
 use crate::util::rel_time;
 use crate::views::ui::{back_link, badge, button_class, empty_state, error_box};
 use crate::web::{redirect_cookies, AppState};
@@ -176,10 +176,15 @@ pub async fn grant_user_entitlement_h(
     Path(user_id): Path<String>,
     Form(f): Form<SlugForm>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) =
+        verification_gate(&user, &c, &format!("/admin/users/{user_id}/entitlements"))
+    {
+        return refusal;
+    }
     let _ =
         admin_api::grant_user_entitlement(&st.api, c.forward.as_deref(), &user_id, &f.slug).await;
     redirect_cookies(
@@ -193,10 +198,15 @@ pub async fn revoke_user_entitlement_h(
     Path(user_id): Path<String>,
     Form(f): Form<SlugForm>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) =
+        verification_gate(&user, &c, &format!("/admin/users/{user_id}/entitlements"))
+    {
+        return refusal;
+    }
     let _ =
         admin_api::revoke_user_entitlement(&st.api, c.forward.as_deref(), &user_id, &f.slug).await;
     redirect_cookies(
