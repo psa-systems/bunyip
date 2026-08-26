@@ -388,9 +388,12 @@ trigger runs a pre-flight gate before the Playwright suite.
 - **`scripts/wait-for-deploy.mjs`** (deploy-sync gate). Polls
   `GET <api>/v1/version` every 15s for up to 10 minutes and compares the
   reported `.commit` short git hash against the commit CI expects staging to be
-  serving. Because the OCI image build only fires on a fixed set of paths
-  (`src/`, `crates/`, `migrations/`, `Cargo.toml`, etc; keep `BUILD_TRIGGER_PATHS`
-  in lock-step with `build-api.yml`'s `on.push.paths`), a docs/CI-only commit
+  serving. Because the OCI image build only fires on a fixed set of paths (one
+  shared filter both publish workflows declare, which `BUILD_TRIGGER_PATHS`
+  replays and `scripts/check-publish-triggers.nu` gates: `bunyip-api/**`,
+  `bunyip-web/**`, `crates/**`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`,
+  `.cargo/**`, `.sqlx/**`, `.dockerignore`, `oci-build/**` and the two build
+  workflow files), a docs/CI-only commit
   never republishes the image; the script walks `git log` back to the last
   build-relevant commit and polls for THAT hash instead, so it never times out
   on a SHA staging can never report. On an unrecoverable clone (filtered/shallow

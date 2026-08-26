@@ -50,15 +50,6 @@ FROM chef AS build
 ARG CARGO_BUILD_JOBS=2
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
-# BUNYIP-554: build.rs turns these into the `?v=` every /assets reference
-# carries, which is what invalidates the immutable one-year Cache-Control on
-# that directory. .dockerignore excludes .git, so the build stage cannot derive
-# them itself and they MUST be passed in or every deploy reuses one version.
-ARG GIT_COMMIT=unknown
-ARG GIT_TAG=unknown
-ARG BUILD_DATE=unknown
-ENV GIT_COMMIT=${GIT_COMMIT} GIT_TAG=${GIT_TAG} BUILD_DATE=${BUILD_DATE}
-
 # Cache JS deps (tailwindcss). The lockfile is copied with the manifest and the
 # install is frozen (BUNYIP-566): without it bun re-resolved `^4.0.0` against the
 # registry on every build, so two builds of the same commit could ship CSS from
@@ -74,6 +65,19 @@ COPY --from=planner /app/recipe.json recipe.json
 RUN --mount=type=cache,id=bunyip-web-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=bunyip-web-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     cargo chef cook --release --recipe-path recipe.json --bin bunyip-web
+
+# BUNYIP-554: build.rs turns these into the `?v=` every /assets reference
+# carries, which is what invalidates the immutable one-year Cache-Control on
+# that directory. .dockerignore excludes .git, so the build stage cannot derive
+# them itself and they MUST be passed in or every deploy reuses one version.
+# They stay in this stage (cargo build below consumes them) but BELOW the cook
+# and the bun install: a RUN's cache key includes its exec env and CI passes a
+# fresh BUILD_DATE every build, so an ENV above them made both layers
+# uncacheable (BUNYIP-519). scripts/check-build-cache-keys.nu gates the ordering.
+ARG GIT_COMMIT=unknown
+ARG GIT_TAG=unknown
+ARG BUILD_DATE=unknown
+ENV GIT_COMMIT=${GIT_COMMIT} GIT_TAG=${GIT_TAG} BUILD_DATE=${BUILD_DATE}
 
 # Real sources + real build: cargo-chef already compiled every dependency above,
 # so this only builds bunyip-web itself. build:css stays AFTER the source copy

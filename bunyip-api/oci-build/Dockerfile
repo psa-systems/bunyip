@@ -58,14 +58,6 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 # ---- Builder: cook dependencies, then build the workspace ----
 FROM chef AS builder
-# Build metadata (passed from CI; build.rs reads these env vars instead of git).
-ARG GIT_COMMIT=unknown
-ARG GIT_TAG=unknown
-ARG BUILD_DATE=unknown
-ENV GIT_COMMIT=${GIT_COMMIT} \
-    GIT_TAG=${GIT_TAG} \
-    BUILD_DATE=${BUILD_DATE}
-
 # nproc/2 concurrency cap (per governance CI.md); CI passes the real value.
 ARG CARGO_BUILD_JOBS=2
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
@@ -87,6 +79,18 @@ RUN --mount=type=secret,id=dunite_token \
            fi' \
     && cargo chef cook --release --recipe-path recipe.json \
         --bin bunyip-api --bin bunyip-e2e-bootstrap
+
+# Build metadata (passed from CI; build.rs reads these env vars instead of git).
+# MUST stay BELOW the cook: a RUN's buildkit cache key includes its exec env, and
+# CI passes a fresh BUILD_DATE every build, so an ENV above the cook made that
+# layer uncacheable on all 20 runs measured (BUNYIP-519, governance CI.md
+# "Version stamping"). scripts/check-build-cache-keys.nu gates the ordering.
+ARG GIT_COMMIT=unknown
+ARG GIT_TAG=unknown
+ARG BUILD_DATE=unknown
+ENV GIT_COMMIT=${GIT_COMMIT} \
+    GIT_TAG=${GIT_TAG} \
+    BUILD_DATE=${BUILD_DATE}
 
 # Real sources + real build. cargo-chef already compiled every dependency above,
 # so this only builds the workspace crates and links the binaries. No stub can

@@ -25,14 +25,24 @@ on:
       - "feature-*"
     tags:
       - "v*"
+    # One shared filter, declared identically in both publish workflows
+    # (scripts/check-publish-triggers.nu gates the parity): either both images
+    # build for a merge or neither does, so bunyip-api:latest and
+    # bunyip-web:latest can never name different commits. Before BUNYIP-519 the
+    # two lists differed and the pair was mismatched on 63% of merges.
     paths:
       - "bunyip-api/**"
+      - "bunyip-web/**"
       - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".cargo/**"
       - ".sqlx/**"
+      - ".dockerignore"
       - "oci-build/**"
       - ".forgejo/workflows/build-api.yml"
+      - ".forgejo/workflows/build-web.yml"
 
 jobs:
   build-and-push-api:
@@ -81,6 +91,13 @@ jobs:
         # GITHUB_ENV so the build step's `type=gha` cache can reach
         # act_runner's cache server (needs runner cache.enabled: true).
         uses: https://github.com/crazy-max/ghaction-github-runtime@v3
+
+      - name: Assert the buildx gha cache backend is usable
+        # The one cache condition that IS fatal: without these vars type=gha
+        # cannot reach act_runner's cache server at all, and ignore-error=true
+        # below would turn that into a silently cold build that still reports
+        # success (BUNYIP-519).
+        run: ./scripts/check-build-cache-health.nu --preflight
 
       - name: Set environment variables
         run: |
@@ -136,8 +153,10 @@ jobs:
           # type=gha caches per repo; this repo builds more than one image, so scope=($image)
           # gives each image its own namespace (GOV-21) instead of overwriting each other.
           let cache_from = $"type=gha,scope=($image)"
-          # mode=max keeps the dependency-build layer; ignore-error keeps a cache hiccup (or a
-          # disabled runner cache) from failing the build.
+          # mode=max keeps the dependency-build layer; ignore-error keeps a transient cache
+          # hiccup from failing the publish. A disabled runner cache is caught by the preflight
+          # step above instead of being swallowed here, and the step after the build reports the
+          # damage ignore-error hides (BUNYIP-519).
           let cache_to = $"type=gha,scope=($image),mode=max,ignore-error=true"
           let git_commit = (^git rev-parse --short HEAD | str trim)
           let git_tag = (^git describe --tags --always --dirty | str trim)
@@ -154,8 +173,21 @@ jobs:
           let push_args = if $dry_run { [--load] } else { [--push --cache-to $cache_to] }
           let verb = if $dry_run { "[dry-run] WOULD build and push" } else { "Building and pushing" }
           print $"($verb) ($image) with tag: ($tag), commit=($git_commit), tag=($git_tag), date=($build_date)"
+          # Capture the progress stream as well as printing it: the step below reads it
+          # for the cache damage ignore-error=true hides (BUNYIP-519). A failed build still
+          # fails this step - nu propagates an external command's exit code through a pipe.
           # Context is the bunyip repo root (self-contained workspace + dunite git dep).
-          ^docker buildx build ...$push_args --cache-from $cache_from ...$build_args ...$tag_args -f bunyip-api/oci-build/Dockerfile .
+          ^docker buildx build --progress=plain ...$push_args --cache-from $cache_from ...$build_args ...$tag_args -f bunyip-api/oci-build/Dockerfile . out+err>| tee { save --raw --force buildx-api.log }
+
+      - name: Report buildkit cache health
+        # A cold cache and a healthy one look identical from the exit code, because
+        # ignore-error=true swallows the difference. Warn on evicted blobs, a missing
+        # manifest, or a dependency layer that rebuilt despite an unchanged recipe; none
+        # of those make the published image wrong, so none of them fail the publish.
+        # --self-test first, so a signal that stopped detecting anything is not silent.
+        run: |
+          ./scripts/check-build-cache-health.nu --self-test
+          ./scripts/check-build-cache-health.nu --log buildx-api.log
 
       - name: Print image URLs
         run: |

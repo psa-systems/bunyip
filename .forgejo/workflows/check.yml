@@ -228,6 +228,29 @@ jobs:
           ./scripts/check-cache-mount-sharing.nu --self-test
           ./scripts/check-cache-mount-sharing.nu
 
+      - name: Check volatile build metadata stays below the cached layers
+        # A RUN's buildkit cache key includes its exec environment, so an `ENV`
+        # carrying a per-build value (BUILD_DATE, GIT_COMMIT) above the
+        # cargo-chef cook makes that layer uncacheable on every single build.
+        # Measured: the cook was DONE, never CACHED, on 20 of 20 API runs, 68%
+        # of the build (BUNYIP-519).
+        # --self-test first, so a gate that stopped detecting anything fails the
+        # build instead of passing vacuously.
+        run: |
+          ./scripts/check-build-cache-keys.nu --self-test
+          ./scripts/check-build-cache-keys.nu
+
+      - name: Check the publish workflows fire on the same pushes
+        # bunyip-api:latest and bunyip-web:latest are read as a matched pair, so
+        # both build workflows declare one shared `paths:` filter and the e2e
+        # deploy gate replays it. When the lists drifted the pair named different
+        # commits on 63% of merges (BUNYIP-519).
+        # --self-test first, so a gate that stopped detecting anything fails the
+        # build instead of passing vacuously.
+        run: |
+          ./scripts/check-publish-triggers.nu --self-test
+          ./scripts/check-publish-triggers.nu
+
       - name: Cap build parallelism
         # nproc/2 cap: never claim more than half the host (see CI.md "Concurrency cap").
         run: $"CARGO_BUILD_JOBS=((sys cpu | length) / 2 | into int)\n" | save --append $env.GITHUB_ENV
