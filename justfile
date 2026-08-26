@@ -42,7 +42,7 @@ pre-commit: ensure-env
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-theme-colors check-cache-mounts check-build check-clippy check-fmt check-docker
+check: check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-theme-colors check-cache-mounts check-cache-keys check-publish-triggers check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -143,6 +143,20 @@ check-theme-colors:
 check-cache-mounts:
     ./scripts/check-cache-mount-sharing.nu --self-test
     ./scripts/check-cache-mount-sharing.nu
+
+# A RUN's buildkit cache key includes its exec env, so a per-build ENV above the
+# cargo-chef cook makes that layer uncacheable forever (BUNYIP-519).
+[group: 'checks']
+check-cache-keys:
+    ./scripts/check-build-cache-keys.nu --self-test
+    ./scripts/check-build-cache-keys.nu
+
+# Both publish workflows must fire on the same pushes, and the e2e deploy gate
+# must replay the same filter, so the two :latest tags stay a pair (BUNYIP-519).
+[group: 'checks']
+check-publish-triggers:
+    ./scripts/check-publish-triggers.nu --self-test
+    ./scripts/check-publish-triggers.nu
 
 # Build every target in the workspace.
 [group: 'checks']

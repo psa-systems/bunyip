@@ -4,12 +4,11 @@
 // have produced an OCI image.
 //
 // This gate polls bunyip-API's /v1/version (the only versioned endpoint), so
-// it tracks the commits that rebuild bunyip-API: the build-api.yml workflow
-// fires only when one of a fixed set of paths changes (see BUILD_TRIGGER_PATHS
-// below). A commit that touches only docs/tests/CI (or only bunyip-web) never
-// republishes the API image, so the API keeps serving the PREVIOUS build.
-// Polling for GITHUB_SHA in that case times out on a hash the API can never
-// report.
+// it tracks the commits that rebuild bunyip-API: the build workflows fire only
+// when one of a fixed set of paths changes (see BUILD_TRIGGER_PATHS below). A
+// commit that touches only docs/tests/CI never republishes the API image, so
+// the API keeps serving the PREVIOUS build. Polling for GITHUB_SHA in that case
+// times out on a hash the API can never report.
 //
 // Resolve the expected SHA the same way the build trigger does: walk
 // `git log` from GITHUB_SHA backwards, find the most recent commit that
@@ -31,29 +30,34 @@
 
 import { execFileSync } from 'node:child_process';
 
-// Keep in lock-step with build-api.yml's on.push.paths. This gate polls
-// bunyip-API's /v1/version, so it must track exactly the paths that rebuild
-// the bunyip-API image (and thus change its baked GIT_COMMIT). A path here
-// that build-api.yml does not list makes the gate poll for a SHA the API never
-// serves; a build-api.yml path this misses makes the gate accept a stale API.
+// Replays the shared publish filter both build workflows declare (BUNYIP-519).
+// This gate polls bunyip-API's /v1/version, so it must track exactly the paths
+// that rebuild the bunyip-API image (and thus change its baked GIT_COMMIT). A
+// path here the workflows do not list makes the gate poll for a SHA the API
+// never serves; a workflow path this misses makes the gate accept a stale API.
+// scripts/check-publish-triggers.nu gates the three lists against each other.
 //
-// Deliberately excluded:
-// - bunyip-web/** and .forgejo/workflows/build-web.yml: those rebuild only
-//   bunyip-web, which exposes no version endpoint (only /healthz) and does not
-//   advance the API's /v1/version. Listing them would make a web-only commit
-//   resolve to an expectedSha the API never reports, hanging the gate until
-//   its 10-minute timeout - a false failure. A web-only change is therefore
-//   not deploy-gated; it runs against whatever bunyip-web is deployed.
-// - migrations: there is no top-level migrations dir (they live under
-//   bunyip-api/migrations/), so the `bunyip-api` entry already covers them.
+// bunyip-web/** is listed rather than excluded: the two workflows now share one
+// filter so that bunyip-api:latest and bunyip-web:latest always name the same
+// commit, which means a web-only merge rebuilds the API too and does advance
+// /v1/version. Excluding it would resolve to an older SHA than the one staging
+// is about to serve.
+//
+// migrations are not listed separately: there is no top-level migrations dir
+// (they live under bunyip-api/migrations/), so `bunyip-api` already covers them.
 const BUILD_TRIGGER_PATHS = [
   'bunyip-api', // bunyip-api/**
+  'bunyip-web', // bunyip-web/**
   'crates', // crates/**
   'Cargo.toml',
   'Cargo.lock',
+  'rust-toolchain.toml',
+  '.cargo', // .cargo/**
   '.sqlx', // .sqlx/**
+  '.dockerignore',
   'oci-build', // oci-build/**
-  '.forgejo/workflows/build-api.yml', // the api build's own trigger
+  '.forgejo/workflows/build-api.yml',
+  '.forgejo/workflows/build-web.yml',
 ];
 
 // Forgejo Actions passes the literal empty string for secrets that are not
@@ -149,8 +153,8 @@ function resolveBuildSha(headSha) {
   throw new Error(
     `No commit at-or-before ${headSha} touches any build-trigger path ` +
       `(clone depth=${depth}, shallow=${isShallow()}). Check that ` +
-      `BUILD_TRIGGER_PATHS in this script matches build-api.yml's ` +
-      `on.push.paths.`,
+      `BUILD_TRIGGER_PATHS in this script matches the shared on.push.paths ` +
+      `filter both build workflows declare.`,
   );
 }
 
