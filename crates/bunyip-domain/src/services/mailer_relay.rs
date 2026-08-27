@@ -6,16 +6,18 @@
 //! The caller supplies only the recipient, the subject and the body; the
 //! sending identity is always this deployment's.
 //!
-//! The suppression check runs BEFORE anything is handed to the transport.
-//! Today the list is empty ([`NoSuppression`]); BUNYIP-603 feeds it from
-//! bounce/complaint webhooks and only has to swap the implementation wired in
-//! `main.rs`, not restructure this path.
+//! The suppression check runs BEFORE anything is handed to the transport. The
+//! list is the shared `mailer_suppressions` table ([`DbSuppressionList`]), fed
+//! by the bounce/complaint feedback webhook (BUNYIP-603). [`NoSuppression`] is
+//! kept for the deployments and tests that relay without a suppression store.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use sqlx::PgPool;
 
 use crate::errors::AppError;
+use crate::repositories::MailerSuppressionRepository;
 use crate::services::EmailService;
 
 /// Longest accepted subject. RFC 5322 §2.1.1 caps an unfolded header line at
@@ -140,25 +142,109 @@ pub enum RelayOutcome {
     Suppressed,
 }
 
-/// Addresses the relay must not send to.
+/// Why a recipient address is on the suppression list. A hard bounce (the
+/// address does not exist / permanently rejected) and a spam complaint (the
+/// recipient marked the mail as junk) are the two feedback signals that must
+/// stop future sends to protect the shared sending domain's reputation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuppressionReason {
+    Bounce,
+    Complaint,
+}
+
+impl SuppressionReason {
+    /// The stored / logged token. Also the wire value the feedback webhook
+    /// accepts, so the same word round-trips in and out.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SuppressionReason::Bounce => "bounce",
+            SuppressionReason::Complaint => "complaint",
+        }
+    }
+
+    /// Parse the webhook's `event` field. An unrecognised value is rejected
+    /// rather than defaulted, so a malformed feedback event never silently
+    /// suppresses an address under the wrong reason.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_lowercase().as_str() {
+            "bounce" => Some(SuppressionReason::Bounce),
+            "complaint" => Some(SuppressionReason::Complaint),
+            _ => None,
+        }
+    }
+}
+
+/// Addresses the relay must not send to, plus the write path that fills it.
 ///
-/// The seam BUNYIP-603 fills: it replaces the wiring in `main.rs` with a
-/// bounce/complaint-fed implementation and touches nothing else in this path.
+/// The read half ([`Self::is_suppressed`]) runs on every relay; the write half
+/// ([`Self::suppress`]) is fed by the bounce/complaint webhook (BUNYIP-603).
+/// One trait so an in-memory fake can back both halves in a DB-free test.
 #[async_trait]
 pub trait SuppressionList: Send + Sync {
     /// Whether `address` must not be relayed to. An error here is NOT a
     /// suppression decision: the caller surfaces it rather than guessing, so a
     /// broken list never silently turns into "send everything".
     async fn is_suppressed(&self, address: &str) -> Result<bool, AppError>;
+
+    /// Record `address` as suppressed for `reason`, keeping the provider's own
+    /// `detail` for later inspection. Idempotent on the address.
+    async fn suppress(
+        &self,
+        address: &str,
+        reason: SuppressionReason,
+        detail: Option<&str>,
+    ) -> Result<(), AppError>;
 }
 
-/// The list until BUNYIP-603 lands: nothing is suppressed.
+/// A relay with no suppression store: nothing is suppressed and a recorded
+/// suppression is a no-op. Kept for tests and for a deployment that relays
+/// without wiring the shared list.
 pub struct NoSuppression;
 
 #[async_trait]
 impl SuppressionList for NoSuppression {
     async fn is_suppressed(&self, _address: &str) -> Result<bool, AppError> {
         Ok(false)
+    }
+
+    async fn suppress(
+        &self,
+        _address: &str,
+        _reason: SuppressionReason,
+        _detail: Option<&str>,
+    ) -> Result<(), AppError> {
+        Ok(())
+    }
+}
+
+/// The production suppression list: the shared `mailer_suppressions` table.
+///
+/// Both halves delegate to [`MailerSuppressionRepository`], which normalizes the
+/// address, so the read on the send path and the write on the webhook path fold
+/// case identically and can never disagree on what "the same address" is.
+pub struct DbSuppressionList {
+    pool: PgPool,
+}
+
+impl DbSuppressionList {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl SuppressionList for DbSuppressionList {
+    async fn is_suppressed(&self, address: &str) -> Result<bool, AppError> {
+        MailerSuppressionRepository::is_suppressed(&self.pool, address).await
+    }
+
+    async fn suppress(
+        &self,
+        address: &str,
+        reason: SuppressionReason,
+        detail: Option<&str>,
+    ) -> Result<(), AppError> {
+        MailerSuppressionRepository::upsert(&self.pool, address, reason.as_str(), detail).await
     }
 }
 
@@ -245,6 +331,15 @@ mod tests {
         async fn is_suppressed(&self, _address: &str) -> Result<bool, AppError> {
             Ok(true)
         }
+
+        async fn suppress(
+            &self,
+            _address: &str,
+            _reason: SuppressionReason,
+            _detail: Option<&str>,
+        ) -> Result<(), AppError> {
+            Ok(())
+        }
     }
 
     /// A list that cannot answer.
@@ -253,6 +348,15 @@ mod tests {
     #[async_trait]
     impl SuppressionList for BrokenList {
         async fn is_suppressed(&self, _address: &str) -> Result<bool, AppError> {
+            Err(AppError::internal("suppression store unavailable"))
+        }
+
+        async fn suppress(
+            &self,
+            _address: &str,
+            _reason: SuppressionReason,
+            _detail: Option<&str>,
+        ) -> Result<(), AppError> {
             Err(AppError::internal("suppression store unavailable"))
         }
     }

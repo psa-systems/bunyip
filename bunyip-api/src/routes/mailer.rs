@@ -12,5 +12,16 @@ use actix_web::web;
 use crate::handlers;
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
-    cfg.service(web::scope("/mailer").route("/send", web::post().to(handlers::mailer::relay_send)));
+    cfg.service(
+        web::scope("/mailer")
+            .route("/send", web::post().to(handlers::mailer::relay_send))
+            // BUNYIP-603: inbound bounce/complaint feedback. Authenticated by an
+            // `X-Webhook-Signature` HMAC over the body, not by a machine
+            // credential, so it is exempt from the per-IP floor like the Stripe
+            // webhook (an external provider posts from one address).
+            .route(
+                "/webhooks/feedback",
+                web::post().to(handlers::mailer::relay_feedback_webhook),
+            ),
+    );
 }

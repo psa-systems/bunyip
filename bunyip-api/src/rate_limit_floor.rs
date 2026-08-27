@@ -70,6 +70,12 @@ const EXEMPT_PATHS: &[&str] = &[
     // would throttle its neighbours, and 20/minute is far below a transactional
     // relay's normal rate.
     "/v1/mailer/send",
+    // BUNYIP-603: the inbound bounce/complaint feedback webhook. It is
+    // authenticated by an `X-Webhook-Signature` HMAC over the body and fails
+    // closed without the secret, exactly like `/v1/webhooks/stripe`. An external
+    // SMTP provider posts every bounce from one address, so the per-IP floor is
+    // the wrong shape and would throttle a burst of legitimate feedback.
+    "/v1/mailer/webhooks/feedback",
 ];
 
 /// Whether the floor applies to this request.
@@ -207,6 +213,8 @@ mod tests {
         assert!(is_exempt("/v1/auth/setup/status", &Method::GET));
         // BUNYIP-602: the mailer relay is throttled per calling app, not per IP.
         assert!(is_exempt("/v1/mailer/send", &Method::POST));
+        // BUNYIP-603: the signed bounce/complaint feedback webhook, like Stripe's.
+        assert!(is_exempt("/v1/mailer/webhooks/feedback", &Method::POST));
     }
 
     #[test]

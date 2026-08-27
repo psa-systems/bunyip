@@ -204,6 +204,7 @@ and belongs in the same runbook.
 | `OCI_REGISTRY_ENABLED`                  | -                           | the OCI registry endpoint                                           |
 | `OCI_REGISTRY_SERVICE`                  | `OCI_REGISTRY_ENABLED`      | the registry token realm cannot be derived                          |
 | `SMTP_HOST`                             | -                           | transactional email (outside production, where it is required)      |
+| `MAILER_WEBHOOK_SECRET`                 | -                           | the mailer bounce/complaint feedback webhook: the shared suppression list is never fed |
 | `ADMIN_NOTIFICATION_EMAILS`             | `SMTP_HOST`                 | admin notifications have no recipient                               |
 | `IP2LOCATION_DB_PATH`                   | -                           | GeoIP enrichment on login-location alerts                           |
 | `IP2PROXY_DB_PATH`                      | -                           | ASN / VPN enrichment on login alerts                                |

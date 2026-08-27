@@ -27,10 +27,10 @@ use bunyip_api::{
     routes,
     services::{
         stripe_settings_from_db_model, unconfigured_stripe_config, AppBackupAdapter,
-        AppDownloadCache, AuthService, BackupService, DownloadLimiter, EmailService,
-        ForgejoAssetClient, GeoIpService, IpEnrichService, JwtConfig, JwtService, MailerRelay,
-        MokoshBackupAdapter, NoSuppression, PasswordService, ReleaseCache, StripeService,
-        TotpService, WebhookService,
+        AppDownloadCache, AuthService, BackupService, DbSuppressionList, DownloadLimiter,
+        EmailService, ForgejoAssetClient, GeoIpService, IpEnrichService, JwtConfig, JwtService,
+        MailerRelay, MokoshBackupAdapter, PasswordService, ReleaseCache, StripeService,
+        SuppressionList, TotpService, WebhookService,
     },
     version::UpdateChecker,
 };
@@ -550,13 +550,20 @@ async fn main() -> anyhow::Result<()> {
 
     info!(enabled = email_enabled, "Email service initialized");
 
-    // BUNYIP-602: the send-only relay other apps in the suite call. The
-    // suppression list is empty until BUNYIP-603 feeds it from bounce and
-    // complaint webhooks; swapping this one argument is all that takes.
+    // BUNYIP-602 / BUNYIP-603: the send-only relay other apps in the suite call,
+    // reading the shared `mailer_suppressions` table before every send. The same
+    // store is handed to the feedback-webhook handler below, so the read on the
+    // send path and the write on the bounce/complaint path share one list.
+    let suppression: Arc<dyn SuppressionList> = Arc::new(DbSuppressionList::new(pool.clone()));
     let mailer_relay = Arc::new(MailerRelay::new(
         Arc::clone(&email_service),
-        Arc::new(NoSuppression),
+        Arc::clone(&suppression),
     ));
+
+    // BUNYIP-603: the shared HMAC secret the bounce/complaint feedback webhook is
+    // signed with. Absent means the endpoint fails closed (it cannot verify a
+    // signature, so it trusts nothing); `log_feature_gaps` warns once at boot.
+    let mailer_webhook_secret = secret_env("MAILER_WEBHOOK_SECRET");
 
     // BUNYIP-366: IP -> country resolver for login-location alerts. Optional:
     // when IP2LOCATION_DB_PATH is unset or the .BIN fails to load, geoip stays
@@ -1217,6 +1224,10 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::Data::new(auth_service.clone()))
             .app_data(web::Data::new(email_service.clone()))
             .app_data(web::Data::new(mailer_relay.clone()))
+            .app_data(web::Data::new(suppression.clone()))
+            .app_data(web::Data::new(
+                bunyip_api::handlers::mailer::MailerWebhookSecret(mailer_webhook_secret.clone()),
+            ))
             .app_data(web::Data::new(stripe_service.clone()))
             .app_data(web::Data::new(totp_service.clone()))
             .app_data(web::Data::new(webhook_service.clone()))
