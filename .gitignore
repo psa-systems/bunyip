@@ -19,7 +19,6 @@ For AI/
 # The dev container + prod image rebuild it; commit the regenerated file.
 
 # Local env files
-.env.*.local
 
 # Node / Bun
 .bun/
@@ -117,12 +116,9 @@ web_modules/
 # Yarn Integrity file
 .yarn-integrity
 
-# dotenv environment variable files
-.env
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
+# dotenv environment variable files: ignore local env files by pattern, keep the tracked examples (governance GOV-56)
+.env*
+!.env.example
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -183,15 +179,6 @@ dist
 .svelte-kit
 
 # End of https://www.toptal.com/developers/gitignore/api/node
-
-
-# Created by https://www.toptal.com/developers/gitignore/api/dotenv
-# Edit at https://www.toptal.com/developers/gitignore?templates=dotenv
-
-### dotenv ###
-.env
-
-# End of https://www.toptal.com/developers/gitignore/api/dotenv
 
 
 # Created by https://www.toptal.com/developers/gitignore/api/rust
