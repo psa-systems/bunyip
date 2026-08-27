@@ -1919,6 +1919,15 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
          in APP_DATABASE_URL.",
     ),
     EnvVarSpec::gating(
+        "MAILER_WEBHOOK_SECRET",
+        "the mailer bounce/complaint feedback webhook is disabled: with no signing secret the \
+         endpoint fails closed, so the shared suppression list is never fed and the relay keeps \
+         sending to addresses that bounce or complain (BUNYIP-603)",
+        "Set MAILER_WEBHOOK_SECRET_FILE=/run/secrets/mailer_webhook_secret (compose) or \
+         MAILER_WEBHOOK_SECRET (dev .env) to the value shared with the SMTP provider's \
+         bounce/complaint webhook.",
+    ),
+    EnvVarSpec::gating(
         "SETUP_DEFAULT_ADMIN",
         "no bootstrap admin is seeded on first boot",
         "Set SETUP_DEFAULT_ADMIN_FILE=/run/secrets/setup_default_admin to `email:password`, or \

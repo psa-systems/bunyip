@@ -21,7 +21,9 @@ use crate::middleware::extract_client_ip;
 use crate::models::RateLimitConfig;
 use crate::repositories::{RateLimitConfigRepository, RateLimitRepository};
 use crate::responses::{get_request_id, success};
-use crate::services::{MailerRelay, RelayMessage, RelayOutcome};
+use crate::services::{
+    ingest_feedback, MailerRelay, RelayMessage, RelayOutcome, SuppressionList, SIGNATURE_HEADER,
+};
 
 /// A relay request. Every field is required except `html`; a request struct in
 /// bunyip-api keeps its required inputs required so a malformed call still
@@ -187,6 +189,76 @@ pub async fn relay_send(
 
     Ok(success(
         RelaySendResponse::from_outcome(outcome),
+        request_id,
+    ))
+}
+
+/// The shared secret the bounce/complaint feedback webhook is signed with, or
+/// `None` when `MAILER_WEBHOOK_SECRET` is unset. `None` makes the endpoint fail
+/// closed, exactly like the Stripe webhook without its signing secret: an
+/// endpoint that cannot verify a signature must never trust a body.
+pub struct MailerWebhookSecret(pub Option<String>);
+
+/// What the feedback webhook did with an accepted event.
+#[derive(Debug, Serialize)]
+pub struct RelayFeedbackResponse {
+    pub status: &'static str,
+    pub reason: &'static str,
+}
+
+/// POST /v1/mailer/webhooks/feedback
+///
+/// Ingest one signed bounce/complaint feedback event from the SMTP provider (or
+/// a shim normalizing its payload) and record the recipient on the shared
+/// suppression list, so the relay stops sending to an address known to bounce or
+/// complain (BUNYIP-603).
+///
+/// Verification comes first: an unconfigured secret fails closed (502-shaped
+/// internal error, logged at `error`), a missing signature is 401, and a body
+/// that verifies but is malformed is 400. Only a verified, well-formed event
+/// reaches the suppression store.
+pub async fn relay_feedback_webhook(
+    req: HttpRequest,
+    body: web::Bytes,
+    secret: web::Data<MailerWebhookSecret>,
+    suppression: web::Data<Arc<dyn SuppressionList>>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+
+    // Fail closed when no signing secret is configured, mirroring the Stripe
+    // webhook (BUNYIP-203): an endpoint that cannot verify a signature must
+    // reject before it trusts anything, or a forged bounce could suppress an
+    // arbitrary recipient's mail.
+    let Some(secret) = secret.0.as_deref() else {
+        tracing::error!(
+            "Rejecting a mailer feedback webhook: MAILER_WEBHOOK_SECRET is not configured, so no \
+             bounce/complaint signature can be verified. Set it to enable suppression ingestion."
+        );
+        return Err(AppError::internal("mailer webhook secret not configured"));
+    };
+
+    let signature = req
+        .headers()
+        .get(SIGNATURE_HEADER)
+        .and_then(|h| h.to_str().ok())
+        .ok_or(AppError::Unauthorized)?;
+
+    let outcome = ingest_feedback(suppression.get_ref().as_ref(), secret, &body, signature).await?;
+
+    // A suppression is a consequential state change: it stops future mail to a
+    // recipient. Logged at `warn` to match the relay's own suppressed-send line
+    // (BUNYIP-603 AC3, Error Visibility).
+    tracing::warn!(
+        address = %outcome.address,
+        reason = outcome.reason.as_str(),
+        "mailer suppression list updated from a bounce/complaint webhook"
+    );
+
+    Ok(success(
+        RelayFeedbackResponse {
+            status: "recorded",
+            reason: outcome.reason.as_str(),
+        },
         request_id,
     ))
 }

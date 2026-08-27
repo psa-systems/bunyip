@@ -18,6 +18,7 @@ pub mod integration_status;
 pub mod ip_enrich;
 pub mod jwt;
 pub mod mailer_relay;
+pub mod mailer_webhook;
 pub mod password_breach;
 pub mod stripe;
 pub mod totp;
@@ -70,8 +71,11 @@ pub use integration_status::{
 pub use ip_enrich::{IpEnrichService, IpEnrichment, NetworkCategory, VpnLikelihood};
 pub use jwt::{AccessTokenClaims, JwtService, RefreshTokenClaims, TwoFactorChallengeClaims};
 pub use mailer_relay::{
-    MailerRelay, NoSuppression, RelayMessage, RelayOutcome, SuppressionList, MAX_ADDRESS_LEN,
-    MAX_BODY_LEN, MAX_SUBJECT_LEN,
+    DbSuppressionList, MailerRelay, NoSuppression, RelayMessage, RelayOutcome, SuppressionList,
+    SuppressionReason, MAX_ADDRESS_LEN, MAX_BODY_LEN, MAX_SUBJECT_LEN,
+};
+pub use mailer_webhook::{
+    ingest_feedback, verify_signature, FeedbackEvent, FeedbackOutcome, SIGNATURE_HEADER,
 };
 pub use stripe::{
     classify_probe, stripe_config_from_db_model, stripe_err, stripe_err_for,

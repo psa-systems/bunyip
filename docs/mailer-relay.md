@@ -37,8 +37,50 @@ can send as another.
 | 429    | the per-app send cap, or the per-IP failed-authentication cap, was exceeded; see `Retry-After`   |
 | 502    | this deployment has no SMTP transport configured, so nothing was sent                           |
 
-A 200 with `"status": "suppressed"` means the message was deliberately NOT delivered. Branch on `status`, not on the
-HTTP code alone. The suppression list is empty until BUNYIP-603 populates it from bounce and complaint webhooks.
+A 200 with `"status": "suppressed"` means the message was deliberately NOT delivered: the recipient is on the shared
+suppression list (see below). Branch on `status`, not on the HTTP code alone, so a caller can mark that contact
+undeliverable in its own data instead of retrying.
+
+## Suppression list and the feedback webhook (BUNYIP-603)
+
+Because every app in the suite relays through one shared sending domain, a single misbehaving recipient (a dead address
+that hard-bounces, or someone who marks the mail as spam) degrades that domain's reputation for every other app. Bunyip
+keeps one shared suppression list, keyed by recipient address, and refuses to relay to an address on it. The list lives
+in the `mailer_suppressions` table and is shared across all calling apps on purpose: it protects the one domain, not any
+single app's state.
+
+The list is fed by a signed feedback webhook:
+
+```http
+POST /v1/mailer/webhooks/feedback
+X-Webhook-Signature: <hex HMAC-SHA256 of the raw body, keyed by MAILER_WEBHOOK_SECRET>
+Content-Type: application/json
+
+{
+  "event": "bounce",
+  "recipient": "dead@customer.example",
+  "detail": "550 5.1.1 user unknown"
+}
+```
+
+- `event` is `bounce` (address does not exist / permanently rejected) or `complaint` (recipient marked the mail as
+  spam). Any other value is a 400.
+- `recipient` is the affected address; it is stored normalized (trimmed, lowercased), so suppression is
+  case-insensitive across the whole address.
+- `detail` is optional and kept verbatim for an operator inspecting the suppression later.
+
+The signature is verified against `MAILER_WEBHOOK_SECRET` (the same HMAC-SHA256-hex-in-`X-Webhook-Signature` scheme
+bunyip uses for its own outbound webhooks) BEFORE the body is parsed. Verification is fail-closed: with no secret
+configured the endpoint answers 500 and logs at `error` (an endpoint that cannot verify a signature must never trust a
+body), a missing signature is 401, and a signed-but-malformed body is 400. On success the endpoint answers
+`{"status": "recorded", "reason": "bounce"}` and logs the suppression at `warn`.
+
+Provider-neutral by design: the endpoint ingests the normalized shape above, not any one vendor's envelope. Adapting a
+specific SMTP provider's bounce/complaint payload (SES/SNS, Postmark, ...) onto this shape is a thin shim in front of
+this endpoint; the trust boundary is the signed body.
+
+`/v1/mailer/webhooks/feedback` is in `rate_limit_floor::EXEMPT_PATHS` for the same reason `/v1/webhooks/stripe` is: an
+external provider posts every bounce from one address, and the HMAC (not the per-IP floor) is what gates it.
 
 ## Rate limits
 
