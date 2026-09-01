@@ -222,12 +222,12 @@ pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker
                 @if !branding.meta_description.is_empty() {
                     meta name="description" content=(branding.meta_description);
                 }
-                // BUNYIP-560: the record, else the bootstrap environment
-                // default, else omitted. Nothing compiled in.
-                @if let Some(c) = palette_value(&branding.theme_color_light, bootstrap_theme_color_light()) {
+                // BUNYIP-560/568: the record, else omitted. Nothing compiled in
+                // and no environment variable behind it.
+                @if let Some(c) = palette_value(&branding.theme_color_light) {
                     meta name="theme-color" media="(prefers-color-scheme: light)" content=(c);
                 }
-                @if let Some(c) = palette_value(&branding.theme_color_dark, bootstrap_theme_color_dark()) {
+                @if let Some(c) = palette_value(&branding.theme_color_dark) {
                     meta name="theme-color" media="(prefers-color-scheme: dark)" content=(c);
                 }
                 (social_meta(title, &branding))
@@ -240,11 +240,10 @@ pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker
                 // `style-src 'unsafe-inline'`. Unset -> no block -> the default
                 // palette.
                 //
-                // BUNYIP-560: the branding record wins; `BRAND_THEME_CSS` is the
-                // bootstrap default for a database that has never been branded.
-                // The record's value is validated api-side to carry no angle
+                // BUNYIP-560/568: the branding record is the only source. The
+                // record's value is validated api-side to carry no angle
                 // bracket, so it cannot close this element.
-                @if let Some(css) = palette_value(&branding.theme_css, skin_theme_css()) {
+                @if let Some(css) = palette_value(&branding.theme_css) {
                     style { ":root{" (PreEscaped(css)) "}" }
                 }
                 // BUNYIP-294: `defer` so no script blocks HTML parsing. A
@@ -1291,20 +1290,18 @@ mod tests {
         assert!(with_picker.contains(".avatar-slot__img"));
     }
 
-    /// BUNYIP-549/560: the browser-chrome colour used to be two hex literals in
-    /// `document()`, then two environment variables, and is now a field of the
-    /// admin-managed record. The order is: the record, else the bootstrap
-    /// environment default, else NOTHING - never a compiled-in colour, which is
-    /// what left a rebranded deployment's address bar reed-green.
+    /// BUNYIP-549/560/568: the browser-chrome colour used to be two hex literals
+    /// in `document()`, then two environment variables, and is now a field of
+    /// the admin-managed record and nothing else. An unset field renders
+    /// NOTHING - never a compiled-in colour, which is what left a rebranded
+    /// deployment's address bar reed-green.
     #[test]
-    fn the_palette_prefers_the_record_then_the_bootstrap_default_then_nothing() {
-        assert_eq!(palette_value("#abcdef", Some("#123456")), Some("#abcdef"));
-        assert_eq!(palette_value("", Some("#123456")), Some("#123456"));
-        assert_eq!(palette_value("", None), None);
+    fn the_palette_is_the_record_or_nothing() {
+        assert_eq!(palette_value("#abcdef"), Some("#abcdef"));
         assert_eq!(
-            palette_value("", Some("")),
+            palette_value(""),
             None,
-            "an empty environment value is unset, not a colour"
+            "an empty record field is unset, not a colour"
         );
     }
 
@@ -1590,10 +1587,10 @@ mod tests {
         );
         assert!(unbranded.contains("<title>Test</title>"));
         assert!(!unbranded.contains("og:"));
-        // BUNYIP-560: with neither the record nor the environment set, the
-        // browser chrome and the `:root` ramp are OMITTED, not painted one
-        // product's green. `BRAND_THEME_*` is unset in the test process, so
-        // this also proves nothing is compiled in.
+        // BUNYIP-560/568: with the record's palette fields empty, the browser
+        // chrome and the `:root` ramp are OMITTED, not painted one product's
+        // green. The record is the only source, so this also proves nothing is
+        // compiled in.
         assert!(
             !unbranded.contains("theme-color"),
             "an unbranded head carries no chrome colour: {unbranded}"

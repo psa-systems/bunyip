@@ -15,9 +15,12 @@
 #     skin recoloured the page and left the browser chrome bunyip reed-green.
 #     BUNYIP-560 moved the palette into the admin-managed branding record and
 #     deleted the `#2f4e2e` / `#161a16` defaults that had moved to
-#     `bunyip-web/src/config.rs`, so NEITHER file may carry a colour literal
-#     now: unset means the meta is omitted, and a re-introduced default would
-#     paint every deployment's chrome one product's green again.
+#     `bunyip-web/src/config.rs`; BUNYIP-568 then removed the brand-theme
+#     bootstrap variables, so the record is the only source and NONE of the
+#     shell sources may carry a colour literal: an empty column means the meta
+#     is omitted, and a re-introduced default would paint every deployment's
+#     chrome one product's green again. The variable names themselves are held
+#     out by `scripts/check-no-retired-env.nu`.
 #
 # `amber` (the warning role) and `violet` are allowed alongside the two remapped
 # scales, matching the server-rendered side.
@@ -147,9 +150,9 @@ def self-test []: nothing -> nothing {
     let shell_cases = [
         {
             name: "config-driven.rs"
-            body: 'meta name="theme-color" content=(theme_color_light());'
+            body: 'meta name="theme-color" content=(palette_value(&branding.theme_color_light));'
             expect_problems: false
-            why: "a config-driven theme-color meta"
+            why: "a record-driven theme-color meta"
         }
         {
             name: "fragment-href.rs"
@@ -159,7 +162,7 @@ def self-test []: nothing -> nothing {
         }
         {
             name: "in-test.rs"
-            body: ("#[cfg(test)]\nmod tests {\n" + '    install_theme_colors("#123456", "#654321");' + "\n}")
+            body: ("#[cfg(test)]\nmod tests {\n" + '    theme_color_light: "#123456".into(),' + "\n}")
             expect_problems: false
             why: "sentinel hex values below the test marker"
         }
