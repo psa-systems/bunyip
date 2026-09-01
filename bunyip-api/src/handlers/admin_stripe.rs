@@ -778,6 +778,9 @@ pub async fn replace_stripe_price(
             None,
             None,
             None,
+            // BUNYIP-493: the organizations switch has nothing to do with a
+            // price replace either.
+            None,
             admin.0.sub,
         )
         .await
@@ -1356,6 +1359,7 @@ mod tests {
             lifetime_visible: true,
             early_adopter_visible: true,
             standard_visible: true,
+            orgs_enabled: false,
             updated_at: chrono::Utc::now(),
             updated_by: None,
         }

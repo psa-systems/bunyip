@@ -23,7 +23,8 @@ impl TierConfigRepository {
     /// column to NULL; `Some(id)` sets it. This is what lets the catalog "(none)"
     /// selection actually unmap a tier, distinct from a slots/trial-only save that
     /// simply omits the price columns. The numeric slots/trials and the
-    /// `pricing_enabled` switch stay plain `COALESCE` (keep-on-None).
+    /// `pricing_enabled` / `orgs_enabled` switches stay plain `COALESCE`
+    /// (keep-on-None).
     pub async fn update(
         pool: &PgPool,
         lifetime_slots: Option<i64>,
@@ -40,6 +41,7 @@ impl TierConfigRepository {
         lifetime_visible: Option<bool>,
         early_adopter_visible: Option<bool>,
         standard_visible: Option<bool>,
+        orgs_enabled: Option<bool>,
         updated_by: Uuid,
     ) -> Result<TierConfigRow, AppError> {
         let row = sqlx::query_as::<_, TierConfigRow>(
@@ -60,8 +62,9 @@ impl TierConfigRepository {
                 lifetime_visible         = COALESCE($12, lifetime_visible),
                 early_adopter_visible    = COALESCE($13, early_adopter_visible),
                 standard_visible         = COALESCE($14, standard_visible),
+                orgs_enabled             = COALESCE($15, orgs_enabled),
                 updated_at               = NOW(),
-                updated_by               = $15
+                updated_by               = $16
             WHERE id = 1
             RETURNING *
             "#,
@@ -80,6 +83,7 @@ impl TierConfigRepository {
         .bind(lifetime_visible)
         .bind(early_adopter_visible)
         .bind(standard_visible)
+        .bind(orgs_enabled)
         .bind(updated_by)
         .fetch_one(pool)
         .await?;

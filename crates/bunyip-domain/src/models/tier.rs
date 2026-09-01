@@ -27,6 +27,10 @@ pub struct TierConfigRow {
     pub lifetime_visible: bool,
     pub early_adopter_visible: bool,
     pub standard_visible: bool,
+    /// BUNYIP-493: enable switch for the organizations and teams feature.
+    /// `NOT NULL` with a `false` default, the same shape as `pricing_enabled`:
+    /// an admin switch with no env fallback, off until someone turns it on.
+    pub orgs_enabled: bool,
     pub updated_at: DateTime<Utc>,
     pub updated_by: Option<Uuid>,
 }
@@ -50,4 +54,8 @@ pub struct TierConfigWithPricing {
     pub lifetime_visible: bool,
     pub early_adopter_visible: bool,
     pub standard_visible: bool,
+    /// BUNYIP-493: the organizations and teams switch, appended here for the
+    /// same reason the visibility flags are: it is bunyip's own field, not part
+    /// of the response shape shared with a8n-tools.
+    pub orgs_enabled: bool,
 }

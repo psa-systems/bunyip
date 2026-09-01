@@ -5,6 +5,8 @@ pub mod dashboard;
 pub mod health;
 /// BUNYIP-206: forced post-registration onboarding (name + verified email).
 pub mod onboarding;
+/// BUNYIP-493: the organizations and teams surface, behind its feature flag.
+pub mod organizations;
 // BUNYIP-501: the public marketing / legal / docs / landing pages moved to
 // `crate::skin` (content.rs, public.rs). Only framework handlers live here now.
 /// BUNYIP-112/113/115/117: shared web-edge field validators that bound and

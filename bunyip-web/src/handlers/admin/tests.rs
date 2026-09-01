@@ -953,6 +953,7 @@ mod two_column_layout_tests {
             early_adopter_trial_days: "90".into(),
             standard_trial_days: "30".into(),
             trial_period_days: "14".into(),
+            orgs_enabled: false,
         }
     }
 
@@ -1013,6 +1014,59 @@ mod two_column_layout_tests {
         );
         // The Tiers & Slots form still posts to the page's own route.
         assert!(html.contains(r#"action="/admin/tier-settings""#));
+    }
+
+    /// BUNYIP-493: the organizations and teams switch sits on this page next to
+    /// the pricing one, and its tick reflects the saved row in both states. A
+    /// switch that always renders unticked reads as "off" to an admin who just
+    /// turned it on.
+    #[test]
+    fn organizations_switch_reflects_the_saved_state() {
+        // The whole page carries other checkboxes (per-tier visibility), so read
+        // the orgs input itself rather than searching the page for "checked".
+        let orgs_input = |html: &str| -> String {
+            let rest = html
+                .split_once(r#"id="orgs_enabled""#)
+                .expect("the organizations switch renders")
+                .1;
+            rest.split_once('>')
+                .expect("the input closes")
+                .0
+                .to_string()
+        };
+        let render = |orgs_enabled: bool| {
+            let vals = TierFormValues {
+                orgs_enabled,
+                ..tier_vals()
+            };
+            tier_settings_content(
+                Some(&tier_cfg()),
+                None,
+                Err("unavailable"),
+                &vals,
+                None,
+                None,
+            )
+            .into_string()
+        };
+
+        let off = render(false);
+        assert!(
+            off.contains(r#"name="orgs_enabled""#),
+            "the switch is on the page whatever its state"
+        );
+        assert!(
+            !orgs_input(&off).contains("checked"),
+            "unticked when the feature is off: {}",
+            orgs_input(&off)
+        );
+        assert!(
+            orgs_input(&render(true)).contains("checked"),
+            "ticked when the feature is on"
+        );
+        // It rides the Tiers & Slots form, so saving it never runs the catalog
+        // form's Stripe price validation.
+        assert!(render(true).contains(r#"action="/admin/tier-settings""#));
     }
 
     #[test]

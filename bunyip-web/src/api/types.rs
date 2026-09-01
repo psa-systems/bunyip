@@ -237,6 +237,11 @@ pub struct SetupStatus {
     pub email_enabled: bool,
     #[serde(default)]
     pub stripe_enabled: bool,
+    /// BUNYIP-493: the organizations and teams switch. Defaults to false, so an
+    /// older API that does not send it leaves the feature dark rather than
+    /// advertising a surface that is not there.
+    #[serde(default)]
+    pub orgs_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1430,6 +1435,9 @@ pub struct TierConfigResponse {
     pub early_adopter_visible: bool,
     #[serde(default = "default_true")]
     pub standard_visible: bool,
+    /// BUNYIP-493: the organizations and teams switch on the Pricing tiers page.
+    #[serde(default)]
+    pub orgs_enabled: bool,
     #[serde(default)]
     pub updated_at: String,
     #[serde(default)]

@@ -505,6 +505,17 @@ fn dashboard_items(is_member: bool) -> Vec<NavItem> {
             external: true,
         });
     }
+    // BUNYIP-493: organizations and teams are dark until an admin switches them
+    // on, so the entry (like the `/organizations` route itself) does not exist
+    // while the flag is off: off means invisible, not merely inert.
+    if orgs_enabled() {
+        items.push(NavItem {
+            title: "Organizations",
+            href: "/organizations",
+            icon: "users",
+            external: false,
+        });
+    }
     items.extend([
         NavItem {
             title: "Applications",
@@ -1056,6 +1067,46 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// BUNYIP-493: the organizations and teams entry exists only while the
+    /// switch is on. Both states are asserted from the shell a member actually
+    /// renders, because "off means invisible" is the half that a flag added
+    /// before its feature gets wrong: the entry must be absent, not disabled.
+    #[test]
+    fn the_organizations_entry_follows_its_feature_flag() {
+        let _guard = crate::feature_flags::FLAG_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let member = test_user(UserRole::Subscriber);
+        let render = || dashboard_shell(&member, "/dashboard", "Dashboard", html! {}).into_string();
+
+        install_orgs_enabled(false);
+        let off = render();
+        assert!(
+            !off.contains(r#"href="/organizations""#),
+            "the flag is off, so the shell must carry no link to the flagged route: {off}"
+        );
+        assert!(
+            !off.contains("Organizations"),
+            "the flag is off, so no organizations copy renders either: {off}"
+        );
+
+        install_orgs_enabled(true);
+        let on = render();
+        assert!(
+            on.contains(r#"href="/organizations""#),
+            "the flag is on, so the entry must render: {on}"
+        );
+        // BUNYIP-547: the sidebar is not rendered below `md`, so the entry has
+        // to reach both surfaces the shared nav list feeds.
+        assert_eq!(
+            on.matches(r#"href="/organizations""#).count(),
+            2,
+            "the entry must reach the sidebar AND the below-md disclosure: {on}"
+        );
+
+        install_orgs_enabled(false);
     }
 
     /// BUNYIP-506: a role string this build does not recognise decodes to

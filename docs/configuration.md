@@ -360,12 +360,13 @@ Unconfigured means payment is simply disabled. Test-mode walkthrough:
 
 ### Pricing tiers (`tier_config`, admin page: Pricing Tiers)
 
-Singleton row. Slot counts and trial lengths have env seeds; the Stripe identifiers and the publish switch have **no env
-source at all**.
+Singleton row. Slot counts and trial lengths have env seeds; the Stripe identifiers and the two feature switches have
+**no env source at all**.
 
 | Column                                                                              | Meaning                                                                   |
 |-------------------------------------------------------------------------------------|---------------------------------------------------------------------------|
 | `pricing_enabled`                                                                   | when false the public `/pricing` page 404s and every link to it is hidden |
+| `orgs_enabled`                                                                      | when false `/organizations` 404s and its nav entry is not rendered        |
 | `free_price_id`, `lifetime_price_id`, `early_adopter_price_id`, `standard_price_id` | Stripe price ids per tier                                                 |
 | `lifetime_product_id`, `early_adopter_product_id`, `standard_product_id`            | Stripe product ids per tier                                               |
 | `lifetime_visible`, `early_adopter_visible`, `standard_visible`                     | per-tier visibility on `/pricing`. A visible tier must have a price id    |
@@ -378,6 +379,13 @@ is dropped from `/pricing` silently. A free or lifetime tier is mapped to a real
 priceless" is never a state the page can render. A request that sends neither half for a tier (the slots and trials
 form) leaves that tier alone, so a row saved in that state before the check existed is corrected by the catalog form,
 not by an unrelated save.
+
+`orgs_enabled` is the organizations and teams switch (BUNYIP-493), saved by the Tiers & Slots form on the same page so
+it never rides the catalog form's Stripe validation. It is published on the public feature-flags probe
+`GET /v1/auth/setup/status`, answered from the process-wide tier-config snapshot the admin save hot-reloads, so the
+probe still reads no table. bunyip-web reads that probe once before its listener binds and every 60 seconds after, and
+installs the value into the process-wide cell its nav and its flagged routes read: a change reaches the web app within
+a minute with no restart, and a read that fails leaves the feature off rather than guessing it on.
 
 ### Branding (`branding`, admin page: Branding)
 

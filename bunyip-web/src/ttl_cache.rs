@@ -298,6 +298,7 @@ mod tests {
             Ok(SetupStatus {
                 email_enabled: true,
                 stripe_enabled: true,
+                orgs_enabled: false,
             })
         };
 

@@ -533,6 +533,17 @@ mod tests {
     /// organizations, which the product does not have. Each needle below was a
     /// real line in `content.rs` / `public.rs` / `config.rs`; reintroducing any
     /// of them fails the build rather than shipping a false claim again.
+    ///
+    /// BUNYIP-493 decided how this list interacts with the organizations and
+    /// teams flag, since the flag can now be switched on: the guard stays
+    /// ABSOLUTE, not conditional on the flag. Every needle below is a specific
+    /// claim (a membership cap, org switching, an MSP pitch) that the feature
+    /// still will not make when it ships, so gating them on the flag would only
+    /// let a false claim back in behind a switch. Copy the feature introduces is
+    /// written fresh, under the flag from its first commit, and must not reuse
+    /// these strings. If one is genuinely wanted back, it is deleted from this
+    /// list in the same commit that adds the copy, with the reason, rather than
+    /// worked around by splitting or reformatting the string.
     #[test]
     fn removed_business_tier_and_org_copy_stay_removed() {
         const BANNED: &[&str] = &[

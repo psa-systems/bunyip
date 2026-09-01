@@ -8,6 +8,7 @@
 //! type, or an app route: the consumer supplies those and builds its own nav
 //! data, document `<head>`, and shells on top of these.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 use maud::{html, Markup};
@@ -68,6 +69,27 @@ pub fn install_community_enabled(enabled: bool) {
 
 pub fn community_enabled() -> bool {
     *COMMUNITY_ENABLED.get().unwrap_or(&false)
+}
+
+/// BUNYIP-493: whether the organizations and teams feature is switched on.
+/// Installed once from `main` for the same reason [`COMMUNITY_ENABLED`] is: a
+/// nav list is built by a free function with no access to per-request state.
+///
+/// An `AtomicBool` rather than a `OnceLock` because the value comes from an
+/// admin switch, not from the environment: a process that read `false` at
+/// startup must be able to publish a later reading without a restart, and both
+/// states have to be reachable from one test binary. `false` until installed,
+/// so a consumer that never installs it leaves the feature dark.
+static ORGS_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Install the organizations and teams flag. Called from `main`; re-callable, so
+/// a consumer that re-reads the switch can publish the new value.
+pub fn install_orgs_enabled(enabled: bool) {
+    ORGS_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+pub fn orgs_enabled() -> bool {
+    ORGS_ENABLED.load(Ordering::Relaxed)
 }
 
 /// BUNYIP-500: optional per-skin theme override (raw CSS custom-property
