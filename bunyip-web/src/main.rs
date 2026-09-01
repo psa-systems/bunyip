@@ -4,6 +4,7 @@ mod branding;
 mod client_ip;
 mod config;
 mod csrf;
+mod feature_flags;
 mod handlers;
 mod routes;
 mod security;
@@ -106,6 +107,13 @@ async fn main() {
     // task below keeps retrying. Nothing substitutes a compiled-in literal.
     branding::load_at_startup(&api).await;
     branding::spawn_refresh(api.clone());
+    // BUNYIP-493: the organizations and teams switch, read from bunyip-api's
+    // feature-flags probe and installed into the cell the nav and the flagged
+    // routes read. Same shape as the branding load above: one bounded read
+    // before the listener binds, then an interval refresh. An unreadable flag
+    // leaves the feature dark rather than guessing it on.
+    feature_flags::load_at_startup(&api).await;
+    feature_flags::spawn_refresh(api.clone());
     // BUNYIP-243: while bunyip-api is unreachable, poll its /health on an
     // interval and clear the app-wide "service unavailable" banner on recovery.
     // Idle (no network) while healthy; detection itself is reactive in
@@ -213,6 +221,13 @@ async fn main() {
         .route("/membership-required", get(dash::membership_required))
         .route("/membership", get(dash::membership))
         .route("/community", get(dash::community))
+        // BUNYIP-493: registered unconditionally and gated inside the handler,
+        // so flipping the switch needs no router rebuild. While the flag is off
+        // it answers the branded 404, the same page an unrouted path gets.
+        .route(
+            "/organizations",
+            get(handlers::organizations::organizations),
+        )
         .route(
             "/membership/subscribe",
             axum::routing::post(dash::membership_subscribe),

@@ -3122,6 +3122,8 @@ pub struct UpdateTierConfigRequest {
     pub lifetime_visible: Option<bool>,
     pub early_adopter_visible: Option<bool>,
     pub standard_visible: Option<bool>,
+    /// BUNYIP-493: enable switch for the organizations and teams feature.
+    pub orgs_enabled: Option<bool>,
 }
 
 /// BUNYIP-517: resolve a mapped price id to the Stripe product bunyip stores for
@@ -3212,6 +3214,7 @@ pub async fn get_tier_config(
             lifetime_visible: resolved.lifetime_visible,
             early_adopter_visible: resolved.early_adopter_visible,
             standard_visible: resolved.standard_visible,
+            orgs_enabled: resolved.orgs_enabled,
             config: TierConfigResponse {
                 lifetime_slots: resolved.lifetime_slots,
                 early_adopter_slots: resolved.early_adopter_slots,
@@ -3410,6 +3413,7 @@ pub async fn update_tier_config(
         body.lifetime_visible,
         body.early_adopter_visible,
         body.standard_visible,
+        body.orgs_enabled,
         admin.0.sub,
     )
     .await?;
@@ -3447,6 +3451,7 @@ pub async fn update_tier_config(
                 "lifetime_visible": body.lifetime_visible,
                 "early_adopter_visible": body.early_adopter_visible,
                 "standard_visible": body.standard_visible,
+                "orgs_enabled": body.orgs_enabled,
             })),
     )
     .await?;
@@ -3457,6 +3462,7 @@ pub async fn update_tier_config(
             lifetime_visible: resolved.lifetime_visible,
             early_adopter_visible: resolved.early_adopter_visible,
             standard_visible: resolved.standard_visible,
+            orgs_enabled: resolved.orgs_enabled,
             config: TierConfigResponse {
                 lifetime_slots: resolved.lifetime_slots,
                 early_adopter_slots: resolved.early_adopter_slots,

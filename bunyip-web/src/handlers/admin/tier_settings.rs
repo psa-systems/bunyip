@@ -38,6 +38,10 @@ pub(super) struct TierFormValues {
     /// BUNYIP-527: the single trial Stripe actually grants at checkout, relocated
     /// here from the Stripe page. It persists to `stripe_config`, not tier config.
     pub(super) trial_period_days: String,
+    /// BUNYIP-493: the organizations and teams switch. A checkbox rather than a
+    /// typed field, so it carries a bool: this form always submits every
+    /// control, which makes an absent value a real "unticked".
+    pub(super) orgs_enabled: bool,
 }
 
 impl TierFormValues {
@@ -48,6 +52,7 @@ impl TierFormValues {
             early_adopter_trial_days: c.early_adopter_trial_days.to_string(),
             standard_trial_days: c.standard_trial_days.to_string(),
             trial_period_days: trial_period_days.to_string(),
+            orgs_enabled: c.orgs_enabled,
         }
     }
 
@@ -58,6 +63,7 @@ impl TierFormValues {
             early_adopter_trial_days: String::new(),
             standard_trial_days: String::new(),
             trial_period_days: String::new(),
+            orgs_enabled: false,
         }
     }
 }
@@ -119,6 +125,20 @@ pub(super) fn tier_settings_content(
                                 div class="space-y-2 max-w-md" {
                                     label for="trial_period_days" class="text-sm font-medium" { "Checkout trial (days)" }
                                     input id="trial_period_days" name="trial_period_days" type="number" min="0" max="365" value=(values.trial_period_days) class=(dashboard_input());
+                                }
+                            },
+                        ))
+                        // BUNYIP-493: the organizations and teams switch, the
+                        // same shape as the public pricing switch below: off by
+                        // default, and off means the surface is not there at all
+                        // rather than there and empty.
+                        (admin_block(
+                            "Organizations and teams",
+                            Some("Off by default. While this is off, the Organizations nav entry is hidden and its page returns 404. A change reaches the web app within a minute."),
+                            html! {
+                                label class="flex items-center gap-3 text-sm font-medium" {
+                                    input id="orgs_enabled" name="orgs_enabled" type="checkbox" value="true" checked[values.orgs_enabled] class="h-4 w-4 rounded border-input";
+                                    "Enable organizations and teams"
                                 }
                             },
                         ))
@@ -248,6 +268,11 @@ pub struct TierForm {
     // BUNYIP-527: the checkout trial length, persisted to stripe_config.
     #[serde(default)]
     pub trial_period_days: String,
+    // BUNYIP-493: the organizations and teams switch. An unticked checkbox is
+    // absent from the submission, which is a real "off" here because this form
+    // always renders and submits the control.
+    #[serde(default)]
+    pub orgs_enabled: Option<String>,
 }
 
 pub async fn tier_settings_save(
@@ -298,6 +323,10 @@ pub async fn tier_settings_save(
                 MAX_TRIAL_DAYS
             )?),
         );
+        // BUNYIP-493: a checkbox needs no parsing, but it does need sending on
+        // every save: omitting it would leave the stored value in place and make
+        // unticking the box a silent no-op.
+        tier_body.insert("orgs_enabled".into(), json!(f.orgs_enabled.is_some()));
         // BUNYIP-527: the checkout trial is a stripe_config value, bounded [0,365].
         let checkout_trial = parse_tier_field(&f.trial_period_days, "Checkout trial (days)", 365)?;
         Ok::<_, String>((serde_json::Value::Object(tier_body), checkout_trial))
@@ -335,6 +364,9 @@ pub async fn tier_settings_save(
         early_adopter_trial_days: f.early_adopter_trial_days.trim().to_string(),
         standard_trial_days: f.standard_trial_days.trim().to_string(),
         trial_period_days: f.trial_period_days.trim().to_string(),
+        // Echo the submitted tick back, so a rejected save does not quietly
+        // revert the switch to the stored row.
+        orgs_enabled: f.orgs_enabled.is_some(),
     };
     let content = tier_settings_content(
         cfg.as_ref(),

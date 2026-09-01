@@ -906,6 +906,10 @@ pub struct TierConfig {
     pub lifetime_visible: bool,
     pub early_adopter_visible: bool,
     pub standard_visible: bool,
+    /// BUNYIP-493: whether the organizations and teams feature is switched on.
+    /// DB only (admin Pricing tiers page); false until an admin turns it on, so
+    /// the feature is dark from its first commit rather than after a retrofit.
+    pub orgs_enabled: bool,
 }
 
 impl TierConfig {
@@ -941,6 +945,8 @@ impl TierConfig {
             lifetime_visible: true,
             early_adopter_visible: true,
             standard_visible: true,
+            // BUNYIP-493: no env source; the admin Pricing tiers page writes it.
+            orgs_enabled: false,
         }
     }
 
@@ -966,6 +972,7 @@ impl TierConfig {
             lifetime_visible: row.lifetime_visible,
             early_adopter_visible: row.early_adopter_visible,
             standard_visible: row.standard_visible,
+            orgs_enabled: row.orgs_enabled,
         }
     }
 
@@ -992,6 +999,11 @@ impl TierConfig {
             || !row.lifetime_visible
             || !row.early_adopter_visible
             || !row.standard_visible
+            // BUNYIP-493: same reasoning as `pricing_enabled` above - the column
+            // is NOT NULL, so turning the feature on is the only signal that the
+            // row is authoritative, and without it a restart would silently
+            // switch the feature back off.
+            || row.orgs_enabled
     }
 }
 
