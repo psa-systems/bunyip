@@ -101,11 +101,12 @@ PR head's workflow, install scripts and specs, so none of these credentials may
 be in scope for it. PRs run `.forgejo/workflows/e2e-pr.yml`, which declares only
 `E2E_STAGING_BASE_URL` and `OIDC_ISSUER_STAGING`.
 
-The tables below are the authoritative list of every repository-level Forgejo
-Actions **secret** and **variable** the workflows (`.forgejo/workflows/*.yml`)
-consume. Names and purpose only - VALUES live in the Forgejo secret store and
-never in this repo. Set them under the repo's Settings -> Actions -> Secrets /
-Variables.
+The tables below are the authoritative list of every Forgejo Actions **secret**
+and **variable** the workflows (`.forgejo/workflows/*.yml`) consume. Names and
+purpose only - VALUES live in the Forgejo secret store and never in this repo.
+Set them under the repo's Settings -> Actions -> Secrets / Variables, except
+`FORGEJO_PAT`, which is an org-level secret shared by every consumer of
+`psa-systems/common` and reaches the release job through `secrets: inherit`.
 
 ### Build and release (non-E2E)
 
@@ -113,7 +114,8 @@ Consumed by the image-build and release workflows, not the suite.
 
 | Name | Kind | Consumed by | Purpose |
 | --- | --- | --- | --- |
-| `PSA_SYSTEMS_PRIVATE_PACKAGE_PAT` | secret | `build-api`, `build-web`, `create-release` | Forgejo PAT. Registry push password for the published images (`REGISTRY_PASSWORD`) and the releases-API call in `create-release`. Needs `write:repository` (releases) plus package-write (image push) scope. |
+| `PSA_SYSTEMS_PRIVATE_PACKAGE_PAT` | secret | `build-api`, `build-web` | Forgejo PAT. Registry push password for the published images (`REGISTRY_PASSWORD`). Needs package-write (image push) scope. |
+| `FORGEJO_PAT` | secret | `create-release` | Forgejo PAT for the releases-API call. Read by the reusable `psa-systems/common` release workflow, which `create-release.yml` calls with `secrets: inherit`; it lives at the org level so every consumer of `common` resolves the same name. Needs `write:repository` scope. |
 | `PSA_SYSTEMS_PRIVATE_PACKAGE_OWNER` | variable | `build-api`, `build-web` | Registry owner/org path segment for the published images (`REGISTRY_OWNER`). |
 | `RUNS_ON_OPENSUSE_BASE_LATEST` | variable | `build-api`, `build-web`, `create-release`, `e2e-pr` | Runner label for jobs that compile nothing on the runner and launch no browser (`e2e-pr` only downloads Chromium) (`runs-on`). |
 | `RUNS_ON_OPENSUSE_DEV_LATEST` | variable | `check`, `e2e` | Runner label for jobs the base image cannot serve: only this image carries the C toolchain and OpenSSL headers (`check`, BUNYIP-444) and the Playwright browser system libraries plus the pre-baked browsers (`e2e`, BUNYIP-446) (`runs-on`). |

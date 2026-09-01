@@ -8,7 +8,8 @@ This guide covers the developer fast path: clone, run, sign in, click around. Se
 - [`just`](https://github.com/casey/just) for the task runner.
 - [Nushell `0.112.2`](https://www.nushell.sh/) (used by several `just` recipes, by every script under `scripts/` including the CI guards, and by every `run:` step in `.forgejo/workflows/`).
 - No `infisical` CLI is needed. Group-1 secrets are files (`just init-secrets` generates dev throwaways; deployments supply them via the SOPS `compose-secrets.yml`), and the Group-2 integration secrets come from the store `SECRETS_STORAGE` declares (`database` in dev, so they are entered on the admin pages). See [application secrets](secrets-infisical.md).
-- No host-side Rust toolchain. All cargo work happens inside the dev container.
+- The `common` submodule ([psa-systems/common](https://dev.a8n.run/psa-systems/common)), which the root `justfile` imports the shared hook, tree-ownership and release recipes from. Clone with `git clone --recurse-submodules`, or run `git submodule update --init` in an existing clone; without it every `just` command fails to parse.
+- No host-side Rust toolchain. All cargo work happens inside the dev container. The one exception is `just create-release`, whose `Cargo.lock` sync shells out to host `cargo` (BUNYIP-629); cut releases from a box that has a toolchain.
 - A copy of `.env.example` -> `.env` if you're going to run the SSO overlay (`just dev-sso`). The plain `just dev` recipe does not require a real mokosh-server.
 
 ## Run the dev stack
@@ -61,8 +62,12 @@ just dev-clean         # stop + drop volumes (fresh state)
 just dev-sso           # SSO overlay (real mokosh-server target)
 just dev-logs          # tail the container logs
 just check-container   # fmt + clippy + workspace tests, inside the pinned builder (no host toolchain)
+just install-hooks     # write the git pre-commit hook (once per fresh clone)
+just pre-commit        # what the hook runs: fmt + clippy + build + tests in the dev `api` container
 just create-release minor   # bump the workspace version, branch, push, open the release PR
 ```
+
+`install-hooks`, `pre-commit` and `create-release` come from the `common` submodule and are configured by the variables at the top of the root `justfile`; never copy one back into the justfile, `just check-justfile` fails the hook and CI when a shared recipe is shadowed.
 
 `just check` runs the fuller fmt + clippy + build + docker-builder-stage sequence, but it needs a host toolchain; on a toolchain-less dev box use `just check-container`. Never `cargo build` on the host.
 

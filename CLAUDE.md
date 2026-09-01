@@ -45,10 +45,36 @@ is also bunyip's OIDC issuer (it serves `/.well-known/*` + `/oauth2/*`).
 - `just dev-sso` - Traefik-routed stack on `*.a8n.run` (layers `compose.dev-sso.yml` on top). Cross-repo (bunyip + mokosh-server + mokosh-apps), Nebula topology, OIDC client registration, and every spin-up obstacle are documented in `docs/dev-sso-three-repo-runbook.md` - read it before touching dev-sso infra or onboarding a dev box.
 - `just check` - fmt + clippy + build + docker builder stage. `just test`, `just typecheck`, `just lint`, `just fmt`.
 - `just build-docker` - both production images (`build-docker-export` extracts the api static binary). `just migrate` / `migrate-revert`.
-- `just create-release <major|minor|hotfix>` - bump `[workspace.package].version`, push the branch, open the release PR. The member-scoped `cargo update` that syncs `Cargo.lock` runs inside the pinned rust-builder image (dev boxes have no local cargo; online, to resolve the dunite-core git dep), NOT on the host; it is deliberately NOT `--workspace`, which would also roll the dunite git dep forward. Every git/fj step stays on the host, so the recipe needs docker (it fails fast if docker is missing).
+- `just create-release <major|minor|hotfix>` - bump `[workspace.package].version`, push the branch, open the release PR. Comes from `common.just`; `release_layout := "virtual-workspace"` in the root justfile is what selects the `[workspace.package]` bump and the `cargo update --workspace --offline` lock sync (workspace-scoped, so external dependencies including the dunite git dep are left where they are, per BUNYIP-426 F6). That `cargo` call runs on the HOST, so unlike the recipe it replaced it needs a host toolchain; moving it back into a container is BUNYIP-629.
 
 Production runs the published images via `compose.yml` (api + web + postgres,
 images under `dev.a8n.run/psa-systems-private/{bunyip-api,bunyip-web}`).
+
+## The `common` submodule
+
+The task runner's shared half is `psa-systems/common`, vendored as the `common`
+submodule and imported by the root `justfile` (`import 'common/common.just'`).
+It owns `pre-commit` and its two variants, `check-tree-ownership`,
+`install-hooks`, `create-release` and its layout variants, and `check-justfile`;
+the root justfile configures them through variables (`app`, `compose_service`,
+`pre_commit_prepare`, `clippy_args`, `compile_args`, `test_args`,
+`release_layout`) and must never redefine one. `pre_commit_prepare` is load
+bearing: it runs `ensure-oidc-keys` on the host so the daemon does not
+materialize the api service's `./secrets/oidc` bind source as root, which
+`check-tree-ownership` then fails the commit on (DEV-371). `check-justfile` fails the hook and the `Check` workflow if it
+does, which is the whole point of adopting it: a forked recipe silently stops
+receiving shared fixes. A fresh clone needs `git submodule update --init` or
+the import is a parse error, and CI checks out with `submodules: true`. Bumping
+common means updating the submodule and committing the new gitlink. The release
+CI half is the same split: `.forgejo/workflows/create-release.yml` is a caller
+stub for `psa-systems/common/.forgejo/workflows/create-release.yml@main`, which
+builds the changelog with `git log --oneline --first-parent` (one line per
+merged PR, not one per branch commit) and reads the org-level `FORGEJO_PAT`
+through `secrets: inherit`. `.forgejo/workflows/check.yml` stays private: it
+carries ~20 repo-specific guard steps (migrations, workflow shell and secrets,
+serde compatibility, brand/price/copy/theme literals, CSS currency, cache
+mounts and keys, publish triggers) plus the Nushell shell contract and the
+api-image builder stage, none of which the reusable check workflow can express.
 
 ## Toolchain / checks on toolchain-less dev boxes
 

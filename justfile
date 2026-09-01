@@ -6,43 +6,50 @@
 # (https://dev.a8n.run/psa-systems/dunite); it is anonymously readable, so
 # builds need no token, but an optional DUNITE_GIT_TOKEN is honoured.
 
-# List available recipes
+# The hook, release and tree-ownership recipes come from psa-systems/common,
+# vendored as the `common` submodule; run `git submodule update --init` in a
+# fresh clone or the import below is a parse error. Configure the shared
+# recipes through the variables here and never shadow them: `check-justfile`
+# fails the hook and CI when a common-owned recipe is redefined locally.
+set allow-duplicate-recipes := true
+
+# Names the service in common's image tags and cargo cache volumes.
+app := "bunyip"
+
+# compose.dev.yml's dev service is `api` (postgres/web are the other two), so
+# the shared pre-commit runs its cargo steps there rather than in `app`.
+compose_service := "api"
+
+# Host step run before the containerized checks. The api service bind-mounts
+# ./secrets/oidc, and an absent bind source is materialized by the daemon as
+# root, which then fails check-tree-ownership (DEV-371). ensure-oidc-keys
+# creates it on the host first; it is idempotent.
+pre_commit_prepare := "ensure-oidc-keys"
+
+# Keep the containerized pre-commit steps identical to the ones
+# .forgejo/workflows/check.yml runs, so the hook and CI agree.
+clippy_args := "--workspace --all-targets -- -D warnings"
+compile_args := "--workspace --all-targets --locked"
+# --all-targets (not --lib) so binary-crate tests run too: bunyip-web is
+# bin-only and `--lib` skips its whole suite (BUNYIP-271).
+test_args := "--workspace --all-targets"
+
+# The root manifest is virtual and the single version lives at
+# [workspace.package] version, inherited by every member with
+# `version.workspace = true`; release_manifest stays the root default.
+release_layout := "virtual-workspace"
+
+import 'common/common.just'
+
+# List available recipes. Keep FIRST: just picks the default recipe by source order.
 default:
     @just --list
-
-# -- Hooks ------------------------------------------------------------------
-
-# Install the git pre-commit hook (run once per fresh clone). Writes a stub at .git/hooks/pre-commit that execs `just pre-commit`. Bypass with `git commit --no-verify`.
-[group: 'hooks']
-install-hooks:
-    #!/usr/bin/env nu
-    let hook = ".git/hooks/pre-commit"
-    # Remove first so a leftover symlink from an older install does not get
-    # written through to its target file. `try` swallows the not-found case.
-    try { rm $hook }
-    "#!/usr/bin/env sh\nexec just pre-commit\n" | save $hook
-    ^chmod +x $hook
-    print $"Wrote ($hook) -> just pre-commit"
-
-# Run the same checks as .forgejo/workflows/check.yml inside the dev compose `api` container.
-[group: 'hooks']
-pre-commit: ensure-env
-    #!/usr/bin/env nu
-    print "\n[pre-commit] cargo fmt --all --check"
-    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo fmt --all --check
-    print "\n[pre-commit] cargo clippy --workspace --all-targets -- -D warnings"
-    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo clippy --workspace --all-targets -- -D warnings
-    print "\n[pre-commit] cargo build --workspace --all-targets --locked"
-    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo build --workspace --all-targets --locked
-    print "\n[pre-commit] cargo test --workspace --lib"
-    ^docker compose -f compose.dev.yml run --rm --no-deps api cargo test --workspace --lib
-    print "\n[pre-commit] all checks passed"
 
 # -- Checks ----------------------------------------------------------------------
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-theme-colors check-cache-mounts check-cache-keys check-publish-triggers check-build check-clippy check-fmt check-docker
+check: check-justfile check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-theme-colors check-cache-mounts check-cache-keys check-publish-triggers check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -608,132 +615,3 @@ dev-clean-all: dev-clean
     }
     docker buildx prune --force
     print "dev-clean-all: done"
-
-# -- Release ------------------------------------------------------------------
-
-# Create a release (major/minor/hotfix): bump [workspace.package].version, sync Cargo.lock via the pinned rust-builder image (dev boxes have no local cargo; git/fj stay on the host), push the branch, and open the release PR via fj. Needs docker.
-[group: 'release']
-create-release bump:
-    #!/usr/bin/env nu
-    let bump = "{{ bump }}"
-    let repo = "{{ justfile_directory() }}"
-
-    # The lock sync shells out to docker; fail fast if it is missing, before we create the
-    # release branch and leave a half-done release behind.
-    if (which docker | is-empty) {
-        print $"(ansi red)docker not found. create-release runs the cargo lock-sync in the rust-builder image (dev boxes have no local Rust toolchain); install docker or run the cargo update by hand.(ansi reset)"
-        exit 1
-    }
-
-    # Abort if there are uncommitted changes
-    let status = git status --porcelain | str trim
-    if ($status | is-not-empty) {
-        print $"(ansi red)Working tree is dirty. Please stash or commit your changes first.(ansi reset)"
-        exit 1
-    }
-
-    # Switch to main if not already there
-    let branch = git branch --show-current | str trim
-    if $branch != "main" {
-        print $"Switching from ($branch) to main..."
-        git checkout main
-    }
-
-    # Pull latest changes
-    git pull --rebase origin main
-
-    # Calculate next version. bunyip is a workspace, so the single source of
-    # truth is `[workspace.package].version` (not `package.version`).
-    let current = (open Cargo.toml | get workspace.package.version | split row "." | each { into int })
-    let next = match $bump {
-        "major" => [$"($current.0 + 1)" "0" "0"],
-        "minor" => [$"($current.0)" $"($current.1 + 1)" "0"],
-        "hotfix" => [$"($current.0)" $"($current.1)" $"($current.2 + 1)"],
-        _ => { print $"(ansi red)Usage: just create-release <major|minor|hotfix>(ansi reset)"; exit 1 }
-    }
-    let bare = ($next | str join ".")
-    let tag = $"v($bare)"
-    let release_branch = $"release/($tag)"
-
-    # Abort if the target tag already exists. A stale manifest version must never
-    # target an already-published release (BUNYIP-59).
-    let existing_tag = (do { ^git rev-parse -q --verify $"refs/tags/($tag)" } | complete)
-    if $existing_tag.exit_code == 0 {
-        print $"(ansi red)Tag ($tag) already exists. Bump past it or delete the stale tag first.(ansi reset)"
-        exit 1
-    }
-
-    # Create release branch, bump the workspace version, and commit
-    git checkout -b $release_branch
-    open Cargo.toml | update workspace.package.version $bare | to toml | collect | save --force Cargo.toml
-    git add Cargo.toml
-    # The workspace crates inherit version.workspace, so the bump changes their Cargo.lock
-    # entries; sync the lock in the same commit or CI's --locked build fails (BUNYIP-59).
-    # Name the members explicitly rather than `--workspace`, which would also roll every
-    # external dependency forward (BUNYIP-426 F6). Run cargo in the pinned rust-builder image
-    # (dev boxes have no local toolchain). Mirrors `check-container`'s mounts so the registry
-    # + target caches stay warm. Runs ONLINE so cargo can resolve the dunite-core git
-    # dependency (anon-readable, no token); an --offline run cannot check it out. The
-    # container runs as root, but Cargo.lock lands world-readable in the host-owned repo,
-    # so the host-side git add / commit / checkout all work.
-    let docker_args = [
-        "run" "--rm"
-        "-v" $"($repo):/work"
-        "-v" "dunite-check-cargo-registry:/usr/local/cargo/registry"
-        "-v" "bunyip-check-target:/work/target"
-        "-w" "/work"
-        "-e" "SQLX_OFFLINE=true"
-        "ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie"
-        "bash" "-c" "cargo update --package bunyip-api --package bunyip-web --package bunyip-domain --package bunyip-oci --package bunyip-oidc"
-    ]
-    ^docker ...$docker_args
-    if $env.LAST_EXIT_CODE != 0 {
-        print $"(ansi red)the cargo update lock-sync step in the rust-builder container failed (exit ($env.LAST_EXIT_CODE)).(ansi reset)"
-        exit 1
-    }
-    git add Cargo.lock
-    git commit --signoff --message $"Release ($tag)"
-
-    # Push release branch
-    git push --set-upstream origin $release_branch
-
-    # Open the release PR via fj. Body lives in a tempfile so the
-    # changelog can grow later without inline escaping pain.
-    let body_file = (mktemp --tmpdir --suffix .md)
-    [
-        $"Automated release PR for ($tag)."
-        ""
-        $"After merge, `.forgejo/workflows/create-release.yml` tags and publishes ($tag) to the Generic Packages registry."
-    ] | str join "\n" | save --force $body_file
-    let fj_result = (^fj --host dev.a8n.run pr create $"Release ($tag)" --body-file $body_file | complete)
-    rm $body_file
-    if $fj_result.exit_code != 0 {
-        print $"(ansi red)fj pr create failed(ansi reset)"
-        print $fj_result.stderr
-        exit 1
-    }
-
-    # `fj pr create` prints `created pull request #N: <title>` on success.
-    # Parse the number out and build the PR URL from `origin` so the user
-    # gets a clickable link instead of just the fj line.
-    let pr_num = (
-        $fj_result.stdout
-        | str trim
-        | parse --regex 'created pull request #(?P<num>\d+)'
-        | get num.0?
-    )
-    let remote = (git remote get-url origin | str trim)
-    let base_url = if ($remote | str starts-with "ssh://") {
-        $remote | str replace "ssh://git@" "https://" | str replace "git.a8n.run" "dev.a8n.run" | str replace ".git" ""
-    } else {
-        $remote | str replace --regex "git@([^:]+):" "https://$1/" | str replace "git.a8n.run" "dev.a8n.run" | str replace ".git" ""
-    }
-    print $"(ansi green)Pushed ($release_branch)(ansi reset)"
-    if ($pr_num | is-not-empty) {
-        print $"PR: ($base_url)/pulls/($pr_num)"
-    } else {
-        # fj output format drifted; fall back to whatever it said.
-        print $"fj output: ($fj_result.stdout | str trim)"
-    }
-    print $"After merging, the create-release workflow will tag and release ($tag) automatically."
-
