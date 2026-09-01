@@ -71,6 +71,24 @@ jobs:
           # Full history so the migration-immutability gate can diff against the
           # merge-base with origin/main (BUNYIP-293).
           fetch-depth: 0
+          # The root justfile opens with `import 'common/common.just'`, so an
+          # absent submodule is a parse error and every `just` step below fails.
+          submodules: true
+
+      - name: Validate the justfile
+        # First, because it is the cheapest step and its failure invalidates
+        # every local recipe (`just check`, `just pre-commit`, the git hook).
+        # `--summary` parses the justfile and its imports and prints the recipe
+        # names without executing a body; `--evaluate` is not used, it resolves
+        # assignments and can run backtick expressions.
+        run: just --summary
+
+      - name: Check for shadowed common recipes
+        # The hook, tree-ownership and release recipes come from
+        # common/common.just, and `set allow-duplicate-recipes` lets a local
+        # copy silently win. This is what stops the fork coming back
+        # (BUNYIP-567).
+        run: just check-justfile
 
       - name: Check migration version numbers
         # Unique + strictly increasing migration versions; blocks the suffix

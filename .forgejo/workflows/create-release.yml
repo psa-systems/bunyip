@@ -1,18 +1,22 @@
 ---
 
-# Create a Forgejo release when a release/* branch is merged to main.
-# Extracts the version from the branch name, generates a changelog from
-# git log between the previous tag and HEAD, and creates the release
-# (with tag) via the Forgejo API. Pushing the tag re-triggers build-api.yml
-# and build-web.yml (their `tags: ['v*']` triggers), which publish the
-# version-tagged OCI images.
+# Create a Forgejo release when a release/* branch is merged to main, by
+# calling the reusable workflow in psa-systems/common.
 #
-# Paired with the `just create-release <major|minor|hotfix>` recipe in the
-# justfile. The recipe pushes `release/v<version>` and opens a PR via `fj`;
-# this workflow tags and publishes once that PR merges.
+# Everything the release does - deriving the tag from the branch name, building
+# the changelog, and posting to the releases API - lives in
+# psa-systems/common/.forgejo/workflows/create-release.yml. The caller keeps
+# only what Forgejo cannot read from the called workflow: the trigger, the
+# merged/`release/v` gate, `runs-on`, and `secrets: inherit`.
 #
-# Secret: PSA_SYSTEMS_PRIVATE_PACKAGE_PAT needs `write:repository` scope to
-# call the /api/v1/repos/.../releases endpoint.
+# Paired with the `just create-release <major|minor|hotfix>` recipe, which also
+# comes from common/common.just. The recipe pushes `release/v<version>` and
+# opens the PR; this workflow tags and publishes once that PR merges. Pushing
+# the tag re-triggers build-api.yml and build-web.yml (their `tags: ['v*']`
+# triggers), which publish the version-tagged OCI images.
+#
+# Secret: the reusable workflow reads FORGEJO_PAT, which needs
+# `write:repository` scope to call the /api/v1/repos/.../releases endpoint.
 name: Create release
 
 on:
@@ -24,86 +28,23 @@ on:
 
 jobs:
   create-release:
-    name: Create release from merged PR
     if: >-
       github.event.pull_request.merged == true
       && startsWith(github.event.pull_request.head.ref, 'release/v')
-    # Base label: this job compiles nothing. It runs nu/git and one `http post`
-    # to the Forgejo release API, all present in base (BUNYIP-444).
+    uses: psa-systems/common/.forgejo/workflows/create-release.yml@main
+    # Base label: the called job runs git and two HTTP calls, it compiles
+    # nothing. It has to be set here as well as in the called workflow, because
+    # this Forgejo instance does not expand a cross-repo reusable `uses:` unless
+    # the label resolves in the caller's context (BUNYIP-444 for the label
+    # choice; psa-systems/common README "Release workflow" for the placement).
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
-    permissions:
-      contents: write
-
-    # Every run: step in this repo executes under Nushell (BUNYIP-489).
-    # Declared once per job so a new step cannot silently inherit Bash;
-    # scripts/check-workflow-shell.nu gates it.
+    # A called workflow receives no secret it is not passed, and the reusable
+    # workflow needs FORGEJO_PAT.
+    secrets: inherit
+    # This job runs no step of its own, so the Nushell rule (BUNYIP-489) is
+    # vacuous here; declared anyway so the gate stays absolute and a step added
+    # to a caller job can never inherit Bash. The called workflow declares its
+    # own shell.
     defaults:
       run:
         shell: nu {0}
-
-    steps:
-      - name: Clone the repository
-        uses: https://code.forgejo.org/actions/checkout@v5
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.PSA_SYSTEMS_PRIVATE_PACKAGE_PAT }}
-
-      - name: Create release
-        env:
-          FORGEJO_TOKEN: ${{ secrets.PSA_SYSTEMS_PRIVATE_PACKAGE_PAT }}
-          # BUNYIP-236: pass `head.ref` via an env var instead of interpolating
-          # `${{ github.event.pull_request.head.ref }}` directly into the
-          # script body. Forgejo Actions expand `${{ ... }}` into the script
-          # TEXT before the shell runs, so a branch named
-          # `release/v1.0.0"; ^rm -rf /; #` would inject literal shell into
-          # nushell and execute under this workflow's `contents: write` token.
-          # Reading from `$env.PR_BRANCH` keeps the value as data the runtime
-          # binds, not text the shell parses. Mirror of the PMS-500 fix.
-          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
-        run: |
-          let branch = $env.PR_BRANCH
-          # BUNYIP-236 defence in depth: the job-level `if:` already requires
-          # `head.ref` to startsWith `release/v`, but startsWith accepts a
-          # smuggled-suffix branch like `release/v1"; ...`. Reject any value
-          # that does not match strict semver before any downstream command
-          # uses it. The downstream uses (git describe / git log / http post)
-          # all take the value as a data arg now (env-mapped, not
-          # interpolated), so this second check is belt-and-braces - if the
-          # env-var hardening above were ever reverted, this still keeps the
-          # injection vector closed.
-          if not ($branch =~ '^release/v[0-9]+\.[0-9]+\.[0-9]+$') {
-              error make { msg: $"Refusing release for non-semver branch ($branch)" }
-          }
-          let tag = ($branch | str replace "release/" "")
-
-          # Build changelog from commits since the previous tag
-          let prev_tag = (do { ^git describe --tags --abbrev=0 HEAD^ } | complete)
-          let changelog = if $prev_tag.exit_code == 0 {
-            let prev = ($prev_tag.stdout | str trim)
-            ^git log --oneline $"($prev)..HEAD" | str trim
-          } else {
-            # No previous tag - include all commits
-            ^git log --oneline | str trim
-          }
-
-          let body = $"## Changelog\n\n($changelog)"
-
-          let api_url = $"($env.GITHUB_SERVER_URL)/api/v1/repos/($env.GITHUB_REPOSITORY)/releases"
-          let payload = {
-            tag_name: $tag,
-            target_commitish: "main",
-            name: $tag,
-            body: $body,
-            draft: false,
-            prerelease: false,
-          }
-
-          let response = (
-            http post
-              --content-type application/json
-              --headers [Authorization $"token ($env.FORGEJO_TOKEN)"]
-              $api_url
-              $payload
-          )
-
-          print $"Release ($tag) created: ($response.html_url)"

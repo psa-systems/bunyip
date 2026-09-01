@@ -64,9 +64,11 @@ Contributor-facing conventions for AI agents working in this repository are in [
 ## Contributing
 
 - Work happens in `feat/` / `fix/` / `chore/<short-descriptive-name>` branches off `main`; the merge target is `main` via PR.
+- Clone with `git clone --recurse-submodules`, or run `git submodule update --init` in an existing clone: the root `justfile` imports the shared recipes from the `common` submodule ([psa-systems/common](https://dev.a8n.run/psa-systems/common)), and without it every `just` command is a parse error.
 - `just check` runs fmt + clippy + build + the docker builder stage; dev boxes without a local Rust toolchain use `just check-container`.
+- `just install-hooks` writes the git pre-commit hook; the hook and `just pre-commit` come from `common` and run the same fmt + clippy + build + test sequence CI does, inside the `compose.dev.yml` `api` service.
 - Dev container names follow `dev-bunyip-<service>-${USER}` on network `dev-bunyip-private-${USER}`; the production stack (`compose.yml`) drops the `dev-` prefix.
-- Releases: `just create-release <major|minor|hotfix>` bumps the workspace version and opens a release PR; merging it tags `vX.Y.Z` and publishes the images (see [`.forgejo/workflows/create-release.yml`](.forgejo/workflows/create-release.yml)).
+- Releases: `just create-release <major|minor|hotfix>` bumps the workspace version and opens a release PR; merging it tags `vX.Y.Z` and publishes the images. Both halves come from `common` - the recipe from `common/common.just`, and [`.forgejo/workflows/create-release.yml`](.forgejo/workflows/create-release.yml) as a caller stub for the reusable workflow that tags and writes the release notes. The recipe's `Cargo.lock` sync runs host-side `cargo`, so cut releases from a box with a Rust toolchain.
 - CI reads a fixed set of repository-level Forgejo Actions secrets and variables; the authoritative list is in [`e2e/README.md`](e2e/README.md#forgejo-actions-secrets-and-variables), and values are never recorded in the repo.
 
 ## Development happens on Forgejo
