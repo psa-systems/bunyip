@@ -21,6 +21,14 @@
 #                               deleted SPA's /config.json and survived as
 #                               container passthrough no process read, two of
 #                               them aborting `compose up` with a `:?` marker.
+#   palette vars (BUNYIP-568)   the theme CSS and the two browser-chrome colours
+#                               are columns of the admin-managed branding
+#                               record. BUNYIP-560 kept the three variables as
+#                               bootstrap defaults for one release; removing
+#                               them with the plumbing that read them leaves one
+#                               source for the palette, because a variable that
+#                               silently loses to a database row is a support
+#                               call waiting to happen.
 #
 # Excluded paths:
 #   bunyip-api/migrations/  committed migrations are immutable (sqlx checksums
@@ -71,6 +79,20 @@ def main [] {
                 "variable of that family it reads. If bunyip-web ever becomes a relying"
                 "party in its own right, add the variables back WITH the code that reads"
                 "them, and drop the entry here."
+            ]
+        }
+        {
+            pattern: 'BRAND_THEME_(CSS|COLOR_LIGHT|COLOR_DARK)',
+            hint: 'the palette is the branding record, not the environment (BUNYIP-568)',
+            remedy: [
+                "The theme CSS and the two browser-chrome colours are columns of the"
+                "admin-managed branding record, edited on the admin Branding page and"
+                "fetched by bunyip-web from GET /v1/branding. BUNYIP-560 kept these three"
+                "variables as bootstrap defaults for one release; BUNYIP-568 removed them"
+                "with the Config fields and the web-kit shell cells that read them. An"
+                "empty column omits its markup, so nothing is compiled in and nothing"
+                "falls back to the environment. Set the palette on the admin Branding"
+                "page instead."
             ]
         }
     ]

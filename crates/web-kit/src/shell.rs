@@ -92,21 +92,6 @@ pub fn orgs_enabled() -> bool {
     ORGS_ENABLED.load(Ordering::Relaxed)
 }
 
-/// BUNYIP-500: optional per-skin theme override (raw CSS custom-property
-/// declarations). Set once from `main`; emitted into a `:root` block in the
-/// document head. Unset (the default) emits nothing, so the tokens fall back to
-/// the default palette.
-static SKIN_THEME_CSS: OnceLock<Option<String>> = OnceLock::new();
-
-/// Install the per-skin theme override. Called once from `main`. Idempotent.
-pub fn install_skin_theme_css(css: Option<String>) {
-    let _ = SKIN_THEME_CSS.set(css);
-}
-
-pub fn skin_theme_css() -> Option<&'static str> {
-    SKIN_THEME_CSS.get().and_then(Option::as_deref)
-}
-
 /// Absolute URL of the committed share image, installed once from the
 /// consumer's config. The branding record wins when it carries an uploaded
 /// image; this is what an unbranded deployment falls back to, so the Open
@@ -122,35 +107,16 @@ pub fn default_share_image() -> Option<&'static str> {
     DEFAULT_SHARE_IMAGE.get().and_then(Option::as_deref)
 }
 
-/// BUNYIP-549: the two `<meta name="theme-color">` values (light, dark) that
-/// paint the browser chrome. Bootstrap defaults only: the consumer resolves the
-/// running value (e.g. from a brand record) and omits the meta when both the
-/// record and these are empty, rather than painting the chrome a literal colour.
-static THEME_COLOR_LIGHT: OnceLock<Option<String>> = OnceLock::new();
-static THEME_COLOR_DARK: OnceLock<Option<String>> = OnceLock::new();
-
-/// Install the bootstrap browser-chrome colours. Called once from `main`.
-/// Idempotent.
-pub fn install_theme_colors(light: Option<String>, dark: Option<String>) {
-    let _ = THEME_COLOR_LIGHT.set(light);
-    let _ = THEME_COLOR_DARK.set(dark);
-}
-
-pub fn bootstrap_theme_color_light() -> Option<&'static str> {
-    THEME_COLOR_LIGHT.get().and_then(Option::as_deref)
-}
-
-pub fn bootstrap_theme_color_dark() -> Option<&'static str> {
-    THEME_COLOR_DARK.get().and_then(Option::as_deref)
-}
-
-/// BUNYIP-560: resolve one palette value: the record value, else the bootstrap
-/// default, else nothing at all. Pure, so the omission rule is unit-testable.
-pub fn palette_value<'a>(record: &'a str, bootstrap: Option<&'a str>) -> Option<&'a str> {
-    if !record.is_empty() {
-        Some(record)
+/// BUNYIP-560/568: resolve one palette value (a `theme-color` meta, the `:root`
+/// ramp): the brand record's value when non-empty, else nothing at all. There is
+/// no second source and no compiled-in colour, so an unbranded deployment omits
+/// the markup rather than painting one product's palette. Pure, so the omission
+/// rule is unit-testable.
+pub fn palette_value(record: &str) -> Option<&str> {
+    if record.is_empty() {
+        None
     } else {
-        bootstrap.filter(|v| !v.is_empty())
+        Some(record)
     }
 }
 

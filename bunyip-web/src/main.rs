@@ -87,16 +87,9 @@ async fn main() {
     // BUNYIP-329: gate the Community nav entry on whether a Let's Chat instance
     // is configured (BUNYIP_COMMUNITY_URL).
     views::layout::install_community_enabled(cfg.community_enabled());
-    // BUNYIP-500: per-skin brand theme override (BRAND_THEME_CSS); None keeps
-    // the default palette.
-    views::layout::install_skin_theme_css(cfg.theme_css.clone());
-    // BUNYIP-549/560: browser-chrome colours (BRAND_THEME_COLOR_LIGHT /
-    // _DARK), bootstrap defaults for a database that has never been branded.
-    // The branding record wins; with neither set the meta is omitted.
-    views::layout::install_theme_colors(
-        cfg.theme_color_light.clone(),
-        cfg.theme_color_dark.clone(),
-    );
+    // BUNYIP-568: nothing to install for the palette. The theme CSS and the two
+    // browser-chrome colours come from the branding record fetched below, and
+    // an empty field omits its markup.
     // The share image an unbranded deployment falls back to. The branding
     // record still wins when an admin has uploaded one.
     views::layout::install_default_share_image(cfg.default_share_image());

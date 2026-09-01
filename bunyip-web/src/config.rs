@@ -2,11 +2,10 @@
 //! read `window.__RUNTIME_CONFIG__`), this is a normal server process, so plain
 //! env vars are the source of truth.
 
-// BUNYIP-560: the compiled-in `#2f4e2e` / `#161a16` pair is gone. The palette
-// is a field of the admin-managed branding record; `BRAND_THEME_COLOR_LIGHT` /
-// `_DARK` below are bootstrap defaults for a database that has never been
-// branded, and with neither set the `theme-color` meta is OMITTED rather than
-// painting every deployment's browser chrome one product's green.
+// BUNYIP-560/568: the palette is not configuration. The theme CSS and the two
+// browser-chrome colours are fields of the admin-managed branding record and
+// have no environment variable behind them; an unset field OMITS its markup
+// rather than painting every deployment's browser chrome one product's green.
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -59,28 +58,13 @@ pub struct Config {
     /// `TRUSTED_PROXY_CIDR` (comma-separated), analogous to bunyip-api's own
     /// `TRUSTED_PROXY_CIDR`. Empty = trust no forwarding headers.
     pub trusted_proxies: Vec<ipnetwork::IpNetwork>,
-    /// BUNYIP-500: optional theme override. Raw CSS custom-property
-    /// declarations (e.g. `--skin-primary-500: #123456; ...`) emitted into a
-    /// `:root { ... }` block in the document head, overriding the default brand
-    /// ramp the `@theme` tokens fall back to. `BRAND_THEME_CSS`; `None`
-    /// (default) emits nothing, so the default palette is unchanged.
-    ///
-    /// BUNYIP-560: this is a BOOTSTRAP DEFAULT only. The palette is a field of
-    /// the admin-managed branding record, which wins whenever it is set; the
-    /// variable answers solely for a database that has never been branded and
-    /// is removed in 0.16.0 (BUNYIP-568; `docs/configuration.md`).
-    pub theme_css: Option<String>,
-    /// BUNYIP-549: the `<meta name="theme-color">` value for the light scheme
-    /// (the browser chrome: Android address bar, iOS status bar, PWA splash).
-    /// `BRAND_THEME_COLOR_LIGHT`.
-    ///
-    /// BUNYIP-560: bootstrap default only, like [`Config::theme_css`], and
-    /// removed with it. `None` and an empty record field mean the meta is
-    /// omitted; no colour is compiled in.
-    pub theme_color_light: Option<String>,
-    /// BUNYIP-549: the dark-scheme twin of [`Config::theme_color_light`].
-    /// `BRAND_THEME_COLOR_DARK`.
-    pub theme_color_dark: Option<String>,
+    // BUNYIP-568: `theme_css`, `theme_color_light` and `theme_color_dark` are
+    // gone, along with the three brand-theme variables that fed them. They were
+    // the one-release bootstrap defaults BUNYIP-560 left behind when it moved
+    // the palette into the admin-managed branding record; the record is now the
+    // only source, so a rebrand is one admin edit and no deployment can hold a
+    // second palette that silently loses to the row.
+    // `scripts/check-no-retired-env.nu` holds the variable names out.
     // BUNYIP-561: `app_name` (`APP_NAME`) and `brand_description`
     // (`BRAND_DESCRIPTION`) are gone. The product name, tagline, meta
     // description and Open Graph image are the admin-managed branding record
@@ -158,9 +142,6 @@ impl Config {
             // inbound X-Forwarded-For the BFF trusts when resolving the
             // end-user IP. Same comma-separated CIDR form bunyip-api parses.
             trusted_proxies: parse_trusted_proxies(&var("TRUSTED_PROXY_CIDR").unwrap_or_default()),
-            theme_css: var("BRAND_THEME_CSS"),
-            theme_color_light: var("BRAND_THEME_COLOR_LIGHT"),
-            theme_color_dark: var("BRAND_THEME_COLOR_DARK"),
             csp: CspConfig {
                 connect_src: parse_csp_hosts(&var("CSP_CONNECT_SRC").unwrap_or_default()),
                 form_action: parse_csp_hosts(&var("CSP_FORM_ACTION").unwrap_or_default()),

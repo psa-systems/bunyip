@@ -333,8 +333,7 @@ The bootstrap-default families are in the same position: `AUTO_BAN_*`, `RATE_LIM
 `TIER_*` variables seed a fresh database and are not passed either, so on a deployed instance the admin pages are the
 only way to change them.
 
-bunyip-web's own variables (below) are passed by the `web` service, except `BRAND_THEME_CSS`, `BRAND_THEME_COLOR_LIGHT`,
-`BRAND_THEME_COLOR_DARK`, `CSP_CONNECT_SRC` and `CSP_FORM_ACTION`.
+bunyip-web's own variables (below) are passed by the `web` service, except `CSP_CONNECT_SRC` and `CSP_FORM_ACTION`.
 
 ## Settings that are not environment variables
 
@@ -419,10 +418,10 @@ Resolution, stated once:
 - `tagline`, `meta_description` and `og_image_url` are the row value when non-empty, otherwise **empty**, and an empty
   value means the markup is **omitted**: no `<meta name="description">`, no `og:description`, no
   `og:image`, no tagline line, and no title suffix when `brand_name` is empty. No literal is ever substituted.
-- `theme_css`, `theme_color_light` and `theme_color_dark` are the row value when non-empty, otherwise the matching
-  **bootstrap** environment variable (`BRAND_THEME_CSS`, `BRAND_THEME_COLOR_LIGHT`, `BRAND_THEME_COLOR_DARK`), otherwise
-  **omitted**: no `:root` block and no `theme-color` meta. The
-  `#2f4e2e` / `#161a16` defaults that used to be compiled into bunyip-web are gone (BUNYIP-560).
+- `theme_css`, `theme_color_light` and `theme_color_dark` are the row value when non-empty, otherwise **omitted**: no
+  `:root` block and no `theme-color` meta. There is no environment variable and no compiled-in colour behind them; the
+  `#2f4e2e` / `#161a16` defaults bunyip-web used to carry are gone (BUNYIP-560), as are the three bootstrap variables
+  that briefly replaced them (BUNYIP-568).
 - The **mark** falls back to a built-in glyph drawn in the theme's own colour (a shape, not artwork). The **favicon**
   falls back to the icon set committed under
   `bunyip-web/assets/`, root `/favicon.ico` included. The **mascot** falls back to the hero illustration committed under
@@ -437,10 +436,10 @@ once at startup (before it binds) and then every **60 seconds**, so an admin edi
 interval. A startup fetch failure logs at
 `error` and serves unbranded chrome; a later refresh failure logs at `warn` and keeps the last good values.
 
-bunyip-web has **no** brand-text environment variables. `APP_NAME` and
+bunyip-web has **no** brand-text and **no** palette environment variables. `APP_NAME` and
 `BRAND_DESCRIPTION` were removed from it (BUNYIP-561). The brand ASSETS (mark, favicon set, mascot art) and the palette
-are columns of this record too (BUNYIP-560); the three `BRAND_THEME_*` variables survive as bootstrap defaults for one
-release and are **removed in 0.16.0** (tracked in BUNYIP-568).
+are columns of this record too (BUNYIP-560), and the three bootstrap variables that briefly backed the palette were
+removed with the plumbing that read them (BUNYIP-568).
 
 ### Email (`email_config`, admin page: Email)
 
@@ -489,20 +488,15 @@ deployment configuration, and are listed here only so the boundary is explicit.
 
 bunyip-web is a separate binary with its own configuration (`bunyip-web/src/config.rs`): `BUNYIP_BIND_ADDR`,
 `BUNYIP_API_URL`, `BUNYIP_API_PUBLIC_ORIGIN`, `BUNYIP_OIDC_ISSUER`, `BUNYIP_APP_DOMAIN`, `BUNYIP_COMMUNITY_URL`,
-`TRUSTED_PROXY_CIDR`, `BRAND_THEME_CSS`, `BRAND_THEME_COLOR_LIGHT`, `BRAND_THEME_COLOR_DARK`, `CSP_CONNECT_SRC`,
-`CSP_FORM_ACTION`, `RUST_LOG`. Every one has a working default. It holds no secrets and reads none of the api variables
-above, so the api's inventory does not cover it.
+`TRUSTED_PROXY_CIDR`, `CSP_CONNECT_SRC`, `CSP_FORM_ACTION`, `RUST_LOG`. Every one has a working default. It holds no
+secrets and reads none of the api variables above, so the api's inventory does not cover it.
 
 It has no `APP_NAME` and no `BRAND_DESCRIPTION`: the product name, tagline, meta description and Open Graph image are
 the admin-managed `branding` record above (BUNYIP-561), fetched from bunyip-api rather than read from the environment.
 
-`BRAND_THEME_COLOR_LIGHT` and `BRAND_THEME_COLOR_DARK` are the two `<meta name="theme-color">` values that paint the
-browser chrome (Android address bar, iOS status bar, PWA splash) under `prefers-color-scheme: light` and `dark`.
-`BRAND_THEME_CSS` recolours every in-page token, so a deployment sets these alongside it or the chrome does not follow
-the rest of the palette (BUNYIP-549).
-
-All three are **bootstrap defaults only** (BUNYIP-560). The palette is part of the admin-managed `branding` record
-above, which wins whenever its field is set; these variables answer solely for a database that has never been branded,
-and they carry **no compiled-in default**, so with neither source set the `:root` block and the `theme-color` metas are
-omitted rather than painted one product's green. They are kept for one release and *removed in 0.16.0** (BUNYIP-568):
-set the palette on the admin Branding page instead.
+It has no palette variables either (BUNYIP-568). The `:root` custom-property block that recolours every in-page token
+and the two `<meta name="theme-color">` values that paint the browser chrome (Android address bar, iOS status bar, PWA
+splash) under `prefers-color-scheme: light` and `dark` are the `theme_css`, `theme_color_light` and `theme_color_dark`
+columns of that same record, so one admin edit moves the page and the chrome together (BUNYIP-549 / BUNYIP-560). There
+is **no compiled-in default** behind them: an empty column means the `:root` block and the `theme-color` metas are
+omitted rather than painted one product's green. Set the palette on the admin Branding page.
