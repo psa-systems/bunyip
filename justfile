@@ -81,11 +81,11 @@ check-security:
 check-stripe-env:
     ./scripts/check-no-stripe-env.nu
 
-# Gate the single at-rest key: no retired per-consumer encryption-key env names
-# (BUNYIP-483).
+# Gate the retired env names: the per-consumer encryption keys (BUNYIP-483) and
+# the dead BUNYIP_OIDC_* relying-party variables (BUNYIP-539).
 [group: 'checks']
 check-key-env:
-    ./scripts/check-no-legacy-key-env.nu
+    ./scripts/check-no-retired-env.nu
 
 # Gate that Argon2 never runs on an actix worker: every hash and verify goes
 # through services::argon2_offload (BUNYIP-553).
@@ -323,8 +323,8 @@ dev-sso: ensure-env ensure-oidc-keys
 # carry ${USER} in their redirect URIs and cannot live in a migration, so this
 # recipe upserts them against the running dev DB. Idempotent (ON CONFLICT DO
 # UPDATE keeps the redirect URIs current if your username or hosts change).
-# Run after `just dev-sso`; paste the printed HUB client_id into .env as
-# BUNYIP_OIDC_CLIENT_ID and the SPA client_id into mokosh-apps/.env.
+# Run after `just dev-sso`. bunyip needs no client_id of its own; paste the
+# printed SPA client_id into mokosh-apps/.env.
 [group: 'dev']
 register-dev-clients:
     #!/usr/bin/env nu
@@ -364,7 +364,7 @@ register-dev-clients:
                 audience = EXCLUDED.audience;"
     ^docker exec $pg psql --username bunyip --dbname bunyip --quiet --command $sql
     print ""
-    print $"  hub  \(BUNYIP_OIDC_CLIENT_ID in bunyip/.env\):        ($hub_id)"
+    print $"  hub  \(bunyip-web-dev, registered in bunyip-api\):     ($hub_id)"
     print $"  SPA  \(MOKOSH_OIDC_CLIENT_ID in mokosh-apps/.env\):   ($spa_id)"
 
 # Stop the dev stack.

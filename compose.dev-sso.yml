@@ -11,8 +11,8 @@
 #     Traefik terminates) AND for the OIDC OP on ${USER}-bunyip-api.a8n.run
 #     (the SPA + hub reach /oauth2/* + /.well-known/* there).
 #   - The shared `network-traefik-public` network is joined.
-#   - BUNYIP_OIDC_* are passed as runtime CONTAINER env. bunyip-web is an
-#     Axum SSR server that reads them at startup (see bunyip-web/src/config.rs).
+#   - BUNYIP_OIDC_ISSUER is passed as runtime CONTAINER env. bunyip-web is an
+#     Axum SSR server that reads it at startup (see bunyip-web/src/config.rs).
 #
 # bunyip-as-OP cutover (runbook 3.8 / scaffold step 8): bunyip-api IS the
 # issuer. bunyip-web and the mokosh SPA are both relying parties of it, so
@@ -25,9 +25,6 @@ services:
     ports: !reset []
     environment:
       BUNYIP_OIDC_ISSUER: ${BUNYIP_OIDC_ISSUER:?BUNYIP_OIDC_ISSUER missing - copy .env.example to .env and fill in}
-      BUNYIP_OIDC_CLIENT_ID: ${BUNYIP_OIDC_CLIENT_ID:?BUNYIP_OIDC_CLIENT_ID missing - run `just register-dev-clients` (registers the hub + SPA clients in bunyip-api) and paste the hub UUID into .env}
-      BUNYIP_OIDC_REDIRECT_URI: ${BUNYIP_OIDC_REDIRECT_URI:?BUNYIP_OIDC_REDIRECT_URI missing - copy .env.example to .env}
-      BUNYIP_OIDC_SCOPES: ${BUNYIP_OIDC_SCOPES:-openid email offline_access}
     networks:
       - private
       - traefik-public
