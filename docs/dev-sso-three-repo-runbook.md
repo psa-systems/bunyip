@@ -16,7 +16,7 @@ in production (you cannot do that on `localhost`).
 | Repo | Role | dev-sso hostname (user `long`) | Upstream port |
 | --- | --- | --- | --- |
 | `bunyip` | SaaS hub / account + billing UI; **its own OIDC issuer** (new) | `long-bunyip.a8n.run` + `long-bunyip-registry.a8n.run` (OCI registry, sec 9) | web 4400; api 4401 internal, registry 18081 via Traefik |
-| `mokosh-server` | Identity provider (the OIDC issuer the SPA still points at) | `long-mokosh-api.a8n.run` | 4301 |
+| `mokosh-server` | Resource Server: validates the `at+jwt` bunyip-api mints (see 3.8) | `long-mokosh-api.a8n.run` | 4301 |
 | `mokosh-apps` | The PSA client SPA (relying party) | `long-mokosh.a8n.run` | 4301 |
 
 The hostnames follow `<username>-<service>.a8n.run`. Username comes from `${USER}`.
@@ -57,27 +57,29 @@ project name is deliberately left at the repo default; overriding it would make
 compose treat the shared external network as foreign and refuse to start (see the
 comment block in each `compose.dev-sso.yml`).
 
-### 3.2 Why you register the OIDC client once (`just register-bunyip-client`)
-OIDC's authorization-code + PKCE flow requires the **relying party** (the SPA,
-`bunyip-web`) to be **pre-registered with the identity provider** (`mokosh-server`)
-before it can ask for a code. `register-bunyip-client` inserts a row into
-mokosh-server's `oauth_clients` table:
+### 3.2 Why you register the OIDC clients once (`just register-dev-clients`)
+OIDC's authorization-code + PKCE flow requires each **relying party** to be
+**pre-registered with the identity provider** (`bunyip-api`, the OP) before it can
+ask for a code. `register-dev-clients` upserts two rows into bunyip-api's
+`oauth_clients` table, both `TYPE=public` / `AUTH_METHOD=none` (PKCE, no client
+secret; a browser client cannot keep one):
 
-- `MOKOSH_CLIENT_NAME=bunyip-web`, `TYPE=public`, `AUTH_METHOD=none` -> a
-  **public client using PKCE** (no client secret; a browser SPA cannot keep one).
-- `REDIRECT_URIS=https://<user>-bunyip.a8n.run/auth/callback`,
-  `GRANT_TYPES=authorization_code refresh_token`, `AUDIENCE=<mokosh-api origin>`.
+- `bunyip-web-dev` (`...d1`), redirect `https://<user>-bunyip.a8n.run/auth/callback`,
+  audience `https://<user>-bunyip-api.a8n.run`.
+- `mokosh-apps-dev` (`...d2`), redirect `https://<user>-mokosh.a8n.run/auth/callback`,
+  audience `https://<user>-mokosh-api.a8n.run`.
 
-It prints a **client_id UUID**, which you paste into bunyip's `.env` as
-`BUNYIP_OIDC_CLIENT_ID`. The SPA then sends that UUID on every `/oauth2/authorize`
-request so the IdP knows which client is asking and which redirect_uri is allowed.
+The mokosh SPA sends its UUID on every `/oauth2/authorize` request so the OP knows
+which client is asking and which redirect_uri is allowed, which is why the printed
+SPA UUID goes into `mokosh-apps/.env`. **bunyip needs no client_id of its own**:
+`bunyip-web` is server-rendered and signs in against bunyip-api's own
+`/v1/auth/*` endpoints, so nothing on the bunyip side reads a client id.
 
-Why **once**: the registration is a **persisted DB row** in mokosh-server's
-Postgres - it survives restarts. The recipe is **idempotent on the client name**,
-so re-running is safe but unnecessary. The same UUID is intended to be reused in
-every mokosh-server instance (so one bunyip image works against staging + prod),
-which is why bunyip has no runtime fallback for `client_id` - an unset one is a
-hard configuration error, not something to invent.
+Why **once**: the registrations are **persisted DB rows** in bunyip-api's Postgres -
+they survive restarts. The recipe is **idempotent** (`ON CONFLICT DO UPDATE` keeps
+the redirect URIs current if your username or hosts change), so re-running is safe.
+The UUIDs are fixed constants rather than generated, so one mokosh-apps `.env`
+works against every dev box.
 
 ### 3.3 Why two Traefik entrypoints, and `nebula-secure`
 desktop-02's `network-traefik` defines `web-secure` (:20443, bound to the LAN IP)
@@ -141,7 +143,7 @@ cd /home/long/bunyip; just dev-sso
 
 # 2. Register the two dev OIDC clients in bunyip-api (idempotent; prints UUIDs)
 just register-dev-clients
-#    -> hub UUID  -> /home/long/bunyip/.env as BUNYIP_OIDC_CLIENT_ID
+#    -> hub UUID  -> nothing to paste; bunyip reads no client_id
 #    -> SPA UUID  -> /home/long/mokosh-apps/.env as MOKOSH_OIDC_CLIENT_ID
 
 # 3. The Resource Server (mokosh-server)
@@ -149,16 +151,11 @@ cd /home/long/mokosh-server; just dev-sso
 
 # 4. The client SPA
 cd /home/long/mokosh-apps; just dev-sso
-
-# 5. Re-up the hub so it reads the client_id you just set
-cd /home/long/bunyip; just dev-sso
 ```
 
 bunyip `.env` must have (resolve `${USER}` to your username):
 ```
 BUNYIP_OIDC_ISSUER=https://long-bunyip-api.a8n.run
-BUNYIP_OIDC_CLIENT_ID=b0000000-0000-4000-8000-0000000000d1
-BUNYIP_OIDC_REDIRECT_URI=https://long-bunyip.a8n.run/auth/callback
 ```
 mokosh-apps `.env` needs `MOKOSH_OIDC_CLIENT_ID=b0000000-0000-4000-8000-0000000000d2`; mokosh-server reads the RS env from its compose overlay (`OIDC_ISSUER` + `OIDC_AUDIENCE` + the `extra_hosts` pin).
 

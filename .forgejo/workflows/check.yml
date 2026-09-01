@@ -128,10 +128,11 @@ jobs:
         # removed in BUNYIP-482.
         run: ./scripts/check-no-stripe-env.nu
 
-      - name: Check the at-rest key stays single
-        # No retired per-consumer encryption-key env names: TOTP, Stripe and
-        # SMTP secrets are all protected by APP_ENCRYPTION_KEY (BUNYIP-483).
-        run: ./scripts/check-no-legacy-key-env.nu
+      - name: Check the retired env names stay gone
+        # The at-rest key stays single - TOTP, Stripe and SMTP secrets are all
+        # protected by APP_ENCRYPTION_KEY (BUNYIP-483) - and the dead
+        # BUNYIP_OIDC_* relying-party variables stay removed (BUNYIP-539).
+        run: ./scripts/check-no-retired-env.nu
 
       - name: Check Argon2 stays off the actix workers
         # Every hash and verify goes through services::argon2_offload, so a
