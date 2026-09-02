@@ -74,3 +74,17 @@ Contributor-facing conventions for AI agents working in this repository are in [
 ## Development happens on Forgejo
 
 The development home for this repository is <https://dev.a8n.run/psa-systems/bunyip>. The [GitHub](https://github.com/psa-systems/bunyip) and [Codeberg](https://codeberg.org/psa-systems/bunyip) copies are read-only mirrors that exist for visibility only: issues and pull requests are disabled there, and no community support runs on the mirrors. File issues and open pull requests on Forgejo.
+
+## Security
+
+Please do not report a suspected vulnerability through the public issue tracker, on Forgejo or on either mirror: filing it there publishes it. Contact a maintainer privately instead. A published disclosure address and a `SECURITY.md` are being set up and this section will link to them.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+## Authors and credits
+
+Bunyip is built by PSA Systems, and the Bunyip artwork is original to the project.
+
+Built on [Rust](https://www.rust-lang.org/), [Actix Web](https://actix.rs/), [Maud](https://maud.lambda.xyz/), [Tailwind CSS](https://tailwindcss.com/) and [PostgreSQL](https://www.postgresql.org/), and deployed behind [Traefik](https://traefik.io/). Secrets are sourced through [Infisical](https://infisical.com/).
