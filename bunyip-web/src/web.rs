@@ -44,12 +44,13 @@ impl AppState {
             .unwrap_or_default()
     }
 
-    /// The application list the PUBLIC chrome renders (footer links), coalesced
-    /// per TTL.
+    /// The application list the PUBLIC chrome renders: the footer's Product
+    /// column for every visitor, and the header's launch links for a signed-in
+    /// one (BUNYIP-638). Coalesced per TTL.
     ///
     /// Deliberately fetched WITHOUT the visitor's cookie: `/v1/applications`
     /// lists the same active hosted applications for every caller and varies
-    /// only in the per-user `is_accessible` bit, which the public chrome never
+    /// only in the per-user `is_accessible` bit, which neither public surface
     /// reads. Fetching it anonymously is what makes ONE shared cache slot
     /// correct - a per-user payload in a process-wide cache would be served to
     /// the next visitor. The authenticated pages that DO read `is_accessible`
