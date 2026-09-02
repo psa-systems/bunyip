@@ -390,6 +390,11 @@ fn header(user: Option<&User>, pricing: bool, _show_feedback: bool) -> Markup {
                         @if pricing { a href="/pricing" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Pricing" } }
                         a href="/our-story" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Our Story" }
                         a href="/roadmap" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Roadmap" }
+                        // BUNYIP-635: a plain link to the hub, never a menu of
+                        // per-application entries: the chrome must render the
+                        // same working entry when the documented-application
+                        // list cannot be read at all.
+                        a href="/docs" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Documentation" }
                     }
                 }
                 div class="flex items-center gap-4" {
@@ -433,6 +438,8 @@ fn footer(cfg: &Config, apps: &[Application], pricing: bool) -> Markup {
                             @if pricing { li { a href="/pricing" class="text-muted-foreground hover:text-foreground transition-colors" { "Pricing" } } }
                             li { a href="/our-story" class="text-muted-foreground hover:text-foreground transition-colors" { "Our Story" } }
                             li { a href="/roadmap" class="text-muted-foreground hover:text-foreground transition-colors" { "Roadmap" } }
+                            // BUNYIP-635: same plain hub link as the header.
+                            li { a href="/docs" class="text-muted-foreground hover:text-foreground transition-colors" { "Documentation" } }
                             @for app in apps {
                                 li { a href=(app_link(app, &cfg.app_domain)) class="text-muted-foreground hover:text-foreground transition-colors" { (app.display_name) } }
                             }
@@ -532,6 +539,15 @@ fn dashboard_items(is_member: bool) -> Vec<NavItem> {
             title: "Membership & Billing",
             href: "/membership",
             icon: "credit-card",
+            external: false,
+        },
+        // BUNYIP-635: the docs hub belongs in this list and nowhere else -
+        // `shell_nav_sections` feeds both the sidebar and the below-`md`
+        // disclosure, and the sidebar is not rendered on a phone at all.
+        NavItem {
+            title: "Documentation",
+            href: "/docs",
+            icon: "file-text",
             external: false,
         },
         NavItem {
@@ -1408,6 +1424,44 @@ mod tests {
         // The rest of the chrome is untouched by the switch.
         assert!(hidden.contains(r#"href="/our-story""#));
         assert!(hidden.contains(r#"href="/roadmap""#));
+    }
+
+    /// BUNYIP-635: documentation is reachable from the top of every chrome.
+    /// The public header and footer carry it, and the authenticated entry sits
+    /// in `dashboard_items()` - the one list `shell_nav_sections` feeds, which
+    /// is what makes it reachable below `md` too (asserted in
+    /// `every_authenticated_shell_navigates_below_the_md_breakpoint`).
+    ///
+    /// Every one of those links is a PLAIN `/docs` link built from nothing
+    /// fetched, which is the AC that the chrome degrades when the documented-
+    /// application list cannot be loaded: with the public shell handed an empty
+    /// application list and no pricing, the entry still renders and still works.
+    #[test]
+    fn documentation_is_reachable_from_every_chrome_surface() {
+        let cfg = Config::from_env();
+        let degraded = public_shell(&cfg, None, &[], false, false, html! {}).into_string();
+        assert_eq!(
+            degraded.matches(r#"href="/docs""#).count(),
+            2,
+            "header nav link + footer link, neither built from a fetched list"
+        );
+        assert_eq!(
+            degraded.matches("Documentation").count(),
+            2,
+            "both chrome entries are labelled, with no per-application menu"
+        );
+
+        let item = dashboard_items(false)
+            .into_iter()
+            .find(|i| i.href == "/docs")
+            .expect("the authenticated nav carries the documentation entry");
+        assert_eq!(item.title, "Documentation");
+        assert!(!item.external, "the hub is served by this app");
+        assert!(
+            web_kit::ui::icon_is_known(item.icon),
+            "{} is not a known icon",
+            item.icon
+        );
     }
 
     /// The admin nav reads "Pricing Tiers" while the route stays put, so

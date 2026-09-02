@@ -186,7 +186,8 @@ pub mod webhook;
 // Re-export handler functions for convenience
 pub use application::{get_application, list_application_groups, list_applications};
 pub use application_doc::{
-    create_app_doc, delete_app_doc, get_app_doc, list_app_docs, list_app_docs_admin, update_app_doc,
+    create_app_doc, delete_app_doc, get_app_doc, list_app_docs, list_app_docs_admin,
+    list_documented_apps, update_app_doc,
 };
 pub use auth::{
     accept_admin_invite, auth_redirect, confirm_password_reset, get_memberships, login, logout,

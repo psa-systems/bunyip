@@ -68,6 +68,7 @@ const ESSENTIAL_FIELDS = [
     {field: "PricingTier.amount", reason: "a defaulted 0 would advertise a price nobody is charged"}
     {field: "AppDoc.slug", reason: "the doc page's URL key"}
     {field: "AppDocSummary.slug", reason: "the doc page's URL key"}
+    {field: "DocumentedApp.slug", reason: "the app docs link is built from it"}
 ]
 
 # Every `Struct.field` of a `Deserialize` struct in `path` that carries no

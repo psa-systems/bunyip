@@ -2,7 +2,7 @@
 
 Apps come in two forms: a **container image** you pull with Docker, or a **binary release** you download for your platform. Each app's page on the **Applications** catalog shows whichever ones it offers.
 
-You need to be signed in, and for members-only apps you need an active membership. See [Membership & access](/docs/membership).
+You need to be signed in, and for members-only apps you need an active membership. See [Membership & access](membership).
 
 ## Option 1: pull the container image
 

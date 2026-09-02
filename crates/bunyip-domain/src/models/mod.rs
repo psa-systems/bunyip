@@ -29,7 +29,8 @@ pub use application::{
     ARTIFACT_SOURCE_GENERIC_PACKAGE, ARTIFACT_SOURCE_RELEASE,
 };
 pub use application_doc::{
-    ApplicationDoc, ApplicationDocSummary, CreateApplicationDoc, UpdateApplicationDoc,
+    ApplicationDoc, ApplicationDocSummary, CreateApplicationDoc, DocumentedApplication,
+    UpdateApplicationDoc,
 };
 pub use application_group::{
     ApplicationGroup, CreateApplicationGroup, SetApplicationGroupRequest, UpdateApplicationGroup,

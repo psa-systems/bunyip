@@ -1547,6 +1547,16 @@ pub struct AppDocSummary {
     pub sort_order: i32,
 }
 
+/// An application that has published documentation, for the `/docs` hub
+/// (BUNYIP-635). Deliberately NOT `Application`: this list comes from
+/// `/v1/application-docs`, which is derived from the doc pages themselves.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DocumentedApp {
+    pub slug: String,
+    #[serde(default)]
+    pub display_name: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AuthResponse, MembershipStatus, MembershipTier, User, UserRole};

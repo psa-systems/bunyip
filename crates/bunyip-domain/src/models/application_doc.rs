@@ -26,6 +26,16 @@ pub struct ApplicationDocSummary {
     pub sort_order: i32,
 }
 
+/// An ACTIVE application that has at least one documentation page, for the
+/// public `/docs` hub (BUNYIP-635). Sourced from the docs side rather than the
+/// application catalog: `/v1/applications` filters `is_hosted = TRUE` and would
+/// return none of the apps whose docs are published here.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct DocumentedApplication {
+    pub slug: String,
+    pub display_name: String,
+}
+
 /// Admin input for creating a documentation page.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateApplicationDoc {

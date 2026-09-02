@@ -40,6 +40,19 @@ pub async fn list_app_docs(
     Ok(success(docs, request_id))
 }
 
+/// Public: `GET /v1/application-docs` - every ACTIVE application that has at
+/// least one documentation page (BUNYIP-635). The `/docs` hub lists these
+/// alongside its own static pages; it cannot use `/v1/applications`, which
+/// filters `is_hosted = TRUE` and so returns none of the documented apps.
+pub async fn list_documented_apps(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let apps = ApplicationDocRepository::list_documented_apps(&pool).await?;
+    Ok(success(apps, request_id))
+}
+
 /// Public: `GET /v1/applications/{slug}/docs/{doc_slug}` - one doc page.
 pub async fn get_app_doc(
     req: HttpRequest,
