@@ -23,7 +23,7 @@ Two Rust services in one Cargo workspace:
 - **bunyip-web** (port 4400) - the browser-facing front-end. Axum server-rendered HTML (Maud + htmx), no SPA. It is a BFF: it talks to bunyip-api over `/v1` and renders the pages.
 - **bunyip-api** (port 4401) - the backend and the OIDC / OAuth 2.1 issuer (`/.well-known/*`, `/oauth2/*`). Real PostgreSQL persistence, at-rest encryption, Stripe billing, email.
 
-Domain code lives in `crates/bunyip-{domain,oci,oidc}`; the generic, domain-free kernel is the `dunite-core` git dependency. Dependency direction is strictly downward: `bunyip-api -> bunyip-oci/oidc -> bunyip-domain -> dunite-core`.
+Domain code lives in `crates/bunyip-{domain,oci,oidc}`, with the branding-free SSR building blocks in `crates/web-kit`; the generic, domain-free kernel is the `dunite-core` git dependency. Dependency direction is strictly downward: `bunyip-api -> bunyip-oci/oidc -> bunyip-domain -> dunite-core`.
 
 ## Run it locally
 

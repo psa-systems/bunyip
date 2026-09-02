@@ -14,7 +14,8 @@ bunyip/
 └── crates/
     ├── bunyip-domain         models, repositories, business services, app Config, email templates.
     ├── bunyip-oci          OCI registry vertical.        (depends on bunyip-domain)
-    └── bunyip-oidc         OIDC / OAuth 2.1 vertical.    (depends on bunyip-domain)
+    ├── bunyip-oidc         OIDC / OAuth 2.1 vertical.    (depends on bunyip-domain)
+    └── web-kit             branding-free SSR building blocks (Maud + htmx), shared with other front-ends.
 ```
 
 bunyip **owns all domain-specific code**. The generic, domain-free kernel
