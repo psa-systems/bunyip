@@ -30,6 +30,12 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 web::get().to(handlers::get_app_doc),
             ),
     );
+    // BUNYIP-635: which applications carry documentation, for the public /docs
+    // hub. Its own scope rather than `/applications/...`, so no path segment of
+    // it can ever be read as an application slug.
+    cfg.service(
+        web::scope("/application-docs").route("", web::get().to(handlers::list_documented_apps)),
+    );
     // Application groups (BUNYIP-100): display metadata for grouping the apps.
     cfg.service(
         web::scope("/application-groups")

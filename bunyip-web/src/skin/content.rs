@@ -7,7 +7,7 @@ use maud::{html, Markup, PreEscaped};
 use serde::Deserialize;
 
 use crate::api::calls::{self, FeedbackAttachment, FeedbackInput};
-use crate::api::types::{PricingResponse, User};
+use crate::api::types::{Application, DocumentedApp, PricingResponse, User};
 use crate::handlers::dashboard::tier_name;
 use crate::handlers::{dashboard_input, public_ctx, public_response};
 use crate::util::format_stripe_amount;
@@ -1050,22 +1050,156 @@ fn personalize_docs(html: &str, username: &str) -> String {
     html.replace(USERNAME_TOKEN, &highlighted)
 }
 
-/// `GET /docs` - index of the embedded docs. Public (BUNYIP-385).
-pub async fn docs_index(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (c, apps, pricing) = public_ctx(&st, &headers).await;
-    let content = html! {
-        div class="container max-w-4xl py-12" {
-            h1 class="text-4xl font-bold mb-4" { "Documentation" }
-            p class="text-muted-foreground mb-8" { (docs_index_note(&crate::views::layout::brand_name())) }
-            ul class="space-y-3" {
-                @for &(slug, title, _) in DOCS.iter() {
-                    li {
-                        a class="text-lg text-primary-text hover:underline" href=(format!("/docs/{slug}")) { (title) }
+// --- the docs section menu (BUNYIP-635) -------------------------------------
+//
+// The menu lists only sections that HAVE content: the embedded pages above, and
+// the applications the API reports as carrying published documentation. The
+// standup that asked for this named two more sections, "the front end" and "the
+// server", which nothing in this repo has any user-facing content for; they are
+// deliberately absent rather than shipped as dead entries. Writing them (or
+// deciding against them) is BUNYIP-639.
+
+/// One entry of the section menu: link target, label, and whether it is the
+/// page being read.
+fn docs_menu_link(href: &str, label: &str, active: &str) -> Markup {
+    let classes = if href == active {
+        "block rounded-md px-3 py-2 text-sm font-medium bg-accent text-accent-foreground"
+    } else {
+        "block rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+    };
+    html! { a class=(classes) href=(href) { (label) } }
+}
+
+/// The left-hand section menu shared by every `/docs` surface.
+///
+/// Rendered above the article below `md` and beside it from `md` up, so it is
+/// reachable on a phone: a menu that only exists in a desktop column is not a
+/// menu for half the readers.
+///
+/// `documented` is `None` when the application list could not be read at all.
+/// The application section is then a named failure, never an empty menu that
+/// reads as "no application has documentation" (BUNYIP-546).
+fn docs_menu(documented: Option<&[DocumentedApp]>, active: &str) -> Markup {
+    html! {
+        nav class="w-full shrink-0 md:w-56" aria-label="Documentation sections" {
+            p class="px-3 pb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground" { "Guides" }
+            @for &(slug, title, _) in DOCS.iter() {
+                (docs_menu_link(&format!("/docs/{slug}"), title, active))
+            }
+            @match documented {
+                None => {
+                    p class="mt-6 px-3 text-sm text-muted-foreground" { "Could not load application documentation." }
+                }
+                Some([]) => {}
+                Some(list) => {
+                    p class="mt-6 px-3 pb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground" { "Applications" }
+                    @for a in list {
+                        (docs_menu_link(&format!("/apps/{}/docs", a.slug), &app_docs_label(a), active))
                     }
                 }
             }
         }
-    };
+    }
+}
+
+/// An application's menu label: its display name, falling back to the slug when
+/// the API answered without one (`display_name` defaults per BUNYIP-506).
+fn app_docs_label(app: &DocumentedApp) -> String {
+    if app.display_name.is_empty() {
+        app.slug.clone()
+    } else {
+        app.display_name.clone()
+    }
+}
+
+/// The name to show for an application's docs pages. The documented-app list is
+/// consulted FIRST: the public catalog (`apps`) only carries hosted
+/// applications, so an app whose docs are published but which is not hosted has
+/// no entry there and used to be titled by its raw slug (BUNYIP-635).
+fn app_display_name(
+    slug: &str,
+    apps: &[Application],
+    documented: Option<&[DocumentedApp]>,
+) -> String {
+    documented
+        .unwrap_or_default()
+        .iter()
+        .find(|a| a.slug == slug && !a.display_name.is_empty())
+        .map(|a| a.display_name.clone())
+        .or_else(|| {
+            apps.iter()
+                .find(|a| a.slug == slug)
+                .map(|a| a.display_name.clone())
+        })
+        .unwrap_or_else(|| slug.to_string())
+}
+
+/// Wrap a docs page body in the shared two-column shell.
+fn docs_layout(documented: Option<&[DocumentedApp]>, active: &str, body: Markup) -> Markup {
+    html! {
+        div class="container py-12" {
+            div class="flex flex-col gap-8 md:flex-row md:gap-12" {
+                (docs_menu(documented, active))
+                div class="min-w-0 max-w-4xl flex-1" { (body) }
+            }
+        }
+    }
+}
+
+/// The `/docs` hub body: the embedded pages, then the applications that publish
+/// their own documentation (BUNYIP-635).
+///
+/// Three states for the application list, in the BUNYIP-546 order: an
+/// unreadable list says so, an empty one omits the heading entirely (there is
+/// nothing to announce and the failure has its own visible state), and a
+/// populated one links each app's docs index.
+fn docs_index_body(documented: Option<&[DocumentedApp]>) -> Markup {
+    html! {
+        h1 class="text-4xl font-bold mb-4" { "Documentation" }
+        p class="text-muted-foreground mb-8" { (docs_index_note(&crate::views::layout::brand_name())) }
+        ul class="space-y-3" {
+            @for &(slug, title, _) in DOCS.iter() {
+                li {
+                    a class="text-lg text-primary-text hover:underline" href=(format!("/docs/{slug}")) { (title) }
+                }
+            }
+        }
+        @match documented {
+            None => {
+                div class="mt-10" {
+                    h2 class="text-2xl font-semibold mb-4" { "Application documentation" }
+                    (error_box("Could not reach the API to load application documentation."))
+                }
+            }
+            Some([]) => {}
+            Some(list) => {
+                div class="mt-10" {
+                    h2 class="text-2xl font-semibold mb-4" { "Application documentation" }
+                    ul class="space-y-3" {
+                        @for a in list {
+                            li {
+                                a class="text-lg text-primary-text hover:underline" href=(format!("/apps/{}/docs", a.slug)) { (app_docs_label(a)) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// `GET /docs` - index of the embedded docs. Public (BUNYIP-385), extended with
+/// the application documentation section in BUNYIP-635.
+pub async fn docs_index(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    // `join!`, not `try_join!`: the hub still renders when the documented-app
+    // list is the thing that failed.
+    let ((c, apps, pricing), documented) =
+        tokio::join!(public_ctx(&st, &headers), st.documented_apps());
+    let content = docs_layout(
+        documented.as_deref(),
+        "/docs",
+        docs_index_body(documented.as_deref()),
+    );
     public_response(&st, &c, &apps, &pricing, "Docs", true, content)
 }
 
@@ -1076,7 +1210,9 @@ pub async fn docs_page(
     Path(slug): Path<String>,
     Query(q): Query<DocQuery>,
 ) -> Response {
-    let (c, apps, pricing) = public_ctx(&st, &headers).await;
+    let ((c, apps, pricing), documented) =
+        tokio::join!(public_ctx(&st, &headers), st.documented_apps());
+    let active = format!("/docs/{slug}");
     let Some(&(_, title, md)) = DOCS.iter().find(|&&(s, _, _)| s == slug.as_str()) else {
         let content = html! {
             div class="container max-w-4xl py-12" {
@@ -1100,25 +1236,25 @@ pub async fn docs_page(
     } else {
         rendered
     };
-    let content = html! {
-        style { (PreEscaped(DOCS_CSS)) }
-        div class="container max-w-4xl py-12" {
-            div class="mb-6" { (back_link("/docs", "Documentation")) }
-            @if has_token && username.is_some() {
-                @if personalized {
-                    p class="text-sm text-muted-foreground mb-6" {
-                        (personalized_note(&crate::views::layout::brand_name()))
-                        a class="text-primary-text hover:underline" href=(format!("/docs/{slug}?raw=1")) { "Show the generic version" }
-                    }
-                } @else {
-                    p class="text-sm text-muted-foreground mb-6" {
-                        "Showing the generic version. "
-                        a class="text-primary-text hover:underline" href=(format!("/docs/{slug}")) { "Personalize with your username" }
-                    }
+    let body = html! {
+        @if has_token && username.is_some() {
+            @if personalized {
+                p class="text-sm text-muted-foreground mb-6" {
+                    (personalized_note(&crate::views::layout::brand_name()))
+                    a class="text-primary-text hover:underline" href=(format!("/docs/{slug}?raw=1")) { "Show the generic version" }
+                }
+            } @else {
+                p class="text-sm text-muted-foreground mb-6" {
+                    "Showing the generic version. "
+                    a class="text-primary-text hover:underline" href=(format!("/docs/{slug}")) { "Personalize with your username" }
                 }
             }
-            article class="docs-article" { (PreEscaped(body_html)) }
         }
+        article class="docs-article" { (PreEscaped(body_html)) }
+    };
+    let content = html! {
+        style { (PreEscaped(DOCS_CSS)) }
+        (docs_layout(documented.as_deref(), &active, body))
     };
     public_response(
         &st,
@@ -1138,12 +1274,11 @@ pub async fn app_docs_index(
     headers: HeaderMap,
     Path(slug): Path<String>,
 ) -> Response {
-    let (c, apps, pricing) = public_ctx(&st, &headers).await;
-    let app_name = apps
-        .iter()
-        .find(|a| a.slug == slug)
-        .map(|a| a.display_name.clone())
-        .unwrap_or_else(|| slug.clone());
+    // BUNYIP-635: the section menu rides along, so the reader can move between
+    // documentation sections without going back to the hub first.
+    let ((c, apps, pricing), documented) =
+        tokio::join!(public_ctx(&st, &headers), st.documented_apps());
+    let app_name = app_display_name(&slug, &apps, documented.as_deref());
     // BUNYIP-515 logged the failure because the reader could not see it.
     // BUNYIP-546: the reader now sees it too, so an unreadable docs list no
     // longer reads as an app that has published nothing. Still not a 500: the
@@ -1160,24 +1295,23 @@ pub async fn app_docs_index(
         );
         Vec::new()
     });
-    let content = html! {
-        div class="container max-w-4xl py-12" {
-            h1 class="text-4xl font-bold mb-4" { (app_name) " documentation" }
-            @if !docs_reachable {
-                (error_box("Could not reach the API to load documentation."))
-            } @else if docs.is_empty() {
-                (empty_state("file-text", "No documentation for this app yet.", None))
-            } @else {
-                ul class="space-y-3" {
-                    @for d in &docs {
-                        li {
-                            a class="text-lg text-primary-text hover:underline" href=(format!("/apps/{slug}/docs/{}", d.slug)) { (d.title) }
-                        }
+    let body = html! {
+        h1 class="text-4xl font-bold mb-4" { (app_name) " documentation" }
+        @if !docs_reachable {
+            (error_box("Could not reach the API to load documentation."))
+        } @else if docs.is_empty() {
+            (empty_state("file-text", "No documentation for this app yet.", None))
+        } @else {
+            ul class="space-y-3" {
+                @for d in &docs {
+                    li {
+                        a class="text-lg text-primary-text hover:underline" href=(format!("/apps/{slug}/docs/{}", d.slug)) { (d.title) }
                     }
                 }
             }
         }
     };
+    let content = docs_layout(documented.as_deref(), &format!("/apps/{slug}/docs"), body);
     public_response(
         &st,
         &c,
@@ -1195,12 +1329,9 @@ pub async fn app_docs_page(
     headers: HeaderMap,
     Path((slug, doc_slug)): Path<(String, String)>,
 ) -> Response {
-    let (c, apps, pricing) = public_ctx(&st, &headers).await;
-    let app_name = apps
-        .iter()
-        .find(|a| a.slug == slug)
-        .map(|a| a.display_name.clone())
-        .unwrap_or_else(|| slug.clone());
+    let ((c, apps, pricing), documented) =
+        tokio::join!(public_ctx(&st, &headers), st.documented_apps());
+    let app_name = app_display_name(&slug, &apps, documented.as_deref());
     let doc = match calls::app_doc(&st.api, &slug, &doc_slug).await {
         Ok(d) => d,
         Err(e) => {
@@ -1228,14 +1359,15 @@ pub async fn app_docs_page(
             return resp;
         }
     };
+    let body = html! {
+        div class="mb-6" {
+            (back_link(&format!("/apps/{slug}/docs"), &format!("{app_name} documentation")))
+        }
+        article class="docs-article" { (PreEscaped(render_markdown(&doc.body))) }
+    };
     let content = html! {
         style { (PreEscaped(DOCS_CSS)) }
-        div class="container max-w-4xl py-12" {
-            div class="mb-6" {
-                (back_link(&format!("/apps/{slug}/docs"), &format!("{app_name} documentation")))
-            }
-            article class="docs-article" { (PreEscaped(render_markdown(&doc.body))) }
-        }
+        (docs_layout(documented.as_deref(), &format!("/apps/{slug}/docs"), body))
     };
     public_response(
         &st,
@@ -1246,6 +1378,120 @@ pub async fn app_docs_page(
         true,
         content,
     )
+}
+
+#[cfg(test)]
+mod docs_hub_tests {
+    use super::{docs_index_body, docs_menu, DocumentedApp, DOCS};
+
+    fn documented(slugs: &[(&str, &str)]) -> Vec<DocumentedApp> {
+        slugs
+            .iter()
+            .map(|(slug, name)| DocumentedApp {
+                slug: (*slug).into(),
+                display_name: (*name).into(),
+            })
+            .collect()
+    }
+
+    /// BUNYIP-635 AC: the hub lists the static pages AND every application that
+    /// has published documentation.
+    #[test]
+    fn the_hub_lists_the_static_pages_and_every_documented_application() {
+        let apps = documented(&[("mokosh", "Mokosh"), ("mokosh-apps", "Mokosh Apps")]);
+        let html = docs_index_body(Some(&apps)).into_string();
+
+        for &(slug, title, _) in DOCS.iter() {
+            // Maud escapes the title, so compare against what it emits.
+            let label = title.replace('&', "&amp;");
+            assert!(
+                html.contains(&format!("href=\"/docs/{slug}\"")) && html.contains(&label),
+                "the hub must still list the embedded page {slug}"
+            );
+        }
+        assert!(html.contains("Application documentation"));
+        assert!(html.contains("href=\"/apps/mokosh/docs\"") && html.contains("Mokosh"));
+        assert!(html.contains("href=\"/apps/mokosh-apps/docs\""));
+    }
+
+    /// BUNYIP-635 AC: with no application publishing documentation, the heading
+    /// is omitted entirely rather than announcing an empty section.
+    #[test]
+    fn an_empty_application_list_omits_the_heading() {
+        let html = docs_index_body(Some(&[])).into_string();
+        assert!(!html.contains("Application documentation"));
+        assert!(!html.contains("/apps/"));
+        // The static half is unaffected: an app catalog with no docs never
+        // costs the reader the guides.
+        assert!(html.contains("href=\"/docs/getting-started\""));
+    }
+
+    /// BUNYIP-546 / BUNYIP-635: an unreadable list is a NAMED failure. It must
+    /// not render as "no application has documentation", which is what an
+    /// `unwrap_or_default()` here would have said.
+    #[test]
+    fn an_unreadable_application_list_says_so_instead_of_reading_as_empty() {
+        let html = docs_index_body(None).into_string();
+        assert!(html.contains("Could not reach the API to load application documentation."));
+        assert!(!html.contains("href=\"/apps/"), "no dead application links");
+        assert!(html.contains("href=\"/docs/getting-started\""));
+    }
+
+    /// BUNYIP-635 AC: every section the menu lists has content. The menu is
+    /// built from the embedded pages (each an `include_str!` of a real file) and
+    /// from applications the API reports as HAVING published pages, so there is
+    /// no third source a dead entry could come from.
+    #[test]
+    fn every_section_the_menu_lists_has_content() {
+        let apps = documented(&[("mokosh", "Mokosh")]);
+        let menu = docs_menu(Some(&apps), "/docs/getting-started").into_string();
+
+        let mut allowed: Vec<String> = DOCS
+            .iter()
+            .map(|&(slug, _, _)| format!("/docs/{slug}"))
+            .collect();
+        allowed.push("/apps/mokosh/docs".to_string());
+
+        for link in menu.split("href=\"").skip(1) {
+            let href = link.split('"').next().expect("href is quoted");
+            assert!(
+                allowed.iter().any(|a| a == href),
+                "the section menu links {href}, which is not a section with content"
+            );
+        }
+        for &(_, _, body) in DOCS.iter() {
+            assert!(
+                !body.trim().is_empty(),
+                "an embedded page must have content"
+            );
+        }
+        assert!(menu.contains("/apps/mokosh/docs"));
+    }
+
+    /// BUNYIP-635: with the application list unreadable, the menu names the
+    /// failure and lists no application, but every guide stays reachable.
+    #[test]
+    fn the_menu_degrades_to_the_guides_when_the_application_list_fails() {
+        let menu = docs_menu(None, "/docs").into_string();
+        assert!(menu.contains("Could not load application documentation."));
+        assert!(!menu.contains("/apps/"));
+        for &(slug, _, _) in DOCS.iter() {
+            assert!(menu.contains(&format!("/docs/{slug}")));
+        }
+    }
+
+    /// BUNYIP-635 AC: no embedded doc hardcodes a site-root-relative path. A
+    /// `/docs/...` link is correct only while the docs live under this origin's
+    /// `/docs` prefix; a relative one survives the move to a docs subdomain.
+    #[test]
+    fn no_embedded_doc_hardcodes_an_absolute_path() {
+        for &(slug, _, body) in DOCS.iter() {
+            assert!(
+                !body.contains("](/"),
+                "{slug} links an absolute path; use a relative link so it survives a move to a docs subdomain"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

@@ -137,6 +137,13 @@ async fn main() {
             "the subscribe CTA and the onboarding email gate",
             std::time::Duration::from_secs(ttl_cache::SETUP_STATUS_CACHE_TTL_SECS),
         )),
+        // BUNYIP-635: the /docs section menu's application half.
+        documented_apps_cache: Arc::new(ttl_cache::TtlCache::new(
+            "/v1/application-docs",
+            "Vec<DocumentedApp>",
+            "the /docs hub's application documentation section",
+            std::time::Duration::from_secs(ttl_cache::DOCUMENTED_APPS_CACHE_TTL_SECS),
+        )),
     };
 
     use handlers::{auth_pages as ap, consent, dashboard as dash, health, onboarding};
