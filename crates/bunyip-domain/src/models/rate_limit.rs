@@ -1,10 +1,18 @@
-//! Rate limiting models
+//! Rate limiting models.
+//!
+//! The cap and window in force for an action are NOT these compile-time consts:
+//! they are the const resolved through the declared configuration providers
+//! (`database` > `file` > `environment`, BUNYIP-643/645), which is what
+//! [`RateLimitConfig::resolve`] does. This module owns the variable family that
+//! makes that possible ([`rate_limit_vars`]), because the names are built from
+//! the action; `RateLimitConfigRepository::effective` owns the database layer.
 
 use chrono::{DateTime, Duration, Utc};
 use sqlx::FromRow;
-use std::collections::HashMap;
 use std::sync::OnceLock;
 use uuid::Uuid;
+
+use crate::config_providers::ConfigStack;
 
 /// Prefix on the `rate_limits.key` for the per-account 2FA failure counter
 /// (BUNYIP-201). Single source of truth shared by the enforcement path
@@ -128,8 +136,8 @@ impl RateLimitConfig {
     /// Registration: 3 requests per hour per IP.
     ///
     /// One cap for every environment (BUNYIP-601): the enforcement path resolves
-    /// the value actually in force through the const -> env -> persisted chain
-    /// (see [`with_env_defaults`] / `RateLimitConfigRepository::effective`), so a
+    /// the value actually in force through the declared configuration providers
+    /// (see [`Self::resolve`] / `RateLimitConfigRepository::effective`), so a
     /// non-production instance loosens it by setting
     /// `RATE_LIMIT_REGISTRATION_MAX_REQUESTS` (the deployed-instance e2e suite
     /// self-provisions disposable accounts from one CI egress IP and would trip
@@ -325,31 +333,49 @@ impl RateLimitConfig {
     /// `None` for an action with no matching preset (BUNYIP-315), so the caller
     /// can skip a row whose cap/window it cannot resolve rather than guessing.
     ///
-    /// The returned preset carries the env-var bootstrap defaults already
-    /// applied (BUNYIP-413), so no caller ever sees a bare compile-time const.
+    /// The returned preset carries the deployment providers already applied
+    /// (BUNYIP-413/645), so no caller ever sees a bare compile-time const.
     pub fn by_action(action: &str) -> Option<Self> {
         Self::ALL
             .iter()
             .find(|c| c.action == action)
             .copied()
-            .map(Self::with_env_defaults)
+            .map(Self::with_deployment_defaults)
     }
 
-    /// The bootstrap default for this action: the compile-time const with the
-    /// `RATE_LIMIT_{ACTION}_MAX_REQUESTS` / `RATE_LIMIT_{ACTION}_WINDOW_SECONDS`
-    /// env vars applied when set (BUNYIP-413). This is what a fresh install
-    /// enforces; a persisted `rate_limit_configs` row overrides it per action.
-    /// The env map is read once per process (see [`env_defaults`]).
-    pub fn with_env_defaults(self) -> Self {
-        match env_defaults().get(self.action) {
-            Some(o) => self.with_overrides(o.max_requests, o.window_seconds),
-            None => self,
-        }
+    /// This action's cap and window resolved through `stack` (BUNYIP-645).
+    ///
+    /// The declared provider order decides which one serves each half, and this
+    /// compile-time const is the built-in default that stands when none holds a
+    /// usable value. A held value that does not parse, or is not positive, is
+    /// not a value: the next provider serves it, and a `warn!` names both.
+    pub fn resolve(self, stack: &ConfigStack) -> Self {
+        let Some(vars) = Self::vars_for(self.action) else {
+            return self;
+        };
+        self.with_overrides(
+            stack.get_parsed_where::<i32>(vars.max_requests, |max| *max > 0),
+            stack.get_parsed_where::<i64>(vars.window_seconds, |window| *window > 0),
+        )
+    }
+
+    /// [`Self::resolve`] through the deployment providers alone (the file
+    /// provider, then the environment): the bootstrap default a fresh install
+    /// enforces, resolvable with no pool. `RateLimitConfigRepository::effective`
+    /// is what adds the `rate_limit_configs` database provider on top of these.
+    pub fn with_deployment_defaults(self) -> Self {
+        self.resolve(ConfigStack::deployment_cached())
+    }
+
+    /// The variables carrying this action's cap and window, or `None` for an
+    /// action with no preset (which therefore has no declared key either).
+    pub fn vars_for(action: &str) -> Option<&'static RateLimitVars> {
+        rate_limit_vars().iter().find(|vars| vars.action == action)
     }
 
     /// Apply an override layer: each `Some` replaces the corresponding field,
-    /// `None` keeps the current value. Pure, so the const -> env -> persisted
-    /// precedence chain is unit-testable without env or a database.
+    /// `None` keeps the current value. Pure, so a provider's contribution is
+    /// unit-testable without env, a file or a database.
     pub fn with_overrides(
         mut self,
         max_requests: Option<i32>,
@@ -364,7 +390,9 @@ impl RateLimitConfig {
         self
     }
 
-    /// The env-var names carrying this action's bootstrap default.
+    /// The variable names carrying this action's cap and window. The generator
+    /// [`rate_limit_vars`] materializes them for the whole preset list; a caller
+    /// wanting one action's pair as `&'static str` uses [`Self::vars_for`].
     pub fn env_var_names(action: &str) -> (String, String) {
         let upper = action.to_uppercase();
         (
@@ -400,52 +428,101 @@ impl RateLimitConfig {
     }
 }
 
-/// One action's env-var bootstrap default (BUNYIP-413). Either field may be
-/// absent, so an operator can raise a cap without restating the window.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RateLimitEnvDefault {
-    pub max_requests: Option<i32>,
-    pub window_seconds: Option<i64>,
+/// One action's pair of `RATE_LIMIT_*` variable names, with the operator-facing
+/// sentence for each (BUNYIP-645).
+///
+/// Both registries that must declare the family read it from here, so the
+/// variable name an operator sets, the key `config-status` reports and the
+/// `ENV_INVENTORY` entry that classifies it can never disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RateLimitVars {
+    /// The action these variables configure.
+    pub action: &'static str,
+    /// `RATE_LIMIT_{ACTION}_MAX_REQUESTS`.
+    pub max_requests: &'static str,
+    /// What the cap variable configures.
+    pub max_requests_setting: &'static str,
+    /// `RATE_LIMIT_{ACTION}_WINDOW_SECONDS`.
+    pub window_seconds: &'static str,
+    /// What the window variable configures.
+    pub window_seconds_setting: &'static str,
 }
 
-/// Read the env-var bootstrap defaults for every preset action, once per
-/// process. Values that are absent, unparseable, or non-positive are ignored,
-/// so a typo degrades to the compile-time const rather than disabling a limit.
-fn env_defaults() -> &'static HashMap<&'static str, RateLimitEnvDefault> {
-    static DEFAULTS: OnceLock<HashMap<&'static str, RateLimitEnvDefault>> = OnceLock::new();
-    DEFAULTS.get_or_init(|| read_env_defaults(|name| std::env::var(name).ok()))
-}
-
-/// Pure core of [`env_defaults`]: builds the map from an arbitrary env reader
-/// so the parsing and validation rules are unit-testable.
-fn read_env_defaults(
-    get: impl Fn(&str) -> Option<String>,
-) -> HashMap<&'static str, RateLimitEnvDefault> {
-    let mut map = HashMap::new();
-    for cfg in RateLimitConfig::ALL {
-        let (max_var, window_var) = RateLimitConfig::env_var_names(cfg.action);
-        let max_requests = get(&max_var)
-            .and_then(|v| v.trim().parse::<i32>().ok())
-            .filter(|m| *m > 0);
-        let window_seconds = get(&window_var)
-            .and_then(|v| v.trim().parse::<i64>().ok())
-            .filter(|w| *w > 0);
-        if max_requests.is_some() || window_seconds.is_some() {
-            map.insert(
-                cfg.action,
-                RateLimitEnvDefault {
-                    max_requests,
-                    window_seconds,
-                },
-            );
-        }
-    }
-    map
+/// The whole `RATE_LIMIT_*` variable family, generated once per process from
+/// [`RateLimitConfig::ALL`] (BUNYIP-645).
+///
+/// The names are built from the action rather than written down anywhere, which
+/// is why the caps were left out of the configuration providers: a registry of
+/// `&'static str` cannot hold a name that only exists at runtime. Leaking these
+/// once at first use is what makes them `&'static`, and the set is bounded by
+/// the preset list (four short strings per action, once per process), so it is a
+/// one-off materialization rather than a leak that grows.
+pub fn rate_limit_vars() -> &'static [RateLimitVars] {
+    static VARS: OnceLock<Vec<RateLimitVars>> = OnceLock::new();
+    VARS.get_or_init(|| {
+        RateLimitConfig::ALL
+            .iter()
+            .map(|cfg| {
+                let (max_requests, window_seconds) = RateLimitConfig::env_var_names(cfg.action);
+                RateLimitVars {
+                    action: cfg.action,
+                    max_requests: max_requests.leak(),
+                    max_requests_setting: format!(
+                        "the {} rate-limit cap, in requests per window",
+                        cfg.action
+                    )
+                    .leak(),
+                    window_seconds: window_seconds.leak(),
+                    window_seconds_setting: format!(
+                        "the {} rate-limit window, in seconds",
+                        cfg.action
+                    )
+                    .leak(),
+                }
+            })
+            .collect()
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config_providers::{ConfigProvider, ConfigProviderKind};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    /// A provider holding exactly what the test gives it, so the resolution is
+    /// exercised without the process environment, a directory or a database.
+    #[derive(Debug)]
+    struct Fixed {
+        kind: ConfigProviderKind,
+        values: HashMap<String, String>,
+    }
+
+    impl Fixed {
+        fn provider(kind: ConfigProviderKind, pairs: &[(&str, &str)]) -> Arc<dyn ConfigProvider> {
+            Arc::new(Self {
+                kind,
+                values: pairs
+                    .iter()
+                    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                    .collect(),
+            })
+        }
+
+        fn stack(kind: ConfigProviderKind, pairs: &[(&str, &str)]) -> ConfigStack {
+            ConfigStack::new(vec![Self::provider(kind, pairs)])
+        }
+    }
+
+    impl ConfigProvider for Fixed {
+        fn kind(&self) -> ConfigProviderKind {
+            self.kind
+        }
+        fn get(&self, key: &str) -> Option<String> {
+            self.values.get(key).cloned()
+        }
+    }
 
     fn row(action: &str, key: &str, count: i32, window_start: DateTime<Utc>) -> RateLimit {
         RateLimit {
@@ -468,32 +545,157 @@ mod tests {
         assert!(RateLimitConfig::by_action("no_such_action").is_none());
     }
 
-    /// BUNYIP-413: an env var raises the cap for one action only, and a bad or
-    /// non-positive value is ignored so the compile-time const still applies.
+    /// BUNYIP-645: a held value raises the cap for the one action and the one
+    /// field it names, and a value the key cannot use (unparseable, or
+    /// non-positive) leaves the compile-time const in force. Same rules the
+    /// env-only chain applied before, now the provider stack's.
     #[test]
-    fn env_defaults_override_only_valid_values() {
-        let env = HashMap::from([
-            ("RATE_LIMIT_LOGIN_MAX_REQUESTS", "25"),
-            ("RATE_LIMIT_REGISTRATION_WINDOW_SECONDS", "not-a-number"),
-            ("RATE_LIMIT_API_AUTH_MAX_REQUESTS", "0"),
-        ]);
-        let defaults = read_env_defaults(|n| env.get(n).map(|v| v.to_string()));
-
-        assert_eq!(
-            defaults.get("login").copied(),
-            Some(RateLimitEnvDefault {
-                max_requests: Some(25),
-                window_seconds: None,
-            })
+    fn a_held_value_overrides_only_the_action_and_field_it_names() {
+        let stack = Fixed::stack(
+            ConfigProviderKind::Environment,
+            &[
+                ("RATE_LIMIT_LOGIN_MAX_REQUESTS", "25"),
+                ("RATE_LIMIT_REGISTRATION_WINDOW_SECONDS", "not-a-number"),
+                ("RATE_LIMIT_API_AUTH_MAX_REQUESTS", "0"),
+            ],
         );
-        // Unparseable and non-positive values leave the action untouched.
-        assert_eq!(defaults.get("registration"), None);
-        assert_eq!(defaults.get("api_auth"), None);
-        assert_eq!(defaults.get("magic_link"), None);
+
+        // The cap alone moves; the window keeps the const.
+        let login = RateLimitConfig::LOGIN.resolve(&stack);
+        assert_eq!((login.max_requests, login.window_seconds), (25, 60));
+
+        // Unparseable, non-positive and unheld all leave the const in force.
+        assert_eq!(
+            RateLimitConfig::REGISTRATION.resolve(&stack),
+            RateLimitConfig::REGISTRATION
+        );
+        assert_eq!(
+            RateLimitConfig::API_AUTH.resolve(&stack),
+            RateLimitConfig::API_AUTH
+        );
+        assert_eq!(
+            RateLimitConfig::MAGIC_LINK.resolve(&stack),
+            RateLimitConfig::MAGIC_LINK
+        );
     }
 
-    /// BUNYIP-413: the precedence chain is const -> env -> persisted, each layer
-    /// replacing only the fields it sets.
+    /// AC1 (BUNYIP-645): the cap resolves through the declared provider order,
+    /// not through an order written into one function. The `rate_limit_configs`
+    /// row is the database provider, so it still wins, and the file provider
+    /// now sits between it and the environment.
+    #[test]
+    fn the_declared_provider_order_decides_the_cap() {
+        let stack = ConfigStack::new(vec![
+            Fixed::provider(
+                ConfigProviderKind::Environment,
+                &[
+                    ("RATE_LIMIT_LOGIN_MAX_REQUESTS", "7"),
+                    ("RATE_LIMIT_LOGIN_WINDOW_SECONDS", "70"),
+                ],
+            ),
+            Fixed::provider(
+                ConfigProviderKind::File,
+                &[("RATE_LIMIT_LOGIN_MAX_REQUESTS", "8")],
+            ),
+            Fixed::provider(
+                ConfigProviderKind::Database,
+                &[("RATE_LIMIT_LOGIN_MAX_REQUESTS", "9")],
+            ),
+        ]);
+        let login = RateLimitConfig::LOGIN.resolve(&stack);
+        // database cap, and the window from the environment because neither
+        // higher provider holds one.
+        assert_eq!((login.max_requests, login.window_seconds), (9, 70));
+
+        let without_database = ConfigStack::new(vec![
+            Fixed::provider(
+                ConfigProviderKind::Environment,
+                &[("RATE_LIMIT_LOGIN_MAX_REQUESTS", "7")],
+            ),
+            Fixed::provider(
+                ConfigProviderKind::File,
+                &[("RATE_LIMIT_LOGIN_MAX_REQUESTS", "8")],
+            ),
+        ]);
+        assert_eq!(
+            RateLimitConfig::LOGIN
+                .resolve(&without_database)
+                .max_requests,
+            8
+        );
+    }
+
+    /// AC2 (BUNYIP-645): every preset has a generated variable pair, and the
+    /// generated names are exactly what the formatter builds, so an action added
+    /// to `ALL` is declared in both registries with no second edit.
+    #[test]
+    fn every_preset_has_a_generated_variable_pair() {
+        assert_eq!(rate_limit_vars().len(), RateLimitConfig::ALL.len());
+        for cfg in RateLimitConfig::ALL {
+            let vars = RateLimitConfig::vars_for(cfg.action)
+                .unwrap_or_else(|| panic!("{} has no generated variables", cfg.action));
+            let (max_requests, window_seconds) = RateLimitConfig::env_var_names(cfg.action);
+            assert_eq!(vars.max_requests, max_requests);
+            assert_eq!(vars.window_seconds, window_seconds);
+            assert!(!vars.max_requests_setting.is_empty());
+            assert!(!vars.window_seconds_setting.is_empty());
+        }
+        assert!(RateLimitConfig::vars_for("no_such_action").is_none());
+    }
+
+    /// The removal this issue turns on (BUNYIP-645): the caps read no provider
+    /// of their own. `with_env_defaults` and its `env_defaults` map were the
+    /// environment layer of a chain only this file could see, so a `std::env`
+    /// read reappearing in the rate-limit path would be that undeclared source
+    /// again.
+    #[test]
+    fn the_rate_limit_path_reads_no_provider_of_its_own() {
+        let sources = [
+            ("models/rate_limit.rs", include_str!("rate_limit.rs")),
+            (
+                "repositories/rate_limit_config.rs",
+                include_str!("../repositories/rate_limit_config.rs"),
+            ),
+            (
+                "repositories/rate_limit.rs",
+                include_str!("../repositories/rate_limit.rs"),
+            ),
+        ];
+        let mut offenders = Vec::new();
+        for (name, source) in sources {
+            // Everything from `#[cfg(test)]` on is test scaffolding, which is
+            // where this guard's own message lives.
+            let production = match source.find("#[cfg(test)]") {
+                Some(idx) => &source[..idx],
+                None => source,
+            };
+            for (number, line) in production.lines().enumerate() {
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                // Spelled in two pieces so this needle is not itself an
+                // `env::var("...")` literal for the BUNYIP-537 inventory scan
+                // (bunyip-api/tests/env_inventory.rs) to find and fail on.
+                for banned in [
+                    concat!("env", "::var("),
+                    "with_env_defaults",
+                    "env_defaults()",
+                ] {
+                    if line.contains(banned) {
+                        offenders.push(format!("{name}:{} ({banned})", number + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "the rate-limit caps resolve through the declared configuration providers \
+             (BUNYIP-645): read them with RateLimitConfig::resolve through a ConfigStack instead \
+             of reintroducing a private environment layer: {offenders:#?}"
+        );
+    }
+
+    /// The layering itself: each layer replaces only the fields it sets.
     #[test]
     fn overrides_layer_over_the_const_default() {
         let base = RateLimitConfig::LOGIN;

@@ -900,6 +900,20 @@ async fn main() -> anyhow::Result<()> {
         AutoBanConfig::resolve(&stack)
     };
 
+    // BUNYIP-645: the rate-limit rows are a configuration provider too, so a
+    // cap set in compose that an admin row has made dead is reported at boot
+    // exactly like a dead SMTP_HOST. The caps themselves are resolved per TTL
+    // snapshot by RateLimitConfigRepository::effective, not here.
+    match bunyip_domain::repositories::RateLimitConfigRepository::list(&pool).await {
+        Ok(rows) => ConfigStack::with_database(
+            bunyip_domain::repositories::rate_limit_config::database_provider(&rows),
+        )
+        .log_shadowed_providers(),
+        Err(e) => {
+            error!(error = %e, "rate_limit_configs could not be read at boot, so an environment cap an admin row overrides is not reported; the enforcement path reports its own read failures")
+        }
+    }
+
     // Initialize account backup/restore service (BUNYIP-353 / BUNYIP-356). One
     // adapter per entitled app. When Mokosh is configured (MOKOSH_BACKUP_API_URL
     // + the OIDC provider + the Mokosh OAuth client all present) the real HTTP

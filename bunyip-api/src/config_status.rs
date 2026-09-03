@@ -7,8 +7,9 @@
 //! ignored today and becomes live if the higher one is cleared.
 //!
 //! [`survey`] is the only IO here: it reads the three admin-managed singleton
-//! rows and folds them into ONE database provider, so the report covers every
-//! declared key in one stack. Everything below it - the classification, the
+//! rows plus the `rate_limit_configs` table (BUNYIP-645) and folds them into ONE
+//! database provider, so the report covers every declared key in one stack.
+//! Everything below it - the classification, the
 //! report and its rendering - is pure and lives in
 //! [`bunyip_domain::config_providers`], which is what BUNYIP-634 serves to the
 //! rest of the suite alongside the secrets survey.
@@ -19,7 +20,9 @@
 use bunyip_domain::config::{AutoBanConfig, EmailConfig, TierConfig};
 use bunyip_domain::config_providers::{ConfigStack, DatabaseProvider};
 use bunyip_domain::errors::AppError;
-use bunyip_domain::repositories::{AutoBanConfigRepository, EmailConfigRepository};
+use bunyip_domain::repositories::{
+    rate_limit_config, AutoBanConfigRepository, EmailConfigRepository, RateLimitConfigRepository,
+};
 use sqlx::PgPool;
 use tracing::error;
 
@@ -49,6 +52,14 @@ pub async fn survey(pool: &PgPool) -> Result<ConfigStack, AppError> {
         Ok(row) => database.merge(AutoBanConfig::database_provider(&row).map_err(to_app_error)?),
         Err(e) => {
             error!(error = %e, "auto_ban_config could not be read; it contributes nothing to config-status")
+        }
+    }
+    // BUNYIP-645: the same provider the enforcement path resolves a cap
+    // through, built from the same rows, rather than a second reading of them.
+    match RateLimitConfigRepository::list(pool).await {
+        Ok(rows) => database.merge(rate_limit_config::database_provider(&rows)),
+        Err(e) => {
+            error!(error = %e, "rate_limit_configs could not be read; it contributes nothing to config-status")
         }
     }
 

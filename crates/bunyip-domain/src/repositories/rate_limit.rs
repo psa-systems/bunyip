@@ -34,23 +34,16 @@ impl RateLimitRepository {
         Ok(rows)
     }
 
-    /// The longest window in force across every known action, with env and
-    /// persisted overrides applied (BUNYIP-413). The retention horizon for the
-    /// `rate_limits` table: a row older than this cannot belong to an open
-    /// window. Previously a hard-coded hour, which a super-admin-configured
-    /// longer window would have silently invalidated.
+    /// The longest window in force across every known action, as the declared
+    /// configuration providers resolve it (BUNYIP-413/645). The retention
+    /// horizon for the `rate_limits` table: a row older than this cannot belong
+    /// to an open window. Previously a hard-coded hour, which a
+    /// super-admin-configured longer window would have silently invalidated.
     pub async fn max_window_seconds(pool: &PgPool) -> Result<i64, AppError> {
-        let overrides = RateLimitConfigRepository::list(pool).await?;
+        let snapshot = RateLimitConfigRepository::overrides(pool).await?;
         let longest = RateLimitConfig::ALL
             .iter()
-            .map(|cfg| {
-                let effective = cfg.with_env_defaults();
-                overrides
-                    .iter()
-                    .find(|row| row.action == effective.action)
-                    .map(|row| row.window_seconds)
-                    .unwrap_or(effective.window_seconds)
-            })
+            .map(|cfg| snapshot.effective(cfg).window_seconds)
             .max()
             .unwrap_or(3600);
         Ok(longest)

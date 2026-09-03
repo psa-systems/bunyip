@@ -1739,6 +1739,7 @@ pub enum EnvClass {
 }
 
 /// One classified environment variable the api reads.
+#[derive(Clone, Copy)]
 pub struct EnvVarSpec {
     /// The variable name. Secrets also resolve through `{NAME}_FILE`.
     pub name: &'static str,
@@ -1829,7 +1830,7 @@ impl EnvVarSpec {
 /// - [`EnvClass::Defaulted`]: nothing. The defaults are documented in
 ///   `docs/configuration.md`; a line per default would drown the two cases
 ///   above.
-pub static ENV_INVENTORY: &[EnvVarSpec] = &[
+static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
     // ---- Required ---------------------------------------------------------
     EnvVarSpec::required(
         "DATABASE_URL",
@@ -2271,6 +2272,30 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
         "build stamp shown on the version endpoint",
     ),
 ];
+
+/// The inventory: the variables written down above, plus the generated
+/// `RATE_LIMIT_{ACTION}_*` family (BUNYIP-645).
+///
+/// The family is generated because its names are built from the action, which is
+/// exactly why the caps were left out of the configuration providers when
+/// BUNYIP-643 brought the other configurations in: a key must name an inventory
+/// variable, and a runtime-built name could not be one. Both registries are
+/// generated from the one preset list, so an action added to
+/// `RateLimitConfig::ALL` is classified here and declared in `CONFIG_KEYS` with
+/// no second edit. They are [`EnvClass::Defaulted`]: every action has a working
+/// compile-time cap, so an absent variable is not a gap and logs nothing.
+pub static ENV_INVENTORY: std::sync::LazyLock<Vec<EnvVarSpec>> = std::sync::LazyLock::new(|| {
+    WRITTEN_ENV_INVENTORY
+        .iter()
+        .copied()
+        .chain(crate::models::rate_limit_vars().iter().flat_map(|vars| {
+            [
+                EnvVarSpec::defaulted(vars.max_requests, vars.max_requests_setting),
+                EnvVarSpec::defaulted(vars.window_seconds, vars.window_seconds_setting),
+            ]
+        }))
+        .collect()
+});
 
 /// Look up one variable's spec.
 pub fn env_spec(name: &str) -> Option<&'static EnvVarSpec> {
@@ -2845,7 +2870,7 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), total, "duplicate entry in ENV_INVENTORY");
 
-        for spec in ENV_INVENTORY {
+        for spec in ENV_INVENTORY.iter() {
             assert!(
                 !spec.feature.is_empty(),
                 "{} has no feature text",
