@@ -315,6 +315,9 @@ services:
       # dir: the secret value files must never be visible at a second path
       # inside the container).
       - ./secrets/oidc:/run/secrets/oidc:ro
+      # The file configuration layer, one file per key (BUNYIP-643/644): the
+      # admin System page writes it, so it must outlive the container.
+      - config-layer:/app/config
       # Distribution caches MUST be NAMED volumes, never host bind-mounts.
       # Why + the bind-mount workaround: docs/oci-registry-verification.md
       # (Production notes).
@@ -387,6 +390,8 @@ services:
 volumes:
   postgres-data:
     name: bunyip-postgres-data
+  config-layer:
+    name: bunyip-config-layer
   oci-cache:
     name: bunyip-oci-cache
   download-cache:

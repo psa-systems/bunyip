@@ -1253,15 +1253,21 @@ impl Config {
         // the single `finish_startup_audit` at the end of this function decides.
         let mut failures = audit_required(is_production);
 
-        // BUNYIP-622: the application-level deployment settings (feature toggles,
-        // country access) resolve through the file-based YAML layer: an env var
-        // (or its {NAME}_FILE indirection) over the YAML file over the built-in
-        // default. The system-level origins and domains (cors_origin, web_origin,
-        // cookie_domain) resolve from the environment ONLY inside `SysConfig`;
-        // BUNYIP-579 first placed them in the file, which put them on the
-        // API-writable side of the boundary, and BUNYIP-622 moved them out.
-        // Generated on first run, never overwritten, loaded once here.
-        let sys = crate::sys_config::SysConfig::load();
+        // BUNYIP-643/644: the deployment providers (the file layer when there is
+        // one, then the environment). The database provider joins the stack in
+        // main.rs, once the pool is open and the admin-managed rows have been
+        // read.
+        let deployment = ConfigStack::deployment();
+
+        // BUNYIP-622/644: the application-level deployment settings (feature
+        // toggles, country access) resolve through that stack like every other
+        // declared key: the file layer, then the environment, then the built-in
+        // default. The system-level origins and domains (cors_origin,
+        // web_origin, cookie_domain) resolve from the environment ONLY inside
+        // `SysConfig`; BUNYIP-579 first placed them in the file, which put them
+        // on the API-writable side of the boundary, and BUNYIP-622 moved them
+        // out.
+        let sys = crate::sys_config::SysConfig::load(&deployment);
 
         // DATABASE_URL embeds the postgres password, so it supports the
         // DATABASE_URL_FILE secret convention like every other secret. Its
@@ -1318,11 +1324,6 @@ impl Config {
 
         let app_name = env::var("APP_NAME").unwrap_or_else(|_| "localhost".to_string());
 
-        // BUNYIP-643: the deployment providers (the file provider when
-        // BUNYIP_CONFIG_DIR names a directory, then the environment). The
-        // database provider joins the stack in main.rs, once the pool is open
-        // and the admin-managed rows have been read.
-        let deployment = ConfigStack::deployment();
         let email = EmailConfig::resolve(&deployment, None, is_production);
 
         // BUNYIP-542: the declared provider for every governed integration secret.
@@ -2097,14 +2098,24 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
     ),
     EnvVarSpec::defaulted(
         "BUNYIP_CONFIG_FILE",
-        "path to the application-level config YAML layer (BUNYIP-579/622); default \
-         /app/config/config.yaml, generated on first run and never overwritten",
+        "path to the LEGACY config YAML file (BUNYIP-579/622); default /app/config/config.yaml, \
+         read once and migrated into the file layer, then renamed aside (BUNYIP-644)",
     ),
     EnvVarSpec::defaulted(
         "BUNYIP_CONFIG_DIR",
-        "directory the FILE configuration provider reads, one file per key (BUNYIP-643); unset \
-         means that provider is not enabled and configuration resolves from the database and the \
-         environment alone, which is every deployment until an operator mounts one",
+        "directory the FILE configuration layer reads and the admin System page writes, one file \
+         per key (BUNYIP-643/644); default /app/config, and a default directory that does not \
+         exist means the deployment has no file layer",
+    ),
+    EnvVarSpec::defaulted(
+        "COUNTRY_ALLOW",
+        "ISO alpha-2 countries allowed to sign in, comma separated; empty allows all \
+         (BUNYIP-581), and the admin System page writes it into the file layer",
+    ),
+    EnvVarSpec::defaulted(
+        "COUNTRY_DENY",
+        "ISO alpha-2 countries refused sign-in, comma separated, applied after COUNTRY_ALLOW \
+         (BUNYIP-581)",
     ),
     // BUNYIP-561: demoted to a bootstrap default. The product name is the
     // admin-managed `branding.brand_name`; this value is used only while that
@@ -2416,20 +2427,24 @@ mod tests {
     use crate::test_support::env_lock;
     use std::env;
 
-    /// BUNYIP-592: point the system config file at a throwaway temp path before
-    /// any call that reaches `SysConfig::load()`, which GENERATES the file when
-    /// it is absent. Unset, the path is the in-container default under `/app`,
-    /// which `compose.dev.yml` bind-mounts to the repo, so the generation lands
-    /// in the developer's working tree. Callers hold `env_lock()`, so the
+    /// BUNYIP-592/644: point the file configuration layer at a throwaway temp
+    /// directory before any call that reaches `SysConfig::load`, which MIGRATES
+    /// a legacy YAML file into that directory when it finds one. Unset, the
+    /// directory is the in-container default under `/app`, which
+    /// `compose.dev.yml` bind-mounts to the repo, so the migration would write
+    /// into the developer's working tree. Callers hold `env_lock()`, so the
     /// variable cannot leak into a parallel test.
     fn redirect_sys_config_to_temp() {
-        let path = env::temp_dir().join(format!("bunyip-test-config-{}.yaml", std::process::id()));
-        env::set_var(crate::sys_config::PATH_ENV, path);
+        let dir = env::temp_dir().join(format!("bunyip-test-config-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp config dir");
+        env::set_var(crate::config_providers::CONFIG_DIR_ENV, dir);
+        env::remove_var(crate::sys_config::LEGACY_FILE_ENV);
     }
 
     /// BUNYIP-592: a test reaching `from_env_inner` without the redirect above
-    /// writes `config/config.yaml` into the working tree, so `git status` is
-    /// dirty after `just test`. Fails the build on a new call site that skips it.
+    /// resolves and migrates through `config/` in the working tree, so
+    /// `git status` is dirty after `just test`. Fails the build on a new call
+    /// site that skips it.
     #[test]
     fn every_test_that_loads_the_config_redirects_the_sys_config_file() {
         let module = include_str!("config.rs")
@@ -2459,9 +2474,9 @@ mod tests {
 
         assert!(
             offenders.is_empty(),
-            "these tests call Config::from_env_inner without redirecting BUNYIP_CONFIG_FILE \
-             to a temp path first, so they generate config/config.yaml in the working tree: \
-             {offenders:?}"
+            "these tests call Config::from_env_inner without redirecting BUNYIP_CONFIG_DIR \
+             to a temp directory first, so they resolve (and migrate) through config/ in the \
+             working tree: {offenders:?}"
         );
     }
 

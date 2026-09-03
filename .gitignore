@@ -5,14 +5,19 @@
 data
 For AI/
 
-# System config file (BUNYIP-579), generated on first start at
-# BUNYIP_CONFIG_FILE or /app/config/config.yaml. compose.dev.yml bind-mounts the
-# repo at /app, so the dev api writes it here; it holds local operator state
-# (cookie_domain, web_origin, country allow/deny) and is never committed. The
-# generated file, not the directory (BUNYIP-594), so a file a future change
-# tracks under config/ still shows up in git status. Rooted so it ignores only
-# the root directory, not one a crate might add later.
+# The file configuration layer (BUNYIP-643/644): /app/config, which
+# compose.dev.yml bind-mounts to the repo, so the dev api reads it here and the
+# admin System page writes one file per setting into it. Local operator state
+# (country allow/deny, the feature toggles), never committed. The written files
+# and the migrated-aside legacy YAML by name, not the directory (BUNYIP-594), so
+# a file a future change tracks under config/ still shows up in git status.
+# Rooted so it ignores only the root directory, not one a crate might add later.
 /config/config.yaml
+/config/config.yaml.migrated
+/config/LOGIN_APPROVAL_ENABLED
+/config/SIGNUP_BOT_GUARD_ENABLED
+/config/COUNTRY_ALLOW
+/config/COUNTRY_DENY
 
 # Tailwind output: committed (built by `bun run build:css`) so the SSR server
 # serves it without a build step on host runs / fresh clones, matching menkent.

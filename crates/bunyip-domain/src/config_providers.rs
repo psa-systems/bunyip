@@ -21,13 +21,22 @@
 //! | 3        | `environment` | the variables in [`ENV_INVENTORY`], the deployment's baked-in declaration |
 //!
 //! The database is highest because that is where it already was: an existing
-//! deployment resolves exactly the values it resolved before, since the file
-//! provider is off until an operator sets `BUNYIP_CONFIG_DIR`. The file sits
+//! deployment resolves exactly the values it resolved before. The file sits
 //! ABOVE the environment because a file that could not override a value baked
 //! into compose would not be editable-without-a-redeploy, which is the whole
-//! reason it exists. (The older YAML layer in [`crate::sys_config`] orders its
-//! own, disjoint keys the other way round; it is API-writable, which this
-//! provider is not, and BUNYIP-644 tracks unifying the two.)
+//! reason it exists.
+//!
+//! BUNYIP-644 made the file provider the ONE file-based layer: the YAML file
+//! [`crate::sys_config`] used to keep at `BUNYIP_CONFIG_FILE`, with the opposite
+//! precedence and its own on-disk shape, is migrated into this directory once
+//! and is no longer read as configuration. Nothing else writes this directory:
+//! the admin System settings page writes exactly the
+//! [`SYSTEM_SETTINGS_KEYS`] through [`SystemSettings::entries`], which by TYPE
+//! has no field for a system-level key, so an API-writable value can override
+//! compose (that is what an application-level setting is for) without the
+//! configuration boundary moving.
+//!
+//! [`SystemSettings::entries`]: crate::sys_config::SystemSettings::entries
 //!
 //! # The registry
 //!
@@ -224,7 +233,7 @@ const fn spec(key: &'static str, setting: &'static str) -> ConfigKeySpec {
 /// A setting joins this list the moment it gains a second provider, and leaves
 /// it if it ever loses one. Group-1 startup values are structurally excluded
 /// (see [`GROUP_ONE_KEYS`]).
-static SINGLETON_ROW_KEYS: &[ConfigKeySpec] = &[
+static WRITTEN_CONFIG_KEYS: &[ConfigKeySpec] = &[
     // ---- Email (email_config) --------------------------------------------
     spec(
         "SMTP_HOST",
@@ -289,6 +298,26 @@ static SINGLETON_ROW_KEYS: &[ConfigKeySpec] = &[
         "the early-adopter trial length",
     ),
     spec("TIER_STANDARD_TRIAL_DAYS", "the standard trial length"),
+    // ---- System settings (the admin System page, BUNYIP-644) ---------------
+    // The application-level deployment toggles the YAML layer used to carry.
+    // They have no database row: their providers are the file layer (which the
+    // admin page writes) and the environment.
+    spec(
+        "LOGIN_APPROVAL_ENABLED",
+        "whether a suspicious login must be approved from the account owner's inbox",
+    ),
+    spec(
+        "SIGNUP_BOT_GUARD_ENABLED",
+        "whether the signup honeypot and timing guard run",
+    ),
+    spec(
+        "COUNTRY_ALLOW",
+        "the ISO alpha-2 countries allowed to sign in (empty allows all)",
+    ),
+    spec(
+        "COUNTRY_DENY",
+        "the ISO alpha-2 countries refused sign-in, applied after the allow list",
+    ),
 ];
 
 /// The generated `RATE_LIMIT_{ACTION}_{MAX_REQUESTS,WINDOW_SECONDS}` family
@@ -324,9 +353,9 @@ static RATE_LIMIT_CONFIG_KEYS: LazyLock<Vec<ConfigKeySpec>> = LazyLock::new(|| {
 });
 
 /// Every configuration setting with more than one possible provider: the
-/// written-down [`SINGLETON_ROW_KEYS`] plus the generated rate-limit family.
+/// written-down [`WRITTEN_CONFIG_KEYS`] plus the generated rate-limit family.
 pub static CONFIG_KEYS: LazyLock<Vec<ConfigKeySpec>> = LazyLock::new(|| {
-    SINGLETON_ROW_KEYS
+    WRITTEN_CONFIG_KEYS
         .iter()
         .copied()
         .chain(RATE_LIMIT_CONFIG_KEYS.iter().copied())
@@ -370,6 +399,18 @@ pub const TIER_KEYS: &[&str] = &[
     "TIER_EARLY_ADOPTER_SLOTS",
     "TIER_EARLY_ADOPTER_TRIAL_DAYS",
     "TIER_STANDARD_TRIAL_DAYS",
+];
+
+/// The keys the admin System settings page reads and writes (BUNYIP-644): the
+/// application-level deployment toggles that were the YAML layer's whole
+/// content. They are the ONLY keys anything in bunyip writes into the file
+/// layer; see [`SystemSettings`](crate::sys_config::SystemSettings) for why
+/// that set is a type rather than a check.
+pub const SYSTEM_SETTINGS_KEYS: &[&str] = &[
+    "LOGIN_APPROVAL_ENABLED",
+    "SIGNUP_BOT_GUARD_ENABLED",
+    "COUNTRY_ALLOW",
+    "COUNTRY_DENY",
 ];
 
 /// The keys of the `rate_limit_configs` section (BUNYIP-645), generated like
@@ -441,10 +482,34 @@ impl ConfigProvider for EnvironmentProvider {
     }
 }
 
-/// The env var naming the file provider's directory. Unset means the file
-/// provider is not enabled, which is every deployment until an operator mounts
-/// one.
+/// The env var naming the file layer's directory. Unset means
+/// [`DEFAULT_CONFIG_DIR`], the operator-writable directory the image already
+/// creates and the reference deployment already mounts.
 pub const CONFIG_DIR_ENV: &str = "BUNYIP_CONFIG_DIR";
+
+/// Where the file layer lives when `BUNYIP_CONFIG_DIR` is unset. It is the
+/// directory the legacy YAML file already sat in, so an existing deployment's
+/// volume is already the right one (BUNYIP-644).
+pub const DEFAULT_CONFIG_DIR: &str = "/app/config";
+
+/// The file layer's directory: `BUNYIP_CONFIG_DIR`, else [`DEFAULT_CONFIG_DIR`].
+pub fn file_layer_dir() -> PathBuf {
+    match config_dir_override() {
+        Some(dir) => dir,
+        None => PathBuf::from(DEFAULT_CONFIG_DIR),
+    }
+}
+
+/// The explicitly configured directory, when there is one. An explicit
+/// directory that cannot be read is an error the operator meant to avoid; the
+/// default one simply being absent is not (a deployment with no file layer).
+fn config_dir_override() -> Option<PathBuf> {
+    std::env::var(CONFIG_DIR_ENV)
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())
+        .map(PathBuf::from)
+}
 
 /// A directory of one file per key, the shape Traefik's file provider and
 /// PMS-987 use, so the two repositories take the same shape.
@@ -463,15 +528,26 @@ pub struct FileProvider {
 }
 
 impl FileProvider {
-    /// Load the directory named by `BUNYIP_CONFIG_DIR`. `None` when the variable
-    /// is unset or empty: the provider is not enabled and is left out of the
-    /// stack entirely, rather than joining it as a provider that holds nothing.
+    /// Load [`file_layer_dir`], migrating a legacy YAML file into it first
+    /// (BUNYIP-644). `None` when the directory is the default one, is absent,
+    /// and has no legacy file to migrate: this deployment has no file layer, so
+    /// the provider is left out of the stack entirely rather than joining it as
+    /// one that holds nothing.
     pub fn from_env() -> Option<Self> {
-        let dir = std::env::var(CONFIG_DIR_ENV)
-            .ok()
-            .map(|raw| raw.trim().to_string())
-            .filter(|raw| !raw.is_empty())?;
-        Some(Self::load(PathBuf::from(dir)))
+        let dir = file_layer_dir();
+        let legacy = crate::sys_config::legacy_file_path(&dir);
+        if config_dir_override().is_none() && !dir.exists() && !legacy.exists() {
+            return None;
+        }
+        // A value the migration could not write is still served, from memory,
+        // for this boot: a directory the application cannot write must not
+        // silently drop an operator's settings.
+        let unwritten = crate::sys_config::migrate_legacy_file(&dir, &legacy);
+        let mut provider = Self::load(dir);
+        for (key, value) in unwritten {
+            provider.values.entry(key).or_insert(value);
+        }
+        Some(provider)
     }
 
     /// Load one directory. Public so the tests drive it without the environment.
@@ -510,6 +586,11 @@ impl FileProvider {
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
+            // The legacy YAML file and its renamed-aside form live here by
+            // construction (BUNYIP-644): they are migration state, not a typo.
+            if crate::sys_config::is_legacy_file_name(name) {
+                continue;
+            }
             let known = CONFIG_KEYS
                 .iter()
                 .any(|spec| spec.key == name || spec.source_var == name);
@@ -1172,7 +1253,13 @@ mod tests {
     /// source label cannot silently stop covering a key someone adds.
     #[test]
     fn every_config_key_belongs_to_exactly_one_section() {
-        let sections: [&[&str]; 4] = [EMAIL_KEYS, AUTO_BAN_KEYS, TIER_KEYS, &RATE_LIMIT_KEYS];
+        let sections: [&[&str]; 5] = [
+            EMAIL_KEYS,
+            AUTO_BAN_KEYS,
+            TIER_KEYS,
+            SYSTEM_SETTINGS_KEYS,
+            &RATE_LIMIT_KEYS,
+        ];
         for spec in CONFIG_KEYS.iter() {
             let found = sections
                 .iter()
@@ -1181,7 +1268,7 @@ mod tests {
             assert_eq!(
                 found, 1,
                 "{} must be in exactly one of EMAIL_KEYS / AUTO_BAN_KEYS / TIER_KEYS / \
-                 RATE_LIMIT_KEYS",
+                 SYSTEM_SETTINGS_KEYS / RATE_LIMIT_KEYS",
                 spec.key
             );
         }
