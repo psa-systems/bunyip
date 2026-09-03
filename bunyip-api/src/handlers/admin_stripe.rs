@@ -849,8 +849,8 @@ pub async fn list_stripe_webhooks(
 /// POST /v1/admin/stripe/webhooks
 ///
 /// Creates a Stripe webhook endpoint and auto-saves the returned signing secret
-/// to the store `SECRETS_STORAGE` declares (BUNYIP-542), then reloads the
-/// StripeService. In `environment` mode there is no writable store, so the
+/// to the provider `SECRETS_STORAGE` declares (BUNYIP-542), then reloads the
+/// StripeService. In `environment` mode there is no writable provider, so the
 /// endpoint is created and the secret is reported for the operator to file,
 /// rather than saved somewhere nothing reads.
 pub async fn create_stripe_webhook(
@@ -870,20 +870,20 @@ pub async fn create_stripe_webhook(
         .map_err(stripe_err_for(StripePermission::WebhookEndpoints))?;
 
     // If the webhook creation returned a signing secret, persist it to the
-    // declared store.
+    // declared provider.
     if let Some(ref secret) = webhook.secret {
-        let storage = config.secrets_storage;
-        if !storage.is_writable() {
+        let provider = config.secrets_provider;
+        if !provider.is_writable() {
             // The endpoint exists on Stripe's side now, so this is reported, not
             // swallowed: the admin must place the value themselves or events
             // stay rejected.
             tracing::error!(
-                secrets_storage = %storage,
+                secrets_provider = %provider,
                 "Created the Stripe webhook endpoint, but SECRETS_STORAGE=environment has no \
-                 writable store: the signing secret was NOT saved. Write it to the file \
+                 writable provider: the signing secret was NOT saved. Write it to the file \
                  STRIPE_WEBHOOK_SECRET_FILE points at and restart bunyip-api."
             );
-            return Err(crate::secrets::read_only_store_error(
+            return Err(crate::secrets::read_only_provider_error(
                 crate::config::GovernedSecret::StripeWebhookSecret,
             ));
         }
@@ -891,7 +891,7 @@ pub async fn create_stripe_webhook(
             &pool,
             &config,
             &app_key_set,
-            storage,
+            provider,
             crate::config::GovernedSecret::StripeWebhookSecret,
             secret,
             Some(admin.0.sub),
@@ -903,7 +903,7 @@ pub async fn create_stripe_webhook(
             crate::secrets::stripe_runtime_config(&pool, &config, &app_key_set, &row).await?;
         stripe.reload(new_config);
         tracing::info!(
-            secrets_storage = %storage,
+            secrets_provider = %provider,
             "Stripe service reloaded with new webhook secret"
         );
     }

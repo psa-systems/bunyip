@@ -4,12 +4,16 @@
 //! the 409) is unit-tested in `bunyip_api::secrets`. What lives here is the
 //! half a unit test cannot hold: that the DELETED precedence chain stays
 //! deleted, and that every read and write site of a governed secret goes through
-//! the one store layer. Each of these is a one-line edit away from silently
+//! the one provider layer. Each of these is a one-line edit away from silently
 //! coming back, which is exactly why they are grep-asserted.
+//!
+//! BUNYIP-642: the vocabulary is provider, while the variable is still
+//! `SECRETS_STORAGE` and the subcommands are still `secrets-*`, so this file
+//! keeps its name and asserts both halves of that split.
 
 use std::path::{Path, PathBuf};
 
-use bunyip_domain::config::{env_spec, EnvClass, GovernedSecret, SecretsStorage};
+use bunyip_domain::config::{env_spec, EnvClass, GovernedSecret, SecretsProvider};
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -33,6 +37,9 @@ fn production_code(source: &str) -> String {
 
 /// `SECRETS_STORAGE` is required in EVERY environment, with the legal values in
 /// its remedy: an unset value must stop the boot, not fall back to a guess.
+///
+/// BUNYIP-642 renamed the type to `SecretsProvider` and deliberately did NOT
+/// rename this variable, so both spellings are asserted together here.
 #[test]
 fn secrets_storage_is_required_everywhere_and_names_its_legal_values() {
     let spec = env_spec("SECRETS_STORAGE").expect("classified in ENV_INVENTORY");
@@ -44,13 +51,56 @@ fn secrets_storage_is_required_everywhere_and_names_its_legal_values() {
             spec.remedy
         );
         assert_eq!(
-            SecretsStorage::parse(value).map(|s| s.as_str()),
+            SecretsProvider::parse(value).map(|s| s.as_str()),
             Some(value)
         );
     }
-    assert!(SecretsStorage::parse("db").is_none());
-    assert!(SecretsStorage::parse("").is_none());
-    assert!(SecretsStorage::LEGAL_VALUES.contains("infisical"));
+    assert!(SecretsProvider::parse("db").is_none());
+    assert!(SecretsProvider::parse("").is_none());
+    assert!(SecretsProvider::LEGAL_VALUES.contains("infisical"));
+}
+
+/// BUNYIP-642: the operator-typed surface did NOT move with the vocabulary. The
+/// variable is asserted above; here it is the three subcommand names, which
+/// every runbook and every `docker compose run` line in the field types
+/// verbatim. A rename would be silent: an unknown subcommand falls through to
+/// `run_reencrypt_subcommand`, so the operator gets "unknown command" rather
+/// than a compile error.
+#[test]
+fn the_three_secrets_subcommands_keep_their_names() {
+    let main = production_code(&read("bunyip-api/src/main.rs"));
+    for subcommand in ["secrets-status", "secrets-migrate", "secrets-purge"] {
+        assert!(
+            main.contains(&format!("\"{subcommand}\" =>")),
+            "main.rs must still dispatch `{subcommand}`: renaming it breaks every \
+             runbook (BUNYIP-642)"
+        );
+    }
+}
+
+/// BUNYIP-642: the old vocabulary stays gone. `SecretsStorage` and
+/// `read_only_store_error` are compile errors today, but a new module can
+/// reintroduce the word without the compiler noticing, which is how two names
+/// for one concept came back into the suite in the first place.
+#[test]
+fn the_storage_spelling_of_the_provider_does_not_come_back() {
+    for relative in [
+        "crates/bunyip-domain/src/config.rs",
+        "crates/bunyip-domain/src/services/integration_status.rs",
+        "bunyip-api/src/secrets.rs",
+        "bunyip-api/src/main.rs",
+        "bunyip-api/src/handlers/admin.rs",
+        "bunyip-api/src/handlers/admin_stripe.rs",
+    ] {
+        let source = read(relative);
+        for retired in ["SecretsStorage", "read_only_store_error"] {
+            assert!(
+                !source.contains(retired),
+                "{relative} names {retired}; the secrets vocabulary is provider \
+                 (BUNYIP-642). Only the SECRETS_STORAGE variable keeps the old word."
+            );
+        }
+    }
 }
 
 /// The three-level precedence chain is GONE. `EmailConfig::from_env` used to
@@ -69,8 +119,8 @@ fn the_smtp_password_precedence_chain_stays_deleted() {
     let main = production_code(&read("bunyip-api/src/main.rs"));
     assert!(
         !main.contains("fetch_secret("),
-        "main.rs must not call Infisical directly; the store layer \
-         (bunyip_api::secrets) owns every store read (BUNYIP-542)"
+        "main.rs must not call Infisical directly; the provider layer \
+         (bunyip_api::secrets) owns every provider read (BUNYIP-542)"
     );
     assert!(
         !main.contains("smtp_password.is_empty()"),
@@ -84,7 +134,7 @@ fn the_smtp_password_precedence_chain_stays_deleted() {
 /// exposure BUNYIP-38 removed, so `secret_env` (which falls back to the plain
 /// variable) must not be how a governed secret arrives.
 #[test]
-fn the_environment_store_is_file_backed_only() {
+fn the_environment_provider_is_file_backed_only() {
     let config = read("crates/bunyip-domain/src/config.rs");
     let reader = config
         .split("pub fn read_environment(self) -> Option<String> {")
@@ -93,7 +143,7 @@ fn the_environment_store_is_file_backed_only() {
     let body = reader.split('}').next().unwrap_or(reader);
     assert!(
         body.contains("secret_file_env"),
-        "the environment store must read {{NAME}}_FILE only: {body}"
+        "the environment provider must read {{NAME}}_FILE only: {body}"
     );
     assert!(
         !body.contains("secret_env("),
@@ -116,11 +166,11 @@ fn the_environment_store_is_file_backed_only() {
     );
 }
 
-/// The admin save paths write through the store layer, never straight to the
-/// ciphertext columns, and gate that write on the declared store. Without this
-/// an `infisical`-mode save would silently keep writing the database.
+/// The admin save paths write through the provider layer, never straight to the
+/// ciphertext columns, and gate that write on the declared provider. Without
+/// this an `infisical`-mode save would silently keep writing the database.
 #[test]
-fn admin_saves_go_through_the_declared_store() {
+fn admin_saves_go_through_the_declared_provider() {
     for (relative, handler) in [
         ("bunyip-api/src/handlers/admin.rs", "update_email_config"),
         ("bunyip-api/src/handlers/admin.rs", "update_stripe_config"),
@@ -140,17 +190,17 @@ fn admin_saves_go_through_the_declared_store() {
             .unwrap_or_default()
             .to_string();
         assert!(
-            body.contains("config.secrets_storage") || body.contains("storage"),
-            "{handler} must resolve the declared store before writing a secret"
+            body.contains("config.secrets_provider"),
+            "{handler} must resolve the declared provider before writing a secret"
         );
         assert!(
-            body.contains("read_only_store_error"),
-            "{handler} must answer 409 when the declared store is not writable"
+            body.contains("read_only_provider_error"),
+            "{handler} must answer 409 when the declared provider is not writable"
         );
         assert!(
             body.contains("crate::secrets::write_secret")
-                || body.contains("SecretsStorage::Database"),
-            "{handler} must write through the store layer, not straight to the \
+                || body.contains("SecretsProvider::Database"),
+            "{handler} must write through the provider layer, not straight to the \
              ciphertext columns"
         );
     }
@@ -158,9 +208,9 @@ fn admin_saves_go_through_the_declared_store() {
 
 /// `stripe_config_from_db_model` and `StripeConfigResponse::from_db` decrypt the
 /// row's own ciphertext columns, so they are correct ONLY when the database is
-/// the declared store. They stay as the database-store form (and as decryption
-/// test coverage), but nothing that serves a request or boots the api may call
-/// them: that call is the DB-only read the store declaration replaced.
+/// the declared provider. They stay as the database-provider form (and as
+/// decryption test coverage), but nothing that serves a request or boots the api
+/// may call them: that call is the DB-only read the declaration replaced.
 #[test]
 fn the_database_only_stripe_readers_have_no_request_or_boot_callers() {
     for relative in [
@@ -210,20 +260,20 @@ fn every_governed_secret_is_fully_described() {
     );
 }
 
-/// `environment` is the one read-only store, and that is a property of the
-/// store rather than a policy: a process cannot set a variable for its own next
-/// boot, and the compose secret files are mounted read-only.
+/// `environment` is the one read-only provider, and that is a property of the
+/// provider rather than a policy: a process cannot set a variable for its own
+/// next boot, and the compose secret files are mounted read-only.
 #[test]
-fn only_the_environment_store_is_read_only() {
-    assert!(!SecretsStorage::Environment.is_writable());
-    assert!(SecretsStorage::Database.is_writable());
-    assert!(SecretsStorage::Infisical.is_writable());
+fn only_the_environment_provider_is_read_only() {
+    assert!(!SecretsProvider::Environment.is_writable());
+    assert!(SecretsProvider::Database.is_writable());
+    assert!(SecretsProvider::Infisical.is_writable());
 }
 
-/// The reference compose file states the store with no default, and both dev
+/// The reference compose file states the provider with no default, and both dev
 /// overlays default it to `database`, which is what dev has always used.
 #[test]
-fn compose_declares_the_store() {
+fn compose_declares_the_provider() {
     let production = read("compose.yml");
     assert!(
         production.contains("SECRETS_STORAGE: ${SECRETS_STORAGE:?"),

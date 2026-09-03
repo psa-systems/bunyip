@@ -1,7 +1,7 @@
 # Application secrets
 
 bunyip's secrets split by whether the app needs them to boot. **Group-1** startup secrets are file/SOPS-based and
-provided directly. **Group-2** integration secrets come from the ONE store the deployment declares in `SECRETS_STORAGE`
+provided directly. **Group-2** integration secrets come from the ONE provider the deployment declares in `SECRETS_STORAGE`
 (BUNYIP-542): `environment`, `database` or `infisical`. `CLAUDE.md`'s "Secret sourcing (two tiers)" bullet is the
 one-paragraph summary; the enforcement table and the per-mode write behaviour are in
 [`configuration.md`](configuration.md#secrets_storage-where-the-integration-secrets-live-bunyip-542).
@@ -46,14 +46,14 @@ self-host, or add the value to the SOPS
 file. The receiving app holds the same value: mokosh-server reads it as `BUNYIP_WEBHOOK_SECRET`.
 
 `SMTP_PASSWORD` is deliberately absent from the table above: it is a Group-2 governed secret, so it comes from whichever
-store `SECRETS_STORAGE` declares. A deployment running `SECRETS_STORAGE=environment` adds `smtp_password`,
+provider `SECRETS_STORAGE` declares. A deployment running `SECRETS_STORAGE=environment` adds `smtp_password`,
 `stripe_secret_key` and `stripe_webhook_secret` as ordinary compose secrets and passes them as `{NAME}_FILE`; nothing
 else changes about how they are provided.
 `./secrets/oidc/*.pem` is out of scope: the OIDC signing keys are generated out of band.
 
 ### Rotating a Group-1 secret
 
-Change the value in the secret store (the SOPS `compose-secrets.yml` on the host, or `./secrets/<file>` for a
+Change the value in the secret file (the SOPS `compose-secrets.yml` on the host, or `./secrets/<file>` for a
 self-host), then `docker compose up --detach` (or restart the affected service) so the process re-reads
 `/run/secrets/*`. Two need more than that:
 
@@ -68,12 +68,18 @@ self-host), then `docker compose up --detach` (or restart the affected service) 
 
 ## Group-2: the governed integration secrets
 
-Four secrets are **governed** by `SECRETS_STORAGE`, because each has more than one possible store: `SMTP_PASSWORD`,
+Four secrets are **governed** by `SECRETS_STORAGE`, because each has more than one possible provider: `SMTP_PASSWORD`,
 `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
-and `SUPPORT_IMAP_PASSWORD`. The declared store is the only one bunyip reads. There is no precedence chain and no
+and `SUPPORT_IMAP_PASSWORD`. The declared provider is the only one bunyip reads. There is no precedence chain and no
 fallback.
 
-bunyip-api reads the Infisical store itself, in Rust (`crates/bunyip-domain/src/services/infisical.rs`, BUNYIP-525),
+**A note on the name.** The suite calls a selectable implementation a **provider**, and bunyip's code says
+`SecretsProvider` (BUNYIP-642). The variable is still spelled `SECRETS_STORAGE` and the subcommands are still
+`secrets-status` / `secrets-migrate` / `secrets-purge`, deliberately: renaming either would break every running
+deployment and every runbook for a vocabulary change with no functional gain. Read "the declared provider" and
+"`SECRETS_STORAGE`" as the same thing throughout.
+
+bunyip-api reads the Infisical provider itself, in Rust (`crates/bunyip-domain/src/services/infisical.rs`, BUNYIP-525),
 using a Universal Auth machine identity against the `/runtime` folder. There is no CLI and no sidecar.
 
 Whether Infisical is a boot dependency is now **mode-scoped**:
@@ -81,7 +87,7 @@ Whether Infisical is a boot dependency is now **mode-scoped**:
 - `SECRETS_STORAGE=database` / `environment`: Infisical is **not contacted at boot at all**, so it can never delay or
   block a restart.
 - `SECRETS_STORAGE=infisical`: the read is **fail-closed**. An unreachable Infisical, bad credentials or a failed read
-  logs one `ERROR` and exits 1. An operator who declared Infisical the store of record is better served by a refusal
+  logs one `ERROR` and exits 1. An operator who declared Infisical the provider of record is better served by a refusal
   than by a silent boot with email and payments disabled.
 
 ### Infisical folder layout
@@ -107,7 +113,7 @@ environment, project id, secret path, and the two credentials) lives in the SOPS
 
 | Env var                   | Secret? | How read     | Default | Meaning                                                                                |
 |---------------------------|---------|--------------|---------|----------------------------------------------------------------------------------------|
-| `INFISICAL_ENABLED`       | no      | plain env    | `false` | Enable Infisical store. Used with `SECRETS_STORAGE=infisical`                          |
+| `INFISICAL_ENABLED`       | no      | plain env    | `false` | Enable the Infisical provider. Used with `SECRETS_STORAGE=infisical`                   |
 | `INFISICAL_ADDRESS`       | no      | plain env    | `""`    | Infisical base URL (e.g. `https://infisical.a8n.systems`)                              |
 | `INFISICAL_PROJECT_ID`    | no      | plain env    | `""`    | the Infisical project (workspace) id                                                   |
 | `INFISICAL_ENVIRONMENT`   | no      | plain env    | `""`    | (`staging`/`prod`); Infisical > Secrets > Project > Settings > Environments slug       |
@@ -142,11 +148,12 @@ Each step is `docker compose exec api /app/bunyip-api <subcommand>` (or
 `docker compose run --rm api <subcommand>`). None of them prints a secret value.
 
 1. **`bunyip-api secrets-status`** (add `--json` for machine output). Read-only. For each governed secret it reports
-   which stores hold a value, which one is live under the current mode, and a readiness verdict for each candidate mode.
+   which providers hold a value, which one is live under the current mode, and a readiness verdict for each candidate
+   mode. The `--json` keys are unchanged by the BUNYIP-642 rename, so an existing script keeps working.
    Run this first, with nothing at risk.
 
 2. **`bunyip-api secrets-migrate --to <mode> [--dry-run]`**. Copies each governed secret from its current live source
-   into the target store, leaving the source copy in place. `--dry-run` prints the plan and writes nothing.
+   into the target provider, leaving the source copy in place. `--dry-run` prints the plan and writes nothing.
     - `--to database` writes the encrypted columns.
     - `--to infisical` upserts each key (needs the write scope above).
     - `--to environment` cannot write, so it emits the exact `{NAME}_FILE` entries and `./secrets/*` paths to create;
@@ -155,36 +162,36 @@ Each step is `docker compose exec api /app/bunyip-api <subcommand>` (or
 3. **`bunyip-api secrets-status`** again. Every governed secret must read `ready`
    for the target mode.
 
-4. **Set `SECRETS_STORAGE=<mode>` and restart.** The boot log names the declared store, plus one `WARN` per copy still
+4. **Set `SECRETS_STORAGE=<mode>` and restart.** The boot log names the declared provider, plus one `WARN` per copy still
    sitting outside it.
 
 5. **Soak.** The old copies are untouched, so a wrong value is a rollback (set
    `SECRETS_STORAGE` back and restart), not an outage. This is exactly why the cutover does not delete anything.
 
-6. **`bunyip-api secrets-purge --confirm`**. Removes the copies outside the declared store. It refuses to run unless the
-   declared store holds every governed secret, and it is never invoked automatically. The `environment`
-   store cannot be written from the app, so its copies are reported as the
+6. **`bunyip-api secrets-purge --confirm`**. Removes the copies outside the declared provider. It refuses to run unless
+   the declared provider holds every governed secret, and it is never invoked automatically. The `environment`
+   provider cannot be written from the app, so its copies are reported as the
    `{NAME}_FILE` entries for the operator to remove.
 
 Staging is migrated and soaked before production is touched.
 
 ### Changing the Infisical instance
 
-The store stays `infisical` and the instance changes: a new Infisical deployment, a migrated one, or a different
+The provider stays `infisical` and the instance changes: a new Infisical deployment, a migrated one, or a different
 `INFISICAL_ENVIRONMENT` /
 `INFISICAL_SECRET_PATH` on the same one. This is supported by the commands above, in a different order, and it needs a
 hop through the database.
 
 **Why the hop.** bunyip-api holds exactly ONE set of `INFISICAL_*` values (`InfisicalSettings::from_env` in
 `crates/bunyip-domain/src/config.rs`), so no process, and therefore no command, can hold the old and the new instance
-open at once. `secrets-migrate` reads from the DECLARED store and writes to the store named by `--to`, so declaring the
+open at once. `secrets-migrate` reads from the DECLARED provider and writes to the provider named by `--to`, so declaring the
 database in the middle turns one impossible copy into two ordinary ones.
 
 Never just repoint `INFISICAL_*` and restart. The new instance is empty, so in
 `infisical` mode the api either exits 1 (new instance not reachable, or its credentials not issued yet) or boots with
 email and payments off, and the values are stranded on an instance it no longer talks to.
 
-1. **Copy out of the old instance.** Declared store is still `infisical`, pointing at the old instance and healthy. Run
+1. **Copy out of the old instance.** Declared provider is still `infisical`, pointing at the old instance and healthy. Run
    `docker compose exec api /app/bunyip-api secrets-migrate --to database --dry-run`, then the same without `--dry-run`.
    It reads the live values from the old instance and writes the encrypted `email_config` / `stripe_config` columns.
    `bunyip-api secrets-status` must then read `database: ready` for all three.
@@ -194,14 +201,14 @@ email and payments off, and the values are stranded on an instance it no longer 
    boot logs one `WARN` per copy still on the old instance; that is the expected duplicate, not a fault.
 
 3. **Repoint `INFISICAL_*` at the new instance** (address, project id, environment, secret path, and the two
-   credentials) and restart to pick the values up. Nothing reads them: the declared store is the database, and
+   credentials) and restart to pick the values up. Nothing reads them: the declared provider is the database, and
    `database` mode makes no call to Infisical. Keep `INFISICAL_ENABLED=true`, so
-   `secrets-status` still inspects the Infisical store and can answer whether the NEW instance is ready; with it off,
+   `secrets-status` still inspects the Infisical provider and can answer whether the NEW instance is ready; with it off,
    the `infisical:` rows read
    `not inspected` and the next step is unverifiable.
 
 4. **Copy into the new instance.** Run
-   `bunyip-api secrets-migrate --to infisical`. It reads the declared database store and upserts each key into the new
+   `bunyip-api secrets-migrate --to infisical`. It reads the declared database provider and upserts each key into the new
    instance, which needs the **write**
    access in "Access the machine identity needs". `bunyip-api secrets-status`
    must then read `infisical: ready` for all three, and that answer now comes from the new instance.
@@ -211,9 +218,9 @@ email and payments off, and the values are stranded on an instance it no longer 
    `bunyip-api secrets-purge --confirm` to drop the database copies.
 
 **Why it is safe.** Every intermediate state is a legal, running configuration, so the sequence can stop after any step
-and resume days later. At each step the rollback is the store just left: back to `infisical` on the old instance through
+and resume days later. At each step the rollback is the provider just left: back to `infisical` on the old instance through
 step 2, back to `database` after steps 3 to 5, since nothing is deleted until the explicit purge. Nothing is ever
-mid-flight between two stores.
+mid-flight between two providers.
 
 **The same procedure covers a change of `INFISICAL_ENVIRONMENT` or
 `INFISICAL_SECRET_PATH`** on one instance. Those are connection parameters like the address, so the old and the new
@@ -240,11 +247,11 @@ reader.
 | Symptom                                                                                                                                                   | Cause                                                                                                                                                                                                                                                                            |
 |-----------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Boot `ERROR`: `SECRETS_STORAGE is not usable`                                                                                                             | Unset or not one of `environment` / `database` / `infisical`. Set it; `database` matches a deployment whose secrets were entered on the admin pages.                                                                                                                             |
-| Boot `ERROR`: `<SECRET> is absent from the declared <X> store but present in the <Y> store`                                                               | The copy lives in a store this deployment does not read. Run `secrets-migrate --to <X>`, or declare `<Y>`.                                                                                                                                                                       |
-| Boot `WARN`: `<SECRET> is also stored in the <Y> store`                                                                                                   | A leftover copy. Harmless today, live if the mode ever changes to `<Y>`. Clear it with `secrets-purge --confirm`.                                                                                                                                                                |
-| Boot `WARN`: `<SECRET> is not set in the declared store`                                                                                                  | No store holds it; the named feature is off. Set it on the admin page or migrate it in.                                                                                                                                                                                          |
+| Boot `ERROR`: `<SECRET> is absent from the declared <X> provider but present in the <Y> provider`                                                               | The copy lives in a provider this deployment does not read. Run `secrets-migrate --to <X>`, or declare `<Y>`.                                                                                                                                                                       |
+| Boot `WARN`: `<SECRET> is also held by the <Y> provider`                                                                                                   | A leftover copy. Harmless today, live if the mode ever changes to `<Y>`. Clear it with `secrets-purge --confirm`.                                                                                                                                                                |
+| Boot `WARN`: `<SECRET> is not set in the declared provider`                                                                                                  | No provider holds it; the named feature is off. Set it on the admin page or migrate it in.                                                                                                                                                                                          |
 | Boot `ERROR`: Infisical `could not be read` in `infisical` mode                                                                                           | Fail-closed by design. Wrong `INFISICAL_CLIENT_ID` / `_CLIENT_SECRET`, no Universal Auth on `INFISICAL_ADDRESS`, or the instance is unreachable.                                                                                                                                 |
-| After repointing `INFISICAL_*` at a new instance: boot `ERROR` Infisical `could not be read`, or one `WARN` per secret `is not set in the declared store` | The instance was changed without the database hop, so the values are still on the OLD instance and nothing reads it now. Point `INFISICAL_*` back at the old instance, restart, and follow "Changing the Infisical instance" above.                                              |
+| After repointing `INFISICAL_*` at a new instance: boot `ERROR` Infisical `could not be read`, or one `WARN` per secret `is not set in the declared provider` | The instance was changed without the database hop, so the values are still on the OLD instance and nothing reads it now. Point `INFISICAL_*` back at the old instance, restart, and follow "Changing the Infisical instance" above.                                              |
 | Infisical read returns HTTP 404 for a key                                                                                                                 | The key is not at the queried project/env/path: check `INFISICAL_SECRET_PATH`, `INFISICAL_ENVIRONMENT` and `INFISICAL_PROJECT_ID`. The v3 endpoint is confirmed correct on infisical.a8n.systems (401 unauthenticated), so a 404 is a lookup mismatch, not an API-version issue. |
 | Admin save fails with "Could not write ... to Infisical"                                                                                                  | The machine identity lacks **write** access to `INFISICAL_SECRET_PATH`. Nothing was saved and nothing was reloaded.                                                                                                                                                              |
-| Admin secret field is read-only, save returns 409                                                                                                         | `SECRETS_STORAGE=environment`. There is no writable store: edit the file `{NAME}_FILE` points at and restart.                                                                                                                                                                    |
+| Admin secret field is read-only, save returns 409                                                                                                         | `SECRETS_STORAGE=environment`. There is no writable provider: edit the file `{NAME}_FILE` points at and restart.                                                                                                                                                                    |
