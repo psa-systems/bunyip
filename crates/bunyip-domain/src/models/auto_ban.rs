@@ -6,9 +6,10 @@ use uuid::Uuid;
 
 /// Database row for the `auto_ban_config` singleton table.
 ///
-/// Every tunable column is nullable: a NULL means "fall back to the
-/// environment-variable default at load time" (see
-/// [`AutoBanConfig::from_db_row`](crate::config::AutoBanConfig::from_db_row)).
+/// Every tunable column is nullable: a NULL means this row's provider does not
+/// hold that key, so the next provider down the declared stack serves it (see
+/// [`AutoBanConfig::database_provider`](crate::config::AutoBanConfig::database_provider)
+/// and [`crate::config_providers`]).
 #[derive(Debug, sqlx::FromRow)]
 pub struct AutoBanConfigRow {
     pub id: i32,
