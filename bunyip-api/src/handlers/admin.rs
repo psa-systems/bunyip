@@ -12,6 +12,7 @@ use chrono::{Duration, Utc};
 
 use super::{check_rate_limit, live_free_price_id};
 use crate::config::{Config, TierConfig};
+use crate::config_providers::{ConfigStack, DatabaseProvider};
 use crate::errors::AppError;
 use crate::middleware::AdminUser;
 use crate::models::stripe::encrypt_secret;
@@ -35,6 +36,33 @@ use crate::services::{
 use crate::validation;
 use bunyip_domain::services::{BunyipEvent, EventBus};
 use bunyip_oci::services::ManifestCache;
+
+/// BUNYIP-643: the declared provider stack for one admin-managed section, plus
+/// the one-word source label the page shows.
+///
+/// A Group-1 startup value in a row is refused by the database provider and
+/// surfaces here as an operator-facing 400 naming the key, never as a silent
+/// fallback to another provider.
+fn section_stack(
+    database: Result<DatabaseProvider, crate::config::ConfigFailure>,
+    keys: &[&str],
+) -> Result<(ConfigStack, &'static str), AppError> {
+    let database = database.map_err(|failure| {
+        AppError::BadRequest(format!(
+            "{} is not usable - {}. {}",
+            failure.var, failure.reason, failure.remedy
+        ))
+    })?;
+    let stack = ConfigStack::with_database(database);
+    let source = stack
+        .serving_any(keys)
+        .map(|kind| kind.as_str())
+        // No provider holds any of this section's keys, so the built-in
+        // defaults stand, which is what the page has always called
+        // "environment".
+        .unwrap_or("environment");
+    Ok((stack, source))
+}
 
 /// BUNYIP-145: publish a `claims_changed` event for the given user. Fire-and-
 /// forget: the event bus drops the event silently when no tabs are subscribed.
@@ -2519,8 +2547,12 @@ pub async fn set_user_tier(
     let plan = plan_admin_tier_move(totp_valid, &from_tier, &to_tier)?;
 
     // Trial windows come from the resolved tier settings.
-    let tier_config =
-        crate::config::TierConfig::from_db_row(&TierConfigRepository::get(&pool).await?);
+    let tier_row = TierConfigRepository::get(&pool).await?;
+    let (tier_stack, _source) = section_stack(
+        TierConfig::database_provider(&tier_row),
+        crate::config_providers::TIER_KEYS,
+    )?;
+    let tier_config = TierConfig::resolve(&tier_stack, Some(&tier_row));
 
     let user = UserRepository::admin_set_membership_tier(
         &pool,
@@ -2665,11 +2697,10 @@ pub async fn get_email_config(
     let request_id = get_request_id(&req);
 
     let row = EmailConfigRepository::get(&pool).await?;
-    let source = if EmailConfig::has_db_overrides(&row) {
-        "database"
-    } else {
-        "environment"
-    };
+    let (stack, source) = section_stack(
+        EmailConfig::database_provider(&row),
+        crate::config_providers::EMAIL_KEYS,
+    )?;
     // BUNYIP-542: the non-secret settings come from the row (or the env
     // defaults); the password comes from the declared store alone, so the page
     // can never claim a password the running service does not use.
@@ -2680,7 +2711,7 @@ pub async fn get_email_config(
         crate::config::GovernedSecret::SmtpPassword,
     )
     .await?;
-    let resolved = EmailConfig::from_db_row(&row, smtp_password, config.is_production());
+    let resolved = EmailConfig::resolve(&stack, smtp_password, config.is_production());
 
     let has_imap_password = crate::secrets::read_secret(
         &pool,
@@ -2862,7 +2893,11 @@ pub async fn update_email_config(
             .await?
         }
     };
-    let resolved = EmailConfig::from_db_row(&updated, resolved_password, config.is_production());
+    let (stack, _source) = section_stack(
+        EmailConfig::database_provider(&updated),
+        crate::config_providers::EMAIL_KEYS,
+    )?;
+    let resolved = EmailConfig::resolve(&stack, resolved_password, config.is_production());
 
     // BUNYIP-204/351: refuse to disable email in production, even via the DB.
     if config.is_production() && !resolved.enabled {
@@ -2966,7 +3001,11 @@ pub async fn test_email_config(
         crate::config::GovernedSecret::SmtpPassword,
     )
     .await?;
-    let resolved = EmailConfig::from_db_row(&row, smtp_password, config.is_production());
+    let (stack, _source) = section_stack(
+        EmailConfig::database_provider(&row),
+        crate::config_providers::EMAIL_KEYS,
+    )?;
+    let resolved = EmailConfig::resolve(&stack, smtp_password, config.is_production());
 
     let outcome = EmailService::test_connection(&resolved).await;
 
@@ -3065,7 +3104,11 @@ pub async fn send_test_email_message(
         crate::config::GovernedSecret::SmtpPassword,
     )
     .await?;
-    let resolved = EmailConfig::from_db_row(&row, smtp_password, config.is_production());
+    let (stack, _source) = section_stack(
+        EmailConfig::database_provider(&row),
+        crate::config_providers::EMAIL_KEYS,
+    )?;
+    let resolved = EmailConfig::resolve(&stack, smtp_password, config.is_production());
 
     // A transport that will not even build is the same class of news as a relay
     // that refuses the message, so it reports through the same banner instead
@@ -3198,12 +3241,11 @@ pub async fn get_tier_config(
     let request_id = get_request_id(&req);
 
     let row = TierConfigRepository::get(&pool).await?;
-    let resolved = TierConfig::from_db_row(&row);
-    let source = if TierConfig::has_db_overrides(&row) {
-        "database"
-    } else {
-        "environment"
-    };
+    let (stack, source) = section_stack(
+        TierConfig::database_provider(&row),
+        crate::config_providers::TIER_KEYS,
+    )?;
+    let resolved = TierConfig::resolve(&stack, Some(&row));
 
     let (lifetime_used, early_adopter_used) =
         UserRepository::count_tier_assignments(pool.get_ref()).await?;
@@ -3419,7 +3461,11 @@ pub async fn update_tier_config(
     .await?;
 
     // Hot-reload the AuthService with the new tier config
-    let resolved = TierConfig::from_db_row(&row);
+    let (stack, _source) = section_stack(
+        TierConfig::database_provider(&row),
+        crate::config_providers::TIER_KEYS,
+    )?;
+    let resolved = TierConfig::resolve(&stack, Some(&row));
     auth_service.reload_tier_config(resolved.clone());
     // BUNYIP-487: the public /pricing payload is derived from exactly this row
     // plus the Stripe price it maps to, so a save must not wait out the TTL.
@@ -3510,12 +3556,11 @@ pub async fn get_auto_ban_config(
     let request_id = get_request_id(&req);
 
     let row = AutoBanConfigRepository::get(&pool).await?;
-    let resolved = AutoBanConfig::from_db_row(&row);
-    let source = if AutoBanConfig::has_db_overrides(&row) {
-        "database"
-    } else {
-        "environment"
-    };
+    let (stack, source) = section_stack(
+        AutoBanConfig::database_provider(&row),
+        crate::config_providers::AUTO_BAN_KEYS,
+    )?;
+    let resolved = AutoBanConfig::resolve(&stack);
 
     Ok(success(
         AutoBanConfigResponse {
@@ -3578,7 +3623,11 @@ pub async fn update_auto_ban_config(
     .await?;
 
     // Hot-reload the running AutoBanService so changes apply without a restart.
-    let resolved = AutoBanConfig::from_db_row(&row);
+    let (stack, _source) = section_stack(
+        AutoBanConfig::database_provider(&row),
+        crate::config_providers::AUTO_BAN_KEYS,
+    )?;
+    let resolved = AutoBanConfig::resolve(&stack);
     auto_ban.reload(resolved);
     tracing::info!(?resolved, "Auto-ban config updated and hot-reloaded");
 

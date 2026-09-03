@@ -18,7 +18,9 @@ derivable from the inventory:
 The dividing line for that last one: **environment variables** are read once at process start, so changing one means
 restarting the container, and they configure the deployment. **In-app settings** live in the database, are edited on the
 admin pages, and apply without a restart, and they configure the product. Where a setting exists in both places the
-environment variable is a bootstrap default and the database row wins; those are marked as such.
+database row wins, and it wins because that priority is DECLARED: see [configuration providers and their
+precedence](#configuration-providers-and-their-precedence-bunyip-643), which also adds the file provider between the
+two and makes the serving provider reportable per key.
 
 Secrets resolve through the `{NAME}_FILE` convention first (a compose secret under `/run/secrets/*`), then the plain
 variable (a dev `.env`). An empty value counts as unset everywhere. The exception is the four governed integration
@@ -189,6 +191,83 @@ Changing the Infisical **instance** (rather than the store) needs the database a
 holds one set of `INFISICAL_*` values and can never see both instances at once. That procedure is tracked in BUNYIP-544
 and belongs in the same runbook.
 
+## Configuration providers and their precedence (BUNYIP-643)
+
+`SECRETS_STORAGE` declares the ONE store the governed secrets come from. Configuration is different: it comes from
+several providers at once, in a **declared priority order**, and which one served a given value is reportable rather
+than something you have to read the code to work out.
+
+| Priority | Provider      | Where it is                                                          | Applies without a restart |
+|----------|---------------|-----------------------------------------------------------------------|---------------------------|
+| 1        | `database`    | the admin-managed rows: `email_config`, `auto_ban_config`, `tier_config` | yes, the save hot-reloads |
+| 2        | `file`        | `BUNYIP_CONFIG_DIR`, one file per key                                  | no, restart to apply      |
+| 3        | `environment` | the variables in the tables above                                      | no, restart to apply      |
+
+The highest-priority provider that holds a key serves it; when none does, the built-in default stands. The database is
+first because that is where it already was: before BUNYIP-643 the `email_config` / `auto_ban_config` / `tier_config`
+rows were applied on top of the environment per field, so an existing deployment resolves exactly the values it
+resolved before. The file provider sits above the environment because a file that could not override a value baked
+into compose would not be editable without a redeploy, which is the reason it exists.
+
+The registry is the settings with **more than one** possible provider, the same rule the governed secrets follow: a
+setting with exactly one source is not declared, because the declaration would be a no-op. So the Stripe price ids,
+`pricing_enabled`, `orgs_enabled` and the per-tier visibility flags stay database-only columns, and `SMTP_EHLO_NAME`,
+`APP_URL`, `APP_NAME`, `SUPPORT_INBOX_EMAIL` and `SUPPORT_IMAP_POLL_SECS` stay environment-only reads. The declared
+keys are the SMTP and IMAP settings, `EMAIL_ENABLED`, `ADMIN_NOTIFICATION_EMAILS`, the four `AUTO_BAN_*` values and the
+four `TIER_*` slot and trial lengths; `CONFIG_KEYS` in `crates/bunyip-domain/src/config_providers.rs` is the source of
+truth, and every entry names a variable `ENV_INVENTORY` classifies.
+
+### The file provider
+
+Unset `BUNYIP_CONFIG_DIR` (the default) means the file provider is **not enabled**, which is every deployment until an
+operator mounts one. Set it to a directory and each file in it is one key:
+
+```nu
+mkdir /app/config/conf.d
+"smtp.example.net" | save --raw /app/config/conf.d/SMTP_HOST
+"587"              | save --raw /app/config/conf.d/SMTP_PORT
+"starttls"         | save --raw /app/config/conf.d/SMTP_TLS
+```
+
+- A file is named for the key (`SMTP_FROM_EMAIL`) or for the variable that carries it (`SMTP_FROM`, which supplies both
+  the address and the display name exactly as the environment variable does). A file named for the key wins.
+- Contents are trimmed; an **empty file counts as absent**, not as an empty value.
+- A file whose name is not a declared key is ignored with a `WARN` naming it, so a typo is visible rather than inert.
+- The directory is **read-only to the application**: nothing in bunyip writes it, which is what lets it sit above the
+  environment without crossing the [configuration
+  boundary](#the-configuration-boundary-system-level-vs-application-level-bunyip-622). It is a different layer from the
+  API-writable YAML file at `BUNYIP_CONFIG_FILE` described [below](#application-level-config-yaml-layer-bunyip-579622),
+  whose keys are disjoint and whose precedence is the other way round; BUNYIP-644 tracks unifying the two.
+- The rate-limit caps are NOT declared keys and do not resolve through this stack: their variable names are a family
+  built at runtime from the action, so they are not `ENV_INVENTORY` entries, and `RateLimitConfigRepository::effective`
+  keeps its own const-then-environment-then-row order. BUNYIP-645 tracks bringing them in.
+- Group-1 startup values (`DATABASE_URL`, `APP_ENCRYPTION_KEY`, `JWT_SECRET`, `SECRETS_STORAGE`, the `INFISICAL_*`
+  credentials) are environment-and-file only. The database provider **refuses** one with a startup error naming it and
+  exit 1, because the database cannot hold the credential used to reach the database.
+
+### Which provider is serving each value
+
+```nu
+docker exec bunyip-api bunyip-api config-status
+docker exec bunyip-api bunyip-api config-status --json
+```
+
+Per key it prints the providers holding a value, the one serving it, and one of four conditions. No configuration value
+is ever printed, exactly as `secrets-status` never prints a secret. The four conditions mirror the secrets enforcement
+table:
+
+| Condition     | Meaning                                                                | Secrets equivalent |
+|---------------|------------------------------------------------------------------------|--------------------|
+| `use`         | only the highest-priority provider holds it                            | used               |
+| `default`     | no provider holds it, so the built-in default configures the setting   | feature off        |
+| `overridden`  | the highest-priority provider holds it and so does a lower one, whose value is ignored today and becomes live if the higher one is cleared | duplicate |
+| `shadowed`    | the highest-priority provider does not hold it, so a lower one serves  | misplaced          |
+
+The severity differs in one place, deliberately. For a secret, "absent from the declared store but present in another"
+is FATAL, because the deployment declared ONE store. For configuration it is `shadowed`, and it is normal: the
+precedence is an order, and a lower provider serving a key is how an override is meant to work. Only `overridden` is
+logged at boot, one `WARN` per ignored provider, which is the stale-copy case worth knowing about.
+
 ## Feature-gating (one `WARN`, boot continues)
 
 | Variable                                | Gate                        | What is off without it                                              |
@@ -258,6 +337,9 @@ per-tenant value stay in the database (BUNYIP-561), so they remain live-editable
 
 Every variable below has a working default; set it only to tune the deployment.
 
+- **Configuration providers**: `BUNYIP_CONFIG_DIR` - the directory the file provider reads, one file per key
+  (BUNYIP-643). Unset means that provider is not enabled and configuration resolves from the database and the
+  environment alone. See [configuration providers and their precedence](#configuration-providers-and-their-precedence-bunyip-643).
 - **Identity and transport**: `ENVIRONMENT` (unset means `production`), `APP_NAME` (the BOOTSTRAP product name only:
   see [Branding](#branding-branding-admin-page-branding)), `APP_URL`, `HOST_IP`, `APP_PORT`, `RUST_LOG`, `CORS_ORIGIN`,
   `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`, `BUNYIP_COOKIE_SHARED_DOMAIN`.
@@ -359,8 +441,11 @@ Unconfigured means payment is simply disabled. Test-mode walkthrough:
 
 ### Pricing tiers (`tier_config`, admin page: Pricing Tiers)
 
-Singleton row. Slot counts and trial lengths have env seeds; the Stripe identifiers and the two feature switches have
-**no env source at all**.
+Singleton row. The slot counts and trial lengths are declared configuration keys, so they also have a file and an
+environment provider (see [the declared order](#configuration-providers-and-their-precedence-bunyip-643)). The Stripe
+identifiers, the two feature switches and the per-tier visibility flags have **no second provider at all**: the admin
+page is their only source, which is exactly why they are not declared keys, so no file or environment value can ever
+turn a feature on.
 
 | Column                                                                              | Meaning                                                                   |
 |-------------------------------------------------------------------------------------|---------------------------------------------------------------------------|
@@ -443,14 +528,21 @@ removed with the plumbing that read them (BUNYIP-568).
 
 ### Email (`email_config`, admin page: Email)
 
-Singleton row; every column is nullable and a NULL column falls back to the matching environment variable per field,
-except `smtp_password`, which is a governed secret and follows `SECRETS_STORAGE` rather than a fallback. There is no
-column for the EHLO name: `SMTP_EHLO_NAME` is deployment identity, not SMTP tuning (BUNYIP-507), so it stays env-only
-alongside the base URL.
+Singleton row; every column is nullable and a NULL column means this row's provider does not hold that key, so the next
+provider in the [declared order](#configuration-providers-and-their-precedence-bunyip-643) (the file provider, then the
+environment) serves it. `smtp_password` and `imap_password` are the exceptions: they are governed secrets and follow
+`SECRETS_STORAGE`, never this stack. There is no column for the EHLO name: `SMTP_EHLO_NAME` is deployment identity, not
+SMTP tuning (BUNYIP-507), so it stays environment-only alongside the base URL and the poll interval.
+
+The **Source** the page shows is the highest-priority provider holding any of this section's keys, so it can now read
+`file` as well as `database` or `environment`. Run `bunyip-api config-status` for the per-key answer.
 
 ### Auto-ban (`auto_ban_config`, admin page: Auto-ban Settings)
 
-Singleton row: `enabled`, `threshold`, `window_secs`, `ban_duration_secs`. Every column has an env seed. Individual IPs
+Singleton row: `enabled`, `threshold`, `window_secs`, `ban_duration_secs`. Every column is a declared configuration key,
+so it also has a file and an environment provider (see [the declared
+order](#configuration-providers-and-their-precedence-bunyip-643)); a stored value that cannot narrow to its in-memory
+width is not held, so the next provider serves it rather than the value wrapping. Individual IPs
 are banned and lifted from the admin IP Bans screen, which is super-admin-only and takes effect on that address's next
 request.
 

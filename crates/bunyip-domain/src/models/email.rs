@@ -6,11 +6,12 @@ use uuid::Uuid;
 
 /// Database row for the `email_config` singleton table.
 ///
-/// Every tunable column is nullable: a NULL means "fall back to the
-/// environment-variable default at load time" (see
-/// [`EmailConfig::from_db_row`](crate::config::EmailConfig::from_db_row)). The
-/// SMTP password is stored encrypted (`smtp_password` ciphertext +
-/// `smtp_password_nonce`, versioned by `key_version`).
+/// Every tunable column is nullable: a NULL means this row's provider does not
+/// hold that key, so the next provider down the declared stack serves it (see
+/// [`EmailConfig::database_provider`](crate::config::EmailConfig::database_provider)
+/// and [`crate::config_providers`]). The SMTP password is stored encrypted
+/// (`smtp_password` ciphertext + `smtp_password_nonce`, versioned by
+/// `key_version`) and is a governed secret, never a configuration key.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct EmailConfigRow {
     pub id: i32,

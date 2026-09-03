@@ -54,7 +54,7 @@ fn secrets_storage_is_required_everywhere_and_names_its_legal_values() {
 }
 
 /// The three-level precedence chain is GONE. `EmailConfig::from_env` used to
-/// read `SMTP_PASSWORD` into a slot that `from_db_row` fell back to and that a
+/// read `SMTP_PASSWORD` into a slot that the database row fell back to and that a
 /// conditional Infisical fetch topped up "only when empty"; each of those three
 /// reads is asserted absent.
 #[test]

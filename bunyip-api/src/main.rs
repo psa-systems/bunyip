@@ -13,6 +13,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 
 use bunyip_api::{
     config::{secret_env, AutoBanConfig, Config, EmailConfig, TierConfig},
+    // BUNYIP-643: the declared configuration provider stack the three
+    // admin-managed configurations resolve through.
+    config_providers::ConfigStack,
     middleware::{
         auto_ban::{self, AutoBanService},
         request_id::RequestIdMiddleware,
@@ -398,19 +401,29 @@ async fn main() -> anyhow::Result<()> {
         "development-webhook-signing-secret-change-in-production".to_string()
     });
 
-    // Initialize tier config — prefer DB overrides, fall back to env vars
+    // BUNYIP-643: resolve the tier configuration through the declared provider
+    // stack (database, then file, then environment). The old
+    // `has_db_overrides` branch is gone: an empty database provider resolves to
+    // exactly what the deployment providers alone resolve, so the branch decided
+    // nothing and only hid the precedence.
     let tier_config = {
         use bunyip_api::repositories::TierConfigRepository;
-        match TierConfigRepository::get(&pool).await {
-            Ok(row) if TierConfig::has_db_overrides(&row) => {
-                info!("Tier config initialized from database");
-                TierConfig::from_db_row(&row)
+        let row = match TierConfigRepository::get(&pool).await {
+            Ok(row) => Some(row),
+            Err(e) => {
+                // Never silent: an unreadable row means the admin-managed values
+                // are NOT in force, which an operator must be able to see.
+                error!(error = %e, "tier_config could not be read; resolving the tier configuration from the file and environment providers alone");
+                None
             }
-            _ => {
-                info!("Tier config initialized from environment variables");
-                config.tier.clone()
-            }
-        }
+        };
+        let database = match row.as_ref().map(TierConfig::database_provider).transpose() {
+            Ok(provider) => provider.unwrap_or_default(),
+            Err(failure) => fatal_config_error(failure.var, &failure.reason, &failure.remedy),
+        };
+        let stack = ConfigStack::with_database(database);
+        stack.log_shadowed_providers();
+        TierConfig::resolve(&stack, row.as_ref())
     };
     let tier_config = Arc::new(std::sync::RwLock::new(tier_config));
 
@@ -514,16 +527,20 @@ async fn main() -> anyhow::Result<()> {
     // so email is wired ahead of auth.
     let email_config = {
         use bunyip_api::repositories::EmailConfigRepository;
-        match EmailConfigRepository::get(&pool).await {
-            Ok(row) if EmailConfig::has_db_overrides(&row) => {
-                info!("Email config initialized from database");
-                EmailConfig::from_db_row(&row, smtp_password, config.is_production())
+        let row = match EmailConfigRepository::get(&pool).await {
+            Ok(row) => Some(row),
+            Err(e) => {
+                error!(error = %e, "email_config could not be read; resolving the email configuration from the file and environment providers alone");
+                None
             }
-            _ => {
-                info!("Email config initialized from environment variables");
-                config.email.clone()
-            }
-        }
+        };
+        let database = match row.as_ref().map(EmailConfig::database_provider).transpose() {
+            Ok(provider) => provider.unwrap_or_default(),
+            Err(failure) => fatal_config_error(failure.var, &failure.reason, &failure.remedy),
+        };
+        let stack = ConfigStack::with_database(database);
+        stack.log_shadowed_providers();
+        EmailConfig::resolve(&stack, smtp_password, config.is_production())
     };
     // BUNYIP-204/351: a production deployment must not run with email disabled,
     // even when the effective config is resolved from the DB. The disabled path
@@ -857,20 +874,28 @@ async fn main() -> anyhow::Result<()> {
             .as_ref()
             .map(|p| Arc::clone(p) as Arc<dyn bunyip_domain::middleware::auth::AtJwtVerifier>);
 
-    // Initialize auto-ban config — prefer DB overrides, fall back to env vars
-    // (BUNYIP-351). Mirrors the tier/stripe DB-overrides-env pattern.
+    // BUNYIP-643: the same declared provider stack as the tier and email
+    // configurations above.
     let auto_ban_config = {
         use bunyip_api::repositories::AutoBanConfigRepository;
-        match AutoBanConfigRepository::get(&pool).await {
-            Ok(row) if AutoBanConfig::has_db_overrides(&row) => {
-                info!("Auto-ban config initialized from database");
-                AutoBanConfig::from_db_row(&row)
+        let row = match AutoBanConfigRepository::get(&pool).await {
+            Ok(row) => Some(row),
+            Err(e) => {
+                error!(error = %e, "auto_ban_config could not be read; resolving the auto-ban configuration from the file and environment providers alone");
+                None
             }
-            _ => {
-                info!("Auto-ban config initialized from environment variables");
-                config.auto_ban
-            }
-        }
+        };
+        let database = match row
+            .as_ref()
+            .map(AutoBanConfig::database_provider)
+            .transpose()
+        {
+            Ok(provider) => provider.unwrap_or_default(),
+            Err(failure) => fatal_config_error(failure.var, &failure.reason, &failure.remedy),
+        };
+        let stack = ConfigStack::with_database(database);
+        stack.log_shadowed_providers();
+        AutoBanConfig::resolve(&stack)
     };
 
     // Initialize account backup/restore service (BUNYIP-353 / BUNYIP-356). One
@@ -1409,6 +1434,22 @@ async fn run_subcommand(
             print!("{summary}");
             Ok(())
         }
+        "config-status" => {
+            // BUNYIP-643: the configuration twin of `secrets-status`. Reads the
+            // three admin-managed rows and reports, per key, which provider is
+            // serving it and which providers hold a value that is ignored.
+            let stack = bunyip_api::config_status::survey(pool).await?;
+            let report = bunyip_domain::config_providers::status_report(&stack);
+            if args.iter().any(|arg| arg == "--json") {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!(
+                    "{}",
+                    bunyip_domain::config_providers::render_status(&report)
+                );
+            }
+            Ok(())
+        }
         "secrets-purge" => {
             let survey = secrets::survey(pool, config, &key_set, probe).await?;
             let confirm = args.iter().any(|arg| arg == "--confirm");
@@ -1492,7 +1533,7 @@ async fn run_reencrypt_subcommand(
         }
         other => anyhow::bail!(
             "unknown subcommand {other:?} (known: reencrypt-secrets, secrets-status, \
-             secrets-migrate, secrets-purge, reconcile-duplicate-prices)"
+             secrets-migrate, secrets-purge, config-status, reconcile-duplicate-prices)"
         ),
     }
 }
