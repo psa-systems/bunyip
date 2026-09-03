@@ -622,12 +622,14 @@ the platform to its compile-time caps.
 |----------------------------------------------------------------------|-------------------------------------------------------------------|-------------------------------------------------------------------------------------|
 | `applications.forgejo_owner`, `.forgejo_repo`, `.pinned_release_tag` | admin Applications page                                           | an app is downloadable only when all three are set                                  |
 | `applications.webhook_url`                                           | admin Applications page                                           | also upserted at boot for the `mokosh` row from `MOKOSH_WEBHOOK_URL`                |
-| `oauth_clients`                                                      | migrations, boot-time reconciliation, `just register-dev-clients` | the `MOKOSH_APPS_*`, `DRILLMARK_*` and `LETS_CHAT_*` variables reconcile these rows |
+| `oauth_clients`                                                      | migrations, boot-time reconciliation, `just register-dev-clients`, `bunyip-api machine-client` | the `MOKOSH_APPS_*`, `DRILLMARK_*` and `LETS_CHAT_*` variables reconcile these rows |
 
 `oauth_clients` is also the suite's machine-identity registry: a registration that is confidential, authenticates with
 `client_secret_basic` and lists `client_credentials` in `allowed_grant_types` may call the mailer relay
-(`POST /v1/mailer/send`, BUNYIP-602). Provisioning, the two rate-limit actions it adds (`mailer_send`,
-`mailer_auth_failures`) and the SMTP/DNS prerequisites are in [`mailer-relay.md`](mailer-relay.md).
+(`POST /v1/mailer/send`, BUNYIP-602). `bunyip-api machine-client register` / `rotate` / `disable` / `list` is the
+supported way to provision one; it prints the plaintext secret once and stores only the Argon2id hash. That family, the
+two rate-limit actions the relay adds (`mailer_send`, `mailer_auth_failures`) and the SMTP/DNS prerequisites are in
+[`mailer-relay.md`](mailer-relay.md).
 
 ### Per-user settings
 

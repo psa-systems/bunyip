@@ -1469,6 +1469,16 @@ async fn run_subcommand(
             }
             Ok(())
         }
+        "machine-client" => {
+            // BUNYIP-604: register / rotate / disable / list the `oauth_clients`
+            // credential a calling app presents to the mailer relay. The module
+            // returns the report rather than printing it, so the plaintext
+            // secret is written to stdout here and nowhere else.
+            let report =
+                bunyip_api::machine_client::run(pool, &config.email.base_url, args).await?;
+            print!("{report}");
+            Ok(())
+        }
         "secrets-purge" => {
             let survey = secrets::survey(pool, config, &key_set, probe).await?;
             let confirm = args.iter().any(|arg| arg == "--confirm");
@@ -1552,7 +1562,8 @@ async fn run_reencrypt_subcommand(
         }
         other => anyhow::bail!(
             "unknown subcommand {other:?} (known: reencrypt-secrets, secrets-status, \
-             secrets-migrate, secrets-purge, config-status, reconcile-duplicate-prices)"
+             secrets-migrate, secrets-purge, config-status, machine-client, \
+             reconcile-duplicate-prices)"
         ),
     }
 }
