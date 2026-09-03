@@ -1,13 +1,14 @@
 //! Admin system-config screen (BUNYIP-580): view and edit the application-level
-//! config layer from the admin UI. Reads/writes the file `SysConfig` loads at
-//! startup; changes apply on the next restart (environment variables still
-//! override the file). Gated behind the existing admin check.
+//! deployment settings from the admin UI. Reads and writes the ONE file-based
+//! configuration layer (BUNYIP-644), the directory the file provider serves;
+//! changes apply on the next restart. Gated behind the existing admin check.
 //!
-//! BUNYIP-622: this endpoint writes a `SysConfigFile`, which by type carries only
-//! application-level keys. The system-level origins and domains (`CORS_ORIGIN`,
-//! `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`) are environment-only and have no field
-//! here, so there is no code path through which this endpoint could persist one.
-//! The absence of those fields IS the enforcement.
+//! BUNYIP-622: this endpoint writes a `SystemSettings`, which by type carries
+//! only application-level keys, and `SystemSettings::entries` is the only
+//! mapping it has from a field to a file. The system-level origins and domains
+//! (`CORS_ORIGIN`, `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`) are environment-only
+//! and have no field here, so there is no code path through which this endpoint
+//! could persist one. The absence of those fields IS the enforcement.
 
 use actix_web::{web, HttpRequest, HttpResponse};
 use serde::{Deserialize, Serialize};
@@ -15,13 +16,14 @@ use serde::{Deserialize, Serialize};
 use crate::errors::AppError;
 use crate::middleware::AdminUser;
 use crate::responses::{get_request_id, success};
-use bunyip_domain::sys_config::{SysConfig, SysConfigFile};
+use bunyip_domain::sys_config::SystemSettings;
 
-/// The current file values, shaped for the admin form. Country lists are
-/// comma-joined for a text input.
+/// The current values, shaped for the admin form. Country lists are comma-joined
+/// for a text input.
 #[derive(Debug, Serialize)]
 pub struct SystemConfigResponse {
-    /// The file these values are read from and written to.
+    /// The file layer directory these values are read from and written to. The
+    /// wire key is unchanged from the YAML layer it replaced (BUNYIP-644).
     pub path: String,
     pub login_approval_enabled: bool,
     pub signup_bot_guard_enabled: bool,
@@ -29,13 +31,13 @@ pub struct SystemConfigResponse {
     pub country_deny: String,
 }
 
-fn response_from_file(file: &SysConfigFile) -> SystemConfigResponse {
+fn response_from(settings: &SystemSettings) -> SystemConfigResponse {
     SystemConfigResponse {
-        path: SysConfig::file_path().display().to_string(),
-        login_approval_enabled: file.features.login_approval_enabled.unwrap_or(false),
-        signup_bot_guard_enabled: file.features.signup_bot_guard_enabled.unwrap_or(false),
-        country_allow: file.country_access.allow.join(", "),
-        country_deny: file.country_access.deny.join(", "),
+        path: SystemSettings::directory().display().to_string(),
+        login_approval_enabled: settings.login_approval_enabled,
+        signup_bot_guard_enabled: settings.signup_bot_guard_enabled,
+        country_allow: settings.country_allow.join(", "),
+        country_deny: settings.country_deny.join(", "),
     }
 }
 
@@ -53,8 +55,8 @@ pub struct UpdateSystemConfigRequest {
 }
 
 /// Parse a comma/space separated list of ISO 3166-1 alpha-2 codes, validating
-/// each is two ASCII letters, so an invalid list is rejected before the file is
-/// touched (BUNYIP-580 AC4).
+/// each is two ASCII letters, so an invalid list is rejected before anything is
+/// written (BUNYIP-580 AC4).
 fn parse_country_list(raw: &str) -> Result<Vec<String>, AppError> {
     let mut out = Vec::new();
     for token in raw.split(|c: char| c == ',' || c.is_whitespace()) {
@@ -80,7 +82,7 @@ pub async fn get_system_config(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     Ok(success(
-        response_from_file(&SysConfig::read_file()),
+        response_from(&SystemSettings::current()),
         request_id,
     ))
 }
@@ -93,8 +95,8 @@ pub async fn update_system_config(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
-    // Validate everything BEFORE touching the file, so an invalid submit never
-    // leaves it broken (AC4).
+    // Validate everything BEFORE writing, so an invalid submit never leaves the
+    // layer half-updated (AC4).
     let country_allow = match &body.country_allow {
         Some(raw) => Some(parse_country_list(raw)?),
         None => None,
@@ -104,27 +106,32 @@ pub async fn update_system_config(
         None => None,
     };
 
-    // Apply the submitted values onto the current file, then write atomically.
-    // BUNYIP-622: only application-level keys are writable here; the system-level
-    // origins have no field on the request and no field on the file.
-    let mut file = SysConfig::read_file();
+    // Apply the submitted values onto the current effective ones, then write one
+    // file per key. BUNYIP-622: only application-level keys are writable here;
+    // the system-level origins have no field on the request and no field on
+    // `SystemSettings`.
+    let mut settings = SystemSettings::current();
     if let Some(v) = body.login_approval_enabled {
-        file.features.login_approval_enabled = Some(v);
+        settings.login_approval_enabled = v;
     }
     if let Some(v) = body.signup_bot_guard_enabled {
-        file.features.signup_bot_guard_enabled = Some(v);
+        settings.signup_bot_guard_enabled = v;
     }
     if let Some(a) = country_allow {
-        file.country_access.allow = a;
+        settings.country_allow = a;
     }
     if let Some(d) = country_deny {
-        file.country_access.deny = d;
+        settings.country_deny = d;
     }
 
-    SysConfig::write_file(&file)
-        .map_err(|e| AppError::internal(format!("could not write the config file: {e}")))?;
+    settings.save().map_err(|e| {
+        AppError::internal(format!(
+            "could not write the system settings to {}: {e}",
+            SystemSettings::directory().display()
+        ))
+    })?;
 
-    Ok(success(response_from_file(&file), request_id))
+    Ok(success(response_from(&settings), request_id))
 }
 
 #[cfg(test)]
@@ -147,8 +154,9 @@ mod tests {
         .expect("unknown fields are ignored");
         assert_eq!(body.login_approval_enabled, Some(true));
         assert_eq!(body.country_allow, None);
-        // The file this handler writes has no field for a system-level key either;
-        // `sys_config::system_level_keys_never_enter_the_file_layer` pins that half.
+        // The settings this handler writes have no field for a system-level key
+        // either; `sys_config::system_level_keys_never_enter_the_file_layer`
+        // pins that half.
     }
 
     #[test]

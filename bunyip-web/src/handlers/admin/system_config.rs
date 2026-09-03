@@ -1,8 +1,10 @@
-//! Admin panel: System settings backed by the YAML config file (BUNYIP-580).
+//! Admin panel: System settings backed by the file configuration layer
+//! (BUNYIP-580/644).
 //!
-//! A web form over the BUNYIP-579 system-config file. Saving writes the whole
-//! file (validated api-side before the write); every change applies on the next
-//! restart, and an environment variable still overrides the file.
+//! A web form over the application-level deployment settings. Saving writes one
+//! file per setting into the file layer directory (validated api-side before the
+//! write); every change applies on the next restart, and the file layer
+//! outranks the environment.
 
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -47,9 +49,9 @@ pub(super) fn system_settings_content(cfg: Option<&SystemConfigResponse>) -> Mar
             div {
                 h1 class="text-3xl font-bold" { "System" }
                 p class="mt-2 text-muted-foreground" {
-                    "Application-level deployment settings, stored in the config file rather than the database. "
+                    "Application-level deployment settings, stored in the file configuration layer rather than the database. "
                     "System-level origins and domains are set through the environment, not here. "
-                    "Every change here applies on the next restart, and an environment variable still overrides the file. See "
+                    "Every change here applies on the next restart, and these values override the matching environment variables. See "
                     a href="/docs" class="text-primary-text hover:underline" { "the documentation" } " for the full reference."
                 }
             }
@@ -57,7 +59,7 @@ pub(super) fn system_settings_content(cfg: Option<&SystemConfigResponse>) -> Mar
                 None => (error_box("Could not load the system config.")),
                 Some(e) => div class="space-y-6" {
                     div class="rounded-md border border-border/60 bg-muted/40 px-4 py-3 text-sm text-muted-foreground" {
-                        "File: " code { (e.path) } ". Changes take effect after the next restart."
+                        "Directory: " code { (e.path) } ". Changes take effect after the next restart."
                     }
                     form method="post" action="/admin/system-config" class="space-y-6" {
                     (admin_block_grid(vec![
@@ -114,7 +116,7 @@ pub struct SystemSettingsForm {
     pub country_deny: String,
 }
 
-/// The full PUT body. The whole file is rewritten from the form, so a cleared
+/// The full PUT body. Every setting is rewritten from the form, so a cleared
 /// field clears the setting. The API validates before writing (BUNYIP-580 AC4).
 pub(super) fn system_config_update_body(f: &SystemSettingsForm) -> Value {
     json!({

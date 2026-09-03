@@ -20,7 +20,7 @@ The country allow/deny gate (below) reads the country to make a permit/refuse de
 ## Purpose
 
 1. **Security**: alert a user to a sign-in from a new country (BUNYIP-366) and feed the suspicious-login risk signal (BUNYIP-373).
-2. **Spam prevention**: a configurable country **allow/deny** list refuses sign-in from unwanted regions (BUNYIP-581), set in the system-config YAML layer (`country_access.allow` / `country_access.deny`, see [configuration.md](configuration.md)).
+2. **Spam prevention**: a configurable country **allow/deny** list refuses sign-in from unwanted regions (BUNYIP-581), set on the admin System page or in the file configuration layer (`COUNTRY_ALLOW` / `COUNTRY_DENY`, see [configuration.md](configuration.md)).
 
 It is never used for marketing, profiling, or attaching a location to the user profile beyond the single coarse security-alert country above.
 
