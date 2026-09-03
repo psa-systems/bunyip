@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::errors::AppError;
 use crate::middleware::AdminUser;
 use crate::responses::{get_request_id, success};
+use bunyip_domain::config_providers::{ConfigStack, SYSTEM_SETTINGS_KEYS};
 use bunyip_domain::sys_config::SystemSettings;
 
 /// The current values, shaped for the admin form. Country lists are comma-joined
@@ -29,15 +30,60 @@ pub struct SystemConfigResponse {
     pub signup_bot_guard_enabled: bool,
     pub country_allow: String,
     pub country_deny: String,
+    /// BUNYIP-648: where each of the four settings above comes from, one entry
+    /// per `SYSTEM_SETTINGS_KEYS` key.
+    pub provenance: Vec<SettingProvenance>,
 }
 
-fn response_from(settings: &SystemSettings) -> SystemConfigResponse {
+/// One setting's provenance, the same three facts `config-status` reports per
+/// key and nothing more: which providers hold it, which one serves it, and the
+/// condition. It carries no configuration VALUE, for the reason the status
+/// report carries none (BUNYIP-643) - the values on this page are the four
+/// fields above, and a provider's ignored copy is not one of them.
+#[derive(Debug, Serialize)]
+pub struct SettingProvenance {
+    /// The declared configuration key, which is the form field's name in upper
+    /// case and the environment variable that carries it.
+    pub key: String,
+    /// The provider serving it: `database` / `file` / `environment`. `None` is
+    /// the built-in default.
+    pub serving: Option<String>,
+    /// `use` / `default` / `overridden` / `shadowed`.
+    pub condition: String,
+    /// Every provider holding a value, highest priority first. This is what
+    /// tells the page that saving will shadow another provider.
+    pub providers: Vec<String>,
+}
+
+/// Resolve each system setting's provenance through `stack`. Pure over the
+/// stack, so the caller decides which one (and reads it once).
+fn provenance_from(stack: &ConfigStack) -> Vec<SettingProvenance> {
+    SYSTEM_SETTINGS_KEYS
+        .iter()
+        .map(|key| {
+            let verdict = stack.resolve(key);
+            SettingProvenance {
+                key: (*key).to_string(),
+                serving: verdict.serving().map(|kind| kind.to_string()),
+                condition: verdict.condition().to_string(),
+                providers: stack
+                    .holders(key)
+                    .iter()
+                    .map(|kind| kind.to_string())
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
+fn response_from(settings: &SystemSettings, stack: &ConfigStack) -> SystemConfigResponse {
     SystemConfigResponse {
         path: SystemSettings::directory().display().to_string(),
         login_approval_enabled: settings.login_approval_enabled,
         signup_bot_guard_enabled: settings.signup_bot_guard_enabled,
         country_allow: settings.country_allow.join(", "),
         country_deny: settings.country_deny.join(", "),
+        provenance: provenance_from(stack),
     }
 }
 
@@ -81,8 +127,12 @@ pub async fn get_system_config(
     _admin: AdminUser,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
+    // One stack for both halves: the effective values and where each came from
+    // are read from the same providers, so the page cannot show a value from one
+    // reading and a provenance from another.
+    let stack = ConfigStack::deployment();
     Ok(success(
-        response_from(&SystemSettings::current()),
+        response_from(&SystemSettings::resolve(&stack), &stack),
         request_id,
     ))
 }
@@ -131,7 +181,11 @@ pub async fn update_system_config(
         ))
     })?;
 
-    Ok(success(response_from(&settings), request_id))
+    // The file provider snapshots its directory when it is built, so the
+    // provenance the save produced is only visible through a stack loaded AFTER
+    // the write.
+    let stack = ConfigStack::deployment();
+    Ok(success(response_from(&settings, &stack), request_id))
 }
 
 #[cfg(test)]
@@ -157,6 +211,46 @@ mod tests {
         // The settings this handler writes have no field for a system-level key
         // either; `sys_config::system_level_keys_never_enter_the_file_layer`
         // pins that half.
+    }
+
+    /// BUNYIP-648 AC1: every setting the page renders reports its provider and
+    /// condition, and the provenance carries no configuration value.
+    #[test]
+    fn every_system_setting_reports_its_provider_and_condition() {
+        let stack = ConfigStack::environment_only();
+        let entries = provenance_from(&stack);
+
+        let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
+        assert_eq!(
+            keys, SYSTEM_SETTINGS_KEYS,
+            "the page reports provenance for exactly the settings it renders"
+        );
+        for entry in &entries {
+            assert!(
+                ["use", "default", "overridden", "shadowed"].contains(&entry.condition.as_str()),
+                "{} reported an unknown condition {}",
+                entry.key,
+                entry.condition
+            );
+            if let Some(serving) = &entry.serving {
+                assert!(
+                    entry.providers.contains(serving),
+                    "{} is served by {serving}, which must be one of its holders",
+                    entry.key
+                );
+            }
+        }
+
+        // No value reaches the wire: the serialized provenance names providers,
+        // conditions and keys only.
+        let json = serde_json::to_value(&entries).expect("provenance serializes");
+        let fields: Vec<String> = json[0]
+            .as_object()
+            .expect("an object per setting")
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(fields, ["condition", "key", "providers", "serving"]);
     }
 
     #[test]

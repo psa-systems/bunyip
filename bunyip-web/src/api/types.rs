@@ -1312,6 +1312,28 @@ pub struct SystemConfigResponse {
     pub country_allow: String,
     #[serde(default)]
     pub country_deny: String,
+    /// BUNYIP-648: where each setting's value comes from. An older api sends no
+    /// such field, which defaults to empty and renders as "not reported".
+    #[serde(default)]
+    pub provenance: Vec<SettingProvenance>,
+}
+
+/// BUNYIP-648: one system setting's provenance. Providers, condition and key
+/// only: the api deliberately sends no configuration value here.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SettingProvenance {
+    /// The declared configuration key, the form field's name in upper case.
+    #[serde(default)]
+    pub key: String,
+    /// `database` / `file` / `environment`; `None` is the built-in default.
+    #[serde(default)]
+    pub serving: Option<String>,
+    /// `use` / `default` / `overridden` / `shadowed`.
+    #[serde(default)]
+    pub condition: String,
+    /// Every provider holding a value, highest priority first.
+    #[serde(default)]
+    pub providers: Vec<String>,
 }
 
 /// BUNYIP-433: result of the SMTP "Test connection" probe. `ok` is the headline
