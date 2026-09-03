@@ -42,6 +42,15 @@
 //! of environment variables; every key here names the variable it is carried by,
 //! and `config_keys_name_an_inventory_variable` fails the build if one does not.
 //!
+//! Most of the registry is written down one `spec` per line. The
+//! `RATE_LIMIT_{ACTION}_*` family is not: its names are built from the action,
+//! so it is GENERATED, one pair per [`RateLimitConfig::ALL`] entry, by
+//! [`rate_limit_vars`] (BUNYIP-645). That is why [`CONFIG_KEYS`] is materialized
+//! at first use rather than being a plain `static` slice.
+//!
+//! [`RateLimitConfig::ALL`]: crate::models::RateLimitConfig::ALL
+//! [`rate_limit_vars`]: crate::models::rate_limit_vars
+//!
 //! # Group-1 keys
 //!
 //! The startup values (`DATABASE_URL`, `APP_ENCRYPTION_KEY`, `JWT_SECRET`, ...)
@@ -74,9 +83,10 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, OnceLock};
 
 use crate::config::ConfigFailure;
+use crate::models::rate_limit_vars;
 
 /// A configuration provider, in priority order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -171,6 +181,7 @@ pub trait ConfigProvider: Send + Sync + std::fmt::Debug {
 // =============================================================================
 
 /// One configuration setting resolved through the provider stack.
+#[derive(Clone, Copy)]
 pub struct ConfigKeySpec {
     /// The provider-stack key, which is also the file name under
     /// `BUNYIP_CONFIG_DIR`.
@@ -207,12 +218,13 @@ const fn spec(key: &'static str, setting: &'static str) -> ConfigKeySpec {
     }
 }
 
-/// Every configuration setting with more than one possible provider.
+/// The settings written down one line each: every declared key except the
+/// generated `RATE_LIMIT_*` family (see [`CONFIG_KEYS`], which is the registry).
 ///
 /// A setting joins this list the moment it gains a second provider, and leaves
 /// it if it ever loses one. Group-1 startup values are structurally excluded
 /// (see [`GROUP_ONE_KEYS`]).
-pub static CONFIG_KEYS: &[ConfigKeySpec] = &[
+static SINGLETON_ROW_KEYS: &[ConfigKeySpec] = &[
     // ---- Email (email_config) --------------------------------------------
     spec(
         "SMTP_HOST",
@@ -279,6 +291,48 @@ pub static CONFIG_KEYS: &[ConfigKeySpec] = &[
     spec("TIER_STANDARD_TRIAL_DAYS", "the standard trial length"),
 ];
 
+/// The generated `RATE_LIMIT_{ACTION}_{MAX_REQUESTS,WINDOW_SECONDS}` family
+/// (BUNYIP-645), one pair per rate-limit preset.
+///
+/// The caps were the one configuration left resolving through a precedence
+/// chain that existed only as the body of one function
+/// (`RateLimitConfigRepository::effective`), for a structural reason: the
+/// variable names are built from the action, so they could be neither
+/// `ENV_INVENTORY` entries nor keys here. Generating both registries from the
+/// one action list removes that exception without letting either registry drift
+/// from the presets.
+static RATE_LIMIT_CONFIG_KEYS: LazyLock<Vec<ConfigKeySpec>> = LazyLock::new(|| {
+    rate_limit_vars()
+        .iter()
+        .flat_map(|vars| {
+            [
+                ConfigKeySpec {
+                    key: vars.max_requests,
+                    source_var: vars.max_requests,
+                    setting: vars.max_requests_setting,
+                    derive: verbatim,
+                },
+                ConfigKeySpec {
+                    key: vars.window_seconds,
+                    source_var: vars.window_seconds,
+                    setting: vars.window_seconds_setting,
+                    derive: verbatim,
+                },
+            ]
+        })
+        .collect()
+});
+
+/// Every configuration setting with more than one possible provider: the
+/// written-down [`SINGLETON_ROW_KEYS`] plus the generated rate-limit family.
+pub static CONFIG_KEYS: LazyLock<Vec<ConfigKeySpec>> = LazyLock::new(|| {
+    SINGLETON_ROW_KEYS
+        .iter()
+        .copied()
+        .chain(RATE_LIMIT_CONFIG_KEYS.iter().copied())
+        .collect()
+});
+
 /// The spec for `key`, or `None` when it is not a declared configuration key.
 pub fn config_key(key: &str) -> Option<&'static ConfigKeySpec> {
     CONFIG_KEYS.iter().find(|spec| spec.key == key)
@@ -317,6 +371,11 @@ pub const TIER_KEYS: &[&str] = &[
     "TIER_EARLY_ADOPTER_TRIAL_DAYS",
     "TIER_STANDARD_TRIAL_DAYS",
 ];
+
+/// The keys of the `rate_limit_configs` section (BUNYIP-645), generated like
+/// the specs themselves so the section can never lag the preset list.
+pub static RATE_LIMIT_KEYS: LazyLock<Vec<&'static str>> =
+    LazyLock::new(|| RATE_LIMIT_CONFIG_KEYS.iter().map(|spec| spec.key).collect());
 
 /// The Group-1 startup values: environment-and-file only, never the database.
 ///
@@ -671,11 +730,32 @@ impl ConfigStack {
         Self::new(providers)
     }
 
+    /// [`Self::deployment`], loaded once per process.
+    ///
+    /// The file provider reads a directory, so a caller on a hot path must not
+    /// rebuild it: the rate-limit caps resolve underneath every request, which
+    /// is the same reason their database layer is a TTL snapshot (BUNYIP-556).
+    /// The values it serves cannot go stale within a process anyway: a file
+    /// provider edit and an environment change both need a restart to apply.
+    pub fn deployment_cached() -> &'static Self {
+        static STACK: OnceLock<ConfigStack> = OnceLock::new();
+        STACK.get_or_init(Self::deployment)
+    }
+
     /// [`Self::deployment`] with the database provider on top.
     pub fn with_database(database: DatabaseProvider) -> Self {
-        let mut stack = Self::deployment();
-        stack.providers.insert(0, Arc::new(database));
-        stack
+        Self::database_over(database, &Self::deployment())
+    }
+
+    /// [`Self::with_database`] over an ALREADY-LOADED lower stack, so a caller
+    /// that layers a fresh database provider repeatedly (the rate-limit
+    /// snapshot, once per TTL window) pays for the file provider once.
+    pub fn database_over(database: DatabaseProvider, lower: &Self) -> Self {
+        let mut providers = lower.providers.clone();
+        providers.insert(0, Arc::new(database));
+        // Sorted, not merely prepended: `lower` may already carry a database
+        // provider, and the order must never depend on the call site.
+        Self::new(providers)
     }
 
     /// The providers, highest priority first.
@@ -723,12 +803,32 @@ impl ConfigStack {
     /// `warn` naming the key and the provider that holds it, then treated as
     /// absent so the caller's default stands: the substitution is never silent.
     pub fn get_parsed<T: std::str::FromStr>(&self, key: &str) -> Option<T> {
+        self.get_parsed_where(key, |_| true)
+    }
+
+    /// [`Self::get_parsed`] with a validity rule, for a key whose type admits
+    /// values it cannot use (a rate-limit cap of zero would refuse every
+    /// request for the action). A value that fails `valid` is treated exactly
+    /// like one that does not parse: logged at `warn`, then the next provider,
+    /// or the built-in default, serves it.
+    pub fn get_parsed_where<T: std::str::FromStr>(
+        &self,
+        key: &str,
+        valid: impl Fn(&T) -> bool,
+    ) -> Option<T> {
         for provider in &self.providers {
             let Some(raw) = provider.get(key) else {
                 continue;
             };
             match raw.trim().parse::<T>() {
-                Ok(value) => return Some(value),
+                Ok(value) if valid(&value) => return Some(value),
+                Ok(_) => tracing::warn!(
+                    config_key = key,
+                    provider = %provider.kind(),
+                    "the {} configuration provider holds a value for {key} that {key} cannot use; \
+                     the next provider, or the built-in default, serves it instead",
+                    provider.kind(),
+                ),
                 // A value this key cannot use is not a value: the next provider
                 // serves, and the built-in default stands if none can. Same rule
                 // the database provider applies at insertion time, where an
@@ -765,7 +865,7 @@ impl ConfigStack {
     /// the secrets boot enforcement: the lower copy is dead today and becomes
     /// live the moment the higher one is cleared.
     pub fn log_shadowed_providers(&self) {
-        for spec in CONFIG_KEYS {
+        for spec in CONFIG_KEYS.iter() {
             let ConfigVerdict::Overridden { serving, ignored } = self.resolve(spec.key) else {
                 continue;
             };
@@ -1072,22 +1172,96 @@ mod tests {
     /// source label cannot silently stop covering a key someone adds.
     #[test]
     fn every_config_key_belongs_to_exactly_one_section() {
-        for spec in CONFIG_KEYS {
-            let sections = [EMAIL_KEYS, AUTO_BAN_KEYS, TIER_KEYS]
+        let sections: [&[&str]; 4] = [EMAIL_KEYS, AUTO_BAN_KEYS, TIER_KEYS, &RATE_LIMIT_KEYS];
+        for spec in CONFIG_KEYS.iter() {
+            let found = sections
                 .iter()
                 .filter(|section| section.contains(&spec.key))
                 .count();
             assert_eq!(
-                sections, 1,
-                "{} must be in exactly one of EMAIL_KEYS / AUTO_BAN_KEYS / TIER_KEYS",
+                found, 1,
+                "{} must be in exactly one of EMAIL_KEYS / AUTO_BAN_KEYS / TIER_KEYS / \
+                 RATE_LIMIT_KEYS",
                 spec.key
             );
         }
-        let declared = EMAIL_KEYS.len() + AUTO_BAN_KEYS.len() + TIER_KEYS.len();
+        let declared: usize = sections.iter().map(|section| section.len()).sum();
         assert_eq!(
             declared,
             CONFIG_KEYS.len(),
             "a section names a key that is not declared in CONFIG_KEYS"
+        );
+    }
+
+    /// AC4 (BUNYIP-645): `config-status` reports the per-action provenance
+    /// alongside every other key, so an operator can ask which provider is
+    /// serving one action's cap.
+    #[test]
+    fn the_status_report_covers_every_rate_limit_action() {
+        let stack = stack_of(vec![
+            Fixed::provider(
+                ConfigProviderKind::Environment,
+                &[("RATE_LIMIT_LOGIN_MAX_REQUESTS", "7")],
+            ),
+            Fixed::provider(
+                ConfigProviderKind::Database,
+                &[("RATE_LIMIT_LOGIN_MAX_REQUESTS", "9")],
+            ),
+        ]);
+        let report = status_report(&stack);
+        for key in RATE_LIMIT_KEYS.iter() {
+            assert!(
+                report.keys.iter().any(|row| row.key == *key),
+                "{key} is missing from the config-status report"
+            );
+        }
+
+        let login = report
+            .keys
+            .iter()
+            .find(|row| row.key == "RATE_LIMIT_LOGIN_MAX_REQUESTS")
+            .expect("the login cap is reported");
+        assert_eq!(login.condition, "overridden");
+        assert_eq!(login.serving.as_deref(), Some("database"));
+
+        let window = report
+            .keys
+            .iter()
+            .find(|row| row.key == "RATE_LIMIT_LOGIN_WINDOW_SECONDS")
+            .expect("the login window is reported");
+        assert_eq!(window.condition, "default");
+        assert_eq!(window.serving, None);
+
+        let rendered = render_status(&report);
+        assert!(rendered.contains("RATE_LIMIT_LOGIN_MAX_REQUESTS"));
+        assert!(
+            !rendered.contains(" 9\n"),
+            "the report must never print a cap:\n{rendered}"
+        );
+    }
+
+    /// AC2 (BUNYIP-645): the rate-limit family is declared, one pair per
+    /// preset, so `config-status` reports every action and no action's cap looks
+    /// like a setting with no environment source.
+    #[test]
+    fn every_rate_limit_action_declares_both_of_its_keys() {
+        for cfg in crate::models::RateLimitConfig::ALL {
+            let vars = crate::models::RateLimitConfig::vars_for(cfg.action)
+                .unwrap_or_else(|| panic!("{} has no generated variables", cfg.action));
+            for key in [vars.max_requests, vars.window_seconds] {
+                let spec = config_key(key)
+                    .unwrap_or_else(|| panic!("{key} must be a declared configuration key"));
+                assert_eq!(spec.source_var, key);
+                assert!(
+                    crate::config::env_spec(key).is_some(),
+                    "{key} must be classified in ENV_INVENTORY"
+                );
+                assert!(RATE_LIMIT_KEYS.contains(&key));
+            }
+        }
+        assert_eq!(
+            RATE_LIMIT_KEYS.len(),
+            crate::models::RateLimitConfig::ALL.len() * 2
         );
     }
 

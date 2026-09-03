@@ -207,7 +207,7 @@ than something you have to read the code to work out.
 
 | Priority | Provider      | Where it is                                                          | Applies without a restart |
 |----------|---------------|-----------------------------------------------------------------------|---------------------------|
-| 1        | `database`    | the admin-managed rows: `email_config`, `auto_ban_config`, `tier_config` | yes, the save hot-reloads |
+| 1        | `database`    | the admin-managed rows: `email_config`, `auto_ban_config`, `tier_config`, `rate_limit_configs` | yes, the save hot-reloads |
 | 2        | `file`        | `BUNYIP_CONFIG_DIR`, one file per key                                  | no, restart to apply      |
 | 3        | `environment` | the variables in the tables above                                      | no, restart to apply      |
 
@@ -221,9 +221,16 @@ The registry is the settings with **more than one** possible provider, the same 
 setting with exactly one source is not declared, because the declaration would be a no-op. So the Stripe price ids,
 `pricing_enabled`, `orgs_enabled` and the per-tier visibility flags stay database-only columns, and `SMTP_EHLO_NAME`,
 `APP_URL`, `APP_NAME`, `SUPPORT_INBOX_EMAIL` and `SUPPORT_IMAP_POLL_SECS` stay environment-only reads. The declared
-keys are the SMTP and IMAP settings, `EMAIL_ENABLED`, `ADMIN_NOTIFICATION_EMAILS`, the four `AUTO_BAN_*` values and the
-four `TIER_*` slot and trial lengths; `CONFIG_KEYS` in `crates/bunyip-domain/src/config_providers.rs` is the source of
-truth, and every entry names a variable `ENV_INVENTORY` classifies.
+keys are the SMTP and IMAP settings, `EMAIL_ENABLED`, `ADMIN_NOTIFICATION_EMAILS`, the four `AUTO_BAN_*` values, the
+four `TIER_*` slot and trial lengths, and the `RATE_LIMIT_{ACTION}_MAX_REQUESTS` / `_WINDOW_SECONDS` pair for every
+rate-limit action; `CONFIG_KEYS` in `crates/bunyip-domain/src/config_providers.rs` is the source of truth, and every
+entry names a variable `ENV_INVENTORY` classifies.
+
+The rate-limit pair is the one part of both registries that is **generated** rather than written down (BUNYIP-645). Its
+variable names are built from the action, so there is one pair per entry in `RateLimitConfig::ALL`
+(`crates/bunyip-domain/src/models/rate_limit.rs`) in `CONFIG_KEYS` and in `ENV_INVENTORY` alike: adding an action
+declares its cap in both, and neither registry can drift from the preset list. That is why the caps were the last
+configuration outside this stack, and it is the only exception to "one `spec` per line".
 
 ### The file provider
 
@@ -246,9 +253,8 @@ mkdir /app/config/conf.d
   boundary](#the-configuration-boundary-system-level-vs-application-level-bunyip-622). It is a different layer from the
   API-writable YAML file at `BUNYIP_CONFIG_FILE` described [below](#application-level-config-yaml-layer-bunyip-579622),
   whose keys are disjoint and whose precedence is the other way round; BUNYIP-644 tracks unifying the two.
-- The rate-limit caps are NOT declared keys and do not resolve through this stack: their variable names are a family
-  built at runtime from the action, so they are not `ENV_INVENTORY` entries, and `RateLimitConfigRepository::effective`
-  keeps its own const-then-environment-then-row order. BUNYIP-645 tracks bringing them in.
+- A rate-limit cap can be set here too, one file per key: `RATE_LIMIT_LOGIN_MAX_REQUESTS` sits between an admin-set
+  `rate_limit_configs` row and the compose variable of the same name (BUNYIP-645).
 - Group-1 startup values (`DATABASE_URL`, `APP_ENCRYPTION_KEY`, `JWT_SECRET`, `SECRETS_STORAGE`, the `INFISICAL_*`
   credentials) are environment-and-file only. The database provider **refuses** one with a startup error naming it and
   exit 1, because the database cannot hold the credential used to reach the database.
@@ -363,8 +369,10 @@ Every variable below has a working default; set it only to tune the deployment.
 - **Abuse controls**: `AUTO_BAN_ENABLED`, `AUTO_BAN_THRESHOLD`, `AUTO_BAN_WINDOW_SECS`, `AUTO_BAN_DURATION_SECS`,
   `LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`.
 - **Rate limits**: `RATE_LIMIT_{ACTION}_MAX_REQUESTS` and `RATE_LIMIT_{ACTION}_WINDOW_SECONDS`, one pair per action
-  (`crates/bunyip-domain/src/models/rate_limit.rs`). The names are built at runtime from the action, so they are a
-  family rather than inventory entries; precedence is const -> env -> the `rate_limit_configs` DB row.
+  (`crates/bunyip-domain/src/models/rate_limit.rs`). They are declared configuration keys, generated from the preset
+  list, and resolve in the [declared provider order](#configuration-providers-and-their-precedence-bunyip-643): the
+  `rate_limit_configs` row, then a file under `BUNYIP_CONFIG_DIR`, then these variables, then the compile-time cap. A
+  value that does not parse or is not positive is not a value: the next provider serves it and a `WARN` names both.
 - **Tiers and billing**: `TIER_LIFETIME_SLOTS`, `TIER_EARLY_ADOPTER_SLOTS`, `TIER_EARLY_ADOPTER_TRIAL_DAYS`,
   `TIER_STANDARD_TRIAL_DAYS`, `BUNYIP_BILLING_TRIAL_PERIOD_DAYS`.
 - **Distribution proxy**: `DOWNLOAD_CACHE_DIR`, `DOWNLOAD_CACHE_MAX_BYTES`, `DOWNLOAD_CONCURRENCY_PER_USER`,
@@ -557,10 +565,17 @@ request.
 ### Rate limits (`rate_limit_configs`, admin page: Rate Limits)
 
 One row per action, keyed by the action name, with `max_requests` and
-`window_seconds`. A present row overrides both the constant and the env seed. Super-admin-only (BUNYIP-413).
+`window_seconds`. Super-admin-only (BUNYIP-413).
+
+This table is the **database provider** for that action's two declared keys (BUNYIP-645), so a present row wins over a
+file value, a compose variable and the compile-time cap in the [one declared
+order](#configuration-providers-and-their-precedence-bunyip-643), and `bunyip-api config-status` answers "which
+provider is serving the login cap" per action. It resolves nothing on its own: before BUNYIP-645 the order lived in the
+body of `RateLimitConfigRepository::effective` and there was no way to ask that question.
 
 The enforcement path reads a process-wide 30-second snapshot of the whole table rather than one row per rate-limit
-decision (BUNYIP-556). A save invalidates the snapshot in the api process that took the write, so the new cap is in
+decision (BUNYIP-556); the providers are layered and every preset resolved through them once per snapshot, so a
+rate-limit decision is a lookup and costs no query and no provider read. A save invalidates the snapshot in the api process that took the write, so the new cap is in
 force on the next request there; another api process picks it up within the 30 seconds. If the table cannot be read, the
 last good snapshot keeps being enforced and the failure is logged at `error`: a refresh failure never silently reverts
 the platform to its compile-time caps.
