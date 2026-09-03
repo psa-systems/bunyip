@@ -282,6 +282,17 @@ name, then the built-in default. They have no database provider.
   **effective** values, so what you save is what you were looking at. A save validates the values (country codes are
   2-letter) and writes one file per setting, each atomically; a cleared field removes its file, which is what "absent"
   means in this layer. Changes apply on the next restart.
+- **Provenance on the page** (BUNYIP-648): under each field the page names the provider serving that setting and what
+  saving will do to the others, so the two cases you would otherwise only find in the boot log or in `config-status`
+  are on the screen you are editing. `GET /v1/admin/system-config` carries them per setting as the provider serving it,
+  its `use` / `default` / `overridden` / `shadowed` condition and the providers holding it: the same facts
+  `config-status` reports, and, like it, **no configuration value**. The four lines an operator sees:
+    - the file layer serves it, and this form writes that layer;
+    - the environment variable of the same name serves it, and saving here writes the file layer, which overrides that
+      variable from the next restart;
+    - the file layer serves it and the environment variable also sets it, so that copy is ignored today and becomes
+      live again if the file value is cleared;
+    - no provider sets it, so the built-in default applies.
 - **Boundary**: the form and the request body have no field for a system-level origin, and neither does the type the
   handler writes, so the API has no path to persist one (BUNYIP-622). `SYSTEM_LEVEL_ENV_KEYS` in
   `crates/bunyip-domain/src/sys_config.rs` is the machine-checked list and
