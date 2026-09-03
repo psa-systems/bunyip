@@ -19,7 +19,7 @@
 
 use serde::Serialize;
 
-use crate::config::{env_spec, GovernedSecret, SecretsStorage};
+use crate::config::{env_spec, GovernedSecret, SecretsProvider};
 
 /// One integration's state, mirroring Mokosh's ok / skipped / error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -52,26 +52,27 @@ pub struct IntegrationStatus {
 /// without a database or an environment.
 #[derive(Debug, Clone, Copy)]
 pub struct IntegrationSignals {
-    /// The declared governed-secret store, named in the SMTP / IMAP failure text.
-    pub secrets_store: SecretsStorage,
+    /// The declared governed-secret provider, named in the SMTP / IMAP failure
+    /// text.
+    pub secrets_provider: SecretsProvider,
     /// An SMTP relay host is configured.
     pub smtp_host_set: bool,
-    /// The SMTP password is present and non-empty in the declared store.
+    /// The SMTP password is present and non-empty in the declared provider.
     pub smtp_password_present: bool,
-    /// The Stripe secret key is present in the declared store.
+    /// The Stripe secret key is present in the declared provider.
     pub stripe_secret_present: bool,
-    /// The Stripe webhook signing secret is present in the declared store.
+    /// The Stripe webhook signing secret is present in the declared provider.
     pub stripe_webhook_present: bool,
     /// The support IMAP mailbox is enabled or has a host configured.
     pub imap_configured: bool,
-    /// The IMAP password is present and non-empty in the declared store.
+    /// The IMAP password is present and non-empty in the declared provider.
     pub imap_password_present: bool,
     /// `INFISICAL_ENABLED` is set.
     pub infisical_enabled: bool,
     /// Every Infisical credential is present, so the client can be built.
     pub infisical_complete: bool,
-    /// `SECRETS_STORAGE=infisical`: Infisical is the declared store of record.
-    pub infisical_is_store: bool,
+    /// `SECRETS_STORAGE=infisical`: Infisical is the declared provider of record.
+    pub infisical_is_provider: bool,
     /// A Forgejo base URL is configured for the distribution proxy.
     pub forgejo_base_set: bool,
     /// The Forgejo API token is present.
@@ -122,7 +123,7 @@ fn status(
 /// each rule below is unit-tested. The order is the order the status view lists
 /// them in.
 pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> {
-    let store = sig.secrets_store.as_str();
+    let provider = sig.secrets_provider.as_str();
     let mut out = Vec::new();
 
     // Email (SMTP). The blank-password case is `Failing`, not `Configured`: the
@@ -150,11 +151,11 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
             "Email (SMTP)",
             IntegrationState::Failing,
             format!(
-                "SMTP_PASSWORD is unset in the {store} store: {}.",
+                "SMTP_PASSWORD is unset in the {provider} provider: {}.",
                 GovernedSecret::SmtpPassword.feature()
             ),
             format!(
-                "Set the SMTP password in the {store} store (admin Email page, or \
+                "Set the SMTP password in the {provider} provider (admin Email page, or \
                  `bunyip-api secrets-migrate`)."
             ),
         )
@@ -168,7 +169,7 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
             "Stripe billing",
             IntegrationState::Unconfigured,
             format!("{}.", GovernedSecret::StripeSecretKey.feature()),
-            format!("Enter the Stripe secret key in the {store} store (admin Stripe page)."),
+            format!("Enter the Stripe secret key in the {provider} provider (admin Stripe page)."),
         )
     } else if sig.stripe_webhook_present {
         status(
@@ -184,11 +185,12 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
             "Stripe billing",
             IntegrationState::Failing,
             format!(
-                "STRIPE_WEBHOOK_SECRET is unset in the {store} store: {}.",
+                "STRIPE_WEBHOOK_SECRET is unset in the {provider} provider: {}.",
                 GovernedSecret::StripeWebhookSecret.feature()
             ),
             format!(
-                "Enter the Stripe webhook signing secret in the {store} store (admin Stripe page)."
+                "Enter the Stripe webhook signing secret in the {provider} provider (admin \
+                 Stripe page)."
             ),
         )
     });
@@ -218,30 +220,32 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
             "Support inbox (IMAP)",
             IntegrationState::Failing,
             format!(
-                "SUPPORT_IMAP_PASSWORD is unset in the {store} store: {}.",
+                "SUPPORT_IMAP_PASSWORD is unset in the {provider} provider: {}.",
                 GovernedSecret::SupportImapPassword.feature()
             ),
-            format!("Set the IMAP password in the {store} store (admin Email page)."),
+            format!("Set the IMAP password in the {provider} provider (admin Email page)."),
         )
     });
 
-    // Secrets store (Infisical). `SECRETS_STORAGE=infisical` makes it the store of
-    // record (the app would not have booted if the client were unbuildable, but it
-    // is reported so the operator can see the store it depends on); otherwise it is
-    // an optional inspection target for `secrets-status`.
-    out.push(if sig.infisical_is_store {
+    // Secrets provider (Infisical). `SECRETS_STORAGE=infisical` makes it the
+    // provider of record (the app would not have booted if the client were
+    // unbuildable, but it is reported so the operator can see the provider it
+    // depends on); otherwise it is an optional inspection target for
+    // `secrets-status`.
+    out.push(if sig.infisical_is_provider {
         if sig.infisical_complete {
             status(
                 "infisical",
-                "Secrets store (Infisical)",
+                "Secrets provider (Infisical)",
                 IntegrationState::Configured,
-                "Infisical is the declared secrets store and its client is configured.".to_string(),
+                "Infisical is the declared secrets provider and its client is configured."
+                    .to_string(),
                 String::new(),
             )
         } else {
             status(
                 "infisical",
-                "Secrets store (Infisical)",
+                "Secrets provider (Infisical)",
                 IntegrationState::Failing,
                 "SECRETS_STORAGE=infisical, but the Infisical client is not fully configured."
                     .to_string(),
@@ -251,7 +255,7 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
     } else if !sig.infisical_enabled {
         status(
             "infisical",
-            "Secrets store (Infisical)",
+            "Secrets provider (Infisical)",
             IntegrationState::Unconfigured,
             feature_of("INFISICAL_ENABLED"),
             remedy_of("INFISICAL_ENABLED"),
@@ -259,7 +263,7 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
     } else if sig.infisical_complete {
         status(
             "infisical",
-            "Secrets store (Infisical)",
+            "Secrets provider (Infisical)",
             IntegrationState::Configured,
             "Infisical is enabled and its client is configured for secrets-status inspection."
                 .to_string(),
@@ -268,7 +272,7 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
     } else {
         status(
             "infisical",
-            "Secrets store (Infisical)",
+            "Secrets provider (Infisical)",
             IntegrationState::Failing,
             "INFISICAL_ENABLED is set, but the Infisical client is not fully configured."
                 .to_string(),
@@ -380,7 +384,7 @@ mod tests {
     /// standup asked to keep usable, and it must never present as broken.
     fn nothing_configured() -> IntegrationSignals {
         IntegrationSignals {
-            secrets_store: SecretsStorage::Database,
+            secrets_provider: SecretsProvider::Database,
             smtp_host_set: false,
             smtp_password_present: false,
             stripe_secret_present: false,
@@ -389,7 +393,7 @@ mod tests {
             imap_password_present: false,
             infisical_enabled: false,
             infisical_complete: false,
-            infisical_is_store: false,
+            infisical_is_provider: false,
             forgejo_base_set: false,
             forgejo_token_present: false,
             oci_enabled: false,
@@ -422,11 +426,12 @@ mod tests {
     }
 
     /// The standup's example: a blank SMTP password reads as Failing, and names
-    /// the secret, the store it was expected in, and the capability it disables.
+    /// the secret, the provider it was expected in, and the capability it
+    /// disables.
     #[test]
     fn a_blank_smtp_password_is_a_named_failure_not_a_configured_relay() {
         let mut sig = nothing_configured();
-        sig.secrets_store = SecretsStorage::Infisical;
+        sig.secrets_provider = SecretsProvider::Infisical;
         sig.smtp_host_set = true;
         sig.smtp_password_present = false;
 
@@ -480,10 +485,10 @@ mod tests {
     /// `SECRETS_STORAGE=infisical` with an incomplete client is Failing, and
     /// complete is Configured.
     #[test]
-    fn infisical_as_the_declared_store_reflects_client_completeness() {
+    fn infisical_as_the_declared_provider_reflects_client_completeness() {
         let mut sig = nothing_configured();
-        sig.secrets_store = SecretsStorage::Infisical;
-        sig.infisical_is_store = true;
+        sig.secrets_provider = SecretsProvider::Infisical;
+        sig.infisical_is_provider = true;
         sig.infisical_complete = false;
         assert_eq!(
             find(&integration_statuses(&sig), "infisical").state,

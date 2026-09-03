@@ -125,25 +125,29 @@ pub struct Config {
     /// login path.
     pub country_allow: Vec<String>,
     pub country_deny: Vec<String>,
-    /// BUNYIP-525: how to reach the Infisical store of the Group-2 integration
+    /// BUNYIP-525: how to reach the Infisical provider of the Group-2 integration
     /// secrets. Group-1 startup secrets stay file/SOPS-based and are never held
-    /// here. Whether the store is read at all is `secrets_storage`.
+    /// here. Whether this provider is read at all is `secrets_provider`.
     pub infisical: InfisicalSettings,
-    /// BUNYIP-542: the ONE store the deployment declares for its governed
+    /// BUNYIP-542: the ONE provider the deployment declares for its governed
     /// integration secrets (`SECRETS_STORAGE`). Required, with no default: the
-    /// app consults only this store, so which copy is live is an operator
+    /// app consults only this provider, so which copy is live is an operator
     /// declaration rather than a precedence chain.
-    pub secrets_storage: SecretsStorage,
+    pub secrets_provider: SecretsProvider,
 }
 
 /// BUNYIP-542: where a deployment keeps its governed integration secrets.
 ///
 /// Declared by `SECRETS_STORAGE` and required, because inferring it from what
 /// happens to be populated cannot tell "deliberately in the database" from
-/// "left behind in the database". The declared store is the ONLY one consulted:
-/// there is no fallback to a second store.
+/// "left behind in the database". The declared provider is the ONLY one
+/// consulted: there is no fallback to a second provider.
+///
+/// The variable keeps its `SECRETS_STORAGE` spelling while the type says
+/// provider (BUNYIP-642): renaming it would break every running deployment and
+/// every runbook for a vocabulary change with no functional gain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SecretsStorage {
+pub enum SecretsProvider {
     /// The process environment, through `{NAME}_FILE` compose secrets.
     Environment,
     /// The `email_config` / `stripe_config` rows, encrypted under
@@ -153,11 +157,11 @@ pub enum SecretsStorage {
     Infisical,
 }
 
-impl SecretsStorage {
+impl SecretsProvider {
     /// The legal values, for the operator-facing error on an unrecognised one.
     pub const LEGAL_VALUES: &'static str = "environment, database, infisical";
 
-    /// Every store, in declaration order.
+    /// Every provider, in declaration order.
     pub const ALL: [Self; 3] = [Self::Environment, Self::Database, Self::Infisical];
 
     /// The wire/env spelling.
@@ -180,29 +184,33 @@ impl SecretsStorage {
         }
     }
 
-    /// Whether the admin pages can write a governed secret to this store.
+    /// Whether the admin pages can write a governed secret to this provider.
     ///
-    /// `environment` is the one read-only store: a process cannot set an
+    /// `environment` is the one read-only provider: a process cannot set an
     /// environment variable for its own next boot, and the compose secret files
-    /// are mounted read-only. That is a property of the store, not a policy.
+    /// are mounted read-only. That is a property of the provider, not a policy.
     pub fn is_writable(self) -> bool {
         !matches!(self, Self::Environment)
     }
 }
 
-impl std::fmt::Display for SecretsStorage {
+impl std::fmt::Display for SecretsProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-/// BUNYIP-542: an integration secret with more than one possible store, and so
-/// governed by `SECRETS_STORAGE`.
+/// BUNYIP-542: an integration secret with more than one possible provider, and
+/// so governed by `SECRETS_STORAGE`.
 ///
 /// Group-1 startup secrets are structurally excluded (the database cannot hold
 /// the credential used to reach the database), and an integration secret with
-/// exactly one store today is excluded because the declaration would be a
-/// no-op. Either joins this list the moment it gains a second store.
+/// exactly one provider today is excluded because the declaration would be a
+/// no-op. Either joins this list the moment it gains a second provider.
+///
+/// The name stays `GovernedSecret` (BUNYIP-642): it names the registry entry,
+/// not the provider, and "governed" is the accurate word for a secret with more
+/// than one possible home.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GovernedSecret {
     /// `email_config.smtp_password` / `SMTP_PASSWORD` / `/runtime/SMTP_PASSWORD`.
@@ -224,8 +232,8 @@ impl GovernedSecret {
         Self::SupportImapPassword,
     ];
 
-    /// The variable name in the `environment` store, which is also the key name
-    /// in the `infisical` store.
+    /// The variable name in the `environment` provider, which is also the key
+    /// name in the `infisical` provider.
     pub fn name(self) -> &'static str {
         match self {
             Self::SmtpPassword => "SMTP_PASSWORD",
@@ -235,7 +243,7 @@ impl GovernedSecret {
         }
     }
 
-    /// What stops working when no store holds this secret.
+    /// What stops working when no provider holds this secret.
     pub fn feature(self) -> &'static str {
         match self {
             Self::SmtpPassword => {
@@ -267,7 +275,7 @@ impl GovernedSecret {
         }
     }
 
-    /// The `environment`-store secret file this value belongs in, as the
+    /// The `environment`-provider secret file this value belongs in, as the
     /// `{NAME}_FILE` target `secrets-migrate --to environment` emits.
     pub fn secret_file(self) -> &'static str {
         match self {
@@ -278,12 +286,12 @@ impl GovernedSecret {
         }
     }
 
-    /// This secret's value in the `environment` store.
+    /// This secret's value in the `environment` provider.
     ///
     /// File-backed ONLY: the plain variable is deliberately not consulted. A
     /// `STRIPE_SECRET_KEY=sk_live_...` in a compose `environment:` block is the
     /// exposure BUNYIP-38 removed - it is visible to `docker inspect` and to
-    /// every child process - so the environment store means a `{NAME}_FILE`
+    /// every child process - so the environment provider means a `{NAME}_FILE`
     /// compose secret, in every mode.
     pub fn read_environment(self) -> Option<String> {
         secret_file_env(self.name())
@@ -293,7 +301,7 @@ impl GovernedSecret {
 /// Read one secret from a `{NAME}_FILE` compose secret, and only from there
 /// (BUNYIP-542). An unreadable path is reported at `error` and treated as
 /// absent, so the boot enforcement below turns it into either the fatal
-/// "declared store is empty but another store holds it" report or the
+/// "declared provider is empty but another provider holds it" report or the
 /// feature-off warning, never a silent success.
 fn secret_file_env(name: &str) -> Option<String> {
     let file_var = format!("{name}_FILE");
@@ -309,23 +317,23 @@ fn secret_file_env(name: &str) -> Option<String> {
                 env_var = %file_var,
                 path = %path,
                 error = %e,
-                "{file_var} points at an unreadable file, so the environment store holds no \
-                 value for {name}"
+                "{file_var} points at an unreadable file, so the environment provider holds \
+                 no value for {name}"
             );
             None
         }
     }
 }
 
-/// BUNYIP-525: how to reach the Infisical store of the Group-2 (integration)
+/// BUNYIP-525: how to reach the Infisical provider of the Group-2 (integration)
 /// secrets. Credentials honour the `{NAME}_FILE` convention like every other
-/// secret. Whether this store is READ is [`SecretsStorage`]; `enabled` only
+/// secret. Whether this provider is READ is [`SecretsProvider`]; `enabled` only
 /// decides whether it is inspected outside `SECRETS_STORAGE=infisical`, which
 /// is what `bunyip-api secrets-status` needs to report readiness.
 #[derive(Debug, Clone)]
 pub struct InfisicalSettings {
-    /// Inspect the Infisical store outside `SECRETS_STORAGE=infisical`
-    /// (`INFISICAL_ENABLED`). Off by default; the declared store is read
+    /// Inspect the Infisical provider outside `SECRETS_STORAGE=infisical`
+    /// (`INFISICAL_ENABLED`). Off by default; the declared provider is read
     /// regardless.
     pub enabled: bool,
     /// Base URL of the Infisical instance (`INFISICAL_ADDRESS`),
@@ -498,7 +506,7 @@ impl EmailConfig {
     /// Resolve the email configuration through the provider stack (BUNYIP-643).
     ///
     /// BUNYIP-542: `smtp_password` is passed in, already resolved from the ONE
-    /// store `SECRETS_STORAGE` declares. It is a governed secret and never a
+    /// provider `SECRETS_STORAGE` declares. It is a governed secret and never a
     /// configuration key.
     ///
     /// The fields with no second source stay direct environment reads, per the
@@ -613,13 +621,13 @@ impl EmailConfig {
         }
     }
 
-    /// The `database` store's copy of the SMTP password: the decrypted
+    /// The `database` provider's copy of the SMTP password: the decrypted
     /// `email_config.smtp_password` ciphertext (BUNYIP-542).
     ///
     /// `None` when the row holds no ciphertext. A ciphertext no key in the set
     /// can read is logged at `error` and reported as absent, so the boot
-    /// enforcement treats it as "the declared store holds nothing" rather than
-    /// silently substituting another store's value.
+    /// enforcement treats it as "the declared provider holds nothing" rather
+    /// than silently substituting another provider's value.
     ///
     /// [`AppKeySet`]: crate::services::AppKeySet
     pub fn db_smtp_password(
@@ -637,8 +645,8 @@ impl EmailConfig {
                     error = %e,
                     key_version = row.key_version,
                     "email_config.smtp_password does not decrypt with APP_ENCRYPTION_KEY or any \
-                     APP_ENCRYPTION_KEY_PREV entry; treating the database store as holding no \
-                     SMTP password"
+                     APP_ENCRYPTION_KEY_PREV entry; treating the database provider as holding \
+                     no SMTP password"
                 );
                 None
             }
@@ -663,8 +671,8 @@ impl EmailConfig {
                     error = %e,
                     key_version = row.key_version,
                     "email_config.imap_password does not decrypt with APP_ENCRYPTION_KEY or any \
-                     APP_ENCRYPTION_KEY_PREV entry; treating the database store as holding no \
-                     IMAP password"
+                     APP_ENCRYPTION_KEY_PREV entry; treating the database provider as holding \
+                     no IMAP password"
                 );
                 None
             }
@@ -897,7 +905,7 @@ impl TierConfig {
     /// ONE possible provider - the admin pages write them and no environment
     /// variable exists for them (BUNYIP-482/487/493/527) - so they are not
     /// declared keys, for the same reason `GovernedSecret` excludes a secret
-    /// with one store: the declaration would be a no-op, and declaring them
+    /// with one provider: the declaration would be a no-op, and declaring them
     /// would hand the file provider a feature flag `CLAUDE.md` requires to be
     /// admin-managed. They are read straight from the row by [`Self::resolve`].
     pub fn database_provider(
@@ -1317,26 +1325,26 @@ impl Config {
         let deployment = ConfigStack::deployment();
         let email = EmailConfig::resolve(&deployment, None, is_production);
 
-        // BUNYIP-542: the declared store for every governed integration secret.
+        // BUNYIP-542: the declared provider for every governed integration secret.
         // Absence is reported by the presence audit above, so the placeholder in
         // that arm is never observed: a non-empty `failures` returns Err before
         // this Config is built. An unrecognised value is its own failure, named
         // with the legal set.
-        let secrets_storage = match secret_env("SECRETS_STORAGE") {
-            Some(raw) => SecretsStorage::parse(&raw).unwrap_or_else(|| {
+        let secrets_provider = match secret_env("SECRETS_STORAGE") {
+            Some(raw) => SecretsProvider::parse(&raw).unwrap_or_else(|| {
                 failures.push(ConfigFailure {
                     var: "SECRETS_STORAGE",
                     reason: format!(
-                        "the value {raw:?} is not one of the stores bunyip can read secrets from"
+                        "the value {raw:?} is not one of the providers bunyip can read secrets from"
                     ),
                     remedy: format!(
                         "Set SECRETS_STORAGE to one of: {}. See docs/configuration.md.",
-                        SecretsStorage::LEGAL_VALUES
+                        SecretsProvider::LEGAL_VALUES
                     ),
                 });
-                SecretsStorage::Database
+                SecretsProvider::Database
             }),
-            None => SecretsStorage::Database,
+            None => SecretsProvider::Database,
         };
 
         // BUNYIP-623: a self-hosted production deployment with email not yet
@@ -1492,7 +1500,7 @@ impl Config {
             country_allow: sys.country_allow.clone(),
             country_deny: sys.country_deny.clone(),
             infisical,
-            secrets_storage,
+            secrets_provider,
         };
 
         // BUNYIP-537: the one place startup failures are reported. Every branch
@@ -1505,7 +1513,7 @@ impl Config {
             port = %config.port,
             environment = %config.environment,
             bootstrap_admin_configured = config.bootstrap_admin_email.is_some(),
-            secrets_storage = %config.secrets_storage,
+            secrets_provider = %config.secrets_provider,
             "Configuration loaded"
         );
 
@@ -1980,8 +1988,8 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
     .gated_by("BUNYIP_UPDATE_CHECK_URL"),
     EnvVarSpec::gating(
         "INFISICAL_ENABLED",
-        "the Infisical store is not inspected: `bunyip-api secrets-status` cannot report whether \
-         SECRETS_STORAGE=infisical is ready to switch to (BUNYIP-525, BUNYIP-542)",
+        "the Infisical provider is not inspected: `bunyip-api secrets-status` cannot report \
+         whether SECRETS_STORAGE=infisical is ready to switch to (BUNYIP-525, BUNYIP-542)",
         "Set INFISICAL_ENABLED=true plus the INFISICAL_* credentials (see \
          docs/secrets-infisical.md). SECRETS_STORAGE=infisical inspects it either way.",
     ),
@@ -2890,34 +2898,35 @@ mod tests {
 
     /// Every legal value round-trips, and nothing else parses: an operator
     /// typo must be a startup error, never a silent fallback to some default
-    /// store.
+    /// provider.
     #[test]
-    fn secrets_storage_parses_exactly_the_three_legal_values() {
+    fn secrets_provider_parses_exactly_the_three_legal_values() {
         for (raw, expected) in [
-            ("environment", SecretsStorage::Environment),
-            ("database", SecretsStorage::Database),
-            ("infisical", SecretsStorage::Infisical),
+            ("environment", SecretsProvider::Environment),
+            ("database", SecretsProvider::Database),
+            ("infisical", SecretsProvider::Infisical),
             // Case and surrounding whitespace are operator noise, not intent.
-            ("  DataBase ", SecretsStorage::Database),
+            ("  DataBase ", SecretsProvider::Database),
         ] {
-            assert_eq!(SecretsStorage::parse(raw), Some(expected), "{raw}");
+            assert_eq!(SecretsProvider::parse(raw), Some(expected), "{raw}");
         }
         for raw in ["", "db", "vault", "environmnet", "database,infisical"] {
-            assert_eq!(SecretsStorage::parse(raw), None, "{raw}");
+            assert_eq!(SecretsProvider::parse(raw), None, "{raw}");
         }
     }
 
     /// An unrecognised value is a startup failure naming the variable and the
     /// legal set, collected with every other failure in the one report.
     #[test]
-    fn an_unrecognised_secrets_storage_is_a_startup_failure() {
+    fn an_unrecognised_secrets_provider_is_a_startup_failure() {
         let _env = env_lock();
         redirect_sys_config_to_temp();
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
         env::set_var("ENVIRONMENT", "development");
         env::set_var("SECRETS_STORAGE", "vault");
 
-        let err = Config::from_env_inner().expect_err("an unrecognised store must fail the boot");
+        let err =
+            Config::from_env_inner().expect_err("an unrecognised provider must fail the boot");
         let ConfigError::Startup(failures) = &err else {
             panic!("expected a startup report, got {err:?}");
         };
@@ -2931,18 +2940,18 @@ mod tests {
         }
 
         env::set_var("SECRETS_STORAGE", "infisical");
-        let config = Config::from_env_inner().expect("a legal store loads");
-        assert_eq!(config.secrets_storage, SecretsStorage::Infisical);
+        let config = Config::from_env_inner().expect("a legal provider loads");
+        assert_eq!(config.secrets_provider, SecretsProvider::Infisical);
 
         env::remove_var("SECRETS_STORAGE");
         env::remove_var("ENVIRONMENT");
     }
 
-    /// The environment store is `{NAME}_FILE` only. A plain variable holding a
-    /// governed secret is the compose-`environment:` exposure BUNYIP-38
+    /// The environment provider is `{NAME}_FILE` only. A plain variable holding
+    /// a governed secret is the compose-`environment:` exposure BUNYIP-38
     /// removed, so it resolves to nothing rather than quietly working.
     #[test]
-    fn the_environment_store_reads_the_file_and_ignores_the_plain_variable() {
+    fn the_environment_provider_reads_the_file_and_ignores_the_plain_variable() {
         let _env = env_lock();
         let dir = std::env::temp_dir().join("bunyip-542-env-store");
         std::fs::create_dir_all(&dir).expect("temp dir");
@@ -3440,12 +3449,13 @@ mod tests {
         row.smtp_password_nonce = Some(nonce);
         row.key_version = ver;
 
-        // BUNYIP-542: the caller resolves the password from the declared store;
-        // `db_smtp_password` is the database store's half of that resolution.
-        let from_store = EmailConfig::db_smtp_password(&row, &key_set);
-        assert_eq!(from_store.as_deref(), Some("s3cr3t-relay-pass"));
+        // BUNYIP-542: the caller resolves the password from the declared
+        // provider; `db_smtp_password` is the database provider's half of that
+        // resolution.
+        let from_provider = EmailConfig::db_smtp_password(&row, &key_set);
+        assert_eq!(from_provider.as_deref(), Some("s3cr3t-relay-pass"));
         let db = EmailConfig::database_provider(&row).expect("no Group-1 key in the email row");
-        let cfg = EmailConfig::resolve(&db_over_env(db.clone()), from_store, false);
+        let cfg = EmailConfig::resolve(&db_over_env(db.clone()), from_provider, false);
         assert_eq!(cfg.smtp_password, "s3cr3t-relay-pass");
         // The governed secret is NOT a configuration key: the ciphertext column
         // never enters the provider (BUNYIP-542 owns it, not this stack).

@@ -62,12 +62,13 @@ pub struct EmailConfigResponse {
     pub admin_notification_emails: Vec<String>,
     /// Whether the resolved values come from "database" or "environment".
     pub source: &'static str,
-    /// BUNYIP-542: the declared store for the SMTP password
+    /// BUNYIP-542: the declared provider for the SMTP password
     /// (`SECRETS_STORAGE`): "environment", "database" or "infisical". The
-    /// non-secret settings above are unaffected by it.
+    /// non-secret settings above are unaffected by it. The wire key stays
+    /// `secrets_storage`, matching the variable it reports (BUNYIP-642).
     pub secrets_storage: &'static str,
     /// Whether the SMTP password can be changed from the admin page. False in
-    /// `environment` mode, where there is no writable store, so the field
+    /// `environment` mode, where there is no writable provider, so the field
     /// renders read-only instead of reporting a save that lands nowhere.
     pub smtp_password_editable: bool,
     /// BUNYIP-571: inbound IMAP settings. The password is write-only like the

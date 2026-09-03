@@ -9,7 +9,8 @@ without an entry there fails `bunyip-api/tests/env_inventory.rs`. The classifica
 operator-facing rendering of that table, so they cannot drift from the code. The three sections that follow them are not
 derivable from the inventory:
 
-- [Which store a running deployment is using](#which-store-a-running-deployment-is-using), and what each store costs.
+- [Which provider a running deployment is using](#which-provider-a-running-deployment-is-using), and what each
+  provider costs.
 - [Compose coverage](#secret-files-and-compose-coverage): what the api reads that this repository's `compose.yml` does
   not pass.
 - [Settings that are not environment variables](#settings-that-are-not-environment-variables): the database-backed
@@ -96,10 +97,17 @@ staging fall back to documented placeholder values.
 
 ## `SECRETS_STORAGE`: where the integration secrets live (BUNYIP-542)
 
-`SECRETS_STORAGE` declares the ONE store bunyip reads its governed integration secrets from. Legal values:
+`SECRETS_STORAGE` declares the ONE provider bunyip reads its governed integration secrets from. Legal values:
 `environment`, `database`, `infisical`. Unset or unrecognised logs one `ERROR` naming the legal set and exits 1.
 
-The governed set is exactly the secrets with more than one possible store:
+**Why the variable says storage and everything else says provider.** The suite's word for a selectable implementation
+is **provider**, and bunyip's code says `SecretsProvider` (BUNYIP-642). The variable keeps its `SECRETS_STORAGE`
+spelling and the subcommands keep their `secrets-status` / `secrets-migrate` / `secrets-purge` names, deliberately:
+renaming either breaks every running deployment and every runbook for a vocabulary change with no functional gain. The
+`secrets-status --json` keys and the `secrets_storage` field of the admin API responses are unchanged for the same
+reason.
+
+The governed set is exactly the secrets with more than one possible provider:
 
 | Secret                  | `database`                     | `environment`                | `infisical`                    |
 |-------------------------|--------------------------------|------------------------------|--------------------------------|
@@ -108,7 +116,7 @@ The governed set is exactly the secrets with more than one possible store:
 | `STRIPE_WEBHOOK_SECRET` | `stripe_config.webhook_secret` | `STRIPE_WEBHOOK_SECRET_FILE` | `<path>/STRIPE_WEBHOOK_SECRET` |
 | `SUPPORT_IMAP_PASSWORD` | `email_config.imap_password`   | `SUPPORT_IMAP_PASSWORD_FILE` | `<path>/SUPPORT_IMAP_PASSWORD` |
 
-The declared store is the ONLY one consulted. There is no fallback and no precedence chain: in `database` mode the
+The declared provider is the ONLY one consulted. There is no fallback and no precedence chain: in `database` mode the
 environment slot and Infisical are not read at all, and vice versa. Group-1 startup secrets (`DATABASE_URL`,
 `JWT_SECRET`, `APP_ENCRYPTION_KEY`, ...) cannot be governed by this switch - the database cannot hold the credential
 used to reach the database - and stay file-based.
@@ -119,19 +127,19 @@ consulted.
 
 ### Startup enforcement, per governed secret
 
-| Situation                                          | Behaviour                                                                                |
-|----------------------------------------------------|------------------------------------------------------------------------------------------|
-| present in the declared store                      | use it                                                                                   |
-| absent everywhere                                  | feature off, one `WARN` naming the secret and the feature it gates                       |
-| absent from the declared store, present in another | **fatal**: one `ERROR` naming the secret, both stores and `secrets-migrate`, then exit 1 |
-| present in the declared store AND in another       | boot, and one `WARN` per duplicate naming `secrets-purge`                                |
+| Situation                                             | Behaviour                                                                                   |
+|-------------------------------------------------------|---------------------------------------------------------------------------------------------|
+| present in the declared provider                      | use it                                                                                      |
+| absent everywhere                                     | feature off, one `WARN` naming the secret and the feature it gates                          |
+| absent from the declared provider, present in another | **fatal**: one `ERROR` naming the secret, both providers and `secrets-migrate`, then exit 1 |
+| present in the declared provider AND in another       | boot, and one `WARN` per duplicate naming `secrets-purge`                                   |
 
 "Present" means a non-null ciphertext column (database), a non-empty `{NAME}_FILE` read (environment), or a successful
-key read (infisical). The duplicate warning is what keeps a later mode change honest: a stale copy in a store nobody
+key read (infisical). The duplicate warning is what keeps a later mode change honest: a stale copy in a provider nobody
 reads today becomes live the moment someone flips the mode.
 
 `infisical` mode is **fail-closed**: an unreachable Infisical or a failed read aborts the boot, because the operator
-declared it the store of record. `database` and `environment` mode never contact Infisical at boot, so it stays off the
+declared it the provider of record. `database` and `environment` mode never contact Infisical at boot, so it stays off the
 boot path for them.
 
 ### Writing from the admin pages
@@ -139,8 +147,8 @@ boot path for them.
 | Mode          | Admin Stripe / Email secret fields                                                                                                                                      |
 |---------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `database`    | editable; encrypted under `APP_ENCRYPTION_KEY`, written to the row, service hot-reloaded                                                                                |
-| `infisical`   | editable; written to `INFISICAL_SECRET_PATH` through the API (no DB write), service hot-reloaded, and an audit entry records the admin, the secret and the target store |
-| `environment` | read-only, labelled with the owning store and the file to edit; the API answers 409                                                                                     |
+| `infisical`   | editable; written to `INFISICAL_SECRET_PATH` through the API (no DB write), service hot-reloaded, and an audit entry records the admin, the secret and the target provider |
+| `environment` | read-only, labelled with the owning provider and the file to edit; the API answers 409                                                                                    |
 
 A failed Infisical write surfaces on the form and in the log with the underlying cause, performs no reload and reports
 no success. The machine identity needs **write** access to `INFISICAL_SECRET_PATH`; read access alone fails the save.
@@ -153,7 +161,7 @@ Non-secret configuration (`smtp_host`, `smtp_port`, `smtp_tls`, `smtp_username`,
 Only a change made through the admin pages hot-applies. A value changed directly in Infisical, or in a secret file,
 takes effect on the next restart, because the boot read is the only reader.
 
-### Which store a running deployment is using
+### Which provider a running deployment is using
 
 `bunyip-api secrets-status` answers this from inside the container. To confirm from outside, without decrypting
 anything:
@@ -168,9 +176,9 @@ A populated column with `SECRETS_STORAGE=database` means the row is the live sou
 that secret is the expected result rather than a misconfiguration. The database columns are `BYTEA`: AES-256-GCM
 ciphertext plus nonce under `APP_ENCRYPTION_KEY`.
 
-### What each store costs
+### What each provider costs
 
-| Store           | Set from                         | Applies without a restart                     | Cons                                                                                                                                                                        |
+| Provider        | Set from                         | Applies without a restart                     | Cons                                                                                                                                                                        |
 |-----------------|----------------------------------|-----------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **database**    | admin Stripe / Email pages       | yes                                           | recoverable only with `APP_ENCRYPTION_KEY`; a restore under a rotated key needs `APP_ENCRYPTION_KEY_PREV` and a re-encrypt pass. The secrets share a backup with user data. |
 | **environment** | secret file, edited on the host  | no: restart to pick up a new value            | **the admin UI cannot write it**, so those fields are read-only and every rotation is a host edit plus a restart.                                                           |
@@ -181,19 +189,19 @@ variable for its own next boot and `/run/secrets/*` is mounted read-only, so a s
 read-only there because the alternative is worse, namely a handler that encrypts the value into a row nothing reads
 while the page reports success.
 
-### Changing the store
+### Changing the provider
 
 Never by editing `SECRETS_STORAGE` and hoping. The pre-flight runs while the current deployment is healthy: `bunyip-api
 secrets-status`, then `secrets-migrate --to <target>`, then `secrets-status` again, then set `SECRETS_STORAGE`, restart,
 soak, and finally `secrets-purge --confirm`. The full runbook is in [ `secrets-infisical.md`](secrets-infisical.md).
 
-Changing the Infisical **instance** (rather than the store) needs the database as a staging hop, because bunyip-api
+Changing the Infisical **instance** (rather than the provider) needs the database as a staging hop, because bunyip-api
 holds one set of `INFISICAL_*` values and can never see both instances at once. That procedure is tracked in BUNYIP-544
 and belongs in the same runbook.
 
 ## Configuration providers and their precedence (BUNYIP-643)
 
-`SECRETS_STORAGE` declares the ONE store the governed secrets come from. Configuration is different: it comes from
+`SECRETS_STORAGE` declares the ONE provider the governed secrets come from. Configuration is different: it comes from
 several providers at once, in a **declared priority order**, and which one served a given value is reportable rather
 than something you have to read the code to work out.
 
@@ -263,8 +271,8 @@ table:
 | `overridden`  | the highest-priority provider holds it and so does a lower one, whose value is ignored today and becomes live if the higher one is cleared | duplicate |
 | `shadowed`    | the highest-priority provider does not hold it, so a lower one serves  | misplaced          |
 
-The severity differs in one place, deliberately. For a secret, "absent from the declared store but present in another"
-is FATAL, because the deployment declared ONE store. For configuration it is `shadowed`, and it is normal: the
+The severity differs in one place, deliberately. For a secret, "absent from the declared provider but present in
+another" is FATAL, because the deployment declared ONE provider. For configuration it is `shadowed`, and it is normal: the
 precedence is an order, and a lower provider serving a key is how an override is meant to work. Only `overridden` is
 logged at boot, one `WARN` per ignored provider, which is the stale-copy case worth knowing about.
 
@@ -289,7 +297,7 @@ logged at boot, one `WARN` per ignored provider, which is the stale-copy case wo
 | `IP2PROXY_DB_PATH`                      | -                           | ASN / VPN enrichment on login alerts                                |
 | `BUNYIP_UPDATE_CHECK_URL`               | -                           | the operator update checker                                         |
 | `BUNYIP_UPDATE_CHECK_TOKEN`             | `BUNYIP_UPDATE_CHECK_URL`   | authenticated access to a private release feed                      |
-| `INFISICAL_ENABLED`                     | -                           | inspecting the Infisical store (`secrets-status` readiness)         |
+| `INFISICAL_ENABLED`                     | -                           | inspecting the Infisical provider (`secrets-status` readiness)      |
 | `INFISICAL_ADDRESS`                     | `INFISICAL_ENABLED`         | the Infisical server address                                        |
 | `INFISICAL_PROJECT_ID`                  | `INFISICAL_ENABLED`         | the Infisical project                                               |
 | `INFISICAL_CLIENT_ID`                   | `INFISICAL_ENABLED`         | the Universal Auth machine identity                                 |
@@ -400,7 +408,7 @@ this repository.
 |---------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
 | `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`       | deliberate: governed secrets, read only as `{NAME}_FILE` under `SECRETS_STORAGE=environment` |
 | `APP_URL`                                                           | the base URL for email links and the EHLO fallback silently comes from `CORS_ORIGIN`         |
-| `INFISICAL_*` (7)                                                   | the `infisical` store cannot be selected or inspected                                        |
+| `INFISICAL_*` (7)                                                   | the `infisical` provider cannot be selected or inspected                                     |
 | `BUNYIP_WEB_ORIGIN`                                                 | a multi-RP deployment cannot pin the login-UI origin                                         |
 | `BUNYIP_COOKIE_SHARED_DOMAIN`                                       | the cross-subdomain OP session cookie cannot be enabled                                      |
 | `MOKOSH_APPS_*`, `DRILLMARK_*`, `LETS_CHAT_*`                       | those OIDC clients keep whatever the migrations seeded; no reconciliation runs               |

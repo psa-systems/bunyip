@@ -432,21 +432,21 @@ async fn main() -> anyhow::Result<()> {
     // guards the TOTP secrets, the Stripe secrets and the SMTP password.
     let app_key_set = config.app_key_set();
 
-    // BUNYIP-542: read every governed integration secret from the ONE store
-    // SECRETS_STORAGE declares, and enforce the store declaration. The old
+    // BUNYIP-542: read every governed integration secret from the ONE provider
+    // SECRETS_STORAGE declares, and enforce that declaration. The old
     // three-level precedence chain (DB row, then the env slot, then a
     // conditional Infisical fetch that filled the slot only when it was empty)
     // is gone: which copy is live is now the operator's declaration.
     //
-    // Infisical is contacted only when it IS the declared store, so `database`
+    // Infisical is contacted only when it IS the declared provider, so `database`
     // and `environment` deployments keep the property that Infisical is never a
     // boot dependency. In `infisical` mode the read is deliberately fail-closed.
-    let infisical_probe = if config.secrets_storage == bunyip_api::config::SecretsStorage::Infisical
-    {
-        bunyip_api::secrets::InfisicalProbe::Inspect
-    } else {
-        bunyip_api::secrets::InfisicalProbe::Skip
-    };
+    let infisical_probe =
+        if config.secrets_provider == bunyip_api::config::SecretsProvider::Infisical {
+            bunyip_api::secrets::InfisicalProbe::Inspect
+        } else {
+            bunyip_api::secrets::InfisicalProbe::Skip
+        };
     let secret_survey =
         bunyip_api::secrets::survey(&pool, &config, &app_key_set, infisical_probe).await?;
     let fatal_secret_reports = bunyip_api::secrets::enforce(&secret_survey);
@@ -454,15 +454,15 @@ async fn main() -> anyhow::Result<()> {
         for report in &fatal_secret_reports {
             error!(env_var = "SECRETS_STORAGE", "{report}");
         }
-        error!("Refusing to start: fix the secret storage errors above and restart");
+        error!("Refusing to start: fix the secrets-provider errors above and restart");
         std::process::exit(1);
     }
     info!(
-        secrets_storage = %config.secrets_storage,
-        "Governed integration secrets resolved from the declared store"
+        secrets_provider = %config.secrets_provider,
+        "Governed integration secrets resolved from the declared provider"
     );
     // The env-fallback EmailConfig carries the same resolved password, so both
-    // branches below agree on the one store's value.
+    // branches below agree on the one provider's value.
     let smtp_password = secret_survey
         .value(bunyip_api::config::GovernedSecret::SmtpPassword)
         .map(str::to_string);
@@ -522,7 +522,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize Email service: non-secret settings prefer the DB row (admin
     // UI) and fall back to the environment (BUNYIP-351); the SMTP password
-    // comes from the declared store alone (BUNYIP-542). The auth service (built
+    // comes from the declared provider alone (BUNYIP-542). The auth service (built
     // below) also holds the email service for BUNYIP-366 login-location alerts,
     // so email is wired ahead of auth.
     let email_config = {
@@ -641,7 +641,7 @@ async fn main() -> anyhow::Result<()> {
 
     // BUNYIP-542: the non-secret Stripe settings (app tag, checkout URLs, trial
     // length) still come from the `stripe_config` row, but the two secrets come
-    // from the declared store alone.
+    // from the declared provider alone.
     let stripe_config = {
         use bunyip_api::config::GovernedSecret;
         use bunyip_api::repositories::StripeConfigRepository;
@@ -658,7 +658,7 @@ async fn main() -> anyhow::Result<()> {
         match (&row, secret_key) {
             (Some(row), Some(secret_key)) => {
                 // The non-secret columns come from the row in every mode; the
-                // two secrets come from the declared store alone.
+                // two secrets come from the declared provider alone.
                 let mut cfg = stripe_settings_from_db_model(row);
                 cfg.secret_key = secret_key.to_string();
                 cfg.webhook_secret = secret_survey
@@ -666,13 +666,15 @@ async fn main() -> anyhow::Result<()> {
                     .map(str::to_string)
                     .unwrap_or(unconfigured_stripe_config().webhook_secret);
                 info!(
-                    secrets_storage = %config.secrets_storage,
-                    "Stripe service initialized with secrets from the declared store"
+                    secrets_provider = %config.secrets_provider,
+                    "Stripe service initialized with secrets from the declared provider"
                 );
                 cfg
             }
             _ => {
-                info!("No Stripe secret key in the declared store; starting with Stripe disabled");
+                info!(
+                    "No Stripe secret key in the declared provider; starting with Stripe disabled"
+                );
                 unconfigured_stripe_config()
             }
         }
@@ -1377,7 +1379,7 @@ async fn run_subcommand(
     pool: &sqlx::PgPool,
     config: &Config,
 ) -> anyhow::Result<()> {
-    use bunyip_api::config::SecretsStorage;
+    use bunyip_api::config::SecretsProvider;
     use bunyip_api::secrets;
 
     // BUNYIP-542: the `secrets-*` family is the non-destructive pre-flight the
@@ -1386,7 +1388,8 @@ async fn run_subcommand(
     // serving. Infisical is inspected when the deployment has it enabled, which
     // is what makes "is `--to infisical` ready?" answerable.
     let key_set = config.app_key_set();
-    let probe = if config.infisical.enabled || config.secrets_storage == SecretsStorage::Infisical {
+    let probe = if config.infisical.enabled || config.secrets_provider == SecretsProvider::Infisical
+    {
         secrets::InfisicalProbe::Inspect
     } else {
         secrets::InfisicalProbe::Skip
@@ -1405,18 +1408,20 @@ async fn run_subcommand(
         }
         "secrets-migrate" => {
             let target = match args.iter().position(|arg| arg == "--to") {
-                Some(idx) => args.get(idx + 1).and_then(|raw| SecretsStorage::parse(raw)),
+                Some(idx) => args
+                    .get(idx + 1)
+                    .and_then(|raw| SecretsProvider::parse(raw)),
                 None => None,
             };
             let Some(target) = target else {
                 anyhow::bail!(
                     "secrets-migrate needs --to <{}>",
-                    SecretsStorage::LEGAL_VALUES
+                    SecretsProvider::LEGAL_VALUES
                 );
             };
             let survey = secrets::survey(pool, config, &key_set, probe).await?;
             let dry_run = args.iter().any(|arg| arg == "--dry-run");
-            // A governed secret with no value in any store fails the run rather
+            // A governed secret with no value in any provider fails the run rather
             // than migrating to a blank (BUNYIP-621); --allow-missing skips it
             // explicitly for a deployment that does not use that feature.
             let allow_missing = args.iter().any(|arg| arg == "--allow-missing");
@@ -1475,7 +1480,7 @@ async fn run_subcommand(
 
 /// BUNYIP-562: build a `StripeService` for a CLI subcommand the same way startup
 /// does - non-secret settings from the `stripe_config` row, the secret key and
-/// webhook secret from the declared secret store (the survey). An unreadable row
+/// webhook secret from the declared secrets provider (the survey). An unreadable row
 /// or a missing secret key yields the disabled service, so the caller can report
 /// "nothing to do" rather than crash.
 async fn build_stripe_service(
