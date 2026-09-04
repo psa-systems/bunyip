@@ -77,6 +77,7 @@ just create-release minor   # bump the workspace version, branch, push, open the
 - `bunyip-web/` - the Axum server-rendered front-end (Maud + htmx), the browser-facing BFF. No SPA.
 - `crates/bunyip-domain/` - models, repositories, services, the app `Config`, and the email templates.
 - `crates/bunyip-oci/`, `crates/bunyip-oidc/` - the OCI-registry and OIDC / OAuth 2.1 verticals.
+- `crates/web-kit/` - branding-free shared SSR building blocks (Maud + htmx), used by this front-end and reusable by others.
 - `compose.yml` - the production / self-host reference deployment (pulls the published images).
 - `compose.dev.yml` - the dev stack (builds from source).
 - `compose.dev-sso.yml` - the overlay for testing SSO against a real mokosh-server.
