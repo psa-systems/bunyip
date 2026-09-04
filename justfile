@@ -187,13 +187,18 @@ check-docker:
 
 # Run fmt + clippy + workspace lib tests inside the pinned rust-builder image.
 # For dev boxes with no local Rust toolchain; named volumes keep repeat runs incremental.
+# The build cache is mounted OUTSIDE /work and reached through CARGO_TARGET_DIR
+# (what common's pre-commit-docker does): a volume nested under the bind mount
+# makes Docker create the missing mountpoint on the host as root, which then
+# fails check-tree-ownership (DEV-371, BUNYIP-640).
 [group: 'checks']
 check-container:
     docker run --rm \
         -v {{ justfile_directory() }}:/work \
         -v dunite-check-cargo-registry:/usr/local/cargo/registry \
-        -v bunyip-check-target:/work/target \
+        -v bunyip-check-target:/cargo-target \
         -w /work \
+        -e CARGO_TARGET_DIR=/cargo-target \
         -e SQLX_OFFLINE=true \
         ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie \
         bash -c "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace --all-targets"

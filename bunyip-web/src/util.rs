@@ -93,6 +93,21 @@ pub fn app_link(app: &Application, domain: &str) -> String {
     }
 }
 
+/// Launch URL for a SIGNED-IN user: [`app_link`]'s host plus `/dashboard`
+/// (BUNYIP-638). `/dashboard`, not the apex, so the child app's AuthGuard sees a
+/// protected route and starts the OIDC code flow against the user's existing OP
+/// session; the apex just shows its marketing page and makes the user click
+/// "Sign in" before the SSO bridge fires. An unset apex domain keeps
+/// `app_link`'s bare `#`, never `#/dashboard`.
+pub fn app_launch_link(app: &Application, domain: &str) -> String {
+    let base = app_link(app, domain);
+    if base == "#" {
+        base
+    } else {
+        format!("{base}/dashboard")
+    }
+}
+
 /// Tailwind gradient class pairs an application card's accent is drawn from.
 pub const APP_GRADIENTS: [&str; 4] = [
     "from-indigo-500 to-primary",
@@ -232,7 +247,9 @@ pub fn days_until(iso: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{app_gradient, app_link, fnv1a, APP_GRADIENTS, UNGROUPED_APP_GRADIENT};
+    use super::{
+        app_gradient, app_launch_link, app_link, fnv1a, APP_GRADIENTS, UNGROUPED_APP_GRADIENT,
+    };
     use crate::api::types::Application;
 
     fn app(slug: &str, subdomain: Option<&str>) -> Application {
@@ -274,6 +291,56 @@ mod tests {
 
         // No apex domain configured -> a neutral href, never a broken absolute.
         assert_eq!(app_link(&with, ""), "#");
+    }
+
+    /// BUNYIP-638: the launch link is the same host resolution plus the
+    /// `/dashboard` suffix that makes the child app's AuthGuard start the OIDC
+    /// flow. The unconfigured case stays the bare `#` `app_link` returns, never
+    /// `#/dashboard`, which no browser resolves to anything useful.
+    #[test]
+    fn app_launch_link_deep_links_into_the_child_app() {
+        let with = app("lets-chat", Some("chat"));
+        assert_eq!(
+            app_launch_link(&with, "a8n.systems"),
+            "https://chat.a8n.systems/dashboard"
+        );
+
+        let without = app("lets-chat", None);
+        assert_eq!(
+            app_launch_link(&without, "a8n.systems"),
+            "https://lets-chat.a8n.systems/dashboard"
+        );
+
+        assert_eq!(app_launch_link(&with, ""), "#");
+    }
+
+    /// BUNYIP-638: one construction of the launch URL, so the reason for the
+    /// `/dashboard` suffix lives in one doc comment instead of being re-derived
+    /// per view. It was hand-built in two places and documented in one of them.
+    #[test]
+    fn nothing_hand_builds_an_application_launch_url() {
+        let sources = [
+            (
+                "handlers/dashboard.rs",
+                include_str!("handlers/dashboard.rs"),
+            ),
+            ("views/layout.rs", include_str!("views/layout.rs")),
+        ];
+        for (name, src) in sources {
+            for line in src
+                .split("#[cfg(test)]")
+                .next()
+                .expect("split yields a head")
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+            {
+                assert!(
+                    !(line.contains("https://") && line.contains("/dashboard")),
+                    "{name} builds a launch URL by hand: `{}`; use util::app_launch_link",
+                    line.trim()
+                );
+            }
+        }
     }
 
     /// BUNYIP-495: the accent follows the group, so every member of a group is

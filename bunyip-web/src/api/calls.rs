@@ -4,8 +4,8 @@ use serde_json::{json, Value};
 
 use super::types::{
     AppDoc, AppDocSummary, AppDownloadGroup, Application, ApplicationGroup, ApplicationGroupList,
-    ApplicationList, CheckoutSessionResponse, DownloadGroups, Membership, PaginatedResponse,
-    PricingResponse, SessionInfo, StripeInvoice, StripePaymentResponse,
+    ApplicationList, CheckoutSessionResponse, DocumentedApp, DownloadGroups, Membership,
+    PaginatedResponse, PricingResponse, SessionInfo, StripeInvoice, StripePaymentResponse,
 };
 use super::{ok_data, parse, parse_bare, Api, ApiError};
 
@@ -227,6 +227,13 @@ pub async fn submit_feedback(
 }
 
 // --- application docs (BUNYIP-388, public read) -----------------------------
+
+/// Public: the applications that have published documentation (BUNYIP-635).
+/// Not `applications()`: that endpoint filters `is_hosted = TRUE` and returns
+/// none of the apps whose docs the `/docs` hub links.
+pub async fn documented_apps(api: &Api) -> Result<Vec<DocumentedApp>, ApiError> {
+    parse(api.get("/application-docs", None).await?)
+}
 
 /// Public: an application's documentation index (page metadata, ordered).
 pub async fn app_docs(api: &Api, app_slug: &str) -> Result<Vec<AppDocSummary>, ApiError> {

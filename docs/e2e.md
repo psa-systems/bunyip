@@ -178,9 +178,10 @@ PR gate is a separate workflow that declares only the two base URLs (see
   there is one preset, `RateLimitConfig::REGISTRATION` (3/hour/IP), and a
   non-production instance loosens it with the standard rate-limit env override
   `RATE_LIMIT_REGISTRATION_MAX_REQUESTS` / `RATE_LIMIT_REGISTRATION_WINDOW_SECONDS`
-  (e.g. 30 / 3600), resolved by `check_rate_limit` through the const -> env ->
-  persisted `rate_limit_configs` chain, or an admin-set override row for the
-  `registration` action. The long-running non-production deployment the e2e suite
+  (e.g. 30 / 3600), resolved by `check_rate_limit` through the declared
+  configuration providers (`database` > `file` > `environment`, then the built-in
+  cap), or an admin-set `rate_limit_configs` row for the `registration` action,
+  which is that database provider. The long-running non-production deployment the e2e suite
   provisions against (staging) sets those variables in its own bunyip-api server
   environment; there is no in-repo compose knob and no code branch. BUNYIP-601
   removed the earlier `if config.is_production()` branch (and its

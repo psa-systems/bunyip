@@ -5,8 +5,21 @@ use uuid::Uuid;
 
 use crate::errors::AppError;
 use crate::models::application_doc::{
-    ApplicationDoc, ApplicationDocSummary, CreateApplicationDoc, UpdateApplicationDoc,
+    ApplicationDoc, ApplicationDocSummary, CreateApplicationDoc, DocumentedApplication,
+    UpdateApplicationDoc,
 };
+
+/// The public "which applications have documentation" query (BUNYIP-635), kept
+/// as a constant so the unit test below can assert the active filter is still
+/// in it: a deactivated application must drop out of the `/docs` hub, and the
+/// only thing that makes it drop out is this predicate.
+const DOCUMENTED_APPS_SQL: &str = r#"
+    SELECT DISTINCT a.slug, a.display_name
+    FROM applications a
+    JOIN application_docs d ON d.application_id = a.id
+    WHERE a.is_active = TRUE
+    ORDER BY a.display_name ASC
+    "#;
 
 pub struct ApplicationDocRepository;
 
@@ -152,5 +165,38 @@ impl ApplicationDocRepository {
                 .fetch_all(pool)
                 .await?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    /// Public: every ACTIVE application carrying at least one documentation
+    /// page, for the `/docs` hub (BUNYIP-635). The join is what makes the list
+    /// real data: an app with no pages never appears, and deactivating one
+    /// removes it on the next read.
+    pub async fn list_documented_apps(
+        pool: &PgPool,
+    ) -> Result<Vec<DocumentedApplication>, AppError> {
+        let rows = sqlx::query_as::<_, DocumentedApplication>(DOCUMENTED_APPS_SQL)
+            .fetch_all(pool)
+            .await?;
+        Ok(rows)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DOCUMENTED_APPS_SQL;
+
+    /// BUNYIP-635: the `/docs` hub promises that deactivating an application
+    /// removes its entry. That promise is one predicate wide, so it is asserted
+    /// here rather than left to a reviewer noticing its removal.
+    #[test]
+    fn the_documented_app_list_only_ever_returns_active_applications() {
+        assert!(
+            DOCUMENTED_APPS_SQL.contains("a.is_active = TRUE"),
+            "a deactivated application must drop out of the public docs hub"
+        );
+        assert!(
+            DOCUMENTED_APPS_SQL.contains("JOIN application_docs"),
+            "the list is derived from published pages, never from the catalog"
+        );
     }
 }

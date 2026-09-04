@@ -8,7 +8,7 @@ use axum::response::{Html, IntoResponse, Response};
 use maud::Markup;
 
 use crate::api::calls;
-use crate::api::types::{Application, PricingResponse, SetupStatus};
+use crate::api::types::{Application, DocumentedApp, PricingResponse, SetupStatus};
 use crate::api::Api;
 use crate::config::Config;
 use crate::ttl_cache::TtlCache;
@@ -26,6 +26,11 @@ pub struct AppState {
     /// BUNYIP-555: the setup-status flags, which bunyip-api answers from process
     /// state without touching a table.
     pub setup_status_cache: Arc<TtlCache<SetupStatus>>,
+    /// BUNYIP-635: the applications carrying documentation, read by every
+    /// `/docs` render for the section menu. Same terms as the other near-static
+    /// payloads: it changes only when an admin publishes a page or deactivates
+    /// an application.
+    pub documented_apps_cache: Arc<TtlCache<Vec<DocumentedApp>>>,
 }
 
 impl AppState {
@@ -39,12 +44,13 @@ impl AppState {
             .unwrap_or_default()
     }
 
-    /// The application list the PUBLIC chrome renders (footer links), coalesced
-    /// per TTL.
+    /// The application list the PUBLIC chrome renders: the footer's Product
+    /// column for every visitor, and the header's launch links for a signed-in
+    /// one (BUNYIP-638). Coalesced per TTL.
     ///
     /// Deliberately fetched WITHOUT the visitor's cookie: `/v1/applications`
     /// lists the same active hosted applications for every caller and varies
-    /// only in the per-user `is_accessible` bit, which the public chrome never
+    /// only in the per-user `is_accessible` bit, which neither public surface
     /// reads. Fetching it anonymously is what makes ONE shared cache slot
     /// correct - a per-user payload in a process-wide cache would be served to
     /// the next visitor. The authenticated pages that DO read `is_accessible`
@@ -55,6 +61,16 @@ impl AppState {
             .get_or_fetch(|| calls::applications(&self.api, None))
             .await
             .unwrap_or_default()
+    }
+
+    /// The applications with published documentation, coalesced per TTL
+    /// (BUNYIP-635). `None` only when the cache has never read the list, which
+    /// the `/docs` hub renders as "could not load" - never as "no application
+    /// has documentation", and never as a menu of dead links.
+    pub async fn documented_apps(&self) -> Option<Vec<DocumentedApp>> {
+        self.documented_apps_cache
+            .get_or_fetch(|| calls::documented_apps(&self.api))
+            .await
     }
 
     /// The setup-status flags, coalesced per TTL. `None` only when the cache has

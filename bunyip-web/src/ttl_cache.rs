@@ -35,6 +35,11 @@ pub const PRICING_CACHE_TTL_SECS: u64 = 30;
 /// catalog.
 pub const APPLICATIONS_CACHE_TTL_SECS: u64 = 30;
 
+/// Freshness window for the `/docs` hub's documented-application list
+/// (BUNYIP-635). Same as the application list: it moves only when an admin
+/// publishes a documentation page or deactivates an application.
+pub const DOCUMENTED_APPS_CACHE_TTL_SECS: u64 = 30;
+
 /// Freshness window for the setup-status flags. Longer, because they change
 /// only when an admin configures SMTP or Stripe, and bunyip-api hot-reloads
 /// both (`StripeService::reload`), so the change still lands with no restart.

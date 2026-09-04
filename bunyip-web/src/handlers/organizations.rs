@@ -104,6 +104,12 @@ mod tests {
                 "the test chrome",
                 Duration::from_secs(1),
             )),
+            documented_apps_cache: Arc::new(TtlCache::new(
+                "/v1/application-docs",
+                "Vec<DocumentedApp>",
+                "the test chrome",
+                Duration::from_secs(1),
+            )),
         }
     }
 

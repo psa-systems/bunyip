@@ -1,11 +1,19 @@
 //! Persisted rate-limit configuration (BUNYIP-413).
 //!
 //! One optional `rate_limit_configs` row per known [`RateLimitConfig`] action.
-//! Absent means "use the bootstrap default" (the compile-time const with any
-//! `RATE_LIMIT_{ACTION}_*` env var applied); present overrides the cap and
-//! window for that action everywhere it is enforced. The enforcement path
-//! resolves the effective config through [`RateLimitConfigRepository::effective`],
-//! so a change lands on the next request with no restart.
+//! Absent means "use the built-in default"; present overrides the cap and window
+//! for that action everywhere it is enforced. The enforcement path resolves the
+//! effective config through [`RateLimitConfigRepository::effective`], so a change
+//! lands on the next request with no restart.
+//!
+//! BUNYIP-645: this table is the DATABASE PROVIDER for the
+//! `RATE_LIMIT_{ACTION}_*` keys, and nothing more. The caps used to resolve
+//! through a const-then-environment-then-row order that existed only as the body
+//! of `effective`, which is the same defect BUNYIP-643 removed for the three
+//! admin-managed configuration rows: an operator could not ask which of the
+//! three sources was in force. Now the rows build a [`DatabaseProvider`], the
+//! declared order in [`crate::config_providers`] decides, and
+//! `bunyip-api config-status` reports the per-action provenance.
 //!
 //! BUNYIP-556: that resolution reads a process-wide TTL snapshot of the whole
 //! table ([`RateLimitConfigCache`]), not a row per decision. The table holds at
@@ -14,7 +22,9 @@
 //! extra round trip on every request and six more on every login. `upsert` and
 //! `delete` invalidate the snapshot in the writing process, so an admin change
 //! is still live on the next request there; another api process picks it up
-//! within the TTL.
+//! within the TTL. Layering the providers is part of building the snapshot, and
+//! so is resolving every preset through them: a decision is a map lookup, and
+//! costs no query, no provider read and no allocation.
 
 use chrono::{DateTime, Utc};
 use sqlx::{FromRow, PgPool};
@@ -24,6 +34,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+use crate::config_providers::{ConfigStack, DatabaseProvider};
 use crate::errors::AppError;
 use crate::models::RateLimitConfig;
 
@@ -37,9 +48,112 @@ pub struct RateLimitConfigRow {
     pub updated_by: Option<Uuid>,
 }
 
-/// Every persisted override, indexed by action. Shared by `Arc` so a request
-/// clones a pointer rather than the map.
-pub type RateLimitOverrides = Arc<HashMap<String, RateLimitConfigRow>>;
+/// The cached table, shared by `Arc` so a request clones a pointer rather than
+/// the map.
+pub type RateLimitOverrides = Arc<RateLimitSnapshot>;
+
+/// One TTL window's view of `rate_limit_configs`: the rows, the provider stack
+/// they build, and what every preset resolves to through it (BUNYIP-645).
+///
+/// The resolution happens HERE, once per snapshot, rather than per decision. The
+/// precedence is still the declared provider order - this is a memo of a
+/// [`ConfigStack`] walk, not a second ordering - and it keeps the BUNYIP-556
+/// property that the rate-limit floor adds no per-request cost.
+#[derive(Debug)]
+pub struct RateLimitSnapshot {
+    rows: HashMap<String, RateLimitConfigRow>,
+    resolved: HashMap<&'static str, RateLimitConfig>,
+    stack: ConfigStack,
+}
+
+impl RateLimitSnapshot {
+    /// Build the snapshot from a table read.
+    fn build(rows: Vec<RateLimitConfigRow>) -> Self {
+        let stack =
+            ConfigStack::database_over(database_provider(&rows), ConfigStack::deployment_cached());
+        let resolved = RateLimitConfig::ALL
+            .iter()
+            .map(|cfg| (cfg.action, cfg.resolve(&stack)))
+            .collect();
+        Self {
+            rows: rows
+                .into_iter()
+                .map(|row| (row.action.clone(), row))
+                .collect(),
+            resolved,
+            stack,
+        }
+    }
+
+    /// The persisted override row for `action`, if the table holds one.
+    pub fn row(&self, action: &str) -> Option<&RateLimitConfigRow> {
+        self.rows.get(action)
+    }
+
+    /// How many actions carry a persisted override.
+    pub fn overrides(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// The provider stack these rows sit on top of.
+    pub fn stack(&self) -> &ConfigStack {
+        &self.stack
+    }
+
+    /// `base` as the declared providers resolve it. An action with no preset
+    /// resolves to itself: it has no declared configuration key, so no provider
+    /// can hold a value for it and nothing enforces it either.
+    pub fn effective(&self, base: &RateLimitConfig) -> RateLimitConfig {
+        self.resolved.get(base.action).copied().unwrap_or(*base)
+    }
+}
+
+/// The `rate_limit_configs` rows as a configuration provider (BUNYIP-645).
+///
+/// Public because `bunyip-api config-status` surveys the same provider the
+/// enforcement path resolves through, rather than a second reading of the table.
+///
+/// A row for an action with no preset holds nothing: it has no declared key, and
+/// nothing enforces it either. A non-positive cap or window is not held for the
+/// same reason the database provider drops an out-of-range column - it would
+/// refuse every request for the action - though the schema's `CHECK` means the
+/// table cannot hold one. A refusal from `set` is impossible by construction
+/// (every key here is generated from the same preset list `CONFIG_KEYS` is, and
+/// none is a Group-1 startup value, which
+/// `every_generated_rate_limit_key_is_settable` proves), so one is reported at
+/// `error` naming the key: it would mean the family and the registry had
+/// drifted, and the built-in default serves that action until they agree again.
+pub fn database_provider(rows: &[RateLimitConfigRow]) -> DatabaseProvider {
+    let mut provider = DatabaseProvider::new();
+    for row in rows {
+        let Some(vars) = RateLimitConfig::vars_for(&row.action) else {
+            tracing::warn!(
+                action = %row.action,
+                "a rate_limit_configs row names an action with no RateLimitConfig preset; nothing \
+                 enforces it, so it configures nothing"
+            );
+            continue;
+        };
+        for (key, value) in [
+            (vars.max_requests, i64::from(row.max_requests)),
+            (vars.window_seconds, row.window_seconds),
+        ] {
+            if value <= 0 {
+                continue;
+            }
+            if let Err(failure) = provider.set(key, value.to_string()) {
+                tracing::error!(
+                    config_key = key,
+                    reason = %failure.reason,
+                    "the rate_limit_configs provider could not hold {key}, so the next provider \
+                     or the built-in default serves that action: {}",
+                    failure.remedy
+                );
+            }
+        }
+    }
+    provider
+}
 
 /// Freshness window for the override snapshot, matching `PRICING_CACHE_TTL_SECS`.
 /// It bounds only how long a SECOND api process keeps enforcing the previous
@@ -89,11 +203,7 @@ impl RateLimitConfigCache {
         }
         match load().await {
             Ok(rows) => {
-                let fresh: RateLimitOverrides = Arc::new(
-                    rows.into_iter()
-                        .map(|row| (row.action.clone(), row))
-                        .collect(),
-                );
+                let fresh: RateLimitOverrides = Arc::new(RateLimitSnapshot::build(rows));
                 *self.slot.write().unwrap_or_else(|e| e.into_inner()) =
                     Some((Instant::now(), fresh.clone()));
                 Ok(fresh)
@@ -109,7 +219,7 @@ impl RateLimitConfigCache {
                     Some(v) => {
                         tracing::error!(
                             error = %e,
-                            overrides = v.len(),
+                            overrides = v.overrides(),
                             "rate-limit config refresh failed; serving the last good snapshot"
                         );
                         Ok(v)
@@ -212,35 +322,33 @@ impl RateLimitConfigRepository {
         Ok(result.rows_affected() > 0)
     }
 
-    /// The cached snapshot of every persisted override (BUNYIP-556), reloaded
-    /// at most once per TTL and on every write.
+    /// The cached snapshot of the whole table (BUNYIP-556), reloaded at most
+    /// once per TTL and on every write.
     pub async fn overrides(pool: &PgPool) -> Result<RateLimitOverrides, AppError> {
         cache().get_or_load(|| Self::list(pool)).await
     }
 
-    /// The config actually enforced for `base`: the bootstrap default (const +
-    /// env) with the persisted row's cap/window applied when one exists. Every
-    /// enforcement entry point resolves through here, so an override takes
-    /// effect at every call site for that action.
+    /// The config actually enforced for `base`: this preset resolved through the
+    /// declared configuration providers, whose database layer is these rows
+    /// (BUNYIP-645). Every enforcement entry point resolves through here, so an
+    /// override takes effect at every call site for that action.
     ///
-    /// Reads the cached snapshot, never a per-decision `SELECT`: the const to
-    /// env to persisted precedence is unchanged, only where the persisted layer
-    /// is read from.
+    /// Reads the cached snapshot, never a per-decision `SELECT`: the resolution
+    /// itself happened when the snapshot was built, so a decision is a lookup.
     pub async fn effective(
         pool: &PgPool,
         base: &RateLimitConfig,
     ) -> Result<RateLimitConfig, AppError> {
-        let base = base.with_env_defaults();
-        match Self::overrides(pool).await?.get(base.action) {
-            Some(row) => Ok(base.with_overrides(Some(row.max_requests), Some(row.window_seconds))),
-            None => Ok(base),
-        }
+        Ok(Self::overrides(pool).await?.effective(base))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config_providers::{
+        ConfigProvider, ConfigProviderKind, Enumeration, RATE_LIMIT_KEYS,
+    };
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn row(action: &str, max_requests: i32, window_seconds: i64) -> RateLimitConfigRow {
@@ -268,10 +376,79 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            assert_eq!(snapshot.get("login").unwrap().max_requests, 2);
+            assert_eq!(snapshot.row("login").unwrap().max_requests, 2);
+            // And the decision itself is a lookup in the snapshot, not a walk
+            // of the providers (BUNYIP-645 keeps the BUNYIP-556 property).
+            let login = snapshot.effective(&RateLimitConfig::LOGIN);
+            assert_eq!((login.max_requests, login.window_seconds), (2, 120));
         }
 
         assert_eq!(loads.load(Ordering::Relaxed), 1);
+    }
+
+    /// AC1/AC5 (BUNYIP-645): the row is the database provider, so it still wins
+    /// over the built-in default, and an action with no row resolves to its
+    /// const exactly as before.
+    #[tokio::test]
+    async fn the_rows_are_the_database_provider_over_the_deployment_stack() {
+        let cache = RateLimitConfigCache::new(Duration::from_secs(30));
+        let snapshot = cache
+            .get_or_load(|| async { Ok(vec![row("login", 2, 120)]) })
+            .await
+            .unwrap();
+
+        let login = snapshot.effective(&RateLimitConfig::LOGIN);
+        assert_eq!((login.max_requests, login.window_seconds), (2, 120));
+        assert_eq!(
+            snapshot
+                .stack()
+                .resolve("RATE_LIMIT_LOGIN_MAX_REQUESTS")
+                .serving(),
+            Some(ConfigProviderKind::Database),
+            "the row must be reported as the provider serving the cap"
+        );
+
+        // No row for this action: the const stands, and the report says so.
+        assert_eq!(
+            snapshot.effective(&RateLimitConfig::MAGIC_LINK),
+            RateLimitConfig::MAGIC_LINK
+        );
+        assert_eq!(
+            snapshot
+                .stack()
+                .resolve("RATE_LIMIT_MAGIC_LINK_MAX_REQUESTS")
+                .condition(),
+            "default"
+        );
+    }
+
+    /// A row for an action no preset defines cannot reach the provider: it has
+    /// no declared key, and nothing enforces it either.
+    #[test]
+    fn a_row_for_an_unknown_action_holds_nothing() {
+        assert!(database_provider(&[row("no_such_action", 1, 1)]).is_empty());
+    }
+
+    /// The error branch in [`database_provider`] is unreachable by construction,
+    /// and this is what makes that true: every generated key is a declared
+    /// configuration key and none is a Group-1 startup value.
+    #[test]
+    fn every_generated_rate_limit_key_is_settable() {
+        let mut provider = DatabaseProvider::new();
+        for vars in crate::models::rate_limit_vars() {
+            for key in [vars.max_requests, vars.window_seconds] {
+                provider
+                    .set(key, "1")
+                    .unwrap_or_else(|e| panic!("{key} must be a declared key: {e:?}"));
+            }
+        }
+
+        let mut expected: Vec<String> = RATE_LIMIT_KEYS.iter().map(|k| (*k).to_string()).collect();
+        expected.sort();
+        match provider.enumerate() {
+            Enumeration::Keys(keys) => assert_eq!(keys, expected),
+            Enumeration::Unsupported => panic!("the database provider lists its keys"),
+        }
     }
 
     /// An expired snapshot is re-read, so an override written by another api
@@ -304,7 +481,7 @@ mod tests {
             .get_or_load(|| async { Ok(vec![row("login", 5, 60)]) })
             .await
             .unwrap();
-        assert_eq!(first.get("login").unwrap().max_requests, 5);
+        assert_eq!(first.row("login").unwrap().max_requests, 5);
 
         cache.invalidate();
 
@@ -312,7 +489,7 @@ mod tests {
             .get_or_load(|| async { Ok(vec![row("login", 2, 60)]) })
             .await
             .unwrap();
-        assert_eq!(second.get("login").unwrap().max_requests, 2);
+        assert_eq!(second.row("login").unwrap().max_requests, 2);
     }
 
     /// A failed refresh serves the last good snapshot. Silently reverting to the
@@ -332,7 +509,7 @@ mod tests {
             .get_or_load(|| async { Err(AppError::internal("rate_limit_configs unreadable")) })
             .await
             .expect("a failed refresh must not fail the decision when a snapshot exists");
-        assert_eq!(served.get("login").unwrap().max_requests, 2);
+        assert_eq!(served.row("login").unwrap().max_requests, 2);
     }
 
     /// With nothing cached yet there is no last good snapshot to serve, so the

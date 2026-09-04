@@ -102,41 +102,42 @@ The credential is an ordinary `oauth_clients` registration, so it is created, ro
 other app identity lives. A registration may relay when it is confidential, authenticates with `client_secret_basic`,
 and lists `client_credentials` in `allowed_grant_types`.
 
-1. Generate a secret on the machine that will hold it, and keep the plaintext only in the calling app's own secret
-   store:
+The `bunyip-api machine-client` subcommand family is the supported way to get one. Run it in the api container, which
+already has `DATABASE_URL` and the rest of the api's configuration:
 
-   ```nu
-   openssl rand --hex 32
-   ```
+```nu
+docker compose exec api /app/bunyip-api machine-client register --name mokosh-server
+```
 
-2. Hash it with Argon2id. `bunyip_oidc::machine_client::hash_client_secret` is the function the verifier is written
-   against; any Argon2id PHC string produced with the same parameters (`Argon2::default()`, or PasswordService's
-   `m=65536 t=3 p=4`) verifies, because the parameters are read back out of the stored string.
+It generates the secret, hashes it with `bunyip_oidc::machine_client::hash_client_secret` (the function the verifier is
+written against), writes the row, and prints the `client_id` and the plaintext secret **once**:
 
-3. Register the client:
+```
+registered machine client "mokosh-server"
+  client_id: 0f9f2ad2-...
+  secret:    9pQ...
 
-   ```sql
-   INSERT INTO oauth_clients (
-       client_id, client_secret_hash, client_type, name,
-       redirect_uris, post_logout_redirect_uris,
-       allowed_scopes, allowed_grant_types,
-       token_endpoint_auth_method, require_pkce, audience
-   ) VALUES (
-       gen_random_uuid(), '<argon2id-hash>', 'confidential', 'mokosh-server',
-       ARRAY[]::TEXT[], ARRAY[]::TEXT[],
-       ARRAY[]::TEXT[], ARRAY['client_credentials'],
-       'client_secret_basic', TRUE, 'https://<this-deployment>/v1'
-   )
-   RETURNING client_id;
-   ```
+The secret is shown once and is not stored; copy it into the calling app's secret store now.
+```
 
-   No plaintext secret is ever committed to this repo, and no seed migration ships one: the row above is created per
-   deployment.
+Only the Argon2id hash is stored. The plaintext is never written to the database, a log line, or a file, so a secret
+that is not captured from that output is gone and the credential has to be rotated.
 
-4. Revoke access by setting `disabled_at`. The lookup filters on it, so a disabled registration answers 401 exactly like
-   an unregistered one.
+| Command | What it does |
+|---------|--------------|
+| `machine-client register --name <name> [--grant <grant>]...` | registers a confidential `client_secret_basic` client listing `client_credentials`, and prints its credential once. `--grant` is repeatable and adds grants alongside `client_credentials`, which is always listed. |
+| `machine-client rotate --client-id <uuid>` | replaces `client_secret_hash` and prints the new secret once. The old secret stops working immediately. |
+| `machine-client disable --client-id <uuid>` | sets `disabled_at`. The relay's lookup filters on it, so the credential answers 401 exactly like an unregistered one. |
+| `machine-client list` | prints the client_id, name, grants and state of every confidential registration, so it is auditable which apps hold a machine credential. |
 
-There is no CLI or admin screen for this yet; it is tracked in BUNYIP-604.
+Revocation is terminal: `rotate` refuses a disabled registration rather than printing a secret that would still answer
+401. Provision a new machine client instead.
+
+An unknown verb, a missing `--name` / `--client-id`, or a `--client-id` that is not a UUID is an error carrying the
+usage text and a non-zero exit; nothing is a silent no-op.
+
+No plaintext secret is ever committed to this repo, and no seed migration ships one: the registration is created per
+deployment.
 
 ## Before this can send real mail
 

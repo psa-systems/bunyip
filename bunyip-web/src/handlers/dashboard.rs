@@ -21,8 +21,8 @@ use crate::handlers::{
     password_ok, rotating_index,
 };
 use crate::util::{
-    app_gradient, days_until, entry_price, format_stripe_amount, has_active_membership,
-    pricing_currency, rel_time, tier_price, urlenc,
+    app_gradient, app_launch_link, days_until, entry_price, format_stripe_amount,
+    has_active_membership, pricing_currency, rel_time, tier_price, urlenc,
 };
 use crate::views::password::{guard_message, password_field, PwField, PwRole};
 use crate::views::ui::{
@@ -148,8 +148,6 @@ fn dashboard_apps_grid(
         } @else {
             div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
                 @for app in apps {
-                    @let subdomain = app.subdomain.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| app.slug.clone());
-                    @let app_url = format!("{subdomain}.{base_domain}");
                     div class="rounded-lg border bg-card text-card-foreground shadow-sm flex h-full flex-col border-border/50 transition-all hover:shadow-lg hover:shadow-indigo-500/5" {
                         div class="flex flex-col space-y-1.5 p-6" {
                             div class="flex items-center justify-between" {
@@ -162,7 +160,7 @@ fn dashboard_apps_grid(
                         }
                         div class="p-6 pt-0 mt-auto" {
                             @if app.is_accessible {
-                                a href=(format!("https://{app_url}/dashboard")) target="_blank" rel="noopener noreferrer" {
+                                a href=(app_launch_link(app, base_domain)) target="_blank" rel="noopener noreferrer" {
                                     span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md shadow-indigo-500/15 hover:shadow-lg hover:shadow-indigo-500/25 transition-shadow", app_gradient(app.group_id.as_deref())))) {
                                         "Open " (app.display_name) (icon("external-link", "ml-2 h-4 w-4"))
                                     }
@@ -339,12 +337,9 @@ fn app_card(
             div class="p-6 pt-0 mt-auto" {
                 p class="text-sm text-muted-foreground mb-4" { (app_url) }
                 @if app.is_accessible {
-                    // `/dashboard`, not `/`, so the child app's AuthGuard sees a
-                    // protected route and kicks off the OIDC code flow against
-                    // the user's existing OP session. Landing on the public
-                    // homepage instead just shows the marketing page; the user
-                    // has to click "Sign in" before the SSO bridge fires.
-                    a href=(format!("https://{app_url}/dashboard")) target="_blank" rel="noopener noreferrer" {
+                    // The `/dashboard` deep link, not the apex: see
+                    // `util::app_launch_link` for why the suffix is load-bearing.
+                    a href=(app_launch_link(app, domain)) target="_blank" rel="noopener noreferrer" {
                         span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {gradient} text-white border-0 shadow-md"))) { "Launch" (icon("external-link", "ml-2 h-4 w-4")) }
                     }
                 } @else {

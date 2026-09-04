@@ -16,8 +16,8 @@ Select an app, for example **Mokosh**, to see its details and how to get it.
 
 ## Get access
 
-Some apps are open to any signed-in account; others need an active membership. If an app is members-only and you are not a member yet, you are pointed to the **Membership** page. See [Membership & access](/docs/membership) for what a membership includes and how to start one.
+Some apps are open to any signed-in account; others need an active membership. If an app is members-only and you are not a member yet, you are pointed to the **Membership** page. See [Membership & access](membership) for what a membership includes and how to start one.
 
 ## Download and run
 
-Once you have access, download the app and run it. Apps ship as either a container image you pull with Docker or a binary you download for your platform. See [Downloading apps](/docs/downloading-apps) for the steps.
+Once you have access, download the app and run it. Apps ship as either a container image you pull with Docker or a binary you download for your platform. See [Downloading apps](downloading-apps) for the steps.

@@ -9,7 +9,8 @@ without an entry there fails `bunyip-api/tests/env_inventory.rs`. The classifica
 operator-facing rendering of that table, so they cannot drift from the code. The three sections that follow them are not
 derivable from the inventory:
 
-- [Which store a running deployment is using](#which-store-a-running-deployment-is-using), and what each store costs.
+- [Which provider a running deployment is using](#which-provider-a-running-deployment-is-using), and what each
+  provider costs.
 - [Compose coverage](#secret-files-and-compose-coverage): what the api reads that this repository's `compose.yml` does
   not pass.
 - [Settings that are not environment variables](#settings-that-are-not-environment-variables): the database-backed
@@ -18,7 +19,9 @@ derivable from the inventory:
 The dividing line for that last one: **environment variables** are read once at process start, so changing one means
 restarting the container, and they configure the deployment. **In-app settings** live in the database, are edited on the
 admin pages, and apply without a restart, and they configure the product. Where a setting exists in both places the
-environment variable is a bootstrap default and the database row wins; those are marked as such.
+database row wins, and it wins because that priority is DECLARED: see [configuration providers and their
+precedence](#configuration-providers-and-their-precedence-bunyip-643644), which also adds the file provider between the
+two and makes the serving provider reportable per key.
 
 Secrets resolve through the `{NAME}_FILE` convention first (a compose secret under `/run/secrets/*`), then the plain
 variable (a dev `.env`). An empty value counts as unset everywhere. The exception is the four governed integration
@@ -33,10 +36,12 @@ every integration, because integrations must be manageable in-product by the MSP
 The rule matters because of where each side can be written. System-level keys are read from the **environment only** and
 have **no file or admin-API write path**: if the API could write one, any flaw that reached the API would become
 host- or network-level exposure (adding an origin you do not control, repointing the database, moving the secrets
-backend). The split is enforced **structurally, not by a permission check**: the file the admin settings API writes
-(`SysConfigFile` in `crates/bunyip-domain/src/sys_config.rs`) has no field for a system-level key, so there is no code
-path to persist one and no guard a refactor could drop. `SYSTEM_LEVEL_ENV_KEYS` in that file is the machine-checked list;
-`system_level_keys_never_enter_the_file_layer` fails the build if one ever reappears in the file layer.
+backend). The split is enforced **structurally, not by a permission check**: the type the admin settings API writes
+(`SystemSettings` in `crates/bunyip-domain/src/sys_config.rs`) has no field for a system-level key, and its `entries`
+method is the only mapping the code has from a field to a file, so there is no code path to persist one and no guard a
+refactor could drop. `SYSTEM_LEVEL_ENV_KEYS` in that file is the machine-checked list;
+`system_level_keys_never_enter_the_file_layer` fails the build if one ever becomes writable, or becomes a declared
+configuration key the file layer could serve.
 
 **System-level (environment only, never API-writable):**
 
@@ -49,8 +54,9 @@ path to persist one and no guard a refactor could drop. `SYSTEM_LEVEL_ENV_KEYS` 
 
 **Application-level (product-managed):** everything else. This includes every integration (SMTP, Stripe, IMAP, the OCI
 registry, GeoIP), which is managed in the database through the admin pages (see [settings that are not environment
-variables](#settings-that-are-not-environment-variables)), and the deployment toggles the YAML file layer carries
-(`LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`, the country allow/deny list). A corollary the boundary must hold:
+variables](#settings-that-are-not-environment-variables)), and the deployment toggles the [file
+layer](#the-application-level-deployment-settings-and-the-admin-system-page-bunyip-579580622644) carries
+(`LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`, `COUNTRY_ALLOW`, `COUNTRY_DENY`). A corollary the boundary must hold:
 creating a username and password does not depend on any integration, so a self-hosted install with no email configured
 can still create its first account (`account_creation_does_not_depend_on_the_email_integration` in
 `services/auth.rs`).
@@ -94,10 +100,17 @@ staging fall back to documented placeholder values.
 
 ## `SECRETS_STORAGE`: where the integration secrets live (BUNYIP-542)
 
-`SECRETS_STORAGE` declares the ONE store bunyip reads its governed integration secrets from. Legal values:
+`SECRETS_STORAGE` declares the ONE provider bunyip reads its governed integration secrets from. Legal values:
 `environment`, `database`, `infisical`. Unset or unrecognised logs one `ERROR` naming the legal set and exits 1.
 
-The governed set is exactly the secrets with more than one possible store:
+**Why the variable says storage and everything else says provider.** The suite's word for a selectable implementation
+is **provider**, and bunyip's code says `SecretsProvider` (BUNYIP-642). The variable keeps its `SECRETS_STORAGE`
+spelling and the subcommands keep their `secrets-status` / `secrets-migrate` / `secrets-purge` names, deliberately:
+renaming either breaks every running deployment and every runbook for a vocabulary change with no functional gain. The
+`secrets-status --json` keys and the `secrets_storage` field of the admin API responses are unchanged for the same
+reason.
+
+The governed set is exactly the secrets with more than one possible provider:
 
 | Secret                  | `database`                     | `environment`                | `infisical`                    |
 |-------------------------|--------------------------------|------------------------------|--------------------------------|
@@ -106,7 +119,7 @@ The governed set is exactly the secrets with more than one possible store:
 | `STRIPE_WEBHOOK_SECRET` | `stripe_config.webhook_secret` | `STRIPE_WEBHOOK_SECRET_FILE` | `<path>/STRIPE_WEBHOOK_SECRET` |
 | `SUPPORT_IMAP_PASSWORD` | `email_config.imap_password`   | `SUPPORT_IMAP_PASSWORD_FILE` | `<path>/SUPPORT_IMAP_PASSWORD` |
 
-The declared store is the ONLY one consulted. There is no fallback and no precedence chain: in `database` mode the
+The declared provider is the ONLY one consulted. There is no fallback and no precedence chain: in `database` mode the
 environment slot and Infisical are not read at all, and vice versa. Group-1 startup secrets (`DATABASE_URL`,
 `JWT_SECRET`, `APP_ENCRYPTION_KEY`, ...) cannot be governed by this switch - the database cannot hold the credential
 used to reach the database - and stay file-based.
@@ -117,19 +130,19 @@ consulted.
 
 ### Startup enforcement, per governed secret
 
-| Situation                                          | Behaviour                                                                                |
-|----------------------------------------------------|------------------------------------------------------------------------------------------|
-| present in the declared store                      | use it                                                                                   |
-| absent everywhere                                  | feature off, one `WARN` naming the secret and the feature it gates                       |
-| absent from the declared store, present in another | **fatal**: one `ERROR` naming the secret, both stores and `secrets-migrate`, then exit 1 |
-| present in the declared store AND in another       | boot, and one `WARN` per duplicate naming `secrets-purge`                                |
+| Situation                                             | Behaviour                                                                                   |
+|-------------------------------------------------------|---------------------------------------------------------------------------------------------|
+| present in the declared provider                      | use it                                                                                      |
+| absent everywhere                                     | feature off, one `WARN` naming the secret and the feature it gates                          |
+| absent from the declared provider, present in another | **fatal**: one `ERROR` naming the secret, both providers and `secrets-migrate`, then exit 1 |
+| present in the declared provider AND in another       | boot, and one `WARN` per duplicate naming `secrets-purge`                                   |
 
 "Present" means a non-null ciphertext column (database), a non-empty `{NAME}_FILE` read (environment), or a successful
-key read (infisical). The duplicate warning is what keeps a later mode change honest: a stale copy in a store nobody
+key read (infisical). The duplicate warning is what keeps a later mode change honest: a stale copy in a provider nobody
 reads today becomes live the moment someone flips the mode.
 
 `infisical` mode is **fail-closed**: an unreachable Infisical or a failed read aborts the boot, because the operator
-declared it the store of record. `database` and `environment` mode never contact Infisical at boot, so it stays off the
+declared it the provider of record. `database` and `environment` mode never contact Infisical at boot, so it stays off the
 boot path for them.
 
 ### Writing from the admin pages
@@ -137,8 +150,8 @@ boot path for them.
 | Mode          | Admin Stripe / Email secret fields                                                                                                                                      |
 |---------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `database`    | editable; encrypted under `APP_ENCRYPTION_KEY`, written to the row, service hot-reloaded                                                                                |
-| `infisical`   | editable; written to `INFISICAL_SECRET_PATH` through the API (no DB write), service hot-reloaded, and an audit entry records the admin, the secret and the target store |
-| `environment` | read-only, labelled with the owning store and the file to edit; the API answers 409                                                                                     |
+| `infisical`   | editable; written to `INFISICAL_SECRET_PATH` through the API (no DB write), service hot-reloaded, and an audit entry records the admin, the secret and the target provider |
+| `environment` | read-only, labelled with the owning provider and the file to edit; the API answers 409                                                                                    |
 
 A failed Infisical write surfaces on the form and in the log with the underlying cause, performs no reload and reports
 no success. The machine identity needs **write** access to `INFISICAL_SECRET_PATH`; read access alone fails the save.
@@ -151,7 +164,7 @@ Non-secret configuration (`smtp_host`, `smtp_port`, `smtp_tls`, `smtp_username`,
 Only a change made through the admin pages hot-applies. A value changed directly in Infisical, or in a secret file,
 takes effect on the next restart, because the boot read is the only reader.
 
-### Which store a running deployment is using
+### Which provider a running deployment is using
 
 `bunyip-api secrets-status` answers this from inside the container. To confirm from outside, without decrypting
 anything:
@@ -166,9 +179,9 @@ A populated column with `SECRETS_STORAGE=database` means the row is the live sou
 that secret is the expected result rather than a misconfiguration. The database columns are `BYTEA`: AES-256-GCM
 ciphertext plus nonce under `APP_ENCRYPTION_KEY`.
 
-### What each store costs
+### What each provider costs
 
-| Store           | Set from                         | Applies without a restart                     | Cons                                                                                                                                                                        |
+| Provider        | Set from                         | Applies without a restart                     | Cons                                                                                                                                                                        |
 |-----------------|----------------------------------|-----------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **database**    | admin Stripe / Email pages       | yes                                           | recoverable only with `APP_ENCRYPTION_KEY`; a restore under a rotated key needs `APP_ENCRYPTION_KEY_PREV` and a re-encrypt pass. The secrets share a backup with user data. |
 | **environment** | secret file, edited on the host  | no: restart to pick up a new value            | **the admin UI cannot write it**, so those fields are read-only and every rotation is a host edit plus a restart.                                                           |
@@ -179,15 +192,153 @@ variable for its own next boot and `/run/secrets/*` is mounted read-only, so a s
 read-only there because the alternative is worse, namely a handler that encrypts the value into a row nothing reads
 while the page reports success.
 
-### Changing the store
+### Changing the provider
 
 Never by editing `SECRETS_STORAGE` and hoping. The pre-flight runs while the current deployment is healthy: `bunyip-api
 secrets-status`, then `secrets-migrate --to <target>`, then `secrets-status` again, then set `SECRETS_STORAGE`, restart,
 soak, and finally `secrets-purge --confirm`. The full runbook is in [ `secrets-infisical.md`](secrets-infisical.md).
 
-Changing the Infisical **instance** (rather than the store) needs the database as a staging hop, because bunyip-api
+Changing the Infisical **instance** (rather than the provider) needs the database as a staging hop, because bunyip-api
 holds one set of `INFISICAL_*` values and can never see both instances at once. That procedure is tracked in BUNYIP-544
 and belongs in the same runbook.
+
+## Configuration providers and their precedence (BUNYIP-643/644)
+
+`SECRETS_STORAGE` declares the ONE provider the governed secrets come from. Configuration is different: it comes from
+several providers at once, in a **declared priority order**, and which one served a given value is reportable rather
+than something you have to read the code to work out.
+
+| Priority | Provider      | Where it is                                                          | Applies without a restart |
+|----------|---------------|-----------------------------------------------------------------------|---------------------------|
+| 1        | `database`    | the admin-managed rows: `email_config`, `auto_ban_config`, `tier_config`, `rate_limit_configs` | yes, the save hot-reloads |
+| 2        | `file`        | `BUNYIP_CONFIG_DIR` (default `/app/config`), one file per key           | no, restart to apply      |
+| 3        | `environment` | the variables in the tables above                                      | no, restart to apply      |
+
+The highest-priority provider that holds a key serves it; when none does, the built-in default stands. The database is
+first because that is where it already was: before BUNYIP-643 the `email_config` / `auto_ban_config` / `tier_config`
+rows were applied on top of the environment per field, so an existing deployment resolves exactly the values it
+resolved before. The file layer sits above the environment because a file that could not override a value baked
+into compose would not be editable without a redeploy, which is the reason it exists. It is the ONE file-based layer:
+BUNYIP-644 folded the YAML file that used to sit below the environment into it, and there is no second on-disk shape
+and no second precedence rule.
+
+The registry is the settings with **more than one** possible provider, the same rule the governed secrets follow: a
+setting with exactly one source is not declared, because the declaration would be a no-op. So the Stripe price ids,
+`pricing_enabled`, `orgs_enabled` and the per-tier visibility flags stay database-only columns, and `SMTP_EHLO_NAME`,
+`APP_URL`, `APP_NAME`, `SUPPORT_INBOX_EMAIL` and `SUPPORT_IMAP_POLL_SECS` stay environment-only reads. The declared
+keys are the SMTP and IMAP settings, `EMAIL_ENABLED`, `ADMIN_NOTIFICATION_EMAILS`, the four `AUTO_BAN_*` values, the
+four `TIER_*` slot and trial lengths, the four application-level deployment settings the admin System page writes
+(`LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`, `COUNTRY_ALLOW`, `COUNTRY_DENY`), and the
+`RATE_LIMIT_{ACTION}_MAX_REQUESTS` / `_WINDOW_SECONDS` pair for every rate-limit action; `CONFIG_KEYS` in
+`crates/bunyip-domain/src/config_providers.rs` is the source of truth, and every entry names a variable
+`ENV_INVENTORY` classifies.
+
+The rate-limit pair is the one part of both registries that is **generated** rather than written down (BUNYIP-645). Its
+variable names are built from the action, so there is one pair per entry in `RateLimitConfig::ALL`
+(`crates/bunyip-domain/src/models/rate_limit.rs`) in `CONFIG_KEYS` and in `ENV_INVENTORY` alike: adding an action
+declares its cap in both, and neither registry can drift from the preset list. That is why the caps were the last
+configuration outside this stack, and it is the only exception to "one `spec` per line".
+
+### The file layer
+
+There is **one** file-based configuration layer (BUNYIP-644): a directory, one file per key. `BUNYIP_CONFIG_DIR` names
+it and defaults to `/app/config`, which the api image creates writable and `compose.yml` mounts as the named volume
+`bunyip-config-layer`, so an edit outlives the container. A default directory that does not exist means the deployment
+simply has no file layer, and configuration resolves from the database and the environment alone; a directory named
+explicitly that cannot be read is an `ERROR` and reports as unreadable rather than as empty.
+
+```nu
+"smtp.example.net" | save --raw /app/config/SMTP_HOST
+"587"              | save --raw /app/config/SMTP_PORT
+"starttls"         | save --raw /app/config/SMTP_TLS
+```
+
+- A file is named for the key (`SMTP_FROM_EMAIL`) or for the variable that carries it (`SMTP_FROM`, which supplies both
+  the address and the display name exactly as the environment variable does). A file named for the key wins.
+- Contents are trimmed; an **empty file counts as absent**, not as an empty value.
+- A file whose name is not a declared key is ignored with a `WARN` naming it, so a typo is visible rather than inert.
+- The layer sits **above the environment**, so an operator edit changes a value compose already sets without a
+  redeploy. That is the whole reason it exists.
+- Nothing in bunyip writes it **except** the admin **System** page, and that page writes exactly the four
+  application-level deployment settings below and nothing else. The write path is a type with no field for a
+  system-level key, so the [configuration
+  boundary](#the-configuration-boundary-system-level-vs-application-level-bunyip-622) does not move: an
+  application-level setting is meant to be product-managed, and a system-level one still has no file or API write path
+  at all.
+- A rate-limit cap can be set here too, one file per key: `RATE_LIMIT_LOGIN_MAX_REQUESTS` sits between an admin-set
+  `rate_limit_configs` row and the compose variable of the same name (BUNYIP-645).
+- Group-1 startup values (`DATABASE_URL`, `APP_ENCRYPTION_KEY`, `JWT_SECRET`, `SECRETS_STORAGE`, the `INFISICAL_*`
+  credentials) are environment-and-file only. The database provider **refuses** one with a startup error naming it and
+  exit 1, because the database cannot hold the credential used to reach the database.
+
+### The application-level deployment settings and the admin System page (BUNYIP-579/580/622/644)
+
+Four settings are deployment toggles rather than product data, so they live in the file layer instead of the database:
+`LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`, `COUNTRY_ALLOW` and `COUNTRY_DENY`. They are ordinary declared
+keys, resolved by the same precedence as everything else: the file layer, then the environment variable of the same
+name, then the built-in default. They have no database provider.
+
+- **Admin screen** (BUNYIP-580): **Admin -> System** (`/admin/system-config`) edits them through a form. It shows the
+  **effective** values, so what you save is what you were looking at. A save validates the values (country codes are
+  2-letter) and writes one file per setting, each atomically; a cleared field removes its file, which is what "absent"
+  means in this layer. Changes apply on the next restart.
+- **Provenance on the page** (BUNYIP-648): under each field the page names the provider serving that setting and what
+  saving will do to the others, so the two cases you would otherwise only find in the boot log or in `config-status`
+  are on the screen you are editing. `GET /v1/admin/system-config` carries them per setting as the provider serving it,
+  its `use` / `default` / `overridden` / `shadowed` condition and the providers holding it: the same facts
+  `config-status` reports, and, like it, **no configuration value**. The four lines an operator sees:
+    - the file layer serves it, and this form writes that layer;
+    - the environment variable of the same name serves it, and saving here writes the file layer, which overrides that
+      variable from the next restart;
+    - the file layer serves it and the environment variable also sets it, so that copy is ignored today and becomes
+      live again if the file value is cleared;
+    - no provider sets it, so the built-in default applies.
+- **Boundary**: the form and the request body have no field for a system-level origin, and neither does the type the
+  handler writes, so the API has no path to persist one (BUNYIP-622). `SYSTEM_LEVEL_ENV_KEYS` in
+  `crates/bunyip-domain/src/sys_config.rs` is the machine-checked list and
+  `system_level_keys_never_enter_the_file_layer` fails the build if one ever becomes writable or becomes a declared
+  key the file layer could serve.
+
+**Migrating from the YAML file.** These settings used to live in a second file-based layer of their own: a YAML file at
+`BUNYIP_CONFIG_FILE` (default `/app/config/config.yaml`), which ranked BELOW the environment. That layer is gone. On
+the first start after the upgrade the api migrates it, needing no operator action:
+
+- Each setting the YAML file holds is written as its own file in the file layer directory, then the YAML file is
+  renamed to `config.yaml.migrated` and never read as configuration again. Each step logs at `INFO` naming the key.
+- A setting the **environment** also holds is **dropped rather than migrated**, with one `WARN` naming it. The
+  environment was already winning, and the file layer now outranks the environment, so carrying the value across would
+  change the value the deployment resolves. Nothing else changes what a deployment resolves.
+- A setting that already has a per-key file keeps the per-key file; the YAML value for it is dropped with an `INFO`.
+- If a file cannot be written the value is still served from memory for that boot, an `ERROR` names the key, the YAML
+  file is not renamed, and the migration is retried on the next start.
+
+Two smaller changes come with it. The `{NAME}_FILE` indirection no longer applies to these four settings: the per-key
+file in the layer directory is the file-based way to set them (the indirection is unchanged for secrets and for the
+system-level keys). And `COUNTRY_ALLOW` / `COUNTRY_DENY` are now environment variables as well, comma separated, which
+they were not under the YAML layer.
+
+### Which provider is serving each value
+
+```nu
+docker exec bunyip-api bunyip-api config-status
+docker exec bunyip-api bunyip-api config-status --json
+```
+
+Per key it prints the providers holding a value, the one serving it, and one of four conditions. No configuration value
+is ever printed, exactly as `secrets-status` never prints a secret. The four conditions mirror the secrets enforcement
+table:
+
+| Condition     | Meaning                                                                | Secrets equivalent |
+|---------------|------------------------------------------------------------------------|--------------------|
+| `use`         | only the highest-priority provider holds it                            | used               |
+| `default`     | no provider holds it, so the built-in default configures the setting   | feature off        |
+| `overridden`  | the highest-priority provider holds it and so does a lower one, whose value is ignored today and becomes live if the higher one is cleared | duplicate |
+| `shadowed`    | the highest-priority provider does not hold it, so a lower one serves  | misplaced          |
+
+The severity differs in one place, deliberately. For a secret, "absent from the declared provider but present in
+another" is FATAL, because the deployment declared ONE provider. For configuration it is `shadowed`, and it is normal: the
+precedence is an order, and a lower provider serving a key is how an override is meant to work. Only `overridden` is
+logged at boot, one `WARN` per ignored provider, which is the stale-copy case worth knowing about.
 
 ## Feature-gating (one `WARN`, boot continues)
 
@@ -210,7 +361,7 @@ and belongs in the same runbook.
 | `IP2PROXY_DB_PATH`                      | -                           | ASN / VPN enrichment on login alerts                                |
 | `BUNYIP_UPDATE_CHECK_URL`               | -                           | the operator update checker                                         |
 | `BUNYIP_UPDATE_CHECK_TOKEN`             | `BUNYIP_UPDATE_CHECK_URL`   | authenticated access to a private release feed                      |
-| `INFISICAL_ENABLED`                     | -                           | inspecting the Infisical store (`secrets-status` readiness)         |
+| `INFISICAL_ENABLED`                     | -                           | inspecting the Infisical provider (`secrets-status` readiness)      |
 | `INFISICAL_ADDRESS`                     | `INFISICAL_ENABLED`         | the Infisical server address                                        |
 | `INFISICAL_PROJECT_ID`                  | `INFISICAL_ENABLED`         | the Infisical project                                               |
 | `INFISICAL_CLIENT_ID`                   | `INFISICAL_ENABLED`         | the Universal Auth machine identity                                 |
@@ -228,36 +379,15 @@ and belongs in the same runbook.
 | `MOKOSH_WEBHOOK_URL`                    | -                           | `account_deleted` events are never dispatched to mokosh             |
 | `MOKOSH_BACKUP_API_URL`                 | -                           | account backup/restore falls back to the pending stub               |
 
-## Application-level config YAML layer (BUNYIP-579/622)
-
-A subset of the deployment-level settings below also resolves through a file-based YAML layer, so they can be reviewed
-and edited in one place, by hand or from the admin **System** screen (BUNYIP-580), rather than only as environment
-variables. This layer carries **application-level settings only** (see [the configuration
-boundary](#the-configuration-boundary-system-level-vs-application-level-bunyip-622)): today `LOGIN_APPROVAL_ENABLED`,
-`SIGNUP_BOT_GUARD_ENABLED`, and the country allow/deny list. BUNYIP-579 originally also carried the system-level origins
-(`CORS_ORIGIN`, `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`); BUNYIP-622 moved those to the environment only, because a setting
-the API can write must not be one whose modification changes which origins the deployment trusts. Branding and every
-per-tenant value stay in the database (BUNYIP-561), so they remain live-editable without a restart.
-
-- **File location**: `BUNYIP_CONFIG_FILE`, default `/app/config/config.yaml` (mount `/app/config` as a volume so edits
-  persist).
-- **First run**: the file is generated from the built-in defaults on first start and is **never overwritten**
-  afterwards, so operator edits survive a restart (the Forgejo `app.ini` precedent).
-- **Precedence**: environment variable, then the YAML file, then the built-in default. The environment variable's
-  `{NAME}_FILE` indirection is honoured too, so a secret-bearing value can be sourced from a mounted file rather than
-  inlined, keeping the Infisical path intact.
-- **Admin screen** (BUNYIP-580): **Admin -> System** (`/admin/system-config`) edits the same file through a form. A save
-  validates the values (country codes are 2-letter) and rewrites the whole file atomically; a cleared field clears the
-  setting. The screen edits the file layer only, so a value an environment variable also sets shows the file value but
-  the effective value stays the environment one until that variable is removed. It exposes only application-level keys:
-  there is no field for a system-level origin, so the API has no path to write one (BUNYIP-622).
-- **Apply**: edits to the YAML (by hand or from the admin screen) take effect on the next application restart. This is
-  the documented, supported path.
-
 ## Defaulted (no boot-time log)
 
 Every variable below has a working default; set it only to tune the deployment.
 
+- **Configuration providers**: `BUNYIP_CONFIG_DIR` - the directory the file layer reads and the admin System page
+  writes, one file per key (BUNYIP-643/644); default `/app/config`, and a default directory that does not exist means
+  the deployment has no file layer. `BUNYIP_CONFIG_FILE` - the LEGACY YAML file, read once and migrated into that
+  directory, then renamed aside. See [configuration providers and their
+  precedence](#configuration-providers-and-their-precedence-bunyip-643644).
 - **Identity and transport**: `ENVIRONMENT` (unset means `production`), `APP_NAME` (the BOOTSTRAP product name only:
   see [Branding](#branding-branding-admin-page-branding)), `APP_URL`, `HOST_IP`, `APP_PORT`, `RUST_LOG`, `CORS_ORIGIN`,
   `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`, `BUNYIP_COOKIE_SHARED_DOMAIN`.
@@ -271,10 +401,14 @@ Every variable below has a working default; set it only to tune the deployment.
 - **Governed secrets** (read only when `SECRETS_STORAGE=environment`, and only as `{NAME}_FILE`): `SMTP_PASSWORD`,
   `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`.
 - **Abuse controls**: `AUTO_BAN_ENABLED`, `AUTO_BAN_THRESHOLD`, `AUTO_BAN_WINDOW_SECS`, `AUTO_BAN_DURATION_SECS`,
-  `LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`.
+  `LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`, `COUNTRY_ALLOW`, `COUNTRY_DENY`. The last four are also the
+  [admin System page's settings](#the-application-level-deployment-settings-and-the-admin-system-page-bunyip-579580622644),
+  so a file in the layer directory overrides the variable of the same name.
 - **Rate limits**: `RATE_LIMIT_{ACTION}_MAX_REQUESTS` and `RATE_LIMIT_{ACTION}_WINDOW_SECONDS`, one pair per action
-  (`crates/bunyip-domain/src/models/rate_limit.rs`). The names are built at runtime from the action, so they are a
-  family rather than inventory entries; precedence is const -> env -> the `rate_limit_configs` DB row.
+  (`crates/bunyip-domain/src/models/rate_limit.rs`). They are declared configuration keys, generated from the preset
+  list, and resolve in the [declared provider order](#configuration-providers-and-their-precedence-bunyip-643644): the
+  `rate_limit_configs` row, then a file under `BUNYIP_CONFIG_DIR`, then these variables, then the compile-time cap. A
+  value that does not parse or is not positive is not a value: the next provider serves it and a `WARN` names both.
 - **Tiers and billing**: `TIER_LIFETIME_SLOTS`, `TIER_EARLY_ADOPTER_SLOTS`, `TIER_EARLY_ADOPTER_TRIAL_DAYS`,
   `TIER_STANDARD_TRIAL_DAYS`, `BUNYIP_BILLING_TRIAL_PERIOD_DAYS`.
 - **Distribution proxy**: `DOWNLOAD_CACHE_DIR`, `DOWNLOAD_CACHE_MAX_BYTES`, `DOWNLOAD_CONCURRENCY_PER_USER`,
@@ -318,7 +452,7 @@ this repository.
 |---------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
 | `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`       | deliberate: governed secrets, read only as `{NAME}_FILE` under `SECRETS_STORAGE=environment` |
 | `APP_URL`                                                           | the base URL for email links and the EHLO fallback silently comes from `CORS_ORIGIN`         |
-| `INFISICAL_*` (7)                                                   | the `infisical` store cannot be selected or inspected                                        |
+| `INFISICAL_*` (7)                                                   | the `infisical` provider cannot be selected or inspected                                     |
 | `BUNYIP_WEB_ORIGIN`                                                 | a multi-RP deployment cannot pin the login-UI origin                                         |
 | `BUNYIP_COOKIE_SHARED_DOMAIN`                                       | the cross-subdomain OP session cookie cannot be enabled                                      |
 | `MOKOSH_APPS_*`, `DRILLMARK_*`, `LETS_CHAT_*`                       | those OIDC clients keep whatever the migrations seeded; no reconciliation runs               |
@@ -359,8 +493,11 @@ Unconfigured means payment is simply disabled. Test-mode walkthrough:
 
 ### Pricing tiers (`tier_config`, admin page: Pricing Tiers)
 
-Singleton row. Slot counts and trial lengths have env seeds; the Stripe identifiers and the two feature switches have
-**no env source at all**.
+Singleton row. The slot counts and trial lengths are declared configuration keys, so they also have a file and an
+environment provider (see [the declared order](#configuration-providers-and-their-precedence-bunyip-643644)). The Stripe
+identifiers, the two feature switches and the per-tier visibility flags have **no second provider at all**: the admin
+page is their only source, which is exactly why they are not declared keys, so no file or environment value can ever
+turn a feature on.
 
 | Column                                                                              | Meaning                                                                   |
 |-------------------------------------------------------------------------------------|---------------------------------------------------------------------------|
@@ -443,24 +580,38 @@ removed with the plumbing that read them (BUNYIP-568).
 
 ### Email (`email_config`, admin page: Email)
 
-Singleton row; every column is nullable and a NULL column falls back to the matching environment variable per field,
-except `smtp_password`, which is a governed secret and follows `SECRETS_STORAGE` rather than a fallback. There is no
-column for the EHLO name: `SMTP_EHLO_NAME` is deployment identity, not SMTP tuning (BUNYIP-507), so it stays env-only
-alongside the base URL.
+Singleton row; every column is nullable and a NULL column means this row's provider does not hold that key, so the next
+provider in the [declared order](#configuration-providers-and-their-precedence-bunyip-643644) (the file provider, then the
+environment) serves it. `smtp_password` and `imap_password` are the exceptions: they are governed secrets and follow
+`SECRETS_STORAGE`, never this stack. There is no column for the EHLO name: `SMTP_EHLO_NAME` is deployment identity, not
+SMTP tuning (BUNYIP-507), so it stays environment-only alongside the base URL and the poll interval.
+
+The **Source** the page shows is the highest-priority provider holding any of this section's keys, so it can now read
+`file` as well as `database` or `environment`. Run `bunyip-api config-status` for the per-key answer.
 
 ### Auto-ban (`auto_ban_config`, admin page: Auto-ban Settings)
 
-Singleton row: `enabled`, `threshold`, `window_secs`, `ban_duration_secs`. Every column has an env seed. Individual IPs
+Singleton row: `enabled`, `threshold`, `window_secs`, `ban_duration_secs`. Every column is a declared configuration key,
+so it also has a file and an environment provider (see [the declared
+order](#configuration-providers-and-their-precedence-bunyip-643644)); a stored value that cannot narrow to its in-memory
+width is not held, so the next provider serves it rather than the value wrapping. Individual IPs
 are banned and lifted from the admin IP Bans screen, which is super-admin-only and takes effect on that address's next
 request.
 
 ### Rate limits (`rate_limit_configs`, admin page: Rate Limits)
 
 One row per action, keyed by the action name, with `max_requests` and
-`window_seconds`. A present row overrides both the constant and the env seed. Super-admin-only (BUNYIP-413).
+`window_seconds`. Super-admin-only (BUNYIP-413).
+
+This table is the **database provider** for that action's two declared keys (BUNYIP-645), so a present row wins over a
+file value, a compose variable and the compile-time cap in the [one declared
+order](#configuration-providers-and-their-precedence-bunyip-643644), and `bunyip-api config-status` answers "which
+provider is serving the login cap" per action. It resolves nothing on its own: before BUNYIP-645 the order lived in the
+body of `RateLimitConfigRepository::effective` and there was no way to ask that question.
 
 The enforcement path reads a process-wide 30-second snapshot of the whole table rather than one row per rate-limit
-decision (BUNYIP-556). A save invalidates the snapshot in the api process that took the write, so the new cap is in
+decision (BUNYIP-556); the providers are layered and every preset resolved through them once per snapshot, so a
+rate-limit decision is a lookup and costs no query and no provider read. A save invalidates the snapshot in the api process that took the write, so the new cap is in
 force on the next request there; another api process picks it up within the 30 seconds. If the table cannot be read, the
 last good snapshot keeps being enforced and the failure is logged at `error`: a refresh failure never silently reverts
 the platform to its compile-time caps.
@@ -471,12 +622,14 @@ the platform to its compile-time caps.
 |----------------------------------------------------------------------|-------------------------------------------------------------------|-------------------------------------------------------------------------------------|
 | `applications.forgejo_owner`, `.forgejo_repo`, `.pinned_release_tag` | admin Applications page                                           | an app is downloadable only when all three are set                                  |
 | `applications.webhook_url`                                           | admin Applications page                                           | also upserted at boot for the `mokosh` row from `MOKOSH_WEBHOOK_URL`                |
-| `oauth_clients`                                                      | migrations, boot-time reconciliation, `just register-dev-clients` | the `MOKOSH_APPS_*`, `DRILLMARK_*` and `LETS_CHAT_*` variables reconcile these rows |
+| `oauth_clients`                                                      | migrations, boot-time reconciliation, `just register-dev-clients`, `bunyip-api machine-client` | the `MOKOSH_APPS_*`, `DRILLMARK_*` and `LETS_CHAT_*` variables reconcile these rows |
 
 `oauth_clients` is also the suite's machine-identity registry: a registration that is confidential, authenticates with
 `client_secret_basic` and lists `client_credentials` in `allowed_grant_types` may call the mailer relay
-(`POST /v1/mailer/send`, BUNYIP-602). Provisioning, the two rate-limit actions it adds (`mailer_send`,
-`mailer_auth_failures`) and the SMTP/DNS prerequisites are in [`mailer-relay.md`](mailer-relay.md).
+(`POST /v1/mailer/send`, BUNYIP-602). `bunyip-api machine-client register` / `rotate` / `disable` / `list` is the
+supported way to provision one; it prints the plaintext secret once and stores only the Argon2id hash. That family, the
+two rate-limit actions the relay adds (`mailer_send`, `mailer_auth_failures`) and the SMTP/DNS prerequisites are in
+[`mailer-relay.md`](mailer-relay.md).
 
 ### Per-user settings
 

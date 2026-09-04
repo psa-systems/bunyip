@@ -29,7 +29,8 @@ pub use application::{
     ARTIFACT_SOURCE_GENERIC_PACKAGE, ARTIFACT_SOURCE_RELEASE,
 };
 pub use application_doc::{
-    ApplicationDoc, ApplicationDocSummary, CreateApplicationDoc, UpdateApplicationDoc,
+    ApplicationDoc, ApplicationDocSummary, CreateApplicationDoc, DocumentedApplication,
+    UpdateApplicationDoc,
 };
 pub use application_group::{
     ApplicationGroup, CreateApplicationGroup, SetApplicationGroupRequest, UpdateApplicationGroup,
@@ -58,7 +59,10 @@ pub use feedback::{
 };
 pub use membership::{AdminMembershipResponse, MembershipResponse};
 pub use oauth_client_user_tenant::{CreateUserTenantAssignment, OAuthClientUserTenant};
-pub use rate_limit::{KeyKind, KeySubject, RateLimit, RateLimitConfig, TWO_FACTOR_KEY_PREFIX};
+pub use rate_limit::{
+    rate_limit_vars, KeyKind, KeySubject, RateLimit, RateLimitConfig, RateLimitVars,
+    TWO_FACTOR_KEY_PREFIX,
+};
 pub use stripe::{
     StripeConfig, StripeConfigResponse, StripeInvoiceResponse, StripePriceResponse,
     StripeProductResponse, StripeSubscriptionItemResponse, StripeSubscriptionResponse,

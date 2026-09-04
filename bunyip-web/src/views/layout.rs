@@ -15,7 +15,7 @@ use maud::{html, Markup, PreEscaped, DOCTYPE};
 
 use crate::api::types::{Application, Branding, User, UserRole};
 use crate::config::Config;
-use crate::util::app_link;
+use crate::util::{app_launch_link, app_link};
 use crate::views::ui::{button_class, icon};
 
 // BUNYIP-589: the generic shell scaffolding (asset, install_*, palette_value,
@@ -376,7 +376,13 @@ fn feedback_launcher() -> Markup {
 /// affordance (the launcher lives below the page content, mounted by the
 /// shell). Parameter is kept so call sites do not change; the underscore
 /// silences the unused-arg lint.
-fn header(user: Option<&User>, pricing: bool, _show_feedback: bool) -> Markup {
+fn header(
+    cfg: &Config,
+    user: Option<&User>,
+    apps: &[Application],
+    pricing: bool,
+    _show_feedback: bool,
+) -> Markup {
     let is_admin = user.map(|u| u.role == UserRole::Admin).unwrap_or(false);
     html! {
         header class="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60" {
@@ -390,6 +396,24 @@ fn header(user: Option<&User>, pricing: bool, _show_feedback: bool) -> Markup {
                         @if pricing { a href="/pricing" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Pricing" } }
                         a href="/our-story" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Our Story" }
                         a href="/roadmap" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Roadmap" }
+                        // BUNYIP-635: a plain link to the hub, never a menu of
+                        // per-application entries: the chrome must render the
+                        // same working entry when the documented-application
+                        // list cannot be read at all.
+                        a href="/docs" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Documentation" }
+                        // BUNYIP-638: a signed-in visitor reaches any hosted
+                        // application in ONE click from any public page, so the
+                        // links are inline rather than behind an "Applications"
+                        // menu, and they carry the `/dashboard` deep link that
+                        // fires the SSO bridge on arrival. `apps` is the
+                        // cookie-less process-wide list, so nothing here reads a
+                        // per-visitor field; each application's own gate decides
+                        // access when the user lands.
+                        @if user.is_some() {
+                            @for app in apps {
+                                a href=(app_launch_link(app, &cfg.app_domain)) target="_blank" rel="noopener noreferrer" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { (app.display_name) }
+                            }
+                        }
                     }
                 }
                 div class="flex items-center gap-4" {
@@ -433,6 +457,8 @@ fn footer(cfg: &Config, apps: &[Application], pricing: bool) -> Markup {
                             @if pricing { li { a href="/pricing" class="text-muted-foreground hover:text-foreground transition-colors" { "Pricing" } } }
                             li { a href="/our-story" class="text-muted-foreground hover:text-foreground transition-colors" { "Our Story" } }
                             li { a href="/roadmap" class="text-muted-foreground hover:text-foreground transition-colors" { "Roadmap" } }
+                            // BUNYIP-635: same plain hub link as the header.
+                            li { a href="/docs" class="text-muted-foreground hover:text-foreground transition-colors" { "Documentation" } }
                             @for app in apps {
                                 li { a href=(app_link(app, &cfg.app_domain)) class="text-muted-foreground hover:text-foreground transition-colors" { (app.display_name) } }
                             }
@@ -477,7 +503,7 @@ pub fn public_shell(
 ) -> Markup {
     html! {
         div class="flex min-h-screen flex-col" {
-            (header(user, pricing, show_feedback))
+            (header(cfg, user, apps, pricing, show_feedback))
             main class="flex-1" { (content) }
             (footer(cfg, apps, pricing))
             @if show_feedback { (feedback_launcher()) }
@@ -532,6 +558,15 @@ fn dashboard_items(is_member: bool) -> Vec<NavItem> {
             title: "Membership & Billing",
             href: "/membership",
             icon: "credit-card",
+            external: false,
+        },
+        // BUNYIP-635: the docs hub belongs in this list and nowhere else -
+        // `shell_nav_sections` feeds both the sidebar and the below-`md`
+        // disclosure, and the sidebar is not rendered on a phone at all.
+        NavItem {
+            title: "Documentation",
+            href: "/docs",
+            icon: "file-text",
             external: false,
         },
         NavItem {
@@ -1408,6 +1443,127 @@ mod tests {
         // The rest of the chrome is untouched by the switch.
         assert!(hidden.contains(r#"href="/our-story""#));
         assert!(hidden.contains(r#"href="/roadmap""#));
+    }
+
+    /// BUNYIP-635: documentation is reachable from the top of every chrome.
+    /// The public header and footer carry it, and the authenticated entry sits
+    /// in `dashboard_items()` - the one list `shell_nav_sections` feeds, which
+    /// is what makes it reachable below `md` too (asserted in
+    /// `every_authenticated_shell_navigates_below_the_md_breakpoint`).
+    ///
+    /// Every one of those links is a PLAIN `/docs` link built from nothing
+    /// fetched, which is the AC that the chrome degrades when the documented-
+    /// application list cannot be loaded: with the public shell handed an empty
+    /// application list and no pricing, the entry still renders and still works.
+    #[test]
+    fn documentation_is_reachable_from_every_chrome_surface() {
+        let cfg = Config::from_env();
+        let degraded = public_shell(&cfg, None, &[], false, false, html! {}).into_string();
+        assert_eq!(
+            degraded.matches(r#"href="/docs""#).count(),
+            2,
+            "header nav link + footer link, neither built from a fetched list"
+        );
+        assert_eq!(
+            degraded.matches("Documentation").count(),
+            2,
+            "both chrome entries are labelled, with no per-application menu"
+        );
+
+        let item = dashboard_items(false)
+            .into_iter()
+            .find(|i| i.href == "/docs")
+            .expect("the authenticated nav carries the documentation entry");
+        assert_eq!(item.title, "Documentation");
+        assert!(!item.external, "the hub is served by this app");
+        assert!(
+            web_kit::ui::icon_is_known(item.icon),
+            "{} is not a known icon",
+            item.icon
+        );
+    }
+
+    fn test_app(slug: &str, subdomain: Option<&str>, display_name: &str) -> Application {
+        Application {
+            id: slug.into(),
+            slug: slug.into(),
+            display_name: display_name.into(),
+            description: None,
+            icon_url: None,
+            version: None,
+            source_code_url: None,
+            release_notes_url: None,
+            subdomain: subdomain.map(str::to_string),
+            // The cached public list is fetched anonymously, so these two are
+            // NOT this visitor's: the header must not read either of them.
+            is_accessible: false,
+            maintenance_mode: true,
+            maintenance_message: None,
+            group_id: None,
+        }
+    }
+
+    /// BUNYIP-638: a signed-in visitor launches any hosted application in one
+    /// click from any public page, through the header, on the `/dashboard` deep
+    /// link that fires the SSO bridge on arrival. An anonymous visitor gets no
+    /// header links, and the footer's Product column is unchanged for both.
+    #[test]
+    fn the_public_header_launches_every_application_for_a_signed_in_user() {
+        let cfg = Config {
+            app_domain: "a8n.systems".into(),
+            ..Config::from_env()
+        };
+        let apps = [
+            test_app("lets-chat", Some("chat"), "Chat"),
+            test_app("atlas", None, "Atlas"),
+        ];
+        let user = test_user(UserRole::Subscriber);
+
+        let signed_in =
+            public_shell(&cfg, Some(&user), &apps, false, false, html! {}).into_string();
+        let (head, foot) = signed_in
+            .split_once("<footer")
+            .expect("the public shell renders a footer");
+        for host in ["chat", "atlas"] {
+            assert!(
+                head.contains(&format!(
+                    r#"<a href="https://{host}.a8n.systems/dashboard" target="_blank" rel="noopener noreferrer""#
+                )),
+                "the header launches {host} in a new tab"
+            );
+        }
+        assert_eq!(
+            head.matches(".a8n.systems/dashboard").count(),
+            2,
+            "one header link per application, and no per-visitor field filters them"
+        );
+        assert!(head.contains(">Chat<") && head.contains(">Atlas<"));
+        assert!(
+            head.find("/roadmap").expect("the nav carries Roadmap")
+                < head
+                    .find("chat.a8n.systems")
+                    .expect("the nav carries the applications"),
+            "the application links follow the site nav links"
+        );
+        assert!(
+            foot.contains(r#"href="https://chat.a8n.systems""#)
+                && foot.contains(r#"href="https://atlas.a8n.systems""#),
+            "the footer still lists the apex links"
+        );
+
+        let anon = public_shell(&cfg, None, &apps, false, false, html! {}).into_string();
+        let (anon_head, anon_foot) = anon
+            .split_once("<footer")
+            .expect("the public shell renders a footer");
+        assert!(
+            !anon_head.contains("a8n.systems"),
+            "an anonymous visitor gets no application links in the header"
+        );
+        assert!(
+            anon_foot.contains(r#"href="https://chat.a8n.systems""#)
+                && anon_foot.contains(r#"href="https://atlas.a8n.systems""#),
+            "the footer lists them for an anonymous visitor too"
+        );
     }
 
     /// The admin nav reads "Pricing Tiers" while the route stays put, so

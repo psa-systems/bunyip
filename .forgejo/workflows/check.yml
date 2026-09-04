@@ -315,3 +315,13 @@ jobs:
         run: |
           ^docker image rm bunyip-api-builder:check | complete | ignore
           ^docker build --provenance=false --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .
+
+      - name: Check the working tree is fully owned by the runner user
+        # Last, so it sees the tree every container above left behind: the
+        # Tailwind guard's rust-builder-glibc run and the api builder-stage
+        # build. A containerised step that runs as root leaves files only sudo
+        # can remove (DEV-371), and `just pre-commit` cannot be relied on to
+        # catch it because the compose dispatcher exits early when no Rust or
+        # Cargo path is staged - which is exactly the file set (justfile,
+        # compose.dev.yml, scripts/) that reintroduces one (BUNYIP-647).
+        run: just check-tree-ownership

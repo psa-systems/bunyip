@@ -3,6 +3,11 @@ use std::env;
 use tracing::info;
 use url::Url;
 
+/// BUNYIP-643: the declared configuration providers the three admin-managed
+/// configs resolve through. The environment provider is `ENV_INVENTORY` below
+/// as it stands, so the default resolution is unchanged.
+use crate::config_providers::{ConfigProviderKind, ConfigStack, DatabaseProvider};
+
 /// The file-or-env secret reader now lives in dunite-core (PSA-37), shared by
 /// every dunite consumer. Re-exported here so existing `secret_env(...)` and
 /// `crate::config::secret_env(...)` call sites keep resolving unchanged.
@@ -120,25 +125,29 @@ pub struct Config {
     /// login path.
     pub country_allow: Vec<String>,
     pub country_deny: Vec<String>,
-    /// BUNYIP-525: how to reach the Infisical store of the Group-2 integration
+    /// BUNYIP-525: how to reach the Infisical provider of the Group-2 integration
     /// secrets. Group-1 startup secrets stay file/SOPS-based and are never held
-    /// here. Whether the store is read at all is `secrets_storage`.
+    /// here. Whether this provider is read at all is `secrets_provider`.
     pub infisical: InfisicalSettings,
-    /// BUNYIP-542: the ONE store the deployment declares for its governed
+    /// BUNYIP-542: the ONE provider the deployment declares for its governed
     /// integration secrets (`SECRETS_STORAGE`). Required, with no default: the
-    /// app consults only this store, so which copy is live is an operator
+    /// app consults only this provider, so which copy is live is an operator
     /// declaration rather than a precedence chain.
-    pub secrets_storage: SecretsStorage,
+    pub secrets_provider: SecretsProvider,
 }
 
 /// BUNYIP-542: where a deployment keeps its governed integration secrets.
 ///
 /// Declared by `SECRETS_STORAGE` and required, because inferring it from what
 /// happens to be populated cannot tell "deliberately in the database" from
-/// "left behind in the database". The declared store is the ONLY one consulted:
-/// there is no fallback to a second store.
+/// "left behind in the database". The declared provider is the ONLY one
+/// consulted: there is no fallback to a second provider.
+///
+/// The variable keeps its `SECRETS_STORAGE` spelling while the type says
+/// provider (BUNYIP-642): renaming it would break every running deployment and
+/// every runbook for a vocabulary change with no functional gain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SecretsStorage {
+pub enum SecretsProvider {
     /// The process environment, through `{NAME}_FILE` compose secrets.
     Environment,
     /// The `email_config` / `stripe_config` rows, encrypted under
@@ -148,11 +157,11 @@ pub enum SecretsStorage {
     Infisical,
 }
 
-impl SecretsStorage {
+impl SecretsProvider {
     /// The legal values, for the operator-facing error on an unrecognised one.
     pub const LEGAL_VALUES: &'static str = "environment, database, infisical";
 
-    /// Every store, in declaration order.
+    /// Every provider, in declaration order.
     pub const ALL: [Self; 3] = [Self::Environment, Self::Database, Self::Infisical];
 
     /// The wire/env spelling.
@@ -175,29 +184,33 @@ impl SecretsStorage {
         }
     }
 
-    /// Whether the admin pages can write a governed secret to this store.
+    /// Whether the admin pages can write a governed secret to this provider.
     ///
-    /// `environment` is the one read-only store: a process cannot set an
+    /// `environment` is the one read-only provider: a process cannot set an
     /// environment variable for its own next boot, and the compose secret files
-    /// are mounted read-only. That is a property of the store, not a policy.
+    /// are mounted read-only. That is a property of the provider, not a policy.
     pub fn is_writable(self) -> bool {
         !matches!(self, Self::Environment)
     }
 }
 
-impl std::fmt::Display for SecretsStorage {
+impl std::fmt::Display for SecretsProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-/// BUNYIP-542: an integration secret with more than one possible store, and so
-/// governed by `SECRETS_STORAGE`.
+/// BUNYIP-542: an integration secret with more than one possible provider, and
+/// so governed by `SECRETS_STORAGE`.
 ///
 /// Group-1 startup secrets are structurally excluded (the database cannot hold
 /// the credential used to reach the database), and an integration secret with
-/// exactly one store today is excluded because the declaration would be a
-/// no-op. Either joins this list the moment it gains a second store.
+/// exactly one provider today is excluded because the declaration would be a
+/// no-op. Either joins this list the moment it gains a second provider.
+///
+/// The name stays `GovernedSecret` (BUNYIP-642): it names the registry entry,
+/// not the provider, and "governed" is the accurate word for a secret with more
+/// than one possible home.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GovernedSecret {
     /// `email_config.smtp_password` / `SMTP_PASSWORD` / `/runtime/SMTP_PASSWORD`.
@@ -219,8 +232,8 @@ impl GovernedSecret {
         Self::SupportImapPassword,
     ];
 
-    /// The variable name in the `environment` store, which is also the key name
-    /// in the `infisical` store.
+    /// The variable name in the `environment` provider, which is also the key
+    /// name in the `infisical` provider.
     pub fn name(self) -> &'static str {
         match self {
             Self::SmtpPassword => "SMTP_PASSWORD",
@@ -230,7 +243,7 @@ impl GovernedSecret {
         }
     }
 
-    /// What stops working when no store holds this secret.
+    /// What stops working when no provider holds this secret.
     pub fn feature(self) -> &'static str {
         match self {
             Self::SmtpPassword => {
@@ -262,7 +275,7 @@ impl GovernedSecret {
         }
     }
 
-    /// The `environment`-store secret file this value belongs in, as the
+    /// The `environment`-provider secret file this value belongs in, as the
     /// `{NAME}_FILE` target `secrets-migrate --to environment` emits.
     pub fn secret_file(self) -> &'static str {
         match self {
@@ -273,12 +286,12 @@ impl GovernedSecret {
         }
     }
 
-    /// This secret's value in the `environment` store.
+    /// This secret's value in the `environment` provider.
     ///
     /// File-backed ONLY: the plain variable is deliberately not consulted. A
     /// `STRIPE_SECRET_KEY=sk_live_...` in a compose `environment:` block is the
     /// exposure BUNYIP-38 removed - it is visible to `docker inspect` and to
-    /// every child process - so the environment store means a `{NAME}_FILE`
+    /// every child process - so the environment provider means a `{NAME}_FILE`
     /// compose secret, in every mode.
     pub fn read_environment(self) -> Option<String> {
         secret_file_env(self.name())
@@ -288,7 +301,7 @@ impl GovernedSecret {
 /// Read one secret from a `{NAME}_FILE` compose secret, and only from there
 /// (BUNYIP-542). An unreadable path is reported at `error` and treated as
 /// absent, so the boot enforcement below turns it into either the fatal
-/// "declared store is empty but another store holds it" report or the
+/// "declared provider is empty but another provider holds it" report or the
 /// feature-off warning, never a silent success.
 fn secret_file_env(name: &str) -> Option<String> {
     let file_var = format!("{name}_FILE");
@@ -304,23 +317,23 @@ fn secret_file_env(name: &str) -> Option<String> {
                 env_var = %file_var,
                 path = %path,
                 error = %e,
-                "{file_var} points at an unreadable file, so the environment store holds no \
-                 value for {name}"
+                "{file_var} points at an unreadable file, so the environment provider holds \
+                 no value for {name}"
             );
             None
         }
     }
 }
 
-/// BUNYIP-525: how to reach the Infisical store of the Group-2 (integration)
+/// BUNYIP-525: how to reach the Infisical provider of the Group-2 (integration)
 /// secrets. Credentials honour the `{NAME}_FILE` convention like every other
-/// secret. Whether this store is READ is [`SecretsStorage`]; `enabled` only
+/// secret. Whether this provider is READ is [`SecretsProvider`]; `enabled` only
 /// decides whether it is inspected outside `SECRETS_STORAGE=infisical`, which
 /// is what `bunyip-api secrets-status` needs to report readiness.
 #[derive(Debug, Clone)]
 pub struct InfisicalSettings {
-    /// Inspect the Infisical store outside `SECRETS_STORAGE=infisical`
-    /// (`INFISICAL_ENABLED`). Off by default; the declared store is read
+    /// Inspect the Infisical provider outside `SECRETS_STORAGE=infisical`
+    /// (`INFISICAL_ENABLED`). Off by default; the declared provider is read
     /// regardless.
     pub enabled: bool,
     /// Base URL of the Infisical instance (`INFISICAL_ADDRESS`),
@@ -371,7 +384,8 @@ pub enum SmtpTls {
 
 impl SmtpTls {
     /// Stable lowercase slug used in the DB (`email_config.smtp_tls`), the admin
-    /// API, and audit metadata. Inverse of the `from_db_row` string match.
+    /// API, and audit metadata. Inverse of the match in `smtp_tls_from`, which
+    /// is what the database provider's value is read back through.
     pub fn as_str(&self) -> &'static str {
         match self {
             SmtpTls::Implicit => "implicit",
@@ -430,16 +444,81 @@ pub struct EmailConfig {
 }
 
 impl EmailConfig {
-    /// Load email configuration from environment variables
+    /// Load email configuration from the environment provider alone.
+    ///
+    /// The same resolution [`Self::resolve`] performs, through a stack holding
+    /// only [`EnvironmentProvider`]: no file, no database.
     pub fn from_env(is_production: bool) -> Self {
-        // Allow forcing email enabled in development via env var
-        let force_enabled = env::var("EMAIL_ENABLED")
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false);
+        Self::resolve(&ConfigStack::environment_only(), None, is_production)
+    }
 
-        let smtp_host = env::var("SMTP_HOST").unwrap_or_else(|_| "localhost".to_string());
-        let has_smtp = !smtp_host.is_empty() && smtp_host != "localhost";
+    /// The `email_config` row as a configuration provider (BUNYIP-643).
+    ///
+    /// This is where `from_db_row`'s per-field fallback went. A column is held
+    /// only when it would have won that fallback, so an existing deployment
+    /// resolves exactly the values it resolved before: a NULL is not held, an
+    /// empty string is not held where the old code filtered one, and an
+    /// out-of-range port is not held (it fell back to the environment then and
+    /// falls back to the environment now). The encrypted `smtp_password` /
+    /// `imap_password` columns are deliberately absent: they are governed
+    /// secrets and follow `SECRETS_STORAGE`, not this stack.
+    pub fn database_provider(
+        row: &crate::models::email::EmailConfigRow,
+    ) -> Result<DatabaseProvider, ConfigFailure> {
+        let mut db = DatabaseProvider::new();
+        db.set_non_empty("SMTP_HOST", row.smtp_host.clone())?;
+        db.set_opt(
+            "SMTP_PORT",
+            row.smtp_port
+                .and_then(|p| u16::try_from(p).ok())
+                .map(|p| p.to_string()),
+        )?;
+        db.set_opt(
+            "SMTP_TLS",
+            row.smtp_tls
+                .clone()
+                .filter(|tls| matches!(tls.as_str(), "starttls" | "implicit")),
+        )?;
+        db.set_opt("SMTP_USERNAME", row.smtp_username.clone())?;
+        db.set_non_empty("SMTP_FROM_EMAIL", row.from_email.clone())?;
+        db.set_non_empty("SMTP_FROM_NAME", row.from_name.clone())?;
+        db.set_opt(
+            "ADMIN_NOTIFICATION_EMAILS",
+            row.admin_notification_emails.clone(),
+        )?;
+        db.set_opt("EMAIL_ENABLED", row.enabled.map(|v| v.to_string()))?;
+        db.set_non_empty("SUPPORT_IMAP_HOST", row.imap_host.clone())?;
+        db.set_opt(
+            "SUPPORT_IMAP_PORT",
+            row.imap_port
+                .and_then(|p| u16::try_from(p).ok())
+                .map(|p| p.to_string()),
+        )?;
+        db.set_opt("SUPPORT_IMAP_USERNAME", row.imap_username.clone())?;
+        db.set_non_empty("SUPPORT_IMAP_MAILBOX", row.imap_mailbox.clone())?;
+        db.set_opt(
+            "SUPPORT_IMAP_ENABLED",
+            row.imap_enabled.map(|v| v.to_string()),
+        )?;
+        Ok(db)
+    }
 
+    /// Resolve the email configuration through the provider stack (BUNYIP-643).
+    ///
+    /// BUNYIP-542: `smtp_password` is passed in, already resolved from the ONE
+    /// provider `SECRETS_STORAGE` declares. It is a governed secret and never a
+    /// configuration key.
+    ///
+    /// The fields with no second source stay direct environment reads, per the
+    /// registry rule in [`crate::config_providers`]: `SMTP_EHLO_NAME`, `APP_URL`,
+    /// `APP_NAME`, `SUPPORT_INBOX_EMAIL`, `SUPPORT_IMAP_POLL_SECS` and the
+    /// dev-only `EMAIL_LOG_TOKENS` gate have exactly one provider today, so a
+    /// declaration would be a no-op.
+    pub fn resolve(
+        stack: &ConfigStack,
+        smtp_password: Option<String>,
+        is_production: bool,
+    ) -> Self {
         // EMAIL_LOG_TOKENS lets local development log the full magic-link /
         // reset / email-change URL (token included) at DEBUG when email sending
         // is disabled. It defaults off and is forced off in production so the
@@ -449,51 +528,67 @@ impl EmailConfig {
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false);
 
-        // SMTP_TLS: "implicit" (port 465) or "starttls" (port 587)
-        let smtp_tls = match env::var("SMTP_TLS")
-            .unwrap_or_default()
-            .to_lowercase()
-            .as_str()
-        {
-            "starttls" => SmtpTls::Starttls,
-            // Default to implicit TLS (port 465)
-            _ => SmtpTls::Implicit,
-        };
+        // SMTP_TLS: "implicit" (port 465) or "starttls" (port 587).
+        let smtp_tls = smtp_tls_from(stack.get("SMTP_TLS").as_deref());
 
-        let default_port: u16 = match smtp_tls {
+        // The port default follows the TLS mode the DEPLOYMENT providers
+        // declare, not the database's. That is what `from_db_row` did (its port
+        // fallback came from `from_env`, whose default followed the environment
+        // TLS), and keeping it is what makes every existing deployment's
+        // resolved port identical. The admin page writes the port alongside the
+        // TLS mode, so the database never relies on this default.
+        let default_port: u16 = match smtp_tls_from(
+            stack
+                .get_below(ConfigProviderKind::Database, "SMTP_TLS")
+                .as_deref(),
+        ) {
             SmtpTls::Implicit => 465,
             SmtpTls::Starttls => 587,
         };
 
+        let smtp_host = stack
+            .get("SMTP_HOST")
+            .unwrap_or_else(|| "localhost".to_string());
+        let has_smtp = !smtp_host.is_empty() && smtp_host != "localhost";
+
+        // EMAIL_ENABLED is a force-ON switch in the environment, not a plain
+        // value: `EMAIL_ENABLED=false` never turned sending off, it left the
+        // production-and-SMTP rule to decide. So the environment's value feeds
+        // the computed default below, and only the providers ABOVE it (the
+        // database column the admin page writes, and the file) answer outright.
+        let force_enabled = stack
+            .get_below(ConfigProviderKind::File, "EMAIL_ENABLED")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+        let enabled = stack
+            .get_above(ConfigProviderKind::Environment, "EMAIL_ENABLED")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or((is_production && has_smtp) || force_enabled);
+
         Self {
             smtp_host,
-            smtp_port: env::var("SMTP_PORT")
-                .unwrap_or_else(|_| default_port.to_string())
-                .parse()
-                .unwrap_or(default_port),
+            smtp_port: stack.get_parsed::<u16>("SMTP_PORT").unwrap_or(default_port),
             smtp_tls,
-            smtp_username: env::var("SMTP_USERNAME").unwrap_or_default(),
-            // BUNYIP-542: the SMTP password is a governed secret. It comes from
-            // the ONE store `SECRETS_STORAGE` declares, resolved by the caller,
-            // so it is deliberately not read here.
-            smtp_password: String::new(),
+            smtp_username: stack.get("SMTP_USERNAME").unwrap_or_default(),
+            smtp_password: smtp_password.unwrap_or_default(),
             smtp_ehlo_name: env::var("SMTP_EHLO_NAME")
                 .ok()
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty()),
-            from_email: parse_smtp_from_email(
-                &env::var("SMTP_FROM").unwrap_or_else(|_| "noreply@localhost".to_string()),
-            ),
-            from_name: parse_smtp_from_name(
-                &env::var("SMTP_FROM").unwrap_or_else(|_| "noreply@localhost".to_string()),
-            ),
+            from_email: stack
+                .get("SMTP_FROM_EMAIL")
+                .unwrap_or_else(|| "noreply@localhost".to_string()),
+            from_name: stack
+                .get("SMTP_FROM_NAME")
+                .unwrap_or_else(|| "localhost".to_string()),
             base_url: env::var("APP_URL")
                 .or_else(|_| env::var("CORS_ORIGIN"))
                 .unwrap_or_else(|_| "http://localhost:5173".to_string()),
-            enabled: (is_production && has_smtp) || force_enabled,
+            enabled,
             log_tokens,
             app_name: env::var("APP_NAME").unwrap_or_else(|_| "localhost".to_string()),
-            admin_notification_emails: env::var("ADMIN_NOTIFICATION_EMAILS")
+            admin_notification_emails: stack
+                .get("ADMIN_NOTIFICATION_EMAILS")
                 .unwrap_or_default()
                 .split(',')
                 .map(str::trim)
@@ -506,19 +601,17 @@ impl EmailConfig {
                 .ok()
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty()),
-            // BUNYIP-571: inbound IMAP poller config (env bootstrap; the DB row
-            // overrides host/port/username/mailbox/enabled in from_db_row).
-            imap_host: env::var("SUPPORT_IMAP_HOST").unwrap_or_default(),
-            imap_port: env::var("SUPPORT_IMAP_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(993),
-            imap_username: env::var("SUPPORT_IMAP_USERNAME").unwrap_or_default(),
-            imap_mailbox: env::var("SUPPORT_IMAP_MAILBOX")
-                .ok()
+            // BUNYIP-571: inbound IMAP poller config. The poll interval is the
+            // one field with no database column, so it stays an env read.
+            imap_host: stack.get("SUPPORT_IMAP_HOST").unwrap_or_default(),
+            imap_port: stack.get_parsed::<u16>("SUPPORT_IMAP_PORT").unwrap_or(993),
+            imap_username: stack.get("SUPPORT_IMAP_USERNAME").unwrap_or_default(),
+            imap_mailbox: stack
+                .get("SUPPORT_IMAP_MAILBOX")
                 .filter(|v| !v.is_empty())
                 .unwrap_or_else(|| "INBOX".to_string()),
-            imap_enabled: env::var("SUPPORT_IMAP_ENABLED")
+            imap_enabled: stack
+                .get("SUPPORT_IMAP_ENABLED")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false),
             imap_poll_secs: env::var("SUPPORT_IMAP_POLL_SECS")
@@ -528,13 +621,13 @@ impl EmailConfig {
         }
     }
 
-    /// The `database` store's copy of the SMTP password: the decrypted
+    /// The `database` provider's copy of the SMTP password: the decrypted
     /// `email_config.smtp_password` ciphertext (BUNYIP-542).
     ///
     /// `None` when the row holds no ciphertext. A ciphertext no key in the set
     /// can read is logged at `error` and reported as absent, so the boot
-    /// enforcement treats it as "the declared store holds nothing" rather than
-    /// silently substituting another store's value.
+    /// enforcement treats it as "the declared provider holds nothing" rather
+    /// than silently substituting another provider's value.
     ///
     /// [`AppKeySet`]: crate::services::AppKeySet
     pub fn db_smtp_password(
@@ -552,8 +645,8 @@ impl EmailConfig {
                     error = %e,
                     key_version = row.key_version,
                     "email_config.smtp_password does not decrypt with APP_ENCRYPTION_KEY or any \
-                     APP_ENCRYPTION_KEY_PREV entry; treating the database store as holding no \
-                     SMTP password"
+                     APP_ENCRYPTION_KEY_PREV entry; treating the database provider as holding \
+                     no SMTP password"
                 );
                 None
             }
@@ -578,118 +671,11 @@ impl EmailConfig {
                     error = %e,
                     key_version = row.key_version,
                     "email_config.imap_password does not decrypt with APP_ENCRYPTION_KEY or any \
-                     APP_ENCRYPTION_KEY_PREV entry; treating the database store as holding no \
-                     IMAP password"
+                     APP_ENCRYPTION_KEY_PREV entry; treating the database provider as holding \
+                     no IMAP password"
                 );
                 None
             }
-        }
-    }
-
-    /// Build an `EmailConfig` from the DB row, falling back to env defaults for
-    /// any NULL column (BUNYIP-351). Mirrors [`TierConfig::from_db_row`].
-    ///
-    /// BUNYIP-542: `smtp_password` is passed in, already resolved from the ONE
-    /// store `SECRETS_STORAGE` declares (see [`GovernedSecret`]). This function
-    /// no longer consults a second source for it: the "DB row, else the env
-    /// slot" fallback WAS the invisible precedence chain.
-    ///
-    /// System-level fields (`base_url`, `app_name`, `smtp_ehlo_name`) and the dev-only
-    /// `log_tokens` gate stay env-derived: they are branding / bootstrap
-    /// concerns, not SMTP tuning. `enabled` is recomputed from the resolved
-    /// host so the BUNYIP-204 production semantics still hold against DB config.
-    pub fn from_db_row(
-        row: &crate::models::email::EmailConfigRow,
-        smtp_password: Option<String>,
-        is_production: bool,
-    ) -> Self {
-        let env = Self::from_env(is_production);
-
-        let smtp_host = row
-            .smtp_host
-            .clone()
-            .filter(|s| !s.is_empty())
-            .unwrap_or(env.smtp_host);
-        let smtp_port = row
-            .smtp_port
-            .and_then(|p| u16::try_from(p).ok())
-            .unwrap_or(env.smtp_port);
-        let smtp_tls = match row.smtp_tls.as_deref() {
-            Some("starttls") => SmtpTls::Starttls,
-            Some("implicit") => SmtpTls::Implicit,
-            _ => env.smtp_tls,
-        };
-        let smtp_username = row.smtp_username.clone().unwrap_or(env.smtp_username);
-        let smtp_password = smtp_password.unwrap_or_default();
-        let from_email = row
-            .from_email
-            .clone()
-            .filter(|s| !s.is_empty())
-            .unwrap_or(env.from_email);
-        let from_name = row
-            .from_name
-            .clone()
-            .filter(|s| !s.is_empty())
-            .unwrap_or(env.from_name);
-        let admin_notification_emails = match &row.admin_notification_emails {
-            Some(raw) => raw
-                .split(',')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .collect(),
-            None => env.admin_notification_emails,
-        };
-
-        // Recompute `enabled` from the resolved host so a DB-supplied SMTP host
-        // flips sending on exactly like the env path does. An explicit
-        // `enabled` column still wins when set.
-        let has_smtp = !smtp_host.is_empty() && smtp_host != "localhost";
-        let force_enabled = env::var("EMAIL_ENABLED")
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false);
-        let enabled = row
-            .enabled
-            .unwrap_or((is_production && has_smtp) || force_enabled);
-
-        Self {
-            smtp_host,
-            smtp_port,
-            smtp_tls,
-            smtp_username,
-            smtp_password,
-            // Deployment/network identity, not a per-tenant email setting, so
-            // it stays env-derived like `base_url` (BUNYIP-507).
-            smtp_ehlo_name: env.smtp_ehlo_name,
-            from_email,
-            from_name,
-            base_url: env.base_url,
-            enabled,
-            log_tokens: env.log_tokens,
-            app_name: env.app_name,
-            admin_notification_emails,
-            // Env-derived like `smtp_ehlo_name`: no per-tenant DB column, the
-            // support inbox is deployment identity (BUNYIP-571).
-            support_inbox_email: env.support_inbox_email,
-            // BUNYIP-571: the DB row overrides the IMAP connection config; the
-            // poll interval stays env-only operational tuning.
-            imap_host: row
-                .imap_host
-                .clone()
-                .filter(|s| !s.is_empty())
-                .unwrap_or(env.imap_host),
-            imap_port: row
-                .imap_port
-                .and_then(|p| u16::try_from(p).ok())
-                .unwrap_or(env.imap_port),
-            imap_username: row.imap_username.clone().unwrap_or(env.imap_username),
-            imap_mailbox: row
-                .imap_mailbox
-                .clone()
-                .filter(|s| !s.is_empty())
-                .unwrap_or(env.imap_mailbox),
-            imap_enabled: row.imap_enabled.unwrap_or(env.imap_enabled),
-            imap_poll_secs: env.imap_poll_secs,
         }
     }
 
@@ -728,24 +714,15 @@ impl EmailConfig {
             None => ClientId::default(),
         }
     }
+}
 
-    /// Returns `true` if the DB row has at least one non-NULL override.
-    pub fn has_db_overrides(row: &crate::models::email::EmailConfigRow) -> bool {
-        row.enabled.is_some()
-            || row.smtp_host.is_some()
-            || row.smtp_port.is_some()
-            || row.smtp_tls.is_some()
-            || row.smtp_username.is_some()
-            || row.smtp_password.is_some()
-            || row.from_email.is_some()
-            || row.from_name.is_some()
-            || row.admin_notification_emails.is_some()
-            || row.imap_host.is_some()
-            || row.imap_port.is_some()
-            || row.imap_username.is_some()
-            || row.imap_password.is_some()
-            || row.imap_mailbox.is_some()
-            || row.imap_enabled.is_some()
+/// The SMTP TLS mode a provider's raw value names. Anything but `starttls`
+/// (case-insensitively) is implicit TLS, which is what the environment read has
+/// always done; the database provider only ever holds one of the two spellings.
+fn smtp_tls_from(raw: Option<&str>) -> SmtpTls {
+    match raw.unwrap_or_default().to_lowercase().as_str() {
+        "starttls" => SmtpTls::Starttls,
+        _ => SmtpTls::Implicit,
     }
 }
 
@@ -763,7 +740,7 @@ fn client_id_from_host(host: &str) -> ClientId {
 
 /// Parse email address from SMTP_FROM.
 /// Supports "Display Name <email>" or plain "email" format.
-fn parse_smtp_from_email(smtp_from: &str) -> String {
+pub(crate) fn parse_smtp_from_email(smtp_from: &str) -> String {
     if let Some(start) = smtp_from.find('<') {
         if let Some(end) = smtp_from.find('>') {
             return smtp_from[start + 1..end].trim().to_string();
@@ -774,7 +751,7 @@ fn parse_smtp_from_email(smtp_from: &str) -> String {
 
 /// Parse display name from SMTP_FROM.
 /// Returns the part before `<`, or "localhost" if no display name is present.
-fn parse_smtp_from_name(smtp_from: &str) -> String {
+pub(crate) fn parse_smtp_from_name(smtp_from: &str) -> String {
     if let Some(start) = smtp_from.find('<') {
         let name = smtp_from[..start].trim();
         if !name.is_empty() {
@@ -820,57 +797,60 @@ pub struct AutoBanConfig {
 }
 
 impl AutoBanConfig {
-    /// Load auto-ban configuration from environment variables
+    /// Load auto-ban configuration from the environment provider alone.
     pub fn from_env() -> Self {
+        Self::resolve(&ConfigStack::environment_only())
+    }
+
+    /// The `auto_ban_config` row as a configuration provider (BUNYIP-643).
+    ///
+    /// The `BIGINT` columns are stored as `i64` and narrowed back to the
+    /// in-memory `u32`/`u64` widths here; a stored negative or over-wide value
+    /// is not held, so it falls back to the next provider exactly as it fell
+    /// back to the environment before.
+    pub fn database_provider(
+        row: &crate::models::auto_ban::AutoBanConfigRow,
+    ) -> Result<DatabaseProvider, ConfigFailure> {
+        let mut db = DatabaseProvider::new();
+        db.set_opt("AUTO_BAN_ENABLED", row.enabled.map(|v| v.to_string()))?;
+        db.set_opt(
+            "AUTO_BAN_THRESHOLD",
+            row.threshold
+                .and_then(|v| u32::try_from(v).ok())
+                .map(|v| v.to_string()),
+        )?;
+        db.set_opt(
+            "AUTO_BAN_WINDOW_SECS",
+            row.window_secs
+                .and_then(|v| u64::try_from(v).ok())
+                .map(|v| v.to_string()),
+        )?;
+        db.set_opt(
+            "AUTO_BAN_DURATION_SECS",
+            row.ban_duration_secs
+                .and_then(|v| u64::try_from(v).ok())
+                .map(|v| v.to_string()),
+        )?;
+        Ok(db)
+    }
+
+    /// Resolve the auto-ban configuration through the provider stack.
+    pub fn resolve(stack: &ConfigStack) -> Self {
         Self {
-            enabled: env::var("AUTO_BAN_ENABLED")
+            // Anything but `false` / `0` is on, which is what the environment
+            // read has always done and what the database column serialises to.
+            enabled: stack
+                .get("AUTO_BAN_ENABLED")
                 .map(|v| v != "false" && v != "0")
                 .unwrap_or(true),
-            threshold: env::var("AUTO_BAN_THRESHOLD")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(5),
-            window_secs: env::var("AUTO_BAN_WINDOW_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
+            threshold: stack.get_parsed::<u32>("AUTO_BAN_THRESHOLD").unwrap_or(5),
+            window_secs: stack
+                .get_parsed::<u64>("AUTO_BAN_WINDOW_SECS")
                 .unwrap_or(3600),
-            ban_duration_secs: env::var("AUTO_BAN_DURATION_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
+            ban_duration_secs: stack
+                .get_parsed::<u64>("AUTO_BAN_DURATION_SECS")
                 .unwrap_or(86400),
         }
-    }
-
-    /// Build an `AutoBanConfig` from the DB row, falling back to env defaults
-    /// for any column that is NULL (BUNYIP-351). Mirrors
-    /// [`TierConfig::from_db_row`]. The `BIGINT` columns are stored as `i64`
-    /// and narrowed back to the in-memory `u32`/`u64` widths; a stored negative
-    /// or over-wide value is clamped to the env default rather than wrapping.
-    pub fn from_db_row(row: &crate::models::auto_ban::AutoBanConfigRow) -> Self {
-        let env = Self::from_env();
-        Self {
-            enabled: row.enabled.unwrap_or(env.enabled),
-            threshold: row
-                .threshold
-                .and_then(|v| u32::try_from(v).ok())
-                .unwrap_or(env.threshold),
-            window_secs: row
-                .window_secs
-                .and_then(|v| u64::try_from(v).ok())
-                .unwrap_or(env.window_secs),
-            ban_duration_secs: row
-                .ban_duration_secs
-                .and_then(|v| u64::try_from(v).ok())
-                .unwrap_or(env.ban_duration_secs),
-        }
-    }
-
-    /// Returns `true` if the DB row has at least one non-NULL override.
-    pub fn has_db_overrides(row: &crate::models::auto_ban::AutoBanConfigRow) -> bool {
-        row.enabled.is_some()
-            || row.threshold.is_some()
-            || row.window_secs.is_some()
-            || row.ban_duration_secs.is_some()
     }
 }
 
@@ -913,97 +893,75 @@ pub struct TierConfig {
 }
 
 impl TierConfig {
-    /// Load tier configuration from environment variables
+    /// Load tier configuration from the environment provider alone.
     pub fn from_env() -> Self {
-        Self {
-            lifetime_slots: env::var("TIER_LIFETIME_SLOTS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(5),
-            early_adopter_slots: env::var("TIER_EARLY_ADOPTER_SLOTS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(5),
-            early_adopter_trial_days: env::var("TIER_EARLY_ADOPTER_TRIAL_DAYS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(90),
-            standard_trial_days: env::var("TIER_STANDARD_TRIAL_DAYS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(30),
-            // BUNYIP-482: no env source; the admin tier-settings page writes it.
-            free_price_id: None,
-            early_adopter_price_id: None,
-            standard_price_id: None,
-            lifetime_product_id: None,
-            early_adopter_product_id: None,
-            standard_product_id: None,
-            // BUNYIP-487: no env source; the admin Pricing tiers page writes it.
-            pricing_enabled: false,
-            // BUNYIP-527: no env source; default visible.
-            lifetime_visible: true,
-            early_adopter_visible: true,
-            standard_visible: true,
-            // BUNYIP-493: no env source; the admin Pricing tiers page writes it.
-            orgs_enabled: false,
-        }
+        Self::resolve(&ConfigStack::environment_only(), None)
     }
 
-    /// Build a `TierConfig` from the DB row, falling back to env defaults
-    /// for any column that is NULL.
-    pub fn from_db_row(row: &crate::models::tier::TierConfigRow) -> Self {
-        let env = Self::from_env();
-        Self {
-            lifetime_slots: row.lifetime_slots.unwrap_or(env.lifetime_slots),
-            early_adopter_slots: row.early_adopter_slots.unwrap_or(env.early_adopter_slots),
-            early_adopter_trial_days: row
-                .early_adopter_trial_days
-                .unwrap_or(env.early_adopter_trial_days),
-            standard_trial_days: row.standard_trial_days.unwrap_or(env.standard_trial_days),
-            // BUNYIP-482: DB only; NULL means no $0 price is configured.
-            free_price_id: row.free_price_id.clone(),
-            early_adopter_price_id: row.early_adopter_price_id.clone(),
-            standard_price_id: row.standard_price_id.clone(),
-            lifetime_product_id: row.lifetime_product_id.clone(),
-            early_adopter_product_id: row.early_adopter_product_id.clone(),
-            standard_product_id: row.standard_product_id.clone(),
-            pricing_enabled: row.pricing_enabled,
-            lifetime_visible: row.lifetime_visible,
-            early_adopter_visible: row.early_adopter_visible,
-            standard_visible: row.standard_visible,
-            orgs_enabled: row.orgs_enabled,
-        }
-    }
-
-    /// Returns `true` if the DB row has at least one non-NULL override.
+    /// The `tier_config` row as a configuration provider (BUNYIP-643).
     ///
-    /// BUNYIP-487: `pricing_enabled` is `NOT NULL`, so "overridden" means "set
-    /// to true". Without it, enabling pricing and changing nothing else would
-    /// send startup down the env-fallback branch and silently unpublish the
-    /// page on the next restart.
-    pub fn has_db_overrides(row: &crate::models::tier::TierConfigRow) -> bool {
-        row.pricing_enabled
-            || row.lifetime_slots.is_some()
-            || row.early_adopter_slots.is_some()
-            || row.early_adopter_trial_days.is_some()
-            || row.standard_trial_days.is_some()
-            || row.free_price_id.is_some()
-            || row.early_adopter_price_id.is_some()
-            || row.standard_price_id.is_some()
-            || row.lifetime_product_id.is_some()
-            || row.early_adopter_product_id.is_some()
-            || row.standard_product_id.is_some()
-            // BUNYIP-527: hiding a tier (visible = false) is a DB override too, so
-            // the choice survives a restart instead of falling back to env.
-            || !row.lifetime_visible
-            || !row.early_adopter_visible
-            || !row.standard_visible
-            // BUNYIP-493: same reasoning as `pricing_enabled` above - the column
-            // is NOT NULL, so turning the feature on is the only signal that the
-            // row is authoritative, and without it a restart would silently
-            // switch the feature back off.
-            || row.orgs_enabled
+    /// Only the four slot/trial columns are here. The price and product ids and
+    /// the `pricing_enabled` / visibility / `orgs_enabled` switches have exactly
+    /// ONE possible provider - the admin pages write them and no environment
+    /// variable exists for them (BUNYIP-482/487/493/527) - so they are not
+    /// declared keys, for the same reason `GovernedSecret` excludes a secret
+    /// with one provider: the declaration would be a no-op, and declaring them
+    /// would hand the file provider a feature flag `CLAUDE.md` requires to be
+    /// admin-managed. They are read straight from the row by [`Self::resolve`].
+    pub fn database_provider(
+        row: &crate::models::tier::TierConfigRow,
+    ) -> Result<DatabaseProvider, ConfigFailure> {
+        let mut db = DatabaseProvider::new();
+        db.set_opt(
+            "TIER_LIFETIME_SLOTS",
+            row.lifetime_slots.map(|v| v.to_string()),
+        )?;
+        db.set_opt(
+            "TIER_EARLY_ADOPTER_SLOTS",
+            row.early_adopter_slots.map(|v| v.to_string()),
+        )?;
+        db.set_opt(
+            "TIER_EARLY_ADOPTER_TRIAL_DAYS",
+            row.early_adopter_trial_days.map(|v| v.to_string()),
+        )?;
+        db.set_opt(
+            "TIER_STANDARD_TRIAL_DAYS",
+            row.standard_trial_days.map(|v| v.to_string()),
+        )?;
+        Ok(db)
+    }
+
+    /// Resolve the tier configuration through the provider stack.
+    ///
+    /// `row` carries the database-only columns; `None` is the no-database
+    /// caller, which takes their built-in defaults.
+    pub fn resolve(stack: &ConfigStack, row: Option<&crate::models::tier::TierConfigRow>) -> Self {
+        Self {
+            lifetime_slots: stack.get_parsed::<i64>("TIER_LIFETIME_SLOTS").unwrap_or(5),
+            early_adopter_slots: stack
+                .get_parsed::<i64>("TIER_EARLY_ADOPTER_SLOTS")
+                .unwrap_or(5),
+            early_adopter_trial_days: stack
+                .get_parsed::<i64>("TIER_EARLY_ADOPTER_TRIAL_DAYS")
+                .unwrap_or(90),
+            standard_trial_days: stack
+                .get_parsed::<i64>("TIER_STANDARD_TRIAL_DAYS")
+                .unwrap_or(30),
+            // BUNYIP-482: database only; NULL means no $0 price is configured.
+            free_price_id: row.and_then(|row| row.free_price_id.clone()),
+            early_adopter_price_id: row.and_then(|row| row.early_adopter_price_id.clone()),
+            standard_price_id: row.and_then(|row| row.standard_price_id.clone()),
+            lifetime_product_id: row.and_then(|row| row.lifetime_product_id.clone()),
+            early_adopter_product_id: row.and_then(|row| row.early_adopter_product_id.clone()),
+            standard_product_id: row.and_then(|row| row.standard_product_id.clone()),
+            // BUNYIP-487/493: database only, off until an admin turns it on.
+            pricing_enabled: row.is_some_and(|row| row.pricing_enabled),
+            orgs_enabled: row.is_some_and(|row| row.orgs_enabled),
+            // BUNYIP-527: database only, visible until an admin hides it.
+            lifetime_visible: row.is_none_or(|row| row.lifetime_visible),
+            early_adopter_visible: row.is_none_or(|row| row.early_adopter_visible),
+            standard_visible: row.is_none_or(|row| row.standard_visible),
+        }
     }
 }
 
@@ -1295,15 +1253,21 @@ impl Config {
         // the single `finish_startup_audit` at the end of this function decides.
         let mut failures = audit_required(is_production);
 
-        // BUNYIP-622: the application-level deployment settings (feature toggles,
-        // country access) resolve through the file-based YAML layer: an env var
-        // (or its {NAME}_FILE indirection) over the YAML file over the built-in
-        // default. The system-level origins and domains (cors_origin, web_origin,
-        // cookie_domain) resolve from the environment ONLY inside `SysConfig`;
-        // BUNYIP-579 first placed them in the file, which put them on the
-        // API-writable side of the boundary, and BUNYIP-622 moved them out.
-        // Generated on first run, never overwritten, loaded once here.
-        let sys = crate::sys_config::SysConfig::load();
+        // BUNYIP-643/644: the deployment providers (the file layer when there is
+        // one, then the environment). The database provider joins the stack in
+        // main.rs, once the pool is open and the admin-managed rows have been
+        // read.
+        let deployment = ConfigStack::deployment();
+
+        // BUNYIP-622/644: the application-level deployment settings (feature
+        // toggles, country access) resolve through that stack like every other
+        // declared key: the file layer, then the environment, then the built-in
+        // default. The system-level origins and domains (cors_origin,
+        // web_origin, cookie_domain) resolve from the environment ONLY inside
+        // `SysConfig`; BUNYIP-579 first placed them in the file, which put them
+        // on the API-writable side of the boundary, and BUNYIP-622 moved them
+        // out.
+        let sys = crate::sys_config::SysConfig::load(&deployment);
 
         // DATABASE_URL embeds the postgres password, so it supports the
         // DATABASE_URL_FILE secret convention like every other secret. Its
@@ -1359,28 +1323,29 @@ impl Config {
         });
 
         let app_name = env::var("APP_NAME").unwrap_or_else(|_| "localhost".to_string());
-        let email = EmailConfig::from_env(is_production);
 
-        // BUNYIP-542: the declared store for every governed integration secret.
+        let email = EmailConfig::resolve(&deployment, None, is_production);
+
+        // BUNYIP-542: the declared provider for every governed integration secret.
         // Absence is reported by the presence audit above, so the placeholder in
         // that arm is never observed: a non-empty `failures` returns Err before
         // this Config is built. An unrecognised value is its own failure, named
         // with the legal set.
-        let secrets_storage = match secret_env("SECRETS_STORAGE") {
-            Some(raw) => SecretsStorage::parse(&raw).unwrap_or_else(|| {
+        let secrets_provider = match secret_env("SECRETS_STORAGE") {
+            Some(raw) => SecretsProvider::parse(&raw).unwrap_or_else(|| {
                 failures.push(ConfigFailure {
                     var: "SECRETS_STORAGE",
                     reason: format!(
-                        "the value {raw:?} is not one of the stores bunyip can read secrets from"
+                        "the value {raw:?} is not one of the providers bunyip can read secrets from"
                     ),
                     remedy: format!(
                         "Set SECRETS_STORAGE to one of: {}. See docs/configuration.md.",
-                        SecretsStorage::LEGAL_VALUES
+                        SecretsProvider::LEGAL_VALUES
                     ),
                 });
-                SecretsStorage::Database
+                SecretsProvider::Database
             }),
-            None => SecretsStorage::Database,
+            None => SecretsProvider::Database,
         };
 
         // BUNYIP-623: a self-hosted production deployment with email not yet
@@ -1422,7 +1387,7 @@ impl Config {
             );
         }
 
-        let auto_ban = AutoBanConfig::from_env();
+        let auto_ban = AutoBanConfig::resolve(&deployment);
         let trusted_proxies =
             parse_trusted_proxies(&env::var("TRUSTED_PROXY_CIDR").unwrap_or_default());
 
@@ -1446,7 +1411,7 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(1);
 
-        let tier = TierConfig::from_env();
+        let tier = TierConfig::resolve(&deployment, None);
         let download = DownloadConfig::from_env();
         let oci = OciConfig::from_env();
         let oidc = OidcConfig::from_env();
@@ -1536,7 +1501,7 @@ impl Config {
             country_allow: sys.country_allow.clone(),
             country_deny: sys.country_deny.clone(),
             infisical,
-            secrets_storage,
+            secrets_provider,
         };
 
         // BUNYIP-537: the one place startup failures are reported. Every branch
@@ -1549,7 +1514,7 @@ impl Config {
             port = %config.port,
             environment = %config.environment,
             bootstrap_admin_configured = config.bootstrap_admin_email.is_some(),
-            secrets_storage = %config.secrets_storage,
+            secrets_provider = %config.secrets_provider,
             "Configuration loaded"
         );
 
@@ -1775,6 +1740,7 @@ pub enum EnvClass {
 }
 
 /// One classified environment variable the api reads.
+#[derive(Clone, Copy)]
 pub struct EnvVarSpec {
     /// The variable name. Secrets also resolve through `{NAME}_FILE`.
     pub name: &'static str,
@@ -1865,7 +1831,7 @@ impl EnvVarSpec {
 /// - [`EnvClass::Defaulted`]: nothing. The defaults are documented in
 ///   `docs/configuration.md`; a line per default would drown the two cases
 ///   above.
-pub static ENV_INVENTORY: &[EnvVarSpec] = &[
+static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
     // ---- Required ---------------------------------------------------------
     EnvVarSpec::required(
         "DATABASE_URL",
@@ -2024,8 +1990,8 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
     .gated_by("BUNYIP_UPDATE_CHECK_URL"),
     EnvVarSpec::gating(
         "INFISICAL_ENABLED",
-        "the Infisical store is not inspected: `bunyip-api secrets-status` cannot report whether \
-         SECRETS_STORAGE=infisical is ready to switch to (BUNYIP-525, BUNYIP-542)",
+        "the Infisical provider is not inspected: `bunyip-api secrets-status` cannot report \
+         whether SECRETS_STORAGE=infisical is ready to switch to (BUNYIP-525, BUNYIP-542)",
         "Set INFISICAL_ENABLED=true plus the INFISICAL_* credentials (see \
          docs/secrets-infisical.md). SECRETS_STORAGE=infisical inspects it either way.",
     ),
@@ -2132,8 +2098,24 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
     ),
     EnvVarSpec::defaulted(
         "BUNYIP_CONFIG_FILE",
-        "path to the application-level config YAML layer (BUNYIP-579/622); default \
-         /app/config/config.yaml, generated on first run and never overwritten",
+        "path to the LEGACY config YAML file (BUNYIP-579/622); default /app/config/config.yaml, \
+         read once and migrated into the file layer, then renamed aside (BUNYIP-644)",
+    ),
+    EnvVarSpec::defaulted(
+        "BUNYIP_CONFIG_DIR",
+        "directory the FILE configuration layer reads and the admin System page writes, one file \
+         per key (BUNYIP-643/644); default /app/config, and a default directory that does not \
+         exist means the deployment has no file layer",
+    ),
+    EnvVarSpec::defaulted(
+        "COUNTRY_ALLOW",
+        "ISO alpha-2 countries allowed to sign in, comma separated; empty allows all \
+         (BUNYIP-581), and the admin System page writes it into the file layer",
+    ),
+    EnvVarSpec::defaulted(
+        "COUNTRY_DENY",
+        "ISO alpha-2 countries refused sign-in, comma separated, applied after COUNTRY_ALLOW \
+         (BUNYIP-581)",
     ),
     // BUNYIP-561: demoted to a bootstrap default. The product name is the
     // admin-managed `branding.brand_name`; this value is used only while that
@@ -2302,6 +2284,30 @@ pub static ENV_INVENTORY: &[EnvVarSpec] = &[
     ),
 ];
 
+/// The inventory: the variables written down above, plus the generated
+/// `RATE_LIMIT_{ACTION}_*` family (BUNYIP-645).
+///
+/// The family is generated because its names are built from the action, which is
+/// exactly why the caps were left out of the configuration providers when
+/// BUNYIP-643 brought the other configurations in: a key must name an inventory
+/// variable, and a runtime-built name could not be one. Both registries are
+/// generated from the one preset list, so an action added to
+/// `RateLimitConfig::ALL` is classified here and declared in `CONFIG_KEYS` with
+/// no second edit. They are [`EnvClass::Defaulted`]: every action has a working
+/// compile-time cap, so an absent variable is not a gap and logs nothing.
+pub static ENV_INVENTORY: std::sync::LazyLock<Vec<EnvVarSpec>> = std::sync::LazyLock::new(|| {
+    WRITTEN_ENV_INVENTORY
+        .iter()
+        .copied()
+        .chain(crate::models::rate_limit_vars().iter().flat_map(|vars| {
+            [
+                EnvVarSpec::defaulted(vars.max_requests, vars.max_requests_setting),
+                EnvVarSpec::defaulted(vars.window_seconds, vars.window_seconds_setting),
+            ]
+        }))
+        .collect()
+});
+
 /// Look up one variable's spec.
 pub fn env_spec(name: &str) -> Option<&'static EnvVarSpec> {
     ENV_INVENTORY.iter().find(|spec| spec.name == name)
@@ -2421,20 +2427,24 @@ mod tests {
     use crate::test_support::env_lock;
     use std::env;
 
-    /// BUNYIP-592: point the system config file at a throwaway temp path before
-    /// any call that reaches `SysConfig::load()`, which GENERATES the file when
-    /// it is absent. Unset, the path is the in-container default under `/app`,
-    /// which `compose.dev.yml` bind-mounts to the repo, so the generation lands
-    /// in the developer's working tree. Callers hold `env_lock()`, so the
+    /// BUNYIP-592/644: point the file configuration layer at a throwaway temp
+    /// directory before any call that reaches `SysConfig::load`, which MIGRATES
+    /// a legacy YAML file into that directory when it finds one. Unset, the
+    /// directory is the in-container default under `/app`, which
+    /// `compose.dev.yml` bind-mounts to the repo, so the migration would write
+    /// into the developer's working tree. Callers hold `env_lock()`, so the
     /// variable cannot leak into a parallel test.
     fn redirect_sys_config_to_temp() {
-        let path = env::temp_dir().join(format!("bunyip-test-config-{}.yaml", std::process::id()));
-        env::set_var(crate::sys_config::PATH_ENV, path);
+        let dir = env::temp_dir().join(format!("bunyip-test-config-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp config dir");
+        env::set_var(crate::config_providers::CONFIG_DIR_ENV, dir);
+        env::remove_var(crate::sys_config::LEGACY_FILE_ENV);
     }
 
     /// BUNYIP-592: a test reaching `from_env_inner` without the redirect above
-    /// writes `config/config.yaml` into the working tree, so `git status` is
-    /// dirty after `just test`. Fails the build on a new call site that skips it.
+    /// resolves and migrates through `config/` in the working tree, so
+    /// `git status` is dirty after `just test`. Fails the build on a new call
+    /// site that skips it.
     #[test]
     fn every_test_that_loads_the_config_redirects_the_sys_config_file() {
         let module = include_str!("config.rs")
@@ -2464,9 +2474,9 @@ mod tests {
 
         assert!(
             offenders.is_empty(),
-            "these tests call Config::from_env_inner without redirecting BUNYIP_CONFIG_FILE \
-             to a temp path first, so they generate config/config.yaml in the working tree: \
-             {offenders:?}"
+            "these tests call Config::from_env_inner without redirecting BUNYIP_CONFIG_DIR \
+             to a temp directory first, so they resolve (and migrate) through config/ in the \
+             working tree: {offenders:?}"
         );
     }
 
@@ -2875,7 +2885,7 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), total, "duplicate entry in ENV_INVENTORY");
 
-        for spec in ENV_INVENTORY {
+        for spec in ENV_INVENTORY.iter() {
             assert!(
                 !spec.feature.is_empty(),
                 "{} has no feature text",
@@ -2928,34 +2938,35 @@ mod tests {
 
     /// Every legal value round-trips, and nothing else parses: an operator
     /// typo must be a startup error, never a silent fallback to some default
-    /// store.
+    /// provider.
     #[test]
-    fn secrets_storage_parses_exactly_the_three_legal_values() {
+    fn secrets_provider_parses_exactly_the_three_legal_values() {
         for (raw, expected) in [
-            ("environment", SecretsStorage::Environment),
-            ("database", SecretsStorage::Database),
-            ("infisical", SecretsStorage::Infisical),
+            ("environment", SecretsProvider::Environment),
+            ("database", SecretsProvider::Database),
+            ("infisical", SecretsProvider::Infisical),
             // Case and surrounding whitespace are operator noise, not intent.
-            ("  DataBase ", SecretsStorage::Database),
+            ("  DataBase ", SecretsProvider::Database),
         ] {
-            assert_eq!(SecretsStorage::parse(raw), Some(expected), "{raw}");
+            assert_eq!(SecretsProvider::parse(raw), Some(expected), "{raw}");
         }
         for raw in ["", "db", "vault", "environmnet", "database,infisical"] {
-            assert_eq!(SecretsStorage::parse(raw), None, "{raw}");
+            assert_eq!(SecretsProvider::parse(raw), None, "{raw}");
         }
     }
 
     /// An unrecognised value is a startup failure naming the variable and the
     /// legal set, collected with every other failure in the one report.
     #[test]
-    fn an_unrecognised_secrets_storage_is_a_startup_failure() {
+    fn an_unrecognised_secrets_provider_is_a_startup_failure() {
         let _env = env_lock();
         redirect_sys_config_to_temp();
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
         env::set_var("ENVIRONMENT", "development");
         env::set_var("SECRETS_STORAGE", "vault");
 
-        let err = Config::from_env_inner().expect_err("an unrecognised store must fail the boot");
+        let err =
+            Config::from_env_inner().expect_err("an unrecognised provider must fail the boot");
         let ConfigError::Startup(failures) = &err else {
             panic!("expected a startup report, got {err:?}");
         };
@@ -2969,18 +2980,18 @@ mod tests {
         }
 
         env::set_var("SECRETS_STORAGE", "infisical");
-        let config = Config::from_env_inner().expect("a legal store loads");
-        assert_eq!(config.secrets_storage, SecretsStorage::Infisical);
+        let config = Config::from_env_inner().expect("a legal provider loads");
+        assert_eq!(config.secrets_provider, SecretsProvider::Infisical);
 
         env::remove_var("SECRETS_STORAGE");
         env::remove_var("ENVIRONMENT");
     }
 
-    /// The environment store is `{NAME}_FILE` only. A plain variable holding a
-    /// governed secret is the compose-`environment:` exposure BUNYIP-38
+    /// The environment provider is `{NAME}_FILE` only. A plain variable holding
+    /// a governed secret is the compose-`environment:` exposure BUNYIP-38
     /// removed, so it resolves to nothing rather than quietly working.
     #[test]
-    fn the_environment_store_reads_the_file_and_ignores_the_plain_variable() {
+    fn the_environment_provider_reads_the_file_and_ignores_the_plain_variable() {
         let _env = env_lock();
         let dir = std::env::temp_dir().join("bunyip-542-env-store");
         std::fs::create_dir_all(&dir).expect("temp dir");
@@ -3404,23 +3415,34 @@ mod tests {
         clear_email_env();
     }
 
+    /// A stack of the database provider over the environment, the shape
+    /// `from_db_row` used to hard-code (BUNYIP-643). The file provider is left
+    /// out so these tests keep asserting exactly the old two-provider answer.
+    fn db_over_env(db: DatabaseProvider) -> ConfigStack {
+        ConfigStack::new(vec![
+            std::sync::Arc::new(db),
+            std::sync::Arc::new(crate::config_providers::EnvironmentProvider),
+        ])
+    }
+
     #[test]
-    fn email_from_db_row_falls_back_to_env_when_all_null() {
+    fn email_database_provider_falls_back_to_env_when_all_null() {
         let _env = env_lock();
         clear_email_env();
 
         let row = email_row();
-        assert!(!EmailConfig::has_db_overrides(&row));
+        let db = EmailConfig::database_provider(&row).expect("no Group-1 key in the email row");
+        assert!(db.is_empty(), "an all-NULL row holds nothing");
 
         // dev (is_production=false) with no SMTP env => the env defaults.
-        let cfg = EmailConfig::from_db_row(&row, None, false);
+        let cfg = EmailConfig::resolve(&db_over_env(db), None, false);
         assert_eq!(cfg.smtp_host, "localhost");
         assert!(!cfg.enabled);
         assert!(cfg.admin_notification_emails.is_empty());
     }
 
     #[test]
-    fn email_from_db_row_applies_overrides() {
+    fn email_database_provider_applies_overrides() {
         let _env = env_lock();
         clear_email_env();
 
@@ -3433,9 +3455,10 @@ mod tests {
         row.from_email = Some("noreply@example.com".to_string());
         row.from_name = Some("Example".to_string());
         row.admin_notification_emails = Some("ops@example.com, alerts@example.com".to_string());
-        assert!(EmailConfig::has_db_overrides(&row));
+        let db = EmailConfig::database_provider(&row).expect("no Group-1 key in the email row");
+        assert!(!db.is_empty());
 
-        let cfg = EmailConfig::from_db_row(&row, None, false);
+        let cfg = EmailConfig::resolve(&db_over_env(db), None, false);
         assert!(cfg.enabled);
         assert_eq!(cfg.smtp_host, "smtp.example.com");
         assert_eq!(cfg.smtp_port, 587);
@@ -3453,7 +3476,7 @@ mod tests {
     }
 
     #[test]
-    fn email_from_db_row_decrypts_stored_password() {
+    fn email_database_provider_never_holds_the_governed_password() {
         let _env = env_lock();
         clear_email_env();
 
@@ -3466,17 +3489,101 @@ mod tests {
         row.smtp_password_nonce = Some(nonce);
         row.key_version = ver;
 
-        // BUNYIP-542: the caller resolves the password from the declared store;
-        // `db_smtp_password` is the database store's half of that resolution.
-        let from_store = EmailConfig::db_smtp_password(&row, &key_set);
-        assert_eq!(from_store.as_deref(), Some("s3cr3t-relay-pass"));
-        let cfg = EmailConfig::from_db_row(&row, from_store, false);
+        // BUNYIP-542: the caller resolves the password from the declared
+        // provider; `db_smtp_password` is the database provider's half of that
+        // resolution.
+        let from_provider = EmailConfig::db_smtp_password(&row, &key_set);
+        assert_eq!(from_provider.as_deref(), Some("s3cr3t-relay-pass"));
+        let db = EmailConfig::database_provider(&row).expect("no Group-1 key in the email row");
+        let cfg = EmailConfig::resolve(&db_over_env(db.clone()), from_provider, false);
         assert_eq!(cfg.smtp_password, "s3cr3t-relay-pass");
-        assert!(EmailConfig::has_db_overrides(&row));
+        // The governed secret is NOT a configuration key: the ciphertext column
+        // never enters the provider (BUNYIP-542 owns it, not this stack).
+        assert!(db.is_empty());
+    }
+
+    use crate::config_providers::ConfigVerdict;
+
+    /// A stand-in environment provider: it answers for the same PRIORITY as the
+    /// real one without touching the process environment, which this suite can
+    /// only mutate under a lock that does not stop other threads reading.
+    #[derive(Debug)]
+    struct FakeEnvironment(std::collections::BTreeMap<String, String>);
+
+    impl crate::config_providers::ConfigProvider for FakeEnvironment {
+        fn kind(&self) -> ConfigProviderKind {
+            ConfigProviderKind::Environment
+        }
+        fn get(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+    }
+
+    /// AC3, the resolved-values-are-unchanged proof: with the environment AND
+    /// the database both holding email settings, every field the database holds
+    /// comes from the database and every field it leaves NULL comes from the
+    /// environment. That IS the `from_db_row` contract, now stated as a declared
+    /// priority rather than as the order two functions were called in.
+    #[test]
+    fn the_database_provider_wins_per_field_and_the_environment_fills_the_rest() {
+        let _env = env_lock();
+        clear_email_env();
+
+        let environment = FakeEnvironment(
+            [
+                ("SMTP_HOST", "env.example.net"),
+                ("SMTP_PORT", "2525"),
+                ("SMTP_USERNAME", "env-user"),
+                ("SMTP_FROM_EMAIL", "env@example.net"),
+                ("ADMIN_NOTIFICATION_EMAILS", "env-ops@example.net"),
+            ]
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect(),
+        );
+
+        let mut row = email_row();
+        row.smtp_host = Some("db.example.com".to_string());
+        row.from_name = Some("Database Sender".to_string());
+
+        let db = EmailConfig::database_provider(&row).expect("no Group-1 key in the email row");
+        let stack = ConfigStack::new(vec![
+            std::sync::Arc::new(db),
+            std::sync::Arc::new(environment),
+        ]);
+        let cfg = EmailConfig::resolve(&stack, None, false);
+
+        // Held by the database: the database serves it.
+        assert_eq!(cfg.smtp_host, "db.example.com");
+        assert_eq!(cfg.from_name, "Database Sender");
+        // Left NULL: the environment serves it, exactly as before.
+        assert_eq!(cfg.smtp_port, 2525);
+        assert_eq!(cfg.smtp_username, "env-user");
+        assert_eq!(cfg.from_email, "env@example.net");
+        assert_eq!(cfg.admin_notification_emails, vec!["env-ops@example.net"]);
+
+        // And the provenance says so, per key, without anyone having to read
+        // the resolution code to find out.
+        assert_eq!(
+            stack.resolve("SMTP_HOST"),
+            ConfigVerdict::Overridden {
+                serving: ConfigProviderKind::Database,
+                ignored: vec![ConfigProviderKind::Environment],
+            }
+        );
+        assert_eq!(
+            stack.resolve("SMTP_PORT"),
+            ConfigVerdict::Shadowed {
+                serving: ConfigProviderKind::Environment,
+                absent_from: ConfigProviderKind::Database,
+                ignored: vec![],
+            }
+        );
+        assert_eq!(stack.resolve("SMTP_TLS"), ConfigVerdict::Default);
     }
 
     #[test]
-    fn email_from_db_row_ignores_out_of_range_port() {
+    fn email_database_provider_ignores_an_out_of_range_port() {
         let _env = env_lock();
         clear_email_env();
 
@@ -3484,7 +3591,12 @@ mod tests {
         // (465 for the default implicit TLS) is kept rather than wrapping.
         let mut row = email_row();
         row.smtp_port = Some(-1);
-        let cfg = EmailConfig::from_db_row(&row, None, false);
+        let db = EmailConfig::database_provider(&row).expect("no Group-1 key in the email row");
+        assert!(
+            db.is_empty(),
+            "an unusable port is not held, so it cannot serve"
+        );
+        let cfg = EmailConfig::resolve(&db_over_env(db), None, false);
         assert_eq!(cfg.smtp_port, 465);
     }
 
@@ -3518,14 +3630,16 @@ mod tests {
     }
 
     #[test]
-    fn auto_ban_from_db_row_falls_back_to_env_when_all_null() {
+    fn auto_ban_database_provider_falls_back_to_env_when_all_null() {
         let _env = env_lock();
         clear_auto_ban_env();
 
         let row = auto_ban_row(None, None, None, None);
-        assert!(!AutoBanConfig::has_db_overrides(&row));
+        let db =
+            AutoBanConfig::database_provider(&row).expect("no Group-1 key in the auto-ban row");
+        assert!(db.is_empty(), "an all-NULL row holds nothing");
 
-        let cfg = AutoBanConfig::from_db_row(&row);
+        let cfg = AutoBanConfig::resolve(&db_over_env(db));
         // Documented env defaults.
         assert!(cfg.enabled);
         assert_eq!(cfg.threshold, 5);
@@ -3534,14 +3648,16 @@ mod tests {
     }
 
     #[test]
-    fn auto_ban_from_db_row_applies_overrides() {
+    fn auto_ban_database_provider_applies_overrides() {
         let _env = env_lock();
         clear_auto_ban_env();
 
         let row = auto_ban_row(Some(false), Some(10), Some(120), Some(600));
-        assert!(AutoBanConfig::has_db_overrides(&row));
+        let db =
+            AutoBanConfig::database_provider(&row).expect("no Group-1 key in the auto-ban row");
+        assert!(!db.is_empty());
 
-        let cfg = AutoBanConfig::from_db_row(&row);
+        let cfg = AutoBanConfig::resolve(&db_over_env(db));
         assert!(!cfg.enabled);
         assert_eq!(cfg.threshold, 10);
         assert_eq!(cfg.window_secs, 120);
@@ -3549,17 +3665,20 @@ mod tests {
     }
 
     #[test]
-    fn auto_ban_from_db_row_ignores_out_of_range_values() {
+    fn auto_ban_database_provider_ignores_out_of_range_values() {
         let _env = env_lock();
         clear_auto_ban_env();
 
         // A negative BIGINT cannot narrow to the unsigned in-memory widths, so
         // the env default is kept rather than wrapping to a huge value.
         let row = auto_ban_row(None, Some(-1), Some(-5), Some(-9));
-        // Non-NULL columns still count as overrides even if out of range.
-        assert!(AutoBanConfig::has_db_overrides(&row));
+        let db =
+            AutoBanConfig::database_provider(&row).expect("no Group-1 key in the auto-ban row");
+        // An unusable value is not held, so it cannot serve and the next
+        // provider (here the environment default) answers.
+        assert!(db.is_empty());
 
-        let cfg = AutoBanConfig::from_db_row(&row);
+        let cfg = AutoBanConfig::resolve(&db_over_env(db));
         assert_eq!(cfg.threshold, 5);
         assert_eq!(cfg.window_secs, 3600);
         assert_eq!(cfg.ban_duration_secs, 86400);

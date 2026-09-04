@@ -86,7 +86,15 @@ pub async fn poll_once(
     key_set: &AppKeySet,
 ) -> anyhow::Result<usize> {
     let row = EmailConfigRepository::get(pool).await?;
-    let cfg = EmailConfig::from_db_row(&row, None, config.is_production());
+    // BUNYIP-643: the same declared provider stack the boot path resolves
+    // through, so the poller can never see a different answer.
+    let database = EmailConfig::database_provider(&row)
+        .map_err(|failure| anyhow::anyhow!("{}: {}", failure.var, failure.reason))?;
+    let cfg = EmailConfig::resolve(
+        &crate::config_providers::ConfigStack::with_database(database),
+        None,
+        config.is_production(),
+    );
     if !cfg.imap_enabled || cfg.imap_host.is_empty() || cfg.imap_username.is_empty() {
         return Ok(0);
     }

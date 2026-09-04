@@ -13,6 +13,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 
 use bunyip_api::{
     config::{secret_env, AutoBanConfig, Config, EmailConfig, TierConfig},
+    // BUNYIP-643: the declared configuration provider stack the three
+    // admin-managed configurations resolve through.
+    config_providers::ConfigStack,
     middleware::{
         auto_ban::{self, AutoBanService},
         request_id::RequestIdMiddleware,
@@ -398,19 +401,29 @@ async fn main() -> anyhow::Result<()> {
         "development-webhook-signing-secret-change-in-production".to_string()
     });
 
-    // Initialize tier config — prefer DB overrides, fall back to env vars
+    // BUNYIP-643: resolve the tier configuration through the declared provider
+    // stack (database, then file, then environment). The old
+    // `has_db_overrides` branch is gone: an empty database provider resolves to
+    // exactly what the deployment providers alone resolve, so the branch decided
+    // nothing and only hid the precedence.
     let tier_config = {
         use bunyip_api::repositories::TierConfigRepository;
-        match TierConfigRepository::get(&pool).await {
-            Ok(row) if TierConfig::has_db_overrides(&row) => {
-                info!("Tier config initialized from database");
-                TierConfig::from_db_row(&row)
+        let row = match TierConfigRepository::get(&pool).await {
+            Ok(row) => Some(row),
+            Err(e) => {
+                // Never silent: an unreadable row means the admin-managed values
+                // are NOT in force, which an operator must be able to see.
+                error!(error = %e, "tier_config could not be read; resolving the tier configuration from the file and environment providers alone");
+                None
             }
-            _ => {
-                info!("Tier config initialized from environment variables");
-                config.tier.clone()
-            }
-        }
+        };
+        let database = match row.as_ref().map(TierConfig::database_provider).transpose() {
+            Ok(provider) => provider.unwrap_or_default(),
+            Err(failure) => fatal_config_error(failure.var, &failure.reason, &failure.remedy),
+        };
+        let stack = ConfigStack::with_database(database);
+        stack.log_shadowed_providers();
+        TierConfig::resolve(&stack, row.as_ref())
     };
     let tier_config = Arc::new(std::sync::RwLock::new(tier_config));
 
@@ -419,21 +432,21 @@ async fn main() -> anyhow::Result<()> {
     // guards the TOTP secrets, the Stripe secrets and the SMTP password.
     let app_key_set = config.app_key_set();
 
-    // BUNYIP-542: read every governed integration secret from the ONE store
-    // SECRETS_STORAGE declares, and enforce the store declaration. The old
+    // BUNYIP-542: read every governed integration secret from the ONE provider
+    // SECRETS_STORAGE declares, and enforce that declaration. The old
     // three-level precedence chain (DB row, then the env slot, then a
     // conditional Infisical fetch that filled the slot only when it was empty)
     // is gone: which copy is live is now the operator's declaration.
     //
-    // Infisical is contacted only when it IS the declared store, so `database`
+    // Infisical is contacted only when it IS the declared provider, so `database`
     // and `environment` deployments keep the property that Infisical is never a
     // boot dependency. In `infisical` mode the read is deliberately fail-closed.
-    let infisical_probe = if config.secrets_storage == bunyip_api::config::SecretsStorage::Infisical
-    {
-        bunyip_api::secrets::InfisicalProbe::Inspect
-    } else {
-        bunyip_api::secrets::InfisicalProbe::Skip
-    };
+    let infisical_probe =
+        if config.secrets_provider == bunyip_api::config::SecretsProvider::Infisical {
+            bunyip_api::secrets::InfisicalProbe::Inspect
+        } else {
+            bunyip_api::secrets::InfisicalProbe::Skip
+        };
     let secret_survey =
         bunyip_api::secrets::survey(&pool, &config, &app_key_set, infisical_probe).await?;
     let fatal_secret_reports = bunyip_api::secrets::enforce(&secret_survey);
@@ -441,15 +454,15 @@ async fn main() -> anyhow::Result<()> {
         for report in &fatal_secret_reports {
             error!(env_var = "SECRETS_STORAGE", "{report}");
         }
-        error!("Refusing to start: fix the secret storage errors above and restart");
+        error!("Refusing to start: fix the secrets-provider errors above and restart");
         std::process::exit(1);
     }
     info!(
-        secrets_storage = %config.secrets_storage,
-        "Governed integration secrets resolved from the declared store"
+        secrets_provider = %config.secrets_provider,
+        "Governed integration secrets resolved from the declared provider"
     );
     // The env-fallback EmailConfig carries the same resolved password, so both
-    // branches below agree on the one store's value.
+    // branches below agree on the one provider's value.
     let smtp_password = secret_survey
         .value(bunyip_api::config::GovernedSecret::SmtpPassword)
         .map(str::to_string);
@@ -509,21 +522,25 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize Email service: non-secret settings prefer the DB row (admin
     // UI) and fall back to the environment (BUNYIP-351); the SMTP password
-    // comes from the declared store alone (BUNYIP-542). The auth service (built
+    // comes from the declared provider alone (BUNYIP-542). The auth service (built
     // below) also holds the email service for BUNYIP-366 login-location alerts,
     // so email is wired ahead of auth.
     let email_config = {
         use bunyip_api::repositories::EmailConfigRepository;
-        match EmailConfigRepository::get(&pool).await {
-            Ok(row) if EmailConfig::has_db_overrides(&row) => {
-                info!("Email config initialized from database");
-                EmailConfig::from_db_row(&row, smtp_password, config.is_production())
+        let row = match EmailConfigRepository::get(&pool).await {
+            Ok(row) => Some(row),
+            Err(e) => {
+                error!(error = %e, "email_config could not be read; resolving the email configuration from the file and environment providers alone");
+                None
             }
-            _ => {
-                info!("Email config initialized from environment variables");
-                config.email.clone()
-            }
-        }
+        };
+        let database = match row.as_ref().map(EmailConfig::database_provider).transpose() {
+            Ok(provider) => provider.unwrap_or_default(),
+            Err(failure) => fatal_config_error(failure.var, &failure.reason, &failure.remedy),
+        };
+        let stack = ConfigStack::with_database(database);
+        stack.log_shadowed_providers();
+        EmailConfig::resolve(&stack, smtp_password, config.is_production())
     };
     // BUNYIP-204/351: a production deployment must not run with email disabled,
     // even when the effective config is resolved from the DB. The disabled path
@@ -624,7 +641,7 @@ async fn main() -> anyhow::Result<()> {
 
     // BUNYIP-542: the non-secret Stripe settings (app tag, checkout URLs, trial
     // length) still come from the `stripe_config` row, but the two secrets come
-    // from the declared store alone.
+    // from the declared provider alone.
     let stripe_config = {
         use bunyip_api::config::GovernedSecret;
         use bunyip_api::repositories::StripeConfigRepository;
@@ -641,7 +658,7 @@ async fn main() -> anyhow::Result<()> {
         match (&row, secret_key) {
             (Some(row), Some(secret_key)) => {
                 // The non-secret columns come from the row in every mode; the
-                // two secrets come from the declared store alone.
+                // two secrets come from the declared provider alone.
                 let mut cfg = stripe_settings_from_db_model(row);
                 cfg.secret_key = secret_key.to_string();
                 cfg.webhook_secret = secret_survey
@@ -649,13 +666,15 @@ async fn main() -> anyhow::Result<()> {
                     .map(str::to_string)
                     .unwrap_or(unconfigured_stripe_config().webhook_secret);
                 info!(
-                    secrets_storage = %config.secrets_storage,
-                    "Stripe service initialized with secrets from the declared store"
+                    secrets_provider = %config.secrets_provider,
+                    "Stripe service initialized with secrets from the declared provider"
                 );
                 cfg
             }
             _ => {
-                info!("No Stripe secret key in the declared store; starting with Stripe disabled");
+                info!(
+                    "No Stripe secret key in the declared provider; starting with Stripe disabled"
+                );
                 unconfigured_stripe_config()
             }
         }
@@ -857,21 +876,43 @@ async fn main() -> anyhow::Result<()> {
             .as_ref()
             .map(|p| Arc::clone(p) as Arc<dyn bunyip_domain::middleware::auth::AtJwtVerifier>);
 
-    // Initialize auto-ban config — prefer DB overrides, fall back to env vars
-    // (BUNYIP-351). Mirrors the tier/stripe DB-overrides-env pattern.
+    // BUNYIP-643: the same declared provider stack as the tier and email
+    // configurations above.
     let auto_ban_config = {
         use bunyip_api::repositories::AutoBanConfigRepository;
-        match AutoBanConfigRepository::get(&pool).await {
-            Ok(row) if AutoBanConfig::has_db_overrides(&row) => {
-                info!("Auto-ban config initialized from database");
-                AutoBanConfig::from_db_row(&row)
+        let row = match AutoBanConfigRepository::get(&pool).await {
+            Ok(row) => Some(row),
+            Err(e) => {
+                error!(error = %e, "auto_ban_config could not be read; resolving the auto-ban configuration from the file and environment providers alone");
+                None
             }
-            _ => {
-                info!("Auto-ban config initialized from environment variables");
-                config.auto_ban
-            }
-        }
+        };
+        let database = match row
+            .as_ref()
+            .map(AutoBanConfig::database_provider)
+            .transpose()
+        {
+            Ok(provider) => provider.unwrap_or_default(),
+            Err(failure) => fatal_config_error(failure.var, &failure.reason, &failure.remedy),
+        };
+        let stack = ConfigStack::with_database(database);
+        stack.log_shadowed_providers();
+        AutoBanConfig::resolve(&stack)
     };
+
+    // BUNYIP-645: the rate-limit rows are a configuration provider too, so a
+    // cap set in compose that an admin row has made dead is reported at boot
+    // exactly like a dead SMTP_HOST. The caps themselves are resolved per TTL
+    // snapshot by RateLimitConfigRepository::effective, not here.
+    match bunyip_domain::repositories::RateLimitConfigRepository::list(&pool).await {
+        Ok(rows) => ConfigStack::with_database(
+            bunyip_domain::repositories::rate_limit_config::database_provider(&rows),
+        )
+        .log_shadowed_providers(),
+        Err(e) => {
+            error!(error = %e, "rate_limit_configs could not be read at boot, so an environment cap an admin row overrides is not reported; the enforcement path reports its own read failures")
+        }
+    }
 
     // Initialize account backup/restore service (BUNYIP-353 / BUNYIP-356). One
     // adapter per entitled app. When Mokosh is configured (MOKOSH_BACKUP_API_URL
@@ -1352,7 +1393,7 @@ async fn run_subcommand(
     pool: &sqlx::PgPool,
     config: &Config,
 ) -> anyhow::Result<()> {
-    use bunyip_api::config::SecretsStorage;
+    use bunyip_api::config::SecretsProvider;
     use bunyip_api::secrets;
 
     // BUNYIP-542: the `secrets-*` family is the non-destructive pre-flight the
@@ -1361,7 +1402,8 @@ async fn run_subcommand(
     // serving. Infisical is inspected when the deployment has it enabled, which
     // is what makes "is `--to infisical` ready?" answerable.
     let key_set = config.app_key_set();
-    let probe = if config.infisical.enabled || config.secrets_storage == SecretsStorage::Infisical {
+    let probe = if config.infisical.enabled || config.secrets_provider == SecretsProvider::Infisical
+    {
         secrets::InfisicalProbe::Inspect
     } else {
         secrets::InfisicalProbe::Skip
@@ -1380,18 +1422,20 @@ async fn run_subcommand(
         }
         "secrets-migrate" => {
             let target = match args.iter().position(|arg| arg == "--to") {
-                Some(idx) => args.get(idx + 1).and_then(|raw| SecretsStorage::parse(raw)),
+                Some(idx) => args
+                    .get(idx + 1)
+                    .and_then(|raw| SecretsProvider::parse(raw)),
                 None => None,
             };
             let Some(target) = target else {
                 anyhow::bail!(
                     "secrets-migrate needs --to <{}>",
-                    SecretsStorage::LEGAL_VALUES
+                    SecretsProvider::LEGAL_VALUES
                 );
             };
             let survey = secrets::survey(pool, config, &key_set, probe).await?;
             let dry_run = args.iter().any(|arg| arg == "--dry-run");
-            // A governed secret with no value in any store fails the run rather
+            // A governed secret with no value in any provider fails the run rather
             // than migrating to a blank (BUNYIP-621); --allow-missing skips it
             // explicitly for a deployment that does not use that feature.
             let allow_missing = args.iter().any(|arg| arg == "--allow-missing");
@@ -1407,6 +1451,32 @@ async fn run_subcommand(
             )
             .await?;
             print!("{summary}");
+            Ok(())
+        }
+        "config-status" => {
+            // BUNYIP-643: the configuration twin of `secrets-status`. Reads the
+            // three admin-managed rows and reports, per key, which provider is
+            // serving it and which providers hold a value that is ignored.
+            let stack = bunyip_api::config_status::survey(pool).await?;
+            let report = bunyip_domain::config_providers::status_report(&stack);
+            if args.iter().any(|arg| arg == "--json") {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!(
+                    "{}",
+                    bunyip_domain::config_providers::render_status(&report)
+                );
+            }
+            Ok(())
+        }
+        "machine-client" => {
+            // BUNYIP-604: register / rotate / disable / list the `oauth_clients`
+            // credential a calling app presents to the mailer relay. The module
+            // returns the report rather than printing it, so the plaintext
+            // secret is written to stdout here and nowhere else.
+            let report =
+                bunyip_api::machine_client::run(pool, &config.email.base_url, args).await?;
+            print!("{report}");
             Ok(())
         }
         "secrets-purge" => {
@@ -1434,7 +1504,7 @@ async fn run_subcommand(
 
 /// BUNYIP-562: build a `StripeService` for a CLI subcommand the same way startup
 /// does - non-secret settings from the `stripe_config` row, the secret key and
-/// webhook secret from the declared secret store (the survey). An unreadable row
+/// webhook secret from the declared secrets provider (the survey). An unreadable row
 /// or a missing secret key yields the disabled service, so the caller can report
 /// "nothing to do" rather than crash.
 async fn build_stripe_service(
@@ -1492,7 +1562,8 @@ async fn run_reencrypt_subcommand(
         }
         other => anyhow::bail!(
             "unknown subcommand {other:?} (known: reencrypt-secrets, secrets-status, \
-             secrets-migrate, secrets-purge, reconcile-duplicate-prices)"
+             secrets-migrate, secrets-purge, config-status, machine-client, \
+             reconcile-duplicate-prices)"
         ),
     }
 }

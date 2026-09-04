@@ -6,11 +6,12 @@ use uuid::Uuid;
 
 /// Database row for the `email_config` singleton table.
 ///
-/// Every tunable column is nullable: a NULL means "fall back to the
-/// environment-variable default at load time" (see
-/// [`EmailConfig::from_db_row`](crate::config::EmailConfig::from_db_row)). The
-/// SMTP password is stored encrypted (`smtp_password` ciphertext +
-/// `smtp_password_nonce`, versioned by `key_version`).
+/// Every tunable column is nullable: a NULL means this row's provider does not
+/// hold that key, so the next provider down the declared stack serves it (see
+/// [`EmailConfig::database_provider`](crate::config::EmailConfig::database_provider)
+/// and [`crate::config_providers`]). The SMTP password is stored encrypted
+/// (`smtp_password` ciphertext + `smtp_password_nonce`, versioned by
+/// `key_version`) and is a governed secret, never a configuration key.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct EmailConfigRow {
     pub id: i32,
@@ -61,12 +62,13 @@ pub struct EmailConfigResponse {
     pub admin_notification_emails: Vec<String>,
     /// Whether the resolved values come from "database" or "environment".
     pub source: &'static str,
-    /// BUNYIP-542: the declared store for the SMTP password
+    /// BUNYIP-542: the declared provider for the SMTP password
     /// (`SECRETS_STORAGE`): "environment", "database" or "infisical". The
-    /// non-secret settings above are unaffected by it.
+    /// non-secret settings above are unaffected by it. The wire key stays
+    /// `secrets_storage`, matching the variable it reports (BUNYIP-642).
     pub secrets_storage: &'static str,
     /// Whether the SMTP password can be changed from the admin page. False in
-    /// `environment` mode, where there is no writable store, so the field
+    /// `environment` mode, where there is no writable provider, so the field
     /// renders read-only instead of reporting a save that lands nowhere.
     pub smtp_password_editable: bool,
     /// BUNYIP-571: inbound IMAP settings. The password is write-only like the

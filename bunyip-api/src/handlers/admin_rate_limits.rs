@@ -395,7 +395,7 @@ pub async fn list_rate_limit_configs(
     let entries: Vec<RateLimitConfigEntry> = RateLimitConfig::ALL
         .iter()
         .map(|cfg| {
-            let default_cfg = cfg.with_env_defaults();
+            let default_cfg = cfg.with_deployment_defaults();
             let row = rows.iter().find(|r| r.action == default_cfg.action);
             build_config_entry(&default_cfg, row)
         })
@@ -794,7 +794,7 @@ mod db_tests {
             RateLimitConfigRepository::effective(&pool, &cfg)
                 .await
                 .unwrap(),
-            cfg.with_env_defaults(),
+            cfg.with_deployment_defaults(),
             "with no override the bootstrap default (const + env) applies"
         );
 
