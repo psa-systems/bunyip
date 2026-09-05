@@ -554,4 +554,228 @@ mod tests {
             offenders.join("\n")
         );
     }
+
+    // -- BUNYIP-656: an `extra` that cannot override its variant -------------
+    //
+    // `button_class` concatenates BTN_BASE, the variant, the size and the
+    // caller's `extra`, so an `extra` naming a colour the variant already
+    // names puts two same-specificity utilities on one element. CSS resolves
+    // those by their order in the stylesheet, NOT by their order in the class
+    // attribute, so the override lands only when Tailwind happens to emit it
+    // last. It did for `bg-white` over `bg-primary` and did not for
+    // `text-brand-primary-800` over `text-primary-foreground`, which is how
+    // the public CTA shipped a white label on a white pill: the button read as
+    // an empty box, and the arrow went with it (`stroke="currentColor"`).
+
+    /// Tailwind's escaping of a class name, enough for the utilities the
+    /// buttons use (`hover:bg-primary/90` -> `.hover\:bg-primary\/90`).
+    fn escape_class(token: &str) -> String {
+        token
+            .chars()
+            .map(|c| match c {
+                ':' | '/' | '.' | '%' | '[' | ']' | '(' | ')' | ',' | '#' => format!("\\{c}"),
+                _ => c.to_string(),
+            })
+            .collect()
+    }
+
+    /// Where `token`'s rule starts in the built stylesheet, and which CSS
+    /// properties it declares. `None` when Tailwind emitted no rule for it,
+    /// which for a button utility means the class is inert - the caller wrote
+    /// a name that does not exist, so there is nothing to conflict with.
+    fn rule(css: &str, token: &str) -> Option<(usize, Vec<String>)> {
+        let sel = format!(".{}", escape_class(token));
+        let mut from = 0;
+        while let Some(rel) = css[from..].find(&sel) {
+            let at = from + rel;
+            from = at + sel.len();
+            // A selector starts a rule or continues a selector list, and ends
+            // at the block, a pseudo-class, or the next selector in the list.
+            let before = css[..at].chars().next_back();
+            let after = css[from..].chars().next();
+            let starts = matches!(before, None | Some('}') | Some(',') | Some('\n'));
+            let ends = matches!(after, Some('{') | Some(':') | Some(','));
+            if !(starts && ends) {
+                continue;
+            }
+            let open = from + css[from..].find('{').expect("selector opens a block");
+            let close = open + css[open..].find('}').expect("block closes");
+            let props = css[open + 1..close]
+                .split(';')
+                .filter_map(|d| d.split_once(':').map(|(k, _)| k.trim().to_string()))
+                .filter(|k| !k.starts_with("--"))
+                .collect();
+            return Some((at, props));
+        }
+        None
+    }
+
+    /// The state prefix (`hover:`, `dark:`, `md:hover:`, ...) a token carries.
+    /// Two utilities only fight when they apply in the same state; a `:hover`
+    /// rule outranks a base one on specificity whatever the order.
+    fn state_of(token: &str) -> &str {
+        token.rfind(':').map_or("", |i| &token[..=i])
+    }
+
+    /// Every `button_class("v", "s", "extra")` in the tree, as literals. The
+    /// two `&format!(..)` extras keep their literal segments, holes dropped:
+    /// those name a gradient, never a colour utility.
+    fn button_call_sites() -> Vec<(String, String, String, String)> {
+        // Split so this function's own needle does not match the scan.
+        let needle = concat!("button_class", "(");
+        let mut sites = Vec::new();
+        let mut stack = vec![
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            web_kit_src(),
+        ];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("readable source dir") {
+                let path = entry.expect("readable dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let body = std::fs::read_to_string(&path).expect("readable source file");
+                for (n, line) in body.lines().enumerate() {
+                    if line.trim_start().starts_with("//") {
+                        continue;
+                    }
+                    for piece in line.split(needle).skip(1) {
+                        // The literals of one call, in order: variant, size,
+                        // then whatever the extra is built from.
+                        let mut depth = 1usize;
+                        let (mut lits, mut cur, mut in_str, mut esc) =
+                            (Vec::new(), String::new(), false, false);
+                        for c in piece.chars() {
+                            if in_str {
+                                match c {
+                                    _ if esc => esc = false,
+                                    '\\' => esc = true,
+                                    '"' => {
+                                        in_str = false;
+                                        lits.push(std::mem::take(&mut cur));
+                                    }
+                                    _ => cur.push(c),
+                                }
+                                continue;
+                            }
+                            match c {
+                                '"' => in_str = true,
+                                '(' => depth += 1,
+                                ')' => {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        break;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        if lits.len() < 2 {
+                            continue;
+                        }
+                        // Everything past the size is the extra; a format
+                        // string's `{hole}` is dropped, its literal text kept.
+                        let extra = lits[2..]
+                            .join(" ")
+                            .split(['{', '}'])
+                            .step_by(2)
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        sites.push((
+                            format!("{}:{}", path.display(), n + 1),
+                            lits[0].clone(),
+                            lits[1].clone(),
+                            extra,
+                        ));
+                    }
+                }
+            }
+        }
+        sites
+    }
+
+    /// No `button_class` call may leave the caller's `extra` losing to the
+    /// variant it was written to override. Either the variant does not name
+    /// that property (the fix: a real variant, so the conflict never exists),
+    /// or the extra's utility is the one the stylesheet emits last.
+    #[test]
+    fn every_button_extra_outranks_the_variant_colour_it_overrides() {
+        let css = include_str!("../../assets/styles.css");
+        let sites = button_call_sites();
+        assert!(
+            sites.len() > 20,
+            "the button scan matched {} sites; needle is stale",
+            sites.len()
+        );
+        let mut offenders = Vec::new();
+        for (site, variant, size, extra) in &sites {
+            let base = super::button_class(variant, size, "");
+            for ex in extra.split_whitespace() {
+                let Some((ex_at, ex_props)) = rule(css, ex) else {
+                    continue;
+                };
+                for va in base.split_whitespace() {
+                    // A repeat is the same rule twice, so nothing is ambiguous.
+                    if va == ex || state_of(va) != state_of(ex) {
+                        continue;
+                    }
+                    let Some((va_at, va_props)) = rule(css, va) else {
+                        continue;
+                    };
+                    if !va_props.iter().any(|p| ex_props.contains(p)) || ex_at > va_at {
+                        continue;
+                    }
+                    offenders.push(format!(
+                        "{site}: `{ex}` cannot override `{va}` (both set {}); \
+                         the stylesheet emits `{va}` last, so the variant wins",
+                        va_props
+                            .iter()
+                            .filter(|p| ex_props.contains(p))
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "a button `extra` that loses to its variant renders a colour \
+             nobody asked for; give the button a variant instead:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// The label on the `inverse` variant is the regression itself: it sits on
+    /// the variant's own fill, so it has to clear AA there rather than on the
+    /// gradient panel behind it.
+    #[test]
+    fn the_inverse_button_label_is_readable_on_its_own_fill() {
+        let css = include_str!("../../assets/styles.css");
+        let classes = super::button_class("inverse", "lg", "");
+        let fill = [1.0, 1.0, 1.0];
+        let decl = ".text-brand-primary-800{color:var(--skin-primary-800,";
+        let at = css
+            .find(decl)
+            .expect("`text-brand-primary-800` in the built stylesheet")
+            + decl.len();
+        let hex = &css[at..at + 7];
+        let label = std::array::from_fn(|i| {
+            u8::from_str_radix(&hex[1 + i * 2..3 + i * 2], 16).expect("hex component") as f64
+                / 255.0
+        });
+        assert!(
+            classes.contains("bg-white") && classes.contains("text-brand-primary-800"),
+            "the inverse variant changed shape: {classes}"
+        );
+        let ratio = contrast(label, fill);
+        assert!(
+            ratio >= 4.5,
+            "the inverse button label is {ratio:.2}:1 on its own fill, below AA 4.5:1"
+        );
+    }
 }

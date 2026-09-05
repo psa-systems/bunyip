@@ -396,7 +396,7 @@ pub(super) fn user_grid_row(u: &crate::api::types::AdminUser) -> Markup {
             div style=(USERS_GRID) class="py-2.5 px-2 -mx-2 rounded-md" {
                 (avatar) (identity) (tier) (verified_indicator(u.email_verified)) (joined)
                 form method="post" action=(format!("/admin/users/{}/reactivate", u.id)) data-confirm="Reactivate this user? They will be able to sign in again." {
-                    button type="submit" class=(button_class("outline", "sm", "h-8 px-2 text-xs")) { "Reactivate" }
+                    button type="submit" class=(button_class("outline", "xs", "text-xs")) { "Reactivate" }
                 }
             }
         }

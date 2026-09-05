@@ -190,6 +190,20 @@ fn variant_classes(variant: &str) -> &'static str {
         }
         "secondary" => "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         "ghost" => "hover:bg-accent hover:text-accent-foreground",
+        // The brand fill, from the SKINNABLE scale (BUNYIP-656). `bg-primary`
+        // is a static hex in `@theme inline`, so it holds the default green
+        // through a rebrand; `bg-brand-primary-700` follows `--skin-primary-*`.
+        // The two share a default value, which is why the hero CTA passing the
+        // brand fill as an `extra` and losing to `bg-primary` looked right.
+        "brand" => "bg-brand-primary-700 text-white hover:bg-brand-primary-800",
+        // A button sitting ON the brand gradient: the fill is the light
+        // surface and the label the brand's darkest step (BUNYIP-656). It is a
+        // variant rather than an `extra` on `default`, because `extra` cannot
+        // override a colour the variant already names: two utilities for one
+        // property resolve by stylesheet order, not class-attribute order, and
+        // `.text-primary-foreground` sorts after every `.text-brand-*`, so the
+        // label rendered white on the white fill and vanished.
+        "inverse" => "bg-white text-brand-primary-800",
         "link" => "text-primary-text underline-offset-4 hover:underline",
         _ => "bg-primary text-primary-foreground hover:bg-primary/90",
     }
@@ -197,6 +211,9 @@ fn variant_classes(variant: &str) -> &'static str {
 
 fn size_classes(size: &str) -> &'static str {
     match size {
+        // Sits inside a table row, where `sm` is a line taller than the row's
+        // own rhythm; pairs with `text-xs` (BUNYIP-656).
+        "xs" => "h-8 rounded-md px-2",
         "sm" => "h-9 rounded-md px-3",
         "lg" => "h-11 rounded-md px-8",
         "icon" => "h-10 w-10",
