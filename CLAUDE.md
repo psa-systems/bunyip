@@ -56,14 +56,20 @@ images under `dev.a8n.run/psa-systems-private/{bunyip-api,bunyip-web}`).
 The task runner's shared half is `psa-systems/common`, vendored as the `common`
 submodule and imported by the root `justfile` (`import 'common/common.just'`).
 It owns `pre-commit` and its two variants, `check-tree-ownership`,
-`install-hooks`, `create-release` and its layout variants, and `check-justfile`;
-the root justfile configures them through variables (`app`, `compose_service`,
-`pre_commit_prepare`, `clippy_args`, `compile_args`, `test_args`,
-`release_layout`) and must never redefine one. `pre_commit_prepare` is load
-bearing: it runs `ensure-oidc-keys` on the host so the daemon does not
-materialize the api service's `./secrets/oidc` bind source as root, which
-`check-tree-ownership` then fails the commit on (DEV-371). `check-justfile` fails the hook and the `Check` workflow if it
-does, which is the whole point of adopting it: a forked recipe silently stops
+`ensure-bind-sources`, `install-hooks`, `create-release` and its layout
+variants, and `check-justfile`; the root justfile configures them through
+variables (`app`, `compose_service`, `dev_bind_sources`, `pre_commit_prepare`,
+`clippy_args`, `compile_args`, `test_args`, `release_layout`) and must never
+redefine one. Two of those variables carry the `./secrets/oidc` bind source the
+api service mounts. `dev_bind_sources := "secrets/oidc"` is what stops the
+daemon materializing that directory as root while it resolves the mount, which
+`check-tree-ownership` then fails every commit in the clone on (DEV-371):
+`ensure-bind-sources` creates it host-owned and repairs an empty root-owned one,
+and common runs it ahead of the prepare step in both pre-commit variants.
+`pre_commit_prepare := "ensure-oidc-keys"` then generates the Ed25519 keypair
+into it on the host, the part that is bunyip-specific. `check-justfile` fails
+the hook and the `Check` workflow when a common-owned recipe is redefined
+locally, which is the whole point of adopting it: a forked recipe silently stops
 receiving shared fixes. A fresh clone needs `git submodule update --init` or
 the import is a parse error, and CI checks out with `submodules: true`. Bumping
 common means updating the submodule and committing the new gitlink. The release
