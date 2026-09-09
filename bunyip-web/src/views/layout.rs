@@ -1075,6 +1075,18 @@ mod tests {
     /// that ships the sidebar as its only nav fails here.
     #[test]
     fn every_authenticated_shell_navigates_below_the_md_breakpoint() {
+        // BUNYIP-665: the `/organizations` entry is pushed only `if orgs_enabled()`,
+        // and that flag cell is process-wide, so this guard has to pin it under
+        // FLAG_LOCK exactly as every flag-flipping test does. Without the lock a
+        // concurrent flipper flips the flag between the sidebar render and the
+        // below-md disclosure render inside one `dashboard_shell` call, landing
+        // /organizations in the sidebar but not the disclosure. Pinning it ON also
+        // makes the flagged entry one of the destinations this guard proves reaches
+        // both surfaces.
+        let _flag = crate::feature_flags::FLAG_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        install_orgs_enabled(true);
         let admin = test_user(UserRole::Admin);
         let member = test_user(UserRole::Subscriber);
         let shells = [
@@ -1130,6 +1142,7 @@ mod tests {
                 );
             }
         }
+        install_orgs_enabled(false);
     }
 
     /// BUNYIP-493: the organizations and teams entry exists only while the
