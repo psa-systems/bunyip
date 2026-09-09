@@ -1,5 +1,10 @@
 # M1 Stripe billing: sequenced implementation plan
 
+> **Historical snapshot (archived).** This M1 plan records the sequencing as of
+> 2026-05-31, kept for provenance and not maintained. The billing vertical has
+> moved on since (see the tracker and `docs/configuration.md`); read this for the
+> reasoning of the time, not the current state.
+
 Snapshot: 2026-05-31. Built on the locked scoping decisions below. This is a
 **plan, not a build** - no billing logic was changed to produce it. Companion to
 `docs/dev-docs/billing-m1-gap-matrix.md` (the audit it sequences). Per-user data model
