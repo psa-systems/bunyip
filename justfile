@@ -20,11 +20,15 @@ app := "bunyip"
 # the shared pre-commit runs its cargo steps there rather than in `app`.
 compose_service := "api"
 
-# The api service bind-mounts ./secrets/oidc, and an absent bind source is
-# materialized by the daemon as root, which then fails check-tree-ownership
-# (DEV-371). Declaring it here makes common's ensure-bind-sources create it
-# host-owned, and repair an empty root-owned one, before any container starts.
-dev_bind_sources := "secrets/oidc"
+# Directories the daemon would create root-owned while resolving a dev-stack
+# mount, which then fails check-tree-ownership (DEV-371). Two shapes here: the
+# ./secrets/oidc bind SOURCE (Cause 1), and the ./target and
+# ./bunyip-web/node_modules mount points that compose.dev.yml nests under the
+# .:/app bind (the cargo-target and web-node-modules named volumes, Cause 2).
+# Declaring them makes common's ensure-bind-sources create each host-owned, and
+# repair an empty root-owned one, before any container starts (BUNYIP-658 for the
+# bind source, BUNYIP-659 for the named-volume mount points).
+dev_bind_sources := "secrets/oidc target bunyip-web/node_modules"
 
 # Host step run before the containerized checks: generate the dev OIDC keypair
 # into the declared bind source. Idempotent; common runs ensure-bind-sources
