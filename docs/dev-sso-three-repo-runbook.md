@@ -287,6 +287,23 @@ bunyip-api's `TRUSTED_PROXY_CIDR`. bunyip-api logs its posture once at boot (a
 `WARN` when `TRUSTED_PROXY_CIDR` is empty). Full walkthrough:
 `docs/client-ip-forwarding.md` (section "The audited-login path").
 
+### 6.11 check-tree-ownership fails on a root-owned `target` or `bunyip-web/node_modules`
+Symptom: after a containerized dev run or pre-commit, `just check-tree-ownership`
+reports `./target` or `./bunyip-web/node_modules` is not owned by the host user,
+and `ls -lad <path>` shows `root root`. Cause: `compose.dev.yml` nests the
+`cargo-target` and `web-node-modules` named volumes under the `.:/app` bind mount,
+so when the daemon resolves a mount point that does not exist yet it creates it
+inside the working tree `root:root`, before the container's `user:` mapping applies
+(DEV-371 Cause 2, the named-volume sibling of the `secrets/oidc` bind source in
+3.7). Prevention: both paths are listed in `dev_bind_sources`, so
+`just ensure-bind-sources` (a dependency of the dev and pre-commit recipes) creates
+each host-owned before any container starts. Recovery for a path already created
+root-owned: an EMPTY one is removed as the host user with `rmdir ./target` (no
+sudo, because removing an empty directory needs write permission on its PARENT,
+which the host user has), then `just ensure-bind-sources` recreates it; a POPULATED
+one (a container wrote into it, as `bunyip-web/node_modules` does) needs
+`sudo rm --recursive <path>` first, then the same recreate.
+
 ## 7. Troubleshooting quick-reference
 
 | Symptom | Most likely cause | Where |
@@ -301,6 +318,7 @@ bunyip-api's `TRUSTED_PROXY_CIDR`. bunyip-api logs its posture once at boot (a
 | api exits 1, "APP_ENCRYPTION_KEY ... not the required 32" | stale `.env` missing the new secret keys | 6.9 |
 | api fails to load the OIDC key set | `secrets/oidc/dev-2026.pem` missing | 3.7 / 6.9 |
 | `${USER}` literal in `docker inspect` labels | map-syntax labels | 6.8 |
+| check-tree-ownership fails on `target` / `node_modules` | root-owned nested named-volume mount point | 6.11 |
 
 ## 8. Open / transitional items
 
