@@ -93,7 +93,10 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                     @if is_member {
                         div class="flex items-center justify-between" {
                             div { (membership_status(&user, &pricing_currency(&pricing))) }
-                            a href="/membership" class=(button_class("outline", "sm", "border-indigo-300/30 text-indigo-600 hover:bg-indigo-500/10 dark:border-indigo-500/30 dark:text-indigo-400")) { "Manage" }
+                            // BUNYIP-656: `ghost` plus the border/background
+                            // `outline` would add, so the indigo border is the
+                            // element's only `border-color` and actually lands.
+                            a href="/membership" class=(button_class("ghost", "sm", "border bg-background border-indigo-300/30 text-indigo-600 hover:bg-indigo-500/10 dark:border-indigo-500/30 dark:text-indigo-400")) { "Manage" }
                         }
                     } @else {
                         div class="flex items-center justify-between" {

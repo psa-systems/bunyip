@@ -182,7 +182,15 @@ pub fn icon(name: &str, class: &str) -> Markup {
     }
 }
 
-fn variant_classes(variant: &str) -> &'static str {
+/// The colour half of a button. Public so bunyip-web's cascade guard can read
+/// the real table instead of a copy of it (BUNYIP-656).
+///
+/// A caller that needs a different colour asks for a VARIANT, never an `extra`:
+/// an `extra` and a variant token are both single-class selectors, so the
+/// stylesheet's own order decides which wins, and the `default` variant's
+/// `text-primary-foreground` is emitted after `text-brand-primary-800`, which
+/// is how the landing CTA shipped a white label on a white fill.
+pub fn variant_classes(variant: &str) -> &'static str {
     match variant {
         "destructive" => "bg-destructive text-destructive-foreground hover:bg-destructive/90",
         "outline" => {
@@ -191,12 +199,23 @@ fn variant_classes(variant: &str) -> &'static str {
         "secondary" => "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         "ghost" => "hover:bg-accent hover:text-accent-foreground",
         "link" => "text-primary-text underline-offset-4 hover:underline",
+        // Light fill on the brand gradient (the landing CTA panel). A variant
+        // rather than an `extra` so only one `text-*` lands on the element.
+        "inverse" => "bg-white text-brand-primary-800 hover:bg-white",
+        // The skinnable brand fill (the landing hero). A variant rather than an
+        // `extra` so the rebrand tokens are the element's only background.
+        "brand" => "bg-brand-primary-700 text-white hover:bg-brand-primary-800",
         _ => "bg-primary text-primary-foreground hover:bg-primary/90",
     }
 }
 
-fn size_classes(size: &str) -> &'static str {
+/// The geometry half of a button. Public for the same guard as
+/// [`variant_classes`].
+pub fn size_classes(size: &str) -> &'static str {
     match size {
+        // Compact button for a dense admin row. A size, not an `extra`, because
+        // `h-8` / `px-2` are emitted before `sm`'s `h-9` / `px-3` and lose.
+        "xs" => "h-8 rounded-md px-2",
         "sm" => "h-9 rounded-md px-3",
         "lg" => "h-11 rounded-md px-8",
         "icon" => "h-10 w-10",

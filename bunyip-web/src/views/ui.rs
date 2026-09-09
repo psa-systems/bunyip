@@ -554,4 +554,225 @@ mod tests {
             offenders.join("\n")
         );
     }
+
+    // -- BUNYIP-656: an `extra` that cannot outrank its variant --------------
+    //
+    // `button_class` concatenates the variant, the size and the caller's
+    // `extra`, so an element can carry `bg-primary text-primary-foreground`
+    // AND `bg-white text-brand-primary-800`. Both are single-class selectors of
+    // equal specificity, and CSS resolves those by their order in the
+    // STYLESHEET, not in the class attribute. The landing CTA's fill override
+    // sorted later and won; its text override sorted earlier and lost, which
+    // is how a white label shipped on a white fill.
+
+    /// Declarations the built stylesheet emits, as
+    /// `class -> [(state, byte offset, properties)]`, where `state` is the
+    /// selector text after the class (`""`, `":hover"`, the `dark` `:where()`).
+    /// Reading the real declarations rather than matching colour-utility names
+    /// makes `text-xs` (font-size) and `bg-gradient-to-r` (background-image)
+    /// non-conflicts by construction, so there is no list of colour names to
+    /// keep current.
+    #[allow(clippy::type_complexity)]
+    fn css_declarations(
+        css: &str,
+    ) -> std::collections::HashMap<String, Vec<(String, usize, std::collections::BTreeSet<String>)>>
+    {
+        let mut rules = Vec::new();
+        collect_rules(css, 0, &mut rules);
+        let mut index: std::collections::HashMap<
+            String,
+            Vec<(String, usize, std::collections::BTreeSet<String>)>,
+        > = std::collections::HashMap::new();
+        for (offset, prelude, body) in rules {
+            let props: std::collections::BTreeSet<String> = body
+                .split(';')
+                .filter_map(|d| d.split_once(':'))
+                .map(|(p, _)| p.trim().to_string())
+                .filter(|p| !p.is_empty())
+                .collect();
+            if props.is_empty() {
+                continue;
+            }
+            for selector in split_selectors(&prelude) {
+                let Some((class, state)) = class_and_state(selector) else {
+                    continue;
+                };
+                let entries = index.entry(class).or_default();
+                match entries.iter_mut().find(|(s, _, _)| *s == state) {
+                    Some(entry) => {
+                        entry.1 = entry.1.max(offset);
+                        entry.2.extend(props.iter().cloned());
+                    }
+                    None => entries.push((state, offset, props.clone())),
+                }
+            }
+        }
+        index
+    }
+
+    /// Every rule with declarations, as `(offset, prelude, body)`. Descends
+    /// through `@media` / `@supports` so a conditional emission keeps its real
+    /// position in the sheet.
+    fn collect_rules(css: &str, base: usize, out: &mut Vec<(usize, String, String)>) {
+        let b = css.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            let mut k = i;
+            while k < b.len() && b[k] != b'{' && b[k] != b'}' && b[k] != b';' {
+                k += 1;
+            }
+            if k >= b.len() {
+                break;
+            }
+            if b[k] != b'{' {
+                i = k + 1;
+                continue;
+            }
+            let (mut depth, mut m) = (1usize, k + 1);
+            while m < b.len() && depth > 0 {
+                match b[m] {
+                    b'{' => depth += 1,
+                    b'}' => depth -= 1,
+                    _ => {}
+                }
+                m += 1;
+            }
+            let body = &css[k + 1..m - 1];
+            let prelude = css[i..k].trim();
+            if prelude.starts_with('@') || body.contains('{') {
+                collect_rules(body, base + k + 1, out);
+            } else {
+                out.push((base + i, prelude.to_string(), body.to_string()));
+            }
+            i = m;
+        }
+    }
+
+    /// Split a selector list on the commas that are not inside `:where(...)`.
+    fn split_selectors(prelude: &str) -> Vec<&str> {
+        let (mut out, mut depth, mut start) = (Vec::new(), 0i32, 0usize);
+        for (i, c) in prelude.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                ',' if depth == 0 => {
+                    out.push(&prelude[start..i]);
+                    start = i + 1;
+                }
+                _ => {}
+            }
+        }
+        out.push(&prelude[start..]);
+        out
+    }
+
+    /// The class a selector leads with (Tailwind's `\` escapes undone) and the
+    /// selector text after it, which is the state the rule applies in.
+    fn class_and_state(selector: &str) -> Option<(String, String)> {
+        let rest = selector.trim().strip_prefix('.')?;
+        let (mut name, mut end, bytes) = (String::new(), rest.len(), rest.as_bytes());
+        let mut i = 0;
+        while i < bytes.len() {
+            let c = bytes[i] as char;
+            if c == '\\' && i + 1 < bytes.len() {
+                name.push(bytes[i + 1] as char);
+                i += 2;
+                continue;
+            }
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                name.push(c);
+                i += 1;
+                continue;
+            }
+            end = i;
+            break;
+        }
+        if name.is_empty() {
+            return None;
+        }
+        Some((name, rest[end..].trim().to_string()))
+    }
+
+    /// BUNYIP-656: a caller's `extra` can only override the variant when the
+    /// stylesheet emits it last, which is luck rather than a rule. A caller
+    /// that needs a different colour or size gets a real variant or size, so
+    /// the class list never names one property twice and there is nothing for
+    /// the cascade to resolve. Fails naming the `(extra, variant, property)`
+    /// triple, so restoring the old CTA call reports exactly what cannot land.
+    #[test]
+    fn every_button_extra_outranks_the_variant_colour_it_overrides() {
+        let index = css_declarations(include_str!("../../assets/styles.css"));
+        // Split so this file's own source does not match the scan.
+        let needle = concat!("button_", "class(");
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![src, web_kit_src()];
+        let (mut checked, mut offenders) = (0, Vec::new());
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("readable source dir") {
+                let path = entry.expect("readable dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let body = std::fs::read_to_string(&path).expect("readable source file");
+                for (n, line) in body.lines().enumerate() {
+                    if line.trim_start().starts_with("//") {
+                        continue;
+                    }
+                    for piece in line.split(needle).skip(1) {
+                        let args: Vec<&str> = piece.split('"').skip(1).step_by(2).take(3).collect();
+                        if args.len() < 3 {
+                            continue;
+                        }
+                        checked += 1;
+                        let base = format!(
+                            "{} {}",
+                            web_kit::ui::variant_classes(args[0]),
+                            web_kit::ui::size_classes(args[1])
+                        );
+                        // `{}` marks a `format!` placeholder, not a utility.
+                        for extra in args[2].split_whitespace().filter(|u| !u.contains('{')) {
+                            let Some(extra_rules) = index.get(extra) else {
+                                continue;
+                            };
+                            for token in base.split_whitespace() {
+                                let Some(token_rules) = index.get(token) else {
+                                    continue;
+                                };
+                                for (e_state, e_at, e_props) in extra_rules {
+                                    for (t_state, t_at, t_props) in token_rules {
+                                        if e_state != t_state || t_at <= e_at {
+                                            continue;
+                                        }
+                                        for prop in e_props.intersection(t_props) {
+                                            offenders.push(format!(
+                                                "{}:{}: `{extra}` cannot override `{token}` \
+                                                 ({prop}): the stylesheet emits `{token}` last, \
+                                                 so the variant wins. Give the caller a variant \
+                                                 or size instead of an extra.",
+                                                path.display(),
+                                                n + 1
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            checked > 20,
+            "the button scan matched {checked} call sites; needle is stale"
+        );
+        assert!(
+            offenders.is_empty(),
+            "an `extra` that loses to its variant renders a colour nobody chose:\n{}",
+            offenders.join("\n")
+        );
+    }
 }
