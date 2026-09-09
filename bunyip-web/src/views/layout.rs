@@ -560,9 +560,10 @@ fn dashboard_items(is_member: bool) -> Vec<NavItem> {
             icon: "credit-card",
             external: false,
         },
-        // BUNYIP-635: the docs hub belongs in this list and nowhere else -
-        // `shell_nav_sections` feeds both the sidebar and the below-`md`
-        // disclosure, and the sidebar is not rendered on a phone at all.
+        // BUNYIP-635 put the docs hub in this list, which `shell_nav_sections`
+        // feeds to both the sidebar and the below-`md` disclosure. BUNYIP-630
+        // additionally promoted it to `TOPBAR_DESTINATIONS`; the row stays, so
+        // the sidebar remains the complete destination list.
         NavItem {
             title: "Documentation",
             href: "/docs",
@@ -833,6 +834,31 @@ fn profile_menu(user: &User) -> Markup {
     }
 }
 
+/// BUNYIP-630: the destinations a signed-in visitor reaches most, promoted out
+/// of the sidebar into the top bar so each is ONE click from every page rather
+/// than a menu open away. Applications was reached through membership and then
+/// the dashboard; documentation only by typing `/docs` or opening the nav.
+///
+/// Both keep their [`dashboard_items`] rows: the sidebar stays the complete
+/// destination list, and the existing paths and bookmarks are untouched.
+const TOPBAR_DESTINATIONS: [(&str, &str, &str); 2] = [
+    ("/applications", "Applications", "app-window"),
+    ("/docs", "Documentation", "file-text"),
+];
+
+/// One top-bar destination, shaped like the [`theme_controls`] buttons beside
+/// it: a ghost icon control with an accessible name. It carries NO breakpoint
+/// class, so it survives the below-`md` collapse that hides [`sidebar`] whole
+/// (BUNYIP-547), and it links rather than fetches, so nothing it renders can
+/// depend on a payload that failed to load.
+fn topbar_link(href: &str, label: &str, glyph: &str) -> Markup {
+    html! {
+        a href=(href) class=(button_class("ghost", "icon", "")) aria-label=(label) title=(label) {
+            (icon(glyph, "h-4 w-4"))
+        }
+    }
+}
+
 /// `nav` is the below-`md` navigation disclosure ([`mobile_nav`]), rendered left
 /// of the page title. It is the only nav an authenticated shell has under 768px,
 /// where [`sidebar`] is `hidden` (BUNYIP-547).
@@ -850,6 +876,9 @@ fn app_topbar(title: &str, user: &User, nav: Markup) -> Markup {
                 h1 class="truncate text-lg font-semibold" { (title) }
             }
             div class="flex items-center gap-2" {
+                @for (href, label, glyph) in TOPBAR_DESTINATIONS {
+                    (topbar_link(href, label, glyph))
+                }
                 (theme_controls("h-4 w-4"))
                 (profile_menu(user))
             }
@@ -1449,7 +1478,9 @@ mod tests {
     /// The public header and footer carry it, and the authenticated entry sits
     /// in `dashboard_items()` - the one list `shell_nav_sections` feeds, which
     /// is what makes it reachable below `md` too (asserted in
-    /// `every_authenticated_shell_navigates_below_the_md_breakpoint`).
+    /// `every_authenticated_shell_navigates_below_the_md_breakpoint`). The
+    /// authenticated top bar carries it as well since BUNYIP-630, guarded by
+    /// `every_authenticated_shell_puts_the_top_bar_destinations_one_click_away`.
     ///
     /// Every one of those links is a PLAIN `/docs` link built from nothing
     /// fetched, which is the AC that the chrome degrades when the documented-
@@ -1481,6 +1512,100 @@ mod tests {
             "{} is not a known icon",
             item.icon
         );
+    }
+
+    /// BUNYIP-630: `TOPBAR_DESTINATIONS` are TOP-BAR entries of every
+    /// authenticated shell, not sidebar rows. Both sat in `dashboard_items()`,
+    /// which reaches a phone only through the `data-mobile-nav` disclosure, so
+    /// each cost a menu open from every page.
+    ///
+    /// The invariant: for EVERY authenticated shell and EVERY entry in that
+    /// table, the link renders inside the top-bar `<header>`, outside both the
+    /// sidebar and the nav disclosure, with an accessible name and no
+    /// breakpoint class, so it is one click at every width. The user nav keeps
+    /// its own row for each, so this promotes the destinations without removing
+    /// a path. A new shell, or a new entry, that regresses any of it fails here
+    /// alongside `every_authenticated_shell_navigates_below_the_md_breakpoint`.
+    #[test]
+    fn every_authenticated_shell_puts_the_top_bar_destinations_one_click_away() {
+        let admin = test_user(UserRole::Admin);
+        let member = test_user(UserRole::Subscriber);
+        // Promoted, not moved: the user nav still lists both destinations, so
+        // the pre-existing paths and bookmarks keep working. The ADMIN nav is
+        // admin destinations only, so in that shell the top bar is the only
+        // path, which is exactly the reachability this issue is about.
+        let user_nav = dashboard_items(true);
+        for (href, _, _) in TOPBAR_DESTINATIONS {
+            assert!(
+                user_nav.iter().any(|i| i.href == href),
+                "the user nav lost {href} when it was promoted to the top bar"
+            );
+        }
+        let shells = [
+            (
+                "admin_shell",
+                admin_shell(&admin, "/admin", "Admin", html! {}).into_string(),
+            ),
+            (
+                "dashboard_shell",
+                dashboard_shell(&member, "/dashboard", "Dashboard", html! {}).into_string(),
+            ),
+        ];
+        for (name, markup) in shells {
+            // Drop the sidebar: what remains is what a 375px viewport renders.
+            let (before, after) = markup
+                .split_once("<aside")
+                .unwrap_or_else(|| panic!("{name} renders a sidebar"));
+            let (_, after) = after.split_once("</aside>").expect("the sidebar closes");
+            let small = format!("{before}{after}");
+
+            let bar = small
+                .split_once("<header")
+                .unwrap_or_else(|| panic!("{name} renders a top bar"))
+                .1;
+            let bar = bar.split_once("</header>").expect("the top bar closes").0;
+
+            // Drop the disclosure too: the same destinations also have nav rows
+            // inside it, and a row there is precisely the menu-open this issue
+            // removes. What survives BOTH strips is the one-click surface.
+            let (open, rest) = bar
+                .split_once("data-mobile-nav")
+                .expect("the top bar mounts the below-md nav disclosure");
+            let open = open
+                .rsplit_once("<details")
+                .expect("the disclosure opens with a <details>")
+                .0;
+            let rest = rest
+                .split_once("</details>")
+                .expect("the disclosure closes")
+                .1;
+            let bar = format!("{open}{rest}");
+
+            for (href, label, glyph) in TOPBAR_DESTINATIONS {
+                let anchor = format!(r#"<a href="{href}""#);
+                let link = bar
+                    .split_once(anchor.as_str())
+                    .unwrap_or_else(|| {
+                        panic!("{name}'s top bar carries no {href} link outside the nav disclosure")
+                    })
+                    .1;
+                let link = link.split_once('>').expect("the anchor opens").0;
+                assert!(
+                    link.contains(&format!(r#"aria-label="{label}""#)),
+                    "{name}'s icon-only {href} control needs an accessible name: {link}"
+                );
+                for hide in ["hidden", "md:", "sm:", "lg:"] {
+                    assert!(
+                        !link.contains(hide),
+                        "{name}'s {href} entry carries `{hide}`, so it does not survive every width: {link}"
+                    );
+                }
+                assert!(
+                    web_kit::ui::icon_is_known(glyph),
+                    "{glyph} is not a known icon, so {href} would render an empty <svg>"
+                );
+            }
+        }
     }
 
     fn test_app(slug: &str, subdomain: Option<&str>, display_name: &str) -> Application {
