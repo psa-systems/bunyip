@@ -4,11 +4,11 @@
 
 _Surfaces what matters._
 
-<!--
-BUNYIP-587 records the one-minute walkthrough GIF and drops it at docs/assets/bunyip-walkthrough.gif.
-When it lands, replace this comment with:
+## Walkthrough
+
 ![Bunyip walkthrough](docs/assets/bunyip-walkthrough.gif)
--->
+
+The image above is a placeholder. BUNYIP-587 records the one-minute Bunyip-to-Mokosh walkthrough and replaces it at the same path.
 
 ## Try it
 
