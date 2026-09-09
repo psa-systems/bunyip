@@ -14,6 +14,7 @@ pub mod email;
 pub mod event_bus;
 pub mod geoip;
 pub mod infisical;
+pub mod integration_registry;
 pub mod integration_status;
 pub mod ip_enrich;
 pub mod jwt;
@@ -65,6 +66,10 @@ pub use email::{AsyncStubTransport, EmailService, SmtpTestError, SmtpTestStage};
 pub use event_bus::{BunyipEvent, EventBus};
 pub use geoip::GeoIpService;
 pub use infisical::{InfisicalClient, InfisicalError};
+pub use integration_registry::{
+    integration, integrations_with, IntegrationCapability, RegisteredIntegration,
+    INTEGRATION_REGISTRY,
+};
 pub use integration_status::{
     integration_statuses, IntegrationSignals, IntegrationState, IntegrationStatus,
 };
