@@ -159,7 +159,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                         (format!("{brand} handles the business-y bits - signup, billing, members, invitations - so Mokosh can focus on what makes your MSP tick."))
                     }
                     div class="mt-10 flex flex-col gap-4 sm:flex-row hero-fade-up-3" {
-                        a href=(cta_href) class=(button_class("default", "lg", "w-full sm:w-auto gap-2 bg-brand-primary-700 hover:bg-brand-primary-800 border-0 text-white shadow-lg shadow-primary/25")) {
+                        a href=(cta_href) class=(button_class("brand", "lg", "w-full sm:w-auto gap-2 border-0 shadow-lg shadow-primary/25")) {
                             (cta_label) " " (icon("arrow-right", "h-4 w-4"))
                         }
                         // BUNYIP-487: /pricing 404s when pricing is unpublished,
@@ -237,9 +237,10 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                                 h3 class="text-2xl md:text-3xl font-bold tracking-tight" { "Ready to wire up your business layer?" }
                                 p class="mt-2 text-brand-primary-100" { (try_phrase(&branding.brand_name)) " " (crate::skin::content::trial_phrase(trial_days)) ". Bring your team along." }
                             }
-                            // Same size and shape as the hero CTA; only the
-                            // inverted-on-gradient colouring is bespoke.
-                            a href=(cta_href) class=(button_class("default", "lg", "whitespace-nowrap gap-2 bg-white hover:bg-white text-brand-primary-800 border-0 shadow-sm hover:shadow-md")) {
+                            // Same size and shape as the hero CTA; the
+                            // inverted-on-gradient colouring is the `inverse`
+                            // variant, so nothing here names a colour twice.
+                            a href=(cta_href) class=(button_class("inverse", "lg", "gap-2 border-0 shadow-sm hover:shadow-md")) {
                                 (if signed_in { "Go to Membership" } else { "Create your account" })
                                 (icon("arrow-right", "h-4 w-4"))
                             }
