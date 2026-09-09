@@ -121,8 +121,12 @@ After the dunite rebuild, **bunyip-api is itself an OIDC issuer**
 (`OIDC_ISSUER=http://localhost:4401`; the provider is gated on that var in
 `main.rs`). It loads an Ed25519 signing key at startup
 (`OIDC_JWT_PRIVATE_KEY_PATH=/run/secrets/oidc/dev-2026.pem`, mounted from
-`./secrets/oidc`). Missing keys = boot failure. `just ensure-oidc-keys` now generates
-them (added this session).
+`./secrets/oidc`). Missing keys = boot failure. `just ensure-oidc-keys` generates
+them. It depends on `just ensure-bind-sources`, which creates `./secrets/oidc`
+owned by the host user and repairs an empty root-owned one (`rmdir` plus
+`mkdir`, no sudo, since removing a directory needs write on the parent), so a
+directory the daemon materialized as root does not turn into a permission-denied
+error from openssl.
 
 ### 3.8 The OIDC direction (cutover landed: bunyip-api IS the OP)
 The reversed wiring scaffold step 8 flagged is now converged in dev-sso. There is ONE issuer: `bunyip-api` (`OIDC_ISSUER=https://<user>-bunyip-api.a8n.run`, serves `/oauth2/*` + `/.well-known/*` + its own `/v1/auth/*` email+password login). Both relying parties consume it:

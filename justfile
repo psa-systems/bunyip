@@ -20,10 +20,15 @@ app := "bunyip"
 # the shared pre-commit runs its cargo steps there rather than in `app`.
 compose_service := "api"
 
-# Host step run before the containerized checks. The api service bind-mounts
-# ./secrets/oidc, and an absent bind source is materialized by the daemon as
-# root, which then fails check-tree-ownership (DEV-371). ensure-oidc-keys
-# creates it on the host first; it is idempotent.
+# The api service bind-mounts ./secrets/oidc, and an absent bind source is
+# materialized by the daemon as root, which then fails check-tree-ownership
+# (DEV-371). Declaring it here makes common's ensure-bind-sources create it
+# host-owned, and repair an empty root-owned one, before any container starts.
+dev_bind_sources := "secrets/oidc"
+
+# Host step run before the containerized checks: generate the dev OIDC keypair
+# into the declared bind source. Idempotent; common runs ensure-bind-sources
+# ahead of it.
 pre_commit_prepare := "ensure-oidc-keys"
 
 # Keep the containerized pre-commit steps identical to the ones
@@ -274,14 +279,14 @@ ensure-env:
 # Generate the dev OIDC signing keypair (Ed25519, kid dev-2026) into ./secrets/oidc
 # if missing. bunyip-api IS the OIDC issuer and loads these at startup
 # (OIDC_JWT_PRIVATE_KEY_PATH); without them it fails to boot. ./secrets/oidc is
-# mounted into the api container at /run/secrets/oidc (see compose.dev.yml). The
-# keypair is gitignored; this just makes a fresh clone bootable without manual
-# openssl steps. Pre-BUNYIP-38 layouts kept the keys at ./secrets/ directly; they
-# are migrated into the subdir automatically.
+# mounted into the api container at /run/secrets/oidc (see compose.dev.yml) and
+# is created host-owned by ensure-bind-sources, which also repairs an empty
+# root-owned one. The keypair is gitignored; this just makes a fresh clone
+# bootable without manual openssl steps. Pre-BUNYIP-38 layouts kept the keys at
+# ./secrets/ directly; they are migrated into the subdir automatically.
 [private]
-ensure-oidc-keys:
+ensure-oidc-keys: ensure-bind-sources
     #!/usr/bin/env nu
-    mkdir secrets/oidc
     # Migrate the old flat layout (secrets/dev-2026.pem) into secrets/oidc/.
     ["dev-2026.pem", "dev-2026.pub.pem"] | each {|f|
         if (($"secrets/($f)" | path exists) and not ($"secrets/oidc/($f)" | path exists)) {
