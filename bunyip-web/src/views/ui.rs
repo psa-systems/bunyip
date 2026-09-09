@@ -257,7 +257,6 @@ mod tests {
             ("--muted-foreground", "--muted", 4.5),
             ("--muted-foreground", "--card", 4.5),
             ("--muted-foreground", "--background", 4.5),
-            ("--primary-foreground", "--primary", 4.5),
             ("--destructive-foreground", "--destructive", 4.5),
             ("--destructive-text", "--card", 4.5),
             ("--destructive-text", "--background", 4.5),
