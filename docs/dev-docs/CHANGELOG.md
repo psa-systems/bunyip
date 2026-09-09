@@ -2,6 +2,8 @@
 
 Internal, name-free history for bunyip. Point-in-time working docs (milestone handoffs, audit reports, codebase-state snapshots) are distilled here as they are retired, so the tree keeps only forward-useful reference material. Entries are newest-first and vary in depth by how much still matters.
 
+> **Point-in-time history.** Each entry records the state at its own date, not the current architecture, so a claim in an older entry (an early SPA-plus-Caddy topology, a seed-JSON backend) describes that moment and has since been superseded. For what is true now see `README.md`, `docs/configuration.md` and `docs/dev-sso-three-repo-runbook.md`.
+
 ## 2026-07-01 - Docs reorganization and history sanitization
 
 - Markdown docs consolidated under `docs/` (public / how-to) and `docs/dev-docs/` (internal working notes); `README.md` and `CLAUDE.md` stay at the repo root, and README files stay colocated with their code. Path references in config, the justfile, source comments, and the subscriptions admin string were updated to match.

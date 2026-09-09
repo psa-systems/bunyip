@@ -1,5 +1,12 @@
 # bunyip-web conversion roadmap
 
+> **Historical snapshot (archived).** This is the bunyip-web Axum SSR conversion
+> roadmap from the dunite-rebuild era (mid-2026), kept for provenance. It is a
+> record of that completed migration, not the live plan or the current feature
+> status: the checkboxes below reflect where the conversion stood then, and
+> current status and plans live in the tracker, not here. For what is true now
+> see `README.md` and `docs/dev-sso-three-repo-runbook.md`.
+
 This crate is the **Axum SSR** frontend for PSA Systems (Bunyip) - server-rendered HTML
 (Maud templates + htmx) backed by the **separate `/v1` API service**. It replaced
 an earlier Dioxus/WASM port: the user only needed a web interface and "normal

@@ -2,6 +2,13 @@
 
 Snapshot date: 2026-05-30. Tracking issue: **BUNYIP-26**.
 
+> **Historical snapshot (archived).** This file records the rebuild plan as it
+> stood on 2026-05-30, kept for provenance and NOT maintained against the current
+> architecture. Paths and present-tense wording below describe that point in time
+> and some no longer exist (`crates/bunyip-mocks`, `seeds/`). For what is true now
+> see `README.md`, `docs/configuration.md` and `docs/dev-sso-three-repo-runbook.md`;
+> live status lives in the tracker, not here.
+
 ## Goal
 
 Replace `bunyip-api` (today an axum in-memory mock: `crates/bunyip-mocks` +
@@ -98,5 +105,5 @@ The "Unresolved contradiction (decide before filling)" above is **resolved**, an
 
 - **Consumption boundary: consume dunite** (not own-wholesale). `crates/bunyip-domain/Cargo.toml` depends on `dunite-core` (git, branch `main`) and `crates/bunyip-domain/src/lib.rs:12` re-exports `dunite_core::{errors, responses, validation}`. menkent's "own wholesale / drop dunite" trajectory was **not** followed for bunyip.
 - **Fill steps 2-7 are done:** `bunyip-domain`/`bunyip-oci`/`bunyip-oidc` are filled; `bunyip-api` is a real actix binary on Postgres and the OIDC issuer; migrations are present (48 total); the dev OIDC Ed25519 keypair is now generated automatically by `just ensure-oidc-keys` (the manual openssl step in step 5 is automated).
-- **Step 8 (reversed OIDC wiring) is still open:** `bunyip-web` is configured as a **client of mokosh-server** (`BUNYIP_OIDC_ISSUER` + the `register-bunyip-client` flow) even though bunyip-api is now its own issuer (`OIDC_ISSUER=:4401`). The transitional dual-issuer state and the whole dev-sso/Traefik topology are documented in `docs/dev-sso-three-repo-runbook.md` (sec 3.8).
+- **Step 8 (reversed OIDC wiring), as it stood at the snapshot:** `bunyip-web` was still configured as a **client of mokosh-server** (`BUNYIP_OIDC_ISSUER` + the `register-bunyip-client` flow) even though bunyip-api was already its own issuer. This has since been reconciled: bunyip-api is the sole OP, `bunyip-web` and the mokosh SPA are its clients, and `register-bunyip-client` is retired. See `docs/dev-sso-three-repo-runbook.md` (sec 3.8) for the current wiring.
 - **Billing:** a full Stripe vertical exists (ported from menkent). The M1 acceptance-criteria audit, including the a8n.tools-consumer-vs-PSA-SaaS-plan reshape and two correctness bugs, is in `docs/dev-docs/billing-m1-gap-matrix.md`.

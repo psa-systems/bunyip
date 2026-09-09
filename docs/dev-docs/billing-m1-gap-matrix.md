@@ -1,5 +1,10 @@
 # M1 Stripe billing: acceptance-criteria gap matrix (audit, not a build plan)
 
+> **Historical snapshot (archived).** This audit records the M1 billing gaps as of
+> 2026-05-31, kept for provenance and not maintained. The billing vertical has
+> moved on since (see the tracker and `docs/configuration.md`); read this for the
+> findings of the time, not the current state.
+
 Snapshot: 2026-05-31. Deliverable for the M1 "Stripe-backed subscription billing
 for SaaS access" ticket. This is an **audit** of the billing vertical that was
 ported from menkent into the current actix/dunite backend. **No billing logic was

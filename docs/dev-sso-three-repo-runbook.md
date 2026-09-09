@@ -312,9 +312,12 @@ bunyip-api's `TRUSTED_PROXY_CIDR`. bunyip-api logs its posture once at boot (a
 - **Open PRs** from this session: `fix/dev-sso-nebula-secure-list` (bunyip +
   mokosh-apps), `fix/dev-sso-private-network-external`, `feat/dev-ensure-oidc-keys`;
   mokosh-server already carries the nebula-secure change.
-- The milestone-1 handoff (now distilled into `docs/dev-docs/CHANGELOG.md`) and
+- ~~The milestone-1 handoff (now distilled into `docs/dev-docs/CHANGELOG.md`) and
   `docs/dev-docs/bunyip-on-dunite-scaffold.md` predate the rebuild landing and are
-  stale on "mock backend / don't persist in bunyip-api".
+  stale on "mock backend / don't persist in bunyip-api".~~ RECONCILED (BUNYIP-628):
+  every file under `docs/dev-docs/` now carries a historical-archive banner at its
+  top that dates it and points to the current docs, so those dated snapshots are
+  kept for provenance and are no longer read as current.
 
 ## 9. OCI registry subdomain (distribution proxy, BUNYIP-32)
 
