@@ -8,9 +8,10 @@ use super::types::{
     AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList, ArchivedFeedback,
     AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary,
     IntegrationStatus, IntegrationStatusResponse, IpEnrichment, PaginatedResponse, PricingStatus,
-    RestoreReport, SeedTemplateInfo, SmtpTestResult, StripeConfigResponse, StripePermissionReport,
-    StripePrice, StripeProduct, StripeWebhookEndpoint, SystemHealth, SystemHealthResponse,
-    TestEmailResult, TierConfigResponse, UserEntitlement,
+    ProviderStatusAggregateResponse, RestoreReport, SeedTemplateInfo, SmtpTestResult,
+    StripeConfigResponse, StripePermissionReport, StripePrice, StripeProduct,
+    StripeWebhookEndpoint, SystemHealth, SystemHealthResponse, TestEmailResult, TierConfigResponse,
+    UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -36,6 +37,16 @@ pub async fn integration_status(
 ) -> Result<Vec<IntegrationStatus>, ApiError> {
     let resp: IntegrationStatusResponse = parse(api.get("/admin/integrations", cookie).await?)?;
     Ok(resp.integrations)
+}
+
+/// The suite provider-status aggregate (BUNYIP-634): Bunyip's own state plus
+/// every other application in the suite, and the discrepancies flagged across
+/// them. `GET /v1/admin/providers/status`.
+pub async fn provider_status(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<ProviderStatusAggregateResponse, ApiError> {
+    parse(api.get("/admin/providers/status", cookie).await?)
 }
 
 // --- users ------------------------------------------------------------------

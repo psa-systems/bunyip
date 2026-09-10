@@ -14,6 +14,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/admin", get(admin::dashboard))
         .route("/admin/status", get(admin::system_status))
+        .route("/admin/providers/status", get(admin::provider_status_page))
         .route("/admin/audit-logs", get(admin::audit_logs))
         .route("/admin/logs", get(admin::logs))
         .route("/admin/seed", get(admin::seed_data))

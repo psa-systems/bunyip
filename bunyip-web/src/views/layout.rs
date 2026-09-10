@@ -596,6 +596,14 @@ fn admin_items() -> Vec<NavItem> {
             icon: "activity",
             external: false,
         },
+        // BUNYIP-634: the suite provider-status aggregate (Bunyip's own,
+        // Mokosh's, and Drillmark's) on one page.
+        NavItem {
+            title: "Provider Status",
+            href: "/admin/providers/status",
+            icon: "globe",
+            external: false,
+        },
         // BUNYIP-410: Memberships folded into the Users page (tier column +
         // filter bar); its nav entry is removed and /admin/memberships redirects
         // to the filtered users list.

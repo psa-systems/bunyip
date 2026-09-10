@@ -567,6 +567,154 @@ pub struct IntegrationStatusResponse {
     pub integrations: Vec<IntegrationStatus>,
 }
 
+// --- BUNYIP-634: the suite provider-status aggregate ------------------------
+//
+// Mirrors `bunyip_domain::services::provider_status`. Every field carries
+// `#[serde(default)]` per the module's own wire-compatibility rule: this is
+// itself an envelope over data another application (Mokosh, Drillmark) may
+// report on an older or newer contract version, so a field it does not send
+// must decode as absent rather than failing the whole page.
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ProviderEnabledEntry {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub priority: usize,
+    #[serde(default)]
+    pub reachable: bool,
+    #[serde(default)]
+    pub unreachable_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ProviderKeyEntry {
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub feature: Option<String>,
+    #[serde(default)]
+    pub recorded_served_by: Option<String>,
+    #[serde(default)]
+    pub live_holds: bool,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub providers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ProviderKindEntry {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub enabled: Vec<ProviderEnabledEntry>,
+    #[serde(default)]
+    pub serving: Option<String>,
+    #[serde(default)]
+    pub keys: Vec<ProviderKeyEntry>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ProviderStatusReport {
+    #[serde(default)]
+    pub hosting_profile: String,
+    #[serde(default)]
+    pub kinds: Vec<ProviderKindEntry>,
+    #[serde(default)]
+    pub collected_at: Option<String>,
+}
+
+/// One application's outcome. Deserialized from the internally-tagged
+/// `{"state": "ok" | "unreachable" | "unauthenticated" | "version_mismatch", ...}`
+/// bunyip-api's `AppProviderStatus` serializes. An unrecognised `state` (a
+/// future variant) decodes as [`ProviderAppState::Unknown`], the same
+/// tolerant-unknown shape `wire_enum!` gives string enums, so a newer
+/// bunyip-api never breaks this page; it just renders as an unclassified row.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ProviderAppState {
+    Ok {
+        #[serde(default)]
+        report: ProviderStatusReport,
+    },
+    Unreachable {
+        #[serde(default)]
+        reason: String,
+    },
+    Unauthenticated,
+    VersionMismatch {
+        #[serde(default)]
+        reported_version: String,
+    },
+    #[serde(other)]
+    #[default]
+    Unknown,
+}
+
+impl ProviderAppState {
+    pub fn is_healthy(&self) -> bool {
+        matches!(self, ProviderAppState::Ok { .. })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProviderAppStatusRow {
+    #[serde(default)]
+    pub app: String,
+    #[serde(flatten)]
+    pub status: ProviderAppState,
+}
+
+/// One flagged discrepancy. Deserialized from the internally-tagged
+/// `{"condition": "...", ...}` shape; an unrecognised condition decodes as
+/// [`ProviderDiscrepancy::Unknown`] rather than failing the page.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "condition", rename_all = "snake_case")]
+pub enum ProviderDiscrepancy {
+    DeclaredProviderHoldsNothing {
+        #[serde(default)]
+        app: String,
+        #[serde(default)]
+        kind: String,
+        #[serde(default)]
+        key: String,
+    },
+    PresentInMultipleProviders {
+        #[serde(default)]
+        app: String,
+        #[serde(default)]
+        kind: String,
+        #[serde(default)]
+        key: String,
+        #[serde(default)]
+        providers: Vec<String>,
+    },
+    AbsentFromHighestPriorityProvider {
+        #[serde(default)]
+        app: String,
+        #[serde(default)]
+        kind: String,
+        #[serde(default)]
+        key: String,
+        #[serde(default)]
+        serving: String,
+        #[serde(default)]
+        holder: String,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+/// Envelope of `GET /v1/admin/providers/status`.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ProviderStatusAggregateResponse {
+    #[serde(default)]
+    pub apps: Vec<ProviderAppStatusRow>,
+    #[serde(default)]
+    pub discrepancies: Vec<ProviderDiscrepancy>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminUser {
     pub id: String,

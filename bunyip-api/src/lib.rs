@@ -23,6 +23,7 @@ pub mod handlers;
 pub mod machine_client;
 pub mod migrate_reconcile;
 pub mod mokosh_backup;
+pub mod provider_status;
 pub mod rate_limit_floor;
 pub mod reconcile_prices;
 pub mod reencrypt;

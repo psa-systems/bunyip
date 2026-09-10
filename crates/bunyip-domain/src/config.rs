@@ -1942,6 +1942,34 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
          to the release packages.",
     ),
     EnvVarSpec::gating(
+        "MOKOSH_PROVIDER_STATUS_URL",
+        "the suite provider-status aggregate (BUNYIP-634) cannot reach Mokosh: its row on the \
+         admin page reads as unreachable rather than being fetched",
+        "Set it to Mokosh's admin provider-status JSON endpoint (PMS-989), reachable over the \
+         shared Docker network through Traefik.",
+    ),
+    EnvVarSpec::gating(
+        "DRILLMARK_PROVIDER_STATUS_URL",
+        "the suite provider-status aggregate (BUNYIP-634) cannot reach Drillmark: its row on the \
+         admin page reads as unreachable rather than being fetched",
+        "Set it to Drillmark's admin provider-status JSON endpoint (DMARC-41), reachable over the \
+         shared Docker network through Traefik.",
+    ),
+    EnvVarSpec::gating(
+        "PROVIDER_STATUS_CLIENT_ID",
+        "the suite provider-status aggregate (BUNYIP-634) has no machine credential to present to \
+         Mokosh or Drillmark, so every remote fetch answers unreachable",
+        "Set it to the client_id half of the machine credential Bunyip presents to the other \
+         applications in the suite (the mailer-relay shape, reversed).",
+    ),
+    EnvVarSpec::gating(
+        "PROVIDER_STATUS_CLIENT_SECRET",
+        "the suite provider-status aggregate (BUNYIP-634) has no machine credential to present to \
+         Mokosh or Drillmark, so every remote fetch answers unreachable",
+        "Set PROVIDER_STATUS_CLIENT_SECRET_FILE=/run/secrets/provider_status_client_secret to the \
+         secret half of the machine credential.",
+    ),
+    EnvVarSpec::gating(
         "OCI_REGISTRY_ENABLED",
         "the OCI registry endpoint is off",
         "Set OCI_REGISTRY_ENABLED=true and OCI_REGISTRY_SERVICE to serve it.",
