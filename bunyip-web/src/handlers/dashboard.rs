@@ -2558,6 +2558,34 @@ mod tests {
     use super::*;
     use crate::api::types::{MembershipStatus, MembershipTier, User, UserRole};
 
+    /// BUNYIP-682: the chrome's signed-in `Applications` link points at a page
+    /// behind the auth wall, so an anonymous request is sent to sign in.
+    #[tokio::test]
+    async fn applications_redirects_an_anonymous_visitor_to_login() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let res = axum::Router::new()
+            .route("/applications", axum::routing::get(applications))
+            .with_state(crate::handlers::unreachable_api_state())
+            .oneshot(
+                Request::builder()
+                    .uri("/applications")
+                    .body(Body::empty())
+                    .expect("the request builds"),
+            )
+            .await
+            .expect("the router answers");
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            res.headers()
+                .get(axum::http::header::LOCATION)
+                .and_then(|v| v.to_str().ok()),
+            Some("/login")
+        );
+    }
+
     fn user(role: UserRole, status: MembershipStatus) -> User {
         User {
             id: "u1".into(),

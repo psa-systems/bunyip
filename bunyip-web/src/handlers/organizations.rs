@@ -62,9 +62,6 @@ pub async fn organizations(State(st): State<AppState>, headers: HeaderMap) -> Re
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::time::Duration;
-
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::routing::get;
@@ -72,46 +69,8 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-    use crate::api::Api;
-    use crate::config::Config;
-    use crate::ttl_cache::TtlCache;
+    use crate::handlers::unreachable_api_state;
     use crate::views::layout::install_orgs_enabled;
-
-    /// State pointed at a port nothing listens on: every upstream call fails
-    /// fast, which is the harshest case for the gate. The flag decision must not
-    /// depend on the API being reachable, and a failed fetch must not turn a 404
-    /// into a 200 or a 500.
-    fn state() -> AppState {
-        let api = Api::new("http://127.0.0.1:1");
-        AppState {
-            api,
-            cfg: Arc::new(Config::from_env()),
-            pricing_cache: Arc::new(TtlCache::new(
-                "/v1/pricing",
-                "PricingResponse",
-                "the test chrome",
-                Duration::from_secs(1),
-            )),
-            applications_cache: Arc::new(TtlCache::new(
-                "/v1/applications",
-                "Vec<Application>",
-                "the test chrome",
-                Duration::from_secs(1),
-            )),
-            setup_status_cache: Arc::new(TtlCache::new(
-                "/v1/auth/setup/status",
-                "SetupStatus",
-                "the test chrome",
-                Duration::from_secs(1),
-            )),
-            documented_apps_cache: Arc::new(TtlCache::new(
-                "/v1/application-docs",
-                "Vec<DocumentedApp>",
-                "the test chrome",
-                Duration::from_secs(1),
-            )),
-        }
-    }
 
     /// The flag cell is process-wide and its lock is a plain `Mutex`, so the
     /// request is driven on a runtime built inside the test rather than by
@@ -129,7 +88,7 @@ mod tests {
     async fn get_organizations() -> (StatusCode, Option<String>) {
         let app = Router::new()
             .route("/organizations", get(organizations))
-            .with_state(state());
+            .with_state(unreachable_api_state());
         let res = app
             .oneshot(
                 Request::builder()

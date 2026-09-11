@@ -15,7 +15,6 @@ use maud::{html, Markup, PreEscaped, DOCTYPE};
 
 use crate::api::types::{Application, Branding, User, UserRole};
 use crate::config::Config;
-use crate::util::app_link;
 use crate::views::ui::{button_class, icon};
 
 // BUNYIP-589: the generic shell scaffolding (asset, install_*, palette_value,
@@ -377,8 +376,8 @@ fn feedback_launcher() -> Markup {
 /// shell). `_cfg` and `_apps` went the same way in BUNYIP-667: the header
 /// stopped rendering per-application links, so it reads neither the application
 /// list nor the app domain those links were built from. All three parameters
-/// are kept so call sites and the `footer` signature beside them do not change;
-/// the underscore silences the unused-arg lint.
+/// are kept so `public_shell`'s call sites do not change (removing the list is
+/// BUNYIP-683); the underscore silences the unused-arg lint.
 fn header(
     _cfg: &Config,
     user: Option<&User>,
@@ -440,7 +439,7 @@ fn header(
     }
 }
 
-fn footer(cfg: &Config, apps: &[Application], pricing: bool) -> Markup {
+fn footer(cfg: &Config, user: Option<&User>, pricing: bool) -> Markup {
     let year = chrono::Utc::now().format("%Y").to_string();
     html! {
         footer class="border-t border-border/50 bg-gradient-to-b from-background to-indigo-950/5 dark:to-indigo-950/30" {
@@ -464,8 +463,10 @@ fn footer(cfg: &Config, apps: &[Application], pricing: bool) -> Markup {
                             li { a href="/roadmap" class="text-muted-foreground hover:text-foreground transition-colors" { "Roadmap" } }
                             // BUNYIP-635: same plain hub link as the header.
                             li { a href="/docs" class="text-muted-foreground hover:text-foreground transition-colors" { "Documentation" } }
-                            @for app in apps {
-                                li { a href=(app_link(app, &cfg.app_domain)) class="text-muted-foreground hover:text-foreground transition-colors" { (app.display_name) } }
+                            // BUNYIP-682: one signed-in link, like the header
+                            // (BUNYIP-667), never an entry per application.
+                            @if user.is_some() {
+                                li { a href="/applications" class="text-muted-foreground hover:text-foreground transition-colors" { "Applications" } }
                             }
                         }
                     }
@@ -510,7 +511,7 @@ pub fn public_shell(
         div class="flex min-h-screen flex-col" {
             (header(cfg, user, apps, pricing, show_feedback))
             main class="flex-1" { (content) }
-            (footer(cfg, apps, pricing))
+            (footer(cfg, user, pricing))
             @if show_feedback { (feedback_launcher()) }
         }
     }
@@ -1638,7 +1639,7 @@ mod tests {
             release_notes_url: None,
             subdomain: subdomain.map(str::to_string),
             // The cached public list is fetched anonymously, so these two are
-            // NOT this visitor's: the header must not read either of them.
+            // NOT this visitor's: the chrome must not read either of them.
             is_accessible: false,
             maintenance_mode: true,
             maintenance_message: None,
@@ -1646,13 +1647,11 @@ mod tests {
         }
     }
 
-    /// BUNYIP-667: the public header carries ONE `Applications` link, never an
-    /// entry per application. The nav must not grow with the application list,
-    /// and must render the same working link when that list is empty. The
-    /// footer's Product column is deliberately untouched, and BUNYIP-638's
-    /// one-click launch still lives on the dashboard through `app_launch_link`.
+    /// BUNYIP-667 (header) and BUNYIP-682 (footer): the public chrome carries ONE
+    /// `Applications` link per half, signed-in only, never an entry per app.
+    /// BUNYIP-638's one-click launch still lives on the dashboard.
     #[test]
-    fn the_public_header_carries_one_applications_link_not_one_per_app() {
+    fn the_public_chrome_carries_one_applications_link_not_one_per_app() {
         let cfg = Config {
             app_domain: "a8n.systems".into(),
             ..Config::from_env()
@@ -1665,70 +1664,58 @@ mod tests {
 
         let signed_in =
             public_shell(&cfg, Some(&user), &apps, false, false, html! {}).into_string();
-        let (head, foot) = signed_in
-            .split_once("<footer")
-            .expect("the public shell renders a footer");
-
-        assert_eq!(
-            head.matches(r#"href="/applications""#).count(),
-            1,
-            "exactly one Applications entry in the header"
-        );
-        assert!(head.contains(">Applications<"), "and it is labelled");
-        for name in ["Chat", "Atlas"] {
-            assert!(
-                !head.contains(&format!(">{name}<")),
-                "no application display name reaches the header: {name}"
-            );
-        }
-        assert!(
-            !head.contains(".a8n.systems/dashboard"),
-            "the header no longer carries per-application launch links"
-        );
-        assert!(
-            head.find("/roadmap").expect("the nav carries Roadmap")
-                < head
-                    .find(r#"href="/applications""#)
-                    .expect("and Applications"),
-            "Applications follows the site nav links"
-        );
-
-        // The list's SIZE must not change the header: an empty list renders the
-        // same entry, which is the property a per-application menu cannot hold.
+        // An empty list must render the same entries: a per-app list cannot.
         let empty = public_shell(&cfg, Some(&user), &[], false, false, html! {}).into_string();
-        let empty_head = empty
-            .split_once("<footer")
-            .expect("the public shell renders a footer")
-            .0;
-        assert_eq!(
-            empty_head.matches(r#"href="/applications""#).count(),
-            1,
-            "the entry survives an empty application list"
-        );
-
-        assert!(
-            foot.contains(r#"href="https://chat.a8n.systems""#)
-                && foot.contains(r#"href="https://atlas.a8n.systems""#),
-            "the footer still lists the apex links"
-        );
+        for page in [&signed_in, &empty] {
+            let (head, foot) = page
+                .split_once("<footer")
+                .expect("the public shell renders a footer");
+            for (half, markup) in [("header", head), ("footer", foot)] {
+                assert_eq!(
+                    markup.matches(r#"href="/applications""#).count(),
+                    1,
+                    "exactly one Applications entry in the {half}"
+                );
+                assert!(markup.contains(">Applications<"), "labelled in the {half}");
+                for name in ["Chat", "Atlas"] {
+                    assert!(
+                        !markup.contains(&format!(">{name}<")),
+                        "no application display name reaches the {half}: {name}"
+                    );
+                }
+                for host in ["chat", "atlas"] {
+                    assert!(
+                        !markup.contains(&format!("https://{host}.a8n.systems")),
+                        "no per-application link in the {half}: {host}"
+                    );
+                }
+                assert!(
+                    markup
+                        .find("/docs")
+                        .expect("the chrome carries Documentation")
+                        < markup
+                            .find(r#"href="/applications""#)
+                            .expect("and Applications"),
+                    "Applications follows the site links in the {half}"
+                );
+            }
+        }
 
         let anon = public_shell(&cfg, None, &apps, false, false, html! {}).into_string();
-        let (anon_head, anon_foot) = anon
-            .split_once("<footer")
-            .expect("the public shell renders a footer");
         assert!(
-            !anon_head.contains(r#"href="/applications""#),
-            "an anonymous visitor gets no Applications entry"
+            !anon.contains(r#"href="/applications""#),
+            "an anonymous visitor gets no Applications entry in header or footer"
         );
-        assert!(
-            !anon_head.contains("a8n.systems"),
-            "an anonymous visitor gets no application links in the header"
-        );
-        assert!(
-            anon_foot.contains(r#"href="https://chat.a8n.systems""#)
-                && anon_foot.contains(r#"href="https://atlas.a8n.systems""#),
-            "the footer lists them for an anonymous visitor too"
-        );
+        for (host, name) in [("chat", "Chat"), ("atlas", "Atlas")] {
+            assert!(
+                !anon.contains(&format!("https://{host}.a8n.systems")),
+                "an anonymous visitor gets no application link: {host}"
+            );
+            assert!(
+                !anon.contains(&format!(">{name}<")),
+                "no application display name reaches an anonymous visitor: {name}"
+            );
+        }
     }
 
     /// The admin nav reads "Pricing Tiers" while the route stays put, so

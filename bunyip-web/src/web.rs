@@ -21,7 +21,7 @@ pub struct AppState {
     /// public page render does not always produce an upstream call (which,
     /// per-render, tripped the rate-limit floor and 404'd `/pricing`).
     pub pricing_cache: Arc<TtlCache<PricingResponse>>,
-    /// BUNYIP-555: the public chrome's application list, on the same terms.
+    /// BUNYIP-555: the public application list (landing page cards), on the same terms.
     pub applications_cache: Arc<TtlCache<Vec<Application>>>,
     /// BUNYIP-555: the setup-status flags, which bunyip-api answers from process
     /// state without touching a table.
