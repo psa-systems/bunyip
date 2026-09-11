@@ -180,6 +180,13 @@ impl Config {
     /// is configured: a relative path is not resolvable by every scraper, and
     /// a wrong absolute one is worse than an omitted tag.
     pub fn default_share_image(&self) -> Option<String> {
+        self.apex_url()
+            .map(|apex| format!("{apex}{}", web_kit::shell::asset(DEFAULT_SHARE_IMAGE_PATH)))
+    }
+
+    /// BUNYIP-686: the main domain's origin (`{scheme}://{app_domain}`), or
+    /// `None` when no app domain is configured.
+    pub fn apex_url(&self) -> Option<String> {
         if self.app_domain.is_empty() {
             return None;
         }
@@ -188,11 +195,7 @@ impl Config {
         } else {
             "http"
         };
-        Some(format!(
-            "{scheme}://{}{}",
-            self.app_domain,
-            web_kit::shell::asset(DEFAULT_SHARE_IMAGE_PATH)
-        ))
+        Some(format!("{scheme}://{}", self.app_domain))
     }
 }
 

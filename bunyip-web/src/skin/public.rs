@@ -1,13 +1,17 @@
 //! Public marketing pages (landing for now; the rest land in phase 2).
 
-use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
-use axum::response::Response;
-use maud::html;
+use std::sync::Arc;
 
+use axum::extract::{Request, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::middleware::Next;
+use axum::response::Response;
+use maud::{html, Markup};
+
+use crate::config::Config;
 use crate::handlers::public_ctx;
 use crate::util::{app_gradient, app_link};
-use crate::views::layout::{asset, document, public_shell};
+use crate::views::layout::{asset, brand_mark, brand_name, branding, document, public_shell};
 use crate::views::ui::{button_class, icon};
 use crate::web::{html_cookies, html_status, AppState};
 
@@ -290,6 +294,54 @@ pub async fn not_found(State(st): State<AppState>, headers: HeaderMap) -> Respon
     html_status(document("Not found", body), StatusCode::NOT_FOUND)
 }
 
+/// BUNYIP-686: stamped by the edge proxy's lowest-priority catch-all router on
+/// hosts no other router claims (DEV-741).
+pub const UNKNOWN_HOST_HEADER: &str = "x-bunyip-unknown-host";
+
+/// BUNYIP-686: long enough to read why the visitor is being moved.
+const UNKNOWN_HOST_REDIRECT_MS: u32 = 10_000;
+
+/// BUNYIP-686: the 404 body for a host nothing serves. No `public_shell`: its
+/// links are host-relative and would keep the visitor on the unknown host.
+pub fn unknown_host_content(apex: Option<&str>, domain: &str) -> Markup {
+    html! {
+        div class="flex min-h-screen flex-col items-center justify-center text-center px-6" {
+            div class="flex items-center gap-2" {
+                (brand_mark(&branding()))
+                span class="text-xl font-semibold tracking-tight" { (brand_name()) }
+            }
+            p class="mt-10 text-5xl font-bold text-gradient bg-gradient-to-r from-primary to-indigo-500" { "404" }
+            h1 class="mt-4 text-4xl font-bold" { "Page not found" }
+            p class="mt-4 max-w-md text-muted-foreground" { "This address doesn't exist or is temporarily unavailable." }
+            @if let Some(apex) = apex {
+                a href=(apex) class=(button_class("default", "default", "mt-8")) { "Go to " (domain) }
+                p class="mt-4 text-xs text-muted-foreground" data-redirect-to=(apex) data-redirect-after=(UNKNOWN_HOST_REDIRECT_MS) {
+                    "Taking you to " (domain) "…"
+                }
+            }
+        }
+    }
+}
+
+/// BUNYIP-686: a request carrying [`UNKNOWN_HOST_HEADER`] gets the unknown-host
+/// 404 instead of the site, except the assets that page loads itself. Takes only
+/// the config, so rendering it can never call `/v1`.
+pub async fn unknown_host_gate(
+    State(cfg): State<Arc<Config>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let path = req.uri().path();
+    let own_asset =
+        path.starts_with("/assets/") || path.starts_with("/brand/") || path == "/favicon.ico";
+    if own_asset || !req.headers().contains_key(UNKNOWN_HOST_HEADER) {
+        return next.run(req).await;
+    }
+    let apex = cfg.apex_url();
+    let body = unknown_host_content(apex.as_deref(), &cfg.app_domain);
+    html_status(document("Not found", body), StatusCode::NOT_FOUND)
+}
+
 #[cfg(test)]
 mod copy_tests {
     use super::{
@@ -508,5 +560,125 @@ mod copy_tests {
                 f.icon
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod unknown_host_tests {
+    use std::sync::Arc;
+
+    use axum::body::{to_bytes, Body};
+    use axum::http::{Request, StatusCode};
+    use axum::routing::get;
+    use axum::Router;
+    use tower::ServiceExt;
+
+    use super::{unknown_host_gate, UNKNOWN_HOST_HEADER};
+    use crate::config::Config;
+
+    fn app(app_domain: &str) -> Router {
+        let cfg = Config {
+            app_domain: app_domain.into(),
+            api_public_origin: "https://api.a8n.systems".into(),
+            ..Config::from_env()
+        };
+        Router::new()
+            .route("/", get(|| async { "the site" }))
+            .route("/assets/js/app.js", get(|| async { "the asset" }))
+            .route("/brand/mark", get(|| async { "the mark" }))
+            .route("/favicon.ico", get(|| async { "the icon" }))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::new(cfg),
+                unknown_host_gate,
+            ))
+    }
+
+    async fn get_body(app: Router, path: &str, unknown_host: bool) -> (StatusCode, String) {
+        let mut req = Request::builder().uri(path);
+        if unknown_host {
+            req = req.header(UNKNOWN_HOST_HEADER, "1");
+        }
+        let res = app
+            .oneshot(req.body(Body::empty()).expect("the request builds"))
+            .await
+            .expect("the router answers");
+        let status = res.status();
+        let bytes = to_bytes(res.into_body(), usize::MAX)
+            .await
+            .expect("the body reads");
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    /// BUNYIP-686: any path on an unknown host is the branded 404, which sends
+    /// the visitor to the main domain and never links back to the unknown host.
+    #[tokio::test]
+    async fn an_unknown_host_gets_the_404_that_sends_it_to_the_main_domain() {
+        for path in ["/", "/login", "/pricing"] {
+            let (status, body) = get_body(app("a8n.systems"), path, true).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+            assert!(body.contains("Page not found"), "{path}");
+            assert!(body.contains(r#"href="https://a8n.systems""#), "{path}");
+            assert!(
+                body.contains(r#"data-redirect-to="https://a8n.systems""#)
+                    && body.contains(r#"data-redirect-after="10000""#),
+                "{path}"
+            );
+            assert!(
+                !body.contains("<a href=\"/"),
+                "no host-relative link: {path}"
+            );
+            assert!(!body.contains("the site"), "{path}");
+        }
+    }
+
+    /// The page's own stylesheet, script, mark and icon still load on that host.
+    #[tokio::test]
+    async fn an_unknown_host_still_loads_the_pages_own_assets() {
+        for (path, expected) in [
+            ("/assets/js/app.js", "the asset"),
+            ("/brand/mark", "the mark"),
+            ("/favicon.ico", "the icon"),
+        ] {
+            let (status, body) = get_body(app("a8n.systems"), path, true).await;
+            assert_eq!((status, body.as_str()), (StatusCode::OK, expected));
+        }
+    }
+
+    /// Without the proxy's header nothing changes.
+    #[tokio::test]
+    async fn a_known_host_is_untouched() {
+        let (status, body) = get_body(app("a8n.systems"), "/", false).await;
+        assert_eq!((status, body.as_str()), (StatusCode::OK, "the site"));
+    }
+
+    /// No app domain: still a 404, but with nowhere to send the visitor it
+    /// neither links nor redirects.
+    #[tokio::test]
+    async fn without_an_app_domain_the_page_neither_links_nor_redirects() {
+        let (status, body) = get_body(app(""), "/", true).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.contains("Page not found"));
+        assert!(!body.contains("data-redirect-to"));
+        assert!(!body.contains("Go to "));
+    }
+
+    /// The gate sits inside the CSRF and CSP layers, so its response still
+    /// carries the policy.
+    #[test]
+    fn the_gate_is_layered_inside_the_csp() {
+        let main = include_str!("../main.rs");
+        let fallback = main
+            .find(".fallback(public::not_found)")
+            .expect("main.rs mounts the fallback");
+        let gate = main
+            .find("public::unknown_host_gate")
+            .expect("main.rs layers the gate");
+        let csrf = main
+            .find("csrf::enforce_origin")
+            .expect("main.rs layers CSRF");
+        let csp = main
+            .find("security::csp_layer")
+            .expect("main.rs layers the CSP");
+        assert!(fallback < gate && gate < csrf && gate < csp);
     }
 }

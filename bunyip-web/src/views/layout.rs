@@ -303,7 +303,7 @@ pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker
 ///
 /// The `alt` is empty on purpose: the mark sits inside a link whose text is the
 /// product name, so naming it again would announce the brand twice.
-fn brand_mark(branding: &Branding) -> Markup {
+pub(crate) fn brand_mark(branding: &Branding) -> Markup {
     html! {
         @if let Some(src) = branding.mark_src() {
             img src=(src) alt="" width="28" height="28" class="w-7 h-7 object-contain";

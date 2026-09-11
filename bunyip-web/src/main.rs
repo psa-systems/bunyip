@@ -344,6 +344,12 @@ async fn main() {
         // branding record, falling back to the committed file.
         .route("/favicon.ico", get(branding::favicon_ico))
         .fallback(public::not_found)
+        // BUNYIP-686: hosts the edge proxy's catch-all forwards get the
+        // unknown-host 404, not the site. Inside the CSRF and CSP layers.
+        .layer(axum::middleware::from_fn_with_state(
+            cfg.clone(),
+            public::unknown_host_gate,
+        ))
         // BUNYIP-259: Origin / Referer CSRF defense on every state-
         // changing POST. Refuses cross-origin form submissions before
         // the handler runs. The `/oauth2/*` family is exempted inside
