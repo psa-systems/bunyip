@@ -371,6 +371,45 @@ pub fn admin_response(
     )
 }
 
+/// Test state pointed at a port nothing listens on, so every upstream call
+/// fails fast: a route gate must not depend on the API being reachable.
+#[cfg(test)]
+pub(crate) fn unreachable_api_state() -> AppState {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use crate::ttl_cache::TtlCache;
+
+    AppState {
+        api: crate::api::Api::new("http://127.0.0.1:1"),
+        cfg: Arc::new(crate::config::Config::from_env()),
+        pricing_cache: Arc::new(TtlCache::new(
+            "/v1/pricing",
+            "PricingResponse",
+            "the test chrome",
+            Duration::from_secs(1),
+        )),
+        applications_cache: Arc::new(TtlCache::new(
+            "/v1/applications",
+            "Vec<Application>",
+            "the test chrome",
+            Duration::from_secs(1),
+        )),
+        setup_status_cache: Arc::new(TtlCache::new(
+            "/v1/auth/setup/status",
+            "SetupStatus",
+            "the test chrome",
+            Duration::from_secs(1),
+        )),
+        documented_apps_cache: Arc::new(TtlCache::new(
+            "/v1/application-docs",
+            "Vec<DocumentedApp>",
+            "the test chrome",
+            Duration::from_secs(1),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod onboarding_gate_tests {
     use super::{names_present, onboarding_allowed};
