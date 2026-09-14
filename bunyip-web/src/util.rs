@@ -77,35 +77,30 @@ pub fn pricing_currency(pricing: &PricingResponse) -> String {
         .to_string()
 }
 
-/// External URL for an app: `https://{subdomain|slug}.{domain}`, or `#` when no
-/// apex domain is configured. Mirrors the `getAppUrl` helpers in LandingPage /
-/// Footer.
-pub fn app_link(app: &Application, domain: &str) -> String {
+/// BUNYIP-684: `{subdomain}.{domain}`, only when the row declares a subdomain and
+/// an app domain is configured. The slug is never guessed into a host.
+pub fn app_host(app: &Application, domain: &str) -> Option<String> {
     let sub = app
         .subdomain
         .as_deref()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(&app.slug);
-    if domain.is_empty() {
-        "#".to_string()
-    } else {
-        format!("https://{sub}.{domain}")
-    }
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    (!domain.is_empty()).then(|| format!("{sub}.{domain}"))
+}
+
+/// External URL for an app: `https://` plus [`app_host`], or `None` when the
+/// host is not declared, so no view renders a guessed or `#` link.
+pub fn app_link(app: &Application, domain: &str) -> Option<String> {
+    app_host(app, domain).map(|host| format!("https://{host}"))
 }
 
 /// Launch URL for a SIGNED-IN user: [`app_link`]'s host plus `/dashboard`
 /// (BUNYIP-638). `/dashboard`, not the apex, so the child app's AuthGuard sees a
 /// protected route and starts the OIDC code flow against the user's existing OP
 /// session; the apex just shows its marketing page and makes the user click
-/// "Sign in" before the SSO bridge fires. An unset apex domain keeps
-/// `app_link`'s bare `#`, never `#/dashboard`.
-pub fn app_launch_link(app: &Application, domain: &str) -> String {
-    let base = app_link(app, domain);
-    if base == "#" {
-        base
-    } else {
-        format!("{base}/dashboard")
-    }
+/// "Sign in" before the SSO bridge fires. `None` exactly when [`app_link`] is.
+pub fn app_launch_link(app: &Application, domain: &str) -> Option<String> {
+    app_link(app, domain).map(|base| format!("{base}/dashboard"))
 }
 
 /// Tailwind gradient class pairs an application card's accent is drawn from.
@@ -248,7 +243,8 @@ pub fn days_until(iso: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        app_gradient, app_launch_link, app_link, fnv1a, APP_GRADIENTS, UNGROUPED_APP_GRADIENT,
+        app_gradient, app_host, app_launch_link, app_link, fnv1a, APP_GRADIENTS,
+        UNGROUPED_APP_GRADIENT,
     };
     use crate::api::types::Application;
 
@@ -271,47 +267,48 @@ mod tests {
     }
 
     /// BUNYIP-533: the "Let's Chat" product is served at `chat.{app_domain}`, so
-    /// its application row carries `subdomain = "chat"`; the link then resolves
-    /// correctly on both environments (staging `a8n.systems`, prod `spa.systems`)
-    /// because only the domain half varies. Without the subdomain the link fell
-    /// back to the slug and pointed at the wrong host (`lets-chat.{app_domain}`),
-    /// which is the bug the seed migration corrects.
+    /// its row carries `subdomain = "chat"` and only the domain half varies per
+    /// environment. BUNYIP-684: without a declared subdomain there is NO link;
+    /// the old slug guess pointed six of eight live applications at 404 hosts.
     #[test]
-    fn app_link_prefers_subdomain_over_slug() {
+    fn app_link_needs_a_declared_subdomain_and_domain() {
         let with = app("lets-chat", Some("chat"));
-        assert_eq!(app_link(&with, "a8n.systems"), "https://chat.a8n.systems");
-        assert_eq!(app_link(&with, "spa.systems"), "https://chat.spa.systems");
-
-        // The pre-fix state: no subdomain -> slug fallback -> wrong host.
-        let without = app("lets-chat", None);
         assert_eq!(
-            app_link(&without, "a8n.systems"),
-            "https://lets-chat.a8n.systems"
+            app_link(&with, "a8n.systems").as_deref(),
+            Some("https://chat.a8n.systems")
+        );
+        assert_eq!(
+            app_link(&with, "psa.systems").as_deref(),
+            Some("https://chat.psa.systems")
+        );
+        assert_eq!(
+            app_host(&with, "a8n.systems").as_deref(),
+            Some("chat.a8n.systems")
         );
 
-        // No apex domain configured -> a neutral href, never a broken absolute.
-        assert_eq!(app_link(&with, ""), "#");
+        for sub in [None, Some(""), Some("   ")] {
+            let without = app("lets-chat", sub);
+            assert_eq!(app_link(&without, "a8n.systems"), None, "{sub:?}");
+            assert_eq!(app_host(&without, "a8n.systems"), None, "{sub:?}");
+        }
+        assert_eq!(app_link(&with, ""), None, "no app domain, no link");
     }
 
-    /// BUNYIP-638: the launch link is the same host resolution plus the
-    /// `/dashboard` suffix that makes the child app's AuthGuard start the OIDC
-    /// flow. The unconfigured case stays the bare `#` `app_link` returns, never
-    /// `#/dashboard`, which no browser resolves to anything useful.
+    /// BUNYIP-638: the launch link is the same host plus the `/dashboard` suffix
+    /// that makes the child app's AuthGuard start the OIDC flow, and is absent
+    /// whenever the host is.
     #[test]
     fn app_launch_link_deep_links_into_the_child_app() {
         let with = app("lets-chat", Some("chat"));
         assert_eq!(
-            app_launch_link(&with, "a8n.systems"),
-            "https://chat.a8n.systems/dashboard"
+            app_launch_link(&with, "a8n.systems").as_deref(),
+            Some("https://chat.a8n.systems/dashboard")
         );
-
-        let without = app("lets-chat", None);
         assert_eq!(
-            app_launch_link(&without, "a8n.systems"),
-            "https://lets-chat.a8n.systems/dashboard"
+            app_launch_link(&app("lets-chat", None), "a8n.systems"),
+            None
         );
-
-        assert_eq!(app_launch_link(&with, ""), "#");
+        assert_eq!(app_launch_link(&with, ""), None);
     }
 
     /// BUNYIP-638: one construction of the launch URL, so the reason for the
