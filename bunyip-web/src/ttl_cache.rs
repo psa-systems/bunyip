@@ -2,11 +2,12 @@
 //! render (BUNYIP-518 for `/v1/pricing`, BUNYIP-555 for `/v1/applications` and
 //! `/v1/auth/setup/status`).
 //!
-//! Each of those payloads is chrome, not page content: the pricing payload
-//! decides whether the nav and footer links to `/pricing` are shown, the
-//! application list fills the public footer, and the setup-status flags decide
-//! whether the subscribe CTA is live. Fetching them upstream on every render
-//! turned normal browsing into a burst of identical calls, which (before those
+//! The pricing payload decides whether the nav and footer links to `/pricing`
+//! are shown, the application list fills the landing page's application cards
+//! (the chrome stopped listing applications in BUNYIP-667/682), and the
+//! setup-status flags decide whether the subscribe CTA is live. Fetching them
+//! upstream on every render turned normal browsing into a burst of identical
+//! calls, which (before those
 //! endpoints were cached) tripped the per-IP rate-limit floor and swallowed the
 //! 429 into a thinner page: `/pricing` 404'd with the switch on and every tier
 //! resolving, and the footer lost its application links.
@@ -271,7 +272,7 @@ mod tests {
         let cache: TtlCache<Vec<Application>> = TtlCache::new(
             "/v1/applications",
             "Vec<Application>",
-            "the public footer's application links",
+            "the landing page's application cards",
             Duration::from_secs(APPLICATIONS_CACHE_TTL_SECS),
         );
         let calls = AtomicUsize::new(0);
@@ -315,13 +316,13 @@ mod tests {
     }
 
     /// BUNYIP-555 AC (F3): a failing fetch serves the last good list. A 429
-    /// alone must never render the launcher/footer as "no applications".
+    /// alone must never render the application list as "no applications".
     #[tokio::test]
     async fn a_429_never_empties_the_application_list() {
         let cache: TtlCache<Vec<Application>> = TtlCache::new(
             "/v1/applications",
             "Vec<Application>",
-            "the public footer's application links",
+            "the landing page's application cards",
             // Zero TTL so the next render is always a miss and re-fetches.
             Duration::from_secs(0),
         );

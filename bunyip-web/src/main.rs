@@ -128,7 +128,7 @@ async fn main() {
         applications_cache: Arc::new(ttl_cache::TtlCache::new(
             "/v1/applications",
             "Vec<Application>",
-            "the public footer's application links",
+            "the landing page's application cards",
             std::time::Duration::from_secs(ttl_cache::APPLICATIONS_CACHE_TTL_SECS),
         )),
         setup_status_cache: Arc::new(ttl_cache::TtlCache::new(
