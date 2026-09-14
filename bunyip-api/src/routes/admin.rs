@@ -17,6 +17,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/integrations",
                 web::get().to(handlers::get_integration_status),
             )
+            // BUNYIP-634: the suite provider-status aggregate.
+            .route(
+                "/providers/status",
+                web::get().to(handlers::get_provider_status),
+            )
             .route("/key-health", web::get().to(handlers::get_key_health))
             .route(
                 "/key-health/{key_id}",
