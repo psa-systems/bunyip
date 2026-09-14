@@ -602,8 +602,8 @@ fn admin_items() -> Vec<NavItem> {
             icon: "activity",
             external: false,
         },
-        // BUNYIP-634: the suite provider-status aggregate (Bunyip's own,
-        // Mokosh's, and Drillmark's) on one page.
+        // BUNYIP-634: the suite provider-status aggregate (this deployment's
+        // own, Mokosh's, and Drillmark's) on one page.
         NavItem {
             title: "Provider Status",
             href: "/admin/providers/status",

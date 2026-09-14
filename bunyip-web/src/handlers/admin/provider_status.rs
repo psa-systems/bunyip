@@ -1,7 +1,7 @@
 //! Admin panel: suite provider status (BUNYIP-634).
 //!
 //! One page shows every application in the suite's live provider state,
-//! Bunyip's own included, through the shared contract
+//! this deployment's own included, through the shared contract
 //! (`docs/provider-status-contract.md`): which providers are enabled, which
 //! is serving, and the discrepancies that matter, flagged rather than left
 //! for the reader to notice by comparing columns. The classification is
@@ -35,15 +35,20 @@ fn state_badge(status: &ProviderAppState) -> Markup {
 
 /// The failure detail line for a non-healthy row. Empty for a healthy one
 /// (the caller skips rendering it).
-fn state_detail(status: &ProviderAppState) -> Option<String> {
+fn state_detail(status: &ProviderAppState, brand_name: &str) -> Option<String> {
+    let this_deployment = if brand_name.is_empty() {
+        "this deployment".to_string()
+    } else {
+        brand_name.to_string()
+    };
     match status {
         ProviderAppState::Ok { .. } => None,
         ProviderAppState::Unreachable { reason } => Some(reason.clone()),
-        ProviderAppState::Unauthenticated => {
-            Some("the application rejected Bunyip's machine credential".to_string())
-        }
+        ProviderAppState::Unauthenticated => Some(format!(
+            "the application rejected {this_deployment}'s machine credential"
+        )),
         ProviderAppState::VersionMismatch { reported_version } => Some(format!(
-            "the application reports contract version {reported_version:?}, which this Bunyip does not understand"
+            "the application reports contract version {reported_version:?}, which {this_deployment} does not understand"
         )),
         ProviderAppState::Unknown => Some("an unrecognised status was returned".to_string()),
     }
@@ -88,7 +93,7 @@ fn ok_report(status: &ProviderAppState) -> Option<&ProviderStatusReport> {
 }
 
 /// One application's card.
-fn app_card(row: &ProviderAppStatusRow) -> Markup {
+fn app_card(row: &ProviderAppStatusRow, brand_name: &str) -> Markup {
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
             div class="flex flex-col space-y-1.5 p-6" {
@@ -98,7 +103,7 @@ fn app_card(row: &ProviderAppStatusRow) -> Markup {
                 }
             }
             div class="p-6 pt-0" {
-                @if let Some(detail) = state_detail(&row.status) {
+                @if let Some(detail) = state_detail(&row.status, brand_name) {
                     p class="text-sm text-muted-foreground" { (detail) }
                 } @else if let Some(report) = ok_report(&row.status) {
                     div class="divide-y" { @for kind in &report.kinds { (kind_row(kind)) } }
@@ -161,19 +166,32 @@ fn discrepancies_card(discrepancies: &[ProviderDiscrepancy]) -> Markup {
     }
 }
 
+/// The intro sentence under the page heading. Empty brand name omits the
+/// possessive clause rather than substituting a literal.
+fn intro_note(brand_name: &str) -> String {
+    if brand_name.is_empty() {
+        "The live provider state of every application in the suite, including this deployment's own.".to_string()
+    } else {
+        format!(
+            "The live provider state of every application in the suite, {brand_name}'s own included."
+        )
+    }
+}
+
 fn provider_status_content(
     apps: &[ProviderAppStatusRow],
     discrepancies: &[ProviderDiscrepancy],
     reachable: bool,
+    brand_name: &str,
 ) -> Markup {
     html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "Provider Status" } p class="mt-2 text-muted-foreground" { "The live provider state of every application in the suite, Bunyip's own included." } }
+            div { h1 class="text-3xl font-bold" { "Provider Status" } p class="mt-2 text-muted-foreground" { (intro_note(brand_name)) } }
             @if !reachable {
                 (error_box("Could not reach the API to load the suite provider status."))
             } @else {
                 (discrepancies_card(discrepancies))
-                div class="grid gap-4 md:grid-cols-2" { @for row in apps { (app_card(row)) } }
+                div class="grid gap-4 md:grid-cols-2" { @for row in apps { (app_card(row, brand_name)) } }
             }
         }
     }
@@ -191,7 +209,12 @@ pub async fn provider_status_page(
     let fetched = admin_api::provider_status(&st.api, c.forward.as_deref()).await;
     let reachable = fetched.is_ok();
     let aggregate = fetched.unwrap_or_default();
-    let content = provider_status_content(&aggregate.apps, &aggregate.discrepancies, reachable);
+    let content = provider_status_content(
+        &aggregate.apps,
+        &aggregate.discrepancies,
+        reachable,
+        &crate::views::layout::brand_name(),
+    );
     admin_response(
         &c,
         &user,
@@ -237,7 +260,7 @@ mod tests {
             app: "drillmark".to_string(),
             status: ProviderAppState::Unauthenticated,
         };
-        let html = provider_status_content(&[ok, unreachable, unauth], &[], true).into_string();
+        let html = provider_status_content(&[ok, unreachable, unauth], &[], true, "").into_string();
         assert!(html.contains(">Reachable<"));
         assert!(html.contains(">Unreachable<"));
         assert!(html.contains(">Unauthenticated<"));
@@ -248,7 +271,7 @@ mod tests {
     /// than an empty page that reads as "everything is fine".
     #[test]
     fn an_unreachable_api_is_stated_on_the_page() {
-        let html = provider_status_content(&[], &[], false).into_string();
+        let html = provider_status_content(&[], &[], false, "").into_string();
         assert!(html.contains("Could not reach the API to load the suite provider status."));
     }
 
@@ -268,7 +291,7 @@ mod tests {
                 status: ProviderAppState::Unknown,
             },
         ];
-        let html = provider_status_content(&rows, &[], true).into_string();
+        let html = provider_status_content(&rows, &[], true, "").into_string();
         assert!(html.contains("bunyip"));
         assert!(html.contains("mokosh"));
         assert!(html.contains("drillmark"));
