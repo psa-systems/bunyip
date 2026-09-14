@@ -3,8 +3,9 @@
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use maud::html;
+use maud::{html, Markup};
 
+use crate::api::types::Application;
 use crate::handlers::public_ctx;
 use crate::util::{app_gradient, app_link};
 use crate::views::layout::{asset, document, public_shell};
@@ -115,6 +116,45 @@ fn hero_mascot(branding: &crate::api::types::Branding) -> maud::Markup {
     }
 }
 
+/// The landing page's application cards. Absent with no applications.
+fn wired_apps_section(apps: &[Application], domain: &str, brand: &str) -> Markup {
+    html! {
+        @if !apps.is_empty() {
+            section class="relative py-20" {
+                div class="container relative scroll-fade-up in-view" {
+                    h2 class="text-center text-3xl font-bold text-brand-primary-900 dark:text-brand-primary-50" { "Wired into your stack" }
+                    p class="mx-auto mt-4 max-w-2xl text-center text-muted-foreground" { (format!("{brand} is the front door to the products your team already runs.")) }
+                    div class="mt-12 grid gap-8 md:grid-cols-2 max-w-3xl mx-auto scroll-fade-up-child in-view" {
+                        @for app in apps {
+                            div class="rounded-lg border bg-card text-card-foreground shadow-sm flex h-full flex-col transition-all hover:shadow-lg border-border/50" {
+                                div class="flex flex-col space-y-1.5 p-6" {
+                                    div class="flex items-center gap-4" {
+                                        div class={ "flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-to-br " (app_gradient(app.group_id.as_deref())) } {
+                                            @if let Some(icon) = &app.icon_url { img src=(icon) alt=(app.display_name) class="h-6 w-6"; }
+                                            @else { (icon("package", "h-5 w-5 text-white")) }
+                                        }
+                                        div { h3 class="text-2xl font-semibold leading-none tracking-tight" { (app.display_name) } }
+                                    }
+                                }
+                                div class="p-6 pt-0 mt-auto" {
+                                    p class="text-base text-muted-foreground" { (app.description.clone().unwrap_or_default()) }
+                                    // BUNYIP-684: no declared host, no link.
+                                    @if let Some(href) = app_link(app, domain) {
+                                        a href=(href) target="_blank" rel="noopener noreferrer"
+                                          class="mt-4 inline-flex items-center gap-1 text-sm font-medium text-brand-primary-700 dark:text-brand-primary-200 hover:underline" {
+                                            "Learn more " (icon("arrow-right", "h-3 w-3"))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (c, apps, pricing) = public_ctx(&st, &headers).await;
     let signed_in = c.is_signed_in();
@@ -198,36 +238,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                 }
             }
             // Apps wired through the platform
-            @if !apps.is_empty() {
-                section class="relative py-20" {
-                    div class="container relative scroll-fade-up in-view" {
-                        h2 class="text-center text-3xl font-bold text-brand-primary-900 dark:text-brand-primary-50" { "Wired into your stack" }
-                        p class="mx-auto mt-4 max-w-2xl text-center text-muted-foreground" { (format!("{brand} is the front door to the products your team already runs.")) }
-                        div class="mt-12 grid gap-8 md:grid-cols-2 max-w-3xl mx-auto scroll-fade-up-child in-view" {
-                            @for app in &apps {
-                                div class="rounded-lg border bg-card text-card-foreground shadow-sm flex h-full flex-col transition-all hover:shadow-lg border-border/50" {
-                                    div class="flex flex-col space-y-1.5 p-6" {
-                                        div class="flex items-center gap-4" {
-                                            div class={ "flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-to-br " (app_gradient(app.group_id.as_deref())) } {
-                                                @if let Some(icon) = &app.icon_url { img src=(icon) alt=(app.display_name) class="h-6 w-6"; }
-                                                @else { (icon("package", "h-5 w-5 text-white")) }
-                                            }
-                                            div { h3 class="text-2xl font-semibold leading-none tracking-tight" { (app.display_name) } }
-                                        }
-                                    }
-                                    div class="p-6 pt-0 mt-auto" {
-                                        p class="text-base text-muted-foreground" { (app.description.clone().unwrap_or_default()) }
-                                        a href=(app_link(app, &st.cfg.app_domain)) target="_blank" rel="noopener noreferrer"
-                                          class="mt-4 inline-flex items-center gap-1 text-sm font-medium text-brand-primary-700 dark:text-brand-primary-200 hover:underline" {
-                                            "Learn more " (icon("arrow-right", "h-3 w-3"))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            (wired_apps_section(&apps, &st.cfg.app_domain, brand))
             // CTA
             section class="relative overflow-hidden border-t border-border/50 py-20" {
                 div class="container relative" {
@@ -508,5 +519,49 @@ mod copy_tests {
                 f.icon
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod wired_apps_tests {
+    use super::wired_apps_section;
+    use crate::api::types::Application;
+
+    fn app(slug: &str, subdomain: Option<&str>, name: &str) -> Application {
+        Application {
+            id: slug.into(),
+            slug: slug.into(),
+            display_name: name.into(),
+            description: None,
+            icon_url: None,
+            version: None,
+            source_code_url: None,
+            release_notes_url: None,
+            subdomain: subdomain.map(str::to_string),
+            is_accessible: false,
+            maintenance_mode: false,
+            maintenance_message: None,
+            group_id: None,
+        }
+    }
+
+    /// BUNYIP-684: "Learn more" renders only for a declared subdomain. The live
+    /// catalog's slug-guessed hosts (e.g. `backup.a8n.systems`) all answer 404.
+    #[test]
+    fn learn_more_links_only_a_declared_subdomain() {
+        let apps = [
+            app("lets-chat", Some("chat"), "Let's Chat"),
+            app("backup", None, "Backup"),
+        ];
+        let html = wired_apps_section(&apps, "a8n.systems", "Brand").into_string();
+        assert!(html.contains("Chat") && html.contains("Backup"));
+        assert_eq!(html.matches("Learn more").count(), 1);
+        assert!(html.contains(r#"href="https://chat.a8n.systems""#));
+        assert!(!html.contains("backup.a8n.systems"));
+        assert!(!html.contains(r##"href="#""##));
+
+        let no_domain = wired_apps_section(&apps, "", "Brand").into_string();
+        assert!(!no_domain.contains("Learn more"));
+        assert!(!no_domain.contains("href="));
     }
 }

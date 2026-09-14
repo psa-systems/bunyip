@@ -21,7 +21,7 @@ use crate::handlers::{
     password_ok, rotating_index,
 };
 use crate::util::{
-    app_gradient, app_launch_link, days_until, entry_price, format_stripe_amount,
+    app_gradient, app_host, app_launch_link, days_until, entry_price, format_stripe_amount,
     has_active_membership, pricing_currency, rel_time, tier_price, urlenc,
 };
 use crate::views::password::{guard_message, password_field, PwField, PwRole};
@@ -163,9 +163,12 @@ fn dashboard_apps_grid(
                         }
                         div class="p-6 pt-0 mt-auto" {
                             @if app.is_accessible {
-                                a href=(app_launch_link(app, base_domain)) target="_blank" rel="noopener noreferrer" {
-                                    span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md shadow-indigo-500/15 hover:shadow-lg hover:shadow-indigo-500/25 transition-shadow", app_gradient(app.group_id.as_deref())))) {
-                                        "Open " (app.display_name) (icon("external-link", "ml-2 h-4 w-4"))
+                                // BUNYIP-684: no declared host, nothing to launch.
+                                @if let Some(href) = app_launch_link(app, base_domain) {
+                                    a href=(href) target="_blank" rel="noopener noreferrer" {
+                                        span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md shadow-indigo-500/15 hover:shadow-lg hover:shadow-indigo-500/25 transition-shadow", app_gradient(app.group_id.as_deref())))) {
+                                            "Open " (app.display_name) (icon("external-link", "ml-2 h-4 w-4"))
+                                        }
                                     }
                                 }
                             } @else {
@@ -318,12 +321,7 @@ fn app_card(
     is_member: bool,
     downloads: Option<&AppDownloadGroup>,
 ) -> Markup {
-    let subdomain = app
-        .subdomain
-        .clone()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| app.slug.clone());
-    let app_url = format!("{subdomain}.{domain}");
+    let host = app_host(app, domain);
     let gradient = app_gradient(app.group_id.as_deref());
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm flex h-full flex-col border-border/50 transition-all hover:shadow-lg" {
@@ -338,12 +336,15 @@ fn app_card(
                 p class="text-sm text-muted-foreground" { (app.description.clone().unwrap_or_default()) }
             }
             div class="p-6 pt-0 mt-auto" {
-                p class="text-sm text-muted-foreground mb-4" { (app_url) }
+                // BUNYIP-684: host and Launch only for a declared subdomain.
+                @if let Some(host) = &host { p class="text-sm text-muted-foreground mb-4" { (host) } }
                 @if app.is_accessible {
                     // The `/dashboard` deep link, not the apex: see
                     // `util::app_launch_link` for why the suffix is load-bearing.
-                    a href=(app_launch_link(app, domain)) target="_blank" rel="noopener noreferrer" {
-                        span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {gradient} text-white border-0 shadow-md"))) { "Launch" (icon("external-link", "ml-2 h-4 w-4")) }
+                    @if let Some(href) = app_launch_link(app, domain) {
+                        a href=(href) target="_blank" rel="noopener noreferrer" {
+                            span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {gradient} text-white border-0 shadow-md"))) { "Launch" (icon("external-link", "ml-2 h-4 w-4")) }
+                        }
                     }
                 } @else {
                     button type="button" disabled class=(button_class("default", "default", "w-full")) {
@@ -2649,6 +2650,40 @@ mod tests {
             !html.contains("Release notes"),
             "no release-notes link when the URL is unset"
         );
+    }
+
+    /// BUNYIP-684: an accessible application without a declared subdomain has
+    /// no host label and no launch control on either surface; a slug is never
+    /// guessed into a host. With one, both render.
+    #[test]
+    fn app_surfaces_link_only_a_declared_subdomain() {
+        let declared = app_with_release_notes(None);
+        let mut undeclared = app_with_release_notes(None);
+        undeclared.subdomain = None;
+
+        let card = app_card(&declared, "a8n.run", true, None).into_string();
+        assert!(card.contains(">mokosh.a8n.run<"), "host label");
+        assert!(card.contains(r#"href="https://mokosh.a8n.run/dashboard""#));
+
+        let grid = dashboard_apps_grid(&[declared], true, "a8n.run", true).into_string();
+        assert!(grid.contains(r#"href="https://mokosh.a8n.run/dashboard""#));
+
+        let card = app_card(&undeclared, "a8n.run", true, None).into_string();
+        let grid = dashboard_apps_grid(&[undeclared], true, "a8n.run", true).into_string();
+        for (surface, html) in [("card", &card), ("grid", &grid)] {
+            assert!(
+                !html.contains("a8n.run"),
+                "no guessed host on the {surface}"
+            );
+            assert!(
+                !html.contains(r##"href="#""##),
+                "no dead link on the {surface}"
+            );
+            assert!(
+                !html.contains("Launch") && !html.contains("Open Mokosh"),
+                "{surface}"
+            );
+        }
     }
 
     /// The class list of a card's root element, which is the first `class="..."`
