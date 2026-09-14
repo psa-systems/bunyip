@@ -662,7 +662,7 @@ impl ProviderAppState {
 pub struct ProviderAppStatusRow {
     #[serde(default)]
     pub app: String,
-    #[serde(flatten)]
+    #[serde(flatten, default)]
     pub status: ProviderAppState,
 }
 
