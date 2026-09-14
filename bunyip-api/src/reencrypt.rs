@@ -9,7 +9,7 @@
 //! | `user_totp`    | `encrypted_secret` / `nonce` / `key_version`                |
 //! | `user_totp`    | `pending_*` (BUNYIP-355 staged re-key)                      |
 //! | `stripe_config`| `secret_key`, `webhook_secret` (+ nonces)                   |
-//! | `email_config` | `smtp_password` (+ nonce)                                    |
+//! | `email_config` | `smtp_password`, `imap_password` (+ nonces)                 |
 //!
 //! Idempotent: [`AppKeySet::rewrite`] returns `None` for a value already on the
 //! current key and version, so a second run rewrites nothing. A value that no
@@ -166,7 +166,7 @@ pub async fn reencrypt_stripe(
     Ok(summary)
 }
 
-/// Re-encrypt the SMTP password on the `email_config` row.
+/// Re-encrypt the SMTP and IMAP passwords on the `email_config` row.
 pub async fn reencrypt_email(
     pool: &PgPool,
     keys: &AppKeySet,
@@ -174,25 +174,38 @@ pub async fn reencrypt_email(
     let row = EmailConfigRepository::get(pool).await?;
     let mut summary = ReencryptSummary::default();
 
-    let (Some(ciphertext), Some(nonce)) = (&row.smtp_password, &row.smtp_password_nonce) else {
-        return Ok(summary);
-    };
-
-    match keys.rewrite(ciphertext, nonce, row.key_version) {
-        Ok(Some((ct, n, version))) => {
-            EmailConfigRepository::update_password_encryption(pool, &ct, &n, version).await?;
-            summary.rewritten += 1;
+    if let (Some(ciphertext), Some(nonce)) = (&row.smtp_password, &row.smtp_password_nonce) {
+        match keys.rewrite(ciphertext, nonce, row.key_version) {
+            Ok(Some((ct, n, version))) => {
+                EmailConfigRepository::update_password_encryption(pool, &ct, &n, version).await?;
+                summary.rewritten += 1;
+            }
+            Ok(None) => summary.already_current += 1,
+            Err(_) => summary
+                .undecryptable
+                .push("email_config smtp_password".to_string()),
         }
-        Ok(None) => summary.already_current += 1,
-        Err(_) => summary
-            .undecryptable
-            .push("email_config smtp_password".to_string()),
+    }
+
+    if let (Some(ciphertext), Some(nonce)) = (&row.imap_password, &row.imap_password_nonce) {
+        match keys.rewrite(ciphertext, nonce, row.key_version) {
+            Ok(Some((ct, n, version))) => {
+                EmailConfigRepository::update_imap_password_encryption(pool, &ct, &n, version)
+                    .await?;
+                summary.rewritten += 1;
+            }
+            Ok(None) => summary.already_current += 1,
+            Err(_) => summary
+                .undecryptable
+                .push("email_config imap_password".to_string()),
+        }
     }
 
     Ok(summary)
 }
 
-/// Run the whole pass: TOTP secrets, Stripe secrets and the SMTP password.
+/// Run the whole pass: TOTP secrets, Stripe secrets, and the SMTP and IMAP
+/// passwords.
 pub async fn reencrypt_all(pool: &PgPool, keys: &AppKeySet) -> Result<ReencryptSummary, AppError> {
     let mut summary = reencrypt_totp(pool, keys).await?;
     summary.merge(reencrypt_stripe(pool, keys).await?);
@@ -224,5 +237,52 @@ mod tests {
             a.to_string(),
             "3 rewritten, 4 already current, 2 undecryptable"
         );
+    }
+
+    /// BUNYIP-689: a new `*_nonce BYTEA` column cannot be added to a migration
+    /// without the build naming the files that must cover it. `user_totp.nonce`
+    /// has no prefix and is not matched here: it is covered by
+    /// `reencrypt_totp` and `check_totp_key` by construction.
+    #[test]
+    fn every_encrypted_column_is_reencrypted_and_health_checked() {
+        let migrations_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations");
+        let mut nonce_columns = std::collections::BTreeSet::new();
+
+        for entry in std::fs::read_dir(migrations_dir).expect("read migrations dir") {
+            let path = entry.expect("read migration dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("sql") {
+                continue;
+            }
+            let contents = std::fs::read_to_string(&path).expect("read migration file");
+            let tokens: Vec<&str> = contents.split_whitespace().collect();
+            for pair in tokens.windows(2) {
+                let column = pair[0].trim_end_matches(|c: char| !c.is_alphanumeric() && c != '_');
+                let ty = pair[1].trim_end_matches(|c: char| !c.is_alphanumeric());
+                if column.ends_with("_nonce") && ty.eq_ignore_ascii_case("BYTEA") {
+                    nonce_columns.insert(column.to_string());
+                }
+            }
+        }
+
+        assert!(
+            !nonce_columns.is_empty(),
+            "expected at least one `*_nonce BYTEA` column across bunyip-api/migrations"
+        );
+
+        let reencrypt_src = include_str!("reencrypt.rs");
+        let admin_src = include_str!("handlers/admin.rs");
+
+        for column in &nonce_columns {
+            assert!(
+                reencrypt_src.contains(column.as_str()),
+                "reencrypt.rs never names {column}; every encrypted column must be \
+                 rewritten by the re-encrypt pass"
+            );
+            assert!(
+                admin_src.contains(column.as_str()),
+                "handlers/admin.rs never names {column}; every encrypted column must \
+                 be counted by rotation status and evaluated by key-health"
+            );
+        }
     }
 }
