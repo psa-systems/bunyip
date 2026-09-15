@@ -20,7 +20,7 @@ use crate::api::types::{
     ProviderStatusReport,
 };
 use crate::handlers::{admin_guard, admin_response};
-use crate::views::ui::{badge, error_box};
+use crate::views::ui::{badge, empty_state, error_box};
 
 /// The badge for one application's state.
 fn state_badge(status: &ProviderAppState) -> Markup {
@@ -157,7 +157,7 @@ fn discrepancies_card(discrepancies: &[ProviderDiscrepancy]) -> Markup {
             }
             div class="p-6 pt-0" {
                 @if discrepancies.is_empty() {
-                    p class="text-sm text-muted-foreground" { "None flagged." }
+                    (empty_state("circle-check", "None flagged.", None))
                 } @else {
                     ul class="space-y-2 list-disc pl-5" { @for d in discrepancies { (discrepancy_row(d)) } }
                 }
