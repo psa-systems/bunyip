@@ -49,6 +49,7 @@ const ALLOW_RAW_ARGON2 = [
     "crates/bunyip-domain/src/services/totp.rs"     # the 19 MiB recovery-code preset
     "crates/bunyip-oidc/src/handlers/oidc.rs"       # the OIDC client-secret verify
     "crates/bunyip-oidc/src/machine_client.rs"      # client-secret hash, inside an offload closure
+    "bunyip-api/src/settings_archive.rs"            # the archive KDF preset, inside an offload closure
 ]
 
 # The one file allowed to call the TOTP recovery-code Argon2 helpers, and the

@@ -412,7 +412,11 @@ pub struct UpsertRateLimitConfigRequest {
 }
 
 /// Validate an admin-supplied cap/window pair. Pure and unit-tested.
-fn validate_limits(max_requests: i32, window_seconds: i64) -> Result<(), AppError> {
+///
+/// `pub(crate)` because a settings archive restores the same rows this handler
+/// writes (BUNYIP-714), and an import that skipped the check would let a file
+/// put a cap in the table that the admin page would have refused.
+pub(crate) fn validate_limits(max_requests: i32, window_seconds: i64) -> Result<(), AppError> {
     if !(1..=MAX_REQUESTS_LIMIT).contains(&max_requests) {
         return Err(AppError::bad_request(format!(
             "max_requests must be between 1 and {MAX_REQUESTS_LIMIT}"
