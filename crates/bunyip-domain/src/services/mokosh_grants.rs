@@ -36,6 +36,17 @@ impl MokoshGrantsService {
         // fields lets the caller pick either; here we refuse both-set
         // and neither-set with a validation error naming which.
         let grantee_id = resolve_grantee_id(pool, &req).await?;
+
+        // BUNYIP-675 Layer 2: EXISTS guard on write. The FK on the
+        // table (Layer 1) enforces this at the schema level too, but a
+        // future migration that relaxes the FK must not silently lose
+        // the invariant, so the service repeats the check as its own
+        // named step. Portal contacts are a Mokosh-side concept and
+        // never appear in `users`, so an id in the contact space always
+        // fails this check; the error names the field so the caller can
+        // point the operator at the exact input.
+        Self::assert_grantee_is_bunyip_user(pool, grantee_id).await?;
+
         if grantee_id == owner_bunyip_user_id {
             return Err(AppError::validation(
                 "grantee",
@@ -61,6 +72,35 @@ impl MokoshGrantsService {
             &req.role,
         )
         .await
+    }
+
+    /// BUNYIP-675 Layer 2: refuse a grantee id that is not a Bunyip
+    /// user. Kept as its own method so the intent is discoverable in
+    /// the code, and named for the field so the error surfaces
+    /// consistently with the parent ticket's AC.
+    ///
+    /// Runs `EXISTS (SELECT 1 FROM users WHERE id = $1)`. A future
+    /// migration adding a `removed_at` soft-delete column on `users`
+    /// widens this to also require `removed_at IS NULL` in the same PR
+    /// as the column.
+    pub async fn assert_grantee_is_bunyip_user(
+        pool: &PgPool,
+        grantee_bunyip_user_id: Uuid,
+    ) -> Result<(), AppError> {
+        let (exists,): (bool,) =
+            sqlx::query_as("SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)")
+                .bind(grantee_bunyip_user_id)
+                .fetch_one(pool)
+                .await
+                .map_err(AppError::from)?;
+        if exists {
+            Ok(())
+        } else {
+            Err(AppError::validation(
+                "grantee_bunyip_user_id",
+                "is not a Bunyip user",
+            ))
+        }
     }
 
     pub async fn list_own(
@@ -113,6 +153,14 @@ impl MokoshGrantsService {
     }
 }
 
+/// Resolve the grantee id from the request.
+///
+/// BUNYIP-675 Layer 2 (primary defence): the lookup queries `users`
+/// only. A portal-contact email that happens to match a Bunyip user's
+/// email finds the Bunyip user and grants against THAT identity, which
+/// is correct behaviour (the granted identity is the Bunyip one); a
+/// contact-only email finds nothing. `contacts` is a Mokosh-side table
+/// and is never queried here.
 async fn resolve_grantee_id(pool: &PgPool, req: &CreateGrantRequest) -> Result<Uuid, AppError> {
     match (&req.grantee_email, &req.grantee_bunyip_user_id) {
         (Some(email), None) => {
@@ -123,12 +171,12 @@ async fn resolve_grantee_id(pool: &PgPool, req: &CreateGrantRequest) -> Result<U
             UserRepository::find_by_email(pool, trimmed)
                 .await?
                 .map(|u| u.id)
-                .ok_or_else(|| AppError::not_found("Bunyip user"))
+                .ok_or_else(|| AppError::validation("grantee_email", "is not a Bunyip user"))
         }
         (None, Some(id)) => UserRepository::find_by_id(pool, *id)
             .await?
             .map(|u| u.id)
-            .ok_or_else(|| AppError::not_found("Bunyip user")),
+            .ok_or_else(|| AppError::validation("grantee_bunyip_user_id", "is not a Bunyip user")),
         (Some(_), Some(_)) => Err(AppError::validation(
             "grantee",
             "supply grantee_email OR grantee_bunyip_user_id, not both",

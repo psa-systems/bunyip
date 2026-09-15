@@ -170,17 +170,114 @@ async fn self_grant_is_refused() {
 }
 
 #[tokio::test]
-async fn granting_to_a_non_user_id_is_400() {
+async fn granting_to_a_non_user_id_is_validation_error_naming_the_field() {
     let Some(pool) = maybe_pool().await else {
         return;
     };
     let owner = seed_user(&pool, "grant-nonuser@example.test").await;
-    // A UUID that names no `users` row. The service resolution returns
-    // 404 (the `Bunyip user` shape) rather than reaching the FK.
+    // A UUID that names no `users` row. Both the resolution step and
+    // the `assert_grantee_is_bunyip_user` guard refuse this shape; the
+    // resolution runs first, and both variants of the error name the
+    // grantee-side field so a caller reading the response points the
+    // operator at what to fix (BUNYIP-675 shape).
     let result =
         MokoshGrantsService::create_grant(&pool, true, owner, req(Uuid::new_v4(), "acme", "admin"))
             .await;
-    assert!(matches!(result, Err(AppError::NotFound { .. })));
+    match result {
+        Err(AppError::ValidationError { field, .. }) => {
+            assert_eq!(field, "grantee_bunyip_user_id");
+        }
+        other => panic!("expected ValidationError, got {other:?}"),
+    }
+}
+
+/// BUNYIP-675 Layer 2: `assert_grantee_is_bunyip_user` names its field
+/// on refusal so a Mokosh-side portal contact id can be told apart
+/// from a Bunyip user id in the response body.
+#[tokio::test]
+async fn assert_grantee_is_bunyip_user_names_the_field_on_refusal() {
+    let Some(pool) = maybe_pool().await else {
+        return;
+    };
+    // A Uuid that names no `users` row - the shape a Mokosh portal
+    // contact id would take here (Bunyip has no `contacts` table).
+    let portal_contact_id = Uuid::new_v4();
+    let result = MokoshGrantsService::assert_grantee_is_bunyip_user(&pool, portal_contact_id).await;
+    match result {
+        Err(AppError::ValidationError { field, message }) => {
+            assert_eq!(field, "grantee_bunyip_user_id");
+            assert!(
+                message.to_ascii_lowercase().contains("bunyip user"),
+                "message should say why: {message}"
+            );
+        }
+        other => panic!("expected ValidationError, got {other:?}"),
+    }
+}
+
+/// BUNYIP-675 Layer 1: a direct INSERT that bypasses the service and
+/// names a non-user id fails the FK constraint. The service is the
+/// primary defence; this proves the schema is still the backstop the
+/// ticket's three-layer strategy names.
+#[tokio::test]
+async fn direct_insert_with_a_non_user_grantee_id_fails_the_fk() {
+    let Some(pool) = maybe_pool().await else {
+        return;
+    };
+    let owner = seed_user(&pool, "fk-owner@example.test").await;
+    let portal_contact_id = Uuid::new_v4();
+
+    let result = sqlx::query(
+        "INSERT INTO mokosh_account_grants \
+         (owner_bunyip_user_id, grantee_bunyip_user_id, mokosh_account_id, role) \
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(owner)
+    .bind(portal_contact_id)
+    .bind("acme")
+    .bind("admin")
+    .execute(&pool)
+    .await;
+    let e = result.expect_err("FK must refuse a non-user grantee id");
+    let db_err = match e {
+        sqlx::Error::Database(db_err) => db_err,
+        other => panic!("expected a Database error carrying the FK code, got {other:?}"),
+    };
+    assert_eq!(
+        db_err.code().as_deref(),
+        Some("23503"),
+        "FK violation code must fire, got {db_err:?}"
+    );
+}
+
+/// BUNYIP-675 primary defence: the grantee-email lookup queries
+/// `users` only. An email that is NOT in `users` (a Mokosh portal
+/// contact address never brought into Bunyip) surfaces as a
+/// validation error naming the email field.
+#[tokio::test]
+async fn grantee_email_lookup_ignores_non_user_addresses() {
+    let Some(pool) = maybe_pool().await else {
+        return;
+    };
+    let owner = seed_user(&pool, "email-only-owner@example.test").await;
+    let result = MokoshGrantsService::create_grant(
+        &pool,
+        true,
+        owner,
+        CreateGrantRequest {
+            grantee_email: Some("contact-only@example.test".to_string()),
+            grantee_bunyip_user_id: None,
+            mokosh_account_id: "acme".to_string(),
+            role: "admin".to_string(),
+        },
+    )
+    .await;
+    match result {
+        Err(AppError::ValidationError { field, .. }) => {
+            assert_eq!(field, "grantee_email");
+        }
+        other => panic!("expected ValidationError on grantee_email, got {other:?}"),
+    }
 }
 
 #[tokio::test]
