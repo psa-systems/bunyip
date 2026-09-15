@@ -14,6 +14,7 @@ pub mod entitlement;
 pub mod feedback;
 pub mod membership;
 pub mod oauth_client_user_tenant;
+pub mod organization;
 pub mod rate_limit;
 pub mod stripe;
 pub mod support;
@@ -59,6 +60,11 @@ pub use feedback::{
 };
 pub use membership::{AdminMembershipResponse, MembershipResponse};
 pub use oauth_client_user_tenant::{CreateUserTenantAssignment, OAuthClientUserTenant};
+pub use organization::{
+    validate_name, validate_team_member_role, AddTeamMemberRequest, CreateOrganizationRequest,
+    CreateTeamRequest, Organization, Team, TeamMember, UpdateOrganizationRequest,
+    UpdateTeamMemberRoleRequest, UpdateTeamRequest, VALID_TEAM_MEMBER_ROLES,
+};
 pub use rate_limit::{
     rate_limit_vars, KeyKind, KeySubject, RateLimit, RateLimitConfig, RateLimitVars,
     TWO_FACTOR_KEY_PREFIX,

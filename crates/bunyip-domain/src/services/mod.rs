@@ -20,6 +20,9 @@ pub mod ip_enrich;
 pub mod jwt;
 pub mod mailer_relay;
 pub mod mailer_webhook;
+pub mod organizations;
+#[cfg(test)]
+pub mod organizations_tests;
 pub mod password_breach;
 pub mod provider_status;
 pub mod stripe;
@@ -83,6 +86,7 @@ pub use mailer_relay::{
 pub use mailer_webhook::{
     ingest_feedback, verify_signature, FeedbackEvent, FeedbackOutcome, SIGNATURE_HEADER,
 };
+pub use organizations::{OrganizationsService, TeamsService};
 pub use stripe::{
     classify_probe, stripe_config_from_db_model, stripe_err, stripe_err_for,
     stripe_settings_from_db_model, unconfigured_stripe_config, ProbeStatus, StripeConfig,
