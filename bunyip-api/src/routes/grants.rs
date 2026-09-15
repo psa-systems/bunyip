@@ -16,6 +16,14 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route(
                 "/{id}",
                 web::delete().to(handlers::mokosh_grants::revoke_grant),
+            )
+            // BUNYIP-673 / 674: mint an at+jwt scoped to the granted
+            // Mokosh account. Behind AuthenticatedUser; the caller is
+            // the grantee, and Bunyip mints a token Mokosh's OIDC-RS
+            // consults its mokosh_bunyip_grants mirror to verify.
+            .route(
+                "/{id}/access-token",
+                web::post().to(handlers::mokosh_grants::mint_grant_token),
             ),
     );
 }

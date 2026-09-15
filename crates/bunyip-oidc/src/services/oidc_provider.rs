@@ -89,10 +89,48 @@ impl AtClaims {
         acr: &str,
         amr: &[String],
         selected_tenant_id: Option<Uuid>,
+        grant: Option<&GrantClaimSet>,
     ) -> Self {
         let mut extra = BTreeMap::new();
         if let (Some(name), Some(tid)) = (client.tenant_claim_name.as_deref(), selected_tenant_id) {
             extra.insert(name.to_string(), serde_json::Value::String(tid.to_string()));
+        }
+        // BUNYIP-673 / 674: grant-scoped `at+jwt`. When the caller is
+        // consuming a Mokosh account under a cross-account grant rather
+        // than through their own tenancy, the mint carries three
+        // extras so Mokosh's OIDC-RS can distinguish grant access from
+        // ordinary access AND revalidate the grant against the
+        // mokosh_bunyip_grants mirror BUNYIP-674 landed:
+        //
+        // - `mokosh_grant_id`: the Bunyip mokosh_account_grants row
+        //   this token was minted for. Mokosh looks the row up by
+        //   (grantee, mokosh_account_id) rather than by id (so a
+        //   revoke-then-regrant on Bunyip that mints a new id keeps
+        //   working), but the id is carried for observability.
+        // - `mokosh_grant_role`: the role the grant carries. Mokosh
+        //   uses this as the caller's effective role for the scoped
+        //   tenant, replacing the identity-level `bunyip_role`.
+        // - `mokosh_grant_account_id`: the Mokosh tenant the grant
+        //   targets, as a string. Named separately from the client's
+        //   `tenant_claim_name` (usually `mokosh_tenant_id`) because
+        //   the two axes decide different things: the tenant claim
+        //   places the caller in a tenant; the grant claim marks the
+        //   placement as being under grant authority so Mokosh's
+        //   `ensure_principal_usable` consults the mirror rather than
+        //   the caller's own role.
+        if let Some(g) = grant {
+            extra.insert(
+                "mokosh_grant_id".to_string(),
+                serde_json::Value::String(g.grant_id.to_string()),
+            );
+            extra.insert(
+                "mokosh_grant_role".to_string(),
+                serde_json::Value::String(g.role.clone()),
+            );
+            extra.insert(
+                "mokosh_grant_account_id".to_string(),
+                serde_json::Value::String(g.mokosh_account_id.clone()),
+            );
         }
         AtClaims {
             iss: issuer.to_string(),
@@ -113,6 +151,22 @@ impl AtClaims {
             extra,
         }
     }
+}
+
+/// BUNYIP-673 / 674: grant-scoped access-token context. When present on
+/// `AtClaims::build`, adds three extras (`mokosh_grant_id`,
+/// `mokosh_grant_role`, `mokosh_grant_account_id`) that Mokosh's
+/// OIDC-RS reads to distinguish grant access from ordinary access.
+///
+/// Kept as its own struct rather than four bare arguments so a caller
+/// cannot mistakenly pass `mokosh_account_id` and forget `role` (or
+/// vice versa), and so a future field on the shape moves in one place
+/// rather than in every callsite.
+#[derive(Debug, Clone)]
+pub struct GrantClaimSet {
+    pub grant_id: Uuid,
+    pub role: String,
+    pub mokosh_account_id: String,
 }
 
 // ── ID token claims ───────────────────────────────────────────────────────────
@@ -636,6 +690,56 @@ impl OidcProvider {
         amr: &[String],
         selected_tenant_id: Option<Uuid>,
     ) -> Result<(String, DateTime<Utc>), AppError> {
+        self.mint_access_token_inner(
+            user,
+            client,
+            scope,
+            auth_time,
+            acr,
+            amr,
+            selected_tenant_id,
+            None,
+        )
+    }
+
+    /// BUNYIP-673 / 674: mint an access token that puts the caller in a
+    /// Mokosh account under a cross-account grant. Same signing key and
+    /// TTL as the identity-scoped [`Self::mint_access_token`]; the
+    /// difference rides in the three `mokosh_grant_*` extras
+    /// [`AtClaims::build`] populates from `grant`, which Mokosh's
+    /// OIDC-RS uses to consult the BUNYIP-674 mirror rather than
+    /// applying the caller's own role.
+    ///
+    /// The caller is the GRANTEE (the `user` argument), not the owner
+    /// of the granted Mokosh account. The mint carries no ownership
+    /// claim; Mokosh derives the owner by looking the grant row up in
+    /// the mirror.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mint_grant_access_token(
+        &self,
+        user: &User,
+        client: &OAuthClient,
+        scope: &[String],
+        auth_time: DateTime<Utc>,
+        acr: &str,
+        amr: &[String],
+        grant: &GrantClaimSet,
+    ) -> Result<(String, DateTime<Utc>), AppError> {
+        self.mint_access_token_inner(user, client, scope, auth_time, acr, amr, None, Some(grant))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn mint_access_token_inner(
+        &self,
+        user: &User,
+        client: &OAuthClient,
+        scope: &[String],
+        auth_time: DateTime<Utc>,
+        acr: &str,
+        amr: &[String],
+        selected_tenant_id: Option<Uuid>,
+        grant: Option<&GrantClaimSet>,
+    ) -> Result<(String, DateTime<Utc>), AppError> {
         let now = Utc::now();
         let ttl = Duration::seconds(client.access_token_ttl_seconds as i64);
         let exp = now + ttl;
@@ -655,6 +759,7 @@ impl OidcProvider {
             acr,
             amr,
             selected_tenant_id,
+            grant,
         );
 
         let token = jsonwebtoken::encode(&header, &claims, &self.keys.encoding_key)
@@ -1794,6 +1899,7 @@ mod tests {
             "urn:mace:incommon:iap:silver",
             &["pwd".to_string()],
             None,
+            None,
         )
     }
 
@@ -1823,9 +1929,91 @@ mod tests {
             "urn:mace:incommon:iap:silver",
             &[],
             None,
+            None,
         );
         assert!(claims.scope.is_empty());
         assert_eq!(claims.bunyip_role, "admin");
+    }
+
+    /// BUNYIP-673 / 674: grant-scoped mint carries the three
+    /// `mokosh_grant_*` extras Mokosh's OIDC-RS looks up against the
+    /// mirror. The identity-level `bunyip_role` stays on the token
+    /// unchanged; the grant's own role rides in `mokosh_grant_role`,
+    /// and Mokosh's downstream code decides which one to apply.
+    #[test]
+    fn grant_claim_set_populates_the_three_mokosh_extras() {
+        let now = Utc::now();
+        let grant = GrantClaimSet {
+            grant_id: Uuid::from_u128(0x12345678),
+            role: "manager".to_string(),
+            mokosh_account_id: "acme".to_string(),
+        };
+        let claims = AtClaims::build(
+            "https://issuer.example.com",
+            &test_user("subscriber"),
+            &test_client(),
+            &[],
+            now,
+            now + Duration::seconds(600),
+            now,
+            "urn:mace:incommon:iap:silver",
+            &[],
+            None,
+            Some(&grant),
+        );
+        assert_eq!(
+            claims.extra.get("mokosh_grant_id").and_then(|v| v.as_str()),
+            Some(grant.grant_id.to_string()).as_deref()
+        );
+        assert_eq!(
+            claims
+                .extra
+                .get("mokosh_grant_role")
+                .and_then(|v| v.as_str()),
+            Some("manager")
+        );
+        assert_eq!(
+            claims
+                .extra
+                .get("mokosh_grant_account_id")
+                .and_then(|v| v.as_str()),
+            Some("acme")
+        );
+        assert_eq!(
+            claims.bunyip_role, "subscriber",
+            "identity-level bunyip_role stays on the token unchanged"
+        );
+    }
+
+    /// The three grant extras are OFF by default: an ordinary mint (no
+    /// GrantClaimSet) must not carry them. Guards a callsite that
+    /// might inadvertently pass Some.
+    #[test]
+    fn a_non_grant_mint_carries_none_of_the_grant_extras() {
+        let now = Utc::now();
+        let claims = AtClaims::build(
+            "https://issuer.example.com",
+            &test_user("subscriber"),
+            &test_client(),
+            &[],
+            now,
+            now + Duration::seconds(600),
+            now,
+            "urn:mace:incommon:iap:silver",
+            &[],
+            None,
+            None,
+        );
+        for key in [
+            "mokosh_grant_id",
+            "mokosh_grant_role",
+            "mokosh_grant_account_id",
+        ] {
+            assert!(
+                !claims.extra.contains_key(key),
+                "non-grant mint must not carry {key}"
+            );
+        }
     }
 
     // The claim must serialize under the literal key `bunyip_role` so the

@@ -6,7 +6,7 @@
 //! rule.
 
 use actix_web::{web, HttpRequest, HttpResponse};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -14,8 +14,9 @@ use uuid::Uuid;
 use bunyip_domain::errors::AppError;
 use bunyip_domain::middleware::AuthenticatedUser;
 use bunyip_domain::models::{CreateGrantRequest, MokoshAccountGrant};
-use bunyip_domain::repositories::ApplicationRepository;
+use bunyip_domain::repositories::{ApplicationRepository, MokoshGrantRepository, UserRepository};
 use bunyip_domain::services::{MokoshGrantsService, WebhookService};
+use bunyip_oidc::services::oidc_provider::{GrantClaimSet, OidcProvider};
 
 use crate::config::TierConfig;
 use crate::responses::{created, get_request_id, success};
@@ -118,6 +119,141 @@ pub async fn list_grants(
         }
     };
     Ok(success(grants, request_id))
+}
+
+/// Body for `POST /v1/grants/{id}/access-token`.
+#[derive(Debug, Deserialize)]
+pub struct MintGrantTokenRequest {
+    /// The target OAuth client's `client_id` (Uuid, the same shape
+    /// `oauth_clients.client_id` holds). The consuming Mokosh app
+    /// already knows this - it is the id the SPA authenticates against
+    /// at `/authorize`. Named in the body rather than looked up from a
+    /// bunyip-side registry because Bunyip serves many resource
+    /// servers and the caller has always known which one they intend
+    /// to sign into; a bunyip-managed lookup would either need a
+    /// hardcoded slug (fragile) or a new env var (an operator surface
+    /// this request does not need).
+    pub client_id: Uuid,
+}
+
+/// Body for `POST /v1/grants/{id}/access-token`.
+#[derive(Debug, Serialize)]
+pub struct MintGrantTokenResponse {
+    pub access_token: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub mokosh_account_id: String,
+    pub role: String,
+}
+
+/// `POST /v1/grants/{id}/access-token` - the grantee mints an at+jwt
+/// scoped to the granted Mokosh account.
+///
+/// Every failure returns 404 rather than 403 for a caller who is not
+/// the grantee, matching the sibling `revoke_grant` posture where a
+/// foreign caller cannot enumerate grants they do not own. Both
+/// "unknown id" and "wrong caller" therefore look identical from the
+/// outside; the audit trail on the row identifies who actually tried.
+pub async fn mint_grant_token(
+    req: HttpRequest,
+    user: AuthenticatedUser,
+    pool: web::Data<PgPool>,
+    tier_config: web::Data<Arc<RwLock<TierConfig>>>,
+    provider: web::Data<Arc<OidcProvider>>,
+    path: web::Path<Uuid>,
+    body: web::Json<MintGrantTokenRequest>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let flag = orgs_enabled(tier_config.get_ref());
+    if !flag {
+        return Err(AppError::not_found("Mokosh grant"));
+    }
+
+    let grant_id = path.into_inner();
+    let grant = MokoshGrantRepository::find_by_id(pool.get_ref(), grant_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Mokosh grant"))?;
+
+    if grant.grantee_bunyip_user_id != user.0.sub {
+        // Wrong caller: 404, not 403. See the module-level note - a
+        // caller who is not the grantee cannot enumerate grants they
+        // do not own.
+        return Err(AppError::not_found("Mokosh grant"));
+    }
+    if grant.revoked_at.is_some() {
+        return Err(AppError::not_found("Mokosh grant"));
+    }
+
+    // Target client. The provider's own `load_client` gives us
+    // `first_party`, `tenant_claim_name`, `disabled_at`, and the TTL /
+    // audience the mint reads. A client that is not registered, is
+    // disabled, is third-party, or has no tenant claim configured is
+    // refused: the grant flow only makes sense against a first-party
+    // Bunyip-owned resource server with tenant-claim support (Mokosh
+    // today; other siblings later).
+    let client = provider
+        .load_client(body.client_id)
+        .await?
+        .ok_or_else(|| AppError::bad_request("Unknown client_id"))?;
+    if client.disabled_at.is_some() {
+        return Err(AppError::bad_request("Client is disabled"));
+    }
+    if !client.first_party {
+        return Err(AppError::bad_request(
+            "Grant tokens are only issued to first-party clients",
+        ));
+    }
+    if client.tenant_claim_name.is_none() {
+        return Err(AppError::bad_request(
+            "Client is not configured with a tenant_claim_name",
+        ));
+    }
+
+    // Grantee user. The grant table's FK to `users(id)` guarantees the
+    // row exists at grant-creation time; a delete-user path between
+    // create and mint would tombstone the row and this lookup would
+    // 404 back to the caller with a clean shape.
+    let grantee = UserRepository::find_by_id(pool.get_ref(), user.0.sub)
+        .await?
+        .ok_or_else(|| AppError::not_found("User"))?;
+
+    let grant_set = GrantClaimSet {
+        grant_id: grant.id,
+        role: grant.role.clone(),
+        mokosh_account_id: grant.mokosh_account_id.clone(),
+    };
+    // Scope: `openid` alone. A grant token is deliberately narrow -
+    // the caller is exercising a granted role on ONE resource server,
+    // not consenting to a broader scope set the way an authorize flow
+    // would negotiate. A future ticket may widen this to include the
+    // client's registered mokosh:* scopes, but the minimal one gets
+    // the flow working without inheriting scope from the grantor's
+    // last authorize session.
+    let scope = vec!["openid".to_string()];
+    let now = chrono::Utc::now();
+    let (access_token, exp) = provider.mint_grant_access_token(
+        &grantee,
+        &client,
+        &scope,
+        now,
+        // acr / amr mirror the values a fresh cookie-authenticated
+        // session would produce: silver LoA and `pwd` because the
+        // grantee is signed in with a password (grants cannot be
+        // minted from an unauthenticated flow). MFA-elevated ACR is
+        // a future refinement.
+        "urn:mace:incommon:iap:silver",
+        &["pwd".to_string()],
+        &grant_set,
+    )?;
+
+    Ok(success(
+        MintGrantTokenResponse {
+            access_token,
+            expires_at: exp,
+            mokosh_account_id: grant.mokosh_account_id,
+            role: grant.role,
+        },
+        request_id,
+    ))
 }
 
 /// `DELETE /v1/grants/{id}` - revoke a grant. The caller must be the
