@@ -75,6 +75,12 @@ pub struct PublicPricingResponse {
     /// Only tiers that resolve to a usable Stripe price. Empty means there is
     /// nothing honest to publish, which is also a 404.
     pub tiers: Vec<PublicPricingTier>,
+    /// BUNYIP-692: org-tier catalogue riding on the same cached payload
+    /// bunyip-web's `TtlCache<Pricing>` reads, so the SSR shell does not
+    /// grow a second endpoint fetch. Empty when `orgs_enabled` is off, so
+    /// a caller can render blind without knowing the flag itself.
+    #[serde(default)]
+    pub org_tiers: Vec<bunyip_domain::models::PublicOrgPricingTier>,
 }
 
 impl PublicPricingResponse {
@@ -84,6 +90,7 @@ impl PublicPricingResponse {
             enabled: false,
             trial_days,
             tiers: Vec::new(),
+            org_tiers: Vec::new(),
         }
     }
 }
@@ -465,6 +472,14 @@ async fn resolve(
             enabled: !tiers.is_empty(),
             trial_days,
             tiers,
+            // BUNYIP-692: org tiers ride here too. `resolve` is called by
+            // both `public_pricing` and `admin_pricing_status`, and the
+            // admin path deliberately reads the SAME payload the public
+            // page reads. `public_pricing` fills this vec below via the
+            // service; `admin_pricing_status` leaves it empty because its
+            // own diagnosis card is separate from the org catalogue (a
+            // future BUNYIP-692 admin diagnosis extension may fill it).
+            org_tiers: Vec::new(),
         },
         reasons,
     )
@@ -486,16 +501,30 @@ pub async fn public_pricing(
     pool: web::Data<PgPool>,
 ) -> Result<HttpResponse, AppError> {
     let cfg = snapshot(&tier_config);
+    let orgs_enabled = cfg.orgs_enabled;
     let stripe = stripe.get_ref().clone();
     let pool = pool.get_ref().clone();
     // The reasons are dropped here, not swallowed: `resolve` has already logged
     // each one, and the public body must not name price ids or config state.
     // BUNYIP-526: the slot-usage counts ride inside the cached resolve, so they
     // refresh on the same TTL as the prices rather than per request.
+    // BUNYIP-692: the org-tier catalogue rides on the same cache entry so
+    // bunyip-web's `TtlCache<Pricing>` does not grow a second endpoint fetch.
     let body = cache
         .get_or_resolve(|| async move {
             let usage = slot_usage(&pool).await;
-            resolve(cfg, stripe, usage).await.0
+            let mut resolved = resolve(cfg, stripe, usage).await.0;
+            resolved.org_tiers =
+                bunyip_domain::services::OrgPricingService::public_list(&pool, orgs_enabled)
+                    .await
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(
+                            error = %e,
+                            "pricing: org-tier catalogue load failed; publishing []"
+                        );
+                        Vec::new()
+                    });
+            resolved
         })
         .await;
     Ok(HttpResponse::Ok().json(body.as_ref()))
@@ -548,6 +577,7 @@ mod tests {
             enabled,
             trial_days: 30,
             tiers: vec![],
+            org_tiers: vec![],
         }
     }
 

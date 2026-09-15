@@ -20,6 +20,9 @@ pub mod ip_enrich;
 pub mod jwt;
 pub mod mailer_relay;
 pub mod mailer_webhook;
+pub mod org_pricing;
+#[cfg(test)]
+pub mod org_pricing_tests;
 pub mod organizations;
 #[cfg(test)]
 pub mod organizations_tests;
@@ -86,6 +89,7 @@ pub use mailer_relay::{
 pub use mailer_webhook::{
     ingest_feedback, verify_signature, FeedbackEvent, FeedbackOutcome, SIGNATURE_HEADER,
 };
+pub use org_pricing::OrgPricingService;
 pub use organizations::{OrganizationsService, TeamsService};
 pub use stripe::{
     classify_probe, stripe_config_from_db_model, stripe_err, stripe_err_for,

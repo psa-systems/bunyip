@@ -307,6 +307,29 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/pricing/status",
                 web::get().to(handlers::admin_pricing_status),
             )
+            // BUNYIP-692: org-tier pricing catalogue CRUD. `reorder` is
+            // registered BEFORE `{id}` so actix never captures "reorder" as
+            // a UUID (BUNYIP-473 shape).
+            .route(
+                "/pricing/orgs",
+                web::get().to(handlers::org_pricing::admin_list),
+            )
+            .route(
+                "/pricing/orgs",
+                web::post().to(handlers::org_pricing::admin_create),
+            )
+            .route(
+                "/pricing/orgs/reorder",
+                web::put().to(handlers::org_pricing::admin_reorder),
+            )
+            .route(
+                "/pricing/orgs/{id}",
+                web::put().to(handlers::org_pricing::admin_update),
+            )
+            .route(
+                "/pricing/orgs/{id}",
+                web::delete().to(handlers::org_pricing::admin_delete),
+            )
             // Tier config
             .route("/tier-config", web::get().to(handlers::get_tier_config))
             .route("/tier-config", web::put().to(handlers::update_tier_config))

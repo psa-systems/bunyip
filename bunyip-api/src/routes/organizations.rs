@@ -55,6 +55,15 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route(
                 "/teams/{team_id}/members/{bunyip_user_id}",
                 web::delete().to(handlers::organizations::remove_team_member),
+            )
+            // BUNYIP-692: owner picks or clears the org's pricing tier.
+            .route(
+                "/tier",
+                web::put().to(handlers::org_pricing::set_organization_tier),
+            )
+            .route(
+                "/tier",
+                web::delete().to(handlers::org_pricing::clear_organization_tier),
             ),
     );
 }

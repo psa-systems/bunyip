@@ -14,6 +14,7 @@ pub mod entitlement;
 pub mod feedback;
 pub mod membership;
 pub mod oauth_client_user_tenant;
+pub mod org_pricing;
 pub mod organization;
 pub mod rate_limit;
 pub mod stripe;
@@ -60,6 +61,12 @@ pub use feedback::{
 };
 pub use membership::{AdminMembershipResponse, MembershipResponse};
 pub use oauth_client_user_tenant::{CreateUserTenantAssignment, OAuthClientUserTenant};
+pub use org_pricing::{
+    validate_seats, validate_stripe_price_id, validate_tier_name, validate_visibility,
+    CreateOrgPricingTierRequest, OrgPricingTier, PublicOrgPricingTier,
+    ReorderOrgPricingTiersRequest, SetOrganizationTierRequest, UpdateOrgPricingTierRequest,
+    VALID_VISIBILITIES,
+};
 pub use organization::{
     validate_name, validate_team_member_role, AddTeamMemberRequest, CreateOrganizationRequest,
     CreateTeamRequest, Organization, Team, TeamMember, UpdateOrganizationRequest,
