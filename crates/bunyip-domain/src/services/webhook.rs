@@ -65,6 +65,29 @@ impl WebhookService {
             .await;
     }
 
+    /// BUNYIP-674 [BUNYIP-626 child 3]: notify Mokosh that a grant on
+    /// this bunyip changed state (created, revoked, or role changed).
+    /// Fire-and-forget from Bunyip's side: the parent ticket's stale-
+    /// window budget is 30s (Mokosh caches the DB row it reads on
+    /// receipt with a 30s TTL), so a single delivery attempt is enough
+    /// to close the window on the common path and the 30s TTL is the
+    /// backstop when a delivery drops.
+    ///
+    /// The payload names the field shape BUNYIP-674 documents so the
+    /// Mokosh receiver's UPSERT lands on the right (owner, grantee,
+    /// mokosh_account_id) triple regardless of whether the receiver
+    /// missed a prior `granted` event.
+    pub async fn notify_mokosh_grant_changed(
+        &self,
+        app: &Application,
+        grant: &crate::models::MokoshAccountGrant,
+    ) {
+        let Some(url) = webhook_url(app) else { return };
+        self.sender
+            .send(url, &mokosh_grant_changed_payload(grant))
+            .await;
+    }
+
     /// Deliver the `account_deleted` webhook to one app with bounded retries
     /// (BUNYIP-211). Returns `Ok(())` on the first 2xx response - or when the
     /// app has no `webhook_url`, since there is nothing to notify - or
@@ -100,6 +123,35 @@ fn account_deleted_payload(user_id: Uuid) -> serde_json::Value {
         "event": "account_deleted",
         "user_id": user_id,
         "timestamp": chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+/// Build the `mokosh_grant_changed` webhook payload (BUNYIP-674). Kept
+/// beside its sibling so the wire shape and the HMAC the receiver
+/// verifies stay together and cannot drift with a callsite-level edit.
+fn mokosh_grant_changed_payload(grant: &crate::models::MokoshAccountGrant) -> serde_json::Value {
+    let state = if grant.revoked_at.is_some() {
+        "revoked"
+    } else {
+        "granted"
+    };
+    // Only the granted state carries a role; a revoked event drops it
+    // so Mokosh cannot accidentally re-apply a stale role from a
+    // late-arriving `granted` webhook after seeing a `revoked` one.
+    let role = if grant.revoked_at.is_some() {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::String(grant.role.clone())
+    };
+    serde_json::json!({
+        "event": "mokosh_grant_changed",
+        "grant_id": grant.id,
+        "owner_bunyip_user_id": grant.owner_bunyip_user_id,
+        "grantee_bunyip_user_id": grant.grantee_bunyip_user_id,
+        "mokosh_account_id": grant.mokosh_account_id,
+        "state": state,
+        "role": role,
+        "at": chrono::Utc::now().to_rfc3339(),
     })
 }
 
@@ -207,5 +259,56 @@ mod tests {
             .dispatch_account_deleted(&app, Uuid::new_v4())
             .await
             .is_ok());
+    }
+
+    /// BUNYIP-674: pin the wire shape Mokosh's receiver decodes. Every
+    /// field the parent ticket names must be present and typed as
+    /// documented; a change to any of them must move the receiver in
+    /// the same PR.
+    #[test]
+    fn mokosh_grant_changed_payload_carries_the_documented_fields() {
+        let grant = crate::models::MokoshAccountGrant {
+            id: Uuid::from_u128(1),
+            owner_bunyip_user_id: Uuid::from_u128(2),
+            grantee_bunyip_user_id: Uuid::from_u128(3),
+            mokosh_account_id: "acme".to_string(),
+            role: "admin".to_string(),
+            granted_at: Utc::now(),
+            revoked_at: None,
+        };
+        let payload = mokosh_grant_changed_payload(&grant);
+        assert_eq!(payload["event"], "mokosh_grant_changed");
+        assert_eq!(payload["grant_id"], serde_json::json!(grant.id));
+        assert_eq!(
+            payload["owner_bunyip_user_id"],
+            serde_json::json!(grant.owner_bunyip_user_id)
+        );
+        assert_eq!(
+            payload["grantee_bunyip_user_id"],
+            serde_json::json!(grant.grantee_bunyip_user_id)
+        );
+        assert_eq!(payload["mokosh_account_id"], "acme");
+        assert_eq!(payload["state"], "granted");
+        assert_eq!(payload["role"], "admin");
+        assert!(payload["at"].is_string());
+    }
+
+    #[test]
+    fn mokosh_grant_changed_payload_drops_the_role_when_revoked() {
+        let grant = crate::models::MokoshAccountGrant {
+            id: Uuid::from_u128(1),
+            owner_bunyip_user_id: Uuid::from_u128(2),
+            grantee_bunyip_user_id: Uuid::from_u128(3),
+            mokosh_account_id: "acme".to_string(),
+            role: "admin".to_string(),
+            granted_at: Utc::now(),
+            revoked_at: Some(Utc::now()),
+        };
+        let payload = mokosh_grant_changed_payload(&grant);
+        assert_eq!(payload["state"], "revoked");
+        assert!(
+            payload["role"].is_null(),
+            "revoked events must drop the role so a late-arriving granted webhook does not reapply it"
+        );
     }
 }
