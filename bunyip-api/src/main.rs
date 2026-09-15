@@ -679,9 +679,21 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     };
+    let stripe_secret_key = stripe_config.secret_key.clone();
     let stripe_service = Arc::new(StripeService::new(stripe_config));
 
     info!("Stripe service initialized");
+
+    // BUNYIP-693: seat-based org billing provider. Wraps StripeService for
+    // `ensure_customer` (so an owner keeps their existing customer id) and
+    // holds its own `stripe::Client` for the three subscription operations
+    // that are not on the shared dunite service today.
+    let org_billing_provider = Arc::new(
+        bunyip_api::org_billing_provider::StripeOrgBillingProvider::new(
+            stripe_service.clone(),
+            &stripe_secret_key,
+        ),
+    );
 
     // BUNYIP-203: warn loudly when Stripe is wired (real secret key) but no
     // webhook signing secret is configured. The webhook handler fails closed
@@ -1270,6 +1282,7 @@ async fn main() -> anyhow::Result<()> {
                 bunyip_api::handlers::mailer::MailerWebhookSecret(mailer_webhook_secret.clone()),
             ))
             .app_data(web::Data::new(stripe_service.clone()))
+            .app_data(web::Data::new(org_billing_provider.clone()))
             .app_data(web::Data::new(totp_service.clone()))
             .app_data(web::Data::new(webhook_service.clone()))
             .app_data(web::Data::new(backup_service.clone()))

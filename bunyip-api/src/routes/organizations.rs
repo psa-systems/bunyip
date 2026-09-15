@@ -64,6 +64,23 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route(
                 "/tier",
                 web::delete().to(handlers::org_pricing::clear_organization_tier),
+            )
+            // BUNYIP-693: the org's seat-based Stripe subscription.
+            .route(
+                "/subscription",
+                web::get().to(handlers::org_billing::get_subscription),
+            )
+            .route(
+                "/subscription",
+                web::post().to(handlers::org_billing::subscribe),
+            )
+            .route(
+                "/subscription",
+                web::put().to(handlers::org_billing::change_tier),
+            )
+            .route(
+                "/subscription",
+                web::delete().to(handlers::org_billing::cancel),
             ),
     );
 }
