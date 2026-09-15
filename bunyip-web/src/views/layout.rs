@@ -302,10 +302,16 @@ pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker
 ///
 /// The `alt` is empty on purpose: the mark sits inside a link whose text is the
 /// product name, so naming it again would announce the brand twice.
-fn brand_mark(branding: &Branding) -> Markup {
+pub(crate) fn brand_mark(branding: &Branding) -> Markup {
     html! {
         @if let Some(src) = branding.mark_src() {
-            img src=(src) alt="" width="28" height="28" class="w-7 h-7 object-contain";
+            // An uploaded mark is often flat-color ink meant for a light
+            // strip, unlike the fallback glyph below (drawn in `currentColor`
+            // so it already adapts). `bg-card` gives it the same themed
+            // surface the branding-page preview frames it on
+            // (`handlers/admin/branding.rs`), so it stays legible in dark
+            // mode instead of vanishing or clashing.
+            img src=(src) alt="" width="28" height="28" class="w-7 h-7 rounded object-contain bg-card p-0.5";
         } @else {
             svg class="w-7 h-7 text-brand-primary-700 dark:text-brand-primary-200" viewBox="0 0 32 32" fill="none" {
                 path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M8 28 V14 M16 28 V8 M24 28 V14" {}
@@ -600,6 +606,14 @@ fn admin_items() -> Vec<NavItem> {
             title: "System Status",
             href: "/admin/status",
             icon: "activity",
+            external: false,
+        },
+        // BUNYIP-634: the suite provider-status aggregate (this deployment's
+        // own, Mokosh's, and Drillmark's) on one page.
+        NavItem {
+            title: "Provider Status",
+            href: "/admin/providers/status",
+            icon: "globe",
             external: false,
         },
         // BUNYIP-410: Memberships folded into the Users page (tier column +
@@ -1468,6 +1482,10 @@ mod tests {
             "{uploaded}"
         );
         assert!(!uploaded.contains("<svg"), "{uploaded}");
+        // BUNYIP-702: an uploaded mark is often flat-color ink with no
+        // dark-mode treatment of its own, unlike the glyph it replaces
+        // (drawn in `currentColor`), so it needs a themed surface behind it.
+        assert!(uploaded.contains("bg-card"), "{uploaded}");
     }
 
     /// BUNYIP-487: `/pricing` 404s unless an admin published it, so the nav and
