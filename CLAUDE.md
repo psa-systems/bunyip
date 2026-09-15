@@ -61,11 +61,15 @@ variants, and `check-justfile`; the root justfile configures them through
 variables (`app`, `compose_service`, `dev_bind_sources`, `pre_commit_prepare`,
 `clippy_args`, `compile_args`, `test_args`, `release_layout`) and must never
 redefine one. Two of those variables carry the `./secrets/oidc` bind source the
-api service mounts. `dev_bind_sources := "secrets/oidc"` is what stops the
-daemon materializing that directory as root while it resolves the mount, which
-`check-tree-ownership` then fails every commit in the clone on (DEV-371):
-`ensure-bind-sources` creates it host-owned and repairs an empty root-owned one,
-and common runs it ahead of the prepare step in both pre-commit variants.
+api service mounts. `dev_bind_sources := "secrets/oidc target bunyip-web/node_modules"`
+is what stops the daemon materializing a path as root while it resolves a
+mount, which `check-tree-ownership` then fails every commit in the clone on
+(DEV-371): `secrets/oidc` is the api's bind source (BUNYIP-658), and `target`
+and `bunyip-web/node_modules` are the mount points of the `cargo-target` and
+`web-node-modules` named volumes that `compose.dev.yml` nests under the
+`.:/app` bind (BUNYIP-659). `ensure-bind-sources` creates each host-owned and
+repairs an empty root-owned one, and common runs it ahead of the prepare step
+in both pre-commit variants.
 `pre_commit_prepare := "ensure-oidc-keys"` then generates the Ed25519 keypair
 into it on the host, the part that is bunyip-specific. `check-justfile` fails
 the hook and the `Check` workflow when a common-owned recipe is redefined
