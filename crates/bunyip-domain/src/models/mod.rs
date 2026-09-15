@@ -13,6 +13,7 @@ pub mod email;
 pub mod entitlement;
 pub mod feedback;
 pub mod membership;
+pub mod mokosh_grant;
 pub mod oauth_client_user_tenant;
 pub mod org_pricing;
 pub mod organization;
@@ -60,6 +61,10 @@ pub use feedback::{
     RespondToFeedbackRequest, UpdateFeedbackStatusRequest,
 };
 pub use membership::{AdminMembershipResponse, MembershipResponse};
+pub use mokosh_grant::{
+    validate_grant_role, validate_mokosh_account_id, CreateGrantRequest, MokoshAccountGrant,
+    VALID_GRANT_ROLES,
+};
 pub use oauth_client_user_tenant::{CreateUserTenantAssignment, OAuthClientUserTenant};
 pub use org_pricing::{
     validate_seats, validate_stripe_price_id, validate_tier_name, validate_visibility,

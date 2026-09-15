@@ -177,6 +177,7 @@ pub mod events;
 pub mod feedback;
 pub mod mailer;
 pub mod membership;
+pub mod mokosh_grants;
 pub mod org_billing;
 pub mod org_pricing;
 pub mod organizations;
