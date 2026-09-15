@@ -2861,6 +2861,7 @@ mod tests {
                 available: true,
                 slots_remaining: None,
             }],
+            ..PricingResponse::default()
         }
     }
 

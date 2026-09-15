@@ -1618,6 +1618,9 @@ pub struct TierConfigResponse {
 /// is the only source: `enabled` is its switch and each tier's amount comes
 /// from the Stripe price that tier maps to, so the advertised price cannot
 /// disagree with the charged one.
+///
+/// BUNYIP-692: `org_tiers` rides on the same cached payload so bunyip-web's
+/// `TtlCache<Pricing>` does not grow a second endpoint fetch.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct PricingResponse {
     #[serde(default)]
@@ -1628,6 +1631,109 @@ pub struct PricingResponse {
     pub trial_days: i64,
     #[serde(default)]
     pub tiers: Vec<PricingTier>,
+    #[serde(default)]
+    pub org_tiers: Vec<OrgTier>,
+}
+
+// -- BUNYIP-672 / 692 / 693 / 673: org and grant wire types -----------------
+
+/// One organization row (BUNYIP-672).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Organization {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub owner_bunyip_user_id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: String,
+    /// BUNYIP-692: the tier the owner picked, or `None` when unset.
+    #[serde(default)]
+    pub org_tier_id: Option<String>,
+}
+
+/// One team row (BUNYIP-672).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Team {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub organization_id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+/// One team_members row (BUNYIP-672).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TeamMember {
+    #[serde(default)]
+    pub team_id: String,
+    #[serde(default)]
+    pub bunyip_user_id: String,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub joined_at: String,
+}
+
+/// One org-tier row on the public pricing catalogue (BUNYIP-692).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct OrgTier {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub stripe_price_id: String,
+    #[serde(default)]
+    pub included_seats: i32,
+    #[serde(default)]
+    pub seat_cap: Option<i32>,
+}
+
+/// `GET /v1/organization/subscription` snapshot (BUNYIP-693).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct OrgSubscription {
+    #[serde(default)]
+    pub organization_id: String,
+    #[serde(default)]
+    pub org_tier_id: Option<String>,
+    #[serde(default)]
+    pub stripe_subscription_id: Option<String>,
+    #[serde(default)]
+    pub subscription_status: Option<String>,
+    #[serde(default)]
+    pub seat_count: i32,
+    #[serde(default)]
+    pub subscription_updated_at: Option<String>,
+}
+
+/// One `mokosh_account_grants` row (BUNYIP-673).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct MokoshGrant {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub owner_bunyip_user_id: String,
+    #[serde(default)]
+    pub grantee_bunyip_user_id: String,
+    #[serde(default)]
+    pub mokosh_account_id: String,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub granted_at: String,
+    #[serde(default)]
+    pub revoked_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

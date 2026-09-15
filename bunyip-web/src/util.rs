@@ -415,6 +415,7 @@ mod tests {
                 enabled: true,
                 trial_days: 14,
                 tiers,
+                ..PricingResponse::default()
             }
         }
 
@@ -451,6 +452,7 @@ mod tests {
                 enabled: false,
                 trial_days: 14,
                 tiers: vec![tier(MembershipTier::Standard, 900, true)],
+            ..PricingResponse::default()
             };
             assert_eq!(entry_price(&off), None);
             assert_eq!(tier_price(&off, &MembershipTier::Standard), None);

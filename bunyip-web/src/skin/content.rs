@@ -1762,6 +1762,7 @@ mod pricing_tests {
                 available: true,
                 slots_remaining: None,
             }],
+            ..PricingResponse::default()
         }
     }
 
@@ -1802,6 +1803,7 @@ mod pricing_tests {
                 tier(MembershipTier::EarlyAdopter, 200),
                 tier(MembershipTier::Standard, 300),
             ],
+            ..PricingResponse::default()
         };
         let html = pricing_content(&payload, true, false).into_string();
         for name in ["Lifetime", "Early Adopter", "Standard"] {

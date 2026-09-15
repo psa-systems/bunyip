@@ -5,7 +5,8 @@ use serde_json::{json, Value};
 use super::types::{
     AppDoc, AppDocSummary, AppDownloadGroup, Application, ApplicationGroup, ApplicationGroupList,
     ApplicationList, CheckoutSessionResponse, DocumentedApp, DownloadGroups, Membership,
-    PaginatedResponse, PricingResponse, SessionInfo, StripeInvoice, StripePaymentResponse,
+    MokoshGrant, OrgSubscription, Organization, PaginatedResponse, PricingResponse, SessionInfo,
+    StripeInvoice, StripePaymentResponse, Team, TeamMember,
 };
 use super::{ok_data, parse, parse_bare, Api, ApiError};
 
@@ -259,4 +260,256 @@ pub async fn app_doc(api: &Api, app_slug: &str, doc_slug: &str) -> Result<AppDoc
         )
         .await?,
     )
+}
+
+// -- BUNYIP-691: organizations + teams + grants -----------------------------
+
+/// `GET /v1/organization` - the caller's own org. `Ok(None)` when the caller
+/// has no org yet, so the SSR page can render the create form.
+pub async fn get_own_organization(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Option<Organization>, ApiError> {
+    let resp = api.get("/organization", cookie).await?;
+    if resp.status == 404 {
+        return Ok(None);
+    }
+    parse(resp).map(Some)
+}
+
+/// `POST /v1/organization` - create the caller's org.
+pub async fn create_organization(
+    api: &Api,
+    cookie: Option<&str>,
+    name: &str,
+) -> Result<Organization, ApiError> {
+    parse(
+        api.post("/organization", cookie, Some(json!({ "name": name })))
+            .await?,
+    )
+}
+
+/// `PUT /v1/organization` - rename.
+pub async fn update_own_organization(
+    api: &Api,
+    cookie: Option<&str>,
+    name: &str,
+) -> Result<Organization, ApiError> {
+    parse(
+        api.put("/organization", cookie, Some(json!({ "name": name })))
+            .await?,
+    )
+}
+
+/// `GET /v1/organization/teams`.
+pub async fn list_teams(api: &Api, cookie: Option<&str>) -> Result<Vec<Team>, ApiError> {
+    parse(api.get("/organization/teams", cookie).await?)
+}
+
+/// `POST /v1/organization/teams`.
+pub async fn create_team(
+    api: &Api,
+    cookie: Option<&str>,
+    name: &str,
+    description: Option<&str>,
+) -> Result<Team, ApiError> {
+    let mut body = json!({ "name": name });
+    if let Some(d) = description {
+        body["description"] = json!(d);
+    }
+    parse(api.post("/organization/teams", cookie, Some(body)).await?)
+}
+
+/// `PUT /v1/organization/teams/{id}`.
+pub async fn update_team(
+    api: &Api,
+    cookie: Option<&str>,
+    team_id: &str,
+    name: &str,
+    description: Option<&str>,
+) -> Result<Team, ApiError> {
+    let mut body = json!({ "name": name });
+    if let Some(d) = description {
+        body["description"] = json!(d);
+    }
+    parse(
+        api.put(
+            &format!("/organization/teams/{}", urlencoding::encode(team_id)),
+            cookie,
+            Some(body),
+        )
+        .await?,
+    )
+}
+
+/// `DELETE /v1/organization/teams/{id}`.
+pub async fn delete_team(api: &Api, cookie: Option<&str>, team_id: &str) -> Result<(), ApiError> {
+    let r = api
+        .delete(
+            &format!("/organization/teams/{}", urlencoding::encode(team_id)),
+            cookie,
+            None,
+        )
+        .await?;
+    ok_data(&r)?;
+    Ok(())
+}
+
+/// `GET /v1/organization/teams/{id}/members`.
+pub async fn list_team_members(
+    api: &Api,
+    cookie: Option<&str>,
+    team_id: &str,
+) -> Result<Vec<TeamMember>, ApiError> {
+    parse(
+        api.get(
+            &format!(
+                "/organization/teams/{}/members",
+                urlencoding::encode(team_id)
+            ),
+            cookie,
+        )
+        .await?,
+    )
+}
+
+/// `POST /v1/organization/teams/{id}/members`.
+pub async fn add_team_member(
+    api: &Api,
+    cookie: Option<&str>,
+    team_id: &str,
+    bunyip_user_id: &str,
+    role: &str,
+) -> Result<TeamMember, ApiError> {
+    parse(
+        api.post(
+            &format!(
+                "/organization/teams/{}/members",
+                urlencoding::encode(team_id)
+            ),
+            cookie,
+            Some(json!({ "bunyip_user_id": bunyip_user_id, "role": role })),
+        )
+        .await?,
+    )
+}
+
+/// `DELETE /v1/organization/teams/{team_id}/members/{bunyip_user_id}`.
+pub async fn remove_team_member(
+    api: &Api,
+    cookie: Option<&str>,
+    team_id: &str,
+    bunyip_user_id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .delete(
+            &format!(
+                "/organization/teams/{}/members/{}",
+                urlencoding::encode(team_id),
+                urlencoding::encode(bunyip_user_id)
+            ),
+            cookie,
+            None,
+        )
+        .await?;
+    ok_data(&r)?;
+    Ok(())
+}
+
+/// `PUT /v1/organization/tier` - the owner picks a tier.
+pub async fn set_organization_tier(
+    api: &Api,
+    cookie: Option<&str>,
+    org_tier_id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .put(
+            "/organization/tier",
+            cookie,
+            Some(json!({ "org_tier_id": org_tier_id })),
+        )
+        .await?;
+    ok_data(&r)?;
+    Ok(())
+}
+
+/// `GET /v1/organization/subscription` - the current billing snapshot.
+pub async fn get_org_subscription(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<OrgSubscription, ApiError> {
+    parse(api.get("/organization/subscription", cookie).await?)
+}
+
+/// `POST /v1/organization/subscription` - subscribe against the picked tier.
+pub async fn subscribe_org(api: &Api, cookie: Option<&str>) -> Result<OrgSubscription, ApiError> {
+    parse(api.post("/organization/subscription", cookie, None).await?)
+}
+
+/// `PUT /v1/organization/subscription` - change tier after picking a new one.
+pub async fn change_org_tier(api: &Api, cookie: Option<&str>) -> Result<OrgSubscription, ApiError> {
+    parse(api.put("/organization/subscription", cookie, None).await?)
+}
+
+/// `DELETE /v1/organization/subscription` - cancel at period end.
+pub async fn cancel_org_subscription(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<OrgSubscription, ApiError> {
+    parse(
+        api.delete("/organization/subscription", cookie, None)
+            .await?,
+    )
+}
+
+/// `GET /v1/grants?role=owner` - grants the caller has ISSUED.
+pub async fn list_issued_grants(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Vec<MokoshGrant>, ApiError> {
+    parse(api.get("/grants?role=owner", cookie).await?)
+}
+
+/// `GET /v1/grants?role=grantee` - grants the caller has RECEIVED ("Shared
+/// with you"). This is what the app switcher's shared list reads.
+pub async fn list_received_grants(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Vec<MokoshGrant>, ApiError> {
+    parse(api.get("/grants?role=grantee", cookie).await?)
+}
+
+/// `POST /v1/grants` - the caller (grantor) creates a grant.
+pub async fn create_grant(
+    api: &Api,
+    cookie: Option<&str>,
+    grantee_email: &str,
+    mokosh_account_id: &str,
+    role: &str,
+) -> Result<MokoshGrant, ApiError> {
+    parse(
+        api.post(
+            "/grants",
+            cookie,
+            Some(json!({
+                "grantee_email": grantee_email,
+                "mokosh_account_id": mokosh_account_id,
+                "role": role,
+            })),
+        )
+        .await?,
+    )
+}
+
+/// `DELETE /v1/grants/{id}`.
+pub async fn revoke_grant(api: &Api, cookie: Option<&str>, grant_id: &str) -> Result<(), ApiError> {
+    let r = api
+        .delete(
+            &format!("/grants/{}", urlencoding::encode(grant_id)),
+            cookie,
+            None,
+        )
+        .await?;
+    ok_data(&r)?;
+    Ok(())
 }

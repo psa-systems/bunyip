@@ -224,9 +224,44 @@ async fn main() {
         // BUNYIP-493: registered unconditionally and gated inside the handler,
         // so flipping the switch needs no router rebuild. While the flag is off
         // it answers the branded 404, the same page an unrouted path gets.
+        // BUNYIP-691: the POST targets under `/organizations/*` are the write
+        // half of the SSR page; each one flag-gates for the same reason, redirects
+        // back to `/organizations`, and never renders content itself.
         .route(
             "/organizations",
             get(handlers::organizations::organizations),
+        )
+        .route(
+            "/organizations/create",
+            axum::routing::post(handlers::organizations::post_create_org),
+        )
+        .route(
+            "/organizations/teams/create",
+            axum::routing::post(handlers::organizations::post_create_team),
+        )
+        .route(
+            "/organizations/tier",
+            axum::routing::post(handlers::organizations::post_set_tier),
+        )
+        .route(
+            "/organizations/subscription/subscribe",
+            axum::routing::post(handlers::organizations::post_subscribe),
+        )
+        .route(
+            "/organizations/subscription/change",
+            axum::routing::post(handlers::organizations::post_change_tier),
+        )
+        .route(
+            "/organizations/subscription/cancel",
+            axum::routing::post(handlers::organizations::post_cancel),
+        )
+        .route(
+            "/organizations/grants/create",
+            axum::routing::post(handlers::organizations::post_create_grant),
+        )
+        .route(
+            "/organizations/grants/{grant_id}/revoke",
+            axum::routing::post(handlers::organizations::post_revoke_grant),
         )
         .route(
             "/membership/subscribe",
