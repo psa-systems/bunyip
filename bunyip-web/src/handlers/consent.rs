@@ -25,16 +25,6 @@ pub struct ConsentQuery {
     pub client_id: String,
     /// Space-separated scope strings.
     pub missing: String,
-    /// Human-readable name of the requesting client (BUNYIP-342), passed by the
-    /// authorize handler so the screen can name the app. Absent on a
-    /// hand-crafted URL or an older backend.
-    #[serde(default)]
-    pub client_name: Option<String>,
-    /// BUNYIP-406: the requesting client's icon/logo URL, passed by the
-    /// authorize handler alongside `client_name`. Absent when the client has no
-    /// logo (or on an older backend); the card then shows a name-initial badge.
-    #[serde(default)]
-    pub logo_uri: Option<String>,
     /// Absolute URL the authorize handler wants us to send the user back to
     /// after Allow. Already URL-encoded by the caller.
     #[serde(default, rename = "continue")]
@@ -153,9 +143,21 @@ pub async fn consent_get(
         return redirect("/dashboard");
     }
 
+    // BUNYIP-697: the rendered name/logo come from a client_id-keyed lookup
+    // against the client registry, never from the query string - a
+    // hand-crafted `client_name`/`logo_uri` param (e.g. a phishing link) is
+    // not accepted as input at all. A lookup failure (unknown client_id,
+    // API unreachable) falls back to the generic "An application" card rather
+    // than failing the whole page.
+    let identity = crate::api::calls::client_identity(&st.api, c.forward.as_deref(), &q.client_id)
+        .await
+        .ok();
+    let client_name = identity.as_ref().and_then(|i| i.name.as_deref());
+    let logo_uri = identity.as_ref().and_then(|i| i.logo_uri.as_deref());
+
     let body = html! {
-        // BUNYIP-406: name + icon of the requesting application.
-        (app_identity(q.client_name.as_deref(), q.logo_uri.as_deref()))
+        // BUNYIP-406 / BUNYIP-697: name + icon of the requesting application.
+        (app_identity(client_name, logo_uri))
         ul class="mb-4 space-y-2 list-disc list-inside text-sm" {
             @for s in &scopes {
                 li { (scope_label(s)) }
@@ -176,10 +178,7 @@ pub async fn consent_get(
         "shield",
         "bg-primary/10 text-primary-text",
         "Approve access",
-        &consent_description(
-            q.client_name.as_deref(),
-            &crate::views::layout::brand_name(),
-        ),
+        &consent_description(client_name, &crate::views::layout::brand_name()),
         body,
     );
 
