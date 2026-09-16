@@ -87,13 +87,19 @@ pub const SYSTEM_LEVEL_ENV_KEYS: &[&str] = &[
     // Database connection.
     "DATABASE_URL",
     "APP_DATABASE_URL",
+    "BUNYIP_APP_PASSWORD",
     // Secrets backend location and credentials.
     "SECRETS_STORAGE",
-    "INFISICAL_HOST",
+    "INFISICAL_ADDRESS",
     "INFISICAL_CLIENT_ID",
     "INFISICAL_CLIENT_SECRET",
     "INFISICAL_PROJECT_ID",
     "INFISICAL_ENVIRONMENT",
+    // Signing and at-rest key material.
+    "JWT_SECRET",
+    "APP_ENCRYPTION_KEY",
+    "APP_ENCRYPTION_KEY_PREV",
+    "APP_KEY_VERSION",
 ];
 
 /// The env var naming the LEGACY YAML file (BUNYIP-579/622). It is no longer a

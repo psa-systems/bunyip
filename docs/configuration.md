@@ -49,8 +49,8 @@ configuration key the file layer could serve.
 |----------------------------------------------------------------------------------------------------|---------------------------------|
 | `CORS_ORIGIN`, `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`                                                 | origins and domains the deployment trusts |
 | `DATABASE_URL`, `APP_DATABASE_URL`, `BUNYIP_APP_PASSWORD`                                           | database connection             |
-| `SECRETS_STORAGE`, `INFISICAL_HOST`, `INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_PROJECT_ID`, `INFISICAL_ENVIRONMENT` | secrets backend location and credentials |
-| `JWT_SECRET`, `APP_ENCRYPTION_KEY` (+ `_PREV`, `_VERSION`)                                          | signing and at-rest key material |
+| `SECRETS_STORAGE`, `INFISICAL_ADDRESS`, `INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_PROJECT_ID`, `INFISICAL_ENVIRONMENT` | secrets backend location and credentials |
+| `JWT_SECRET`, `APP_ENCRYPTION_KEY`, `APP_ENCRYPTION_KEY_PREV`, `APP_KEY_VERSION`                   | signing and at-rest key material |
 
 **Application-level (product-managed):** everything else. This includes every integration (SMTP, Stripe, IMAP, the OCI
 registry, GeoIP), which is managed in the database through the admin pages (see [settings that are not environment
