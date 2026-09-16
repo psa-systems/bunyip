@@ -25,6 +25,13 @@ services:
     ports: !reset []
     environment:
       BUNYIP_OIDC_ISSUER: ${BUNYIP_OIDC_ISSUER:?BUNYIP_OIDC_ISSUER missing - copy .env.example to .env and fill in}
+      # BUNYIP-192/BUNYIP-720: the browser-facing origin of bunyip-api. Same
+      # host the overlay advertises as the api's own OIDC issuer below
+      # (${USER}-bunyip-api.a8n.run). Without this the SSE subscriber and the
+      # Stripe webhook prefill inherit compose.dev.yml's http://localhost:4401
+      # default, which is unreachable from a Traefik-routed browser and (once
+      # reachable) Mixed Content on an HTTPS page.
+      BUNYIP_API_PUBLIC_ORIGIN: https://${USER}-bunyip-api.a8n.run
     networks:
       - private
       - traefik-public

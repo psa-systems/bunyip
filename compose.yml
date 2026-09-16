@@ -349,11 +349,14 @@ services:
       # ══ Hosting: listener + upstream ══════════════════════════════════════
       BUNYIP_BIND_ADDR: 0.0.0.0:4400
       BUNYIP_API_URL: ${BUNYIP_API_URL:-http://api:4401}
-      # BUNYIP-192 / BUNYIP-510: the browser-facing origin of bunyip-api. Used
-      # for the dashboard SSE subscriber and for the Stripe webhook URL the
-      # admin page prefills. Unset falls back to the internal BUNYIP_API_URL,
-      # which no browser and no Stripe delivery can reach.
-      BUNYIP_API_PUBLIC_ORIGIN: ${BUNYIP_API_PUBLIC_ORIGIN:-}
+      # BUNYIP-192 / BUNYIP-510 / BUNYIP-720: the browser-facing origin of
+      # bunyip-api. Used for the dashboard SSE subscriber and for the Stripe
+      # webhook URL the admin page prefills. REQUIRED: an unset value used to
+      # fall back to the internal BUNYIP_API_URL, which no browser and no
+      # Stripe delivery can reach, and which also lacks the https:// prefix
+      # use_secure_cookies() checks, so the fallback deploy looked healthy
+      # while shipping a dead live-update channel and non-Secure cookies.
+      BUNYIP_API_PUBLIC_ORIGIN: ${BUNYIP_API_PUBLIC_ORIGIN:?must be the public browser-facing bunyip-api origin, e.g. https://api.example.com}
 
       # ══ Hosting: proxy trust ══════════════════════════════════════════════
       # BUNYIP-311 / BUNYIP-409: trusted-proxy CIDRs for the FIRST hop of the
