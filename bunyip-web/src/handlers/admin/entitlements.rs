@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::api::admin as admin_api;
 use crate::api::types::UserEntitlement;
 use crate::handlers::{admin_guard, admin_response, verification_gate};
-use crate::util::rel_time;
+use crate::util::{rel_time, urlenc};
 use crate::views::ui::{back_link, badge, button_class, empty_state, error_box};
 use crate::web::{redirect_cookies, AppState};
 
@@ -73,14 +73,27 @@ pub async fn set_app_restricted(
         Err(r) => return r,
     };
     let requires_entitlement = f.value == "true";
-    let _ = admin_api::set_application_restricted(
+    let target = match admin_api::set_application_restricted(
         &st.api,
         c.forward.as_deref(),
         &slug,
         requires_entitlement,
     )
-    .await;
-    redirect_cookies("/admin/entitlements", &c.set_cookies)
+    .await
+    {
+        Ok(_) => format!(
+            "/admin/entitlements?toast_ok={}",
+            urlenc("Entitlement requirement changed")
+        ),
+        Err(e) => {
+            tracing::warn!(slug = %slug, error = ?e, "admin set application restricted failed");
+            format!(
+                "/admin/entitlements?toast_err={}",
+                urlenc("Could not change the entitlement requirement")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 pub async fn user_entitlements(
@@ -185,12 +198,27 @@ pub async fn grant_user_entitlement_h(
     {
         return refusal;
     }
-    let _ =
-        admin_api::grant_user_entitlement(&st.api, c.forward.as_deref(), &user_id, &f.slug).await;
-    redirect_cookies(
-        &format!("/admin/users/{user_id}/entitlements"),
-        &c.set_cookies,
+    let target = match admin_api::grant_user_entitlement(
+        &st.api,
+        c.forward.as_deref(),
+        &user_id,
+        &f.slug,
     )
+    .await
+    {
+        Ok(_) => format!(
+            "/admin/users/{user_id}/entitlements?toast_ok={}",
+            urlenc("Entitlement granted")
+        ),
+        Err(e) => {
+            tracing::warn!(user_id = %user_id, slug = %f.slug, error = ?e, "admin grant user entitlement failed");
+            format!(
+                "/admin/users/{user_id}/entitlements?toast_err={}",
+                urlenc("Could not grant the entitlement")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 pub async fn revoke_user_entitlement_h(
     State(st): State<AppState>,
@@ -207,10 +235,25 @@ pub async fn revoke_user_entitlement_h(
     {
         return refusal;
     }
-    let _ =
-        admin_api::revoke_user_entitlement(&st.api, c.forward.as_deref(), &user_id, &f.slug).await;
-    redirect_cookies(
-        &format!("/admin/users/{user_id}/entitlements"),
-        &c.set_cookies,
+    let target = match admin_api::revoke_user_entitlement(
+        &st.api,
+        c.forward.as_deref(),
+        &user_id,
+        &f.slug,
     )
+    .await
+    {
+        Ok(_) => format!(
+            "/admin/users/{user_id}/entitlements?toast_ok={}",
+            urlenc("Entitlement revoked")
+        ),
+        Err(e) => {
+            tracing::warn!(user_id = %user_id, slug = %f.slug, error = ?e, "admin revoke user entitlement failed");
+            format!(
+                "/admin/users/{user_id}/entitlements?toast_err={}",
+                urlenc("Could not revoke the entitlement")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }

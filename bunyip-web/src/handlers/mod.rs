@@ -734,4 +734,105 @@ mod verification_gate_tests {
             }
         }
     }
+
+    /// Every bunyip-web admin handler source that calls `admin_api::`
+    /// (BUNYIP-723). Discarding the result with `let _ =` swallows a refused
+    /// action into a fake redirect: the browser follows a 303 back to a page
+    /// that re-renders as if the click succeeded, and only the global
+    /// service-unavailable banner covers a transport error or a 5xx, never a
+    /// 4xx on one endpoint. The scan below fails the build the moment a new or
+    /// edited handler drops back into that shape.
+    const ADMIN_API_CALLER_SOURCES: &[(&str, &str)] = &[
+        (
+            "bunyip-web/src/handlers/admin/application_groups.rs",
+            include_str!("admin/application_groups.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/applications.rs",
+            include_str!("admin/applications.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/audit.rs",
+            include_str!("admin/audit.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/auto_ban_settings.rs",
+            include_str!("admin/auto_ban_settings.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/backup.rs",
+            include_str!("admin/backup.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/dashboard.rs",
+            include_str!("admin/dashboard.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/email_config.rs",
+            include_str!("admin/email_config.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/entitlements.rs",
+            include_str!("admin/entitlements.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/error_log.rs",
+            include_str!("admin/error_log.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/feedback.rs",
+            include_str!("admin/feedback.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/ip_bans.rs",
+            include_str!("admin/ip_bans.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/memberships.rs",
+            include_str!("admin/memberships.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/provider_status.rs",
+            include_str!("admin/provider_status.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/rate_limits.rs",
+            include_str!("admin/rate_limits.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/seed.rs",
+            include_str!("admin/seed.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/status.rs",
+            include_str!("admin/status.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/stripe.rs",
+            include_str!("admin/stripe.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/system_config.rs",
+            include_str!("admin/system_config.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/tier_settings.rs",
+            include_str!("admin/tier_settings.rs"),
+        ),
+        (
+            "bunyip-web/src/handlers/admin/users.rs",
+            include_str!("admin/users.rs"),
+        ),
+    ];
+
+    #[test]
+    fn no_handler_discards_an_admin_api_result() {
+        for (path, source) in ADMIN_API_CALLER_SOURCES {
+            assert!(
+                !source.contains("let _ = admin_api::"),
+                "{path}: discards an admin_api:: result with `let _ =`, which turns a \
+                 refused action into a fake success redirect (BUNYIP-723)"
+            );
+        }
+    }
 }

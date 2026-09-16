@@ -46,10 +46,22 @@ pub async fn membership_grant(
     if let Some(refusal) = verification_gate(&user, &c, &format!("/admin/users/{user_id}")) {
         return refusal;
     }
-    let _ = admin_api::grant_membership(&st.api, c.forward.as_deref(), &user_id).await;
     // BUNYIP-410: the Memberships page is gone; return to the user detail where
     // the action now lives.
-    redirect_cookies(&format!("/admin/users/{user_id}"), &c.set_cookies)
+    let target = match admin_api::grant_membership(&st.api, c.forward.as_deref(), &user_id).await {
+        Ok(_) => format!(
+            "/admin/users/{user_id}?toast_ok={}",
+            urlenc("Membership granted")
+        ),
+        Err(e) => {
+            tracing::warn!(user_id = %user_id, error = ?e, "admin grant membership failed");
+            format!(
+                "/admin/users/{user_id}?toast_err={}",
+                urlenc("Could not grant membership")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 /// POST /admin/memberships/{user_id}/revoke - revoke an admin-override
