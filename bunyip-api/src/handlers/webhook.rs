@@ -467,7 +467,7 @@ async fn handle_subscription_created(
         .as_i64()
         .unwrap_or(300) as i32;
 
-    // Resolve tier from product ID mapping (None means no match — leave tier unchanged)
+    // Resolve tier from product ID mapping (None means no match - leave tier unchanged)
     let resolved_tier = resolve_tier_for_product(product_id, tc);
 
     let mut tx = pool.begin().await?;
@@ -622,7 +622,7 @@ async fn handle_subscription_deleted(
             tracing::info!(
                 user_id = %user.id,
                 stripe_subscription_id = %stripe_subscription_id,
-                "Subscription deleted for lifetime member — skipping tier reset"
+                "Subscription deleted for lifetime member - skipping tier reset"
             );
             return Ok(());
         }

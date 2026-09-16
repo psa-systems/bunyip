@@ -38,7 +38,7 @@ pub(crate) fn resolve_manifest_digest(digest: String, bytes: &[u8]) -> String {
 
 const DEFAULT_ACCEPT: &str = "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json";
 
-/// GET /v2/  — version probe. Requires auth but no scope.
+/// GET /v2/  - version probe. Requires auth but no scope.
 pub async fn version_probe(user: Option<OciBearerUser>) -> Result<HttpResponse, OciError> {
     match user {
         Some(_) => Ok(HttpResponse::Ok()
