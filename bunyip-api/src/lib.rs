@@ -31,6 +31,7 @@ pub mod root_span;
 pub mod routes;
 pub mod secrets;
 pub mod seed;
+pub mod settings_archive;
 pub mod support_ingest;
 pub mod version;
 

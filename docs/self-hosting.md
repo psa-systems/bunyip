@@ -27,7 +27,7 @@ docker compose up --detach
 
 `BUNYIP_API_IMAGE` and `BUNYIP_WEB_IMAGE` are **required** (BUNYIP-237): Compose refuses to start without them. Pin both to the same release tag, e.g. `dev.a8n.run/psa-systems-private/bunyip-api:v0.4.1`, so a rolling restart never serves two different builds.
 
-Group-1 startup secrets (postgres, `DATABASE_URL`, `APP_ENCRYPTION_KEY`, `JWT_SECRET`, ...) are files, never environment variables: `compose.yml` mounts each from `./secrets/<name>` at `/run/secrets/<name>` and the api reads it through the `{NAME}_FILE` convention, so `docker inspect` never shows a value. `just init-secrets` ([`scripts/init-secrets.nu`](../scripts/init-secrets.nu)) generates them locally, which is right for a self-host that keeps its own values; the PSA deployments supply the same files from the SOPS `compose-secrets.yml`. Group-2 integration secrets (the SMTP password and the two Stripe secrets) come from the ONE store the deployment declares in `SECRETS_STORAGE=environment|database|infisical`, and only from that store. Full detail: [secrets-infisical.md](secrets-infisical.md).
+Group-1 startup secrets (postgres, `DATABASE_URL`, `APP_ENCRYPTION_KEY`, `JWT_SECRET`, ...) are files, never environment variables: `compose.yml` mounts each from `./secrets/<name>` at `/run/secrets/<name>` and the api reads it through the `{NAME}_FILE` convention, so `docker inspect` never shows a value. `just init-secrets` ([`scripts/init-secrets.nu`](../scripts/init-secrets.nu)) generates them locally, which is right for a self-host that keeps its own values; the PSA deployments supply the same files from the SOPS `compose-secrets.yml`. Group-2 integration secrets (the SMTP password, the two Stripe secrets and the support IMAP password) come from the ONE store the deployment declares in `SECRETS_STORAGE=environment|database|infisical`, and only from that store. Full detail: [secrets-infisical.md](secrets-infisical.md).
 
 `bunyip-api` and `bunyip-web` are released as a **matched pair**: both carry the same workspace version and are promoted together. Since BUNYIP-506 the response models tolerate one release of skew (an unknown field or enum value degrades to a neutral render instead of failing the decode), which is what makes a rolling restart safe; two or more releases apart is not supported. Bump both image tags to the same release in the same operator action.
 
@@ -65,3 +65,7 @@ docker compose up --detach
 ```
 
 Database migrations run on `bunyip-api` startup. Committed migrations are immutable, so a downgrade is not a supported path; restore from a backup instead.
+
+## Backing up and restoring settings
+
+Everything the admin pages configure lives in the database, so a wiped postgres volume loses the branding, the palette and brand assets, the tier flags, the email and Stripe rows, the rate-limit overrides, the application catalogue and the OAuth client registrations all at once. `bunyip-api settings-export` writes them to one passphrase-encrypted file and `bunyip-api settings-import` puts them back; the file needs neither `APP_ENCRYPTION_KEY` nor the old database to open, so it survives exactly the failure a `pg_dump` does not help with. The wipe-and-restore procedure, both commands and every flag, the format, and what is and is not archived: [settings-archive.md](settings-archive.md).

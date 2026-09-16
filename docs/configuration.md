@@ -448,20 +448,20 @@ Each is inert until added to the api service's `environment:` block. A deploymen
 hosts use the docker repo's per-host template) may already pass some of these; this table describes `compose.yml` in
 this repository.
 
-| Variable                                                            | Consequence of the gap                                                                       |
-|---------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
-| `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`       | deliberate: governed secrets, read only as `{NAME}_FILE` under `SECRETS_STORAGE=environment` |
-| `APP_URL`                                                           | the base URL for email links and the EHLO fallback silently comes from `CORS_ORIGIN`         |
-| `INFISICAL_*` (7)                                                   | the `infisical` provider cannot be selected or inspected                                     |
-| `BUNYIP_WEB_ORIGIN`                                                 | a multi-RP deployment cannot pin the login-UI origin                                         |
-| `BUNYIP_COOKIE_SHARED_DOMAIN`                                       | the cross-subdomain OP session cookie cannot be enabled                                      |
-| `MOKOSH_APPS_*`, `DRILLMARK_*`, `LETS_CHAT_*`                       | those OIDC clients keep whatever the migrations seeded; no reconciliation runs               |
-| `MOKOSH_WEBHOOK_URL`, `MOKOSH_BACKUP_API_URL`                       | the `applications.webhook_url` upsert never runs; Backup stays a stub                        |
-| `IP2LOCATION_DB_PATH`, `IP2PROXY_DB_PATH`                           | GeoIP and ASN / VPN enrichment stay off                                                      |
-| `OCI_REGISTRY_REALM`                                                | the realm is always derived from `OCI_REGISTRY_SERVICE` (correct for production)             |
-| `OIDC_LIFECYCLE_EVENT_KEY`                                          | the lifecycle event key is fixed at its default                                              |
-| `BUNYIP_BILLING_TRIAL_PERIOD_DAYS`, `TIER_EARLY_ADOPTER_TRIAL_DAYS` | those bootstrap seeds cannot be set; the admin pages are the only path                       |
-| `EMAIL_LOG_TOKENS`, `BUNYIP_E2E_BOOTSTRAP_ALLOW`, `BUNYIP_GIT_SHA`  | dev and build-time only; correctly absent from a production deployment                       |
+| Variable                                                                               | Consequence of the gap                                                                       |
+|----------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
+| `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD` | deliberate: governed secrets, read only as `{NAME}_FILE` under `SECRETS_STORAGE=environment` |
+| `APP_URL`                                                                              | the base URL for email links and the EHLO fallback silently comes from `CORS_ORIGIN`         |
+| `INFISICAL_*` (7)                                                                      | the `infisical` provider cannot be selected or inspected                                     |
+| `BUNYIP_WEB_ORIGIN`                                                                    | a multi-RP deployment cannot pin the login-UI origin                                         |
+| `BUNYIP_COOKIE_SHARED_DOMAIN`                                                          | the cross-subdomain OP session cookie cannot be enabled                                      |
+| `MOKOSH_APPS_*`, `DRILLMARK_*`, `LETS_CHAT_*`                                          | those OIDC clients keep whatever the migrations seeded; no reconciliation runs               |
+| `MOKOSH_WEBHOOK_URL`, `MOKOSH_BACKUP_API_URL`                                          | the `applications.webhook_url` upsert never runs; Backup stays a stub                        |
+| `IP2LOCATION_DB_PATH`, `IP2PROXY_DB_PATH`                                              | GeoIP and ASN / VPN enrichment stay off                                                      |
+| `OCI_REGISTRY_REALM`                                                                   | the realm is always derived from `OCI_REGISTRY_SERVICE` (correct for production)             |
+| `OIDC_LIFECYCLE_EVENT_KEY`                                                             | the lifecycle event key is fixed at its default                                              |
+| `BUNYIP_BILLING_TRIAL_PERIOD_DAYS`, `TIER_EARLY_ADOPTER_TRIAL_DAYS`                    | those bootstrap seeds cannot be set; the admin pages are the only path                       |
+| `EMAIL_LOG_TOKENS`, `BUNYIP_E2E_BOOTSTRAP_ALLOW`, `BUNYIP_GIT_SHA`                     | dev and build-time only; correctly absent from a production deployment                       |
 
 The bootstrap-default families are in the same position: `AUTO_BAN_*`, `RATE_LIMIT_{ACTION}_*` and the remaining
 `TIER_*` variables seed a fresh database and are not passed either, so on a deployed instance the admin pages are the
@@ -473,6 +473,10 @@ bunyip-web's own variables (below) are passed by the `web` service, except `CSP_
 
 These live in the database, are edited on the admin pages, and apply without a restart. Nothing here has an
 environment-variable equivalent unless the table says so.
+
+Because they live in the database, a wiped postgres volume loses every one of them: `bunyip-api settings-export` and
+`settings-import` move the whole set through one passphrase-encrypted file, and the procedure is in
+[settings-archive.md](settings-archive.md).
 
 ### Stripe (`stripe_config`, admin page: Stripe)
 
@@ -486,7 +490,6 @@ Singleton row (`id = 1`).
 | `app_tag`                                 | Stripe app tag                                                                           |
 | `success_url`, `cancel_url`               | checkout redirect targets. Unset defaults to the first `CORS_ORIGIN` entry               |
 | `trial_period_days`                       | signup free trial, 0-365. Env seed: `BUNYIP_BILLING_TRIAL_PERIOD_DAYS`                   |
-| `price_id_personal`, `price_id_business`  | from the original table; no current code reads them (per-tier ids live in `tier_config`) |
 
 Unconfigured means payment is simply disabled. Test-mode walkthrough:
 [`stripe-test-mode.md`](stripe-test-mode.md).
@@ -503,7 +506,7 @@ turn a feature on.
 |-------------------------------------------------------------------------------------|---------------------------------------------------------------------------|
 | `pricing_enabled`                                                                   | when false the public `/pricing` page 404s and every link to it is hidden |
 | `orgs_enabled`                                                                      | when false `/organizations` 404s and its nav entry is not rendered        |
-| `free_price_id`, `lifetime_price_id`, `early_adopter_price_id`, `standard_price_id` | Stripe price ids per tier                                                 |
+| `free_price_id`, `early_adopter_price_id`, `standard_price_id`                      | Stripe price ids per tier                                                 |
 | `lifetime_product_id`, `early_adopter_product_id`, `standard_product_id`            | Stripe product ids per tier                                               |
 | `lifetime_visible`, `early_adopter_visible`, `standard_visible`                     | per-tier visibility on `/pricing`. A visible tier must have a price id    |
 | `lifetime_slots`, `early_adopter_slots`                                             | capacity per tier. Env seeds exist                                        |

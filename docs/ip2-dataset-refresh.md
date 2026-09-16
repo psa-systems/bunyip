@@ -1,5 +1,10 @@
 # Refreshing the IP2Location / IP2Proxy datasets (BUNYIP-474)
 
+This runbook applies only to a self-managed deployment that adds its own `/data` mount and sets
+`IP2LOCATION_DB_PATH` / `IP2PROXY_DB_PATH` itself: none of `compose.yml`, `compose.dev.yml`, or `compose.dev-sso.yml`
+define those variables or mount `/data` for the api service, so GeoIP / ASN enrichment stays off in every stack this
+repo ships until an operator adds both (see [`configuration.md`](configuration.md#the-gaps-explicitly)).
+
 bunyip reads two offline IP datasets, each an IP2Location LITE `.BIN`:
 
 | Purpose | Env var | Installed file |
@@ -34,4 +39,8 @@ Run the script once a month. On a host with the repo checked out and the token i
 
 `/etc/bunyip/ip2.env` holds `IP2LOCATION_TOKEN=...` (mode 0600). The same command works as a systemd timer, a Kubernetes CronJob, or any scheduler: it is a plain script with a non-zero exit on failure. The scheduler's environment needs `nu` on `PATH` (the script's shebang is `#!/usr/bin/env nu`); cron's minimal `PATH` often does not include `/usr/local/bin`, so set it in the crontab or invoke the script as `nu /opt/bunyip/scripts/refresh-ip2-datasets.nu`.
 
-If the app runs from `compose.yml`, point `DATASET_DIR` at the host directory the api bind-mounts for `/data`, so a refresh on the host is picked up by the container (the api opens the `.BIN` at startup; restart it, or let the next deploy pick up the newer file, to load a fresh dataset - the enrichment/geoip lookups themselves always read the file that was open at boot).
+If the app runs from `compose.yml`, add the `/data` bind mount and the `IP2LOCATION_DB_PATH` / `IP2PROXY_DB_PATH`
+variables to the api service yourself (this repo's `compose.yml` does not ship either), then point `DATASET_DIR` at
+the same host directory, so a refresh on the host is picked up by the container (the api opens the `.BIN` at startup;
+restart it, or let the next deploy pick up the newer file, to load a fresh dataset - the enrichment/geoip lookups
+themselves always read the file that was open at boot).

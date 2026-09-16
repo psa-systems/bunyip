@@ -1498,8 +1498,91 @@ async fn run_subcommand(
             print!("{report}");
             Ok(())
         }
+        // BUNYIP-714: the settings archive. Both halves take the passphrase from
+        // a FILE (or stdin), never from a flag: an argument is visible in `ps`
+        // and in `docker inspect`, and this one unlocks every integration secret
+        // at once.
+        "settings-export" => {
+            let passphrase = bunyip_api::settings_archive::read_passphrase(
+                &flag_value(args, "--passphrase-file").ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "settings-export needs --passphrase-file <path|-> (a flag that took \
+                             the passphrase itself would put it in the process list)"
+                    )
+                })?,
+            )?;
+            let output = flag_value(args, "--output").ok_or_else(|| {
+                anyhow::anyhow!(
+                    "settings-export needs --output <path> (an existing path is refused)"
+                )
+            })?;
+            let options = bunyip_api::settings_archive::ExportOptions {
+                include_catalog: args.iter().any(|arg| arg == "--include-catalog"),
+                include_oauth_clients: args.iter().any(|arg| arg == "--include-oauth-clients"),
+            };
+
+            let snapshot =
+                bunyip_api::settings_archive::export(pool, config, &key_set, options).await?;
+            let inputs = bunyip_api::settings_archive::passphrase_inputs(&snapshot, config);
+            let inputs: Vec<&str> = inputs.iter().map(String::as_str).collect();
+            let bytes = bunyip_api::settings_archive::seal(&snapshot, &passphrase, &inputs).await?;
+            bunyip_api::settings_archive::write_archive(&output, &bytes)?;
+            println!(
+                "settings-export: wrote {output} (mode 0600). Keep it and its passphrase apart, \
+                 and note that it holds every integration secret in plaintext once opened."
+            );
+            Ok(())
+        }
+        "settings-import" => {
+            let passphrase = bunyip_api::settings_archive::read_passphrase(
+                &flag_value(args, "--passphrase-file").ok_or_else(|| {
+                    anyhow::anyhow!("settings-import needs --passphrase-file <path|->")
+                })?,
+            )?;
+            let input = flag_value(args, "--input")
+                .ok_or_else(|| anyhow::anyhow!("settings-import needs --input <path>"))?;
+            let dry_run = args.iter().any(|arg| arg == "--dry-run");
+
+            let bytes = bunyip_api::settings_archive::read_archive(&input)?;
+            let snapshot = bunyip_api::settings_archive::open(&bytes, &passphrase).await?;
+
+            if dry_run {
+                let plan =
+                    bunyip_api::settings_archive::plan(pool, config, &key_set, &snapshot).await?;
+                print!("{}", bunyip_api::settings_archive::render_plan(&plan));
+                return Ok(());
+            }
+
+            let report =
+                bunyip_api::settings_archive::apply(pool, config, &key_set, &snapshot, None)
+                    .await?;
+            print!("{}", bunyip_api::settings_archive::render_report(&report));
+            // A partial import is reported in full and THEN fails: the operator
+            // needs the per-step verdict more than they need a bare exit code.
+            let unapplied = report.unapplied();
+            if !unapplied.is_empty() {
+                anyhow::bail!(
+                    "settings-import did not complete: {} step(s) did not apply ({}). Every step \
+                     is a replace, so fix the cause and re-run the same import.",
+                    unapplied.len(),
+                    unapplied
+                        .iter()
+                        .map(|s| s.step.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            Ok(())
+        }
         other => run_reencrypt_subcommand(other, pool, config).await,
     }
+}
+
+/// The value following `flag` in `args`, for the hand-rolled subcommand parsing
+/// this binary uses instead of a CLI framework.
+fn flag_value(args: &[String], flag: &str) -> Option<String> {
+    let idx = args.iter().position(|arg| arg == flag)?;
+    args.get(idx + 1).cloned()
 }
 
 /// BUNYIP-562: build a `StripeService` for a CLI subcommand the same way startup
@@ -1563,7 +1646,7 @@ async fn run_reencrypt_subcommand(
         other => anyhow::bail!(
             "unknown subcommand {other:?} (known: reencrypt-secrets, secrets-status, \
              secrets-migrate, secrets-purge, config-status, machine-client, \
-             reconcile-duplicate-prices)"
+             reconcile-duplicate-prices, settings-export, settings-import)"
         ),
     }
 }

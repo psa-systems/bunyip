@@ -83,6 +83,12 @@ jsonwebtoken = "9"
 base64 = "0.21"
 bytes = "1"
 ipnetwork = "0.20"
+# BUNYIP-714: the settings archive derives its own key from the operator's
+# passphrase (Argon2id over a random salt, inside an argon2_offload closure) and
+# refuses a passphrase zxcvbn can guess.
+argon2 = "0.5"
+rand = "0.8"
+zxcvbn = "3.1.1"
 
 # HTTP client / IO. rustls (not native-tls) so the static musl Alpine build
 # needs no OpenSSL at runtime.

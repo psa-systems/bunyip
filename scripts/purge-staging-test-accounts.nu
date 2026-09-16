@@ -73,6 +73,14 @@ def main [
     print $"email LIKE pattern    : ($pattern)"
     print ""
 
+    # Strip the password out of the DSN so it never appears as a psql argv
+    # element (readable via /proc/<pid>/cmdline by any co-resident process,
+    # and would otherwise land in shell history and `ps aux`). It is instead
+    # exported as PGPASSWORD, scoped to the psql child process only.
+    let parsed = ($target | url parse)
+    let db_password = $parsed.password
+    let target_dsn = ($parsed | update password "" | url join)
+
     let preview_sql = "SELECT id, email, role, created_at
 FROM users
 WHERE email LIKE :'pattern'
@@ -87,8 +95,12 @@ WHERE email LIKE :'pattern'
     # Fed on stdin, never `-c`: psql does not expand :'pattern' in a -c string,
     # so the query would reach the server with a literal `:` and fail to parse.
     print "== accounts matched (role='admin' excluded) =="
-    $preview_sql | ^psql $target -v $"pattern=($pattern)" -P pager=off
-    let matched = ($count_sql | ^psql $target -v $"pattern=($pattern)" -tA | str trim | into int)
+    with-env {PGPASSWORD: $db_password} {
+        $preview_sql | ^psql $target_dsn -v $"pattern=($pattern)" -P pager=off
+    }
+    let matched = (with-env {PGPASSWORD: $db_password} {
+        $count_sql | ^psql $target_dsn -v $"pattern=($pattern)" -tA
+    } | str trim | into int)
     print $"matched rows: ($matched)"
     print ""
 
@@ -142,7 +154,9 @@ DELETE FROM users WHERE id IN (SELECT id FROM _purge_ids);
 
 COMMIT;
 "
-    $delete_sql | ^psql $target -v $"pattern=($pattern)" -v ON_ERROR_STOP=1
+    with-env {PGPASSWORD: $db_password} {
+        $delete_sql | ^psql $target_dsn -v $"pattern=($pattern)" -v ON_ERROR_STOP=1
+    }
 
     print $"done: hard-deleted ($matched) test account\(s) matching '($pattern)'."
 }
