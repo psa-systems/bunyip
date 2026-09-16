@@ -1,7 +1,7 @@
 -- OAuth 2.0 / OIDC client registrations
 --
 -- Dynamic registration (RFC 7591) is disabled; clients are seeded here.
--- require_pkce is always TRUE - no exceptions.
+-- require_pkce is always TRUE — no exceptions.
 
 CREATE TABLE IF NOT EXISTS oauth_clients (
     id                          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
