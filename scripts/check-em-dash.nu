@@ -6,8 +6,7 @@
 # but nothing enforced it: a repo-wide scan found 50 occurrences across 25
 # files with the rule in place the whole time. This gate fails the build when
 # a tracked file contains U+2014, so a new one is caught at the PR that
-# introduces it instead of accumulating. It does not fix the existing
-# occurrences; that sweep is tracked separately, as a follow-up issue.
+# introduces it instead of accumulating.
 #
 # The character is built at runtime from its codepoint rather than typed
 # literally, so this file cannot trip the gate it defines.
@@ -17,6 +16,13 @@
 #   scripts/check-em-dash.nu --self-test
 
 const EM_DASH_CODEPOINT = "2014"
+
+# Committed migrations are immutable (sqlx checksums every byte, comments included),
+# so these two keep their em-dash. Exact paths: a new migration is still gated.
+const IMMUTABLE_EXEMPT = [
+    "bunyip-api/migrations/20260417000040_create_oidc_clients.sql"
+    "bunyip-api/migrations/20260417000042_create_oidc_tokens.sql"
+]
 
 def em-dash []: nothing -> string {
     char --unicode $EM_DASH_CODEPOINT
@@ -84,7 +90,7 @@ def main [
         exit 1
     }
 
-    let problems = ($files | each {|f| check-file $f $em_dash } | flatten)
+    let problems = ($files | where {|f| $f not-in $IMMUTABLE_EXEMPT } | each {|f| check-file $f $em_dash } | flatten)
     if ($problems | is-not-empty) {
         for p in $problems { print --stderr $"error: ($p)" }
         let count = ($problems | length)
@@ -95,5 +101,5 @@ def main [
         exit 1
     }
 
-    print $"check-em-dash: ($files | length) tracked files carry no em-dash"
+    print $"check-em-dash: ($files | length) tracked files checked, no em-dash outside the ($IMMUTABLE_EXEMPT | length) exempt immutable migrations"
 }
