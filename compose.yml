@@ -89,6 +89,12 @@ secrets:
     file: ./secrets/forgejo_api_token
   update_check_token:
     file: ./secrets/update_check_token
+  # BUNYIP-603: HMAC-SHA256 key the mailer bounce/complaint feedback webhook
+  # verifies X-Webhook-Signature against. Must equal the value configured on
+  # the SMTP provider's webhook. Empty means the feature is off: the endpoint
+  # fails closed and the shared suppression list is never fed (BUNYIP-733).
+  mailer_webhook_secret:
+    file: ./secrets/mailer_webhook_secret
 
 services:
 
@@ -258,6 +264,10 @@ services:
       SMTP_EHLO_NAME: ${SMTP_EHLO_NAME:-}
       SMTP_FROM: ${SMTP_FROM:-}
       ADMIN_NOTIFICATION_EMAILS: ${ADMIN_NOTIFICATION_EMAILS:-}
+      # BUNYIP-603: verifies the mailer bounce/complaint feedback webhook's
+      # X-Webhook-Signature. An empty secret file fails the endpoint closed
+      # rather than trusting an unverifiable body (BUNYIP-733).
+      MAILER_WEBHOOK_SECRET_FILE: /run/secrets/mailer_webhook_secret
 
       # ══ Integration: distribution proxy (downloads + OCI registry) ════════
       # BUNYIP-28. Disabled until FORGEJO_BASE_URL (.env) + the forgejo_api_token
@@ -310,6 +320,7 @@ services:
       - setup_default_admin
       - forgejo_api_token
       - update_check_token
+      - mailer_webhook_secret
     volumes:
       # OIDC signing keys only (a dedicated subdir, NOT the whole ./secrets
       # dir: the secret value files must never be visible at a second path

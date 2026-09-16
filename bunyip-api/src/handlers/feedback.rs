@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::errors::AppError;
-use crate::middleware::{extract_client_ip, AdminUser};
+use crate::middleware::{extract_client_ip, AdminUser, VerifiedAdminUser};
 use crate::models::{
     AuditAction, CreateAdminNotification, CreateAuditLog, CreateFeedback, FeedbackStatus,
     FeedbackSubmissionResponse, NotificationType, RateLimitConfig, RespondToFeedback,
@@ -619,7 +619,7 @@ pub async fn get_feedback(
 
 pub async fn respond_to_feedback(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     email_service: web::Data<Arc<EmailService>>,
     path: web::Path<uuid::Uuid>,

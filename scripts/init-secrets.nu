@@ -179,6 +179,10 @@ def main [] {
     secret-from-env-or-empty $"($secrets_dir)/setup_default_admin" $env_file "SETUP_DEFAULT_ADMIN"
     secret-from-env-or-empty $"($secrets_dir)/forgejo_api_token" $env_file "FORGEJO_API_TOKEN"
     secret-from-env-or-empty $"($secrets_dir)/update_check_token" $env_file "BUNYIP_UPDATE_CHECK_TOKEN"
+    # BUNYIP-603: the value is the SMTP provider's, so an empty file (not a
+    # generated one) means the feedback webhook stays off until an operator
+    # copies in the provider's value (BUNYIP-733).
+    secret-from-env-or-empty $"($secrets_dir)/mailer_webhook_secret" $env_file "MAILER_WEBHOOK_SECRET"
 
     # BUNYIP-482: no stripe_secret_key / stripe_webhook_secret files. The Stripe
     # API keys live only in the stripe_config DB row (admin Stripe page),

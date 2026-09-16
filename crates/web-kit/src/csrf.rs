@@ -32,18 +32,25 @@
 //!   reason. The middleware fails closed (403) in that case, which is
 //!   the secure default; the user retries from a normal-config browser.
 //!
-//! Exemptions: the OIDC `/oauth2/*` family is exempt because the spec
-//! gates those POSTs on PKCE + state + nonce + client authentication.
-//! Cross-origin OIDC flows are exactly what the spec expects an OP to
-//! accept. The Stripe webhook lives on bunyip-api, not bunyip-web, so
-//! it's not affected here.
+//! Exemptions: the caller supplies an explicit allowlist of exact
+//! paths (BUNYIP-730). An exemption is only correct for an endpoint
+//! that authenticates its caller by protocol (PKCE + state + nonce +
+//! client authentication), the way bunyip-api's `/oauth2/token` and
+//! `/oauth2/revoke` do; it is a path allowlist rather than a prefix so
+//! that a new route added under a previously-exempt prefix is covered
+//! by default instead of inheriting the exemption by accident.
+//! bunyip-web mounts no OIDC protocol endpoint of its own (its
+//! `/oauth2/consent` handler authenticates the caller only via the
+//! session cookie), so it wires an empty exemption list. The Stripe
+//! webhook lives on bunyip-api, not bunyip-web, so it's not affected
+//! here.
 //!
 //! Follow-up: a synchronizer-token middleware on top of this is a
 //! separate ticket. It's defense in depth on top of the Origin check,
 //! not a substitute.
 
 use axum::body::Body;
-use axum::extract::Request;
+use axum::extract::{Request, State};
 use axum::http::{header, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -58,7 +65,16 @@ use axum::response::{IntoResponse, Response};
 /// absent. When both are absent, the request is refused: a browser
 /// stripping both is misconfigured for any real form-driven flow, and
 /// the secure default is to fail closed.
-pub async fn enforce_origin(req: Request, next: Next) -> Response {
+///
+/// `exempt` is an exact-path allowlist (not a prefix): a request whose
+/// path matches one of these entries skips the check entirely. Reserve
+/// it for endpoints that authenticate their caller by protocol rather
+/// than by Origin.
+pub async fn enforce_origin_with(
+    State(exempt): State<&'static [&'static str]>,
+    req: Request,
+    next: Next,
+) -> Response {
     // Read-only methods don't change state; no CSRF surface.
     if matches!(
         req.method(),
@@ -69,11 +85,7 @@ pub async fn enforce_origin(req: Request, next: Next) -> Response {
 
     let path = req.uri().path();
 
-    // OIDC handlers authenticate clients via PKCE + state + nonce +
-    // client_secret. They are explicitly designed to accept cross-origin
-    // requests as part of the redirect-back-to-OP chain; the CSRF
-    // surface is closed by the spec, not by Origin.
-    if path.starts_with("/oauth2/") {
+    if exempt.contains(&path) {
         return next.run(req).await;
     }
 
@@ -153,5 +165,69 @@ mod tests {
             host_of("https://example.com/x/y?z=1#f"),
             Some("example.com".into())
         );
+    }
+
+    // ---- Middleware wiring: BUNYIP-730 narrowed the `/oauth2/` prefix
+    // exemption to an explicit path allowlist. These prove an empty
+    // allowlist (bunyip-web's wiring) leaves `/oauth2/consent` subject
+    // to the same Origin check as every other state-changing POST.
+
+    use super::enforce_origin_with;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::post;
+    use axum::Router;
+    use tower::ServiceExt;
+
+    async fn ok() -> &'static str {
+        "ok"
+    }
+
+    fn app(exempt: &'static [&'static str]) -> Router {
+        Router::new().route("/oauth2/consent", post(ok)).layer(
+            axum::middleware::from_fn_with_state(exempt, enforce_origin_with),
+        )
+    }
+
+    #[tokio::test]
+    async fn cross_origin_consent_post_is_refused_with_an_empty_exemption() {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/oauth2/consent")
+            .header("Host", "id.example")
+            .header("Origin", "https://evil.example")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app(&[]).oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn same_origin_consent_post_is_passed_through_with_an_empty_exemption() {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/oauth2/consent")
+            .header("Host", "id.example")
+            .header("Origin", "https://id.example")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app(&[]).oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn an_explicitly_exempted_path_skips_the_check() {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/oauth2/consent")
+            .header("Host", "id.example")
+            .header("Origin", "https://evil.example")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app(&["/oauth2/consent"]).oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }
