@@ -450,6 +450,17 @@ async fn handle_subscription_created(
         .as_str()
         .ok_or(AppError::validation("customer", "Missing customer ID"))?;
 
+    // A subscription object exists as soon as checkout starts; it does not
+    // mean the first payment succeeded (`incomplete` covers 3DS/SCA and
+    // failed initial charges). Classify it through the same helper
+    // `handle_subscription_updated` uses (BUNYIP-717/BUNYIP-718) rather than
+    // assuming Active, or an incomplete subscription would activate
+    // membership and consume a tier slot before it ever paid.
+    let status = subscription["status"].as_str().ok_or(AppError::validation(
+        "status",
+        "Missing subscription status",
+    ))?;
+
     // Find user by customer ID
     let user = UserRepository::find_by_stripe_customer_id(pool, customer_id)
         .await?
@@ -467,18 +478,28 @@ async fn handle_subscription_created(
         .as_i64()
         .unwrap_or(300) as i32;
 
+    let user_status = membership_status_for(status);
+    let grants_access = user_status.has_access();
+
     // Resolve tier from product ID mapping (None means no match - leave tier unchanged)
     let resolved_tier = resolve_tier_for_product(product_id, tc);
 
     let mut tx = pool.begin().await?;
-    UserRepository::update_membership_status(&mut *tx, user.id, MembershipStatus::Active).await?;
-    if let Some(ref tier) = resolved_tier {
-        UserRepository::upgrade_membership_tier(&mut *tx, user.id, tier).await?;
+    UserRepository::update_membership_status(&mut *tx, user.id, user_status).await?;
+    if grants_access {
+        if let Some(ref tier) = resolved_tier {
+            UserRepository::upgrade_membership_tier(&mut *tx, user.id, tier).await?;
+        }
     }
     tx.commit().await?;
 
-    // Grant per-product entitlements for the subscription's prices (BUNYIP-39).
-    sync_stripe_entitlements(pool, user.id, subscription).await?;
+    // Grant per-product entitlements only once the subscription actually
+    // grants access (BUNYIP-39, BUNYIP-718). No `revoke_stripe_entitlements`
+    // counterpart here: a created event has nothing prior to revoke, and
+    // revoking could drop a grant a concurrent active subscription just made.
+    if grants_access {
+        sync_stripe_entitlements(pool, user.id, subscription).await?;
+    }
 
     tracing::info!(
         user_id = %user.id,
@@ -1056,6 +1077,43 @@ mod tests {
         assert!(
             fired.load(std::sync::atomic::Ordering::Relaxed),
             "unrecognised status must log at error"
+        );
+    }
+
+    /// BUNYIP-718: `handle_subscription_created` derives its membership-status
+    /// write and its entitlement-sync/tier-upgrade gate from
+    /// `membership_status_for(status).has_access()`, the exact expression at
+    /// `:481-482`. A `customer.subscription.created` event carrying
+    /// `status = "incomplete"` (payment not yet confirmed, e.g. pending 3DS)
+    /// must write a non-access-granting `MembershipStatus` and must not gate
+    /// entitlements or a tier upgrade open, or an unpaid subscription would
+    /// activate membership and consume a lifetime/early-adopter slot.
+    #[test]
+    fn created_incomplete_status_grants_no_access() {
+        let user_status = membership_status_for("incomplete");
+        let grants_access = user_status.has_access();
+
+        assert_eq!(user_status, MembershipStatus::Canceled);
+        assert!(
+            !grants_access,
+            "an incomplete created subscription must not grant access"
+        );
+    }
+
+    /// BUNYIP-718: the same gate must reproduce today's behaviour unchanged
+    /// for the common case, a `created` event that already carries
+    /// `status = "active"` (e.g. an off-session renewal): the write is
+    /// `Active` and the gate is open, so the tier upgrade and entitlement
+    /// sync both run exactly as they did before this change.
+    #[test]
+    fn created_active_status_behaves_as_today() {
+        let user_status = membership_status_for("active");
+        let grants_access = user_status.has_access();
+
+        assert_eq!(user_status, MembershipStatus::Active);
+        assert!(
+            grants_access,
+            "an active created subscription must grant access, matching pre-BUNYIP-718 behaviour"
         );
     }
 }
