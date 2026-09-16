@@ -1022,8 +1022,8 @@ pub async fn application_docs(
         div class="space-y-6" {
             div {
                 (back_link("/admin/applications", "Applications"))
-                h1 class="text-3xl font-bold mt-2" { "Documentation: " (app_name) }
-                p class="text-muted-foreground" { "Public pages, rendered as markdown (raw HTML is stripped). Lower sort order shows first." }
+                h1 class="text-3xl font-bold" { "Documentation: " (app_name) }
+                p class="mt-2 text-muted-foreground" { "Public pages, rendered as markdown (raw HTML is stripped). Lower sort order shows first." }
             }
             div class="space-y-6" {
                 @if !docs_reachable {
