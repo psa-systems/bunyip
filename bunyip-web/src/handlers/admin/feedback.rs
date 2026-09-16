@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::api::admin as admin_api;
 use crate::api::types::{AdminFeedbackDetail, FeedbackAttachmentMeta, FeedbackStatus};
-use crate::handlers::{admin_guard, admin_response, verification_gate};
+use crate::handlers::{admin_guard, admin_response, dashboard_input, verification_gate};
 use crate::util::{rel_time, urlenc};
 use crate::views::ui::{back_link, badge, button_class, empty_state, error_box, icon, pager};
 use crate::web::{redirect_cookies, AppState};
@@ -713,7 +713,7 @@ pub(super) fn feedback_detail_view(f: &AdminFeedbackDetail, tab: FeedbackTab) ->
                     form method="post" action=(format!("/admin/feedback/{}/respond", f.id)) class="space-y-3" {
                         div class="grid gap-2" {
                             label for="response" class="text-sm font-medium" { "Reply to the submitter" }
-                            textarea id="response" name="response" rows="6" required placeholder="Type a response. The submitter will receive this verbatim by email." class="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" {
+                            textarea id="response" name="response" rows="6" required placeholder="Type a response. The submitter will receive this verbatim by email." class={ (dashboard_input()) " min-h-[120px]" } {
                                 @if let Some(resp) = existing_response { (resp) }
                             }
                         }

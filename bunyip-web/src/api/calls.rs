@@ -4,10 +4,28 @@ use serde_json::{json, Value};
 
 use super::types::{
     AppDoc, AppDocSummary, AppDownloadGroup, Application, ApplicationGroup, ApplicationGroupList,
-    ApplicationList, CheckoutSessionResponse, DocumentedApp, DownloadGroups, Membership,
-    PaginatedResponse, PricingResponse, SessionInfo, StripeInvoice, StripePaymentResponse,
+    ApplicationList, CheckoutSessionResponse, ClientIdentity, DocumentedApp, DownloadGroups,
+    Membership, PaginatedResponse, PricingResponse, SessionInfo, StripeInvoice,
+    StripePaymentResponse,
 };
 use super::{ok_data, parse, parse_bare, Api, ApiError};
+
+// --- OAuth client identity ---------------------------------------------------
+
+/// The public display identity (name + logo) of the OAuth client `client_id`
+/// names, resolved server-side (BUNYIP-697) so the consent screen never
+/// trusts a query-string-supplied `client_name`/`logo_uri`.
+pub async fn client_identity(
+    api: &Api,
+    cookie: Option<&str>,
+    client_id: &str,
+) -> Result<ClientIdentity, ApiError> {
+    let path = format!(
+        "/users/me/oauth-clients/{}/identity",
+        urlencoding::encode(client_id)
+    );
+    parse(api.get(&path, cookie).await?)
+}
 
 // --- sessions ---------------------------------------------------------------
 

@@ -3719,36 +3719,152 @@ fn evaluate_key_health(
     }
 }
 
+/// Combine several per-column [`KeyHealthCheck`]s into one, the way a
+/// singleton config row or a `user_totp` table full of rows reports as a
+/// single key-health result (BUNYIP-689).
+///
+/// - `status` is `unhealthy` if any check is, naming every unhealthy label and
+///   its error in `message`; otherwise `healthy` if any check has data;
+///   `no_data` only when none does.
+/// - `needs_reencrypt` is `Some(true)` if any check needs it, `Some(false)` if
+///   some check has data and none needs it, `None` when none has data.
+/// - `key_version` is the version of the first value that needs
+///   re-encrypting, else the first present value's version, else `None`.
+fn combine_key_health(checks: Vec<(String, KeyHealthCheck)>) -> KeyHealthCheck {
+    let unhealthy: Vec<(&str, &str)> = checks
+        .iter()
+        .filter(|(_, c)| c.status == "unhealthy")
+        .map(|(label, c)| (label.as_str(), c.message.as_deref().unwrap_or("")))
+        .collect();
+
+    let has_data = checks.iter().any(|(_, c)| c.has_data);
+
+    let status = if !unhealthy.is_empty() {
+        "unhealthy"
+    } else if has_data {
+        "healthy"
+    } else {
+        "no_data"
+    };
+
+    let message = if unhealthy.is_empty() {
+        None
+    } else {
+        Some(
+            unhealthy
+                .iter()
+                .map(|(label, msg)| format!("{label}: {msg}"))
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    };
+
+    let needs_reencrypt = if checks.iter().any(|(_, c)| c.needs_reencrypt == Some(true)) {
+        Some(true)
+    } else if has_data {
+        Some(false)
+    } else {
+        None
+    };
+
+    let key_version = checks
+        .iter()
+        .find(|(_, c)| c.needs_reencrypt == Some(true))
+        .or_else(|| checks.iter().find(|(_, c)| c.has_data))
+        .and_then(|(_, c)| c.key_version);
+
+    KeyHealthCheck {
+        status: status.to_string(),
+        has_data,
+        key_version,
+        needs_reencrypt,
+        message,
+    }
+}
+
 async fn check_stripe_key(pool: &PgPool, keys: &AppKeySet) -> Result<KeyHealthCheck, AppError> {
     let db = StripeConfigRepository::get(pool).await?;
-    Ok(evaluate_key_health(
-        keys,
-        db.secret_key.as_deref(),
-        db.secret_key_nonce.as_deref(),
-        Some(db.key_version),
-    ))
+    Ok(combine_key_health(vec![
+        (
+            "secret_key".to_string(),
+            evaluate_key_health(
+                keys,
+                db.secret_key.as_deref(),
+                db.secret_key_nonce.as_deref(),
+                Some(db.key_version),
+            ),
+        ),
+        (
+            "webhook_secret".to_string(),
+            evaluate_key_health(
+                keys,
+                db.webhook_secret.as_deref(),
+                db.webhook_secret_nonce.as_deref(),
+                Some(db.key_version),
+            ),
+        ),
+    ]))
 }
 
 async fn check_totp_key(pool: &PgPool, keys: &AppKeySet) -> Result<KeyHealthCheck, AppError> {
-    let row: Option<(Vec<u8>, Vec<u8>, i16)> =
-        sqlx::query_as("SELECT encrypted_secret, nonce, key_version FROM user_totp LIMIT 1")
-            .fetch_optional(pool)
-            .await?;
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(
+        uuid::Uuid,
+        Vec<u8>,
+        Vec<u8>,
+        i16,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        Option<i16>,
+    )> = sqlx::query_as(
+        "SELECT id, encrypted_secret, nonce, key_version, \
+         pending_encrypted_secret, pending_nonce, pending_key_version FROM user_totp",
+    )
+    .fetch_all(pool)
+    .await?;
 
-    Ok(match row {
-        Some((ct, nonce, kv)) => evaluate_key_health(keys, Some(&ct), Some(&nonce), Some(kv)),
-        None => evaluate_key_health(keys, None, None, None),
-    })
+    let mut checks = Vec::new();
+    for (id, ct, nonce, version, pending_ct, pending_nonce, pending_version) in rows {
+        checks.push((
+            format!("user_totp {id} (active secret)"),
+            evaluate_key_health(keys, Some(&ct), Some(&nonce), Some(version)),
+        ));
+        checks.push((
+            format!("user_totp {id} (pending secret)"),
+            evaluate_key_health(
+                keys,
+                pending_ct.as_deref(),
+                pending_nonce.as_deref(),
+                pending_version,
+            ),
+        ));
+    }
+
+    Ok(combine_key_health(checks))
 }
 
 async fn check_email_key(pool: &PgPool, keys: &AppKeySet) -> Result<KeyHealthCheck, AppError> {
     let row = EmailConfigRepository::get(pool).await?;
-    Ok(evaluate_key_health(
-        keys,
-        row.smtp_password.as_deref(),
-        row.smtp_password_nonce.as_deref(),
-        Some(row.key_version),
-    ))
+    Ok(combine_key_health(vec![
+        (
+            "smtp_password".to_string(),
+            evaluate_key_health(
+                keys,
+                row.smtp_password.as_deref(),
+                row.smtp_password_nonce.as_deref(),
+                Some(row.key_version),
+            ),
+        ),
+        (
+            "imap_password".to_string(),
+            evaluate_key_health(
+                keys,
+                row.imap_password.as_deref(),
+                row.imap_password_nonce.as_deref(),
+                Some(row.key_version),
+            ),
+        ),
+    ]))
 }
 
 /// Dispatch a key health check by key_id. Every id now checks the SAME
@@ -3837,6 +3953,7 @@ pub async fn key_rotation_status(
     _admin: AdminUser,
     pool: web::Data<PgPool>,
     config: web::Data<Config>,
+    app_key_set: web::Data<AppKeySet>,
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -3850,11 +3967,16 @@ pub async fn key_rotation_status(
             let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM user_totp")
                 .fetch_one(pool.as_ref())
                 .await?;
-            let on_current: (i64,) =
-                sqlx::query_as("SELECT COUNT(*) FROM user_totp WHERE key_version = $1")
-                    .bind(current_version)
-                    .fetch_one(pool.as_ref())
-                    .await?;
+            // A row is current only when its active secret is on the current
+            // version AND its pending secret (if any) is too: a pending
+            // secret staged on an old version is not a finished rotation.
+            let on_current: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM user_totp WHERE key_version = $1 \
+                 AND (pending_key_version IS NULL OR pending_key_version = $1)",
+            )
+            .bind(current_version)
+            .fetch_one(pool.as_ref())
+            .await?;
 
             Ok(success(
                 serde_json::json!({
@@ -3871,7 +3993,21 @@ pub async fn key_rotation_status(
         "stripe" => {
             let db = StripeConfigRepository::get(&pool).await?;
             let has_secrets = db.secret_key.is_some() || db.webhook_secret.is_some();
-            let on_current = db.key_version == current_version;
+
+            let mut present = Vec::new();
+            if let (Some(ct), Some(n)) = (db.secret_key.as_deref(), db.secret_key_nonce.as_deref())
+            {
+                present.push((ct, n));
+            }
+            if let (Some(ct), Some(n)) = (
+                db.webhook_secret.as_deref(),
+                db.webhook_secret_nonce.as_deref(),
+            ) {
+                present.push((ct, n));
+            }
+            let on_current = present
+                .iter()
+                .all(|(ct, n)| app_key_set.is_current(ct, n, db.key_version));
 
             Ok(success(
                 singleton_rotation_status("stripe", current_version, has_secrets, on_current),
@@ -3880,8 +4016,24 @@ pub async fn key_rotation_status(
         }
         "email" => {
             let row = EmailConfigRepository::get(&pool).await?;
-            let has_secrets = row.smtp_password.is_some();
-            let on_current = row.key_version == current_version;
+            let has_secrets = row.smtp_password.is_some() || row.imap_password.is_some();
+
+            let mut present = Vec::new();
+            if let (Some(ct), Some(n)) = (
+                row.smtp_password.as_deref(),
+                row.smtp_password_nonce.as_deref(),
+            ) {
+                present.push((ct, n));
+            }
+            if let (Some(ct), Some(n)) = (
+                row.imap_password.as_deref(),
+                row.imap_password_nonce.as_deref(),
+            ) {
+                present.push((ct, n));
+            }
+            let on_current = present
+                .iter()
+                .all(|(ct, n)| app_key_set.is_current(ct, n, row.key_version));
 
             Ok(success(
                 singleton_rotation_status("email", current_version, has_secrets, on_current),
@@ -4572,6 +4724,79 @@ mod key_health_tests {
 
         assert_eq!(result.status, "healthy");
         assert_eq!(result.needs_reencrypt, Some(true));
+    }
+
+    // ---- combine_key_health ----
+
+    #[test]
+    fn combine_reports_unhealthy_and_names_the_bad_label() {
+        let ks = test_key_set();
+        let (ct, nonce, _) = ks.encrypt(b"good").unwrap();
+        let healthy = evaluate_key_health(&ks, Some(&ct), Some(&nonce), Some(1));
+
+        let other = key_set_with([0xBB; 32], 1, Vec::new());
+        let (bad_ct, bad_nonce, _) = ks.encrypt(b"bad").unwrap();
+        let unhealthy = evaluate_key_health(&other, Some(&bad_ct), Some(&bad_nonce), Some(1));
+
+        let combined = combine_key_health(vec![
+            ("good_column".to_string(), healthy),
+            ("bad_column".to_string(), unhealthy),
+        ]);
+
+        assert_eq!(combined.status, "unhealthy");
+        assert!(combined.message.unwrap().contains("bad_column"));
+    }
+
+    #[test]
+    fn combine_reports_healthy_and_needs_reencrypt_when_any_column_does() {
+        let ks = test_key_set();
+        let (ct, nonce, _) = ks.encrypt(b"current").unwrap();
+        let current = evaluate_key_health(&ks, Some(&ct), Some(&nonce), Some(1));
+
+        let legacy = key_set_with([0xCC; 32], 1, Vec::new());
+        let (old_ct, old_nonce, _) = legacy.encrypt(b"old").unwrap();
+        let consolidated = key_set_with(test_key(), 1, vec![[0xCC; 32]]);
+        let needs_reencrypt =
+            evaluate_key_health(&consolidated, Some(&old_ct), Some(&old_nonce), Some(1));
+
+        let combined = combine_key_health(vec![
+            ("current_column".to_string(), current),
+            ("old_column".to_string(), needs_reencrypt),
+        ]);
+
+        assert_eq!(combined.status, "healthy");
+        assert_eq!(combined.needs_reencrypt, Some(true));
+    }
+
+    #[test]
+    fn combine_reports_no_data_when_every_column_is_absent() {
+        let absent_a = evaluate_key_health(&test_key_set(), None, None, None);
+        let absent_b = evaluate_key_health(&test_key_set(), None, None, None);
+
+        let combined = combine_key_health(vec![
+            ("a".to_string(), absent_a),
+            ("b".to_string(), absent_b),
+        ]);
+
+        assert_eq!(combined.status, "no_data");
+        assert_eq!(combined.needs_reencrypt, None);
+        assert!(!combined.has_data);
+    }
+
+    #[test]
+    fn combine_reports_needs_reencrypt_false_when_present_column_is_current_and_other_absent() {
+        let ks = test_key_set();
+        let (ct, nonce, _) = ks.encrypt(b"current").unwrap();
+        let current = evaluate_key_health(&ks, Some(&ct), Some(&nonce), Some(1));
+        let absent = evaluate_key_health(&ks, None, None, None);
+
+        let combined = combine_key_health(vec![
+            ("current_column".to_string(), current),
+            ("absent_column".to_string(), absent),
+        ]);
+
+        assert_eq!(combined.status, "healthy");
+        assert_eq!(combined.needs_reencrypt, Some(false));
     }
 
     // ---- KEY_IDS registry ----
