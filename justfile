@@ -58,7 +58,7 @@ default:
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-justfile check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-theme-colors check-em-dash check-cache-mounts check-cache-keys check-publish-triggers check-build check-clippy check-fmt check-docker
+check: check-justfile check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-theme-colors check-em-dash check-system-level-keys check-cache-mounts check-cache-keys check-publish-triggers check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -157,6 +157,13 @@ check-em-dash:
 check-theme-colors:
     ./scripts/check-theme-colors.nu --self-test
     ./scripts/check-theme-colors.nu
+
+# Gate that SYSTEM_LEVEL_ENV_KEYS and the docs/configuration.md system-level
+# table name the same set of keys (BUNYIP-734).
+[group: 'checks']
+check-system-level-keys:
+    ./scripts/check-system-level-keys.nu --self-test
+    ./scripts/check-system-level-keys.nu
 
 # Gate the buildkit cargo cache mounts: every `type=cache` mount carries a
 # per-image `id=` and `sharing=locked`, so concurrent builds cannot unpack

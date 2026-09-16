@@ -245,6 +245,16 @@ jobs:
           ./scripts/check-theme-colors.nu --self-test
           ./scripts/check-theme-colors.nu
 
+      - name: Check the system-level key table matches SYSTEM_LEVEL_ENV_KEYS
+        # SYSTEM_LEVEL_ENV_KEYS (crates/bunyip-domain/src/sys_config.rs) and the
+        # system-level table in docs/configuration.md are two hand-written
+        # copies of the same set, and nothing compared them until now
+        # (BUNYIP-734). --self-test first, so a gate that stopped detecting
+        # anything fails the build instead of passing vacuously.
+        run: |
+          ./scripts/check-system-level-keys.nu --self-test
+          ./scripts/check-system-level-keys.nu
+
       - name: Check buildkit cache mounts are per-image and locked
         # Every `--mount=type=cache` carries an `id=` and `sharing=locked`, so
         # the concurrent builds of a release commit (main push plus tag push,
