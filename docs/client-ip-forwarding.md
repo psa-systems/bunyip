@@ -84,7 +84,7 @@ same range the SSR chain above already requires.
 ## The audited-login path (BUNYIP-476)
 
 A login is audited on the two-hop BFF path (browser -> Traefik -> bunyip-web ->
-bunyip-api), so the `audit_log` row's `actor_ip_address` follows exactly the
+bunyip-api), so the `audit_logs` row's `actor_ip_address` follows exactly the
 rule above: it is the real browser IP only when bunyip-web re-forwards
 `X-Forwarded-For` (its peer Traefik is inside `WEB_TRUSTED_PROXY_CIDR`) AND
 bunyip-api trusts bunyip-web's container peer (inside `TRUSTED_PROXY_CIDR`). If
@@ -102,10 +102,13 @@ regardless, which is why they can disagree with the audited-login row.
   fallback (audit `actor_ip_address`, access log, per-IP rate limit attributed
   to the bunyip-web peer). A `WARN` on a TLS/BFF deployment is the misconfig.
 - **From the data:** sign in through the browser, then read the newest
-  `audit_log` row's `ip_address` (admin Audit Logs, or
-  `SELECT ip_address FROM audit_log WHERE action='login' ORDER BY timestamp DESC LIMIT 1`).
-  It should be the browser's public IP, not a `172.16.0.0/12` /
+  `audit_logs` row's `actor_ip_address` (admin Audit Logs, or the query
+  below). It should be the browser's public IP, not a `172.16.0.0/12` /
   `10.0.0.0/8` container address.
+
+  ```
+  docker exec bunyip-postgres psql --username bunyip --dbname bunyip --command "SELECT actor_ip_address FROM audit_logs WHERE action = 'user_login' ORDER BY created_at DESC LIMIT 1"
+  ```
 
 ### Default config
 
