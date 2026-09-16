@@ -21,7 +21,8 @@ use crate::repositories::{
 };
 use crate::responses::{get_request_id, success, success_no_data};
 use crate::services::{
-    classify_probe, stripe_err_for, AppKeySet, ProbeStatus, StripePermission, StripeService,
+    classify_probe, stripe_err_for, AppKeySet, AuthService, ProbeStatus, StripePermission,
+    StripeService,
 };
 
 // =============================================================================
@@ -684,6 +685,7 @@ pub async fn replace_stripe_price(
     admin: AdminUser,
     stripe: web::Data<Arc<StripeService>>,
     pool: web::Data<PgPool>,
+    auth_service: web::Data<Arc<AuthService>>,
     pricing_cache: web::Data<Arc<PricingCache>>,
     path: web::Path<String>,
     body: web::Json<ReplaceStripePriceRequest>,
@@ -761,7 +763,7 @@ pub async fn replace_stripe_price(
         repointed_columns.push("standard_price_id");
     }
     if !repointed_columns.is_empty() {
-        TierConfigRepository::update(
+        let row = TierConfigRepository::update(
             &pool,
             None,
             None,
@@ -785,6 +787,19 @@ pub async fn replace_stripe_price(
         )
         .await
         .map_err(|e| incomplete("repointing the tier catalog mapping", e.to_string()))?;
+
+        // BUNYIP-724: the row just written is the source of the process-wide
+        // `TierConfig` snapshot every reader (`pricing.rs`, `user.rs`, the
+        // `live_free_price_id` admin lookups) reads instead of the database, so a
+        // replace that repoints a price column must leave that snapshot equal to
+        // the row it just wrote, exactly as `update_tier_config` (admin.rs) does.
+        let (stack, _source) = crate::handlers::admin::section_stack(
+            crate::config::TierConfig::database_provider(&row),
+            crate::config_providers::TIER_KEYS,
+        )
+        .map_err(|e| incomplete("reloading the tier config snapshot", e.to_string()))?;
+        let resolved = crate::config::TierConfig::resolve(&stack, Some(&row));
+        auth_service.reload_tier_config(resolved);
     }
 
     // Move every application entitlement mapped to the old price onto the new
@@ -1078,6 +1093,37 @@ mod tests {
             );
         }
         assert!(checked >= 2, "the scan matched the price handlers");
+    }
+
+    /// BUNYIP-724: a handler that writes `tier_config` through
+    /// `TierConfigRepository::update` must also reload the process-wide
+    /// `TierConfig` snapshot (`AuthService::reload_tier_config`), or every
+    /// reader that trusts the snapshot instead of the database - `/pricing`,
+    /// `live_free_price_id` - keeps serving the pre-write value until restart.
+    /// Scanning by shape, exactly like the pricing-cache test above, is what
+    /// makes the NEXT handler that writes `tier_config` fail the build instead
+    /// of silently leaving the snapshot stale.
+    #[test]
+    fn every_tier_config_writing_handler_reloads_the_snapshot() {
+        let src = include_str!("admin_stripe.rs");
+        let mut checked = 0;
+        for chunk in src.split("\npub async fn ").skip(1) {
+            let (name, rest) = chunk.split_once('(').expect("handler signature");
+            let body = rest.split("\n}").next().unwrap_or(rest);
+            if !body.contains("TierConfigRepository::update") {
+                continue;
+            }
+            checked += 1;
+            assert!(
+                body.contains("reload_tier_config"),
+                "{name} writes tier_config via TierConfigRepository::update but \
+                 does not call AuthService::reload_tier_config"
+            );
+        }
+        assert!(
+            checked >= 1,
+            "the scan matched a tier_config-writing handler"
+        );
     }
 
     // -- BUNYIP-514: duplicate active price guard --
