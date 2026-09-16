@@ -99,7 +99,41 @@ fn provenance_line(cfg: &SystemConfigResponse, field: &str) -> Markup {
     }
 }
 
-pub(super) fn system_settings_content(cfg: Option<&SystemConfigResponse>) -> Markup {
+/// System form values, kept as strings so a failed save echoes back exactly
+/// what the admin typed instead of re-reading the stored record (BUNYIP-731).
+#[derive(Default)]
+pub(super) struct SystemSettingsValues {
+    login_approval_enabled: bool,
+    signup_bot_guard_enabled: bool,
+    country_allow: String,
+    country_deny: String,
+}
+
+impl SystemSettingsValues {
+    fn from_config(c: &SystemConfigResponse) -> Self {
+        SystemSettingsValues {
+            login_approval_enabled: c.login_approval_enabled,
+            signup_bot_guard_enabled: c.signup_bot_guard_enabled,
+            country_allow: c.country_allow.clone(),
+            country_deny: c.country_deny.clone(),
+        }
+    }
+
+    fn from_form(f: &SystemSettingsForm) -> Self {
+        SystemSettingsValues {
+            login_approval_enabled: f.login_approval_enabled.trim() == "true",
+            signup_bot_guard_enabled: f.signup_bot_guard_enabled.trim() == "true",
+            country_allow: f.country_allow.trim().to_string(),
+            country_deny: f.country_deny.trim().to_string(),
+        }
+    }
+}
+
+pub(super) fn system_settings_content(
+    cfg: Option<&SystemConfigResponse>,
+    values: &SystemSettingsValues,
+    error: Option<&str>,
+) -> Markup {
     html! {
         div class="space-y-6" {
             div {
@@ -118,14 +152,15 @@ pub(super) fn system_settings_content(cfg: Option<&SystemConfigResponse>) -> Mar
                         "Directory: " code { (e.path) } ". Changes take effect after the next restart."
                     }
                     form method="post" action="/admin/system-config" class="space-y-6" {
+                    @if let Some(err) = error { (error_box(err)) }
                     (admin_block_grid(vec![
                         admin_block(
                             "Features",
                             Some("Opt-in switches. Restart required."),
                             html! {
                                 div class="space-y-4" {
-                                    (toggle("login_approval_enabled", "Suspicious-login approval gate", e.login_approval_enabled, provenance_line(e, "login_approval_enabled")))
-                                    (toggle("signup_bot_guard_enabled", "Signup bot guard", e.signup_bot_guard_enabled, provenance_line(e, "signup_bot_guard_enabled")))
+                                    (toggle("login_approval_enabled", "Suspicious-login approval gate", values.login_approval_enabled, provenance_line(e, "login_approval_enabled")))
+                                    (toggle("signup_bot_guard_enabled", "Signup bot guard", values.signup_bot_guard_enabled, provenance_line(e, "signup_bot_guard_enabled")))
                                 }
                             },
                         ),
@@ -134,8 +169,8 @@ pub(super) fn system_settings_content(cfg: Option<&SystemConfigResponse>) -> Mar
                             Some("Country allow/deny for sign-in. Restart required."),
                             html! {
                                 div class="space-y-4" {
-                                    (text_field("country_allow", "Allow list", &e.country_allow, "US, GB", "ISO alpha-2 codes; blank allows all.", provenance_line(e, "country_allow")))
-                                    (text_field("country_deny", "Deny list", &e.country_deny, "RU, KP", "ISO alpha-2 codes refused sign-in; applied after allow.", provenance_line(e, "country_deny")))
+                                    (text_field("country_allow", "Allow list", &values.country_allow, "US, GB", "ISO alpha-2 codes; blank allows all.", provenance_line(e, "country_allow")))
+                                    (text_field("country_deny", "Deny list", &values.country_deny, "RU, KP", "ISO alpha-2 codes refused sign-in; applied after allow.", provenance_line(e, "country_deny")))
                                 }
                             },
                         ),
@@ -156,7 +191,11 @@ pub async fn system_config(State(st): State<AppState>, headers: HeaderMap) -> Re
     let cfg = admin_api::system_config(&st.api, c.forward.as_deref())
         .await
         .ok();
-    let content = system_settings_content(cfg.as_ref());
+    let values = cfg
+        .as_ref()
+        .map(SystemSettingsValues::from_config)
+        .unwrap_or_default();
+    let content = system_settings_content(cfg.as_ref(), &values, None);
     admin_response(&c, &user, "/admin/system-config", "System", content)
 }
 
@@ -193,6 +232,8 @@ pub async fn system_config_save(
         Err(r) => return r,
     };
 
+    let values = SystemSettingsValues::from_form(&f);
+
     let error = match admin_api::update_system_config(
         &st.api,
         c.forward.as_deref(),
@@ -204,14 +245,12 @@ pub async fn system_config_save(
         Err(e) => e.user_message(),
     };
 
-    // Re-render with the persisted values plus the inline error.
+    // Re-render with the submitted values plus the inline error; only the
+    // record's non-form info (path, provenance) needs a re-fetch (BUNYIP-731).
     let cfg = admin_api::system_config(&st.api, c.forward.as_deref())
         .await
         .ok();
-    let content = html! {
-        (error_box(&error))
-        (system_settings_content(cfg.as_ref()))
-    };
+    let content = system_settings_content(cfg.as_ref(), &values, Some(&error));
     admin_response(&c, &user, "/admin/system-config", "System", content)
 }
 
@@ -271,7 +310,8 @@ mod tests {
             provenance("COUNTRY_ALLOW", None, &[]),
             provenance("COUNTRY_DENY", Some("file"), &["file", "environment"]),
         ]);
-        let html = system_settings_content(Some(&cfg)).into_string();
+        let values = SystemSettingsValues::from_config(&cfg);
+        let html = system_settings_content(Some(&cfg), &values, None).into_string();
         let fields = rendered_fields(&html);
         assert!(!fields.is_empty(), "the form renders its settings");
         for field in fields {
@@ -322,5 +362,31 @@ mod tests {
         // BUNYIP-622: the form and its body cannot carry a system-level origin.
         assert!(body.get("cors_origin").is_none());
         assert!(body.get("cookie_domain").is_none());
+    }
+
+    /// BUNYIP-731 AC1/AC2: a rejected save re-renders what was submitted, not
+    /// the stored record, and the error sits inside the form below the h1.
+    #[test]
+    fn rejected_save_echoes_the_submitted_values_with_the_error_inside_the_form() {
+        let cfg = config(vec![]);
+        let f = SystemSettingsForm {
+            login_approval_enabled: "true".into(),
+            signup_bot_guard_enabled: "true".into(),
+            country_allow: " US, GB, FR ".into(),
+            country_deny: String::new(),
+        };
+        let values = SystemSettingsValues::from_form(&f);
+        let html = system_settings_content(Some(&cfg), &values, Some("Country code invalid."))
+            .into_string();
+
+        assert!(
+            html.contains(r#"value="US, GB, FR""#),
+            "submitted country_allow is redisplayed, not the stored value: {html}"
+        );
+        let h1 = html.find("<h1").expect("page heading");
+        let form = html.find("<form").expect("settings form");
+        let error = html.find("Country code invalid.").expect("inline error");
+        assert!(h1 < form, "heading renders before the form");
+        assert!(form < error, "error renders inside the form, below the h1");
     }
 }

@@ -152,6 +152,16 @@ jobs:
         # BUNYIP_OIDC_* relying-party variables stay removed (BUNYIP-539).
         run: ./scripts/check-no-retired-env.nu
 
+      - name: Check bunyip-web env vars stay documented
+        # Every variable Config::from_env reads in bunyip-web/src/config.rs
+        # must have a .env.example entry, or a deployer has no way to
+        # discover it exists (BUNYIP-720). --self-test first, so a gate that
+        # stopped detecting anything fails the build instead of passing
+        # vacuously.
+        run: |
+          ./scripts/check-env-parity.nu --self-test
+          ./scripts/check-env-parity.nu
+
       - name: Check Argon2 stays off the actix workers
         # Every hash and verify goes through services::argon2_offload, so a
         # ~100 ms Argon2 never blocks a worker arbiter (BUNYIP-553). A direct
