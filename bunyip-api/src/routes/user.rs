@@ -20,6 +20,12 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/me/avatar", web::delete().to(handlers::delete_avatar))
             // BUNYIP-140: OIDC scope consent grants (consent-screen POST target)
             .route("/me/consents", web::post().to(handlers::grant_consent))
+            // BUNYIP-697: client_id-keyed lookup of the display name/logo the
+            // consent screen renders, so it never trusts the query string.
+            .route(
+                "/me/oauth-clients/{client_id}/identity",
+                web::get().to(handlers::get_client_identity),
+            )
             .route("/me/password", web::put().to(handlers::change_password))
             .route("/me/email", web::post().to(handlers::request_email_change))
             .route(

@@ -47,8 +47,8 @@ file. The receiving app holds the same value: mokosh-server reads it as `BUNYIP_
 
 `SMTP_PASSWORD` is deliberately absent from the table above: it is a Group-2 governed secret, so it comes from whichever
 provider `SECRETS_STORAGE` declares. A deployment running `SECRETS_STORAGE=environment` adds `smtp_password`,
-`stripe_secret_key` and `stripe_webhook_secret` as ordinary compose secrets and passes them as `{NAME}_FILE`; nothing
-else changes about how they are provided.
+`stripe_secret_key`, `stripe_webhook_secret` and `support_imap_password` as ordinary compose secrets and passes them as
+`{NAME}_FILE`; nothing else changes about how they are provided.
 `./secrets/oidc/*.pem` is out of scope: the OIDC signing keys are generated out of band.
 
 ### Rotating a Group-1 secret
@@ -194,7 +194,7 @@ email and payments off, and the values are stranded on an instance it no longer 
 1. **Copy out of the old instance.** Declared provider is still `infisical`, pointing at the old instance and healthy. Run
    `docker compose exec api /app/bunyip-api secrets-migrate --to database --dry-run`, then the same without `--dry-run`.
    It reads the live values from the old instance and writes the encrypted `email_config` / `stripe_config` columns.
-   `bunyip-api secrets-status` must then read `database: ready` for all three.
+   `bunyip-api secrets-status` must then read `database: ready` for all four.
 
 2. **Cut over to the database.** Set `SECRETS_STORAGE=database` and restart. This is now an ordinary database-mode
    deployment serving from those rows, and it is a state you can sit in indefinitely. With `INFISICAL_ENABLED=true` the
@@ -211,7 +211,7 @@ email and payments off, and the values are stranded on an instance it no longer 
    `bunyip-api secrets-migrate --to infisical`. It reads the declared database provider and upserts each key into the new
    instance, which needs the **write**
    access in "Access the machine identity needs". `bunyip-api secrets-status`
-   must then read `infisical: ready` for all three, and that answer now comes from the new instance.
+   must then read `infisical: ready` for all four, and that answer now comes from the new instance.
 
 5. **Cut over to the new instance.** Set `SECRETS_STORAGE=infisical` and restart. Confirm with
    `bunyip-api secrets-status`, soak, then
