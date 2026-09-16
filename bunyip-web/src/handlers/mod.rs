@@ -624,6 +624,15 @@ mod verification_gate_tests {
     /// by calling `verification_gate`; the scan below fails the build if one
     /// stops doing so, which is exactly how the BUNYIP-401 carve-out silently
     /// dropped the requirement from every action at once.
+    ///
+    /// BUNYIP-732: this browser-path gate is necessary but not sufficient - a
+    /// caller that reaches bunyip-api directly (an at+jwt bearer token, another
+    /// app in the suite) never passes through here. The same set of actions is
+    /// gated a second time at the API layer by `VerifiedAdminUser`
+    /// (`crates/bunyip-domain/src/middleware/auth.rs`), with its own mirrored
+    /// scan in `bunyip-api/src/handlers/admin.rs`'s `GATED_ACTIONS`. The two
+    /// lists are kept in sync by hand; a bunyip-web action added here without
+    /// its bunyip-api counterpart leaves the direct-API path unguarded.
     const GATED_ACTIONS: &[(&str, &str, &[&str])] = &[
         (
             "bunyip-web/src/handlers/admin/users.rs",
