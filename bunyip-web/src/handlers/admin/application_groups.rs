@@ -355,6 +355,25 @@ pub async fn application_set_group(
     } else {
         Some(f.group_id.trim())
     };
-    let _ = admin_api::set_application_group(&st.api, c.forward.as_deref(), &id, group_id).await;
-    redirect_cookies(&format!("/admin/applications/{id}/edit"), &c.set_cookies)
+    let target = match admin_api::set_application_group(
+        &st.api,
+        c.forward.as_deref(),
+        &id,
+        group_id,
+    )
+    .await
+    {
+        Ok(_) => format!(
+            "/admin/applications/{id}/edit?toast_ok={}",
+            urlenc("Application moved")
+        ),
+        Err(e) => {
+            tracing::warn!(app_id = %id, error = ?e, "admin set application group failed");
+            format!(
+                "/admin/applications/{id}/edit?toast_err={}",
+                urlenc("Could not move the application")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }

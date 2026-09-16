@@ -765,8 +765,20 @@ pub async fn user_reactivate(
     if let Some(refusal) = verification_gate(&user, &c, "/admin/users?status=suspended") {
         return refusal;
     }
-    let _ = admin_api::reactivate_user(&st.api, c.forward.as_deref(), &id).await;
-    redirect_cookies("/admin/users?status=suspended", &c.set_cookies)
+    let target = match admin_api::reactivate_user(&st.api, c.forward.as_deref(), &id).await {
+        Ok(_) => format!(
+            "/admin/users?status=suspended&toast_ok={}",
+            urlenc("User reactivated")
+        ),
+        Err(e) => {
+            tracing::warn!(user_id = %id, error = ?e, "admin reactivate user failed");
+            format!(
+                "/admin/users?status=suspended&toast_err={}",
+                urlenc("Could not reactivate user")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 pub async fn user_reset_password(
@@ -781,8 +793,20 @@ pub async fn user_reset_password(
     if let Some(refusal) = verification_gate(&user, &c, &format!("/admin/users/{id}")) {
         return refusal;
     }
-    let _ = admin_api::admin_reset_password(&st.api, c.forward.as_deref(), &id).await;
-    redirect_cookies(&format!("/admin/users/{id}"), &c.set_cookies)
+    let target = match admin_api::admin_reset_password(&st.api, c.forward.as_deref(), &id).await {
+        Ok(_) => format!(
+            "/admin/users/{id}?toast_ok={}",
+            urlenc("Password reset email sent")
+        ),
+        Err(e) => {
+            tracing::warn!(user_id = %id, error = ?e, "admin reset password failed");
+            format!(
+                "/admin/users/{id}?toast_err={}",
+                urlenc("Could not send the password reset")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 /// Admin email correction (BUNYIP-119). `verified` is an HTML checkbox, so it
@@ -878,8 +902,20 @@ pub async fn user_grant_lifetime(
     if let Some(refusal) = verification_gate(&user, &c, &format!("/admin/users/{id}")) {
         return refusal;
     }
-    let _ = admin_api::grant_lifetime(&st.api, c.forward.as_deref(), &id).await;
-    redirect_cookies(&format!("/admin/users/{id}"), &c.set_cookies)
+    let target = match admin_api::grant_lifetime(&st.api, c.forward.as_deref(), &id).await {
+        Ok(_) => format!(
+            "/admin/users/{id}?toast_ok={}",
+            urlenc("Lifetime membership granted")
+        ),
+        Err(e) => {
+            tracing::warn!(user_id = %id, error = ?e, "admin grant lifetime membership failed");
+            format!(
+                "/admin/users/{id}?toast_err={}",
+                urlenc("Could not grant lifetime membership")
+            )
+        }
+    };
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 pub async fn user_revoke_lifetime(
