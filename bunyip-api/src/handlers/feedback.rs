@@ -25,6 +25,16 @@ use crate::services::EmailService;
 
 const MAX_ATTACHMENT_SIZE: usize = 5 * 1024 * 1024;
 const MAX_ATTACHMENTS: usize = 3;
+/// BUNYIP-699: cumulative decoded size across every multipart field (file
+/// and non-file alike). A per-field cap alone still lets a request stream
+/// an unbounded number of fields, each individually under the cap, into
+/// unbounded total memory. Reuses the existing 5 MiB constant as the total
+/// request ceiling per the issue's accepted default.
+const MAX_REQUEST_SIZE: usize = MAX_ATTACHMENT_SIZE;
+/// BUNYIP-699: cap on repeated `tags[]` / `tags` occurrences, independent
+/// of byte size, so a flood of tiny valid-tag parts can't grow `tags_raw`
+/// unbounded before `normalize_tags` dedups it.
+const MAX_TAG_FIELDS: usize = 20;
 const ALLOWED_MIME_TYPES: &[&str] = &[
     "image/png",
     "image/jpeg",
@@ -200,6 +210,43 @@ fn normalize_tags(tags: &[String]) -> Result<Vec<String>, AppError> {
     Ok(normalized)
 }
 
+/// BUNYIP-699: checked after every chunk is appended to a field's buffer,
+/// for every field (file or not). `field_bytes_so_far` is the field's own
+/// running length; `request_bytes_so_far` is the cumulative length of every
+/// PRIOR field in this request. Kept pure so the two caps (per-field,
+/// whole-request) are unit-testable without a real multipart stream.
+fn check_multipart_size(
+    field_label: &str,
+    field_bytes_so_far: usize,
+    request_bytes_so_far: usize,
+) -> Result<(), AppError> {
+    if field_bytes_so_far > MAX_ATTACHMENT_SIZE {
+        return Err(AppError::validation(
+            field_label,
+            "Field exceeds 5 MB limit",
+        ));
+    }
+    if request_bytes_so_far + field_bytes_so_far > MAX_REQUEST_SIZE {
+        return Err(AppError::validation(
+            "attachment",
+            "Request exceeds 5 MB total limit",
+        ));
+    }
+    Ok(())
+}
+
+/// BUNYIP-699: rejects a `tags[]`/`tags` field once the request has already
+/// carried `MAX_TAG_FIELDS` occurrences, before the new one is read at all.
+fn check_tag_field_cap(tags_seen_so_far: usize) -> Result<(), AppError> {
+    if tags_seen_so_far >= MAX_TAG_FIELDS {
+        return Err(AppError::validation(
+            "tags",
+            format!("Maximum {MAX_TAG_FIELDS} tags allowed"),
+        ));
+    }
+    Ok(())
+}
+
 async fn check_feedback_rate_limit(pool: &PgPool, key: &str) -> Result<(), AppError> {
     super::check_rate_limit(pool, key, &RateLimitConfig::FEEDBACK_SUBMIT).await
 }
@@ -277,6 +324,7 @@ pub async fn submit_feedback(
     let mut page_path_raw: Option<String> = None;
     let mut website_raw: Option<String> = None;
     let mut attachment_parts: Vec<(String, String, Vec<u8>)> = Vec::new();
+    let mut total_bytes: usize = 0;
 
     while let Some(mut field) = payload
         .try_next()
@@ -294,7 +342,19 @@ pub async fn submit_feedback(
             .and_then(|value| value.get_filename())
             .map(|value| value.to_string());
 
-        // Collect field bytes
+        if field_name == "tags[]" || field_name == "tags" {
+            check_tag_field_cap(tags_raw.len())?;
+        }
+
+        // Collect field bytes. Every field, file or not, is capped as it
+        // streams (BUNYIP-699); the request is also rejected outright once
+        // the cumulative decoded size across all fields exceeds
+        // MAX_REQUEST_SIZE, so no combination of fields can buffer past it.
+        let field_label = if filename.is_some() {
+            "attachment"
+        } else {
+            field_name.as_str()
+        };
         let mut bytes = Vec::new();
         while let Some(chunk) = field
             .try_next()
@@ -302,13 +362,9 @@ pub async fn submit_feedback(
             .map_err(|_| AppError::validation("attachment", "Failed to read field"))?
         {
             bytes.extend_from_slice(&chunk);
-            if filename.is_some() && bytes.len() > MAX_ATTACHMENT_SIZE {
-                return Err(AppError::validation(
-                    "attachment",
-                    "File exceeds 5 MB limit",
-                ));
-            }
+            check_multipart_size(field_label, bytes.len(), total_bytes)?;
         }
+        total_bytes += bytes.len();
 
         if let Some(fname) = filename {
             // File field. BUNYIP-90 hardening: every check runs against
@@ -934,6 +990,37 @@ mod tests {
     #[test]
     fn suppresses_admin_notification_for_spam_feedback() {
         assert!(!should_notify_admins_of_feedback(true));
+    }
+
+    // -- BUNYIP-699: multipart field/request size and tag-count caps --------
+
+    #[test]
+    fn rejects_a_single_non_file_field_once_it_exceeds_the_cap() {
+        assert!(check_multipart_size("message", MAX_ATTACHMENT_SIZE, 0).is_ok());
+        assert!(check_multipart_size("message", MAX_ATTACHMENT_SIZE + 1, 0).is_err());
+    }
+
+    #[test]
+    fn rejects_the_request_once_cumulative_size_across_fields_exceeds_the_cap() {
+        // Two individually-small fields whose sum still clears the per-field
+        // cap but crosses the whole-request cap.
+        let per_field = MAX_REQUEST_SIZE / 2 + 1024;
+        assert!(check_multipart_size("subject", per_field, 0).is_ok());
+        assert!(check_multipart_size("message", per_field, per_field).is_err());
+    }
+
+    #[test]
+    fn file_attachment_cap_is_unchanged_at_the_existing_5mb_constant() {
+        assert!(check_multipart_size("attachment", MAX_ATTACHMENT_SIZE, 0).is_ok());
+        assert!(check_multipart_size("attachment", MAX_ATTACHMENT_SIZE + 1, 0).is_err());
+    }
+
+    #[test]
+    fn rejects_many_repeated_tags_parts_past_the_cap() {
+        for seen in 0..MAX_TAG_FIELDS {
+            assert!(check_tag_field_cap(seen).is_ok());
+        }
+        assert!(check_tag_field_cap(MAX_TAG_FIELDS).is_err());
     }
 
     // -- BUNYIP-411: request metadata capture --------------------------------
