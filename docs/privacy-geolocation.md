@@ -20,7 +20,7 @@ The country allow/deny gate (below) reads the country to make a permit/refuse de
 ## Purpose
 
 1. **Security**: alert a user to a sign-in from a new country (BUNYIP-366) and feed the suspicious-login risk signal (BUNYIP-373).
-2. **Spam prevention**: a configurable country **allow/deny** list refuses sign-in from unwanted regions (BUNYIP-581), set on the admin System page or in the file configuration layer (`COUNTRY_ALLOW` / `COUNTRY_DENY`, see [configuration.md](configuration.md)).
+2. **Spam prevention**: a configurable country **allow/deny** list refuses password sign-in (`login`), magic-link sign-in (`verify_magic_link`), and registration (`register`) from unwanted regions (BUNYIP-581/BUNYIP-726), set on the admin System page or in the file configuration layer (`COUNTRY_ALLOW` / `COUNTRY_DENY`, see [configuration.md](configuration.md)). `complete_2fa_login`, `complete_login_approval`, and `refresh_tokens` are continuations of an already-gated `login` call and inherit its decision rather than re-running it; `request_magic_link` always answers 202 regardless of country, so gating the send would either leak the allow/deny list or do nothing, and the gate runs on redemption (`verify_magic_link`) instead.
 
 It is never used for marketing, profiling, or attaching a location to the user profile beyond the single coarse security-alert country above.
 
@@ -31,7 +31,7 @@ It is never used for marketing, profiling, or attaching a location to the user p
 | `check_login_location` | new-country security alert; records `last_login_country` |
 | `assess_login` | suspicious-login risk signal (country is new) |
 | `country_name_for_ip` | request country shown in the password-reset email |
-| `login` (country gate, BUNYIP-581) | the allow/deny sign-in decision; not persisted |
+| `login`, `verify_magic_link`, `register` (country gate, BUNYIP-581/BUNYIP-726) | the allow/deny sign-in/registration decision; not persisted |
 
 `bunyip-api/src/handlers/admin_ip_enrichment.rs` resolves ASN / VPN / proxy signals (IP2Proxy), not a country, and is advisory only.
 
