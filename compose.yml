@@ -6,8 +6,11 @@
 # what an operator or self-hosting MSP deploys.
 #
 # Quick start:
-#   1. cp .env.example .env  and fill in the production values (CORS_ORIGIN,
-#      BUNYIP_API_URL, OIDC_ISSUER, etc. - non-secret config only).
+#   1. cp .env.production.example .env  and fill in the placeholders (pinned
+#      image tags, CORS_ORIGIN, BUNYIP_API_PUBLIC_ORIGIN, OIDC_ISSUER, the OIDC
+#      signing key path/kid, SECRETS_STORAGE - non-secret config only).
+#      .env.example is the DEV file `just dev` copies; never copy that one for
+#      a deployment.
 #   2. ./scripts/init-secrets.nu
 #      Creates every secret file under ./secrets/ (generating strong values
 #      where needed) plus the OIDC signing keys under ./secrets/oidc/. The
