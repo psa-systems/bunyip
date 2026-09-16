@@ -187,20 +187,25 @@ pub async fn mint_grant_token(
     // `first_party`, `tenant_claim_name`, `disabled_at`, and the TTL /
     // audience the mint reads. A client that is not registered, is
     // disabled, is third-party, or has no tenant claim configured is
-    // refused: the grant flow only makes sense against a first-party
-    // Bunyip-owned resource server with tenant-claim support (Mokosh
-    // today; other siblings later).
+    // refused: the grant flow only makes sense against a resource
+    // server with tenant-claim support (Mokosh today; other siblings
+    // later).
+    //
+    // The precondition is `tenant_claim_name IS NOT NULL`, not
+    // `first_party = TRUE`. Two orthogonal signals: `first_party` is
+    // a UX property BUNYIP-406 uses to name the app on the consent
+    // screen; `tenant_claim_name` is the CAPABILITY - which
+    // registration axis on the client controls tenant scoping. A
+    // grant token is issued to any registered client that opted
+    // into tenant-scoped claims, whether or not it happens to be
+    // marked first-party. This unblocks the BUNYIP-406 / BUNYIP-626
+    // contradiction that shipped an unreachable endpoint.
     let client = provider
         .load_client(body.client_id)
         .await?
         .ok_or_else(|| AppError::bad_request("Unknown client_id"))?;
     if client.disabled_at.is_some() {
         return Err(AppError::bad_request("Client is disabled"));
-    }
-    if !client.first_party {
-        return Err(AppError::bad_request(
-            "Grant tokens are only issued to first-party clients",
-        ));
     }
     if client.tenant_claim_name.is_none() {
         return Err(AppError::bad_request(
