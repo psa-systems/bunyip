@@ -1253,21 +1253,33 @@ impl UserRepository {
         Ok(row.0)
     }
 
-    /// Find users in grace period
-    pub async fn find_in_grace_period(pool: &PgPool) -> Result<Vec<User>, AppError> {
-        let users = sqlx::query_as::<_, User>(
+    /// BUNYIP-719: move every row whose stored grace-period deadline has
+    /// passed to `canceled` and clear the window, in one guarded UPDATE
+    /// (`WHERE membership_status = 'grace_period' AND grace_period_end <
+    /// NOW()`) so a concurrent payment-succeeded event (which clears the
+    /// window and sets `active`) cannot be overwritten by the sweep, and a
+    /// concurrent sweep tick cannot re-touch a row the other tick already
+    /// moved. Returns the rows that were moved (id, email, role) so the
+    /// caller can write one `GracePeriodEnded` audit row per user.
+    pub async fn end_expired_grace_periods(
+        pool: &PgPool,
+    ) -> Result<Vec<(Uuid, String, String)>, AppError> {
+        let rows: Vec<(Uuid, String, String)> = sqlx::query_as(
             r#"
-            SELECT * FROM users
+            UPDATE users
+            SET membership_status = 'canceled',
+                grace_period_start = NULL,
+                grace_period_end = NULL,
+                updated_at = NOW()
             WHERE membership_status = 'grace_period'
-            AND grace_period_end IS NOT NULL
-            AND deleted_at IS NULL
-            ORDER BY grace_period_end ASC
+            AND grace_period_end < NOW()
+            RETURNING id, email, role
             "#,
         )
         .fetch_all(pool)
         .await?;
 
-        Ok(users)
+        Ok(rows)
     }
 
     /// BUNYIP-512: membership statuses that count a user as still "on a plan"
