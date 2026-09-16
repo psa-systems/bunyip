@@ -25,7 +25,7 @@ pub struct AccessTokenClaims {
     pub price_locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub price_id: Option<String>,
-    /// True for lifetime members — access is never time-gated
+    /// True for lifetime members - access is never time-gated
     pub lifetime_member: bool,
     /// Unix timestamp when trial expires; None for lifetime members
     #[serde(skip_serializing_if = "Option::is_none")]

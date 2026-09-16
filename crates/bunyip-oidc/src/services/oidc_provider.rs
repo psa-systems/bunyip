@@ -134,7 +134,7 @@ pub struct IdTokenClaims {
     pub email: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email_verified: Option<bool>,
-    // Membership access — convenience claim for RPs
+    // Membership access - convenience claim for RPs
     #[serde(skip_serializing_if = "Option::is_none")]
     pub membership_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -530,7 +530,7 @@ impl OidcProvider {
             "unknown authorization code".into(),
         ))?;
 
-        // Already consumed — the lost race. Revoke the token family if tokens
+        // Already consumed - the lost race. Revoke the token family if tokens
         // were already issued from this code, mirroring the refresh-token
         // reuse-detection behaviour, then return invalid_grant.
         if row.consumed_at.is_some() || row.revoked_at.is_some() {
@@ -774,7 +774,7 @@ impl OidcProvider {
         Ok((raw, token_id))
     }
 
-    /// Rotate a refresh token — returns the new (raw token, token_id).
+    /// Rotate a refresh token - returns the new (raw token, token_id).
     ///
     /// Runs in a SERIALIZABLE transaction.  If the old token has already been
     /// used (replay), the entire family is revoked and `OidcInvalidGrant` is
@@ -867,7 +867,7 @@ impl OidcProvider {
                 );
             }
             return Err(AppError::OidcInvalidGrant(
-                "refresh token already used — possible replay attack".into(),
+                "refresh token already used - possible replay attack".into(),
             ));
         }
 

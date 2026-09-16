@@ -275,7 +275,7 @@ impl AutoBanService {
             );
             let expires_at = now + chrono::Duration::seconds(cfg.ban_duration_secs as i64);
 
-            // Remove strikes — no longer needed
+            // Remove strikes - no longer needed
             strikes.remove(ip);
             // Release lock before acquiring banned lock
             drop(strikes);
@@ -610,7 +610,7 @@ where
                 }
             }
 
-            // Clean request — pass through to inner service
+            // Clean request - pass through to inner service
             service.call(req).await.map(|res| res.map_into_left_body())
         })
     }

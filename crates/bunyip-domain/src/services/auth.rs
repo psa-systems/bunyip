@@ -931,7 +931,7 @@ impl AuthService {
                 return Ok(LoginResult::TwoFactorRequired { challenge_token });
             }
 
-            // Flag is true but no verified TOTP exists — reset the flag so the
+            // Flag is true but no verified TOTP exists - reset the flag so the
             // frontend can redirect to 2FA setup after login
             UserRepository::set_two_factor_enabled(&self.pool, user.id, false).await?;
         }
@@ -1185,7 +1185,7 @@ impl AuthService {
                     .with_ip(ip)
                     .with_metadata(serde_json::json!({ "email_known": false, "email": email }))
             };
-        // Non-critical — don't fail the request if audit logging fails
+        // Non-critical - don't fail the request if audit logging fails
         if let Err(e) = AuditLogRepository::create(&self.pool, audit_log).await {
             tracing::error!(error = %e, "Failed to create audit log for magic link request");
         }

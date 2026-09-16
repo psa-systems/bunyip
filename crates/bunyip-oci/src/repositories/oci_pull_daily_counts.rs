@@ -109,7 +109,7 @@ mod tests {
         .execute(&pool)
         .await;
         if res.is_err() {
-            // Schema requires more fields — skip this test rather than guessing.
+            // Schema requires more fields - skip this test rather than guessing.
             return;
         }
 
@@ -129,7 +129,7 @@ mod tests {
         repo.decrement(user_id, today).await.unwrap();
         assert_eq!(repo.current(user_id, today).await.unwrap(), 1);
 
-        // Decrement twice more — hitting GREATEST floor.
+        // Decrement twice more - hitting GREATEST floor.
         repo.decrement(user_id, today).await.unwrap();
         repo.decrement(user_id, today).await.unwrap();
         assert_eq!(repo.current(user_id, today).await.unwrap(), 0);

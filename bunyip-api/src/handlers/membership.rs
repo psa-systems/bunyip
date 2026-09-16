@@ -209,7 +209,7 @@ pub async fn cancel_membership(
                 .map_err(stripe_err)?;
         }
     } else {
-        // No Stripe customer — just update status directly
+        // No Stripe customer - just update status directly
         UserRepository::update_membership_status(
             pool.get_ref(),
             user.0.sub,

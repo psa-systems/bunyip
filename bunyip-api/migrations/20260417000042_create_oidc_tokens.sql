@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS refresh_token_families (
 CREATE INDEX IF NOT EXISTS refresh_token_families_user
     ON refresh_token_families(user_id) WHERE revoked_at IS NULL;
 
--- Refresh tokens — rotated on every use; hashed; opaque to clients
+-- Refresh tokens - rotated on every use; hashed; opaque to clients
 CREATE TABLE IF NOT EXISTS refresh_tokens_v2 (
     id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     token_hash          BYTEA       NOT NULL UNIQUE,   -- SHA-256 of raw token

@@ -574,7 +574,7 @@ pub async fn grant_membership(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
-    // Grant free tier — sets lifetime_member=true and membership_status='active'
+    // Grant free tier - sets lifetime_member=true and membership_status='active'
     let user =
         UserRepository::grant_free_membership(pool.get_ref(), body.user_id, admin.0.sub).await?;
 
@@ -2158,7 +2158,7 @@ pub async fn update_stripe_config(
 
     let request_id = get_request_id(&req);
 
-    // Treat empty strings the same as None — user left the field blank
+    // Treat empty strings the same as None - user left the field blank
     let secret_key_plain = body.secret_key.as_deref().filter(|s| !s.is_empty());
     let webhook_secret_plain = body.webhook_secret.as_deref().filter(|s| !s.is_empty());
 

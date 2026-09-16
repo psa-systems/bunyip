@@ -1,4 +1,4 @@
-//! Email configuration repository (singleton, id=1) — BUNYIP-351
+//! Email configuration repository (singleton, id=1) - BUNYIP-351
 
 use sqlx::PgPool;
 use uuid::Uuid;

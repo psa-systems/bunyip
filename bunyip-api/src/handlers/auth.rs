@@ -1315,7 +1315,7 @@ pub async fn auth_redirect(
             .finish());
     }
 
-    // Access token missing/expired — try refresh token
+    // Access token missing/expired - try refresh token
     let refresh_token = req.cookie("refresh_token").map(|c| c.value().to_string());
 
     if let Some(ref refresh_token) = refresh_token {
@@ -1359,7 +1359,7 @@ pub async fn auth_redirect(
         tracing::debug!("auth_redirect: no refresh token cookie found");
     }
 
-    // Not authenticated — redirect to login
+    // Not authenticated - redirect to login
     tracing::debug!(location = %login_url, "auth_redirect: not authenticated, redirecting to login");
     Ok(HttpResponse::Found()
         .insert_header(("Location", login_url.as_str()))

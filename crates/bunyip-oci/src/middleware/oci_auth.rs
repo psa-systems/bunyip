@@ -2,7 +2,7 @@
 //!
 //! - Validates the token (aud=registry, exp, iss) via `OciTokenService`.
 //! - Re-loads the user on every request and re-checks membership.
-//! - Does NOT enforce scope — handlers that take a `<slug>` are
+//! - Does NOT enforce scope - handlers that take a `<slug>` are
 //!   responsible for calling `user.assert_scope(slug)`.
 
 use actix_web::{dev::Payload, FromRequest, HttpRequest};

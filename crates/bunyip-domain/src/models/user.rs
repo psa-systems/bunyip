@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn tier_assignment_existing_users_dont_consume_slots() {
-        // 100 standard users exist but 0 lifetime assigned — lifetime still available
+        // 100 standard users exist but 0 lifetime assigned - lifetime still available
         assert_eq!(tier_for_counts(0, 0, 5, 5), MembershipTier::Lifetime);
     }
 }
