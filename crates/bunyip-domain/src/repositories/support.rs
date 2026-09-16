@@ -227,6 +227,14 @@ impl SupportRepository {
         Ok(tickets)
     }
 
+    /// Total ticket count, for paginating the admin queue (BUNYIP-725).
+    pub async fn count_tickets(pool: &PgPool) -> Result<i64, AppError> {
+        let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM support_tickets")
+            .fetch_one(pool)
+            .await?;
+        Ok(total.0)
+    }
+
     /// Change a ticket's status.
     pub async fn set_status(pool: &PgPool, id: Uuid, status: TicketStatus) -> Result<(), AppError> {
         sqlx::query("UPDATE support_tickets SET status = $1, updated_at = NOW() WHERE id = $2")
