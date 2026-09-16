@@ -1597,7 +1597,7 @@ impl OidcProvider {
     /// - Expired `exp` (30s leeway, same as the existing userinfo
     ///   verifier the legacy `verify_at_jwt_get_sub` helper used).
     ///
-    /// Does not check `aud` — the access token is bunyip-scoped (an
+    /// Does not check `aud` - the access token is bunyip-scoped (an
     /// inbound RP token is meant to authenticate to bunyip's own API),
     /// so any client_id under this issuer is acceptable. Per-handler
     /// authorization stays the handler's job.

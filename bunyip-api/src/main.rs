@@ -1226,7 +1226,7 @@ async fn main() -> anyhow::Result<()> {
             .wrap(bunyip_api::rate_limit_floor::RateLimitFloor::new(
                 pool.clone(),
             ))
-            // Auto-ban runs outermost — rejects banned IPs before CORS processing
+            // Auto-ban runs outermost - rejects banned IPs before CORS processing
             .wrap(AutoBanMiddleware::new(auto_ban_service.clone()))
             // Generic extractor errors (BUNYIP-481): malformed body / path /
             // query / form parameters return the AppError envelope with a

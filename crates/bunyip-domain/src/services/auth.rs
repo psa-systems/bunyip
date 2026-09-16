@@ -1277,7 +1277,7 @@ impl AuthService {
                 });
             }
 
-            // Flag is true but no verified TOTP exists — reset the flag
+            // Flag is true but no verified TOTP exists - reset the flag
             UserRepository::set_two_factor_enabled(&self.pool, user.id, false).await?;
         }
 
@@ -2211,11 +2211,11 @@ impl AuthService {
         // Check if user exists
         match UserRepository::find_by_email(&self.pool, &invite.email).await? {
             Some(user) if user.role == "admin" => {
-                // Already an admin — stale invite
+                // Already an admin - stale invite
                 Err(AppError::conflict("User is already an admin"))
             }
             Some(user) => {
-                // Existing non-admin user — upgrade to admin
+                // Existing non-admin user - upgrade to admin
                 InviteRepository::mark_accepted(&self.pool, invite.id).await?;
                 let updated_user =
                     UserRepository::update_role(&self.pool, user.id, "admin").await?;
@@ -2262,7 +2262,7 @@ impl AuthService {
                     return Err(AppError::conflict("Email already registered"));
                 }
 
-                // New user — need password
+                // New user - need password
                 let password = match password {
                     Some(p) => p,
                     None => {
