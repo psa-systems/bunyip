@@ -145,3 +145,7 @@ deployment.
   the endpoint answers 502 and logs at `error` rather than accepting the message and dropping it.
 - DKIM, SPF and DMARC must be published for the sending domain in the *From* address. The endpoint works without them;
   the mail just will not be trusted by receivers.
+- `MAILER_WEBHOOK_SECRET` must be set to the value configured on the SMTP provider's bounce/complaint webhook, or the
+  feedback webhook above fails closed and the shared suppression list is never fed. See
+  [`configuration.md`](configuration.md) for where to put it (`mailer_webhook_secret` compose secret, or the dev `.env`
+  fallback).
