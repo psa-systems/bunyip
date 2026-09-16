@@ -268,6 +268,58 @@ pub fn country_blocked(country: &str, allow: &[String], deny: &[String]) -> bool
     !allow.is_empty() && !allow.iter().any(|a| a.eq_ignore_ascii_case(c))
 }
 
+/// BUNYIP-581 resolves the client IP to a country the same way the
+/// new-location alert does: no geoip service, no IP, or a private/loopback/
+/// link-local/unspecified address all resolve to no country.
+fn resolve_country(geoip: Option<&GeoIpService>, ip_address: Option<IpAddr>) -> Option<String> {
+    let geoip = geoip?;
+    let ip = ip_address?;
+    if is_non_public_ip(&ip) {
+        return None;
+    }
+    geoip.country_code(ip)
+}
+
+/// BUNYIP-726: the allow/deny decision for an already-resolved country (or the
+/// lack of one). Three outcomes: a resolved country runs [`country_blocked`]
+/// as before; an unresolved country is refused when `allow` is non-empty,
+/// because an allow list is a promise that only its named countries pass and
+/// an unresolved country cannot honour that promise; with only `deny` set, an
+/// unresolved country still passes (today's behaviour, now logged instead of
+/// silent). No-op, no log, when neither list is configured. Pure, so every
+/// branch is unit-tested without a geoip database.
+fn country_gate_decision(
+    country: Option<&str>,
+    allow: &[String],
+    deny: &[String],
+) -> Result<(), AppError> {
+    if allow.is_empty() && deny.is_empty() {
+        return Ok(());
+    }
+
+    match country {
+        Some(country) => {
+            if country_blocked(country, allow, deny) {
+                tracing::warn!(country = %country, "sign-in refused by the country allow/deny list (BUNYIP-581)");
+                return Err(AppError::Forbidden);
+            }
+            Ok(())
+        }
+        None if !allow.is_empty() => {
+            tracing::warn!(
+                "sign-in refused: country could not be resolved and an allow list is configured (BUNYIP-581)"
+            );
+            Err(AppError::Forbidden)
+        }
+        None => {
+            tracing::warn!(
+                "sign-in admitted with an unresolved country because only a deny list is configured (BUNYIP-581)"
+            );
+            Ok(())
+        }
+    }
+}
+
 impl AuthService {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -293,6 +345,14 @@ impl AuthService {
             country_allow,
             country_deny,
         }
+    }
+
+    /// BUNYIP-726: the single country-gate call site every session-minting or
+    /// account-creating method runs first, before any credential work, token
+    /// claim, or row write. See [`country_gate_decision`] for the outcomes.
+    fn enforce_country_gate(&self, ip_address: Option<IpAddr>) -> Result<(), AppError> {
+        let country = resolve_country(self.geoip.as_deref(), ip_address);
+        country_gate_decision(country.as_deref(), &self.country_allow, &self.country_deny)
     }
 
     /// BUNYIP-366: on a genuine login, compare the resolved country of the
@@ -753,6 +813,9 @@ impl AuthService {
         password: String,
         ip_address: Option<IpAddr>,
     ) -> Result<UserResponse, AppError> {
+        // BUNYIP-726: refuse a gated country before any validation or write.
+        self.enforce_country_gate(ip_address)?;
+
         // Validate password strength
         self.password.validate_strength(&password)?;
         self.password
@@ -836,22 +899,9 @@ impl AuthService {
         // normal 2FA-cleared path) use it.
         let refresh_deadline = Some(Utc::now() + refresh_absolute_ttl(remember));
 
-        // BUNYIP-581: country allow/deny gate for spam prevention. The client IP
-        // resolves to a country through the same IP2Location resolver as the
-        // new-location alert; a refused country is a 403 before any credential
-        // work. No-op when no list is configured or no geoip DB is present.
-        if !self.country_deny.is_empty() || !self.country_allow.is_empty() {
-            if let (Some(geoip), Some(ip)) = (&self.geoip, ip_address) {
-                if !is_non_public_ip(&ip) {
-                    if let Some(country) = geoip.country_code(ip) {
-                        if country_blocked(&country, &self.country_allow, &self.country_deny) {
-                            tracing::warn!(country = %country, "sign-in refused by the country allow/deny list (BUNYIP-581)");
-                            return Err(AppError::Forbidden);
-                        }
-                    }
-                }
-            }
-        }
+        // BUNYIP-726/BUNYIP-581: country allow/deny gate for spam prevention,
+        // before any credential work.
+        self.enforce_country_gate(ip_address)?;
 
         // Find user
         let mut user = UserRepository::find_by_email(&self.pool, &email)
@@ -1204,6 +1254,10 @@ impl AuthService {
         ip_address: Option<IpAddr>,
         device_id: Option<String>,
     ) -> Result<MagicLinkResult, AppError> {
+        // BUNYIP-726: refuse a gated country before the single-use token is
+        // claimed, so a refusal never burns it.
+        self.enforce_country_gate(ip_address)?;
+
         let token_hash = self.jwt.hash_token(&token);
 
         // Find token
@@ -2479,6 +2533,94 @@ mod tests {
             country_blocked("US", &["US".to_string()], &["US".to_string()]),
             "deny wins over allow"
         );
+    }
+
+    /// BUNYIP-726 AC2: the three-way decision `enforce_country_gate` delegates
+    /// to, exercised without a geoip database since it takes an
+    /// already-resolved (or absent) country.
+    #[test]
+    fn country_gate_decision_covers_all_three_outcomes() {
+        // Neither list configured: no-op regardless of country.
+        assert!(country_gate_decision(None, &[], &[]).is_ok());
+        assert!(country_gate_decision(Some("RU"), &[], &[]).is_ok());
+
+        // Resolved country runs the same allow/deny decision as before.
+        let deny = vec!["RU".to_string()];
+        assert!(matches!(
+            country_gate_decision(Some("RU"), &[], &deny),
+            Err(AppError::Forbidden)
+        ));
+        assert!(country_gate_decision(Some("US"), &[], &deny).is_ok());
+
+        // Unresolved country with a non-empty allow list is refused: an allow
+        // list is a promise that only its named countries pass, and an
+        // unresolved country cannot honour that promise.
+        let allow = vec!["US".to_string()];
+        assert!(matches!(
+            country_gate_decision(None, &allow, &[]),
+            Err(AppError::Forbidden)
+        ));
+
+        // Unresolved country with only a deny list configured still passes
+        // (today's behaviour, now logged instead of silent).
+        assert!(country_gate_decision(None, &[], &deny).is_ok());
+    }
+
+    /// BUNYIP-726 AC3: `login`, `verify_magic_link` and `register` all call
+    /// `enforce_country_gate`, which delegates to this same pure decision, so a
+    /// country denied for one is denied for all three with no per-caller logic
+    /// to drift.
+    #[test]
+    fn country_gate_decision_refuses_the_same_country_for_every_caller() {
+        let deny = vec!["RU".to_string()];
+        for _caller in ["login", "verify_magic_link", "register"] {
+            assert!(matches!(
+                country_gate_decision(Some("RU"), &[], &deny),
+                Err(AppError::Forbidden)
+            ));
+        }
+    }
+
+    /// BUNYIP-726: fails the build if a method that mints a session or creates
+    /// an account stops calling the country gate. `complete_2fa_login`,
+    /// `complete_login_approval` and `refresh_tokens` are exempt because each
+    /// is a continuation reached only after `login` already ran the gate for
+    /// this request, so they inherit its decision instead of re-running it.
+    #[test]
+    fn every_session_minting_method_runs_the_country_gate() {
+        let source = include_str!("auth.rs");
+
+        fn fn_body<'a>(source: &'a str, name: &str) -> &'a str {
+            let needle = format!("fn {name}(");
+            let start = source
+                .find(&needle)
+                .unwrap_or_else(|| panic!("fn {name} not found"));
+            let rest = &source[start..];
+            let end = rest[1..]
+                .find("\n    pub async fn ")
+                .map(|i| i + 1)
+                .unwrap_or(rest.len());
+            &rest[..end]
+        }
+
+        for name in ["login", "verify_magic_link", "register"] {
+            assert!(
+                fn_body(source, name).contains("enforce_country_gate("),
+                "{name} mints a session or creates an account and must call \
+                 enforce_country_gate (BUNYIP-726)"
+            );
+        }
+
+        // Exempt continuations: reached only after `login` already ran the
+        // gate for this request. Assert they exist (so a rename does not
+        // silently drop the exemption) but do not require the call.
+        for name in [
+            "complete_2fa_login",
+            "complete_login_approval",
+            "refresh_tokens",
+        ] {
+            fn_body(source, name);
+        }
     }
 
     // ── BUNYIP-377: signup submit-timing guard ─────────────────────────────
