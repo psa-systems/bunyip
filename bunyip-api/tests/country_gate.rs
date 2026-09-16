@@ -25,7 +25,7 @@ use bunyip_api::config::TierConfig;
 use bunyip_api::models::{CreateUser, UserRole};
 use bunyip_api::repositories::UserRepository;
 use bunyip_api::services::{
-    AuthService, EmailService, JwtConfig, JwtService, MagicLinkResult, PasswordService,
+    argon2_offload, AuthService, EmailService, JwtConfig, JwtService, MagicLinkResult,
 };
 use bunyip_api::AppError;
 use sqlx::postgres::PgPoolOptions;
@@ -62,8 +62,8 @@ fn build_auth_service(
 async fn seed_user(pool: &PgPool) -> (Uuid, String, String) {
     let email = format!("gate-{}@example.test", Uuid::new_v4().simple());
     let password = format!("Pw-{}-Aa1!zz", Uuid::new_v4().simple());
-    let password_hash = PasswordService::new()
-        .hash(&password)
+    let password_hash = argon2_offload::hash_password(password.clone())
+        .await
         .expect("hash password");
     let user = UserRepository::create(
         pool,
