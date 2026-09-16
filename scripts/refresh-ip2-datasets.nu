@@ -44,11 +44,16 @@ def refresh-one [id: string, token: string, dataset_dir: string, tmp: string]: n
     print $"refresh: fetching ($id) -> ($spec.name)"
 
     let zip = $"($tmp)/($id).zip"
-    # --fail turns an HTTP error into a non-zero exit (it is a fail-fast flag,
-    # not a destructive one); the download endpoint answers 200 with an error
-    # page on a bad token, so the zip integrity check below is the real gate.
+    # The token rides in a curl config file fed on stdin (`--config -`) rather
+    # than as a URL argv element, so it never appears in this process's argv
+    # (readable via /proc/<pid>/cmdline by any co-resident process) or in
+    # `ps aux`. --fail turns an HTTP error into a non-zero exit (it is a
+    # fail-fast flag, not a destructive one); the download endpoint answers
+    # 200 with an error page on a bad token, so the zip integrity check below
+    # is the real gate.
     let url = $"https://www.ip2location.com/download/?token=($token)&file=($spec.code)"
-    let download = (^curl --fail --silent --show-error --location $url --output $zip | complete)
+    let curl_config = $"url = \"($url)\"\noutput = \"($zip)\"\nfail\nsilent\nshow-error\nlocation\n"
+    let download = ($curl_config | ^curl --config - | complete)
     if $download.exit_code != 0 {
         print --stderr $"refresh:   download failed for ($id)"
         return false

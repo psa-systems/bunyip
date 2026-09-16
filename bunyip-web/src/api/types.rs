@@ -107,6 +107,17 @@ pub struct SessionInfo {
     pub current: bool,
 }
 
+/// An OAuth client's public display identity (BUNYIP-697): the name and logo
+/// the consent screen renders, resolved server-side from `client_id` rather
+/// than trusted from the query string.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClientIdentity {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub logo_uri: Option<String>,
+}
+
 /// One trusted device (BUNYIP-138). Mirrors the API's `TrustedDeviceInfo`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TrustedDeviceInfo {
