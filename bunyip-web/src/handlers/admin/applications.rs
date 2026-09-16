@@ -32,15 +32,20 @@ use super::application_groups::group_assignment_form;
 pub(super) fn app_admin_row(app: &AdminApplication) -> Markup {
     html! {
         div class="py-3 flex items-center justify-between gap-4" data-reorder-item data-app-id=(app.id) draggable="true" {
-            div class="flex items-center gap-3" {
+            div class="flex items-center gap-3 min-w-0" {
                 button type="button" data-reorder-handle
                     class="cursor-grab touch-none rounded p-1 text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                     aria-label=(format!("Reorder {}. Drag, or focus this handle and use the up and down arrow keys.", app.display_name)) {
                     (icon("grip-vertical", "h-5 w-5"))
                 }
-                div class="space-y-1" {
-                    p class="font-medium" { (app.display_name) }
-                    p class="text-xs text-muted-foreground" { (app.slug) }
+                div class="space-y-1 min-w-0" {
+                    // `truncate` sits on the text spans, not the `space-y-1` div:
+                    // ellipsis/nowrap do not apply to a block container, so a long
+                    // display_name or slug stretched the row and pushed the
+                    // Active/Maintenance toggles and Edit button off-row, the same
+                    // failure `user_grid_row` was hardened against (BUNYIP-421).
+                    p class="font-medium truncate" { (app.display_name) }
+                    p class="text-xs text-muted-foreground truncate" { (app.slug) }
                     (surface_tags(&SurfaceVisibility::of(app)))
                 }
             }

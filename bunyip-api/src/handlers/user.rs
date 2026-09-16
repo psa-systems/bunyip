@@ -269,6 +269,51 @@ pub async fn grant_consent(
     Ok(success_no_data(request_id))
 }
 
+/// The public display identity of an OAuth client (BUNYIP-697): no secret,
+/// redirect_uri, or scope data, just what the consent screen names and
+/// pictures.
+#[derive(Debug, serde::Serialize)]
+pub struct ClientIdentityResponse {
+    pub name: String,
+    pub logo_uri: Option<String>,
+}
+
+/// GET /v1/users/me/oauth-clients/{client_id}/identity (BUNYIP-697)
+///
+/// Server-side, `client_id`-keyed lookup of an OAuth client's display name and
+/// logo, the same `load_client` the `/oauth2/authorize` redirect-building path
+/// already uses. bunyip-web's consent screen calls this exclusively so the
+/// rendered identity can never come from a query-string-supplied
+/// `client_name`/`logo_uri` (which a phishing link controls). Requires a
+/// signed-in caller purely to match the rest of `/users/me/*`; the returned
+/// fields are the same ones every relying party's authorize redirect already
+/// discloses to the browser.
+pub async fn get_client_identity(
+    req: HttpRequest,
+    _user: AuthenticatedUser,
+    oidc_provider: web::Data<
+        Option<std::sync::Arc<bunyip_oidc::services::oidc_provider::OidcProvider>>,
+    >,
+    path: web::Path<Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let provider = oidc_provider
+        .as_ref()
+        .as_ref()
+        .ok_or_else(|| AppError::not_found("OIDC provider not configured"))?;
+    let client = provider
+        .load_client(path.into_inner())
+        .await?
+        .ok_or_else(|| AppError::not_found("unknown client_id"))?;
+    Ok(success(
+        ClientIdentityResponse {
+            name: client.name,
+            logo_uri: client.logo_uri,
+        },
+        request_id,
+    ))
+}
+
 /// PUT /v1/users/me/profile (BUNYIP-139)
 ///
 /// Persist the optional first_name / last_name / phone columns. Fields absent
