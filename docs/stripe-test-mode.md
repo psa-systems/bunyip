@@ -36,9 +36,14 @@ api listens on `APP_PORT=4401`. Handled event types:
 
 ## Step 1 - load test-mode keys
 
-BUNYIP-482: the **admin Stripe page is the only place keys are entered**. There
-is no Stripe env var; the `stripe_config` DB row is the single source, and a
-save applies immediately (`StripeService::reload()`), with no restart.
+The admin Stripe page is where keys are entered on a deployment whose
+`SECRETS_STORAGE` is `database` or `infisical`; the `stripe_config` row is the
+source and a save applies immediately (`StripeService::reload()`), with no
+restart. Under `SECRETS_STORAGE=environment` the two Stripe secrets are read
+from `STRIPE_SECRET_KEY_FILE` and `STRIPE_WEBHOOK_SECRET_FILE` only, the admin
+fields are read-only, and a write attempt answers 409: write the value to the
+file and restart bunyip-api. See
+[configuration.md](configuration.md#secrets_storage-where-the-integration-secrets-live-bunyip-542).
 
 In the Stripe Dashboard switch to Test mode, open Developers -> API keys, copy
 the **Secret key** (`sk_test_...`), and paste it into the in-app admin Stripe
@@ -94,7 +99,7 @@ bunyip-web falls back to the internal `BUNYIP_API_URL` (a Docker hostname) when
 it is unset, and the admin page flags that value instead of presenting it as
 correct (BUNYIP-510).
 
-- **Created from the Webhook endpoints block on `/admin/stripe`** (preferred): the URL field is prefilled with the derived value, and `create_stripe_webhook` (`bunyip-api/src/handlers/admin_stripe.rs`) encrypts the signing secret Stripe returns, stores it, and hot-reloads `StripeService`. There is nothing to paste; the secret is shown once as a record.
+- **Created from the Webhook endpoints block on `/admin/stripe`** (preferred): the URL field is prefilled with the derived value, and `create_stripe_webhook` (`bunyip-api/src/handlers/admin_stripe.rs`) encrypts the signing secret Stripe returns, stores it, and hot-reloads `StripeService`. There is nothing to paste; the secret is shown once as a record. Under `SECRETS_STORAGE=environment` this path answers an error instead: the endpoint is created on Stripe's side but the signing secret is not saved, so write it to the file `STRIPE_WEBHOOK_SECRET_FILE` names and restart.
 - **Created in the Stripe dashboard**: Stripe never hands the secret to bunyip, so copy it from the dashboard into **Webhook secret** on `/admin/stripe` and Save.
 
 Until a real signing secret is stored, `stripe_webhook` rejects every delivery

@@ -143,6 +143,15 @@ impl User {
                 return true;
             }
         }
+        // BUNYIP-719: `grace_period` grants access only while the stored
+        // deadline is still in the future. A `grace_period` row with no
+        // stored deadline is treated as expired: every write of that status
+        // sets the end date in the same transaction.
+        if self.membership_status == "grace_period" {
+            return self
+                .grace_period_end
+                .is_some_and(|end| end > chrono::Utc::now());
+        }
         self.membership_status_enum().has_access()
     }
 }
@@ -441,6 +450,30 @@ mod tests {
     #[test]
     fn access_denied_for_no_membership_no_trial() {
         let user = user_with_tier(false, None, "standard");
+        assert!(!user.is_access_allowed());
+    }
+
+    #[test]
+    fn access_allowed_for_grace_period_before_deadline() {
+        let mut user = user_with_tier(false, None, "standard");
+        user.membership_status = "grace_period".to_string();
+        user.grace_period_end = Some(Utc::now() + chrono::Duration::days(1));
+        assert!(user.is_access_allowed());
+    }
+
+    #[test]
+    fn access_denied_for_grace_period_after_deadline() {
+        let mut user = user_with_tier(false, None, "standard");
+        user.membership_status = "grace_period".to_string();
+        user.grace_period_end = Some(Utc::now() - chrono::Duration::days(1));
+        assert!(!user.is_access_allowed());
+    }
+
+    #[test]
+    fn access_denied_for_grace_period_with_no_stored_deadline() {
+        let mut user = user_with_tier(false, None, "standard");
+        user.membership_status = "grace_period".to_string();
+        user.grace_period_end = None;
         assert!(!user.is_access_allowed());
     }
 
