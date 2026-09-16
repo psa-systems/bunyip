@@ -1217,6 +1217,7 @@ pub async fn userinfo(
                         user.lifetime_member,
                         user.trial_ends_at.map(|t| t.timestamp()),
                         &user.membership_status,
+                        user.grace_period_end.map(|t| t.timestamp()),
                     )
                 ),
             );
