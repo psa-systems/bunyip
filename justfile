@@ -58,7 +58,7 @@ default:
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-justfile check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-theme-colors check-cache-mounts check-cache-keys check-publish-triggers check-build check-clippy check-fmt check-docker
+check: check-justfile check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-theme-colors check-em-dash check-cache-mounts check-cache-keys check-publish-triggers check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -144,6 +144,12 @@ check-ui-copy:
 check-price-literals:
     ./scripts/check-price-literals.nu --self-test
     ./scripts/check-price-literals.nu
+
+# Gate the em-dash ban: no U+2014 in any tracked file (BUNYIP-694).
+[group: 'checks']
+check-em-dash:
+    ./scripts/check-em-dash.nu --self-test
+    ./scripts/check-em-dash.nu
 
 # Gate the theme tokens: no unmapped stock Tailwind scale in the client-side
 # scripts and no colour literal in the framework shell (BUNYIP-549).

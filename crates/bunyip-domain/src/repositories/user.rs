@@ -1103,7 +1103,7 @@ impl UserRepository {
         Ok(user)
     }
 
-    /// Count users assigned to each tier — used inside a transaction with an advisory lock
+    /// Count users assigned to each tier - used inside a transaction with an advisory lock
     /// to atomically determine which tier the next verified user should receive.
     ///
     /// Counts are based on how many users have actually been assigned each tier,

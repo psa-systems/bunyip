@@ -1,13 +1,13 @@
 //! OIDC / OAuth 2.0 Authorization Server handlers.
 //!
 //! Implements:
-//!   GET  /.well-known/openid-configuration   — OIDC Discovery
-//!   GET  /.well-known/jwks.json              — JWKS
-//!   GET  /oauth2/authorize                   — Authorization endpoint
-//!   POST /oauth2/token                       — Token endpoint
-//!   GET  /oauth2/userinfo                    — Userinfo endpoint
-//!   POST /oauth2/revoke                      — Revocation endpoint (RFC 7009)
-//!   GET  /oauth2/logout                      — RP-Initiated Logout
+//!   GET  /.well-known/openid-configuration   - OIDC Discovery
+//!   GET  /.well-known/jwks.json              - JWKS
+//!   GET  /oauth2/authorize                   - Authorization endpoint
+//!   POST /oauth2/token                       - Token endpoint
+//!   GET  /oauth2/userinfo                    - Userinfo endpoint
+//!   POST /oauth2/revoke                      - Revocation endpoint (RFC 7009)
+//!   GET  /oauth2/logout                      - RP-Initiated Logout
 
 use actix_web::{web, HttpRequest, HttpResponse};
 use base64::Engine as _;

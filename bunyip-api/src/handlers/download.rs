@@ -454,7 +454,7 @@ async fn download_asset_core(
             };
 
             // Attach the DownloadGuard to the stream so it drops only when the
-            // stream is fully consumed or dropped — ensuring the concurrency
+            // stream is fully consumed or dropped - ensuring the concurrency
             // slot stays held for the duration of the streaming response.
             let framed = FramedRead::new(file, BytesCodec::new());
             let stream = futures_util::stream::unfold(

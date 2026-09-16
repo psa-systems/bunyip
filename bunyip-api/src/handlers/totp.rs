@@ -114,7 +114,7 @@ pub async fn confirm_2fa(
 }
 
 /// POST /v1/auth/2fa/verify
-/// Verify 2FA code to complete login (NO auth required — uses challenge token)
+/// Verify 2FA code to complete login (NO auth required - uses challenge token)
 pub async fn verify_2fa(
     req: HttpRequest,
     pool: web::Data<PgPool>,

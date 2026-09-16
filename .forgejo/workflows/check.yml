@@ -213,6 +213,15 @@ jobs:
           ./scripts/check-price-literals.nu --self-test
           ./scripts/check-price-literals.nu
 
+      - name: Check the em-dash ban
+        # CLAUDE.md bans the em-dash (U+2014) in any output or artifact, so no
+        # tracked file may contain one (BUNYIP-694). --self-test first, so a
+        # gate that stopped detecting anything fails the build instead of
+        # passing vacuously.
+        run: |
+          ./scripts/check-em-dash.nu --self-test
+          ./scripts/check-em-dash.nu
+
       - name: Check no product name is compiled into bunyip-web
         # The brand is an admin-managed database record, not a literal: no
         # standalone `Bunyip` in bunyip-web/src/{views,handlers,skin}, and every
