@@ -43,7 +43,7 @@ use bunyip_oci::services::ManifestCache;
 /// A Group-1 startup value in a row is refused by the database provider and
 /// surfaces here as an operator-facing 400 naming the key, never as a silent
 /// fallback to another provider.
-fn section_stack(
+pub(crate) fn section_stack(
     database: Result<DatabaseProvider, crate::config::ConfigFailure>,
     keys: &[&str],
 ) -> Result<(ConfigStack, &'static str), AppError> {
