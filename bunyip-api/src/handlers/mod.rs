@@ -267,5 +267,8 @@ pub use admin_stripe::{
     list_stripe_products, list_stripe_webhooks, replace_stripe_price, unarchive_stripe_price,
     unarchive_stripe_product, update_stripe_product,
 };
-pub use support::{reply_to_support_ticket, SupportReplyRequest};
+pub use support::{
+    get_support_ticket, list_support_tickets, reply_to_support_ticket, ListSupportTicketsQuery,
+    SupportReplyRequest,
+};
 pub use system_config::{get_system_config, update_system_config};

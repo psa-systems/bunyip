@@ -509,7 +509,7 @@ mod tests {
             trial_period_days: None,
         };
 
-        // v2 key only, no previous — cannot decrypt v1 data
+        // v2 key only, no previous - cannot decrypt v1 data
         let ks_v2_no_prev = AppKeySet {
             current: [0xBB; 32],
             current_version: 2,

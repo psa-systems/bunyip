@@ -253,6 +253,14 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 web::post().to(handlers::respond_to_feedback),
             )
             .route(
+                "/support/tickets",
+                web::get().to(handlers::list_support_tickets),
+            )
+            .route(
+                "/support/tickets/{id}",
+                web::get().to(handlers::get_support_ticket),
+            )
+            .route(
                 "/support/tickets/{id}/reply",
                 web::post().to(handlers::reply_to_support_ticket),
             )

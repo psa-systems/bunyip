@@ -53,7 +53,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     // Root-level `/version` update-check endpoint (bunyip-specific).
     version::configure(cfg);
 
-    // OIDC / OAuth 2.1 endpoints (root-level, outside /v1) — provided by the
+    // OIDC / OAuth 2.1 endpoints (root-level, outside /v1) - provided by the
     // dunite-oidc vertical crate.
     bunyip_oidc::routes::oidc::configure_well_known(cfg);
     bunyip_oidc::routes::oidc::configure_oauth2(cfg);
