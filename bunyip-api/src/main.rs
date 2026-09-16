@@ -21,11 +21,11 @@ use bunyip_api::{
         request_id::RequestIdMiddleware,
         AutoBanMiddleware, CspConfig, SecurityHeaders,
     },
-    models::{CreateUser, UserRole},
+    models::{AuditAction, CreateAuditLog, CreateUser, UserRole},
     mokosh_backup::MokoshHttpBackupAdapter,
     repositories::{
-        DownloadCacheRepository, DownloadDailyCountRepository, FeedbackRepository,
-        RateLimitRepository, UserRepository,
+        AuditLogRepository, DownloadCacheRepository, DownloadDailyCountRepository,
+        FeedbackRepository, RateLimitRepository, UserRepository,
     },
     routes,
     services::{
@@ -1085,6 +1085,45 @@ async fn main() -> anyhow::Result<()> {
                 }
                 Err(e) => {
                     error!(error = %e, "Failed to archive/purge closed feedback");
+                }
+            }
+        }
+    });
+
+    // BUNYIP-719: grace-period sweep (hourly). The access predicates
+    // (`AccessTokenClaims::has_member_access_static`, `User::is_access_allowed`)
+    // already deny access once `grace_period_end` passes, so this sweep is not
+    // what closes access; it is what keeps `membership_status` (the admin
+    // membership list, the dashboard counts, `PLAN_MEMBER_STATUSES`) truthful
+    // once the deadline is behind us, for a row a webhook event never revisits.
+    // The guarded `UPDATE ... WHERE membership_status = 'grace_period' AND
+    // grace_period_end < NOW()` in `end_expired_grace_periods` cannot overwrite
+    // a concurrent payment-succeeded reactivation, which clears the window and
+    // sets `active` before the sweep's predicate would match the row again.
+    let grace_period_pool = pool.clone();
+    tokio::spawn(async move {
+        info!("Grace period sweep task started");
+        let mut interval = tokio::time::interval(Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            match UserRepository::end_expired_grace_periods(&grace_period_pool).await {
+                Ok(ended) => {
+                    if !ended.is_empty() {
+                        info!(count = ended.len(), "Ended expired grace periods");
+                    }
+                    for (user_id, email, role) in ended {
+                        let audit_log = CreateAuditLog::new(AuditAction::GracePeriodEnded)
+                            .with_actor(user_id, &email, &role)
+                            .with_resource("user", user_id);
+                        if let Err(e) =
+                            AuditLogRepository::create(&grace_period_pool, audit_log).await
+                        {
+                            error!(error = %e, user_id = %user_id, "Failed to create audit log for grace period ended");
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!(error = %e, "Failed to end expired grace periods");
                 }
             }
         }

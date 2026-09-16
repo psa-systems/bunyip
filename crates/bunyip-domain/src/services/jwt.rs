@@ -30,6 +30,12 @@ pub struct AccessTokenClaims {
     /// Unix timestamp when trial expires; None for lifetime members
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trial_ends_at: Option<i64>,
+    /// BUNYIP-719: Unix timestamp when the stored grace period ends; None
+    /// when the user is not in a grace period. `#[serde(default)]` keeps a
+    /// token minted before this field readable (grace access then decided as
+    /// expired, matching the "no stored deadline" case at the DB layer).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grace_period_end: Option<i64>,
     pub iat: i64,
     pub exp: i64,
     pub jti: String,
@@ -50,6 +56,7 @@ impl AccessTokenClaims {
             self.lifetime_member,
             self.trial_ends_at,
             &self.membership_status,
+            self.grace_period_end,
         )
     }
 
@@ -60,12 +67,14 @@ impl AccessTokenClaims {
         lifetime_member: bool,
         trial_ends_at: Option<i64>,
         membership_status: &str,
+        grace_period_end: Option<i64>,
     ) -> bool {
         role == "admin"
             || lifetime_member
             || trial_ends_at.is_some_and(|ts| ts > chrono::Utc::now().timestamp())
             || membership_status == "active"
-            || membership_status == "grace_period"
+            || (membership_status == "grace_period"
+                && grace_period_end.is_some_and(|ts| ts > chrono::Utc::now().timestamp()))
     }
 }
 
@@ -135,6 +144,7 @@ impl JwtService {
             price_id: user.locked_price_id.clone(),
             lifetime_member: user.lifetime_member,
             trial_ends_at: user.trial_ends_at.map(|t| t.timestamp()),
+            grace_period_end: user.grace_period_end.map(|t| t.timestamp()),
             iat: now.timestamp(),
             exp: exp.timestamp(),
             jti: format!("at_{}", Uuid::new_v4().as_simple()),
@@ -451,6 +461,22 @@ mod tests {
         trial_ends_at: Option<i64>,
         role: &str,
     ) -> AccessTokenClaims {
+        test_claims_with_grace(
+            membership_status,
+            lifetime_member,
+            trial_ends_at,
+            role,
+            None,
+        )
+    }
+
+    fn test_claims_with_grace(
+        membership_status: &str,
+        lifetime_member: bool,
+        trial_ends_at: Option<i64>,
+        role: &str,
+        grace_period_end: Option<i64>,
+    ) -> AccessTokenClaims {
         AccessTokenClaims {
             sub: Uuid::new_v4(),
             email: "test@example.com".to_string(),
@@ -460,6 +486,7 @@ mod tests {
             price_id: None,
             lifetime_member,
             trial_ends_at,
+            grace_period_end,
             iat: Utc::now().timestamp(),
             exp: (Utc::now() + Duration::minutes(15)).timestamp(),
             jti: "test".to_string(),
@@ -480,9 +507,27 @@ mod tests {
     }
 
     #[test]
-    fn has_member_access_grace_period() {
-        let claims = test_claims("grace_period", false, None, "subscriber");
+    fn has_member_access_grace_period_before_deadline() {
+        let future = Utc::now().timestamp() + 86400; // 1 day in the future
+        let claims =
+            test_claims_with_grace("grace_period", false, None, "subscriber", Some(future));
         assert!(claims.has_member_access());
+    }
+
+    #[test]
+    fn has_member_access_grace_period_after_deadline() {
+        let past = Utc::now().timestamp() - 86400; // 1 day in the past
+        let claims = test_claims_with_grace("grace_period", false, None, "subscriber", Some(past));
+        assert!(!claims.has_member_access());
+    }
+
+    #[test]
+    fn has_member_access_grace_period_no_deadline_stored() {
+        // BUNYIP-719: a `grace_period` row with no stored deadline (or a
+        // token minted before this field existed, via `#[serde(default)]`)
+        // is treated as expired.
+        let claims = test_claims("grace_period", false, None, "subscriber");
+        assert!(!claims.has_member_access());
     }
 
     #[test]
@@ -520,6 +565,28 @@ mod tests {
     #[test]
     fn has_member_access_past_due_no_access() {
         let claims = test_claims("past_due", false, None, "subscriber");
+        assert!(!claims.has_member_access());
+    }
+
+    #[test]
+    fn access_token_minted_without_grace_period_end_still_deserializes_and_is_expired() {
+        // A token minted before `grace_period_end` existed carries no such
+        // key at all. `#[serde(default)]` must still deserialize it, and the
+        // resulting `None` must read as expired for a `grace_period` claim.
+        let json = serde_json::json!({
+            "sub": Uuid::new_v4(),
+            "email": "test@example.com",
+            "role": "subscriber",
+            "membership_status": "grace_period",
+            "price_locked": false,
+            "lifetime_member": false,
+            "iat": Utc::now().timestamp(),
+            "exp": (Utc::now() + Duration::minutes(15)).timestamp(),
+            "jti": "pre-existing",
+            "iss": "test",
+        });
+        let claims: AccessTokenClaims = serde_json::from_value(json).unwrap();
+        assert_eq!(claims.grace_period_end, None);
         assert!(!claims.has_member_access());
     }
 }

@@ -475,10 +475,6 @@ Run `just verify-oci` first; everything below assumes it passed.
 | A8 | Binary integrity | download binary + `.sha256` asset via the proxy; `sha256sum` the binary; also sha256 the same file fetched from Forgejo directly | all three digests identical |
 | A9 | Non-member denial | `GET /v1/downloads` + an asset URL with the NON-member cookie jar | HTTP 403, envelope code `FORBIDDEN`, no asset bytes |
 
-Caveat: space docker operations ~15 s apart or the token endpoint's
-5/min/email rate limit (BUNYIP-40) fires before whatever you are actually
-testing.
-
 **A6 cache proof.** "Grep the logs" does NOT work here: the blob path logs
 nothing on an upstream fetch, so absence of log lines proves nothing. The
 definitive method is a re-pull with the upstream dead - it can only succeed if
@@ -500,34 +496,22 @@ let api = $"dev-bunyip-api-($user_name)"
 
 ### Matrix B: limit enforcement
 
-Blocked on BUNYIP-42 for a clean procedure: compose.dev.yml does not pass the
-limit env vars through, so `.env` values are ignored. Until that lands, the
-interim method is a compose override layered on top of the just-managed stack
-(this is the one sanctioned exception to "never raw compose" - it keeps
-compose.dev.yml first so all just-managed wiring stays identical, and HOST_UID
-/ HOST_GID must be exported exactly as the justfile does):
+Set the caps in `.env` and re-up: `compose.dev.yml` passes
+`OCI_PULLS_PER_USER_PER_DAY`, `DOWNLOAD_DAILY_LIMIT_PER_USER`,
+`DOWNLOAD_CONCURRENCY_PER_USER` and `OCI_CONCURRENT_MANIFESTS_PER_USER`
+through to the api service, so no compose override is needed.
 
 ```nu
-# Override file with low limits (save errors if a leftover exists; remove it first).
-if ("/tmp/compose.limits.yml" | path exists) { ^rm /tmp/compose.limits.yml }
-"services:
-  api:
-    environment:
-      OCI_PULLS_PER_USER_PER_DAY: \"3\"
-      DOWNLOAD_DAILY_LIMIT_PER_USER: \"3\"
-      DOWNLOAD_CONCURRENCY_PER_USER: \"1\"
-" | save /tmp/compose.limits.yml
-$env.HOST_UID = (^id --user | str trim); $env.HOST_GID = (^id --group | str trim)
-^docker compose -f compose.dev.yml -f /tmp/compose.limits.yml up --detach api
-# ... run B1-B3 ...
-# Restore the normal stack when done:
+# In .env, then re-up on the supported path.
+# OCI_PULLS_PER_USER_PER_DAY=3
+# DOWNLOAD_DAILY_LIMIT_PER_USER=3
+# DOWNLOAD_CONCURRENCY_PER_USER=1
 just dev-detach
-^rm /tmp/compose.limits.yml
 ```
 
 | # | Test | Expected |
 | --- | --- | --- |
-| B1 | Pull past the daily cap | HTTP 429 on `/v2/{slug}/manifests/...`; the wait time is the `Retry-After` HTTP HEADER (the OCI 429 body has no retry field); value = seconds until midnight UTC. NOTE: one multi-arch docker pull = 3 counted requests (BUNYIP-43), so with cap 3 the SECOND pull is denied |
+| B1 | Pull past the daily cap | HTTP 429 on `/v2/{slug}/manifests/...`; the wait time is the `Retry-After` HTTP HEADER (the OCI 429 body has no retry field); value = seconds until midnight UTC. NOTE: only TAG-addressed manifest requests are metered, so one docker pull counts once (twice for a client that does both HEAD and GET by tag); with cap 3 the fourth pull is denied. See `should_meter` in `crates/bunyip-oci/src/handlers/oci_registry.rs`. |
 | B2 | 4th download with cap 3 | HTTP 429; JSON body code `download_daily_limit` with `details.retry_after` (seconds to midnight UTC) - unlike B1 this one IS in the body |
 | B3 | 3 parallel downloads, concurrency 1 | exactly one 200, rest 429 |
 
@@ -552,11 +536,6 @@ let user_name = (^whoami | str trim)
   covered only by wiremock integration tests in
   `bunyip-api/src/handlers/download.rs`, not by this live matrix.
 - Blob cache hits/misses are not observable in logs (why A6 needs the
-  dead-upstream method); the only blob-cache log lines are the eviction
-  failures of BUNYIP-41.
-- BUNYIP-40: token endpoint shares the 5/min login rate limit; multi-image
-  pulls can 429.
-- BUNYIP-41: blob cache LRU eviction silently fails (pool exhaustion) during
-  concurrent pulls.
-- BUNYIP-42: compose files missing limit/TTL env passthrough.
-- BUNYIP-43: daily pull counter counts manifest requests (3+ per docker pull).
+  dead-upstream method).
+- Defects found during the 2026-06-02 run are recorded on BUNYIP-35 and were
+  fixed under BUNYIP-40, BUNYIP-41, BUNYIP-42 and BUNYIP-43.
