@@ -352,11 +352,15 @@ async fn main() {
         ))
         // BUNYIP-259: Origin / Referer CSRF defense on every state-
         // changing POST. Refuses cross-origin form submissions before
-        // the handler runs. The `/oauth2/*` family is exempted inside
-        // the middleware (those endpoints authenticate via PKCE +
-        // state + nonce + client_secret per spec). The full
-        // synchronizer-token middleware on top of this is a follow-up.
-        .layer(axum::middleware::from_fn(csrf::enforce_origin))
+        // the handler runs. BUNYIP-730: bunyip-web mounts no OIDC
+        // protocol endpoint (its `/oauth2/consent` handler authenticates
+        // the caller only via the session cookie), so it wires an empty
+        // exemption list. The full synchronizer-token middleware on top
+        // of this is a follow-up.
+        .layer(axum::middleware::from_fn_with_state(
+            &[] as &'static [&'static str],
+            csrf::enforce_origin_with,
+        ))
         // BUNYIP-311: resolve the end-user IP once per request (honouring
         // bunyip-web's own trusted proxy) and scope it into a task-local so
         // every outbound /v1 call forwards it to bunyip-api as X-Forwarded-For.
