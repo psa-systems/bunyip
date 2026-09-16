@@ -27,7 +27,7 @@
 //! an endpoint is rejected with `AppError::Unauthorized`, identical to
 //! the pre-BUNYIP-55 behaviour.
 
-use crate::errors::AppError;
+use crate::errors::{AppError, ErrorDetails, ErrorMeta, ErrorResponse};
 use crate::models::User;
 use crate::repositories::user::UserRepository;
 use crate::services::{AccessTokenClaims, JwtService};
@@ -113,6 +113,7 @@ impl AccessTokenClaims {
             price_id: user.locked_price_id.clone(),
             lifetime_member: user.lifetime_member,
             trial_ends_at: user.trial_ends_at.map(|t| t.timestamp()),
+            grace_period_end: user.grace_period_end.map(|t| t.timestamp()),
             iat: token_iat,
             exp: token_exp,
             jti: token_jti.to_string(),
@@ -297,6 +298,115 @@ impl FromRequest for AdminUser {
                 return Err(AppError::Forbidden);
             }
             Ok(AdminUser(claims))
+        })
+    }
+}
+
+/// BUNYIP-732: the message a refused verification-gated API call answers with.
+/// Wording is pinned identical to bunyip-web's `VERIFICATION_REQUIRED_MESSAGE`
+/// (`bunyip-web/src/handlers/mod.rs`) by a source-scan test in
+/// `bunyip-api/src/handlers/admin.rs`, since the two binaries share no crate a
+/// Rust constant could live in.
+pub const VERIFICATION_REQUIRED_MESSAGE: &str =
+    "Verify your email before performing this action. Use the resend link on your dashboard.";
+
+/// BUNYIP-732: a principal is verification-complete once their name is present
+/// AND their email is verified. Mirrors bunyip-web's `is_verified`
+/// (`bunyip-web/src/handlers/mod.rs`), which is the property a privileged
+/// admin action requires on the browser path; this is the same property
+/// enforced at the API layer so the requirement holds for every caller.
+pub fn is_verified(user: &User) -> bool {
+    fn present(v: &Option<String>) -> bool {
+        matches!(v.as_deref().map(str::trim), Some(s) if !s.is_empty())
+    }
+    present(&user.first_name) && present(&user.last_name) && user.email_verified
+}
+
+/// Error type for [`VerifiedAdminUser`]. Distinct from `AppError` because the
+/// verification refusal must name verification as the reason
+/// (`VERIFICATION_REQUIRED_MESSAGE`), and `AppError::Forbidden`'s message is
+/// fixed; `AppError` is `dunite-core`'s generic kernel type, which bunyip does
+/// not extend with domain-specific variants (see CLAUDE.md).
+#[derive(Debug, thiserror::Error)]
+pub enum VerifiedAdminError {
+    #[error(transparent)]
+    Auth(#[from] AppError),
+    #[error("verification required")]
+    VerificationRequired,
+}
+
+impl actix_web::ResponseError for VerifiedAdminError {
+    fn status_code(&self) -> actix_web::http::StatusCode {
+        match self {
+            Self::Auth(e) => e.status_code(),
+            Self::VerificationRequired => actix_web::http::StatusCode::FORBIDDEN,
+        }
+    }
+
+    fn error_response(&self) -> actix_web::HttpResponse {
+        match self {
+            Self::Auth(e) => e.error_response(),
+            Self::VerificationRequired => {
+                actix_web::HttpResponse::Forbidden().json(ErrorResponse {
+                    success: false,
+                    error: ErrorDetails {
+                        code: "VERIFICATION_REQUIRED".to_string(),
+                        message: VERIFICATION_REQUIRED_MESSAGE.to_string(),
+                        details: None,
+                    },
+                    meta: ErrorMeta {
+                        request_id: dunite_core::middleware::request_id::RequestId::new().0,
+                        timestamp: chrono::Utc::now(),
+                    },
+                })
+            }
+        }
+    }
+}
+
+/// Extractor for a verified admin - the [`AdminUser`] check PLUS
+/// [`is_verified`] (BUNYIP-732). Refuses a non-admin exactly as `AdminUser`
+/// does, then refuses an admin whose `users` row is not verification-complete
+/// with a 403 naming verification as the reason, so the actions BUNYIP-619
+/// gated in bunyip-web are also refused at the endpoint that performs them -
+/// for every caller, not only the browser going through bunyip-web.
+#[derive(Debug, Clone)]
+pub struct VerifiedAdminUser(pub AccessTokenClaims);
+
+impl FromRequest for VerifiedAdminUser {
+    type Error = VerifiedAdminError;
+    type Future = Pin<Box<dyn Future<Output = Result<Self, Self::Error>>>>;
+
+    fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
+        let pool = req
+            .app_data::<actix_web::web::Data<PgPool>>()
+            .map(|p| p.get_ref().clone());
+        let req = req.clone();
+
+        Box::pin(async move {
+            let token = extract_token(&req).ok_or(AppError::Unauthorized)?;
+            let identity = verify_once(&req, &token).await?;
+            let claims = identity.claims;
+            if claims.role != "admin" {
+                return Err(AppError::Forbidden.into());
+            }
+            // BUNYIP-557: on the at+jwt path the verification read this row
+            // microseconds ago in THIS request; the HS256 cookie path reads no
+            // row while verifying, so it still queries here.
+            let user = match identity.user {
+                Some(user) => user,
+                None => {
+                    let pool =
+                        pool.ok_or_else(|| AppError::internal("Database pool not available"))?;
+                    UserRepository::find_by_id(&pool, claims.sub)
+                        .await?
+                        .ok_or(AppError::Unauthorized)?
+                }
+            };
+            if !is_verified(&user) {
+                return Err(VerifiedAdminError::VerificationRequired);
+            }
+            Ok(VerifiedAdminUser(claims))
         })
     }
 }
@@ -1119,6 +1229,7 @@ mod tests {
             price_id: None,
             lifetime_member: false,
             trial_ends_at: None,
+            grace_period_end: None,
             iat: 0,
             exp: i64::MAX,
             jti: "jti-1".to_string(),
@@ -1244,6 +1355,7 @@ mod tests {
         assert_eq!(claims.price_id, Some("price_42".to_string()));
         assert!(claims.lifetime_member);
         assert_eq!(claims.trial_ends_at, None);
+        assert_eq!(claims.grace_period_end, None);
         assert_eq!(claims.iss, "https://api.example.test");
         assert_eq!(claims.iat, 1_700_000_000);
         assert_eq!(claims.exp, 1_700_000_900);

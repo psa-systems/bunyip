@@ -450,6 +450,17 @@ async fn handle_subscription_created(
         .as_str()
         .ok_or(AppError::validation("customer", "Missing customer ID"))?;
 
+    // A subscription object exists as soon as checkout starts; it does not
+    // mean the first payment succeeded (`incomplete` covers 3DS/SCA and
+    // failed initial charges). Classify it through the same helper
+    // `handle_subscription_updated` uses (BUNYIP-717/BUNYIP-718) rather than
+    // assuming Active, or an incomplete subscription would activate
+    // membership and consume a tier slot before it ever paid.
+    let status = subscription["status"].as_str().ok_or(AppError::validation(
+        "status",
+        "Missing subscription status",
+    ))?;
+
     // Find user by customer ID
     let user = UserRepository::find_by_stripe_customer_id(pool, customer_id)
         .await?
@@ -467,18 +478,28 @@ async fn handle_subscription_created(
         .as_i64()
         .unwrap_or(300) as i32;
 
+    let user_status = membership_status_for(status);
+    let grants_access = user_status.has_access();
+
     // Resolve tier from product ID mapping (None means no match - leave tier unchanged)
     let resolved_tier = resolve_tier_for_product(product_id, tc);
 
     let mut tx = pool.begin().await?;
-    UserRepository::update_membership_status(&mut *tx, user.id, MembershipStatus::Active).await?;
-    if let Some(ref tier) = resolved_tier {
-        UserRepository::upgrade_membership_tier(&mut *tx, user.id, tier).await?;
+    UserRepository::update_membership_status(&mut *tx, user.id, user_status).await?;
+    if grants_access {
+        if let Some(ref tier) = resolved_tier {
+            UserRepository::upgrade_membership_tier(&mut *tx, user.id, tier).await?;
+        }
     }
     tx.commit().await?;
 
-    // Grant per-product entitlements for the subscription's prices (BUNYIP-39).
-    sync_stripe_entitlements(pool, user.id, subscription).await?;
+    // Grant per-product entitlements only once the subscription actually
+    // grants access (BUNYIP-39, BUNYIP-718). No `revoke_stripe_entitlements`
+    // counterpart here: a created event has nothing prior to revoke, and
+    // revoking could drop a grant a concurrent active subscription just made.
+    if grants_access {
+        sync_stripe_entitlements(pool, user.id, subscription).await?;
+    }
 
     tracing::info!(
         user_id = %user.id,
@@ -519,7 +540,10 @@ async fn handle_subscription_updated(
         .as_str()
         .ok_or(AppError::validation("customer", "Missing customer ID"))?;
 
-    let status = subscription["status"].as_str().unwrap_or("active");
+    let status = subscription["status"].as_str().ok_or(AppError::validation(
+        "status",
+        "Missing subscription status",
+    ))?;
 
     let cancel_at_period_end = subscription["cancel_at_period_end"]
         .as_bool()
@@ -535,18 +559,13 @@ async fn handle_subscription_updated(
 
     // Find user by customer ID
     if let Some(user) = UserRepository::find_by_stripe_customer_id(pool, customer_id).await? {
-        let user_status = match status {
-            "active" => MembershipStatus::Active,
-            "past_due" => MembershipStatus::PastDue,
-            "canceled" => MembershipStatus::Canceled,
-            _ => MembershipStatus::Active,
-        };
-        // Entitlements follow ONLY a genuinely active subscription, on an
-        // explicit allowlist (BUNYIP-39). The membership-status mapping above
-        // falls back to Active for unknown statuses, but entitlements must not:
-        // a non-paying status (unpaid, incomplete_expired, paused, ...) revokes
-        // the Stripe-sourced grants rather than re-granting product access.
-        let grants_access = matches!(status, "active" | "trialing" | "past_due");
+        let user_status = membership_status_for(status);
+        // Entitlements follow the same classification as membership_status
+        // (BUNYIP-39, BUNYIP-717): a non-paying status (unpaid,
+        // incomplete_expired, paused, ...) revokes the Stripe-sourced grants
+        // rather than re-granting product access, and an unrecognised status
+        // is never treated as access-granting.
+        let grants_access = user_status.has_access();
 
         let resolved_tier = resolve_tier_for_product(product_id, tc);
 
@@ -868,6 +887,30 @@ async fn handle_payment_failed(
     Ok(())
 }
 
+/// Maps a raw Stripe subscription status to the `MembershipStatus` it should
+/// produce. This is the ONE classification of Stripe's status vocabulary in
+/// this module (BUNYIP-717): `grants_access` is derived from it rather than
+/// kept as a second, independently-maintained allowlist, so the two cannot
+/// drift apart again. A status that does not pay never maps to an
+/// access-granting variant, and an unrecognised status is treated as
+/// non-paying rather than defaulting to `Active`.
+fn membership_status_for(stripe_status: &str) -> MembershipStatus {
+    match stripe_status {
+        "active" | "trialing" => MembershipStatus::Active,
+        "past_due" => MembershipStatus::PastDue,
+        "canceled" | "unpaid" | "incomplete" | "incomplete_expired" | "paused" => {
+            MembershipStatus::Canceled
+        }
+        other => {
+            tracing::error!(
+                status = other,
+                "unrecognised Stripe subscription status; treating as non-paying"
+            );
+            MembershipStatus::Canceled
+        }
+    }
+}
+
 /// Map a Stripe product ID to its corresponding `MembershipTier` using the current tier config.
 /// Returns `None` if the product ID does not match any configured mapping, meaning tier is left
 /// unchanged and only `membership_status` is updated by the caller.
@@ -967,5 +1010,110 @@ mod tests {
             Some(MembershipTier::Standard)
         );
         assert_eq!(resolve_tier_for_product("prod_unmapped", &tc), None);
+    }
+
+    /// BUNYIP-717: every non-paying Stripe status (the ones this repo does not
+    /// already have a named arm for, plus `canceled`) must map to a
+    /// `MembershipStatus` whose `has_access()` is false. This is the
+    /// regression the catch-all `_ => Active` created: an unhandled status
+    /// silently re-granted access.
+    #[test]
+    fn non_paying_statuses_never_grant_access() {
+        for status in ["unpaid", "incomplete", "incomplete_expired", "paused"] {
+            let mapped = membership_status_for(status);
+            assert!(
+                !mapped.has_access(),
+                "{status} mapped to {mapped:?}, which grants access"
+            );
+        }
+    }
+
+    /// The statuses this repo already classified correctly must keep their
+    /// exact mapping, not just their `has_access()` verdict.
+    #[test]
+    fn known_statuses_keep_their_existing_mapping() {
+        assert_eq!(membership_status_for("active"), MembershipStatus::Active);
+        assert_eq!(membership_status_for("trialing"), MembershipStatus::Active);
+        assert_eq!(membership_status_for("past_due"), MembershipStatus::PastDue);
+    }
+
+    /// A lightweight tracing layer that records whether an ERROR event fired,
+    /// mirroring the pattern `AcquireTimeoutLayer` in `db_metrics.rs` uses to
+    /// assert on log output from a pure function.
+    struct ErrorEventLayer(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl<S: tracing::Subscriber> tracing_subscriber::layer::Layer<S> for ErrorEventLayer {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if *event.metadata().level() == tracing::Level::ERROR {
+                self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// An unrecognised status must be treated as non-paying rather than
+    /// silently granted access, and the surprise must be observable in logs
+    /// (an ERROR event), since Stripe adding a new status is an operational
+    /// event worth noticing.
+    #[test]
+    fn unrecognised_status_is_non_paying_and_logs_an_error() {
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let fired = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let subscriber =
+            tracing_subscriber::Registry::default().with(ErrorEventLayer(fired.clone()));
+
+        let mapped = tracing::subscriber::with_default(subscriber, || {
+            membership_status_for("future_stripe_status")
+        });
+
+        assert!(
+            !mapped.has_access(),
+            "unrecognised status must not grant access"
+        );
+        assert!(
+            fired.load(std::sync::atomic::Ordering::Relaxed),
+            "unrecognised status must log at error"
+        );
+    }
+
+    /// BUNYIP-718: `handle_subscription_created` derives its membership-status
+    /// write and its entitlement-sync/tier-upgrade gate from
+    /// `membership_status_for(status).has_access()`, the exact expression at
+    /// `:481-482`. A `customer.subscription.created` event carrying
+    /// `status = "incomplete"` (payment not yet confirmed, e.g. pending 3DS)
+    /// must write a non-access-granting `MembershipStatus` and must not gate
+    /// entitlements or a tier upgrade open, or an unpaid subscription would
+    /// activate membership and consume a lifetime/early-adopter slot.
+    #[test]
+    fn created_incomplete_status_grants_no_access() {
+        let user_status = membership_status_for("incomplete");
+        let grants_access = user_status.has_access();
+
+        assert_eq!(user_status, MembershipStatus::Canceled);
+        assert!(
+            !grants_access,
+            "an incomplete created subscription must not grant access"
+        );
+    }
+
+    /// BUNYIP-718: the same gate must reproduce today's behaviour unchanged
+    /// for the common case, a `created` event that already carries
+    /// `status = "active"` (e.g. an off-session renewal): the write is
+    /// `Active` and the gate is open, so the tier upgrade and entitlement
+    /// sync both run exactly as they did before this change.
+    #[test]
+    fn created_active_status_behaves_as_today() {
+        let user_status = membership_status_for("active");
+        let grants_access = user_status.has_access();
+
+        assert_eq!(user_status, MembershipStatus::Active);
+        assert!(
+            grants_access,
+            "an active created subscription must grant access, matching pre-BUNYIP-718 behaviour"
+        );
     }
 }

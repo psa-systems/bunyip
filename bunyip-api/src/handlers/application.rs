@@ -43,6 +43,7 @@ async fn resolve_has_member_access(req: &HttpRequest, pool: &PgPool, user: &Opti
             u.lifetime_member,
             u.trial_ends_at.map(|t| t.timestamp()),
             &u.membership_status,
+            u.grace_period_end.map(|t| t.timestamp()),
         );
     }
     match UserRepository::find_by_id(pool, claims.sub).await {
@@ -51,6 +52,7 @@ async fn resolve_has_member_access(req: &HttpRequest, pool: &PgPool, user: &Opti
             u.lifetime_member,
             u.trial_ends_at.map(|t| t.timestamp()),
             &u.membership_status,
+            u.grace_period_end.map(|t| t.timestamp()),
         ),
         Ok(None) => claims.has_member_access(),
         Err(e) => {
@@ -198,6 +200,7 @@ mod tests {
             price_id: None,
             lifetime_member: false,
             trial_ends_at: None,
+            grace_period_end: None,
             iat: 0,
             exp: i64::MAX,
             jti: "jti-557".to_string(),

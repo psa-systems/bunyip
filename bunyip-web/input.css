@@ -108,6 +108,9 @@
   /* Foreground twin of --primary, mirroring the --destructive-text split
      (BUNYIP-485): the fill is too dark to read as text on the dark surfaces. */
   --primary-text: 117 26% 24%;
+  /* Text/icon colour ON a --primary-filled surface (a button, an active nav
+     pill), mirroring the --destructive-foreground split. */
+  --primary-foreground: 0 0% 100%;
 
   --secondary: 120 21% 96%;
   --secondary-foreground: 117 26% 24%;
@@ -141,6 +144,7 @@
 
   --primary: 116 28% 31%;
   --primary-text: 110 30% 62%;
+  --primary-foreground: 0 0% 100%;
 
   --secondary: 120 10% 17%;
   --secondary-foreground: 120 21% 96%;
@@ -180,6 +184,7 @@
 
   --primary: 0 0% 0%;
   --primary-text: 0 0% 0%;
+  --primary-foreground: 0 0% 100%;
 
   --secondary: 0 0% 95%;
   --secondary-foreground: 0 0% 0%;
@@ -228,6 +233,10 @@
 
   --primary: 110 35% 65%;
   --primary-text: 110 35% 65%;
+  /* Unlike the other three blocks, --primary here is a LIGHT fill (65%
+     lightness), so its foreground flips dark, mirroring
+     --destructive-foreground in this same block. */
+  --primary-foreground: 0 0% 0%;
 
   --secondary: 0 0% 12%;
   --secondary-foreground: 0 0% 100%;
@@ -250,8 +259,10 @@
 /* ---------------------------------------------------------------------------
    Theme mapping. `inline` keeps the `hsl(var(--token))` reference live in the
    generated utilities so the runtime class flips above actually reskin the UI.
-   The brand colour scales (primary / indigo / teal / rust) are static and
-   mirror tailwind.config.js.
+   The brand colour scales (primary / indigo / teal / rust) point at the
+   `--color-brand-primary-*` / `--color-brand-accent-*` twins below, which
+   mirror tailwind.config.js by default and follow `--skin-primary-*` /
+   `--skin-accent-*` when a skin sets them (BUNYIP-722).
    --------------------------------------------------------------------------- */
 @theme inline {
   --color-border: hsl(var(--border));
@@ -280,62 +291,58 @@
   --color-brand-accent-700: var(--skin-accent-700, #1d4351);
   --color-brand-accent-900: var(--skin-accent-900, #0e2730);
 
-  /* Semantic surface tokens (flip in dark mode below). */
-  --color-surface: #ffffff;
-  --color-surface-muted: #f3f7f3;
-  --color-surface-elevated: #ffffff;
-  --color-border-subtle: #e3ecde;
-  --color-text-strong: #1f311f;
-  --color-text: #2f4e2e;
-  --color-text-muted: #4f7e48;
-
-  /* `primary` -> reed-700; the *-50..900 ramp mirrors the reed scale so any
-     legacy `from-primary-600` style utility lands in Bunyip green. */
-  --color-primary: #2f4e2e;
-  --color-primary-foreground: #ffffff;
-  --color-primary-50: #f3f7f3;
-  --color-primary-100: #e3ecde;
-  --color-primary-200: #c6d8bd;
-  --color-primary-300: #99bb8e;
-  --color-primary-400: #6e9c64;
-  --color-primary-500: #4f7e48;
-  --color-primary-600: #3c6438;
-  --color-primary-700: #2f4e2e;
-  --color-primary-800: #283e27;
-  --color-primary-900: #1f311f;
+  /* `primary` reads the live theme token, so the four theme blocks' own
+     `--primary` / `--primary-foreground` declarations take effect (BUNYIP-722).
+     The *-50..900 ramp points at the brand-primary twin of each step (the
+     same hex today, and `--skin-primary-*` tomorrow) rather than repeating
+     the literal, so a skin reaches every legacy `from-primary-600` utility
+     too. */
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-primary-50: var(--color-brand-primary-50);
+  --color-primary-100: var(--color-brand-primary-100);
+  --color-primary-200: var(--color-brand-primary-200);
+  --color-primary-300: var(--color-brand-primary-300);
+  --color-primary-400: var(--color-brand-primary-400);
+  --color-primary-500: var(--color-brand-primary-500);
+  --color-primary-600: var(--color-brand-primary-600);
+  --color-primary-700: var(--color-brand-primary-700);
+  --color-primary-800: var(--color-brand-primary-800);
+  --color-primary-900: var(--color-brand-primary-900);
 
   /* Legacy menkent brand scales repointed to Bunyip so existing
      `from-indigo-500` / `to-teal-500` gradient utilities render in
-     reed/water tones instead of indigo/orange. `indigo` -> reed,
-     `teal` -> water, `rust`/`violet` -> reed/water. */
-  --color-rust: #2f4e2e;
-  --color-rust-light: #3c6438;
-  --color-rust-dark: #283e27;
+     reed/water tones instead of indigo/orange, and now via the same
+     brand-primary/brand-accent twins as the ramp above, so a skin reaches
+     them too. `indigo` -> reed, `teal` -> water, `rust`/`violet` -> reed/water. */
+  --color-rust: var(--color-brand-primary-700);
+  --color-rust-light: var(--color-brand-primary-600);
+  --color-rust-dark: var(--color-brand-primary-800);
 
-  --color-indigo-50: #f3f7f3;
-  --color-indigo-100: #e3ecde;
-  --color-indigo-200: #c6d8bd;
-  --color-indigo-300: #99bb8e;
-  --color-indigo-400: #6e9c64;
-  --color-indigo-500: #4f7e48;
-  --color-indigo-600: #3c6438;
-  --color-indigo-700: #2f4e2e;
-  --color-indigo-800: #283e27;
-  --color-indigo-900: #1f311f;
-  --color-indigo-950: #1f311f;
+  --color-indigo-50: var(--color-brand-primary-50);
+  --color-indigo-100: var(--color-brand-primary-100);
+  --color-indigo-200: var(--color-brand-primary-200);
+  --color-indigo-300: var(--color-brand-primary-300);
+  --color-indigo-400: var(--color-brand-primary-400);
+  --color-indigo-500: var(--color-brand-primary-500);
+  --color-indigo-600: var(--color-brand-primary-600);
+  --color-indigo-700: var(--color-brand-primary-700);
+  --color-indigo-800: var(--color-brand-primary-800);
+  --color-indigo-900: var(--color-brand-primary-900);
+  --color-indigo-950: var(--color-brand-primary-900);
 
-  --color-teal-50: #eaf3f4;
-  --color-teal-100: #cce0e3;
-  --color-teal-200: #cce0e3;
-  --color-teal-300: #84afb6;
-  --color-teal-400: #84afb6;
-  --color-teal-500: #2b6273;
-  --color-teal-600: #2b6273;
-  --color-teal-700: #1d4351;
-  --color-teal-800: #1d4351;
-  --color-teal-900: #0e2730;
+  --color-teal-50: var(--color-brand-accent-50);
+  --color-teal-100: var(--color-brand-accent-100);
+  --color-teal-200: var(--color-brand-accent-100);
+  --color-teal-300: var(--color-brand-accent-300);
+  --color-teal-400: var(--color-brand-accent-300);
+  --color-teal-500: var(--color-brand-accent-500);
+  --color-teal-600: var(--color-brand-accent-500);
+  --color-teal-700: var(--color-brand-accent-700);
+  --color-teal-800: var(--color-brand-accent-700);
+  --color-teal-900: var(--color-brand-accent-900);
 
-  --color-violet-500: #2b6273;
+  --color-violet-500: var(--color-brand-accent-500);
 
   --color-secondary: hsl(var(--secondary));
   --color-secondary-foreground: hsl(var(--secondary-foreground));
@@ -360,18 +367,6 @@
     Roboto, "Noto Sans", Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
     Consolas, "Liberation Mono", "Courier New", monospace;
-}
-
-/* Dark mode: invert the semantic surface tokens (brand-primary/water utilities
-   are static; only `surface`/`text` flip). */
-.dark {
-  --color-surface: #161a16;
-  --color-surface-muted: #1f2620;
-  --color-surface-elevated: #283129;
-  --color-border-subtle: #2f4e2e;
-  --color-text-strong: #f3f7f3;
-  --color-text: #c6d8bd;
-  --color-text-muted: #99bb8e;
 }
 
 /* Default border + body colours (globals.css `@layer base`). */

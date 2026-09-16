@@ -794,7 +794,9 @@ mod two_column_layout_tests {
         // BUNYIP-432: the field is write-only. When a password is set the
         // placeholder is a fixed-length mask (no last-4, no length hint); the
         // real value is not in the type or the markup at all.
-        let html = email_settings_content(Some(&email_cfg())).into_string();
+        let cfg = email_cfg();
+        let values = EmailSettingsValues::from_config(&cfg);
+        let html = email_settings_content(Some(&cfg), &values, None).into_string();
         assert!(
             html.contains(r#"placeholder="••••••••""#),
             "a fixed-length mask is shown when a password is set: {html}"
@@ -806,13 +808,16 @@ mod two_column_layout_tests {
         // The empty-password variant shows a distinct, non-secret placeholder.
         let mut none = email_cfg();
         none.has_smtp_password = false;
-        let html_none = email_settings_content(Some(&none)).into_string();
+        let none_values = EmailSettingsValues::from_config(&none);
+        let html_none = email_settings_content(Some(&none), &none_values, None).into_string();
         assert!(html_none.contains(r#"placeholder="Not set""#));
     }
 
     #[test]
     fn email_screen_uses_two_column_blocks() {
-        let html = email_settings_content(Some(&email_cfg())).into_string();
+        let cfg = email_cfg();
+        let values = EmailSettingsValues::from_config(&cfg);
+        let html = email_settings_content(Some(&cfg), &values, None).into_string();
         assert!(
             html.contains("lg:grid-cols-2"),
             "email settings render as a responsive two-column grid"
@@ -832,7 +837,9 @@ mod two_column_layout_tests {
     /// its own endpoint (a separate form from Save, so it tests saved settings).
     #[test]
     fn email_screen_has_test_connection_button() {
-        let html = email_settings_content(Some(&email_cfg())).into_string();
+        let cfg = email_cfg();
+        let values = EmailSettingsValues::from_config(&cfg);
+        let html = email_settings_content(Some(&cfg), &values, None).into_string();
         assert!(
             html.contains(r#"action="/admin/email/test""#),
             "Test connection posts to /admin/email/test"
@@ -849,7 +856,9 @@ mod two_column_layout_tests {
     /// own address, immediately below Test connection.
     #[test]
     fn email_screen_has_test_email_button() {
-        let html = email_settings_content(Some(&email_cfg())).into_string();
+        let cfg = email_cfg();
+        let values = EmailSettingsValues::from_config(&cfg);
+        let html = email_settings_content(Some(&cfg), &values, None).into_string();
         assert!(
             html.contains(r#"action="/admin/email/test-send""#),
             "Test email posts to /admin/email/test-send"
@@ -914,6 +923,47 @@ mod two_column_layout_tests {
             throttled_html.contains("Too many attempts") && throttled_html.contains("destructive"),
             "a throttled click is surfaced, not swallowed: {throttled_html}"
         );
+    }
+
+    /// BUNYIP-731 AC1/AC2: a rejected save re-renders what was submitted, not
+    /// the stored record, and the error sits inside the form below the h1.
+    #[test]
+    fn rejected_save_echoes_the_submitted_values_with_the_error_inside_the_form() {
+        let stored = email_cfg();
+        let submitted = super::EmailSettingsForm {
+            enabled: "true".into(),
+            smtp_host: " typed.example.com ".into(),
+            smtp_port: "587".into(),
+            smtp_tls: "starttls".into(),
+            smtp_username: String::new(),
+            smtp_password: String::new(),
+            from_email: String::new(),
+            from_name: String::new(),
+            admin_notification_emails: String::new(),
+            imap_host: String::new(),
+            imap_port: String::new(),
+            imap_username: String::new(),
+            imap_password: String::new(),
+            imap_mailbox: String::new(),
+            imap_enabled: "false".into(),
+        };
+        let values = EmailSettingsValues::from_form(&submitted);
+        let html = email_settings_content(Some(&stored), &values, Some("SMTP host invalid."))
+            .into_string();
+
+        assert!(
+            html.contains(r#"value="typed.example.com""#),
+            "submitted smtp_host is redisplayed, not the stored value: {html}"
+        );
+        assert!(
+            !html.contains(r#"value="smtp.example.com""#),
+            "stored value is gone"
+        );
+        let h1 = html.find("<h1").expect("page heading");
+        let form = html.find("<form").expect("settings form");
+        let error = html.find("SMTP host invalid.").expect("inline error");
+        assert!(h1 < form, "heading renders before the form");
+        assert!(form < error, "error renders inside the form, below the h1");
     }
 
     fn auto_ban_cfg() -> crate::api::types::AutoBanConfigResponse {

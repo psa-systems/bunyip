@@ -14,7 +14,7 @@ use super::{check_rate_limit, live_free_price_id};
 use crate::config::{Config, TierConfig};
 use crate::config_providers::{ConfigStack, DatabaseProvider};
 use crate::errors::AppError;
-use crate::middleware::AdminUser;
+use crate::middleware::{AdminUser, VerifiedAdminUser};
 use crate::models::stripe::encrypt_secret;
 use crate::models::{
     AuditAction, CreateApplication, CreateApplicationGroup, CreateAuditLog,
@@ -43,7 +43,7 @@ use bunyip_oci::services::ManifestCache;
 /// A Group-1 startup value in a row is refused by the database provider and
 /// surfaces here as an operator-facing 400 naming the key, never as a silent
 /// fallback to another provider.
-fn section_stack(
+pub(crate) fn section_stack(
     database: Result<DatabaseProvider, crate::config::ConfigFailure>,
     keys: &[&str],
 ) -> Result<(ConfigStack, &'static str), AppError> {
@@ -193,7 +193,7 @@ pub struct UpdateUserStatusRequest {
 /// Activate or deactivate a user
 pub async fn update_user_status(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     oidc_provider: web::Data<Option<Arc<bunyip_oidc::services::oidc_provider::OidcProvider>>>,
     bus: web::Data<Arc<EventBus>>,
@@ -271,7 +271,7 @@ pub async fn update_user_status(
 /// Delete a user (soft delete)
 pub async fn delete_user(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     oidc_provider: web::Data<Option<Arc<bunyip_oidc::services::oidc_provider::OidcProvider>>>,
     path: web::Path<uuid::Uuid>,
@@ -332,7 +332,7 @@ pub struct UpdateUserRoleRequest {
 /// Change a user's role
 pub async fn update_user_role(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     bus: web::Data<Arc<EventBus>>,
     path: web::Path<uuid::Uuid>,
@@ -421,7 +421,7 @@ pub struct UpdateUserEmailRequest {
 /// written directly, optionally marked verified in the same edit.
 pub async fn update_user_email(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     path: web::Path<uuid::Uuid>,
     body: web::Json<UpdateUserEmailRequest>,
@@ -478,7 +478,7 @@ pub async fn update_user_email(
 /// email-verification flow (BUNYIP-119).
 pub async fn verify_user_email(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     path: web::Path<uuid::Uuid>,
 ) -> Result<HttpResponse, AppError> {
@@ -514,7 +514,7 @@ pub async fn verify_user_email(
 /// user can re-enrol from scratch.
 pub async fn reset_user_two_factor(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     path: web::Path<uuid::Uuid>,
 ) -> Result<HttpResponse, AppError> {
@@ -565,7 +565,7 @@ pub struct GrantMembershipRequest {
 /// Creates a $0 Stripe subscription so the user receives invoices.
 pub async fn grant_membership(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     stripe: web::Data<Arc<StripeService>>,
     tier_config: web::Data<Arc<std::sync::RwLock<TierConfig>>>,
@@ -638,7 +638,7 @@ pub async fn grant_membership(
 /// Revoke a membership from a user
 pub async fn revoke_membership(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     bus: web::Data<Arc<EventBus>>,
     body: web::Json<GrantMembershipRequest>,
@@ -1575,7 +1575,7 @@ pub async fn get_dashboard_stats(
 /// Trigger a password reset email for a user
 pub async fn admin_reset_password(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     email_service: web::Data<Arc<EmailService>>,
     path: web::Path<uuid::Uuid>,
@@ -2359,7 +2359,7 @@ pub async fn update_stripe_config(
 /// Creates a $0 Stripe subscription so the user receives invoices.
 pub async fn grant_lifetime_membership(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     stripe: web::Data<Arc<StripeService>>,
     tier_config: web::Data<Arc<std::sync::RwLock<TierConfig>>>,
@@ -2424,7 +2424,7 @@ pub async fn grant_lifetime_membership(
 /// POST /v1/admin/users/{user_id}/lifetime/revoke
 pub async fn revoke_lifetime_membership(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     bus: web::Data<Arc<EventBus>>,
     path: web::Path<uuid::Uuid>,
@@ -2520,7 +2520,7 @@ fn plan_admin_tier_move(
 /// destination; no separate counter is touched.
 pub async fn set_user_tier(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     stripe: web::Data<Arc<StripeService>>,
     bus: web::Data<Arc<EventBus>>,
@@ -4609,6 +4609,140 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+    }
+
+    // BUNYIP-732: bunyip-web's `AdminUser`-only extractor never checked
+    // verification, so a caller that skips bunyip-web (an at+jwt bearer token,
+    // another app in the suite) could exercise every action BUNYIP-619 gated
+    // without ever being verification-complete. The scan below is the API-side
+    // twin of `bunyip-web/src/handlers/mod.rs`'s `GATED_ACTIONS` /
+    // `ESCAPE_HATCH_ACTIONS` scan: it fails the build the moment a gated
+    // handler's extractor reverts to `AdminUser`, or an escape hatch gains
+    // `VerifiedAdminUser` and re-traps an admin who cannot yet verify because
+    // mail is unconfigured (BUNYIP-401).
+
+    /// The bunyip-api handler sources, with the set of gated action functions in
+    /// each. Every listed function MUST take `VerifiedAdminUser`, the extractor
+    /// that refuses an unverified admin with a 403 naming verification as the
+    /// reason.
+    const GATED_ACTIONS: &[(&str, &str, &[&str])] = &[
+        (
+            "bunyip-api/src/handlers/admin.rs",
+            include_str!("admin.rs"),
+            &[
+                "update_user_status",
+                "delete_user",
+                "update_user_role",
+                "update_user_email",
+                "verify_user_email",
+                "reset_user_two_factor",
+                "grant_membership",
+                "revoke_membership",
+                "admin_reset_password",
+                "grant_lifetime_membership",
+                "revoke_lifetime_membership",
+                "set_user_tier",
+            ],
+        ),
+        (
+            "bunyip-api/src/handlers/admin_entitlements.rs",
+            include_str!("admin_entitlements.rs"),
+            &["grant_entitlement", "revoke_entitlement"],
+        ),
+        (
+            "bunyip-api/src/handlers/feedback.rs",
+            include_str!("feedback.rs"),
+            &["respond_to_feedback"],
+        ),
+    ];
+
+    /// The escape-hatch handlers an unverified admin MUST still be able to call
+    /// directly, so a mail-less deployment can repair SMTP over the API and the
+    /// admin can then verify (BUNYIP-401). Each MUST keep taking the plain
+    /// `AdminUser`, never `VerifiedAdminUser`, or the hatch closes.
+    const ESCAPE_HATCH_ACTIONS: &[(&str, &str, &[&str])] = &[
+        (
+            "bunyip-api/src/handlers/admin.rs",
+            include_str!("admin.rs"),
+            &[
+                "update_email_config",
+                "test_email_config",
+                "send_test_email_message",
+            ],
+        ),
+        (
+            "bunyip-api/src/handlers/system_config.rs",
+            include_str!("system_config.rs"),
+            &["update_system_config"],
+        ),
+    ];
+
+    /// Return the source slice of the `async fn {name}` signature and body,
+    /// bounded by the next top-level item, so a "contains" check cannot leak
+    /// into the function above or below it.
+    fn fn_body<'a>(source: &'a str, name: &str) -> &'a str {
+        let needle = format!("async fn {name}(");
+        let start = source
+            .find(&needle)
+            .unwrap_or_else(|| panic!("async fn {name} not found in source"));
+        let rest = &source[start..];
+        let end = ["\npub async fn ", "\nasync fn ", "\n#[cfg(test)]"]
+            .iter()
+            // Skip the signature we start on (offset 0) by searching past it.
+            .filter_map(|m| rest[1..].find(m).map(|i| i + 1))
+            .min()
+            .unwrap_or(rest.len());
+        &rest[..end]
+    }
+
+    #[test]
+    fn every_gated_admin_action_takes_the_verified_extractor() {
+        for (path, source, actions) in GATED_ACTIONS {
+            for name in *actions {
+                assert!(
+                    fn_body(source, name).contains("VerifiedAdminUser"),
+                    "{path}: {name} is a verification-gated action but does not take \
+                     VerifiedAdminUser, so an unverified admin could still call it directly \
+                     (BUNYIP-732)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_escape_hatch_actions_never_take_the_verified_extractor() {
+        for (path, source, actions) in ESCAPE_HATCH_ACTIONS {
+            for name in *actions {
+                assert!(
+                    !fn_body(source, name).contains("VerifiedAdminUser"),
+                    "{path}: {name} must NOT take VerifiedAdminUser - an unverified admin needs \
+                     it to repair mail over the API and then verify, or BUNYIP-401 reopens"
+                );
+            }
+        }
+    }
+
+    /// BUNYIP-732: the two binaries share no crate a Rust constant could live
+    /// in, so the refusal wording is pinned identical by scanning bunyip-web's
+    /// own source for its `VERIFICATION_REQUIRED_MESSAGE` literal rather than by
+    /// sharing a symbol.
+    #[test]
+    fn the_verification_message_matches_bunyip_web_word_for_word() {
+        let web_src = include_str!("../../../bunyip-web/src/handlers/mod.rs");
+        let needle = "pub const VERIFICATION_REQUIRED_MESSAGE: &str =\n    \"";
+        let start = web_src
+            .find(needle)
+            .expect("bunyip-web's VERIFICATION_REQUIRED_MESSAGE const not found")
+            + needle.len();
+        let end = web_src[start..]
+            .find('"')
+            .expect("closing quote of bunyip-web's VERIFICATION_REQUIRED_MESSAGE");
+        let web_message = &web_src[start..start + end];
+        assert_eq!(
+            web_message,
+            crate::middleware::VERIFICATION_REQUIRED_MESSAGE,
+            "bunyip-domain's VERIFICATION_REQUIRED_MESSAGE has drifted from bunyip-web's"
+        );
     }
 }
 

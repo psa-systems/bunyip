@@ -15,8 +15,70 @@ use crate::views::layout::{admin_block, admin_block_grid};
 use crate::views::ui::{button_class, error_box, icon, success_box};
 use crate::web::{redirect_cookies, AppState};
 
+/// Email form values, kept as strings (numerics) so a failed save echoes back
+/// exactly what the admin typed instead of re-reading the stored record
+/// (BUNYIP-731). The four secret fields are the deliberate exception: they
+/// post empty for "leave unchanged" and are re-rendered empty regardless of
+/// what was submitted, so they carry no field here.
+#[derive(Default)]
+pub(super) struct EmailSettingsValues {
+    enabled: bool,
+    smtp_host: String,
+    smtp_port: String,
+    smtp_tls: String,
+    smtp_username: String,
+    from_email: String,
+    from_name: String,
+    admin_notification_emails: String,
+    imap_host: String,
+    imap_port: String,
+    imap_username: String,
+    imap_mailbox: String,
+    imap_enabled: bool,
+}
+
+impl EmailSettingsValues {
+    pub(super) fn from_form(f: &EmailSettingsForm) -> Self {
+        EmailSettingsValues {
+            enabled: f.enabled.trim() == "true",
+            smtp_host: f.smtp_host.trim().to_string(),
+            smtp_port: f.smtp_port.trim().to_string(),
+            smtp_tls: f.smtp_tls.trim().to_string(),
+            smtp_username: f.smtp_username.trim().to_string(),
+            from_email: f.from_email.trim().to_string(),
+            from_name: f.from_name.trim().to_string(),
+            admin_notification_emails: f.admin_notification_emails.trim().to_string(),
+            imap_host: f.imap_host.trim().to_string(),
+            imap_port: f.imap_port.trim().to_string(),
+            imap_username: f.imap_username.trim().to_string(),
+            imap_mailbox: f.imap_mailbox.trim().to_string(),
+            imap_enabled: f.imap_enabled.trim() == "true",
+        }
+    }
+
+    pub(super) fn from_config(c: &crate::api::types::EmailConfigResponse) -> Self {
+        EmailSettingsValues {
+            enabled: c.enabled,
+            smtp_host: c.smtp_host.clone(),
+            smtp_port: c.smtp_port.to_string(),
+            smtp_tls: c.smtp_tls.clone(),
+            smtp_username: c.smtp_username.clone(),
+            from_email: c.from_email.clone(),
+            from_name: c.from_name.clone(),
+            admin_notification_emails: c.admin_notification_emails.join(", "),
+            imap_host: c.imap_host.clone(),
+            imap_port: c.imap_port.to_string(),
+            imap_username: c.imap_username.clone(),
+            imap_mailbox: c.imap_mailbox.clone(),
+            imap_enabled: c.imap_enabled,
+        }
+    }
+}
+
 pub(super) fn email_settings_content(
     cfg: Option<&crate::api::types::EmailConfigResponse>,
+    values: &EmailSettingsValues,
+    error: Option<&str>,
 ) -> Markup {
     html! {
         div class="space-y-6" {
@@ -29,6 +91,7 @@ pub(super) fn email_settings_content(
                 // a single Save persists everything.
                 Some(e) => div class="space-y-6" {
                     form method="post" action="/admin/email" class="space-y-6" {
+                    @if let Some(err) = error { (error_box(err)) }
                     (admin_block_grid(vec![
                         admin_block(
                             "SMTP Connection",
@@ -38,20 +101,20 @@ pub(super) fn email_settings_content(
                                     div class="space-y-2" {
                                         label for="enabled" class="text-sm font-medium" { "Sending" }
                                         select id="enabled" name="enabled" class=(dashboard_input()) {
-                                            option value="true" selected[e.enabled] { "Enabled" }
-                                            option value="false" selected[!e.enabled] { "Disabled" }
+                                            option value="true" selected[values.enabled] { "Enabled" }
+                                            option value="false" selected[!values.enabled] { "Disabled" }
                                         }
                                     }
-                                    div class="space-y-2" { label for="smtp_host" class="text-sm font-medium" { "SMTP host" } input id="smtp_host" name="smtp_host" value=(e.smtp_host) placeholder="smtp.example.com" class=(dashboard_input()); }
-                                    div class="space-y-2" { label for="smtp_port" class="text-sm font-medium" { "SMTP port" } input id="smtp_port" name="smtp_port" type="number" min="1" max="65535" value=(e.smtp_port) class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="smtp_host" class="text-sm font-medium" { "SMTP host" } input id="smtp_host" name="smtp_host" value=(values.smtp_host) placeholder="smtp.example.com" class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="smtp_port" class="text-sm font-medium" { "SMTP port" } input id="smtp_port" name="smtp_port" type="number" min="1" max="65535" value=(values.smtp_port) class=(dashboard_input()); }
                                     div class="space-y-2" {
                                         label for="smtp_tls" class="text-sm font-medium" { "TLS mode" }
                                         select id="smtp_tls" name="smtp_tls" class=(dashboard_input()) {
-                                            option value="implicit" selected[e.smtp_tls == "implicit"] { "Implicit (port 465)" }
-                                            option value="starttls" selected[e.smtp_tls == "starttls"] { "STARTTLS (port 587)" }
+                                            option value="implicit" selected[values.smtp_tls == "implicit"] { "Implicit (port 465)" }
+                                            option value="starttls" selected[values.smtp_tls == "starttls"] { "STARTTLS (port 587)" }
                                         }
                                     }
-                                    div class="space-y-2" { label for="smtp_username" class="text-sm font-medium" { "SMTP username" } input id="smtp_username" name="smtp_username" value=(e.smtp_username) autocomplete="off" class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="smtp_username" class="text-sm font-medium" { "SMTP username" } input id="smtp_username" name="smtp_username" value=(values.smtp_username) autocomplete="off" class=(dashboard_input()); }
                                     div class="space-y-2" {
                                         label for="smtp_password" class="text-sm font-medium" { "SMTP password" }
                                         // BUNYIP-432: the placeholder is a fixed-length mask driven only
@@ -75,13 +138,13 @@ pub(super) fn email_settings_content(
                                     div class="space-y-2" {
                                         label for="imap_enabled" class="text-sm font-medium" { "Polling" }
                                         select id="imap_enabled" name="imap_enabled" class=(dashboard_input()) {
-                                            option value="true" selected[e.imap_enabled] { "Enabled" }
-                                            option value="false" selected[!e.imap_enabled] { "Disabled" }
+                                            option value="true" selected[values.imap_enabled] { "Enabled" }
+                                            option value="false" selected[!values.imap_enabled] { "Disabled" }
                                         }
                                     }
-                                    div class="space-y-2" { label for="imap_host" class="text-sm font-medium" { "IMAP host" } input id="imap_host" name="imap_host" value=(e.imap_host) placeholder="imap.example.com" class=(dashboard_input()); }
-                                    div class="space-y-2" { label for="imap_port" class="text-sm font-medium" { "IMAP port" } input id="imap_port" name="imap_port" type="number" min="1" max="65535" value=(e.imap_port) class=(dashboard_input()); }
-                                    div class="space-y-2" { label for="imap_username" class="text-sm font-medium" { "IMAP username" } input id="imap_username" name="imap_username" value=(e.imap_username) autocomplete="off" class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="imap_host" class="text-sm font-medium" { "IMAP host" } input id="imap_host" name="imap_host" value=(values.imap_host) placeholder="imap.example.com" class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="imap_port" class="text-sm font-medium" { "IMAP port" } input id="imap_port" name="imap_port" type="number" min="1" max="65535" value=(values.imap_port) class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="imap_username" class="text-sm font-medium" { "IMAP username" } input id="imap_username" name="imap_username" value=(values.imap_username) autocomplete="off" class=(dashboard_input()); }
                                     div class="space-y-2" {
                                         label for="imap_password" class="text-sm font-medium" { "IMAP password" }
                                         // Write-only, same rules as the SMTP password (BUNYIP-432/542).
@@ -90,7 +153,7 @@ pub(super) fn email_settings_content(
                                             (secret_field_note(e.imap_password_editable, &e.secrets_storage, e.has_imap_password, "SUPPORT_IMAP_PASSWORD", "support_imap_password"))
                                         }
                                     }
-                                    div class="space-y-2" { label for="imap_mailbox" class="text-sm font-medium" { "Mailbox" } input id="imap_mailbox" name="imap_mailbox" value=(e.imap_mailbox) placeholder="INBOX" class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="imap_mailbox" class="text-sm font-medium" { "Mailbox" } input id="imap_mailbox" name="imap_mailbox" value=(values.imap_mailbox) placeholder="INBOX" class=(dashboard_input()); }
                                 }
                             },
                         ),
@@ -99,9 +162,9 @@ pub(super) fn email_settings_content(
                             Some("Who transactional mail comes from, and where operational notices go."),
                             html! {
                                 div class="space-y-4" {
-                                    div class="space-y-2" { label for="from_email" class="text-sm font-medium" { "From email" } input id="from_email" name="from_email" type="email" value=(e.from_email) placeholder="noreply@example.com" class=(dashboard_input()); }
-                                    div class="space-y-2" { label for="from_name" class="text-sm font-medium" { "From name" } input id="from_name" name="from_name" value=(e.from_name) class=(dashboard_input()); }
-                                    div class="space-y-2" { label for="admin_notification_emails" class="text-sm font-medium" { "Admin notification emails" } input id="admin_notification_emails" name="admin_notification_emails" value=(e.admin_notification_emails.join(", ")) placeholder="ops@example.com, alerts@example.com" class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Comma-separated recipients for operational notices." } }
+                                    div class="space-y-2" { label for="from_email" class="text-sm font-medium" { "From email" } input id="from_email" name="from_email" type="email" value=(values.from_email) placeholder="noreply@example.com" class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="from_name" class="text-sm font-medium" { "From name" } input id="from_name" name="from_name" value=(values.from_name) class=(dashboard_input()); }
+                                    div class="space-y-2" { label for="admin_notification_emails" class="text-sm font-medium" { "Admin notification emails" } input id="admin_notification_emails" name="admin_notification_emails" value=(values.admin_notification_emails) placeholder="ops@example.com, alerts@example.com" class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Comma-separated recipients for operational notices." } }
                                 }
                             },
                         ),
@@ -136,7 +199,11 @@ pub async fn email(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let cfg = admin_api::email_config(&st.api, c.forward.as_deref())
         .await
         .ok();
-    let content = email_settings_content(cfg.as_ref());
+    let values = cfg
+        .as_ref()
+        .map(EmailSettingsValues::from_config)
+        .unwrap_or_default();
+    let content = email_settings_content(cfg.as_ref(), &values, None);
     admin_response(&c, &user, "/admin/email", "Email", content)
 }
 
@@ -249,6 +316,8 @@ pub async fn email_save(
         Err(r) => return r,
     };
 
+    let values = EmailSettingsValues::from_form(&f);
+
     let error = match email_update_body(&f) {
         Ok(body) => match admin_api::update_email_config(&st.api, c.forward.as_deref(), body).await
         {
@@ -258,14 +327,12 @@ pub async fn email_save(
         Err(msg) => msg,
     };
 
-    // Re-render with the persisted values plus the inline error.
+    // Re-render with the submitted values plus the inline error; only the
+    // record's non-form info (source, secret flags) needs a re-fetch (BUNYIP-731).
     let cfg = admin_api::email_config(&st.api, c.forward.as_deref())
         .await
         .ok();
-    let content = html! {
-        (error_box(&error))
-        (email_settings_content(cfg.as_ref()))
-    };
+    let content = email_settings_content(cfg.as_ref(), &values, Some(&error));
     admin_response(&c, &user, "/admin/email", "Email", content)
 }
 
@@ -292,9 +359,13 @@ pub async fn email_test(State(st): State<AppState>, headers: HeaderMap) -> Respo
     let cfg = admin_api::email_config(&st.api, c.forward.as_deref())
         .await
         .ok();
+    let values = cfg
+        .as_ref()
+        .map(EmailSettingsValues::from_config)
+        .unwrap_or_default();
     let content = html! {
         (banner)
-        (email_settings_content(cfg.as_ref()))
+        (email_settings_content(cfg.as_ref(), &values, None))
     };
     admin_response(&c, &user, "/admin/email", "Email", content)
 }
@@ -327,9 +398,13 @@ pub async fn email_test_send(State(st): State<AppState>, headers: HeaderMap) -> 
     let cfg = admin_api::email_config(&st.api, c.forward.as_deref())
         .await
         .ok();
+    let values = cfg
+        .as_ref()
+        .map(EmailSettingsValues::from_config)
+        .unwrap_or_default();
     let content = html! {
         (banner)
-        (email_settings_content(cfg.as_ref()))
+        (email_settings_content(cfg.as_ref(), &values, None))
     };
     admin_response(&c, &user, "/admin/email", "Email", content)
 }
