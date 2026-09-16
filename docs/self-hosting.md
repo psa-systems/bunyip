@@ -19,8 +19,8 @@ The images live in the private `dev.a8n.run/psa-systems-private` registry, so au
 
 ```nu
 docker login dev.a8n.run
-cp .env.example .env
-# Edit .env: pin BUNYIP_API_IMAGE / BUNYIP_WEB_IMAGE, set BUNYIP_API_PUBLIC_ORIGIN and the trusted-proxy CIDRs.
+cp .env.production.example .env
+# Edit .env: pin BUNYIP_API_IMAGE / BUNYIP_WEB_IMAGE, set BUNYIP_API_PUBLIC_ORIGIN, the trusted-proxy CIDRs, OIDC_JWT_PRIVATE_KEY_PATH and OIDC_JWT_ACTIVE_KID.
 just init-secrets            # dev throwaways; production supplies ./secrets via the SOPS compose-secrets.yml
 docker compose up --detach
 ```
