@@ -305,6 +305,21 @@ impl RateLimitConfig {
         key_kind: KeyKind::Ip,
     };
 
+    /// PMS-1208 companion (bunyip side): machine-authed user directory
+    /// lookup, per calling app. Same shape as `MAILER_SEND` on
+    /// purpose - the caller shape and the failure-only per-IP bucket
+    /// are the same, so the per-app cap is the same too. 60/min gives
+    /// mokosh-server's create-invitation handler enough headroom that
+    /// a burst of admin adds does not stall against the cap; a per-
+    /// admin cap on the mokosh side keeps the human path bounded
+    /// separately.
+    pub const USER_LOOKUP: Self = Self {
+        action: "user_lookup",
+        max_requests: 60,
+        window_seconds: 60,
+        key_kind: KeyKind::ClientId,
+    };
+
     /// Every preset, so the admin read path can look one up by its stored
     /// `action` string (BUNYIP-315). Keep in lock-step with the consts above.
     pub const ALL: &'static [Self] = &[
@@ -327,6 +342,7 @@ impl RateLimitConfig {
         Self::SMTP_TEST,
         Self::MAILER_SEND,
         Self::MAILER_AUTH_FAILURES,
+        Self::USER_LOOKUP,
     ];
 
     /// Look up the preset for a stored `rate_limits.action` string. Returns

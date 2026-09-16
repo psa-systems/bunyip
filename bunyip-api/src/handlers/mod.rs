@@ -186,6 +186,7 @@ pub mod support;
 pub mod system_config;
 pub mod totp;
 pub mod user;
+pub mod user_lookup;
 pub mod webhook;
 
 // Re-export handler functions for convenience

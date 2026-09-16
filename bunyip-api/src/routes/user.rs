@@ -54,6 +54,19 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route(
                 "/me/trusted-devices/{id}/revoke",
                 web::post().to(handlers::revoke_trusted_device),
-            ),
+            )
+            // PMS-1208 companion: machine-authed directory lookup.
+            // `GET /v1/users/lookup?email=<address>` returns
+            // `{user_id, email}` on match, 404 on unknown or
+            // soft-deleted user. Called by mokosh-server in SaaS
+            // mode before creating a pending grant invitation, so a
+            // grant to an unknown-to-Bunyip address is refused with
+            // a message pointing the owner at "ask them to sign up
+            // first" rather than reaching a dead end at accept
+            // time. Machine auth (HTTP Basic client_id:secret) - see
+            // the handler's module docs. Rate-limit-floor exempt for
+            // the same reason `/v1/mailer/send` is: suite apps
+            // share egress.
+            .route("/lookup", web::get().to(handlers::user_lookup::user_lookup)),
     );
 }

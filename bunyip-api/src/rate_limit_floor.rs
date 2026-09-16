@@ -76,6 +76,13 @@ const EXEMPT_PATHS: &[&str] = &[
     // SMTP provider posts every bounce from one address, so the per-IP floor is
     // the wrong shape and would throttle a burst of legitimate feedback.
     "/v1/mailer/webhooks/feedback",
+    // PMS-1208 companion: machine-authed user directory lookup. Same
+    // exemption reason as `/v1/mailer/send` above: the caller is a
+    // suite app on shared egress, and the per-app cap
+    // `RateLimitConfig::USER_LOOKUP` plus the shared per-IP failure-
+    // only bucket `MAILER_AUTH_FAILURES` are the controls that
+    // replace the floor.
+    "/v1/users/lookup",
 ];
 
 /// Whether the floor applies to this request.
