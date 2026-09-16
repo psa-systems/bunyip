@@ -113,6 +113,7 @@ impl AccessTokenClaims {
             price_id: user.locked_price_id.clone(),
             lifetime_member: user.lifetime_member,
             trial_ends_at: user.trial_ends_at.map(|t| t.timestamp()),
+            grace_period_end: user.grace_period_end.map(|t| t.timestamp()),
             iat: token_iat,
             exp: token_exp,
             jti: token_jti.to_string(),
@@ -1119,6 +1120,7 @@ mod tests {
             price_id: None,
             lifetime_member: false,
             trial_ends_at: None,
+            grace_period_end: None,
             iat: 0,
             exp: i64::MAX,
             jti: "jti-1".to_string(),
@@ -1244,6 +1246,7 @@ mod tests {
         assert_eq!(claims.price_id, Some("price_42".to_string()));
         assert!(claims.lifetime_member);
         assert_eq!(claims.trial_ends_at, None);
+        assert_eq!(claims.grace_period_end, None);
         assert_eq!(claims.iss, "https://api.example.test");
         assert_eq!(claims.iat, 1_700_000_000);
         assert_eq!(claims.exp, 1_700_000_900);
