@@ -2,8 +2,8 @@
 //!
 //! The one place the product name, tagline, meta description, Open Graph image,
 //! palette and brand images are set. Modelled on the Email config page: one
-//! form, one Save, the persisted values re-read after a failed save so the admin
-//! never loses what is actually stored.
+//! form, one Save, the submitted values redisplayed on a rejected save
+//! (BUNYIP-616's rule; BUNYIP-731).
 //!
 //! Every field is a full replacement, not a "blank keeps the current value":
 //! clearing a field is how an admin removes a tagline, description, share image
@@ -99,7 +99,52 @@ fn asset_card(s: &AssetSlot, b: &Branding) -> Markup {
     }
 }
 
-pub(super) fn branding_content(cfg: Option<&Branding>, reachable: bool) -> Markup {
+/// Branding form values (the text fields only - the asset slots and version
+/// markers are not part of this form). A failed save echoes back exactly what
+/// the admin typed instead of re-reading the stored record (BUNYIP-731).
+#[derive(Default)]
+pub(super) struct BrandingValues {
+    brand_name: String,
+    tagline: String,
+    meta_description: String,
+    og_image_url: String,
+    theme_css: String,
+    theme_color_light: String,
+    theme_color_dark: String,
+}
+
+impl BrandingValues {
+    fn from_branding(b: &Branding) -> Self {
+        BrandingValues {
+            brand_name: b.brand_name.clone(),
+            tagline: b.tagline.clone(),
+            meta_description: b.meta_description.clone(),
+            og_image_url: b.og_image_url.clone(),
+            theme_css: b.theme_css.clone(),
+            theme_color_light: b.theme_color_light.clone(),
+            theme_color_dark: b.theme_color_dark.clone(),
+        }
+    }
+
+    fn from_form(f: &BrandingForm) -> Self {
+        BrandingValues {
+            brand_name: f.brand_name.trim().to_string(),
+            tagline: f.tagline.trim().to_string(),
+            meta_description: f.meta_description.trim().to_string(),
+            og_image_url: f.og_image_url.trim().to_string(),
+            theme_css: f.theme_css.trim().to_string(),
+            theme_color_light: f.theme_color_light.trim().to_string(),
+            theme_color_dark: f.theme_color_dark.trim().to_string(),
+        }
+    }
+}
+
+pub(super) fn branding_content(
+    cfg: Option<&Branding>,
+    reachable: bool,
+    values: &BrandingValues,
+    error: Option<&str>,
+) -> Markup {
     html! {
         div class="space-y-6" {
             div {
@@ -110,6 +155,7 @@ pub(super) fn branding_content(cfg: Option<&Branding>, reachable: bool) -> Marku
                 (error_box("Could not reach the API to load branding."))
             } @else if let Some(b) = cfg {
                 form method="post" action="/admin/branding" class="space-y-6" {
+                    @if let Some(err) = error { (error_box(err)) }
                     (admin_block_grid(vec![
                         admin_block(
                             "Identity",
@@ -118,12 +164,12 @@ pub(super) fn branding_content(cfg: Option<&Branding>, reachable: bool) -> Marku
                                 div class="space-y-4" {
                                     div class="space-y-2" {
                                         label for="brand_name" class="text-sm font-medium" { "Product name" }
-                                        input id="brand_name" name="brand_name" maxlength="120" value=(b.brand_name) class=(dashboard_input());
+                                        input id="brand_name" name="brand_name" maxlength="120" value=(values.brand_name) class=(dashboard_input());
                                         p class="text-xs text-muted-foreground" { "Left blank, the deployment falls back to the APP_NAME the api was started with." }
                                     }
                                     div class="space-y-2" {
                                         label for="tagline" class="text-sm font-medium" { "Tagline" }
-                                        input id="tagline" name="tagline" maxlength="200" value=(b.tagline) class=(dashboard_input());
+                                        input id="tagline" name="tagline" maxlength="200" value=(values.tagline) class=(dashboard_input());
                                         p class="text-xs text-muted-foreground" { "One line under the mark. Omitted entirely when blank." }
                                     }
                                 }
@@ -136,12 +182,12 @@ pub(super) fn branding_content(cfg: Option<&Branding>, reachable: bool) -> Marku
                                 div class="space-y-4" {
                                     div class="space-y-2" {
                                         label for="meta_description" class="text-sm font-medium" { "Description" }
-                                        textarea id="meta_description" name="meta_description" rows="3" maxlength="320" class=(dashboard_input()) { (b.meta_description) }
+                                        textarea id="meta_description" name="meta_description" rows="3" maxlength="320" class=(dashboard_input()) { (values.meta_description) }
                                         p class="text-xs text-muted-foreground" { "The meta description and the Open Graph description. Omitted when blank." }
                                     }
                                     div class="space-y-2" {
                                         label for="og_image_url" class="text-sm font-medium" { "Share image URL" }
-                                        input id="og_image_url" name="og_image_url" type="url" maxlength="2048" value=(b.og_image_url) placeholder="https://example.com/card.png" class=(dashboard_input());
+                                        input id="og_image_url" name="og_image_url" type="url" maxlength="2048" value=(values.og_image_url) placeholder="https://example.com/card.png" class=(dashboard_input());
                                         p class="text-xs text-muted-foreground" { "Absolute https:// URL. A card previews as a large image when this is set and a small one when it is blank." }
                                     }
                                 }
@@ -158,17 +204,17 @@ pub(super) fn branding_content(cfg: Option<&Branding>, reachable: bool) -> Marku
                                 div class="space-y-4" {
                                     div class="space-y-2" {
                                         label for="theme_css" class="text-sm font-medium" { "Theme CSS" }
-                                        textarea id="theme_css" name="theme_css" rows="4" maxlength="4096" placeholder="--skin-primary-500: #336699; --skin-accent-500: #993366;" class=(dashboard_input()) { (b.theme_css) }
+                                        textarea id="theme_css" name="theme_css" rows="4" maxlength="4096" placeholder="--skin-primary-500: #336699; --skin-accent-500: #993366;" class=(dashboard_input()) { (values.theme_css) }
                                         p class="text-xs text-muted-foreground" { "CSS custom properties, emitted into :root. No angle brackets." }
                                     }
                                     div class="grid gap-4 sm:grid-cols-2" {
                                         div class="space-y-2" {
                                             label for="theme_color_light" class="text-sm font-medium" { "Browser chrome, light" }
-                                            input id="theme_color_light" name="theme_color_light" maxlength="9" value=(b.theme_color_light) placeholder="#336699" class=(dashboard_input());
+                                            input id="theme_color_light" name="theme_color_light" maxlength="9" value=(values.theme_color_light) placeholder="#336699" class=(dashboard_input());
                                         }
                                         div class="space-y-2" {
                                             label for="theme_color_dark" class="text-sm font-medium" { "Browser chrome, dark" }
-                                            input id="theme_color_dark" name="theme_color_dark" maxlength="9" value=(b.theme_color_dark) placeholder="#112233" class=(dashboard_input());
+                                            input id="theme_color_dark" name="theme_color_dark" maxlength="9" value=(values.theme_color_dark) placeholder="#112233" class=(dashboard_input());
                                         }
                                     }
                                     p class="text-xs text-muted-foreground" { "Hex colours. Blank omits the meta tag rather than guessing one." }
@@ -198,7 +244,11 @@ pub async fn branding(State(st): State<AppState>, headers: HeaderMap) -> Respons
     let data = crate::branding::admin_get(&st.api, c.forward.as_deref()).await;
     let reachable = data.is_ok();
     let cfg = data.ok();
-    let content = branding_content(cfg.as_ref(), reachable);
+    let values = cfg
+        .as_ref()
+        .map(BrandingValues::from_branding)
+        .unwrap_or_default();
+    let content = branding_content(cfg.as_ref(), reachable, &values, None);
     admin_response(&c, &user, "/admin/branding", "Branding", content)
 }
 
@@ -245,6 +295,8 @@ pub async fn branding_save(
         Err(r) => return r,
     };
 
+    let values = BrandingValues::from_form(&f);
+
     let error = match crate::branding::admin_update(
         &st.api,
         c.forward.as_deref(),
@@ -259,15 +311,12 @@ pub async fn branding_save(
         Err(e) => e.user_message(),
     };
 
-    // Re-render with the PERSISTED values plus the inline error: the save wrote
-    // nothing, so showing the rejected input back would misreport the state.
+    // Re-render with the submitted values plus the inline error; only the
+    // record's non-form info (asset slots) needs a re-fetch (BUNYIP-731).
     let data = crate::branding::admin_get(&st.api, c.forward.as_deref()).await;
     let reachable = data.is_ok();
     let cfg = data.ok();
-    let content = html! {
-        (error_box(&error))
-        (branding_content(cfg.as_ref(), reachable))
-    };
+    let content = branding_content(cfg.as_ref(), reachable, &values, Some(&error));
     admin_response(&c, &user, "/admin/branding", "Branding", content)
 }
 
@@ -306,9 +355,10 @@ async fn read_asset_upload(multipart: &mut Multipart) -> Result<(String, String,
     }
 }
 
-/// Re-render the Branding page with an inline error above it, showing the
-/// PERSISTED record: the failed write changed nothing, so anything else would
-/// misreport the state.
+/// Re-render the Branding page with an inline error, for an asset upload or
+/// clear failure. There is no submitted text to echo here (a file input is
+/// never repopulated by the browser on redisplay), so this reads the
+/// persisted record fresh, with the text fields at their stored values.
 async fn branding_error_page(
     st: &AppState,
     c: &crate::auth::AuthCtx,
@@ -318,10 +368,11 @@ async fn branding_error_page(
     let data = crate::branding::admin_get(&st.api, c.forward.as_deref()).await;
     let reachable = data.is_ok();
     let cfg = data.ok();
-    let content = html! {
-        (error_box(error))
-        (branding_content(cfg.as_ref(), reachable))
-    };
+    let values = cfg
+        .as_ref()
+        .map(BrandingValues::from_branding)
+        .unwrap_or_default();
+    let content = branding_content(cfg.as_ref(), reachable, &values, Some(error));
     admin_response(c, user, "/admin/branding", "Branding", content)
 }
 
@@ -468,17 +519,48 @@ mod tests {
     /// palette rather than guessing at it.
     #[test]
     fn the_form_renders_the_stored_palette() {
-        let markup = branding_content(
-            Some(&Branding {
-                theme_css: "--skin-primary-500: #123456;".into(),
-                theme_color_light: "#abcdef".into(),
-                ..Branding::default()
-            }),
-            true,
-        )
-        .into_string();
+        let b = Branding {
+            theme_css: "--skin-primary-500: #123456;".into(),
+            theme_color_light: "#abcdef".into(),
+            ..Branding::default()
+        };
+        let values = BrandingValues::from_branding(&b);
+        let markup = branding_content(Some(&b), true, &values, None).into_string();
         assert!(markup.contains("--skin-primary-500: #123456;"), "{markup}");
         assert!(markup.contains(r##"value="#abcdef""##), "{markup}");
         assert!(markup.contains(r#"name="theme_color_dark""#), "{markup}");
+    }
+
+    /// BUNYIP-731 AC1/AC2: a rejected save re-renders what was submitted, not
+    /// the stored record, and the error sits inside the form below the h1.
+    #[test]
+    fn rejected_save_echoes_the_submitted_values_with_the_error_inside_the_form() {
+        let stored = Branding {
+            brand_name: "Stored Name".into(),
+            ..Branding::default()
+        };
+        let submitted = BrandingForm {
+            brand_name: " Typed Name ".into(),
+            tagline: String::new(),
+            meta_description: String::new(),
+            og_image_url: String::new(),
+            theme_css: String::new(),
+            theme_color_light: String::new(),
+            theme_color_dark: String::new(),
+        };
+        let values = BrandingValues::from_form(&submitted);
+        let html =
+            branding_content(Some(&stored), true, &values, Some("Name too long.")).into_string();
+
+        assert!(
+            html.contains(r#"value="Typed Name""#),
+            "submitted brand_name is redisplayed, not the stored value: {html}"
+        );
+        assert!(!html.contains("Stored Name"));
+        let h1 = html.find("<h1").expect("page heading");
+        let form = html.find("<form").expect("settings form");
+        let error = html.find("Name too long.").expect("inline error");
+        assert!(h1 < form, "heading renders before the form");
+        assert!(form < error, "error renders inside the form, below the h1");
     }
 }
