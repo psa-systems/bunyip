@@ -10,7 +10,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::errors::AppError;
-use crate::middleware::AdminUser;
+use crate::middleware::{AdminUser, VerifiedAdminUser};
 use crate::models::entitlement::entitlement_source;
 use crate::models::{AuditAction, CreateAuditLog};
 use crate::repositories::{ApplicationRepository, AuditLogRepository, EntitlementRepository};
@@ -57,7 +57,7 @@ pub async fn list_user_entitlements(
 /// Body: { "slug": "product-slug" }
 pub async fn grant_entitlement(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     path: web::Path<Uuid>,
     body: web::Json<EntitlementSlugRequest>,
@@ -88,7 +88,7 @@ pub async fn grant_entitlement(
 /// Body: { "slug": "product-slug" }
 pub async fn revoke_entitlement(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     path: web::Path<Uuid>,
     body: web::Json<EntitlementSlugRequest>,
