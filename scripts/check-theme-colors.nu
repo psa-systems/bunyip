@@ -2,8 +2,8 @@
 
 # Theme-token gate (BUNYIP-549).
 #
-# Two surfaces painted outside the theme, both closed here so they cannot come
-# back:
+# Three surfaces painted outside the theme, all closed here so they cannot
+# come back:
 #   - the toast pills in `bunyip-web/assets/js/app.js` were stock Tailwind
 #     (`bg-emerald-600`, `bg-red-600`, `bg-slate-800`). `input.css` remaps only
 #     `indigo` -> reed and `teal` -> water, so any other stock scale is a colour
@@ -21,6 +21,16 @@
 #     is omitted, and a re-introduced default would paint every deployment's
 #     chrome one product's green again. The variable names themselves are held
 #     out by `scripts/check-no-retired-env.nu`.
+#   - `bunyip-web/input.css` baked `--color-primary` / `--color-primary-foreground`
+#     as hex inside `@theme inline`, so the four theme blocks' own `--primary`
+#     declarations were dead: `.dark` / `.high-contrast` (and a skin's
+#     `--skin-primary-*`) repainted every other role and left buttons, the
+#     active nav pill and icon-bubble gradients in one fixed colour (BUNYIP-722).
+#     A `--color-*` declaration inside `@theme inline` may not hold a bare
+#     colour literal except as the fallback argument of a `var(--skin-*, ...)`
+#     reference, and every `--<token>` a theme block declares must have at
+#     least one `hsl(var(--<token>))` reader, or the block's own value can
+#     never reach a rendered utility.
 #
 # `amber` (the warning role) and `violet` are allowed alongside the two remapped
 # scales, matching the server-rendered side.
@@ -30,6 +40,7 @@
 #   scripts/check-theme-colors.nu --self-test
 
 const JS_GLOB = "bunyip-web/assets/js/*.js"
+const INPUT_CSS = "bunyip-web/input.css"
 # The framework shell and its configuration. BUNYIP-560: the palette is the
 # branding record's, so both files are colour-free.
 const SHELL_SOURCES = [
@@ -102,6 +113,70 @@ def check-shell [path: string]: nothing -> list<string> {
             }
         }
     }
+    $problems
+}
+
+# Locate the `@theme inline { ... }` block by brace depth, so a nested
+# `calc(...)` (which holds no braces) can never confuse it. Returns the
+# 0-indexed [start, end] line range, or [-1, -1] if the block is absent.
+def find-theme-inline-block [rows: list]: nothing -> record<start: int, end: int> {
+    mut start = -1
+    mut end = -1
+    mut depth = 0
+    for row in $rows {
+        if $start == -1 {
+            if ($row.item | str trim | str starts-with "@theme inline") {
+                $start = $row.index
+                $depth = (($row.item | str replace --all --regex '[^{]' '') | str length) - (($row.item | str replace --all --regex '[^}]' '') | str length)
+                if $depth <= 0 { $end = $row.index }
+            }
+            continue
+        }
+        if $end != -1 { continue }
+        $depth = $depth + (($row.item | str replace --all --regex '[^{]' '') | str length) - (($row.item | str replace --all --regex '[^}]' '') | str length)
+        if $depth <= 0 { $end = $row.index }
+    }
+    {start: $start, end: $end}
+}
+
+# `bunyip-web/input.css`: no bare colour literal survives inside `@theme
+# inline` (BUNYIP-722), and every HSL token a theme block (`:root`, `.dark`,
+# `.high-contrast`, `.dark.high-contrast`) declares has a live reader.
+def check-input-css [path: string]: nothing -> list<string> {
+    let content = (try { open --raw $path | decode utf-8 } catch { null })
+    if $content == null {
+        return [$"($path): missing or not readable - the gate cannot prove the theme tokens are live."]
+    }
+
+    let rows = ($content | lines | enumerate)
+    let block = (find-theme-inline-block $rows)
+    mut problems = []
+
+    if $block.start == -1 or $block.end == -1 {
+        return [$"($path): no `@theme inline` block found - the gate cannot check its declarations."]
+    }
+
+    for row in ($rows | where index >= $block.start and index <= $block.end) {
+        let text = $row.item
+        if not ($text | str trim | str starts-with "--color-") { continue }
+        if ($text | str contains "theme-literal-ok:") { continue }
+        let stripped = ($text | str replace --all --regex 'var\(--skin-[a-zA-Z0-9-]+,\s*#[0-9a-fA-F]{3,8}\)' '')
+        if (($stripped | parse --regex '(?<lit>#[0-9a-fA-F]{3,8})' | length) > 0) {
+            $problems = ($problems | append $"($path):($row.index + 1): a bare colour literal inside `@theme inline`; point it at the matching `--color-brand-primary-*` / `--color-brand-accent-*` step, a `hsl\(var\(--token\)\)` reader, or add `// theme-literal-ok: <reason>`.")
+        }
+    }
+
+    for row in ($rows | where index < $block.start or index > $block.end) {
+        let hit = ($row.item | parse --regex '^\s*--(?<token>[a-zA-Z0-9-]+):\s*[0-9]+\s+[0-9]+%\s+[0-9]+%\s*;')
+        if ($hit | is-empty) { continue }
+        let token = ($hit | get token | first)
+        let reader_pattern = ('hsl\(var\(--' + $token + '\)\)')
+        let reader = ($content | parse --regex $reader_pattern)
+        if ($reader | is-empty) {
+            $problems = ($problems | append $"($path):($row.index + 1): `--($token)` is declared in a theme block but no `hsl\(var\(--($token)\)\)` reader picks it up, so `.dark` / `.high-contrast` never repaint it.")
+        }
+    }
+
     $problems
 }
 
@@ -180,6 +255,39 @@ def self-test []: nothing -> nothing {
         }
     ]
 
+    let css_cases = [
+        {
+            name: "bare-literal.css"
+            body: ":root {\n  --border: 95 26% 90%;\n}\n@theme inline {\n  --color-border: hsl(var(--border));\n  --color-primary: #2f4e2e;\n}\n"
+            expect_problems: true
+            why: "a bare hex literal inside @theme inline"
+        }
+        {
+            name: "skin-fallback.css"
+            body: ":root {\n  --border: 95 26% 90%;\n}\n@theme inline {\n  --color-border: hsl(var(--border));\n  --color-brand-primary-500: var(--skin-primary-500, #4f7e48);\n}\n"
+            expect_problems: false
+            why: "a hex literal as a var(--skin-*, ...) fallback"
+        }
+        {
+            name: "marked-ok.css"
+            body: ":root {\n  --border: 95 26% 90%;\n}\n@theme inline {\n  --color-border: hsl(var(--border));\n  --color-surface: #ffffff; // theme-literal-ok: legacy alias kept for one release\n}\n"
+            expect_problems: false
+            why: "a hex literal with a theme-literal-ok reason"
+        }
+        {
+            name: "unread-token.css"
+            body: ":root {\n  --border: 95 26% 90%;\n  --primary: 117 26% 24%;\n}\n@theme inline {\n  --color-border: hsl(var(--border));\n}\n"
+            expect_problems: true
+            why: "a theme-block token with no hsl(var(--token)) reader"
+        }
+        {
+            name: "all-live.css"
+            body: ":root {\n  --border: 95 26% 90%;\n  --primary: 117 26% 24%;\n}\n@theme inline {\n  --color-border: hsl(var(--border));\n  --color-primary: hsl(var(--primary));\n}\n"
+            expect_problems: false
+            why: "every theme-block token read through hsl(var(--token)) and no bare literal"
+        }
+    ]
+
     let js_results = ($js_cases | each {|c|
         let path = $"($dir)/($c.name)"
         $c.body | save --force $path
@@ -192,11 +300,18 @@ def self-test []: nothing -> nothing {
         let problems = (check-shell $path)
         {why: $c.why, ok: (($problems | is-not-empty) == $c.expect_problems), problems: $problems}
     })
+    let css_results = ($css_cases | each {|c|
+        let path = $"($dir)/($c.name)"
+        $c.body | save --force $path
+        let problems = (check-input-css $path)
+        {why: $c.why, ok: (($problems | is-not-empty) == $c.expect_problems), problems: $problems}
+    })
     let missing_js = (check-js $"($dir)/absent.js")
     let missing_shell = (check-shell $"($dir)/absent.rs")
+    let missing_css = (check-input-css $"($dir)/absent.css")
     rm --recursive $dir
 
-    let results = ($js_results | append $shell_results)
+    let results = ($js_results | append $shell_results | append $css_results)
     for r in $results {
         if $r.ok {
             print $"self-test ok: gate handles ($r.why)"
@@ -204,7 +319,7 @@ def self-test []: nothing -> nothing {
             print --stderr $"self-test FAILED: gate mis-handles ($r.why): ($r.problems | to nuon)"
         }
     }
-    let missing_ok = (($missing_js | is-not-empty) and ($missing_shell | is-not-empty))
+    let missing_ok = (($missing_js | is-not-empty) and ($missing_shell | is-not-empty) and ($missing_css | is-not-empty))
     if $missing_ok {
         print "self-test ok: gate handles an unreadable source file"
     } else {
@@ -229,7 +344,7 @@ def main [
         exit 1
     }
 
-    let problems = (($js_files | each {|f| check-js $f } | flatten) | append ($SHELL_SOURCES | each {|f| check-shell $f } | flatten))
+    let problems = (($js_files | each {|f| check-js $f } | flatten) | append ($SHELL_SOURCES | each {|f| check-shell $f } | flatten) | append (check-input-css $INPUT_CSS))
     if ($problems | is-not-empty) {
         for p in $problems { print --stderr $"error: ($p)" }
         print --stderr ""
@@ -237,9 +352,13 @@ def main [
         print --stderr "palettes use the same semantic tokens as their server-rendered counterparts,"
         print --stderr $"and neither ($SHELL_SOURCES | str join ' nor ') carries a colour literal -"
         print --stderr "the palette is the admin-managed branding record (BUNYIP-560), and unset means"
-        print --stderr "the markup is omitted rather than painted a compiled-in colour."
+        print --stderr "the markup is omitted rather than painted a compiled-in colour. In"
+        print --stderr $"($INPUT_CSS), a `--color-*` declaration inside `@theme inline` holds no bare"
+        print --stderr "colour literal and every theme-block token has a live `hsl(var(--token))`"
+        print --stderr "reader (BUNYIP-722), so `.dark` / `.high-contrast` and a skin's"
+        print --stderr "`--skin-primary-*` reach every role, not just the ones already wired up."
         exit 1
     }
 
-    print $"check-theme-colors: ($js_files | length) client scripts carry no unmapped stock palette, and ($SHELL_SOURCES | length) shell sources carry no colour literal"
+    print $"check-theme-colors: ($js_files | length) client scripts carry no unmapped stock palette, ($SHELL_SOURCES | length) shell sources carry no colour literal, and ($INPUT_CSS) carries no bare @theme inline literal or unread theme-block token"
 }
