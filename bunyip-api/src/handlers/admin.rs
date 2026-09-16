@@ -2901,13 +2901,7 @@ pub async fn update_email_config(
     )?;
     let resolved = EmailConfig::resolve(&stack, resolved_password, config.is_production());
 
-    // BUNYIP-204/351: refuse to disable email in production, even via the DB.
-    if config.is_production() && !resolved.enabled {
-        return Err(AppError::validation(
-            "enabled",
-            "Email cannot be disabled in a production deployment",
-        ));
-    }
+    refuse_disabled_email_in_production(config.is_production(), resolved.enabled)?;
 
     // Hot-reload the live EmailService so subsequent sends use the new transport.
     email_service.reload(resolved.clone())?;
@@ -3202,6 +3196,26 @@ fn derive_product_for_price(
     }
 }
 
+/// BUNYIP-204/351: refuse to disable email in production, even via the database.
+///
+/// A production deployment with email off cannot send a password reset, a
+/// verification or an admin notification, and the failure is silent: the user
+/// simply never receives the message. The refusal lives here rather than inline
+/// in the handler because a settings archive can write the same column
+/// (BUNYIP-714), and a restore that bypassed the check would be a second way in.
+pub(crate) fn refuse_disabled_email_in_production(
+    is_production: bool,
+    enabled: bool,
+) -> Result<(), AppError> {
+    if is_production && !enabled {
+        return Err(AppError::validation(
+            "enabled",
+            "Email cannot be disabled in a production deployment",
+        ));
+    }
+    Ok(())
+}
+
 /// BUNYIP-609: "Show this tier on the pricing page" only means something for a
 /// tier that has a price mapped. `pricing::resolve` builds the public payload
 /// from the three price ids and drops any tier whose id is empty, so a visible
@@ -3210,7 +3224,7 @@ fn derive_product_for_price(
 /// tier, already resolved to the values the row will hold. Every offending tier
 /// is named in one message rather than stopping at the first, so an admin who
 /// left two of them unmapped fixes both in one pass.
-fn visible_without_price_error(tiers: &[(&str, bool, bool)]) -> Option<AppError> {
+pub(crate) fn visible_without_price_error(tiers: &[(&str, bool, bool)]) -> Option<AppError> {
     let offenders: Vec<&str> = tiers
         .iter()
         .filter(|(_, visible, has_price)| *visible && !*has_price)

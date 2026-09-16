@@ -65,3 +65,7 @@ docker compose up --detach
 ```
 
 Database migrations run on `bunyip-api` startup. Committed migrations are immutable, so a downgrade is not a supported path; restore from a backup instead.
+
+## Backing up and restoring settings
+
+Everything the admin pages configure lives in the database, so a wiped postgres volume loses the branding, the palette and brand assets, the tier flags, the email and Stripe rows, the rate-limit overrides, the application catalogue and the OAuth client registrations all at once. `bunyip-api settings-export` writes them to one passphrase-encrypted file and `bunyip-api settings-import` puts them back; the file needs neither `APP_ENCRYPTION_KEY` nor the old database to open, so it survives exactly the failure a `pg_dump` does not help with. The wipe-and-restore procedure, both commands and every flag, the format, and what is and is not archived: [settings-archive.md](settings-archive.md).

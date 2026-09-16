@@ -474,6 +474,10 @@ bunyip-web's own variables (below) are passed by the `web` service, except `CSP_
 These live in the database, are edited on the admin pages, and apply without a restart. Nothing here has an
 environment-variable equivalent unless the table says so.
 
+Because they live in the database, a wiped postgres volume loses every one of them: `bunyip-api settings-export` and
+`settings-import` move the whole set through one passphrase-encrypted file, and the procedure is in
+[settings-archive.md](settings-archive.md).
+
 ### Stripe (`stripe_config`, admin page: Stripe)
 
 Singleton row (`id = 1`).
