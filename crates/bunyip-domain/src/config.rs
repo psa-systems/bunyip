@@ -376,9 +376,9 @@ impl InfisicalSettings {
 /// SMTP TLS mode
 #[derive(Debug, Clone, PartialEq)]
 pub enum SmtpTls {
-    /// Implicit TLS (port 465) — connection is TLS from the start
+    /// Implicit TLS (port 465) - connection is TLS from the start
     Implicit,
-    /// STARTTLS (port 587) — plaintext connection upgraded to TLS
+    /// STARTTLS (port 587) - plaintext connection upgraded to TLS
     Starttls,
 }
 

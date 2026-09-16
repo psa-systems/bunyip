@@ -10,13 +10,66 @@ use crate::errors::AppError;
 use crate::middleware::AdminUser;
 use crate::models::{MessageDirection, NewMessage, TicketStatus};
 use crate::repositories::SupportRepository;
-use crate::responses::{get_request_id, success};
+use crate::responses::{get_request_id, paginated, success};
 use crate::services::EmailService;
 
 /// The admin's reply body for a support ticket.
 #[derive(Debug, Deserialize)]
 pub struct SupportReplyRequest {
     pub message: String,
+}
+
+/// Query params for `GET /v1/admin/support/tickets`.
+#[derive(Debug, Deserialize)]
+pub struct ListSupportTicketsQuery {
+    pub page: Option<i32>,
+    pub per_page: Option<i32>,
+}
+
+/// GET /v1/admin/support/tickets
+///
+/// The support queue, most recent activity first (BUNYIP-725): the read half
+/// of the mailbox the poller ingests into, so a successfully ingested message
+/// is reachable in the product before it is marked seen.
+pub async fn list_support_tickets(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+    query: web::Query<ListSupportTicketsQuery>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let page = query.page.unwrap_or(1).max(1);
+    let per_page = query.per_page.unwrap_or(20).min(100);
+    let offset = i64::from((page - 1) * per_page);
+
+    let tickets = SupportRepository::list_tickets(&pool, i64::from(per_page), offset).await?;
+    let total = SupportRepository::count_tickets(&pool).await?;
+
+    Ok(paginated(tickets, total, page, per_page, request_id))
+}
+
+/// GET /v1/admin/support/tickets/{id}
+///
+/// A ticket and its full message thread, oldest first, so the reply route's
+/// ticket id is obtainable from a caller path (BUNYIP-725).
+pub async fn get_support_ticket(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let ticket_id = path.into_inner();
+
+    let ticket = SupportRepository::get_ticket(&pool, ticket_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Support ticket not found"))?;
+    let messages = SupportRepository::list_messages(&pool, ticket_id).await?;
+
+    Ok(success(
+        serde_json::json!({ "ticket": ticket, "messages": messages }),
+        request_id,
+    ))
 }
 
 /// Strip the angle brackets from stored Message-IDs (they are kept bare so

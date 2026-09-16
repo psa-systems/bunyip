@@ -696,7 +696,7 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    // Initialize Forgejo download services (optional — degrade gracefully when unconfigured).
+    // Initialize Forgejo download services (optional - degrade gracefully when unconfigured).
     // The mechanism comes from the dunite-download engine; bunyip supplies the
     // Postgres-backed store (DownloadCacheRepository) and counter
     // (DownloadDailyCountRepository) adapters.
@@ -748,7 +748,7 @@ async fn main() -> anyhow::Result<()> {
         "Download service initialized"
     );
 
-    // Initialize OCI registry services (optional — degrade gracefully when Forgejo is unconfigured)
+    // Initialize OCI registry services (optional - degrade gracefully when Forgejo is unconfigured)
     let forgejo_registry_client: Option<Arc<ForgejoRegistryClient>> =
         config.download.forgejo_base_url.as_ref().and_then(|base| {
             config
@@ -762,7 +762,7 @@ async fn main() -> anyhow::Result<()> {
         .as_ref()
         .map(|_| Arc::new(ManifestCache::new(config.oci.manifest_cache_ttl_secs)));
 
-    // Blob cache persistence adapter — the dunite-oci engine is generic over a
+    // Blob cache persistence adapter - the dunite-oci engine is generic over a
     // `BlobStore`; bunyip implements it with `OciBlobCacheRepository` over Postgres.
     let blob_cache: Option<Arc<AppBlobCache>> = forgejo_registry_client.clone().map(|c| {
         let store = Arc::new(OciBlobCacheRepository::new(pool.clone()));
@@ -833,7 +833,7 @@ async fn main() -> anyhow::Result<()> {
     let event_bus = Arc::new(bunyip_domain::services::EventBus::new());
     info!("Event bus initialized");
 
-    // Initialize OIDC provider (optional — only when OIDC_ISSUER is set)
+    // Initialize OIDC provider (optional - only when OIDC_ISSUER is set)
     let oidc_provider: Option<Arc<OidcProvider>> = if config.oidc.enabled() {
         // BUNYIP-258's dev-kid guard is part of the startup audit in
         // `Config::from_env` (BUNYIP-537), so a `dev-` kid in production never
@@ -1226,7 +1226,7 @@ async fn main() -> anyhow::Result<()> {
             .wrap(bunyip_api::rate_limit_floor::RateLimitFloor::new(
                 pool.clone(),
             ))
-            // Auto-ban runs outermost — rejects banned IPs before CORS processing
+            // Auto-ban runs outermost - rejects banned IPs before CORS processing
             .wrap(AutoBanMiddleware::new(auto_ban_service.clone()))
             // Generic extractor errors (BUNYIP-481): malformed body / path /
             // query / form parameters return the AppError envelope with a

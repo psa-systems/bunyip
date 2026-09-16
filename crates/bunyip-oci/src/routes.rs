@@ -1,6 +1,6 @@
 //! Route configuration for the OCI registry server (the registry subdomain).
 //!
-//! Intentionally separate from the main API `configure()` — this module is
+//! Intentionally separate from the main API `configure()` - this module is
 //! mounted on a dedicated `App` in the binary so that the OCI server can run
 //! on its own port and subdomain.
 
