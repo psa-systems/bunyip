@@ -42,7 +42,6 @@ use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 use bunyip_domain::errors::AppError;
-use bunyip_domain::repositories::MokoshGrantRepository;
 use bunyip_oidc::machine_client;
 
 use crate::config::TierConfig;
@@ -63,6 +62,16 @@ pub struct GrantView {
     pub mokosh_account_id: String,
     pub role: String,
     pub granted_at: chrono::DateTime<chrono::Utc>,
+    /// MAPPS-875 v2: grantee identity fields for the mokosh owner
+    /// outbox. The owner already knows the address (they typed it on
+    /// the invite modal, and it stays visible on the pending row
+    /// until accepted), so exposing it here discloses nothing new
+    /// while giving the SPA a real display name for the active
+    /// grants list. Omitted (null on the wire) when the grantee row
+    /// has since been soft-deleted or when the join failed for any
+    /// other reason; the SPA falls back to its own default label.
+    pub grantee_email: Option<String>,
+    pub grantee_name: Option<String>,
 }
 
 fn orgs_enabled(tier_config: &Arc<RwLock<TierConfig>>) -> bool {
@@ -182,18 +191,85 @@ pub async fn list_owner_grants(
     .await?;
 
     let owner = query.owner_bunyip_user_id;
-    let grants = MokoshGrantRepository::list_active_by_owner(pool.get_ref(), owner).await?;
 
-    let views: Vec<GrantView> = grants
+    // MAPPS-875 v2: read grants + join the grantee's `users` row for
+    // email + name so the SPA can render "Revoke access for
+    // <person>". The user-authed sibling handler at
+    // `handlers::mokosh_grants::list_grants` still uses the
+    // repository shape (`MokoshGrantRepository::list_active_by_owner`)
+    // because its response is the raw `MokoshAccountGrant` and the
+    // owner already knows themselves; the machine-authed path needs
+    // enriched rows because its caller is mokosh-server rendering a
+    // stranger. LEFT JOIN so a soft-deleted grantee row does not
+    // filter the grant out (the row still exists, it just can't be
+    // switched into any more; owner needs to be able to revoke it).
+    // Filter `role IS NOT NULL AND revoked_at IS NULL` mirrors the
+    // repository's active predicate exactly.
+    // Named row struct keeps clippy::type_complexity quiet and reads
+    // as documentation for the join shape.
+    #[derive(sqlx::FromRow)]
+    struct GrantJoinRow {
+        id: Uuid,
+        grantee_bunyip_user_id: Uuid,
+        mokosh_account_id: String,
+        role: String,
+        granted_at: chrono::DateTime<chrono::Utc>,
+        email: Option<String>,
+        first_name: Option<String>,
+        last_name: Option<String>,
+    }
+
+    let rows: Vec<GrantJoinRow> = sqlx::query_as(
+        r#"
+        SELECT g.id,
+               g.grantee_bunyip_user_id,
+               g.mokosh_account_id,
+               g.role,
+               g.granted_at,
+               u.email,
+               u.first_name,
+               u.last_name
+        FROM mokosh_account_grants g
+        LEFT JOIN users u ON u.id = g.grantee_bunyip_user_id
+        WHERE g.owner_bunyip_user_id = $1
+          AND g.revoked_at IS NULL
+        ORDER BY g.granted_at ASC
+        "#,
+    )
+    .bind(owner)
+    .fetch_all(pool.get_ref())
+    .await
+    .map_err(bunyip_domain::errors::AppError::from)?;
+
+    let views: Vec<GrantView> = rows
         .into_iter()
-        .map(|g| GrantView {
-            grant_id: g.id,
-            grantee_bunyip_user_id: g.grantee_bunyip_user_id,
-            mokosh_account_id: g.mokosh_account_id,
-            role: g.role,
-            granted_at: g.granted_at,
+        .map(|row| {
+            let name = compose_name(row.first_name.as_deref(), row.last_name.as_deref());
+            GrantView {
+                grant_id: row.id,
+                grantee_bunyip_user_id: row.grantee_bunyip_user_id,
+                mokosh_account_id: row.mokosh_account_id,
+                role: row.role,
+                granted_at: row.granted_at,
+                grantee_email: row.email,
+                grantee_name: name,
+            }
         })
         .collect();
 
     Ok(success(views, request_id))
+}
+
+/// Compose a display name from the two optional halves. Empty halves
+/// collapse (`" X"` never appears); both empty returns `None` so the
+/// SPA falls back to the email.
+fn compose_name(first: Option<&str>, last: Option<&str>) -> Option<String> {
+    let f = first.map(str::trim).filter(|s| !s.is_empty());
+    let l = last.map(str::trim).filter(|s| !s.is_empty());
+    match (f, l) {
+        (Some(a), Some(b)) => Some(format!("{a} {b}")),
+        (Some(a), None) => Some(a.to_string()),
+        (None, Some(b)) => Some(b.to_string()),
+        (None, None) => None,
+    }
 }
