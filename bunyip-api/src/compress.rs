@@ -14,6 +14,12 @@
 //!   drops the `Content-Length` the handler set (actix removes it and switches
 //!   to chunked), so a client loses the size it needs for a progress bar, and
 //!   the assets are already-compressed archives that gain nothing.
+//! - The three binary `/v1` endpoints that answer with stored image bytes and
+//!   a stored image MIME (BUNYIP-741): `public_branding_asset`, `get_avatar`,
+//!   and the admin feedback-attachment download. Each already-compressed image
+//!   would otherwise pay a deflate pass in bunyip-api and an inflate pass in
+//!   bunyip-web for a net saving near zero, and encoding strips the
+//!   `Content-Length` the handler set.
 //!
 //! The framework-sanctioned exemption is an explicit `Content-Encoding` on the
 //! response: `Encoder::response` skips a response that already carries one.
@@ -25,9 +31,12 @@ use actix_web::HttpResponse;
 
 /// Mark a response so the `Compress` middleware leaves its body alone.
 ///
-/// Call this on every streamed response served by the primary stack;
-/// `every_streamed_primary_response_is_compress_exempt` fails the build if a
-/// new `.streaming(` site appears without it.
+/// Call this on every streamed response and every response with a runtime
+/// (stored, not string-literal) `content_type` served by the primary stack;
+/// `every_streamed_primary_response_is_compress_exempt` fails the build on a
+/// new `.streaming(` site without it, and
+/// `every_runtime_content_type_response_is_compress_exempt` fails it on a new
+/// `.content_type(<runtime value>)` site without it.
 pub fn mark_uncompressed(mut response: HttpResponse) -> HttpResponse {
     response.headers_mut().insert(
         header::CONTENT_ENCODING,
@@ -98,6 +107,92 @@ mod tests {
             !routes.contains("bunyip_oci"),
             "the OCI vertical is now on the primary (compressed) stack; its blob \
              stream needs compress::mark_uncompressed too"
+        );
+    }
+
+    /// Every response builder whose `content_type` is a runtime value (not a
+    /// `text/*` or `application/json` string literal) must call
+    /// [`mark_uncompressed`] in the same file (BUNYIP-741). This is the shape
+    /// `.streaming(` misses: a `.body()` response carrying a stored MIME type
+    /// still pays an encode/decode pass for no size win.
+    #[test]
+    fn every_runtime_content_type_response_is_compress_exempt() {
+        fn sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("readable dir") {
+                let path = entry.expect("readable entry").path();
+                if path.is_dir() {
+                    sources(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+
+        /// Returns the argument text of a `.content_type(...)` call starting
+        /// at or after `from` in `line`, matching parens so an argument like
+        /// `meta.mime_type.clone()` is captured whole.
+        fn content_type_arg(line: &str) -> Option<String> {
+            let idx = line.find(".content_type(")?;
+            let start = idx + ".content_type(".len();
+            let bytes = line.as_bytes();
+            let mut depth = 1i32;
+            let mut i = start;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(line[start..i].trim().to_string());
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            None
+        }
+
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        sources(&src, &mut files);
+
+        let mut runtime_content_type = Vec::new();
+        for file in &files {
+            let source = std::fs::read_to_string(file).expect("readable source");
+            let has_runtime_content_type = source.lines().any(|l| {
+                let trimmed = l.trim_start();
+                if trimmed.starts_with("//") {
+                    return false;
+                }
+                match content_type_arg(l) {
+                    // A literal string argument (`"text/csv; charset=utf-8"`,
+                    // `"application/json"`) is a fixed, already-compressible
+                    // type, not a stored binary MIME; an empty argument is not
+                    // a response builder at all (e.g. a multipart field's own
+                    // `content_type()` getter).
+                    Some(arg) if !arg.is_empty() && !arg.starts_with('"') => true,
+                    _ => false,
+                }
+            });
+            if has_runtime_content_type {
+                runtime_content_type.push((file.clone(), source));
+            }
+        }
+
+        assert!(
+            !runtime_content_type.is_empty(),
+            "the scan found no runtime `.content_type(` sites; the pattern has drifted"
+        );
+        let unexempt: Vec<String> = runtime_content_type
+            .iter()
+            .filter(|(_, source)| !source.contains("mark_uncompressed"))
+            .map(|(path, _)| path.display().to_string())
+            .collect();
+        assert!(
+            unexempt.is_empty(),
+            "responses with a runtime content_type on the compressed primary stack \
+             must call compress::mark_uncompressed (BUNYIP-741): {unexempt:#?}"
         );
     }
 

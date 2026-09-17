@@ -160,13 +160,15 @@ pub async fn get_avatar(
         .await?
         .ok_or_else(|| AppError::not_found("Avatar"))?;
 
-    Ok(HttpResponse::Ok()
-        .content_type(mime)
-        .insert_header(("Content-Disposition", "inline"))
-        // Private: it is a per-user resource behind auth, and the ?v= version in
-        // the URL already busts the cache on change.
-        .insert_header(("Cache-Control", "private, max-age=300"))
-        .body(data))
+    Ok(crate::compress::mark_uncompressed(
+        HttpResponse::Ok()
+            .content_type(mime)
+            .insert_header(("Content-Disposition", "inline"))
+            // Private: it is a per-user resource behind auth, and the ?v= version in
+            // the URL already busts the cache on change.
+            .insert_header(("Cache-Control", "private, max-age=300"))
+            .body(data),
+    ))
 }
 
 #[cfg(test)]

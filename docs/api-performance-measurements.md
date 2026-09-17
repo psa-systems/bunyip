@@ -1,9 +1,10 @@
 # API performance measurements (BUNYIP-559)
 
-Two questions the code could not answer were settled by measurement: whether the
-10-connection database pool is bunyip-api's throughput ceiling (F10), and
-whether compressing `/v1` responses is worth the layer (F12). This file is the
-evidence behind both decisions. Re-run it before changing either.
+Questions the code could not answer were settled by measurement: whether the
+10-connection database pool is bunyip-api's throughput ceiling (F10), whether
+compressing `/v1` responses is worth the layer (F12), and what brotli actually
+saves bunyip-web's browser-facing hop over gzip alone (BUNYIP-745). This file
+is the evidence behind those decisions. Re-run it before changing any of them.
 
 ## Bench environment
 
@@ -156,6 +157,60 @@ identity`; `Encoder::response` skips any response that already carries a
 `bunyip-api/src/compress.rs` scans for `.streaming(` sites and fails the build
 if a new one appears without the marker, or if the OCI vertical is ever mounted
 on the primary router.
+
+## BUNYIP-745: bunyip-web negotiates brotli, not gzip alone
+
+F12 above covers the `/v1` hop. This section covers the browser-facing hop:
+`bunyip-web`'s own `CompressionLayer` (`bunyip-web/src/main.rs`), which used to
+offer only gzip because `tower-http`'s `compression-br` cargo feature was not
+enabled. Every browser sends `Accept-Encoding: gzip, deflate, br`, so bunyip-web
+was always answering with its second-choice encoding.
+
+### Before and after, raw / gzip / brotli
+
+Measured with `curl --output /dev/null --write-out '%{size_download}'` against
+a locally built `bunyip-web` (no reverse proxy in front), once per
+`Accept-Encoding` value, before (gzip-only) and after (gzip + brotli) enabling
+`compression-br`. `tower-http`'s default on-the-fly brotli quality is level 4,
+unchanged by this issue.
+
+| Path | Raw | gzip (before and after, unchanged) | brotli (after) | brotli vs gzip |
+| --- | ---: | ---: | ---: | ---: |
+| `/` | 21,097 B | 4,354 B | 4,262 B | 2.1% smaller |
+| `/assets/styles.css` | 73,780 B | 11,535 B | 11,478 B | 0.5% smaller |
+| `/assets/vendor/htmx-2.0.3.min.js` | 50,387 B | 16,211 B | 16,693 B | 3.0% larger |
+
+`/` and `/assets/styles.css` are dynamically-generated / hand-authored text, the
+shape brotli's published 14-21% margin over gzip assumes; the modest win here
+(not the double-digit figure) is because the comparison is wire bytes against
+`gzip`'s own already-strong ratio at the default level, not against
+uncompressed. `/assets/vendor/htmx-2.0.3.min.js` is a third party's own
+minified, already-dense output, where brotli quality 4's smaller search window
+loses to gzip's default level 6 on this specific file; this is `tower-http`'s
+documented low-quality/high-speed preset doing what it says, not a
+misconfiguration, and the issue's own text says to revise the quality level
+only if a measurement shows encode time moving; it does not ask brotli to win
+every file. Every client that does not offer `br` (or any client not shown
+above) still gets exactly the gzip response it got before this change: the
+predicate selects on content type only, per `compression_predicate()`, and is
+unchanged by this issue.
+
+### Confirming the negotiation and the exemptions
+
+- `curl --header 'Accept-Encoding: br' <web>/assets/styles.css` answers
+  `content-encoding: br` and `vary: accept-encoding`; the same request with
+  `Accept-Encoding: gzip` answers `content-encoding: gzip`. A `curl --head`
+  request produces no body, and `tower-http`'s `CompressionLayer` (like most
+  compression middleware) only compresses when there is a body to encode, so
+  the encoding is visible on a `GET`, not on a `HEAD`.
+- `Accept-Encoding: identity` on `/` gets no `Content-Encoding` header at all.
+- A response served as `application/octet-stream` (the relayed installer
+  download's content type) gets no `Content-Encoding` even when the request
+  offers `br, gzip`, because `compression_predicate()`'s
+  `NotForContentType::const_new("application/octet-stream")` exemption
+  (BUNYIP-554) applies before the encoding choice is made; verified by serving
+  a `.bin` file through the same `/assets` `ServeDir` and confirming no
+  `content-encoding` header on the response.
 
 Verified against the running api, with the gzip request header set:
 
