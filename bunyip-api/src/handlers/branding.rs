@@ -53,12 +53,14 @@ pub async fn public_branding_asset(
         .await?
         .ok_or_else(|| AppError::not_found("Brand asset"))?;
 
-    Ok(HttpResponse::Ok()
-        .content_type(mime)
-        .insert_header(("Content-Disposition", "inline"))
-        // Public (it is site chrome, identical for every visitor) and cacheable
-        // for a day; every reference carries the record's version as `?v=`, so a
-        // re-upload produces a new URL rather than waiting the day out.
-        .insert_header(("Cache-Control", "public, max-age=86400"))
-        .body(data))
+    Ok(crate::compress::mark_uncompressed(
+        HttpResponse::Ok()
+            .content_type(mime)
+            .insert_header(("Content-Disposition", "inline"))
+            // Public (it is site chrome, identical for every visitor) and cacheable
+            // for a day; every reference carries the record's version as `?v=`, so a
+            // re-upload produces a new URL rather than waiting the day out.
+            .insert_header(("Cache-Control", "public, max-age=86400"))
+            .body(data),
+    ))
 }
