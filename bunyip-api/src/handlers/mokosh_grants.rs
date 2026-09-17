@@ -264,14 +264,26 @@ pub async fn mint_grant_token(
         role: grant.role.clone(),
         mokosh_account_id: grant.mokosh_account_id.clone(),
     };
-    // Scope: `openid` alone. A grant token is deliberately narrow -
+    // Scope: `openid` + `email`. A grant token is deliberately narrow -
     // the caller is exercising a granted role on ONE resource server,
     // not consenting to a broader scope set the way an authorize flow
-    // would negotiate. A future ticket may widen this to include the
-    // client's registered mokosh:* scopes, but the minimal one gets
-    // the flow working without inheriting scope from the grantor's
-    // last authorize session.
-    let scope = vec!["openid".to_string()];
+    // would negotiate - but `email` is not a widening in that sense. It
+    // is what makes bunyip's userinfo return `email` and `email_verified`
+    // beside `sub`, and BUNYIP-674 option B's grantee JIT gate on
+    // mokosh-server requires a verified email before it will place the
+    // grantee into someone else's tenant (deliberate: placeholder rows
+    // exist only for first-sight owners bunyip is in the middle of
+    // verifying). Without `email` in the token's scope, userinfo returns
+    // `sub` alone and mokosh sees `has_email = false, email_verified =
+    // false` even for a fully verified account - the fields are ABSENT,
+    // not false - and refuses the placement with a message that reads as
+    // misleading to a grantee whose address is in fact verified. The
+    // grantee is a real bunyip user consenting to enter an account they
+    // were invited to, and the RP already receives their email on the
+    // ordinary login token, so this discloses nothing new. A future
+    // ticket may widen this further to the client's registered `mokosh:*`
+    // scopes.
+    let scope = vec!["openid".to_string(), "email".to_string()];
     let now = chrono::Utc::now();
     let (access_token, exp) = provider.mint_grant_access_token(
         &grantee,
