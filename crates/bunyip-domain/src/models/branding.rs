@@ -265,8 +265,15 @@ impl BrandingAssetSlot {
     /// so a derived icon can never outlive the source it came from.
     pub fn storage_kinds(self) -> Vec<&'static str> {
         match self {
-            Self::Mark => vec!["mark"],
-            Self::Mascot => vec!["mascot"],
+            // BUNYIP-744: `mark` and `mascot` are themselves derived (bounded to
+            // the box the layout renders); the uploaded original is kept
+            // alongside them, exactly as the favicon slot keeps its source.
+            Self::Mark => vec![MARK_SOURCE_KIND, "mark"],
+            Self::Mascot => {
+                let mut kinds = vec![MASCOT_SOURCE_KIND];
+                kinds.extend(DERIVED_MASCOTS.iter().map(|d| d.kind));
+                kinds
+            }
             Self::Favicon => {
                 let mut kinds = vec![FAVICON_SOURCE_KIND];
                 kinds.extend(DERIVED_FAVICONS.iter().map(|d| d.kind));
@@ -345,12 +352,51 @@ pub const DERIVED_FAVICONS: &[DerivedFavicon] = &[
     },
 ];
 
+/// The storage key holding exactly what the admin uploaded for the mark slot.
+/// Never referenced from markup; kept so a later change to the derived size can
+/// re-derive without asking the admin to upload again.
+pub const MARK_SOURCE_KIND: &str = "mark-source";
+
+/// BUNYIP-744: the derived mark's square edge, in pixels. 2x the 28 CSS pixel
+/// nav render, with headroom for a larger future placement.
+pub const MARK_DERIVED_SIZE: u32 = 64;
+
+/// The storage key holding exactly what the admin uploaded for the mascot
+/// slot. Never referenced from markup; kept so a later change to the derived
+/// sizes can re-derive without asking the admin to upload again.
+pub const MASCOT_SOURCE_KIND: &str = "mascot-source";
+
+/// BUNYIP-744: one derived mascot variant. `size` bounds the long edge; the
+/// short edge follows the source's aspect ratio (the illustration is never
+/// cropped).
+#[derive(Debug, Clone, Copy)]
+pub struct DerivedMascot {
+    pub kind: &'static str,
+    pub size: u32,
+}
+
+/// The two sizes the landing page's hero `srcset` uses: `mascot` at the 448
+/// CSS pixel box the layout renders (`max-w-md`), `mascot-2x` for a 2x device
+/// pixel ratio.
+pub const DERIVED_MASCOTS: &[DerivedMascot] = &[
+    DerivedMascot {
+        kind: "mascot",
+        size: 448,
+    },
+    DerivedMascot {
+        kind: "mascot-2x",
+        size: 896,
+    },
+];
+
 /// Every storage key that can be served from `GET /v1/branding/assets/{kind}`.
 /// A key outside this set is a 404 before any query runs, so the path parameter
 /// can never name an arbitrary row.
 pub fn is_servable_asset_kind(kind: &str) -> bool {
     kind == "mark"
-        || kind == "mascot"
+        || kind == MARK_SOURCE_KIND
+        || kind == MASCOT_SOURCE_KIND
+        || DERIVED_MASCOTS.iter().any(|d| d.kind == kind)
         || kind == FAVICON_SOURCE_KIND
         || DERIVED_FAVICONS.iter().any(|d| d.kind == kind)
 }
@@ -648,8 +694,19 @@ mod tests {
                 derived.kind
             );
         }
-        assert_eq!(BrandingAssetSlot::Mark.storage_kinds(), vec!["mark"]);
-        assert_eq!(BrandingAssetSlot::Mascot.storage_kinds(), vec!["mascot"]);
+        assert_eq!(
+            BrandingAssetSlot::Mark.storage_kinds(),
+            vec![MARK_SOURCE_KIND, "mark"]
+        );
+        let mascot = BrandingAssetSlot::Mascot.storage_kinds();
+        assert!(mascot.contains(&MASCOT_SOURCE_KIND));
+        for derived in DERIVED_MASCOTS {
+            assert!(
+                mascot.contains(&derived.kind),
+                "{} is derived from the source and must be cleared with it",
+                derived.kind
+            );
+        }
     }
 
     /// The served-kind allow-list is what stops the path parameter naming an
@@ -665,7 +722,7 @@ mod tests {
                 assert!(is_servable_asset_kind(kind), "{kind} must be servable");
             }
         }
-        for unknown in ["", "../mark", "favicon", "users", "mark-source"] {
+        for unknown in ["", "../mark", "favicon", "users", "mark-large"] {
             assert!(!is_servable_asset_kind(unknown), "{unknown} is not a key");
         }
     }

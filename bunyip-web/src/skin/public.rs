@@ -89,6 +89,7 @@ fn features(brand_name: &str) -> Vec<Feature> {
 /// product, and the caption is omitted entirely when the tagline is unset.
 fn hero_mascot(branding: &crate::api::types::Branding) -> maud::Markup {
     let src = branding.mascot_src();
+    let src_2x = branding.mascot_src_2x();
     let tagline = branding.tagline.as_str();
     maud::html! {
         div class="relative aspect-square w-full max-w-md mx-auto" {
@@ -97,7 +98,11 @@ fn hero_mascot(branding: &crate::api::types::Branding) -> maud::Markup {
                 // the server knows, and the square `aspect-square` box above already
                 // reserves the space, so the hero text does not reflow when the
                 // image lands. Deliberately NOT lazy - it is the LCP element.
+                // BUNYIP-744: the 448/896 `srcset` pair mirrors the committed
+                // fallback below, so a 2x device pixel ratio does not upscale
+                // the 448px variant a 1x viewport already selects.
                 img src=(src)
+                    srcset=[src_2x.as_ref().map(|src_2x| format!("{src} 1x, {src_2x} 2x"))]
                     alt="Product illustration"
                     class="relative w-full h-full object-contain drop-shadow-2xl" {}
             } @else {
@@ -456,6 +461,24 @@ mod copy_tests {
         assert!(
             !uploaded.contains("bunyip-hero-"),
             "an uploaded mascot overrides the committed fallback: {uploaded}"
+        );
+    }
+
+    /// BUNYIP-744: the uploaded branch carries a 1x/2x `srcset`, matching the
+    /// committed fallback's shape, and stays eager - it is still the LCP
+    /// element.
+    #[test]
+    fn an_uploaded_mascot_carries_a_1x_2x_srcset_and_stays_eager() {
+        let uploaded = hero_mascot(&branding("", "1755500000000")).into_string();
+        assert!(
+            uploaded.contains(
+                "srcset=\"/brand/mascot?v=1755500000000 1x, /brand/mascot-2x?v=1755500000000 2x\""
+            ),
+            "{uploaded}"
+        );
+        assert!(
+            !uploaded.contains("loading="),
+            "the LCP image stays eagerly loaded: {uploaded}"
         );
     }
 
