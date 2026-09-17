@@ -151,6 +151,43 @@ impl MokoshGrantsService {
             .await?
             .ok_or_else(|| AppError::not_found("Mokosh grant"))
     }
+
+    /// BUNYIP-748: change the role of an active grant in place. Same
+    /// enumeration-resistant posture as `revoke_grant`: unknown id
+    /// and foreign owner are indistinguishable (both 404), so an
+    /// attacker cannot walk the id space to discover whose grants
+    /// live where. `already revoked` is a 404 too - the endpoint
+    /// only acts on active grants, and PATCH on a revoked one is a
+    /// stale-client-cache case the caller should refetch to resolve.
+    ///
+    /// The new role is validated up front against the PMS-1162
+    /// vocabulary. A caller trying to move a grant to an unknown
+    /// role sees the closed vocabulary in the 400 message rather
+    /// than a database CHECK-constraint text; the vocabulary is
+    /// bunyip's contract, not the schema's.
+    ///
+    /// A same-role UPDATE returns Ok with the unchanged row; the
+    /// caller is expected to detect the no-op if they care. This
+    /// keeps the endpoint idempotent under refetch races (two
+    /// PATCHes to the same role from a stale SPA both succeed).
+    pub async fn update_grant_role(
+        pool: &PgPool,
+        orgs_enabled: bool,
+        owner_bunyip_user_id: Uuid,
+        grant_id: Uuid,
+        new_role: &str,
+    ) -> Result<MokoshAccountGrant, AppError> {
+        gate(orgs_enabled)?;
+        if !validate_grant_role(new_role) {
+            return Err(AppError::validation(
+                "role",
+                "role must be one of admin | manager | technician | finance | read_only",
+            ));
+        }
+        MokoshGrantRepository::update_role(pool, grant_id, owner_bunyip_user_id, new_role)
+            .await?
+            .ok_or_else(|| AppError::not_found("Mokosh grant"))
+    }
 }
 
 /// Resolve the grantee id from the request.

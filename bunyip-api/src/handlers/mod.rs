@@ -180,6 +180,7 @@ pub mod membership;
 pub mod mokosh_grant_list;
 pub mod mokosh_grant_register;
 pub mod mokosh_grant_revoke;
+pub mod mokosh_grant_update;
 pub mod mokosh_grants;
 pub mod org_billing;
 pub mod org_pricing;

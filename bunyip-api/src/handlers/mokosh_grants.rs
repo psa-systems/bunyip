@@ -333,3 +333,44 @@ pub async fn revoke_grant(
     notify_grant_changed(pool.get_ref(), webhook.get_ref(), &grant).await;
     Ok(success(grant, request_id))
 }
+
+/// Body for `PATCH /v1/grants/{id}` - the owner names the new role.
+#[derive(Debug, Deserialize)]
+pub struct UpdateGrantRequest {
+    /// The new role from the PMS-1162 vocabulary. Validated by the
+    /// service against the same `validate_grant_role` `create` uses;
+    /// an unknown value returns 400 naming the closed set.
+    pub role: String,
+}
+
+/// `PATCH /v1/grants/{id}` - change a grant's role in place
+/// (BUNYIP-748). The caller must be the grant's owner; unknown-id and
+/// foreign-owner return the same 404 as `revoke_grant`'s
+/// enumeration-resistant posture.
+///
+/// Fires the same `mokosh_grant_changed` webhook `create` and `revoke`
+/// do, so mokosh's mirror re-syncs within the BUNYIP-674 30-second
+/// window and the grantee's next request reads the new role from
+/// their JIT-provisioned users row on the mokosh side.
+pub async fn update_grant_role(
+    req: HttpRequest,
+    user: AuthenticatedUser,
+    pool: web::Data<PgPool>,
+    tier_config: web::Data<Arc<RwLock<TierConfig>>>,
+    webhook: web::Data<Arc<WebhookService>>,
+    path: web::Path<Uuid>,
+    body: web::Json<UpdateGrantRequest>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let flag = orgs_enabled(tier_config.get_ref());
+    let grant = MokoshGrantsService::update_grant_role(
+        pool.get_ref(),
+        flag,
+        user.0.sub,
+        path.into_inner(),
+        body.role.trim(),
+    )
+    .await?;
+    notify_grant_changed(pool.get_ref(), webhook.get_ref(), &grant).await;
+    Ok(success(grant, request_id))
+}

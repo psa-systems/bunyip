@@ -7,13 +7,16 @@
 //! (a machine-authed route in the same scope would blur that
 //! contract for every reader).
 //!
-//! Three ops today, all machine-authed:
+//! Four ops today, all machine-authed:
 //! - POST `/v1/mokosh-grants`             (PMS-1208): register a grant that
 //!   mokosh-server minted on accept.
 //! - GET  `/v1/mokosh-grants?owner_bunyip_user_id={sub}` (MAPPS-875):
 //!   list an owner's active grants for mokosh's owner-outbox page.
 //! - DELETE `/v1/mokosh-grants/{id}`      (MAPPS-875): revoke a grant
 //!   from the same owner-outbox page.
+//! - PATCH  `/v1/mokosh-grants/{id}`      (BUNYIP-748): change a grant's
+//!   role in place; fires the same webhook the DELETE does so the
+//!   mokosh mirror re-syncs.
 
 use actix_web::web;
 
@@ -33,6 +36,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route(
                 "/{id}",
                 web::delete().to(handlers::mokosh_grant_revoke::revoke_grant),
+            )
+            .route(
+                "/{id}",
+                web::patch().to(handlers::mokosh_grant_update::update_grant_role),
             ),
     );
 }

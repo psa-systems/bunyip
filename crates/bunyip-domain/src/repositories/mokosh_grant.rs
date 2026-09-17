@@ -104,6 +104,42 @@ impl MokoshGrantRepository {
         .await
         .map_err(map_sqlx)
     }
+
+    /// BUNYIP-748: change the role of an active grant in place.
+    /// Returns the updated row (mirroring `revoke`'s shape) so the
+    /// caller can log the transition AND fire the
+    /// `mokosh_grant_changed` webhook against the current state.
+    ///
+    /// `Ok(None)` for unknown-id / foreign-caller / already-revoked:
+    /// the WHERE clause names all three predicates and the service
+    /// turns that into an enumeration-resistant 404, same shape as
+    /// `revoke`. Same-role UPDATE returns Some (a caller asking to
+    /// "change" to the current role is a no-op the service handles).
+    ///
+    /// The role is validated against the PMS-1162 CHECK constraint
+    /// at write time; an unknown role trips 23514 and is mapped to
+    /// 400 by `map_sqlx`. The partial UNIQUE index on (owner,
+    /// grantee, mokosh_account) WHERE revoked_at IS NULL is
+    /// unaffected because those three columns don't move; no index
+    /// rebuild is needed.
+    pub async fn update_role(
+        pool: &PgPool,
+        id: Uuid,
+        owner_bunyip_user_id: Uuid,
+        new_role: &str,
+    ) -> Result<Option<MokoshAccountGrant>, AppError> {
+        sqlx::query_as::<_, MokoshAccountGrant>(
+            "UPDATE mokosh_account_grants SET role = $3 \
+             WHERE id = $1 AND owner_bunyip_user_id = $2 AND revoked_at IS NULL \
+             RETURNING *",
+        )
+        .bind(id)
+        .bind(owner_bunyip_user_id)
+        .bind(new_role)
+        .fetch_optional(pool)
+        .await
+        .map_err(map_sqlx)
+    }
 }
 
 /// BUNYIP-673 sqlx-to-AppError translation for a grant write.

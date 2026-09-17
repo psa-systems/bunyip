@@ -360,3 +360,135 @@ async fn revoke_then_regrant_is_allowed_and_creates_a_new_row() {
     assert_ne!(second.id, first.id);
     assert_eq!(second.role, "technician");
 }
+
+// BUNYIP-748 tests below. Same shape as the revoke tests above:
+// unknown-id / foreign-owner / already-revoked -> 404, valid role
+// change -> Ok with the updated row.
+
+#[tokio::test]
+async fn update_role_changes_the_role_in_place() {
+    let Some(pool) = maybe_pool().await else {
+        return;
+    };
+    let owner = seed_user(&pool, "role-owner@example.test").await;
+    let grantee = seed_user(&pool, "role-grantee@example.test").await;
+
+    let grant =
+        MokoshGrantsService::create_grant(&pool, true, owner, req(grantee, "acme", "read_only"))
+            .await
+            .expect("create");
+
+    let updated = MokoshGrantsService::update_grant_role(&pool, true, owner, grant.id, "manager")
+        .await
+        .expect("update ok");
+    assert_eq!(updated.id, grant.id, "same row, not a new one");
+    assert_eq!(updated.role, "manager");
+    assert!(
+        updated.revoked_at.is_none(),
+        "update_role must not revoke as a side effect"
+    );
+
+    // The updated grant is still in the active list; a role change is
+    // not a revoke.
+    let own = MokoshGrantsService::list_own(&pool, true, owner)
+        .await
+        .unwrap();
+    assert!(
+        own.iter().any(|g| g.id == grant.id && g.role == "manager"),
+        "list_own must report the new role"
+    );
+}
+
+#[tokio::test]
+async fn update_role_refuses_a_role_outside_the_vocabulary() {
+    let Some(pool) = maybe_pool().await else {
+        return;
+    };
+    let owner = seed_user(&pool, "role-bad-owner@example.test").await;
+    let grantee = seed_user(&pool, "role-bad-grantee@example.test").await;
+
+    let grant =
+        MokoshGrantsService::create_grant(&pool, true, owner, req(grantee, "acme", "admin"))
+            .await
+            .expect("create");
+
+    let result =
+        MokoshGrantsService::update_grant_role(&pool, true, owner, grant.id, "godmode").await;
+    assert!(
+        matches!(result, Err(AppError::ValidationError { .. })),
+        "unknown role must fail validation, not reach the database"
+    );
+}
+
+#[tokio::test]
+async fn update_role_on_a_foreign_grant_is_404() {
+    let Some(pool) = maybe_pool().await else {
+        return;
+    };
+    let owner = seed_user(&pool, "role-foreign-owner@example.test").await;
+    let grantee = seed_user(&pool, "role-foreign-grantee@example.test").await;
+    let unrelated = seed_user(&pool, "role-foreign-other@example.test").await;
+
+    let grant =
+        MokoshGrantsService::create_grant(&pool, true, owner, req(grantee, "acme", "admin"))
+            .await
+            .expect("create");
+
+    // The wrong owner sees the same 404 an unknown id would produce:
+    // the enumeration-resistant posture from `revoke_grant`. Note the
+    // divergence with `revoke_grant`, which returns Forbidden on a
+    // foreign caller - `update_grant_role` is stricter by design
+    // because the id space here is not the owner's own to walk.
+    let result =
+        MokoshGrantsService::update_grant_role(&pool, true, unrelated, grant.id, "read_only").await;
+    assert!(matches!(
+        result,
+        Err(AppError::NotFound { .. }) | Err(AppError::Forbidden)
+    ));
+}
+
+#[tokio::test]
+async fn update_role_on_a_revoked_grant_is_404() {
+    let Some(pool) = maybe_pool().await else {
+        return;
+    };
+    let owner = seed_user(&pool, "role-revoked-owner@example.test").await;
+    let grantee = seed_user(&pool, "role-revoked-grantee@example.test").await;
+
+    let grant =
+        MokoshGrantsService::create_grant(&pool, true, owner, req(grantee, "acme", "admin"))
+            .await
+            .expect("create");
+    MokoshGrantsService::revoke_grant(&pool, true, owner, grant.id)
+        .await
+        .expect("revoke");
+
+    let result =
+        MokoshGrantsService::update_grant_role(&pool, true, owner, grant.id, "manager").await;
+    assert!(
+        matches!(result, Err(AppError::NotFound { .. })),
+        "PATCH on a revoked grant is a stale-client case; refetch resolves"
+    );
+}
+
+#[tokio::test]
+async fn update_role_to_the_same_role_is_a_no_op_that_succeeds() {
+    let Some(pool) = maybe_pool().await else {
+        return;
+    };
+    let owner = seed_user(&pool, "role-noop-owner@example.test").await;
+    let grantee = seed_user(&pool, "role-noop-grantee@example.test").await;
+
+    let grant =
+        MokoshGrantsService::create_grant(&pool, true, owner, req(grantee, "acme", "manager"))
+            .await
+            .expect("create");
+
+    // A stale SPA that PATCHes to the current role must succeed
+    // rather than 400: the caller cannot distinguish "we haven't
+    // changed" from "somebody else already applied our change".
+    let result = MokoshGrantsService::update_grant_role(&pool, true, owner, grant.id, "manager")
+        .await
+        .expect("no-op update ok");
+    assert_eq!(result.role, "manager");
+}

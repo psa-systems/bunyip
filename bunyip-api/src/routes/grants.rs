@@ -17,6 +17,13 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/{id}",
                 web::delete().to(handlers::mokosh_grants::revoke_grant),
             )
+            // BUNYIP-748: change a grant's role in place. Same
+            // owner-authed shape as revoke; enumeration-resistant
+            // 404 on unknown / foreign / already-revoked.
+            .route(
+                "/{id}",
+                web::patch().to(handlers::mokosh_grants::update_grant_role),
+            )
             // BUNYIP-673 / 674: mint an at+jwt scoped to the granted
             // Mokosh account. Behind AuthenticatedUser; the caller is
             // the grantee, and Bunyip mints a token Mokosh's OIDC-RS
