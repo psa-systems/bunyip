@@ -83,21 +83,47 @@ const EXEMPT_PATHS: &[&str] = &[
     // only bucket `MAILER_AUTH_FAILURES` are the controls that
     // replace the floor.
     "/v1/users/lookup",
-    // PMS-1208 companion: machine-authed grant registration.
-    // Mokosh-server calls this from its invitation-accept path to
-    // create a bunyip-side `mokosh_account_grants` row so the SPA's
-    // subsequent `POST /v1/grants/{id}/access-token` mint call finds
-    // the grant. Same shared-egress reasoning as the two entries
-    // above: `USER_LOOKUP` reused per-app cap and the shared
-    // `MAILER_AUTH_FAILURES` per-IP failure bucket are the controls
-    // that replace the floor.
+    // PMS-1208 companion: machine-authed grant registration (POST),
+    // list (GET, MAPPS-875) and revoke (DELETE {id}, MAPPS-875).
+    // Mokosh-server calls all three from its owner-outbox page and
+    // its invitation-accept path. Same shared-egress reasoning as
+    // the two entries above: `USER_LOOKUP` reused per-app cap and
+    // the shared `MAILER_AUTH_FAILURES` per-IP failure bucket are
+    // the controls that replace the floor. `is_exempt` compares the
+    // request path exactly, so the DELETE-by-id shape (`/v1/mokosh-grants/{uuid}`)
+    // is a separate entry; matching the collection root alone would
+    // leave the child path floored.
     "/v1/mokosh-grants",
+    // MAPPS-875: DELETE `/v1/mokosh-grants/{id}` is machine-authed
+    // like its scope-root siblings; the floor's exact-match posture
+    // means we cannot cover the child with the root entry. Rather
+    // than enumerate one row per uuid the endpoint might ever see,
+    // the exemption reads the caller's PREFIX in `is_exempt` below
+    // when the entry ends in `/*`. See there for the shape.
+    "/v1/mokosh-grants/*",
 ];
 
 /// Whether the floor applies to this request.
+///
+/// Exact match by default. A `/*` suffix is a shallow prefix wildcard
+/// (`starts_with(prefix)` with no deeper segment check), added for
+/// MAPPS-875 so DELETE `/v1/mokosh-grants/{id}` can be exempt without
+/// enumerating one entry per uuid the endpoint will ever see.
 pub(crate) fn is_exempt(path: &str, method: &Method) -> bool {
-    // CORS preflights carry no credential and are answered by the cors layer.
-    method == Method::OPTIONS || EXEMPT_PATHS.contains(&path)
+    if method == Method::OPTIONS {
+        return true;
+    }
+    EXEMPT_PATHS
+        .iter()
+        .any(|entry| match entry.strip_suffix("/*") {
+            Some(prefix) => {
+                // Prefix must be followed by a `/` in the path, else
+                // `/foo-bar` would falsely match an entry for `/foo`.
+                let after = path.strip_prefix(prefix);
+                matches!(after, Some(rest) if rest.starts_with('/'))
+            }
+            None => *entry == path,
+        })
 }
 
 /// Actix middleware factory for the default request cap.
