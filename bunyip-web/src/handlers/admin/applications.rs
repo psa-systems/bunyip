@@ -73,6 +73,12 @@ pub(super) fn app_admin_row(app: &AdminApplication) -> Markup {
     }
 }
 
+/// BUNYIP-742: app-reorder.js's only consumer is this page's
+/// `[data-reorder-list]`, so it ships here instead of the shared head.
+fn reorder_script() -> Markup {
+    html! { script src=(crate::views::layout::asset("/assets/js/app-reorder.js")) defer {} }
+}
+
 pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
@@ -107,6 +113,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                 }
             }
         }
+        (reorder_script())
     };
     admin_response(&c, &user, "/admin/applications", "Applications", content)
 }
@@ -1156,7 +1163,18 @@ pub async fn application_doc_delete(
 
 #[cfg(test)]
 mod tests {
-    use super::{app_danger_zone, doc_fields, AppDoc};
+    use super::{app_danger_zone, doc_fields, reorder_script, AppDoc};
+
+    /// BUNYIP-742: `/admin/applications` is the one page rendering
+    /// `[data-reorder-list]`, so it - and only it - must carry
+    /// app-reorder.js; the negative half of this invariant lives in
+    /// `views::layout::tests::document_head_loads_only_first_party_scripts`.
+    #[test]
+    fn admin_applications_page_ships_the_reorder_script() {
+        let html = reorder_script().into_string();
+        assert!(html.contains(r#"src="/assets/js/app-reorder.js?v="#));
+        assert!(html.contains("defer"));
+    }
 
     /// BUNYIP-597: the admin confirms a hard delete by typing their password,
     /// so that input gets the reveal toggle, and this page is its own document

@@ -207,6 +207,13 @@ impl UsersQ {
 const USERS_GRID: &str =
     "grid-template-columns:2.25rem minmax(0,1fr) auto auto 8.5rem 1.5rem;display:grid;align-items:center;gap:0.75rem;min-width:42rem";
 
+/// BUNYIP-742: htmx is vendored (BUNYIP-424) and served here, the only page
+/// whose `hx-` attributes use it, instead of the shared head. `defer`
+/// preserves execution order the same way it did in the head.
+fn htmx_script() -> Markup {
+    html! { script src=(crate::views::layout::asset("/assets/vendor/htmx-2.0.3.min.js")) defer {} }
+}
+
 pub async fn users(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -256,6 +263,7 @@ pub async fn users(
             (panel)
         }
         style { (maud::PreEscaped(USERS_FILTER_CSS)) }
+        (htmx_script())
         script src=(crate::views::layout::asset("/assets/js/admin-users.js")) defer {}
     };
     admin_response(&c, &user, "/admin/users", "Users", content)
@@ -1218,4 +1226,20 @@ pub async fn user_detail(
         }
     };
     admin_response(&c, &user, "/admin/users", "User", content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::htmx_script;
+
+    /// BUNYIP-742: `/admin/users` is the one page whose `hx-` attributes use
+    /// htmx (BUNYIP-424), so it - and only it - must carry the vendored
+    /// script; the negative half of this invariant lives in
+    /// `views::layout::tests::document_head_loads_only_first_party_scripts`.
+    #[test]
+    fn admin_users_page_ships_htmx() {
+        let html = htmx_script().into_string();
+        assert!(html.contains(r#"src="/assets/vendor/htmx-2.0.3.min.js?v="#));
+        assert!(html.contains("defer"));
+    }
 }
