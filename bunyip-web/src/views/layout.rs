@@ -253,18 +253,20 @@ pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker
                 // the form (mokosh PMS-605). `defer` preserves execution order and
                 // runs after parse, before DOMContentLoaded.
                 //
+                // BUNYIP-742: htmx and app-reorder.js each serve exactly one
+                // admin page (`/admin/users`, `/admin/applications`) and no
+                // longer ship here; they are emitted by those handlers instead
+                // (`admin/users.rs`, `admin/applications.rs`), kept `defer`red
+                // so document order and BUNYIP-294's timing fix still hold.
+                //
                 // BUNYIP-424: htmx is vendored (byte-identical to the published
                 // htmx 2.0.3 dist, sha384-0895/pl2MU10Hqc6jd4RvrthNlDiE9U1tWmX7WRESftEDRosgxNsQG/Ze9YMRzHq)
                 // instead of pulled from unpkg, which resolves from npm at request
                 // time and so is replaceable by an upstream account compromise.
-                script src=(asset("/assets/vendor/htmx-2.0.3.min.js")) defer {}
                 // theme.js is NOT deferred: the stored theme has to land on
                 // <html> before first paint or the page flashes the wrong theme.
                 script src=(asset("/assets/js/theme.js")) {}
                 script src=(asset("/assets/js/app.js")) defer {}
-                // BUNYIP-473: drag-and-drop / keyboard reordering for admin
-                // lists. Inert on pages without a `[data-reorder-list]`.
-                script src=(asset("/assets/js/app-reorder.js")) defer {}
                 // BUNYIP-408: avatar CSS shipped inline (not via the separately
                 // cached styles.css) so a stale stylesheet can never leave the
                 // component's structural rules undefined. BUNYIP-554: only the
@@ -1263,11 +1265,26 @@ mod tests {
     /// `security::tests::no_inline_script_or_event_handlers_in_views`): the
     /// document every SSR page is built from must load scripts only from
     /// `'self'`, or the `script-src 'self'` policy silently breaks the app.
+    ///
+    /// BUNYIP-742: htmx and app-reorder.js each serve exactly one admin page
+    /// (`/admin/users`, `/admin/applications`). Every other page, `/login`,
+    /// `/register` and the 404 included, renders through plain `document()`
+    /// and must NOT carry either. The mirror assertion that each page DOES
+    /// carry its own script lives beside the script's own definition:
+    /// `handlers::admin::users::tests::admin_users_page_ships_htmx` and
+    /// `handlers::admin::applications::tests::admin_applications_page_ships_the_reorder_script`.
     #[test]
     fn document_head_loads_only_first_party_scripts() {
         let html = document("Test", html! {}).into_string();
 
-        assert!(html.contains(r#"src="/assets/vendor/htmx-2.0.3.min.js?v="#));
+        assert!(
+            !html.contains("htmx-2.0.3"),
+            "htmx must not ship outside /admin/users"
+        );
+        assert!(
+            !html.contains("app-reorder"),
+            "app-reorder.js must not ship outside /admin/applications"
+        );
         assert!(html.contains(r#"src="/assets/js/theme.js?v="#));
         assert!(html.contains(r#"src="/assets/js/app.js?v="#));
         assert!(!html.contains("kit.fontawesome.com"));
@@ -1312,7 +1329,7 @@ mod tests {
             }
         }
         assert!(
-            refs >= 12,
+            refs >= 10,
             "expected the whole head to be scanned, saw {refs} /assets references"
         );
     }
