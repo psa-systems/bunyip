@@ -155,7 +155,6 @@ pub struct MintGrantTokenResponse {
 /// outside; the audit trail on the row identifies who actually tried.
 pub async fn mint_grant_token(
     req: HttpRequest,
-    user: AuthenticatedUser,
     pool: web::Data<PgPool>,
     tier_config: web::Data<Arc<RwLock<TierConfig>>>,
     provider: web::Data<Arc<OidcProvider>>,
@@ -168,12 +167,32 @@ pub async fn mint_grant_token(
         return Err(AppError::not_found("Mokosh grant"));
     }
 
+    // Audience-permissive authentication (BUNYIP-673 correction).
+    // Callers of this endpoint hold a mokosh-audience at+jwt (they
+    // signed into mokosh-apps through bunyip OIDC and have not yet
+    // switched into a granted context). The RS-audience gate that
+    // `AuthenticatedUser` extracts through would reject those tokens
+    // with InvalidAudience even though bunyip signed and issued them.
+    // Verify with the permissive `verify_at_jwt_claims` - the same
+    // shape the userinfo endpoint uses - then resolve the user by
+    // sub manually. Everything else (grantee ownership, revoked
+    // check, client capability gate) is unchanged.
+    let bearer = req
+        .headers()
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or_else(|| AppError::OidcInvalidToken("bearer required".into()))?;
+    let claims = provider.verify_at_jwt_claims(bearer)?;
+    let caller_sub =
+        Uuid::parse_str(&claims.sub).map_err(|_| AppError::OidcInvalidToken("bad sub".into()))?;
+
     let grant_id = path.into_inner();
     let grant = MokoshGrantRepository::find_by_id(pool.get_ref(), grant_id)
         .await?
         .ok_or_else(|| AppError::not_found("Mokosh grant"))?;
 
-    if grant.grantee_bunyip_user_id != user.0.sub {
+    if grant.grantee_bunyip_user_id != caller_sub {
         // Wrong caller: 404, not 403. See the module-level note - a
         // caller who is not the grantee cannot enumerate grants they
         // do not own.
@@ -217,7 +236,7 @@ pub async fn mint_grant_token(
     // row exists at grant-creation time; a delete-user path between
     // create and mint would tombstone the row and this lookup would
     // 404 back to the caller with a clean shape.
-    let grantee = UserRepository::find_by_id(pool.get_ref(), user.0.sub)
+    let grantee = UserRepository::find_by_id(pool.get_ref(), caller_sub)
         .await?
         .ok_or_else(|| AppError::not_found("User"))?;
 
