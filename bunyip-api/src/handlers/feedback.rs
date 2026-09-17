@@ -966,10 +966,12 @@ pub async fn get_attachment(
         meta.filename.replace('"', "\\\"")
     );
 
-    Ok(HttpResponse::Ok()
-        .content_type(meta.mime_type.clone())
-        .insert_header(("Content-Disposition", disposition))
-        .body(data))
+    Ok(crate::compress::mark_uncompressed(
+        HttpResponse::Ok()
+            .content_type(meta.mime_type.clone())
+            .insert_header(("Content-Disposition", disposition))
+            .body(data),
+    ))
 }
 
 #[cfg(test)]
