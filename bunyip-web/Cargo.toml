@@ -16,7 +16,7 @@ path = "src/main.rs"
 axum = { version = "0.7", features = ["macros", "multipart"] }
 tokio = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["fs", "compression-gzip", "set-header", "trace"] }
+tower-http = { version = "0.6", features = ["fs", "compression-gzip", "compression-br", "set-header", "trace"] }
 
 # HTML templating (compile-checked Rust macro) - rendered to String and wrapped
 # in axum::response::Html, so no version coupling with a maud "axum" feature.
