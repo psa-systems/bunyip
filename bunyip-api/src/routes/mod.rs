@@ -15,6 +15,7 @@ pub mod grants;
 pub mod health;
 pub mod mailer;
 pub mod membership;
+pub mod mokosh_grant_register;
 pub mod organizations;
 pub mod pricing;
 pub mod user;
@@ -40,6 +41,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .configure(grants::configure)
             .configure(mailer::configure)
             .configure(membership::configure)
+            .configure(mokosh_grant_register::configure)
             .configure(organizations::configure)
             .configure(pricing::configure)
             .configure(branding::configure)

@@ -83,6 +83,15 @@ const EXEMPT_PATHS: &[&str] = &[
     // only bucket `MAILER_AUTH_FAILURES` are the controls that
     // replace the floor.
     "/v1/users/lookup",
+    // PMS-1208 companion: machine-authed grant registration.
+    // Mokosh-server calls this from its invitation-accept path to
+    // create a bunyip-side `mokosh_account_grants` row so the SPA's
+    // subsequent `POST /v1/grants/{id}/access-token` mint call finds
+    // the grant. Same shared-egress reasoning as the two entries
+    // above: `USER_LOOKUP` reused per-app cap and the shared
+    // `MAILER_AUTH_FAILURES` per-IP failure bucket are the controls
+    // that replace the floor.
+    "/v1/mokosh-grants",
 ];
 
 /// Whether the floor applies to this request.

@@ -106,6 +106,17 @@ impl MokoshGrantRepository {
     }
 }
 
+/// BUNYIP-673 sqlx-to-AppError translation for a grant write.
+///
+/// Public so `bunyip-api::handlers::mokosh_grant_register` (the
+/// PMS-1208 machine-authed registration endpoint) reuses this
+/// exact mapping. Keeps 23505 -> 409, 23503 -> 400 and 23514 ->
+/// 400 in one place; a second copy would drift the moment a new
+/// constraint is added on the column.
+pub fn map_mokosh_grant_error(e: SqlxError) -> AppError {
+    map_sqlx(e)
+}
+
 fn map_sqlx(e: SqlxError) -> AppError {
     if let SqlxError::Database(db_err) = &e {
         match db_err.code().as_deref() {

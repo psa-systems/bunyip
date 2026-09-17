@@ -48,7 +48,7 @@ pub use entitlement::EntitlementRepository;
 pub use feedback::FeedbackRepository;
 pub use invite::InviteRepository;
 pub use mailer_suppression::MailerSuppressionRepository;
-pub use mokosh_grant::MokoshGrantRepository;
+pub use mokosh_grant::{map_mokosh_grant_error, MokoshGrantRepository};
 pub use notification::NotificationRepository;
 pub use oauth_client_user_tenant::OAuthClientUserTenantRepository;
 pub use org_pricing::OrgPricingRepository;
