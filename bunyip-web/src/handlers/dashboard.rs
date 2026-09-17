@@ -927,7 +927,7 @@ pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap)
         Err(r) => return r,
     };
     // BUNYIP-590: the cheapest published monthly price, or no number at all.
-    let price = entry_price(&st.pricing().await);
+    let price = entry_price(st.pricing().await.as_ref());
     let content = html! {
         div class="flex min-h-[60vh] items-center justify-center px-4" {
             div class="rounded-lg border bg-card text-card-foreground shadow-sm w-full max-w-md" {

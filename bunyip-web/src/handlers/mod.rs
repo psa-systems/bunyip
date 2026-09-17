@@ -14,6 +14,8 @@ pub mod organizations;
 /// and silent `unwrap_or(0)` numeric coercions.
 pub mod validate;
 
+use std::sync::Arc;
+
 use axum::http::HeaderMap;
 use axum::response::Response;
 use maud::Markup;
@@ -69,7 +71,7 @@ pub fn rotating_index(len: usize) -> usize {
 pub async fn public_ctx(
     st: &AppState,
     headers: &HeaderMap,
-) -> (AuthCtx, Vec<Application>, PricingResponse) {
+) -> (AuthCtx, Arc<Vec<Application>>, Arc<PricingResponse>) {
     let (c, _fwd) = ctx(st, headers).await;
     let (apps, pricing) = tokio::join!(st.public_applications(), st.pricing());
     (c, apps, pricing)
