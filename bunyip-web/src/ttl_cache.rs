@@ -22,7 +22,7 @@
 //! disabled button).
 
 use std::future::Future;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::api::ApiError;
@@ -70,10 +70,10 @@ pub struct TtlCache<T> {
     target: &'static str,
     /// What the page loses when this fetch fails, so the log says why it matters.
     note: &'static str,
-    slot: RwLock<Option<(Instant, T)>>,
+    slot: RwLock<Option<(Instant, Arc<T>)>>,
 }
 
-impl<T: Clone> TtlCache<T> {
+impl<T: Send + Sync> TtlCache<T> {
     pub fn new(
         endpoint: &'static str,
         target: &'static str,
@@ -95,7 +95,7 @@ impl<T: Clone> TtlCache<T> {
     /// (with the HTTP status and the target type, BUNYIP-506/518) and never
     /// silently becomes an empty payload: the last-read value is served if
     /// there is one, else `None` for the caller to fall back on.
-    pub async fn get_or_fetch<F, Fut>(&self, fetch: F) -> Option<T>
+    pub async fn get_or_fetch<F, Fut>(&self, fetch: F) -> Option<Arc<T>>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<T, ApiError>>,
@@ -105,20 +105,21 @@ impl<T: Clone> TtlCache<T> {
     }
 
     /// [`Self::get_or_fetch`] plus the [`CacheSource`], for tests.
-    pub async fn get_or_fetch_traced<F, Fut>(&self, fetch: F) -> (Option<T>, CacheSource)
+    pub async fn get_or_fetch_traced<F, Fut>(&self, fetch: F) -> (Option<Arc<T>>, CacheSource)
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<T, ApiError>>,
     {
         if let Some((at, hit)) = self.slot.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
             if at.elapsed() < self.ttl {
-                return (Some(hit.clone()), CacheSource::CacheHit);
+                return (Some(Arc::clone(hit)), CacheSource::CacheHit);
             }
         }
         match fetch().await {
             Ok(fresh) => {
+                let fresh = Arc::new(fresh);
                 *self.slot.write().unwrap_or_else(|e| e.into_inner()) =
-                    Some((Instant::now(), fresh.clone()));
+                    Some((Instant::now(), Arc::clone(&fresh)));
                 (Some(fresh), CacheSource::Fetched)
             }
             Err(e) => {
@@ -127,7 +128,7 @@ impl<T: Clone> TtlCache<T> {
                     .read()
                     .unwrap_or_else(|e| e.into_inner())
                     .as_ref()
-                    .map(|(_, v)| v.clone());
+                    .map(|(_, v)| Arc::clone(v));
                 let source = if stale.is_some() {
                     CacheSource::StaleOnError
                 } else {

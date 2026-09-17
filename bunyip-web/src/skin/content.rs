@@ -1196,9 +1196,9 @@ pub async fn docs_index(State(st): State<AppState>, headers: HeaderMap) -> Respo
     let ((c, apps, pricing), documented) =
         tokio::join!(public_ctx(&st, &headers), st.documented_apps());
     let content = docs_layout(
-        documented.as_deref(),
+        documented.as_deref().map(|v| &**v),
         "/docs",
-        docs_index_body(documented.as_deref()),
+        docs_index_body(documented.as_deref().map(|v| &**v)),
     );
     public_response(&st, &c, &apps, &pricing, "Docs", true, content)
 }
@@ -1254,7 +1254,7 @@ pub async fn docs_page(
     };
     let content = html! {
         style { (PreEscaped(DOCS_CSS)) }
-        (docs_layout(documented.as_deref(), &active, body))
+        (docs_layout(documented.as_deref().map(|v| &**v), &active, body))
     };
     public_response(
         &st,
@@ -1278,7 +1278,7 @@ pub async fn app_docs_index(
     // documentation sections without going back to the hub first.
     let ((c, apps, pricing), documented) =
         tokio::join!(public_ctx(&st, &headers), st.documented_apps());
-    let app_name = app_display_name(&slug, &apps, documented.as_deref());
+    let app_name = app_display_name(&slug, &apps, documented.as_deref().map(|v| &**v));
     // BUNYIP-515 logged the failure because the reader could not see it.
     // BUNYIP-546: the reader now sees it too, so an unreadable docs list no
     // longer reads as an app that has published nothing. Still not a 500: the
@@ -1311,7 +1311,11 @@ pub async fn app_docs_index(
             }
         }
     };
-    let content = docs_layout(documented.as_deref(), &format!("/apps/{slug}/docs"), body);
+    let content = docs_layout(
+        documented.as_deref().map(|v| &**v),
+        &format!("/apps/{slug}/docs"),
+        body,
+    );
     public_response(
         &st,
         &c,
@@ -1331,7 +1335,7 @@ pub async fn app_docs_page(
 ) -> Response {
     let ((c, apps, pricing), documented) =
         tokio::join!(public_ctx(&st, &headers), st.documented_apps());
-    let app_name = app_display_name(&slug, &apps, documented.as_deref());
+    let app_name = app_display_name(&slug, &apps, documented.as_deref().map(|v| &**v));
     let doc = match calls::app_doc(&st.api, &slug, &doc_slug).await {
         Ok(d) => d,
         Err(e) => {
@@ -1367,7 +1371,7 @@ pub async fn app_docs_page(
     };
     let content = html! {
         style { (PreEscaped(DOCS_CSS)) }
-        (docs_layout(documented.as_deref(), &format!("/apps/{slug}/docs"), body))
+        (docs_layout(documented.as_deref().map(|v| &**v), &format!("/apps/{slug}/docs"), body))
     };
     public_response(
         &st,

@@ -1,6 +1,6 @@
 //! Shared web plumbing: app state and response builders that relay `Set-Cookie`.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use axum::http::header::{HeaderValue, LOCATION, SET_COOKIE};
 use axum::http::StatusCode;
@@ -12,6 +12,21 @@ use crate::api::types::{Application, DocumentedApp, PricingResponse, SetupStatus
 use crate::api::Api;
 use crate::config::Config;
 use crate::ttl_cache::TtlCache;
+
+/// The shared empty application list every reader falls back to on a cold
+/// cache failure, so that path allocates nothing new per render (matching
+/// `branding::unbranded()`).
+fn empty_applications() -> Arc<Vec<Application>> {
+    static EMPTY: OnceLock<Arc<Vec<Application>>> = OnceLock::new();
+    Arc::clone(EMPTY.get_or_init(|| Arc::new(Vec::new())))
+}
+
+/// The shared unpublished pricing default every reader falls back to on a cold
+/// cache failure.
+fn unpublished_pricing() -> Arc<PricingResponse> {
+    static EMPTY: OnceLock<Arc<PricingResponse>> = OnceLock::new();
+    Arc::clone(EMPTY.get_or_init(|| Arc::new(PricingResponse::default())))
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -37,11 +52,11 @@ impl AppState {
     /// The public pricing payload for the chrome, coalesced per TTL. A cold
     /// failure falls back to the unpublished default, which hides the `/pricing`
     /// links rather than offering a dead one (BUNYIP-487/518).
-    pub async fn pricing(&self) -> PricingResponse {
+    pub async fn pricing(&self) -> Arc<PricingResponse> {
         self.pricing_cache
             .get_or_fetch(|| calls::pricing(&self.api))
             .await
-            .unwrap_or_default()
+            .unwrap_or_else(unpublished_pricing)
     }
 
     /// The application list the PUBLIC chrome renders: the footer's Product
@@ -56,18 +71,18 @@ impl AppState {
     /// the next visitor. The authenticated pages that DO read `is_accessible`
     /// (`/dashboard`, `/applications`) keep their own per-request, cookie-bearing
     /// fetch.
-    pub async fn public_applications(&self) -> Vec<Application> {
+    pub async fn public_applications(&self) -> Arc<Vec<Application>> {
         self.applications_cache
             .get_or_fetch(|| calls::applications(&self.api, None))
             .await
-            .unwrap_or_default()
+            .unwrap_or_else(empty_applications)
     }
 
     /// The applications with published documentation, coalesced per TTL
     /// (BUNYIP-635). `None` only when the cache has never read the list, which
     /// the `/docs` hub renders as "could not load" - never as "no application
     /// has documentation", and never as a menu of dead links.
-    pub async fn documented_apps(&self) -> Option<Vec<DocumentedApp>> {
+    pub async fn documented_apps(&self) -> Option<Arc<Vec<DocumentedApp>>> {
         self.documented_apps_cache
             .get_or_fetch(|| calls::documented_apps(&self.api))
             .await
@@ -75,10 +90,15 @@ impl AppState {
 
     /// The setup-status flags, coalesced per TTL. `None` only when the cache has
     /// never read them, so each caller applies its own documented fallback.
+    ///
+    /// Returned by value rather than as an `Arc`: the payload is three bools,
+    /// so an `Arc` clone (refcount bump plus a pointer chase) reads worse than
+    /// cloning the struct itself.
     pub async fn setup_status(&self) -> Option<SetupStatus> {
         self.setup_status_cache
             .get_or_fetch(|| crate::api::auth::setup_status(&self.api))
             .await
+            .map(|s| (*s).clone())
     }
 
     /// Whether the subscribe CTA is live. BUNYIP-515: an unreadable setup status
