@@ -42,8 +42,9 @@ pub use audit::{
 pub use auto_ban::{AutoBanConfigResponse, AutoBanConfigRow};
 pub use branding::{
     is_servable_asset_kind, validate_branding, Branding, BrandingAssetSlot, BrandingCache,
-    BrandingResponse, BrandingRow, DerivedFavicon, UpdateBrandingRequest, DERIVED_FAVICONS,
-    FAVICON_SOURCE_KIND, MAX_BRAND_NAME_LEN, MAX_META_DESCRIPTION_LEN, MAX_OG_IMAGE_URL_LEN,
+    BrandingResponse, BrandingRow, DerivedFavicon, DerivedMascot, UpdateBrandingRequest,
+    DERIVED_FAVICONS, DERIVED_MASCOTS, FAVICON_SOURCE_KIND, MARK_DERIVED_SIZE, MARK_SOURCE_KIND,
+    MASCOT_SOURCE_KIND, MAX_BRAND_NAME_LEN, MAX_META_DESCRIPTION_LEN, MAX_OG_IMAGE_URL_LEN,
     MAX_TAGLINE_LEN, MAX_THEME_CSS_LEN,
 };
 pub use download::{

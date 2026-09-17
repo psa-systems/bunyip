@@ -12,7 +12,7 @@ use dunite_image_upload::{validate_image, ImagePolicy, ImageValidationError};
 use futures_util::TryStreamExt;
 use sqlx::PgPool;
 
-use crate::branding_assets::{derive_favicons, DerivedAsset};
+use crate::branding_assets::{derive_favicons, derive_mark, derive_mascot, DerivedAsset};
 use crate::errors::AppError;
 use crate::middleware::AdminUser;
 use crate::models::{
@@ -171,10 +171,10 @@ async fn read_upload(payload: &mut Multipart, policy: &ImagePolicy) -> Result<Ve
 
 /// `POST /v1/admin/branding/assets/{slot}` (multipart, one file part).
 ///
-/// Nothing is written until the bytes validate AND, for the favicon slot, the
-/// whole derived set encodes: the slot is replaced as one transaction, so a
-/// failure leaves the previous brand intact rather than half-replaced, and the
-/// reason reaches the admin form as a 400 rather than a 500 (BUNYIP-506).
+/// Nothing is written until the bytes validate AND the slot's derived set
+/// encodes: the slot is replaced as one transaction, so a failure leaves the
+/// previous brand intact rather than half-replaced, and the reason reaches the
+/// admin form as a 400 rather than a 500 (BUNYIP-506).
 pub async fn upload_branding_asset(
     req: HttpRequest,
     admin: AdminUser,
@@ -192,23 +192,24 @@ pub async fn upload_branding_asset(
     let bytes = read_upload(&mut payload, &policy).await?;
     let mime = validate_image(&bytes, &policy).map_err(asset_err)?;
 
-    let files: Vec<DerivedAsset> = match slot {
-        // BUNYIP-553: decoding and seven resizes are CPU work, and actix never
-        // migrates a connection's futures off its arbiter, so this runs on the
-        // blocking pool. A JoinError is logged and surfaced, never collapsed
-        // into "that image was invalid".
-        BrandingAssetSlot::Favicon => {
-            match tokio::task::spawn_blocking(move || derive_favicons(bytes)).await {
-                Ok(Ok(files)) => files,
-                Ok(Err(message)) => return Err(AppError::validation("asset", message)),
-                Err(e) => {
-                    tracing::error!(error = %e, "Favicon derivation task failed to join");
-                    return Err(AppError::internal("Could not process that image"));
-                }
-            }
+    // BUNYIP-744: every slot now derives its stored bytes rather than storing
+    // the upload verbatim (mark to 64px, mascot to its 448/896 `srcset` pair,
+    // favicon to its whole icon set). BUNYIP-553: decoding and resizing are CPU
+    // work, and actix never migrates a connection's futures off its arbiter, so
+    // every slot's derivation runs on the blocking pool. A JoinError is logged
+    // and surfaced, never collapsed into "that image was invalid".
+    let derive: fn(Vec<u8>) -> Result<Vec<DerivedAsset>, String> = match slot {
+        BrandingAssetSlot::Favicon => derive_favicons,
+        BrandingAssetSlot::Mark => derive_mark,
+        BrandingAssetSlot::Mascot => derive_mascot,
+    };
+    let files: Vec<DerivedAsset> = match tokio::task::spawn_blocking(move || derive(bytes)).await {
+        Ok(Ok(files)) => files,
+        Ok(Err(message)) => return Err(AppError::validation("asset", message)),
+        Err(e) => {
+            tracing::error!(error = %e, slot = slot.as_str(), "Brand asset derivation task failed to join");
+            return Err(AppError::internal("Could not process that image"));
         }
-        BrandingAssetSlot::Mark => vec![("mark", mime.clone(), bytes)],
-        BrandingAssetSlot::Mascot => vec![("mascot", mime.clone(), bytes)],
     };
 
     let row = BrandingRepository::set_asset(&pool, slot, &files, admin.0.sub).await?;

@@ -1381,11 +1381,17 @@ impl Branding {
         Self::asset_src("mark", &self.mark_version)
     }
 
-    /// The uploaded hero illustration, or `None` to render the committed
-    /// illustration under `assets/` (BUNYIP-605), the same shape the favicon
-    /// set uses.
+    /// The uploaded hero illustration at the 448px box the layout renders, or
+    /// `None` to render the committed illustration under `assets/`
+    /// (BUNYIP-605), the same shape the favicon set uses.
     pub fn mascot_src(&self) -> Option<String> {
         Self::asset_src("mascot", &self.mascot_version)
+    }
+
+    /// BUNYIP-744: the 2x variant of the uploaded hero illustration (896px on
+    /// the long edge), for the `srcset` a 2x device pixel ratio selects.
+    pub fn mascot_src_2x(&self) -> Option<String> {
+        Self::asset_src("mascot-2x", &self.mascot_version)
     }
 
     /// One derived favicon, or `None` when no source has been uploaded (the

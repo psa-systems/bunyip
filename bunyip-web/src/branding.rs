@@ -270,6 +270,7 @@ pub async fn fetch_asset(api: &Api, kind: &str) -> Result<reqwest::Response, Api
 pub const BRAND_ASSET_KINDS: &[&str] = &[
     "mark",
     "mascot",
+    "mascot-2x",
     "favicon-ico",
     "favicon-16",
     "favicon-32",

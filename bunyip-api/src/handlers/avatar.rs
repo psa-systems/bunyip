@@ -25,6 +25,12 @@ use crate::models::UserResponse;
 use crate::repositories::UserRepository;
 use crate::responses::{get_request_id, success};
 
+/// BUNYIP-744: the long edge a stored avatar is bounded to, matching the 512px
+/// canvas `avatar-picker.js` already re-encodes to client-side. Bounding it
+/// server-side too closes the no-JS `<form>` fallback and a direct API POST,
+/// which previously stored the upload verbatim.
+const AVATAR_MAX_EDGE: u32 = 512;
+
 /// Convert a shared-crate validation failure into bunyip's error type.
 ///
 /// The wording is the crate's, which describes the rule and never the bytes;
@@ -32,6 +38,28 @@ use crate::responses::{get_request_id, success};
 fn avatar_err(e: ImageValidationError) -> AppError {
     tracing::warn!(reason = ?e, "Avatar rejected");
     AppError::validation("avatar", e.to_string())
+}
+
+/// Bound `bytes` to `max_edge` on its long edge, re-encoded in its own format
+/// so an animated GIF is not silently flattened into a still PNG. An image
+/// already within bounds is returned unchanged, so a small upload is never
+/// recompressed for no reason.
+fn resize_within(bytes: Vec<u8>, max_edge: u32) -> Result<Vec<u8>, String> {
+    let format = image::guess_format(&bytes)
+        .map_err(|_| "Could not read that file as an image.".to_string())?;
+    let decoded = image::load_from_memory_with_format(&bytes, format)
+        .map_err(|e| format!("Could not read that image: {e}"))?;
+
+    if decoded.width() <= max_edge && decoded.height() <= max_edge {
+        return Ok(bytes);
+    }
+
+    let resized = decoded.resize(max_edge, max_edge, image::imageops::FilterType::Lanczos3);
+    let mut buf = Vec::new();
+    resized
+        .write_to(&mut std::io::Cursor::new(&mut buf), format)
+        .map_err(|e| format!("Could not re-encode that image: {e}"))?;
+    Ok(buf)
 }
 
 /// POST /v1/users/me/avatar (multipart, field name `avatar`).
@@ -89,6 +117,19 @@ pub async fn upload_avatar(
     let bytes = avatar_bytes.ok_or_else(|| avatar_err(ImageValidationError::Empty))?;
     let mime = validate_image(&bytes, &policy).map_err(avatar_err)?;
 
+    // BUNYIP-744: decoding and resizing are CPU work, and actix never migrates
+    // a connection's futures off its arbiter (BUNYIP-553), so this runs on the
+    // blocking pool exactly like the branding-asset derivations.
+    let bytes =
+        match tokio::task::spawn_blocking(move || resize_within(bytes, AVATAR_MAX_EDGE)).await {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(message)) => return Err(AppError::validation("avatar", message)),
+            Err(e) => {
+                tracing::error!(error = %e, "Avatar resize task failed to join");
+                return Err(AppError::internal("Could not process that image"));
+            }
+        };
+
     let updated = UserRepository::set_avatar(&pool, user.0.sub, &mime, &bytes).await?;
     tracing::info!(user_id = %user.0.sub, mime = %mime, size = bytes.len(), "Avatar updated");
 
@@ -131,6 +172,7 @@ pub async fn get_avatar(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::ImageEncoder;
 
     #[test]
     fn validation_failures_are_field_scoped_and_carry_the_rule() {
@@ -154,5 +196,41 @@ mod tests {
         // ever exceeded it, a valid upload would pass validation and then fail
         // on insert with a database error instead of a useful message.
         assert_eq!(ImagePolicy::avatar().max_bytes, 2 * 1024 * 1024);
+    }
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let img = image::RgbaImage::new(width, height);
+        let mut buf = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut buf)
+            .write_image(img.as_raw(), width, height, image::ExtendedColorType::Rgba8)
+            .expect("encode the fixture");
+        buf
+    }
+
+    /// BUNYIP-744: the no-JS `<form>` fallback and a direct API POST reach this
+    /// function with nothing else standing between them and storage, so it is
+    /// the whole guarantee that an avatar never stores larger than 512px.
+    #[test]
+    fn an_oversized_avatar_is_resized_to_the_long_edge() {
+        let resized = resize_within(png(1024, 768), AVATAR_MAX_EDGE).expect("resizes");
+        let decoded = image::load_from_memory(&resized).expect("still a readable image");
+        assert_eq!(decoded.width(), AVATAR_MAX_EDGE);
+        assert!(decoded.height() < AVATAR_MAX_EDGE, "aspect ratio kept");
+    }
+
+    /// An upload already within bounds is stored byte-for-byte: recompressing
+    /// it would only cost quality for no size benefit.
+    #[test]
+    fn an_in_bounds_avatar_is_left_untouched() {
+        let original = png(256, 256);
+        let result = resize_within(original.clone(), AVATAR_MAX_EDGE).expect("no resize needed");
+        assert_eq!(result, original);
+    }
+
+    #[test]
+    fn a_non_image_upload_fails_with_a_renderable_reason() {
+        let err =
+            resize_within(b"not an image".to_vec(), AVATAR_MAX_EDGE).expect_err("not decodable");
+        assert!(err.contains("image"), "{err}");
     }
 }
