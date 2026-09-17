@@ -157,7 +157,18 @@ pub async fn mint_grant_token(
     req: HttpRequest,
     pool: web::Data<PgPool>,
     tier_config: web::Data<Arc<RwLock<TierConfig>>>,
-    provider: web::Data<Arc<OidcProvider>>,
+    // The OIDC provider is registered as `web::Data::new(oidc_provider.clone())`
+    // in `main.rs`, where `oidc_provider` has type `Option<Arc<OidcProvider>>`
+    // (None when OIDC_ISSUER is unset), so the actix `Data` extractor's
+    // TypeId keys on `Option<Arc<OidcProvider>>` and the plain
+    // `web::Data<Arc<OidcProvider>>` shape used by an earlier revision
+    // 500'd with "Requested application data is not configured
+    // correctly" - the same actix diagnostic BUNYIP-oidc's authorize
+    // handler comment names. Every other handler that consumes the
+    // provider (see `admin.rs`, `auth.rs`, `user.rs`) extracts as
+    // `Option<Arc<OidcProvider>>` and dereferences with `as_ref().as_ref()`;
+    // this endpoint does the same and 404s when OIDC is not configured.
+    provider: web::Data<Option<Arc<OidcProvider>>>,
     path: web::Path<Uuid>,
     body: web::Json<MintGrantTokenRequest>,
 ) -> Result<HttpResponse, AppError> {
@@ -166,6 +177,14 @@ pub async fn mint_grant_token(
     if !flag {
         return Err(AppError::not_found("Mokosh grant"));
     }
+    // When bunyip runs without OIDC configured there is no provider to
+    // mint a grant token from. Match the invisibility rule the flag
+    // uses: a 404 rather than a 503 reveals nothing about what would
+    // be enabled next.
+    let provider = provider
+        .as_ref()
+        .as_ref()
+        .ok_or_else(|| AppError::not_found("Mokosh grant"))?;
 
     // Audience-permissive authentication (BUNYIP-673 correction).
     // Callers of this endpoint hold a mokosh-audience at+jwt (they
