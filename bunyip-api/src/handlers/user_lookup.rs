@@ -53,6 +53,18 @@ pub struct UserLookupQuery {
 pub struct UserLookupResponse {
     pub user_id: String,
     pub email: String,
+    /// PMS-1208 finding 7: whether this bunyip identity has verified
+    /// their email address. Mokosh's grant-invitation flow reads this
+    /// so the owner is told at invite-create time when the invitee is
+    /// registered on bunyip but not yet verified. The mokosh middleware
+    /// refuses to JIT-provision an unverified grantee into someone
+    /// else's tenant (deliberate: placeholder path exists only for
+    /// first-sight owners bunyip is in the middle of verifying), so
+    /// without this field the owner sends an invitation, the grantee
+    /// accepts, and the switch fails at placement with a generic 403.
+    /// Surfacing it here lets that refusal land where the owner can
+    /// act on it.
+    pub email_verified: bool,
 }
 
 async fn auth_failures_at_cap(pool: &PgPool, ip_key: &str) -> Result<bool, AppError> {
@@ -174,6 +186,7 @@ pub async fn user_lookup(
         UserLookupResponse {
             user_id: user.id.to_string(),
             email: user.email,
+            email_verified: user.email_verified,
         },
         request_id,
     ))
