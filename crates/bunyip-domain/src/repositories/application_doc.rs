@@ -26,6 +26,8 @@ pub struct ApplicationDocRepository;
 impl ApplicationDocRepository {
     /// Public: doc-page metadata for an app identified by its slug, ordered for
     /// display. Bodies are omitted; use [`get_by_app_and_slug`] for a page.
+    /// Filters `is_active = TRUE` (BUNYIP-765) so a deactivated application's
+    /// pages drop out here too, matching [`list_documented_apps`].
     pub async fn list_by_app_slug(
         pool: &PgPool,
         app_slug: &str,
@@ -35,7 +37,7 @@ impl ApplicationDocRepository {
             SELECT d.slug, d.title, d.sort_order
             FROM application_docs d
             JOIN applications a ON a.id = d.application_id
-            WHERE a.slug = $1
+            WHERE a.slug = $1 AND a.is_active = TRUE
             ORDER BY d.sort_order ASC, d.title ASC
             "#,
         )
@@ -45,7 +47,9 @@ impl ApplicationDocRepository {
         Ok(rows)
     }
 
-    /// Public: one doc page by app slug + doc slug.
+    /// Public: one doc page by app slug + doc slug. Filters `is_active = TRUE`
+    /// (BUNYIP-765) so a deactivated application's page 404s here too, matching
+    /// [`list_documented_apps`].
     pub async fn get_by_app_and_slug(
         pool: &PgPool,
         app_slug: &str,
@@ -56,7 +60,7 @@ impl ApplicationDocRepository {
             SELECT d.*
             FROM application_docs d
             JOIN applications a ON a.id = d.application_id
-            WHERE a.slug = $1 AND d.slug = $2
+            WHERE a.slug = $1 AND d.slug = $2 AND a.is_active = TRUE
             "#,
         )
         .bind(app_slug)
@@ -197,6 +201,38 @@ mod tests {
         assert!(
             DOCUMENTED_APPS_SQL.contains("JOIN application_docs"),
             "the list is derived from published pages, never from the catalog"
+        );
+    }
+
+    /// BUNYIP-765: `list_by_app_slug` and `get_by_app_and_slug` are the two
+    /// public per-app doc queries that once lacked the active filter
+    /// `list_documented_apps` already carried, so a deactivated application's
+    /// docs stayed reachable through the `/applications/{slug}/docs*` routes.
+    /// Scans the source rather than hitting a database: the fix is a predicate
+    /// in a SQL literal, and this pins its presence for both queries.
+    #[test]
+    fn public_per_app_doc_queries_filter_active_applications() {
+        let src = include_str!("application_doc.rs");
+        let src = src.split("\n#[cfg(test)]").next().unwrap();
+
+        let list_fn = src
+            .split("pub async fn list_by_app_slug")
+            .nth(1)
+            .expect("list_by_app_slug present");
+        let list_sql = list_fn.split("fetch_all").next().unwrap();
+        assert!(
+            list_sql.contains("a.is_active = TRUE"),
+            "list_by_app_slug must filter is_active = TRUE"
+        );
+
+        let get_fn = src
+            .split("pub async fn get_by_app_and_slug")
+            .nth(1)
+            .expect("get_by_app_and_slug present");
+        let get_sql = get_fn.split("fetch_optional").next().unwrap();
+        assert!(
+            get_sql.contains("a.is_active = TRUE"),
+            "get_by_app_and_slug must filter is_active = TRUE"
         );
     }
 }
