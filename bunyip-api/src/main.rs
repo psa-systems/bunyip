@@ -572,6 +572,11 @@ async fn main() -> anyhow::Result<()> {
     // store is handed to the feedback-webhook handler below, so the read on the
     // send path and the write on the bounce/complaint path share one list.
     let suppression: Arc<dyn SuppressionList> = Arc::new(DbSuppressionList::new(pool.clone()));
+    // BUNYIP-762: the same list the relay's own pre-check reads is attached to
+    // EmailService's shared send choke point, so every OTHER send path (magic
+    // links, password resets, receipts, ...) is guarded too, not only the
+    // mailer relay.
+    email_service.set_suppression_list(Arc::clone(&suppression));
     let mailer_relay = Arc::new(MailerRelay::new(
         Arc::clone(&email_service),
         Arc::clone(&suppression),
