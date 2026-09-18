@@ -352,6 +352,7 @@ pub struct CreateApplication {
     /// Whether this is a hosted app (hub launch tile) or a catalog-only
     /// distribution product. Defaults to hosted (the DB column default).
     pub is_hosted: Option<bool>,
+    pub maintenance_message: Option<String>,
     // Distribution config (all optional): Forgejo download coordinates and/or
     // OCI image coordinates, so a product can be fully created in one call.
     pub forgejo_owner: Option<String>,
