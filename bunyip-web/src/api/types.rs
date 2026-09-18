@@ -335,6 +335,13 @@ pub struct CheckoutSessionResponse {
     pub session_id: String,
 }
 
+/// `POST /v1/memberships/billing-portal` (BUNYIP-760): the Stripe-hosted
+/// billing-portal session URL for the member's own customer record.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BillingPortalResponse {
+    pub url: String,
+}
+
 /// `GET /v1/memberships/payments`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StripePaymentResponse {
@@ -871,6 +878,23 @@ pub struct AdminIpBan {
     pub banned_at: String,
     #[serde(default)]
     pub expires_at: String,
+}
+
+/// One admin invite as returned by `GET /v1/admin/invites` (BUNYIP-760).
+/// Mirrors `bunyip_domain::models::token::AdminInvite`; `token_hash` is never
+/// serialized by the API, so it is not carried here.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminInvite {
+    pub id: String,
+    pub email: String,
+    pub invited_by: String,
+    pub role: String,
+    pub expires_at: String,
+    #[serde(default)]
+    pub accepted_at: Option<String>,
+    #[serde(default)]
+    pub revoked_at: Option<String>,
+    pub created_at: String,
 }
 
 /// Advisory ASN / VPN enrichment for one address as returned by

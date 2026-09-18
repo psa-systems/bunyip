@@ -4,14 +4,14 @@ use serde_json::{json, Value};
 
 use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeedbackDetail,
-    AdminFeedbackSummary, AdminIpBan, AdminRateLimit, AdminRateLimitConfig, AdminStatsResponse,
-    AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList, ArchivedFeedback,
-    AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary,
-    IntegrationStatus, IntegrationStatusResponse, IpEnrichment, PaginatedResponse, PricingStatus,
-    ProviderStatusAggregateResponse, RestoreReport, SeedTemplateInfo, SmtpTestResult,
-    StripeConfigResponse, StripePermissionReport, StripePrice, StripeProduct,
-    StripeWebhookEndpoint, SystemHealth, SystemHealthResponse, TestEmailResult, TierConfigResponse,
-    UserEntitlement,
+    AdminFeedbackSummary, AdminInvite, AdminIpBan, AdminRateLimit, AdminRateLimitConfig,
+    AdminStatsResponse, AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList,
+    ArchivedFeedback, AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse,
+    FeedbackStatus, ImportSummary, IntegrationStatus, IntegrationStatusResponse, IpEnrichment,
+    PaginatedResponse, PricingStatus, ProviderStatusAggregateResponse, RestoreReport,
+    SeedTemplateInfo, SmtpTestResult, StripeConfigResponse, StripePermissionReport, StripePrice,
+    StripeProduct, StripeWebhookEndpoint, SystemHealth, SystemHealthResponse, TestEmailResult,
+    TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -631,6 +631,53 @@ pub async fn create_ip_ban(
 pub async fn unban_ip(api: &Api, cookie: Option<&str>, ip: &str) -> Result<(), ApiError> {
     let r = api
         .delete(&format!("/admin/ip-bans/{}", urlenc(ip)), cookie, None)
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+// --- admin invites (BUNYIP-760) ---------------------------------------------
+
+/// List pending/past admin invites. Wraps `GET /v1/admin/invites`, paginated.
+pub async fn admin_invites(
+    api: &Api,
+    cookie: Option<&str>,
+    page: u32,
+    per_page: u32,
+) -> Result<PaginatedResponse<AdminInvite>, ApiError> {
+    parse(
+        api.get(
+            &format!("/admin/invites?page={page}&per_page={per_page}"),
+            cookie,
+        )
+        .await?,
+    )
+}
+
+/// Invite `email` as an admin. Wraps `POST /v1/admin/invites`, which emails the
+/// invite link and revokes any prior pending invite for the same address.
+pub async fn create_admin_invite(
+    api: &Api,
+    cookie: Option<&str>,
+    email: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post("/admin/invites", cookie, Some(json!({ "email": email })))
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// Revoke a pending admin invite. Wraps `DELETE /v1/admin/invites/{invite_id}`.
+pub async fn revoke_admin_invite(
+    api: &Api,
+    cookie: Option<&str>,
+    invite_id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .delete(
+            &format!("/admin/invites/{}", urlenc(invite_id)),
+            cookie,
+            None,
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }
