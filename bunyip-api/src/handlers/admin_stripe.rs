@@ -248,11 +248,6 @@ pub struct UpdateStripeProductRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ListStripePricesQuery {
-    pub product_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct CreateStripePriceRequest {
     pub product_id: String,
     pub unit_amount: i64,
@@ -497,11 +492,10 @@ pub async fn list_stripe_prices(
     _admin: AdminUser,
     stripe: web::Data<Arc<StripeService>>,
     pool: web::Data<PgPool>,
-    query: web::Query<ListStripePricesQuery>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let prices = stripe
-        .list_prices(query.product_id.as_deref())
+        .list_prices(None)
         .await
         .map_err(stripe_err_for(StripePermission::Prices))?;
     let tier = TierConfigRepository::get(&pool).await?;

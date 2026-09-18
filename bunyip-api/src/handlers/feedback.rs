@@ -546,11 +546,6 @@ pub async fn submit_feedback(
 pub struct ListFeedbackQuery {
     pub page: Option<i32>,
     pub per_page: Option<i32>,
-    /// Legacy single-status filter kept for compatibility; ignored when
-    /// `bucket` is set. New callers should use `bucket` instead so
-    /// is_spam filtering and "everything except closed" are reachable
-    /// in one parameter.
-    pub status: Option<String>,
     /// BUNYIP-92: tab-aware filtering. Accepts `active` / `closed` /
     /// `spam`. The repository layer maps each value to a static SQL
     /// predicate; unknown values produce an unfiltered list (preserves
@@ -569,11 +564,6 @@ pub async fn list_feedback(
     let request_id = get_request_id(&req);
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).min(100);
-
-    if let Some(status) = query.status.as_deref() {
-        FeedbackStatus::from_str(status)
-            .map_err(|_| AppError::validation("status", "Invalid feedback status"))?;
-    }
 
     // Validate the bucket value against the known set so we can hand it
     // straight through to the repository; an unknown value here would
