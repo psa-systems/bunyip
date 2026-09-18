@@ -431,11 +431,13 @@ Every variable below has a working default; set it only to tune the deployment.
 ## Secret files and compose coverage
 
 The reference `compose.yml` passes every required secret as a `{NAME}_FILE` secret, so `just init-secrets` followed by
-`docker compose up` boots on `ENVIRONMENT=production` with no manual step. `SECRETS_STORAGE` is the one required
-variable it passes with **no default** (`${SECRETS_STORAGE:?...}`), so `docker compose up` aborts until the deployment
-states where its integration secrets live. `compose.dev.yml` and `compose.dev-sso.yml` default it to `database`, which
-is what dev has always used, so `just dev` is unchanged. The secret files, their "empty allowed" status and the rotation
-procedure are in [`secrets-infisical.md`](secrets-infisical.md).
+`docker compose up` boots on `ENVIRONMENT=production` with no manual step. `SECRETS_STORAGE`, `OIDC_JWT_PRIVATE_KEY_PATH`,
+`OIDC_JWT_ACTIVE_KID`, `APP_URL` and `BUNYIP_WEB_ORIGIN` are the non-secret variables it passes with **no default**
+(`${VAR:?...}`, BUNYIP-749 for the latter two), so `docker compose up` aborts until the deployment states where its
+integration secrets live, which key signs its OIDC tokens, and what its own public web origin is. `compose.dev.yml` and
+`compose.dev-sso.yml` default `SECRETS_STORAGE` to `database` (what dev has always used) and `APP_URL` /
+`BUNYIP_WEB_ORIGIN` to `http://localhost:4400`, so `just dev` is unchanged. The secret files, their "empty allowed"
+status and the rotation procedure are in [`secrets-infisical.md`](secrets-infisical.md).
 
 The feature-gating variables are deliberately NOT all passed by `compose.yml`: a self-host with no Forgejo, no GeoIP
 data, no Infisical and no RPs is a supported deployment. Each one it omits produces the single boot warning above, which
@@ -451,9 +453,7 @@ this repository.
 | Variable                                                                               | Consequence of the gap                                                                       |
 |----------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
 | `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD` | deliberate: governed secrets, read only as `{NAME}_FILE` under `SECRETS_STORAGE=environment` |
-| `APP_URL`                                                                              | the base URL for email links and the EHLO fallback silently comes from `CORS_ORIGIN`         |
 | `INFISICAL_*` (7)                                                                      | the `infisical` provider cannot be selected or inspected                                     |
-| `BUNYIP_WEB_ORIGIN`                                                                    | a multi-RP deployment cannot pin the login-UI origin                                         |
 | `BUNYIP_COOKIE_SHARED_DOMAIN`                                                          | the cross-subdomain OP session cookie cannot be enabled                                      |
 | `MOKOSH_APPS_*`, `DRILLMARK_*`, `LETS_CHAT_*`                                          | those OIDC clients keep whatever the migrations seeded; no reconciliation runs               |
 | `MOKOSH_WEBHOOK_URL`, `MOKOSH_BACKUP_API_URL`                                          | the `applications.webhook_url` upsert never runs; Backup stays a stub                        |

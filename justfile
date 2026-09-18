@@ -58,7 +58,7 @@ default:
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-justfile check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-theme-colors check-em-dash check-system-level-keys check-cache-mounts check-cache-keys check-publish-triggers check-build check-clippy check-fmt check-docker
+check: check-justfile check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-theme-colors check-em-dash check-system-level-keys check-cache-mounts check-cache-keys check-publish-triggers check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -109,6 +109,14 @@ check-key-env:
 check-env-parity:
     ./scripts/check-env-parity.nu --self-test
     ./scripts/check-env-parity.nu
+
+# Gate that every compose file running bunyip-api sets APP_URL and
+# BUNYIP_WEB_ORIGIN explicitly, instead of silently falling back to
+# CORS_ORIGIN's first entry (BUNYIP-749).
+[group: 'checks']
+check-compose-env-parity:
+    ./scripts/check-compose-env-parity.nu --self-test
+    ./scripts/check-compose-env-parity.nu
 
 # Gate that Argon2 never runs on an actix worker: every hash and verify goes
 # through services::argon2_offload (BUNYIP-553).

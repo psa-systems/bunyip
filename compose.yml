@@ -221,10 +221,16 @@ services:
 
       # ══ Security: browser origin + cookies ════════════════════════════════
       # Set to the public bunyip-web origin for any real deployment. BUNYIP-423:
-      # the same comma-separated list is the CSRF allow-list. It is also the
-      # fallback source for the app's own base URL (used in email links and as
-      # the EHLO fallback) because APP_URL is not passed through here.
+      # the same comma-separated list is the CSRF allow-list.
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4400}
+      # BUNYIP-749: the app's own public base URL (email links, EHLO fallback)
+      # and the bunyip-web login UI origin (the OIDC authorize handler's bounce
+      # target). Both used to be left unset here, so they silently fell back to
+      # CORS_ORIGIN's first entry - fine for a single-RP dev box, wrong for a
+      # shipped deployment. Required, no default: an unset value must fail
+      # `docker compose up` loudly rather than resolve to the wrong origin.
+      APP_URL: ${APP_URL:?APP_URL must be set to the public bunyip-web origin (e.g. https://bunyip.example.com) - no default (BUNYIP-749, see docs/configuration.md)}
+      BUNYIP_WEB_ORIGIN: ${BUNYIP_WEB_ORIGIN:?BUNYIP_WEB_ORIGIN must be set to the public bunyip-web origin (e.g. https://bunyip.example.com) - no default (BUNYIP-749, see docs/configuration.md)}
       COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
 
       # ══ Security: first-admin bootstrap ═══════════════════════════════════
@@ -260,10 +266,9 @@ services:
       SMTP_USERNAME: ${SMTP_USERNAME:-}
       # EHLO/HELO name announced to the relay, resolved when the SMTP transport
       # is built (after the DB row is merged), never the container id
-      # (BUNYIP-507). Unset falls back to the host of APP_URL - which this file
-      # does not pass, so in practice the host of CORS_ORIGIN - then the domain
-      # of the RESOLVED from-address (email_config.from_email when set, else
-      # SMTP_FROM), then lettre's default.
+      # (BUNYIP-507). Unset falls back to the host of APP_URL (set above), then
+      # the domain of the RESOLVED from-address (email_config.from_email when
+      # set, else SMTP_FROM), then lettre's default.
       SMTP_EHLO_NAME: ${SMTP_EHLO_NAME:-}
       SMTP_FROM: ${SMTP_FROM:-}
       ADMIN_NOTIFICATION_EMAILS: ${ADMIN_NOTIFICATION_EMAILS:-}
