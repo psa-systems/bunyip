@@ -55,15 +55,15 @@ test.describe('magic-link login', () => {
       const token = tokenFromLink(link);
 
       // Verify on the follower context (no prior session): a 200 from
-      // memberships afterwards means the magic link alone established a session.
+      // users/me afterwards means the magic link alone established a session.
       const verified = await follower.post(routes.authMagicLinkVerify, { data: { token } });
       expect(
         verified.ok(),
         `POST ${routes.authMagicLinkVerify} -> ${verified.status()}: ${await verified.text()}`,
       ).toBeTruthy();
 
-      const me = await follower.get(routes.memberships);
-      expect(me.status(), 'magic-link session should read memberships').toBe(200);
+      const me = await follower.get(routes.userMe);
+      expect(me.status(), 'magic-link session should read users/me').toBe(200);
     } finally {
       // `owner` still holds the register session; purge with the disposable
       // account password (BUNYIP-246).
