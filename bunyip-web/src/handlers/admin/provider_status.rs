@@ -240,8 +240,10 @@ mod tests {
                         serving: Some("environment".to_string()),
                         enabled: vec![],
                         keys: vec![],
+                        enumeration: None,
                     }],
                     collected_at: None,
+                    ..Default::default()
                 },
             },
         }
