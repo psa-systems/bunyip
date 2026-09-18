@@ -152,13 +152,9 @@ pub struct User {
     #[serde(default)]
     pub price_locked: bool,
     #[serde(default)]
-    pub locked_price_id: Option<String>,
-    #[serde(default)]
     pub locked_price_amount: Option<i64>,
     #[serde(default)]
     pub created_at: String,
-    #[serde(default)]
-    pub updated_at: String,
     /// v0.13.0 renamed `subscription_tier` to `membership_tier`. The alias
     /// parses a not-yet-restarted API during a rolling deploy; drop it in
     /// v0.15.0 (the contract half of the expand/contract rename).
