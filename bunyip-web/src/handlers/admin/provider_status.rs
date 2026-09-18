@@ -240,8 +240,9 @@ mod tests {
                         serving: Some("environment".to_string()),
                         enabled: vec![],
                         keys: vec![],
+                        ..Default::default()
                     }],
-                    collected_at: None,
+                    ..Default::default()
                 },
             },
         }

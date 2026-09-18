@@ -915,6 +915,7 @@ version = "0.15.1"
 dependencies = [
  "axum",
  "base64 0.21.7",
+ "bunyip-domain",
  "chrono",
  "ipnetwork",
  "maud",
