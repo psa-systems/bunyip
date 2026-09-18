@@ -20,9 +20,9 @@
 // The script polls <op>/v1/version every 15s for up to 10 minutes and
 // compares the reported `commit` (the SHORT git hash baked from the
 // GIT_COMMIT build arg, `git rev-parse --short HEAD`) against the resolved
-// expected SHA via GITHUB_SHA.startsWith(commit). We use /v1/version, NOT
-// the root /version: /version's `.revision` reads BUNYIP_GIT_SHA, which the
-// Dockerfile never sets, so it is always empty.
+// expected SHA via GITHUB_SHA.startsWith(commit). The root /version reports
+// the same GIT_COMMIT value under `.revision` (BUNYIP-752); /v1/version is
+// used here only because it was already the established gate.
 //
 // On bunyip the OIDC OP and the `/v1/*` JSON API share one host (api.<tld>).
 // Prefer an explicit E2E_OP_BASE_URL; otherwise prepend `api.` to
