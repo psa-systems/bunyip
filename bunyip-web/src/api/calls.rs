@@ -114,9 +114,6 @@ pub async fn checkout(
 }
 
 /// These mutate JWT claims, so relay any rotated cookies.
-pub async fn subscribe(api: &Api, cookie: Option<&str>) -> Result<Vec<String>, ApiError> {
-    membership_action(api, cookie, "/memberships/subscribe").await
-}
 pub async fn cancel(api: &Api, cookie: Option<&str>) -> Result<Vec<String>, ApiError> {
     membership_action(api, cookie, "/memberships/cancel").await
 }
