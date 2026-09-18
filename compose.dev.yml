@@ -71,6 +71,11 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       APP_NAME: ${APP_NAME:-PSA Systems}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4400}
+      # BUNYIP-749: explicit rather than left to fall back to CORS_ORIGIN's
+      # first entry, matching compose.yml. Plain `just dev` serves bunyip-web
+      # at localhost:4400, the same default CORS_ORIGIN already uses.
+      APP_URL: ${APP_URL:-http://localhost:4400}
+      BUNYIP_WEB_ORIGIN: ${BUNYIP_WEB_ORIGIN:-http://localhost:4400}
       COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
       # BUNYIP-409: trust bunyip-web (and Traefik on dev-sso) on the internal
       # Docker network so a forwarded X-Forwarded-For surfaces the end-user IP on

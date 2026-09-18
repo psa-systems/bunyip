@@ -162,6 +162,17 @@ jobs:
           ./scripts/check-env-parity.nu --self-test
           ./scripts/check-env-parity.nu
 
+      - name: Check compose files stay in web-origin parity
+        # Every compose file that runs bunyip-api must set APP_URL and
+        # BUNYIP_WEB_ORIGIN explicitly to that stage's real web origin, or the
+        # OIDC login bounce and every transactional-email link silently
+        # resolve to CORS_ORIGIN's first entry instead (BUNYIP-749).
+        # --self-test first, so a gate that stopped detecting anything fails
+        # the build instead of passing vacuously.
+        run: |
+          ./scripts/check-compose-env-parity.nu --self-test
+          ./scripts/check-compose-env-parity.nu
+
       - name: Check Argon2 stays off the actix workers
         # Every hash and verify goes through services::argon2_offload, so a
         # ~100 ms Argon2 never blocks a worker arbiter (BUNYIP-553). A direct
