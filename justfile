@@ -245,7 +245,8 @@ check-fmt:
 check-docker:
     docker build --file bunyip-api/oci-build/Dockerfile --target builder --output type=cacheonly --provenance=false .
 
-# Run fmt + clippy + workspace lib tests inside the pinned rust-builder image.
+# Run fmt + clippy + workspace tests (--all-targets: unit, integration, and
+# doc tests) inside the pinned rust-builder image.
 # For dev boxes with no local Rust toolchain; named volumes keep repeat runs incremental.
 # The build cache is mounted OUTSIDE /work and reached through CARGO_TARGET_DIR
 # (what common's pre-commit-docker does): a volume nested under the bind mount
