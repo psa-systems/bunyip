@@ -27,9 +27,23 @@ docker compose up --detach
 
 `BUNYIP_API_IMAGE` and `BUNYIP_WEB_IMAGE` are **required** (BUNYIP-237): Compose refuses to start without them. Pin both to the same release tag, e.g. `dev.a8n.run/psa-systems-private/bunyip-api:v0.4.1`, so a rolling restart never serves two different builds.
 
+`compose.yml` has eight `${VAR:?...}` variables with no default; Compose refuses to start until every one is set, and the `:?` message names which is missing, so this list is a preview rather than the authoritative source (that source is `compose.yml` itself): `BUNYIP_API_IMAGE`, `BUNYIP_WEB_IMAGE`, `SECRETS_STORAGE`, `APP_URL`, `BUNYIP_WEB_ORIGIN`, `OIDC_JWT_PRIVATE_KEY_PATH`, `OIDC_JWT_ACTIVE_KID`, `BUNYIP_API_PUBLIC_ORIGIN`. See [configuration.md](configuration.md) for what each controls.
+
 Group-1 startup secrets (postgres, `DATABASE_URL`, `APP_ENCRYPTION_KEY`, `JWT_SECRET`, ...) are files, never environment variables: `compose.yml` mounts each from `./secrets/<name>` at `/run/secrets/<name>` and the api reads it through the `{NAME}_FILE` convention, so `docker inspect` never shows a value. `just init-secrets` ([`scripts/init-secrets.nu`](../scripts/init-secrets.nu)) generates them locally, which is right for a self-host that keeps its own values; the PSA deployments supply the same files from the SOPS `compose-secrets.yml`. Group-2 integration secrets (the SMTP password, the two Stripe secrets and the support IMAP password) come from the ONE store the deployment declares in `SECRETS_STORAGE=environment|database|infisical`, and only from that store. Full detail: [secrets-infisical.md](secrets-infisical.md).
 
 `bunyip-api` and `bunyip-web` are released as a **matched pair**: both carry the same workspace version and are promoted together. Since BUNYIP-506 the response models tolerate one release of skew (an unknown field or enum value degrades to a neutral render instead of failing the decode), which is what makes a rolling restart safe; two or more releases apart is not supported. Bump both image tags to the same release in the same operator action.
+
+### Production OIDC signing keypair
+
+`just init-secrets` generates only a dev/test keypair (`dev-2026`, see `.env.example`); it is never a production key. `OIDC_JWT_PRIVATE_KEY_PATH` and `OIDC_JWT_ACTIVE_KID` have no default in `compose.yml` and the api panics at boot when `ENVIRONMENT=production` and the active kid starts with `dev-` (BUNYIP-258), so production needs its own kid-named keypair generated out-of-band:
+
+```nu
+openssl genpkey -algorithm ed25519 -out secrets/oidc/prod-2026.pem
+openssl pkey -in secrets/oidc/prod-2026.pem -pubout -out secrets/oidc/prod-2026.pub.pem
+chmod 600 secrets/oidc/prod-2026.pem secrets/oidc/prod-2026.pub.pem
+```
+
+Drop the pair into `./secrets/oidc/` (mounted into the api container at `/run/secrets/oidc`, or supplied by the same SOPS `compose-secrets.yml` mechanism as the other Group-1 secrets, which treats `./secrets/oidc/*.pem` as out of scope since these keys are generated out of band). Then set `OIDC_JWT_PRIVATE_KEY_PATH=/run/secrets/oidc/prod-2026.pem` and `OIDC_JWT_ACTIVE_KID=prod-2026` in `.env` so the kid names the file. Rotating the key means generating a new `prod-<year>` pair, dropping its public key alongside the current one under `OIDC_JWT_PUBLIC_KEYS_DIR` during the overlap window, then switching `OIDC_JWT_ACTIVE_KID` to the new kid.
 
 ## Update checking
 
