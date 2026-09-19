@@ -208,6 +208,20 @@ services:
       # runbook: docs/secrets-infisical.md.
       SECRETS_STORAGE: ${SECRETS_STORAGE:?SECRETS_STORAGE must be set to environment, database or infisical - no default (BUNYIP-542, see docs/configuration.md)}
 
+      # ══ Security: Infisical provider (SECRETS_STORAGE=infisical) ══════════
+      # Inert with the default SECRETS_STORAGE, but INFISICAL_ENABLED also lets
+      # `bunyip-api secrets-status` inspect readiness ahead of a switch
+      # (BUNYIP-525, BUNYIP-542). INFISICAL_CLIENT_ID / _CLIENT_SECRET honour
+      # the {NAME}_FILE convention (see docs/secrets-infisical.md), so either
+      # set them here directly or point *_FILE at a Group-1 secret file.
+      INFISICAL_ENABLED: ${INFISICAL_ENABLED:-false}
+      INFISICAL_ADDRESS: ${INFISICAL_ADDRESS:-}
+      INFISICAL_PROJECT_ID: ${INFISICAL_PROJECT_ID:-}
+      INFISICAL_ENVIRONMENT: ${INFISICAL_ENVIRONMENT:-}
+      INFISICAL_SECRET_PATH: ${INFISICAL_SECRET_PATH:-/runtime}
+      INFISICAL_CLIENT_ID: ${INFISICAL_CLIENT_ID:-}
+      INFISICAL_CLIENT_SECRET: ${INFISICAL_CLIENT_SECRET:-}
+
       # ══ Security: at-rest + signing key material ══════════════════════════
       JWT_SECRET_FILE: /run/secrets/jwt_secret
       # BUNYIP-332: signs outbound webhook dispatches. Required in production.
@@ -271,6 +285,13 @@ services:
       # set, else SMTP_FROM), then lettre's default.
       SMTP_EHLO_NAME: ${SMTP_EHLO_NAME:-}
       SMTP_FROM: ${SMTP_FROM:-}
+      # Reply-To for all system mail: the monitored support inbox inbound
+      # replies are ingested from (BUNYIP-571). Unset emits no Reply-To (see
+      # SMTP_FROM above). The inbound IMAP poller itself (host/username/etc)
+      # is admin-editable via the email_config DB row; only the address and
+      # the poll interval below have no such row and so must be set here.
+      SUPPORT_INBOX_EMAIL: ${SUPPORT_INBOX_EMAIL:-}
+      SUPPORT_IMAP_POLL_SECS: ${SUPPORT_IMAP_POLL_SECS:-60}
       ADMIN_NOTIFICATION_EMAILS: ${ADMIN_NOTIFICATION_EMAILS:-}
       # BUNYIP-603: verifies the mailer bounce/complaint feedback webhook's
       # X-Webhook-Signature. An empty secret file fails the endpoint closed

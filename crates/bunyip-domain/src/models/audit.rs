@@ -202,6 +202,10 @@ pub enum AuditAction {
     /// [`AuditAction::AdminIpBanLifted`]. Metadata carries the target `ip`, the
     /// operator `reason` and the ban `expires_at`.
     AdminIpBanCreated,
+    /// Admin removed an address from the shared mailer suppression list
+    /// (BUNYIP-762), so it can be mailed again. Metadata carries the target
+    /// `address`.
+    AdminMailerSuppressionDeleted,
 }
 
 impl AuditAction {
@@ -308,6 +312,7 @@ impl AuditAction {
             AuditAction::AdminRateLimitConfigUpdated => "admin_rate_limit_config_updated",
             AuditAction::AdminRateLimitConfigDeleted => "admin_rate_limit_config_deleted",
             AuditAction::AdminIpBanCreated => "admin_ip_ban_created",
+            AuditAction::AdminMailerSuppressionDeleted => "admin_mailer_suppression_deleted",
         }
     }
 
@@ -363,6 +368,7 @@ impl AuditAction {
                 | AuditAction::AdminRateLimitConfigUpdated
                 | AuditAction::AdminRateLimitConfigDeleted
                 | AuditAction::AdminIpBanCreated
+                | AuditAction::AdminMailerSuppressionDeleted
         )
     }
 }
