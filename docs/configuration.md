@@ -170,8 +170,8 @@ takes effect on the next restart, because the boot read is the only reader.
 anything:
 
 ```nu
-docker exec bunyip-postgres psql --username postgres --dbname bunyip --command "select (secret_key is not null) as has_secret_key, (webhook_secret is not null) as has_webhook_secret, key_version, updated_at from stripe_config"
-docker exec bunyip-postgres psql --username postgres --dbname bunyip --command "select smtp_host, smtp_username, (smtp_password is not null) as has_password, key_version, updated_at from email_config"
+docker exec bunyip-postgres psql --username bunyip --dbname bunyip --command "select (secret_key is not null) as has_secret_key, (webhook_secret is not null) as has_webhook_secret, key_version, updated_at from stripe_config"
+docker exec bunyip-postgres psql --username bunyip --dbname bunyip --command "select smtp_host, smtp_username, (smtp_password is not null) as has_password, key_version, updated_at from email_config"
 docker exec bunyip-api env | lines | where {|l| $l =~ '^(SECRETS_STORAGE|SMTP_PASSWORD)' }
 ```
 
