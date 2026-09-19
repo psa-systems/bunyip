@@ -174,9 +174,10 @@ under Integrations captures the account's Mokosh tenant data), set
 bunyip mints nothing and the Backup add-on records Mokosh as "unavailable" - so
 this is opt-in per box. bunyip mints a short-lived Mokosh-audience `at+jwt` for
 the acting admin and calls Mokosh `/api/v1/data/{export,import}`. Backup/export
-works immediately; **restore is gated on mokosh-server PMS-648** (its tenant
-data import is still WIP), so a restore round-trip is not reliable until that
-lands.
+works immediately; the tenant data import endpoint
+[PMS-648](https://niceguyit.myjetbrains.com/issue/PMS-648) added is available,
+but the restore round-trip in this runbook has not been re-tested against that
+shipped endpoint, so its current reliability here is unverified.
 
 On your **Mac** (one time), point the dev hostnames at desktop-02's Nebula IP:
 ```bash
