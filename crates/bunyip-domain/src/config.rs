@@ -2307,10 +2307,6 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
     ),
     EnvVarSpec::defaulted("BUNYIP_E2E_TOTP_SECRET", "e2e bootstrap TOTP seed"),
     EnvVarSpec::defaulted("BUNYIP_SEED_ALLOW", "non-production demo-seed switch"),
-    EnvVarSpec::defaulted(
-        "BUNYIP_GIT_SHA",
-        "build stamp shown on the version endpoint",
-    ),
     // ---- bunyip-web (BFF), BUNYIP-751 --------------------------------------
     // bunyip-web reports a missing variable by falling back to a working
     // default rather than through ConfigFailure / fatal_config_error, so every
