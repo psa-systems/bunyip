@@ -213,8 +213,8 @@ pub struct RelayFeedbackResponse {
 /// suppression list, so the relay stops sending to an address known to bounce or
 /// complain (BUNYIP-603).
 ///
-/// Verification comes first: an unconfigured secret fails closed (502-shaped
-/// internal error, logged at `error`), a missing signature is 401, and a body
+/// Verification comes first: an unconfigured secret fails closed (500
+/// Internal Server Error, logged at `error`), a missing signature is 401, and a body
 /// that verifies but is malformed is 400. Only a verified, well-formed event
 /// reaches the suppression store.
 pub async fn relay_feedback_webhook(
