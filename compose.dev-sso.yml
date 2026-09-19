@@ -76,6 +76,11 @@ services:
       # Login UI host the OP bounces unauthenticated /oauth2/authorize to
       # (bunyip-oidc builds `{web_origin}/login?redirect=...`).
       BUNYIP_WEB_ORIGIN: https://${USER}-bunyip.a8n.run
+      # BUNYIP-749: same host as BUNYIP_WEB_ORIGIN above. Without this override
+      # the api's own base URL (email links, EHLO fallback) stayed at
+      # compose.dev.yml's http://localhost:4400 default even though this
+      # overlay moves the real web origin to the Traefik-routed a8n.run host.
+      APP_URL: https://${USER}-bunyip.a8n.run
       # Share the OP session cookie across every *.a8n.run dev host so the
       # session bunyip-web's /login establishes is sent back to the OP on the
       # subsequent authorize, and the SPA round-trip completes.

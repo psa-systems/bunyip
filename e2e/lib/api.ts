@@ -21,7 +21,6 @@ export const routes = {
   rootStatus: '/',
 
   // Auth / session surface (bunyip-api).
-  memberships: `${API_V1}/auth/memberships`,
   userSessions: `${API_V1}/users/me/sessions`,
   userConsents: `${API_V1}/users/me/consents`,
 
