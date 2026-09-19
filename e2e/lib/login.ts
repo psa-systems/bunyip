@@ -336,18 +336,18 @@ export async function logoutViaHub(page: Page): Promise<void> {
   await page.goto('/logout');
 }
 
-// An authenticated session can read its own memberships (200); an anonymous
+// An authenticated session can read its own user record (200); an anonymous
 // one is rejected (401/403). Cheapest universal session proof on bunyip.
 export async function expectAuthenticated(request: APIRequestContext): Promise<void> {
-  const res = await request.get(routes.memberships);
-  expect(res.status(), `GET ${routes.memberships} should be 200 when authenticated`).toBe(200);
+  const res = await request.get(routes.userMe);
+  expect(res.status(), `GET ${routes.userMe} should be 200 when authenticated`).toBe(200);
 }
 
 export async function expectAnonymous(request: APIRequestContext): Promise<void> {
-  const res = await request.get(routes.memberships);
+  const res = await request.get(routes.userMe);
   expect(
     [401, 403],
-    `GET ${routes.memberships} should be 401/403 when logged out, got ${res.status()}`,
+    `GET ${routes.userMe} should be 401/403 when logged out, got ${res.status()}`,
   ).toContain(res.status());
 }
 

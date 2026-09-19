@@ -14,6 +14,19 @@
 #   2. e2e-pr.yml references no secret outside the base-URL allowlist.
 #   3. every `npm ci` under .forgejo/workflows/ passes --ignore-scripts.
 #
+# A fourth and fifth property scan EVERY .forgejo/workflows/*.yml file, not
+# just the two named above (BUNYIP-766, carried from the 2026-09-04 parity
+# report F4): a `secrets: inherit` and an unpinned cross-repo reusable-workflow
+# `uses:` are both invisible to properties 1-3, which match only the literal
+# `secrets.<NAME>` form, and both hand a called workflow this repo's secrets on
+# the strength of a ref this repo's history does not pin.
+#   4. every `secrets: inherit` carries a justification.
+#   5. every cross-repo reusable-workflow reference is pinned to a commit SHA,
+#      or carries a justification.
+# An exemption is a trailing `# secret-scope-ok: <reason>` marker on the
+# finding's own line, so relying on `secrets: inherit` or on a mutable ref is a
+# visible, reviewed decision rather than a silent gap.
+#
 # Usage: scripts/check-workflow-secrets.nu [workflows_dir]
 
 # Read a file as UTF-8 lines. A file that is absent or not decodable has no
@@ -34,6 +47,44 @@ def grep-tree [dir: string, pattern: string]: nothing -> table {
         | each {|r| { file: $rel, line: ($r.index + 1), text: $r.item } }
     }
     | flatten
+}
+
+# Cross-repo reusable-workflow call: org/repo/.forgejo|.github/workflows/name.yml@ref.
+# A local call (`uses: ./...`) and an action reference (a URL, or
+# `owner/repo@ref` with no workflows path) are both out of scope: only a call
+# into ANOTHER repo's workflow file carries the risk this checks, since the
+# target can change what it does, secrets included, without this repo's
+# history recording it.
+const REUSABLE_WORKFLOW_PATTERN = '^\s*uses:\s*(?<target>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\.(forgejo|github)/workflows/[A-Za-z0-9_.-]+\.ya?ml)@(?<ref>\S+)\s*$'
+
+const COMMIT_SHA_PATTERN = '^[0-9a-f]{40}$'
+
+# The one way to keep a `secrets: inherit` or an unpinned ref: say why, in a
+# trailing comment on the finding's own line.
+const EXEMPTION = 'secret-scope-ok:'
+
+def exempt [lines: list<string>, idx: int]: nothing -> bool {
+    $lines | get $idx | str contains $EXEMPTION
+}
+
+# Properties 4 and 5, for one workflow file.
+def check-workflow-scope [path: string]: nothing -> list<string> {
+    let lines = (read-lines $path)
+    mut problems = []
+    for row in ($lines | enumerate) {
+        let text = $row.item
+        if ($text =~ '^\s*secrets:\s*inherit\s*$') and not (exempt $lines $row.index) {
+            $problems = ($problems | append $"($path):($row.index + 1): `secrets: inherit` hands this job every secret the repo/org holds; justify it with a `# ($EXEMPTION) <reason>` marker naming the secret the called workflow needs.")
+        }
+        let m = ($text | parse --regex $REUSABLE_WORKFLOW_PATTERN)
+        if ($m | is-not-empty) {
+            let ref = ($m | get 0 | get ref)
+            if (not ($ref =~ $COMMIT_SHA_PATTERN)) and not (exempt $lines $row.index) {
+                $problems = ($problems | append $"($path):($row.index + 1): cross-repo reusable-workflow reference pinned to `($ref)`, not a commit SHA; a mutable ref can change what the call does, secrets included, without this repo's history recording it - pin to a SHA or justify with a `# ($EXEMPTION) <reason>` marker.")
+            }
+        }
+    }
+    $problems
 }
 
 def main [workflows_dir: string = ".forgejo/workflows"] {
@@ -93,8 +144,16 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
         $status = 1
     }
 
+    # 4 and 5. Every workflow file, not just the two named above.
+    let all_workflow_files = (glob $"($workflows_dir)/*.yml")
+    let scope_problems = ($all_workflow_files | each {|f| check-workflow-scope $f } | flatten)
+    for p in $scope_problems {
+        print --stderr $"error: ($p) \(BUNYIP-766)"
+        $status = 1
+    }
+
     if $status == 0 {
-        print "workflow secret scope OK: no PR-triggered job holds a credential, all 'npm ci' ignore scripts"
+        print $"workflow secret scope OK: no PR-triggered job holds a credential, all 'npm ci' ignore scripts, every 'secrets: inherit' and unpinned reusable-workflow ref across ($all_workflow_files | length) files is justified"
     }
 
     exit $status
