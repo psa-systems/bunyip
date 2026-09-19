@@ -1,5 +1,6 @@
-//! Auth-flow handlers. Login + logout here for the slice; the rest of the
-//! auth/public pages arrive in phase 2.
+//! Auth-flow handlers: login, logout, registration, magic-link sign-in,
+//! password reset, 2FA verification, invite acceptance, and email
+//! confirmation/verification.
 
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;

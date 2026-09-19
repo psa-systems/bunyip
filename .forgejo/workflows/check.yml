@@ -52,8 +52,7 @@ jobs:
       # the next runner allocation anyway), this keeps the runner's
       # /workspace from filling up between consecutive PR jobs - the
       # ENOSPC failures we hit on three back-to-back bunyip-upgrade PRs
-      # were all this. See docs/bunyip-upgrade/00-overview.md for the
-      # surrounding context.
+      # were all this.
       CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
       CARGO_INCREMENTAL: "0"
 
