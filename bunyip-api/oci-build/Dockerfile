@@ -58,8 +58,8 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 # ---- Builder: cook dependencies, then build the workspace ----
 FROM chef AS builder
-# nproc/2 concurrency cap (per governance CI.md); CI passes the real value.
-ARG CARGO_BUILD_JOBS=2
+# The runner or caller owns parallelism; `default` is cargo's own CPU count (DEV-769).
+ARG CARGO_BUILD_JOBS=default
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
 # Cook dependencies only, from the recipe. This layer is cached unless the

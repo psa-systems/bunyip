@@ -39,11 +39,9 @@ jobs:
     # The credential-free PR gate that branch protection requires on pull
     # requests; counterpart is `E2E / deployment` in e2e.yml.
     name: PR gate
-    # Base label: this job compiles nothing. It runs node/npm only
-    # (`npm ci --ignore-scripts`, so no native addon builds) (BUNYIP-444), and
-    # it never launches a browser, so it needs none of the browser system
-    # libraries that put e2e.yml on the dev label (BUNYIP-446).
-    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
+    # MEDIUM: npm ci, a browser download and an HTTP probe; it compiles nothing and
+    # never launches a browser, so it needs no dev-image library (BUNYIP-446).
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_MEDIUM }}
 
     # Every run: step in this repo executes under Nushell (BUNYIP-489).
     # Declared once per job so a new step cannot silently inherit Bash;
@@ -71,9 +69,9 @@ jobs:
         run: corepack npm ci --ignore-scripts
 
       # Download only: no browser launch here, this proves the install
-      # resolves. That is why the base label is correct for this job: nothing
+      # resolves. That is why the MEDIUM label is correct for this job: nothing
       # ever launches, so no browser system libraries are needed. The suite
-      # that actually drives a browser runs in e2e.yml, on the dev label.
+      # that actually drives a browser runs in e2e.yml, on the HEAVY label.
       - name: Install Playwright browser
         run: corepack npx playwright install chromium
 

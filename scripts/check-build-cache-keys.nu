@@ -111,6 +111,7 @@ def self-test []: nothing -> nothing {
     let multiline = $"($dir)/Dockerfile.multiline"
     "FROM rust AS builder\nENV GIT_COMMIT=${GIT_COMMIT} \\\n    GIT_TAG=${GIT_TAG} \\\n    BUILD_DATE=${BUILD_DATE}\nRUN cargo chef cook --release\n" | save --force $multiline
 
+    # Fixture data: any non-volatile ENV; the literal 2 is not a real build default.
     let stable_env = $"($dir)/Dockerfile.stable-env"
     "FROM rust AS builder\nENV CARGO_BUILD_JOBS=2\nENV RUSTFLAGS=-Clto\nRUN cargo chef cook --release\n" | save --force $stable_env
 

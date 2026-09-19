@@ -67,13 +67,9 @@ jobs:
     # branch-protection pattern then matches both this and the PR gate
     # (`E2E / PR gate`, e2e-pr.yml). Main/deploy check (push + dispatch, never PR).
     name: deployment
-    # Dev label: this job launches Playwright's bundled Chromium, and only the
-    # dev stage of the opensuse image installs the X / GTK / NSS / glib shared
-    # libraries that browser links against; the base stage carries none of them.
-    # The same stage pre-bakes the pinned 1.60.0 browser binaries, so the job
-    # gets both from the image instead of installing either per run
-    # (BUNYIP-446). It still compiles nothing.
-    runs-on: ${{ vars.RUNS_ON_OPENSUSE_DEV_LATEST }}
+    # HEAVY: runs Playwright; only the dev image has the browser system libraries
+    # and the pre-baked browsers (BUNYIP-446, DEV-769).
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_HEAVY }}
 
     # Every run: step in this repo executes under Nushell (BUNYIP-489).
     # Declared once per job so a new step cannot silently inherit Bash;
@@ -110,6 +106,9 @@ jobs:
           # most recent commit that touched a build-trigger path. A shallow
           # clone would stop at depth 1 and the walk would miss or fail.
           fetch-depth: 0
+
+      - name: Start job metrics sampler
+        uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/job-metrics-start@main
 
       # No Node setup step: the dev image extends the opensuse base stage, which
       # ships nodejs24, so the runtime is already on disk. The bare
@@ -179,3 +178,8 @@ jobs:
             e2e/test-results/
           retention-days: 14
           if-no-files-found: ignore
+
+      - name: Report job metrics
+        # Last and always(), so a failing job still reports (composite actions have no post hook).
+        if: always()
+        uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/job-metrics-report@main

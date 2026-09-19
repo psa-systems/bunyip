@@ -46,8 +46,8 @@ RUN cargo chef prepare --recipe-path recipe.json
 # ---- Builder: cook dependencies, then build the web binary + its CSS ----
 FROM chef AS build
 
-# nproc/2 concurrency cap (per governance CI.md).
-ARG CARGO_BUILD_JOBS=2
+# The runner or caller owns parallelism; `default` is cargo's own CPU count (DEV-769).
+ARG CARGO_BUILD_JOBS=default
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
 # Cache JS deps (tailwindcss). The lockfile is copied with the manifest and the

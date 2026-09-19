@@ -93,7 +93,7 @@ check-serde-compat:
     ./scripts/check-serde-compat.nu --self-test
     ./scripts/check-serde-compat.nu
 
-# Gate the runner labels: the native cargo job stays on the dev image, every
+# Gate the runner labels: the native cargo job stays on the HEAVY label, every
 # label carries its reason, no workflow installs at run time what the image
 # provides (C toolchain, BUNYIP-444; browser system libraries, BUNYIP-446).
 [group: 'checks']

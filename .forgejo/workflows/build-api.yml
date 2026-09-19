@@ -47,10 +47,9 @@ on:
 jobs:
   build-and-push-api:
     name: Build and push API image
-    # Base label: nothing compiles on the runner. The musl build happens inside
-    # `docker buildx`, and the runner-side tooling is docker/nu/git only, all
-    # present in base (BUNYIP-444).
-    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
+    # HEAVY: runs `docker buildx build` of the release image, a full cargo
+    # compile inside BuildKit (DEV-769).
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_HEAVY }}
     permissions:
       contents: read
       packages: write
@@ -74,14 +73,25 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Take build parallelism from the runner
+        # Exports CARGO_BUILD_JOBS for the --build-arg below; warns and falls
+        # back to a low CPU-derived value when the runner did not set it (DEV-769).
+        uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/build-parallelism@main
+
+      - name: Start job metrics sampler
+        uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/job-metrics-start@main
+
       - name: Verify Docker availability
         run: |
           docker version
           docker buildx version
 
       - name: Set up buildx builder
-        run: |
-          docker buildx create --name container-builder --driver docker-container --use
+        # Per-job builder name with a readiness retry; a shared constant name
+        # races concurrent jobs on the one DinD daemon.
+        uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/setup-buildx@main
+        with:
+          name: build-api
 
       - name: Export Actions runtime env for buildx gha cache
         # A raw `docker buildx build` (unlike docker/build-push-action)
@@ -161,8 +171,8 @@ jobs:
           let git_commit = (^git rev-parse --short HEAD | str trim)
           let git_tag = (^git describe --tags --always --dirty | str trim)
           let build_date = (date now | format date "%Y-%m-%dT%H:%M:%SZ")
-          # nproc/2 cap: never claim more than half the host (governance CI.md).
-          let jobs = ((sys cpu | length) / 2 | into int)
+          # The runner owns build parallelism; build-parallelism exported it above.
+          let jobs = $env.CARGO_BUILD_JOBS
           let build_args = [
               --build-arg $"GIT_COMMIT=($git_commit)"
               --build-arg $"GIT_TAG=($git_tag)"
@@ -197,3 +207,8 @@ jobs:
           let image = "bunyip-api"
           let registry = $env.IMAGE_REGISTRY
           print $"($prefix) ($registry)/($image):($tag)"
+
+      - name: Report job metrics
+        # Last and always(), so a failing job still reports (composite actions have no post hook).
+        if: always()
+        uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/job-metrics-report@main
