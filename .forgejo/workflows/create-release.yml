@@ -31,7 +31,11 @@ jobs:
     if: >-
       github.event.pull_request.merged == true
       && startsWith(github.event.pull_request.head.ref, 'release/v')
-    uses: psa-systems/common/.forgejo/workflows/create-release.yml@main
+    # psa-systems/common is the org's own shared workflow repo (same org, same
+    # review gate as this one); tracking `@main` is how a shared-workflow fix
+    # or a BUNYIP-444-style label rename reaches this caller. Narrowing this to
+    # a SHA pin is tracked separately.
+    uses: psa-systems/common/.forgejo/workflows/create-release.yml@main  # secret-scope-ok: same-org shared workflow repo, tracked separately for SHA pinning
     # Base label: the called job runs git and two HTTP calls, it compiles
     # nothing. It has to be set here as well as in the called workflow, because
     # this Forgejo instance does not expand a cross-repo reusable `uses:` unless
@@ -40,7 +44,7 @@ jobs:
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
     # A called workflow receives no secret it is not passed, and the reusable
     # workflow needs FORGEJO_PAT.
-    secrets: inherit
+    secrets: inherit  # secret-scope-ok: reusable workflow needs FORGEJO_PAT (write:repository) to call the releases API; this caller job runs no step and reads no secret itself
     # This job runs no step of its own, so the Nushell rule (BUNYIP-489) is
     # vacuous here; declared anyway so the gate stays absolute and a step added
     # to a caller job can never inherit Bash. The called workflow declares its

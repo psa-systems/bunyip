@@ -18,7 +18,7 @@ e2e/
     fixtures.ts               `test` (bearer) and `oidcTest` (replayed OP cookies) request fixtures
     login.ts                  loginViaHub/logoutViaHub (TOTP-aware), expectAuthenticated/Anonymous
     auth-state.ts             read/write .auth/token.txt + .auth/op-state.json
-    factories.ts              today(), getMemberships(), tagged()
+    factories.ts              today(), tagged()
     run.ts                    run id + e2e-<epoch>-<runId>-<n> tagging for teardown
     page-diagnostics.ts       attachPageDiagnostics(): URL trail + request log on failure
   tests/
@@ -27,7 +27,6 @@ e2e/
     global.teardown.ts        delete this run's records, sweep e2e- residue > 24h
     auth/                     project `auth-ui` (ANONYMOUS browser; specs self-login)
     account/                  project `account-ui` (authenticated browser; storageState replay)
-    memberships/             project `account-ui`
     billing/                 project `account-ui` (+ production-skip gate)
     oidc/                    project `api` (request-context fixtures)
   scripts/
@@ -57,7 +56,7 @@ The suite shares ONE E2E account + tenant. bunyip rate-limits login to
   runnable coverage is a single combined login + logout round-trip and every
   other auth flow is `test.fixme`. Its logout runs in a fresh context, so it
   never invalidates the shared `account-ui` session.
-- `account-ui` (`tests/{account,memberships,billing}/*`) replays
+- `account-ui` (`tests/{account,billing}/*`) replays
   `hub-state.json` and must NOT call `loginViaHub`. API calls use `page.request`
   (carries the session cookies).
 - `api` (`tests/oidc/*`) is request-context only via the `lib/fixtures.ts`
@@ -479,9 +478,9 @@ gate's worst case (up to 10 min) plus the serial spec run.
    project's `testMatch` globs:
    - browser, must log in itself, ANONYMOUS -> `tests/auth/` (`auth-ui`). Keep
      login-bearing specs minimal: every `loginViaHub` spends the 5/min limit.
-   - browser, ALREADY authenticated (no `loginViaHub`) -> `tests/account/`,
-     `tests/memberships/`, or `tests/billing/` (`account-ui`). Use `page.request`
-     for API calls so the session cookies authenticate them.
+   - browser, ALREADY authenticated (no `loginViaHub`) -> `tests/account/` or
+     `tests/billing/` (`account-ui`). Use `page.request` for API calls so the
+     session cookies authenticate them.
    - request-context (bearer or replayed OP cookies) -> `tests/oidc/` (`api`),
      importing `test`/`oidcTest` from `../../lib/fixtures`.
 2. **Import from `../../lib/...`** (specs live one directory deep). Do not

@@ -57,15 +57,13 @@ project name is deliberately left at the repo default; overriding it would make
 compose treat the shared external network as foreign and refuse to start (see the
 comment block in each `compose.dev-sso.yml`).
 
-### 3.2 Why you register the OIDC clients once (`just register-dev-clients`)
+### 3.2 Why you register the OIDC client once (`just register-dev-clients`)
 OIDC's authorization-code + PKCE flow requires each **relying party** to be
 **pre-registered with the identity provider** (`bunyip-api`, the OP) before it can
-ask for a code. `register-dev-clients` upserts two rows into bunyip-api's
-`oauth_clients` table, both `TYPE=public` / `AUTH_METHOD=none` (PKCE, no client
+ask for a code. `register-dev-clients` upserts one row into bunyip-api's
+`oauth_clients` table, `TYPE=public` / `AUTH_METHOD=none` (PKCE, no client
 secret; a browser client cannot keep one):
 
-- `bunyip-web-dev` (`...d1`), redirect `https://<user>-bunyip.a8n.run/auth/callback`,
-  audience `https://<user>-bunyip-api.a8n.run`.
 - `mokosh-apps-dev` (`...d2`), redirect `https://<user>-mokosh.a8n.run/auth/callback`,
   audience `https://<user>-mokosh-api.a8n.run`.
 
@@ -73,7 +71,8 @@ The mokosh SPA sends its UUID on every `/oauth2/authorize` request so the OP kno
 which client is asking and which redirect_uri is allowed, which is why the printed
 SPA UUID goes into `mokosh-apps/.env`. **bunyip needs no client_id of its own**:
 `bunyip-web` is server-rendered and signs in against bunyip-api's own
-`/v1/auth/*` endpoints, so nothing on the bunyip side reads a client id.
+`/v1/auth/*` endpoints, so nothing on the bunyip side reads a client id, and no
+`bunyip-web-dev` row is registered.
 
 Why **once**: the registrations are **persisted DB rows** in bunyip-api's Postgres -
 they survive restarts. The recipe is **idempotent** (`ON CONFLICT DO UPDATE` keeps
@@ -130,12 +129,12 @@ error from openssl.
 
 ### 3.8 The OIDC direction (cutover landed: bunyip-api IS the OP)
 The reversed wiring scaffold step 8 flagged is now converged in dev-sso. There is ONE issuer: `bunyip-api` (`OIDC_ISSUER=https://<user>-bunyip-api.a8n.run`, serves `/oauth2/*` + `/.well-known/*` + its own `/v1/auth/*` email+password login). Both relying parties consume it:
-- `bunyip-web` (the hub): `BUNYIP_OIDC_ISSUER=https://<user>-bunyip-api.a8n.run`, client `bunyip-web-dev`.
+- `bunyip-web` (the hub): `BUNYIP_OIDC_ISSUER=https://<user>-bunyip-api.a8n.run`, no client id (it signs in against bunyip-api's own `/v1/auth/*` endpoints).
 - the mokosh SPA: `MOKOSH_OIDC_ISSUER=https://<user>-bunyip-api.a8n.run`, client `mokosh-apps-dev`.
 
 `mokosh-server` is a **Resource Server**: its auth middleware's BunyipVerifier (`src/modules/auth/oidc_rs.rs`) validates the at+jwt bunyip mints by fetching bunyip's discovery + JWKS and JIT-provisioning the user, activated by `OIDC_ISSUER` + `OIDC_AUDIENCE`. Because the issuer host resolves to dev-01's public edge (self-signed + 404 on the OP path) from inside the container, mokosh-server's compose pins it to the LOCAL Traefik via `extra_hosts` (`<user>-bunyip-api.a8n.run:${BUNYIP_OP_TRAEFIK_IP:-172.30.0.11}`), which serves the OP with a valid Let's Encrypt cert.
 
-bunyip-api's OP is exposed on its own Traefik host `<user>-bunyip-api.a8n.run` (port 4401); register the two dev clients with `just register-dev-clients`. The old `register-bunyip-client` (mokosh-server) flow is retired.
+bunyip-api's OP is exposed on its own Traefik host `<user>-bunyip-api.a8n.run` (port 4401); register the mokosh dev client with `just register-dev-clients`. The old `register-bunyip-client` (mokosh-server) flow is retired.
 
 ## 4. Spin-up procedure (the happy path, once a box is set up)
 

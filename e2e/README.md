@@ -16,13 +16,12 @@ or **`test.fixme`** (intent sketched, blocked on a cited dependency). Every
 | Auth | `tests/auth/login.spec.ts` | runnable | ONE combined login + logout round-trip via the real `/login` form (TOTP-aware), kept to a single login to stay under the 5/min rate limit |
 | Auth | `tests/auth/signup.spec.ts` | `test.fixme` | self-service `/register`; needs a mail sink to read the confirmation link (BUNYIP-150) |
 | Auth | `tests/auth/password-reset.spec.ts` | runnable | register a disposable account, request `/password-reset`, read the token from the Stalwart JMAP sink, set a new password, assert it logs in (BUNYIP-150). Skipped without `E2E_MAIL_SINK_URL` |
-| Auth | `tests/auth/magic-link.spec.ts` | runnable | request `/magic-link` for a disposable account, follow the emailed token, assert the new session reads `/v1/auth/memberships` (BUNYIP-150). Skipped without `E2E_MAIL_SINK_URL` |
+| Auth | `tests/auth/magic-link.spec.ts` | runnable | request `/magic-link` for a disposable account, follow the emailed token, assert the new session reads `/v1/users/me` (BUNYIP-150). Skipped without `E2E_MAIL_SINK_URL` |
 | Auth | `tests/auth/two-factor.spec.ts` | `test.fixme` | TOTP enrollment; needs a disposable account + captured secret (BUNYIP-152). The 2FA challenge leg is already exercised by every login in `lib/login.ts` |
 | Account | `tests/account/profile.spec.ts` | runnable | edit `POST /settings/profile`, reload, assert persisted (non-destructive) |
 | Account | `tests/account/sessions.spec.ts` | runnable (read-only) | assert the current session is listed (UI + `GET /v1/users/me/sessions`); never revokes, which would kill the shared session |
 | Account | `tests/account/change-password.spec.ts` | `test.fixme` | mutates the shared E2E credential; needs a disposable account (suite-design limit, no sub-task) |
 | Account | `tests/account/change-email.spec.ts` | runnable | register a disposable account, request an email change, confirm via the emailed link from the Stalwart JMAP sink, assert the new email (BUNYIP-150). Skipped without `E2E_MAIL_SINK_URL` |
-| Memberships | `tests/memberships/memberships-list.spec.ts` | runnable | `/membership` renders; `GET /v1/auth/memberships` reports `active_tenant_id == E2E_TENANT_ID` |
 | Billing | `tests/billing/subscribe.spec.ts` | runnable + prod skip | `POST /membership/subscribe` 302s to checkout.stripe.com (BUNYIP-151). Skipped without `E2E_STRIPE_SECRET_KEY` (= staging Stripe test mode provisioned) |
 | Billing | `tests/billing/cancel.spec.ts` | `test.fixme` + prod skip | `POST /membership/cancel`; deferred under BUNYIP-151 - needs a setup step that gives the account an active membership, which is webhook-dependent (see the spec). Lands once staging Stripe + the webhook are live |
 | Billing | `tests/billing/billing-portal.spec.ts` | runnable + prod skip | read-only redirect assertion on `/checkout/success` (BUNYIP-151). Skipped without `E2E_STRIPE_SECRET_KEY` |
@@ -41,7 +40,7 @@ false`) and login is spent sparingly:
 | `preflight` | `tests/preflight.setup.ts` | none | aggregates every missing required env var into one error |
 | `setup` | `tests/global.setup.ts` | logs in ONCE | drives the hub login (TOTP-aware), captures the bearer + OP cookies + full browser storageState, and drives the OIDC consent Allow so granted scopes exist. Persists to `.auth/`. Depends on `preflight` |
 | `auth-ui` | `tests/auth/*.spec.ts` | ANONYMOUS | browser `page`, no stored session; each runnable spec does its own `loginViaHub`. Its logout assertion runs in a fresh context, so it never invalidates the shared session. The ONLY project that spends the login rate limit, so login-bearing flows are combined and the rest are `test.fixme`. Depends on `preflight` |
-| `account-ui` | `tests/{account,memberships,billing}/*.spec.ts` | ALREADY AUTHENTICATED | browser `page` loaded with the storageState `setup` saved. Do NOT call `loginViaHub` here. Use `page.request` for API calls (it carries the session cookies). Depends on `setup` |
+| `account-ui` | `tests/{account,billing}/*.spec.ts` | ALREADY AUTHENTICATED | browser `page` loaded with the storageState `setup` saved. Do NOT call `loginViaHub` here. Use `page.request` for API calls (it carries the session cookies). Depends on `setup` |
 | `api` | `tests/oidc/*.spec.ts` | request context | the `test`/`oidcTest` fixtures from `lib/fixtures.ts` (bearer, or replayed OP cookies). No browser. Uses the OP host. Depends on `setup` |
 
 **storageState reuse + the 5/min rationale.** `setup` logs in once and saves the

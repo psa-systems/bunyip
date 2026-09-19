@@ -162,6 +162,7 @@ pub mod admin_branding;
 pub mod admin_entitlements;
 pub mod admin_ip_bans;
 pub mod admin_ip_enrichment;
+pub mod admin_mailer_suppressions;
 pub mod admin_oauth_tenants;
 pub mod admin_provider_status;
 pub mod admin_rate_limits;
@@ -191,8 +192,8 @@ pub use application_doc::{
     list_documented_apps, update_app_doc,
 };
 pub use auth::{
-    accept_admin_invite, auth_redirect, confirm_password_reset, get_memberships, login, logout,
-    logout_all, logout_redirect, refresh_token, register, register_challenge, request_magic_link,
+    accept_admin_invite, auth_redirect, confirm_password_reset, login, logout, logout_all,
+    logout_redirect, refresh_token, register, register_challenge, request_magic_link,
     request_password_reset, setup_status, verify_login_approval, verify_magic_link,
     verify_password_reset_token,
 };
@@ -255,6 +256,7 @@ pub use admin_entitlements::{
 };
 pub use admin_ip_bans::{create_ip_ban, list_ip_bans, unban_ip};
 pub use admin_ip_enrichment::ip_enrichment;
+pub use admin_mailer_suppressions::{delete_mailer_suppression, list_mailer_suppressions};
 pub use admin_oauth_tenants::{assign_user_tenant, list_client_assignments, unassign_user_tenant};
 pub use admin_provider_status::get_provider_status;
 pub use admin_rate_limits::{

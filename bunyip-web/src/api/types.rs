@@ -152,13 +152,9 @@ pub struct User {
     #[serde(default)]
     pub price_locked: bool,
     #[serde(default)]
-    pub locked_price_id: Option<String>,
-    #[serde(default)]
     pub locked_price_amount: Option<i64>,
     #[serde(default)]
     pub created_at: String,
-    #[serde(default)]
-    pub updated_at: String,
     /// v0.13.0 renamed `subscription_tier` to `membership_tier`. The alias
     /// parses a not-yet-restarted API during a rolling deploy; drop it in
     /// v0.15.0 (the contract half of the expand/contract rename).
@@ -614,6 +610,16 @@ pub struct ProviderKeyEntry {
     pub providers: Vec<String>,
 }
 
+/// The `list()` outcome for a kind that supports enumeration, mirroring
+/// `bunyip_domain::services::provider_status::KindEnumerationStatus`. An empty
+/// `Supported` and `Unsupported` are different facts and never collapse into
+/// each other.
+#[derive(Debug, Clone, Deserialize)]
+pub enum ProviderKindEnumerationStatus {
+    Supported(Vec<String>),
+    Unsupported,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ProviderKindEntry {
     #[serde(default)]
@@ -624,12 +630,42 @@ pub struct ProviderKindEntry {
     pub serving: Option<String>,
     #[serde(default)]
     pub keys: Vec<ProviderKeyEntry>,
+    #[serde(default)]
+    pub enumeration: Option<ProviderKindEnumerationStatus>,
+}
+
+/// A generation identity: number, when it resolved, and a human-readable
+/// actor. Never credential material.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ProviderGenerationHeader {
+    #[serde(default)]
+    pub number: u64,
+    #[serde(default)]
+    pub resolved_at: Option<String>,
+    #[serde(default)]
+    pub actor: String,
+}
+
+/// One kind's selection differs from its hosting profile's default. Absent
+/// for an application with no hosting-profile concept (Drillmark today).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ProviderHostingProfileDeviation {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub profile_default: Vec<String>,
+    #[serde(default)]
+    pub explicit: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ProviderStatusReport {
     #[serde(default)]
     pub hosting_profile: String,
+    #[serde(default)]
+    pub deviations: Vec<ProviderHostingProfileDeviation>,
+    #[serde(default)]
+    pub configuration_generation: Option<ProviderGenerationHeader>,
     #[serde(default)]
     pub kinds: Vec<ProviderKindEntry>,
     #[serde(default)]
@@ -1746,7 +1782,10 @@ pub struct DocumentedApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuthResponse, MembershipStatus, MembershipTier, User, UserRole};
+    use super::{
+        AuthResponse, MembershipStatus, MembershipTier, ProviderKindEnumerationStatus,
+        ProviderStatusReport, User, UserRole,
+    };
 
     /// Build a minimal web `User` from JSON so the many required fields don't
     /// have to be spelled out in every test.
@@ -1879,5 +1918,61 @@ mod tests {
             serde_json::to_value(UserRole::Unknown).expect("serialize"),
             serde_json::json!("unknown")
         );
+    }
+
+    #[test]
+    fn provider_status_report_decodes_deviations_generation_and_enumeration() {
+        // BUNYIP-768: the exact Mokosh shape the producer's own test
+        // (provider_status.rs's `envelope_parses_the_mokosh_and_drillmark_shapes`)
+        // exercises, so the three fields it carries must survive decode here.
+        let report: ProviderStatusReport = serde_json::from_value(serde_json::json!({
+            "hosting_profile": "saas",
+            "deviations": [{
+                "kind": "configuration",
+                "profile_default": ["file"],
+                "explicit": ["database"],
+            }],
+            "configuration_generation": {
+                "number": 3,
+                "resolved_at": "2026-01-01T00:00:00Z",
+                "actor": "System",
+            },
+            "kinds": [{
+                "kind": "configuration",
+                "enabled": [],
+                "serving": null,
+                "keys": [],
+                "enumeration": {"Supported": ["a", "b"]},
+            }],
+            "collected_at": "2026-01-01T00:00:00Z",
+        }))
+        .expect("mokosh-shaped report decodes");
+
+        assert_eq!(report.deviations.len(), 1);
+        assert_eq!(report.deviations[0].kind, "configuration");
+        assert_eq!(report.deviations[0].profile_default, vec!["file"]);
+        assert_eq!(report.deviations[0].explicit, vec!["database"]);
+
+        let generation = report
+            .configuration_generation
+            .expect("configuration_generation present");
+        assert_eq!(generation.number, 3);
+        assert_eq!(generation.actor, "System");
+
+        match &report.kinds[0].enumeration {
+            Some(ProviderKindEnumerationStatus::Supported(names)) => {
+                assert_eq!(names, &vec!["a".to_string(), "b".to_string()]);
+            }
+            other => panic!("expected Supported enumeration, got {other:?}"),
+        }
+
+        // Drillmark's shape: none of the three keys present at all.
+        let drillmark: ProviderStatusReport = serde_json::from_value(serde_json::json!({
+            "hosting_profile": "drillmark",
+            "kinds": [],
+        }))
+        .expect("drillmark-shaped report decodes");
+        assert!(drillmark.deviations.is_empty());
+        assert!(drillmark.configuration_generation.is_none());
     }
 }

@@ -66,10 +66,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             // (email_enabled / stripe_enabled); the interactive first-admin
             // wizard (`POST /setup`) is gone - the first admin is now bootstrapped
             // from the BOOTSTRAP_ADMIN_EMAIL env var on sign-up / sign-in.
-            .route("/setup/status", web::get().to(handlers::setup_status))
-            // Synthetic single-tenant membership stub for the mokosh
-            // SPA's tenant switcher. See the handler docstring for the
-            // multi-tenant story (deferred to phase-04).
-            .route("/memberships", web::get().to(handlers::get_memberships)),
+            .route("/setup/status", web::get().to(handlers::setup_status)),
     );
 }
