@@ -150,14 +150,17 @@ matching trial rather than billing immediately. Keep the two values in sync - if
 ops changes `BUNYIP_BILLING_TRIAL_PERIOD_DAYS`, update the dashboard trial to
 match.
 
-## Step 4 (optional) - map product ids to tiers
+## Step 4 - map product ids to tiers
 
 Map the tagged product's **id** into the tier config (lifetime / early-adopter /
 standard) so `resolve_tier_for_product` (`bunyip-api/src/handlers/webhook.rs`)
 resolves a tier; otherwise a created subscription still activates membership but
-leaves the tier unchanged (the webhook logs `resolved_tier=None`). Note the M1
-billing plan (`docs/dev-docs/billing-m1-implementation-plan.md`, decision 1) collapses
-to a single plan and removes the tiers, so this step may be retired.
+leaves the tier unchanged (the webhook logs `resolved_tier=None`). This step is
+required for entitlements to resolve to a tier: `resolve_tier_for_product` is
+live and exercised by both webhook call sites plus `settings_archive.rs`'s
+export/import of `tier_config`. The M1 plan's single-plan collapse
+(`docs/dev-docs/billing-m1-implementation-plan.md`, decision 1) is an archived
+historical snapshot and was never implemented against this code path.
 
 ## Step 5 - drive the lifecycle
 
@@ -201,7 +204,7 @@ Verified end to end on the dev-sso stack with provisioned test-mode keys:
 - A `4242` checkout activates membership (`membership_status=active`, `price_locked=true`) via `checkout.session.completed` + `customer.subscription.created`.
 - The grace cycle works: a customer-scoped `invoice.payment_failed` moves the member to `grace_period` (30-day window), and `invoice.payment_succeeded` clears it back to `active`.
 
-Outstanding: tier resolution from a mapped product (Step 4) is intentionally not
-wired, since the M1 plan removes the tiers
-(`docs/dev-docs/billing-m1-implementation-plan.md`, decision 1). Revisit only if the
-single-plan collapse is abandoned.
+Tier resolution from a mapped product (Step 4) is live and required for
+entitlements to resolve to a tier; it is not pending removal. The M1 plan's
+single-plan collapse (`docs/dev-docs/billing-m1-implementation-plan.md`,
+decision 1) is an archived historical snapshot, not the current state.

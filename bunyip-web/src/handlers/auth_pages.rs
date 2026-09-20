@@ -1,7 +1,9 @@
 //! Auth-flow handlers. Login + logout here for the slice; the rest of the
 //! auth/public pages arrive in phase 2.
 
-use axum::extract::{Query, State};
+use std::net::SocketAddr;
+
+use axum::extract::{ConnectInfo, Query, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::Form;
@@ -39,12 +41,12 @@ const BUNYIP_2FA_COOKIE_MAX_AGE_SECS: u64 = 600;
 /// consistently. The previous raw-string emit (`bunyip_2fa=...; Path=/;
 /// HttpOnly; SameSite=Lax`) missed `Secure` (HTTPS-only on production)
 /// and `Max-Age` (the cookie outlived the challenge token).
-fn bunyip_2fa_cookie_set(cfg: &Config, challenge_token: &str) -> String {
-    let secure = if cfg.use_secure_cookies() {
-        "; Secure"
-    } else {
-        ""
-    };
+///
+/// BUNYIP-759: `secure` is the caller's `Config::cookies_secure(peer, headers)`
+/// result, computed once per request from the transport rather than
+/// re-derived here from config state.
+fn bunyip_2fa_cookie_set(secure: bool, challenge_token: &str) -> String {
+    let secure = if secure { "; Secure" } else { "" };
     format!(
         "bunyip_2fa={challenge_token}; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age={}",
         BUNYIP_2FA_COOKIE_MAX_AGE_SECS
@@ -55,12 +57,8 @@ fn bunyip_2fa_cookie_set(cfg: &Config, challenge_token: &str) -> String {
 /// MUST share the original cookie's `HttpOnly` / `Secure` / `SameSite`
 /// attributes or browsers may decide the clear is for a different
 /// cookie and leave the live one in the jar.
-fn bunyip_2fa_cookie_clear(cfg: &Config) -> String {
-    let secure = if cfg.use_secure_cookies() {
-        "; Secure"
-    } else {
-        ""
-    };
+fn bunyip_2fa_cookie_clear(secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
     format!("bunyip_2fa=; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age=0")
 }
 
@@ -78,12 +76,8 @@ fn bunyip_2fa_cookie_clear(cfg: &Config) -> String {
 /// the currently-set cookie), mirroring `AuthCookies::clear`'s two-axis
 /// pattern in `crates/bunyip-domain/src/middleware/auth.rs`. Only issue
 /// domain-scoped clears when the BFF is configured with a cookie domain.
-fn bunyip_auth_cookie_clears(cfg: &Config) -> Vec<String> {
-    let secure = if cfg.use_secure_cookies() {
-        "; Secure"
-    } else {
-        ""
-    };
+fn bunyip_auth_cookie_clears(cfg: &Config, secure: bool) -> Vec<String> {
+    let secure = if secure { "; Secure" } else { "" };
     // The three names must match what bunyip-api sets on login:
     // access_token, refresh_token, and the OP session cookie.
     const NAMES: [&str; 3] = ["access_token", "refresh_token", "bunyip_op_session"];
@@ -358,6 +352,7 @@ pub struct LoginForm {
 pub async fn login_post(
     State(st): State<AppState>,
     headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Form(f): Form<LoginForm>,
 ) -> Response {
     let cookie = cookie_of(&headers);
@@ -375,7 +370,8 @@ pub async fn login_post(
     {
         Ok((LoginOutcome::SignedIn(_), cookies)) => redirect_cookies(&target, &cookies),
         Ok((LoginOutcome::TwoFactorRequired { challenge_token }, mut cookies)) => {
-            cookies.push(bunyip_2fa_cookie_set(&st.cfg, &challenge_token));
+            let secure = st.cfg.cookies_secure(Some(peer.ip()), &headers);
+            cookies.push(bunyip_2fa_cookie_set(secure, &challenge_token));
             // Carry the original ?redirect= forward so the OIDC return-URL
             // survives the 2FA step.
             let path = match f.redirect.as_deref().filter(|s| !s.is_empty()) {
@@ -396,9 +392,11 @@ pub async fn login_post(
 pub async fn logout(
     State(st): State<AppState>,
     headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Query(q): Query<RedirectQuery>,
 ) -> Response {
     let cookie = cookie_of(&headers);
+    let secure = st.cfg.cookies_secure(Some(peer.ip()), &headers);
     // BUNYIP-323: use the bunyip-api response's clearing cookies when it
     // returns them (the common case, and the one that lets the API also
     // revoke the refresh token + fan out OIDC back-channel logouts). But
@@ -409,11 +407,11 @@ pub async fn logout(
     let mut cleared = auth_api::logout(&st.api, cookie.as_deref())
         .await
         .unwrap_or_default();
-    for defensive in bunyip_auth_cookie_clears(&st.cfg) {
+    for defensive in bunyip_auth_cookie_clears(&st.cfg, secure) {
         cleared.push(defensive);
     }
     // Also drop any pending-2FA cookie.
-    cleared.push(bunyip_2fa_cookie_clear(&st.cfg));
+    cleared.push(bunyip_2fa_cookie_clear(secure));
     // Logout lands on the public homepage by default: a user who
     // clicked "Logout" wanted to be done, not be shown another login
     // form. Callers that DO want the post-logout login-then-redirect
@@ -727,13 +725,15 @@ fn magic_form(error: Option<&str>, success: bool) -> Markup {
 pub async fn magic_link_get(
     State(st): State<AppState>,
     headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Query(q): Query<TokenQuery>,
 ) -> Response {
     if let Some(token) = q.token {
         return match auth_api::verify_magic_link(&st.api, &token).await {
             Ok((LoginOutcome::SignedIn(_), cookies)) => redirect_cookies("/dashboard", &cookies),
             Ok((LoginOutcome::TwoFactorRequired { challenge_token }, mut cookies)) => {
-                cookies.push(bunyip_2fa_cookie_set(&st.cfg, &challenge_token));
+                let secure = st.cfg.cookies_secure(Some(peer.ip()), &headers);
+                cookies.push(bunyip_2fa_cookie_set(secure, &challenge_token));
                 redirect_cookies("/login/2fa", &cookies)
             }
             Err(e) => {
@@ -995,6 +995,7 @@ pub async fn twofa_verify_get(
 pub async fn twofa_verify_post(
     State(st): State<AppState>,
     headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Form(f): Form<TwoFactorForm>,
 ) -> Response {
     let Some(challenge) = cookie_value(&headers, "bunyip_2fa") else {
@@ -1004,7 +1005,8 @@ pub async fn twofa_verify_post(
     let target = safe_redirect(f.redirect.as_deref(), &st.cfg.oidc_issuer);
     match auth_api::verify_2fa(&st.api, cookie.as_deref(), &challenge, f.code.trim()).await {
         Ok((_, mut cookies)) => {
-            cookies.push(bunyip_2fa_cookie_clear(&st.cfg));
+            let secure = st.cfg.cookies_secure(Some(peer.ip()), &headers);
+            cookies.push(bunyip_2fa_cookie_clear(secure));
             redirect_cookies(&target, &cookies)
         }
         Err(e) => {
@@ -1351,12 +1353,12 @@ mod logout_clear_tests {
     use super::bunyip_auth_cookie_clears;
     use crate::config::Config;
 
-    fn cfg(app_domain: &str, api_public: &str) -> Config {
+    fn cfg(app_domain: &str) -> Config {
         Config {
             bind_addr: "127.0.0.1:4400".into(),
             api_url: "http://bunyip-api-app:4401".into(),
-            api_public_origin: api_public.into(),
-            oidc_issuer: api_public.into(),
+            api_public_origin: "http://localhost:4401".into(),
+            oidc_issuer: "http://localhost:4401".into(),
             app_domain: app_domain.into(),
             community_url: String::new(),
             trusted_proxies: Vec::new(),
@@ -1366,9 +1368,9 @@ mod logout_clear_tests {
 
     #[test]
     fn dev_config_emits_host_only_clears_for_the_three_auth_cookies() {
-        // No app_domain, http api_public_origin -> host-only clears only,
-        // no Secure attribute.
-        let cs = bunyip_auth_cookie_clears(&cfg("", "http://localhost:4401"));
+        // No app_domain, secure=false (plain HTTP transport) -> host-only
+        // clears only, no Secure attribute.
+        let cs = bunyip_auth_cookie_clears(&cfg(""), false);
         assert_eq!(
             cs.len(),
             3,
@@ -1390,9 +1392,10 @@ mod logout_clear_tests {
 
     #[test]
     fn prod_config_emits_host_only_and_domain_scoped_clears_with_secure() {
-        // With app_domain set and an HTTPS public origin, we expect three
-        // host-only clears AND three domain-scoped clears, all with Secure.
-        let cs = bunyip_auth_cookie_clears(&cfg("a8n.systems", "https://api.a8n.systems"));
+        // With app_domain set and secure=true (HTTPS transport), we expect
+        // three host-only clears AND three domain-scoped clears, all with
+        // Secure.
+        let cs = bunyip_auth_cookie_clears(&cfg("a8n.systems"), true);
         assert_eq!(
             cs.len(),
             6,
@@ -1421,7 +1424,7 @@ mod logout_clear_tests {
     fn every_auth_cookie_name_is_cleared_exactly_once_per_axis() {
         // Guard against a future edit that adds a name to `AuthCookies::set`
         // on the bunyip-api side without updating this list.
-        let cs = bunyip_auth_cookie_clears(&cfg("a8n.systems", "https://api.a8n.systems"));
+        let cs = bunyip_auth_cookie_clears(&cfg("a8n.systems"), true);
         for name in ["access_token", "refresh_token", "bunyip_op_session"] {
             let host_only = cs
                 .iter()
