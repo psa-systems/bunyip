@@ -422,11 +422,12 @@ register-dev-clients:
         \) VALUES
         \('($spa_id)', 'public', 'mokosh-apps-dev',
           ARRAY['($spa_redirect)'], ARRAY['($spa_origin)'],
-          ARRAY['openid','email','offline_access'], ARRAY['authorization_code','refresh_token'],
+          ARRAY['openid','email','profile','offline_access'], ARRAY['authorization_code','refresh_token'],
           'none', TRUE, '($spa_aud)', 600\)
         ON CONFLICT \(client_id\) DO UPDATE
             SET redirect_uris = EXCLUDED.redirect_uris,
                 post_logout_redirect_uris = EXCLUDED.post_logout_redirect_uris,
+                allowed_scopes = EXCLUDED.allowed_scopes,
                 audience = EXCLUDED.audience;"
     ^docker exec $pg psql --username bunyip --dbname bunyip --quiet --command $sql
     print ""
