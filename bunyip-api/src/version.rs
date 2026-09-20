@@ -18,9 +18,25 @@ pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// Git revision baked in at image build time via the `BUNYIP_GIT_SHA` env (set
-/// from the `GIT_SHA` build arg in the OCI Dockerfile). Empty for local
-/// `cargo run` builds.
+/// Git revision baked in at image build time via the `GIT_COMMIT` compile-time
+/// env (the same `option_env!` the `/v1/version` status endpoint reads).
+/// `"unknown"` for local `cargo run` builds, which set no `GIT_COMMIT`.
 pub fn git_revision() -> String {
-    std::env::var("BUNYIP_GIT_SHA").unwrap_or_default()
+    option_env!("GIT_COMMIT").unwrap_or("unknown").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::routes::health::GIT_COMMIT;
+
+    /// BUNYIP-752: root `/version`'s revision and `/v1/version`'s commit must
+    /// report the same value in a built image. Asserting equality against
+    /// `/v1/version`'s own compile-time constant, rather than a literal, is
+    /// what catches a regression back to a runtime env read (which would
+    /// diverge from this the moment the two are compiled with different env).
+    #[test]
+    fn git_revision_matches_the_v1_version_commit() {
+        assert_eq!(git_revision(), GIT_COMMIT);
+    }
 }

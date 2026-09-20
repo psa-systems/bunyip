@@ -68,7 +68,7 @@ pub async fn users(
     sort: &str,
     dir: &str,
 ) -> Result<PaginatedResponse<AdminUser>, ApiError> {
-    let mut path = format!("/admin/users?page={page}&page_size={page_size}");
+    let mut path = format!("/admin/users?page={page}&per_page={page_size}");
     if !search.is_empty() {
         path.push_str(&format!("&search={}", urlenc(search)));
     }
@@ -524,7 +524,7 @@ pub async fn audit_logs(
     page_size: u32,
     admin_only: bool,
 ) -> Result<PaginatedResponse<AdminAuditLog>, ApiError> {
-    let mut path = format!("/admin/audit-logs?page={page}&page_size={page_size}");
+    let mut path = format!("/admin/audit-logs?page={page}&per_page={page_size}");
     if admin_only {
         path.push_str("&admin_only=true");
     }
@@ -788,7 +788,7 @@ pub async fn feedback(
 ) -> Result<PaginatedResponse<AdminFeedbackSummary>, ApiError> {
     parse(
         api.get(
-            &format!("/admin/feedback?page={page}&page_size={page_size}&bucket={bucket}"),
+            &format!("/admin/feedback?page={page}&per_page={page_size}&bucket={bucket}"),
             cookie,
         )
         .await?,
@@ -850,7 +850,7 @@ pub async fn feedback_archive(
 ) -> Result<PaginatedResponse<ArchivedFeedback>, ApiError> {
     parse(
         api.get(
-            &format!("/admin/feedback/archive?page={page}&page_size={page_size}"),
+            &format!("/admin/feedback/archive?page={page}&per_page={page_size}"),
             cookie,
         )
         .await?,
