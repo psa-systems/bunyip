@@ -365,3 +365,8 @@ jobs:
         # Cargo path is staged - which is exactly the file set (justfile,
         # compose.dev.yml, scripts/) that reintroduces one (BUNYIP-647).
         run: just check-tree-ownership
+
+  secrets:
+    uses: psa-systems/common/.forgejo/workflows/check-secrets.yml@main
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_MEDIUM }}
+    secrets: inherit
