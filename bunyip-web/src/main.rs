@@ -244,6 +244,10 @@ async fn main() {
             "/membership/reactivate",
             axum::routing::post(dash::membership_reactivate),
         )
+        .route(
+            "/membership/billing-portal",
+            axum::routing::post(dash::membership_billing_portal),
+        )
         .route("/settings", get(dash::settings))
         // BUNYIP-139
         .route(

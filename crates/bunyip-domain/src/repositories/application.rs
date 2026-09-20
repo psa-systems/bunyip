@@ -292,14 +292,14 @@ impl ApplicationRepository {
             r#"
             INSERT INTO applications (name, slug, display_name, description, icon_url,
                 container_name, health_check_url, subdomain, webhook_url, version, source_code_url,
-                is_hosted,
+                is_hosted, maintenance_message,
                 forgejo_owner, forgejo_repo, forgejo_package, pinned_release_tag, artifact_source,
                 oci_image_owner, oci_image_name, pinned_image_tag, release_notes_url,
                 sort_order)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                COALESCE($12, TRUE),
-                $13, $14, $15, $16, COALESCE($17, 'release'),
-                $18, $19, $20, $21,
+                COALESCE($12, TRUE), $13,
+                $14, $15, $16, $17, COALESCE($18, 'release'),
+                $19, $20, $21, $22,
                 -- BUNYIP-473: append at the end with a distinct position so the
                 -- reorder control has something to move (the old default 0 made
                 -- every new app share a position and the swap a no-op).
@@ -319,6 +319,7 @@ impl ApplicationRepository {
         .bind(data.version.as_deref())
         .bind(data.source_code_url.as_deref())
         .bind(data.is_hosted)
+        .bind(data.maintenance_message.as_deref())
         .bind(data.forgejo_owner.as_deref())
         .bind(data.forgejo_repo.as_deref())
         .bind(data.forgejo_package.as_deref())
@@ -517,6 +518,62 @@ mod tests {
 
         sqlx::query("DELETE FROM applications WHERE id = $1")
             .bind(row.0)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    // BUNYIP-758: maintenance_message set at create time is persisted, not
+    // silently dropped by serde for lacking a field on CreateApplication.
+    #[actix_rt::test]
+    async fn create_persists_maintenance_message() {
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
+        let slug = format!("test-create-maint-msg-{}", uuid::Uuid::new_v4());
+
+        let data = CreateApplication {
+            name: slug.clone(),
+            slug: slug.clone(),
+            display_name: slug.clone(),
+            description: None,
+            icon_url: None,
+            container_name: slug.clone(),
+            health_check_url: None,
+            subdomain: None,
+            webhook_url: None,
+            version: None,
+            source_code_url: None,
+            release_notes_url: None,
+            is_hosted: None,
+            maintenance_message: Some("down for upgrades".into()),
+            forgejo_owner: None,
+            forgejo_repo: None,
+            forgejo_package: None,
+            pinned_release_tag: None,
+            artifact_source: None,
+            oci_image_owner: None,
+            oci_image_name: None,
+            pinned_image_tag: None,
+        };
+
+        let created = ApplicationRepository::create(&pool, &data).await.unwrap();
+        assert_eq!(
+            created.maintenance_message.as_deref(),
+            Some("down for upgrades")
+        );
+
+        let reloaded = ApplicationRepository::find_by_slug(&pool, &slug)
+            .await
+            .unwrap()
+            .expect("app exists");
+        assert_eq!(
+            reloaded.maintenance_message.as_deref(),
+            Some("down for upgrades")
+        );
+
+        sqlx::query("DELETE FROM applications WHERE id = $1")
+            .bind(created.id)
             .execute(&pool)
             .await
             .unwrap();

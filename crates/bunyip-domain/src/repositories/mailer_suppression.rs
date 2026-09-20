@@ -5,9 +5,23 @@
 //! the bounce/complaint feedback webhook writes it. The list is shared across
 //! every calling app because it protects the one sending domain's reputation.
 
+use chrono::{DateTime, Utc};
+use serde::Serialize;
 use sqlx::PgPool;
 
 use crate::errors::AppError;
+
+/// One row of the suppression list, as read back for the admin surface
+/// (BUNYIP-762): the operator needs to see why and when an address was
+/// suppressed, not just that it is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
+pub struct MailerSuppression {
+    pub address: String,
+    pub reason: String,
+    pub detail: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
 
 /// Normalize a recipient address for suppression matching: trim surrounding
 /// whitespace and lowercase it. Suppression is deliberately case-insensitive
@@ -62,6 +76,45 @@ impl MailerSuppressionRepository {
         .execute(pool)
         .await?;
         Ok(())
+    }
+
+    /// The total number of suppressed addresses, for the admin list's paging.
+    pub async fn count(pool: &PgPool) -> Result<i64, AppError> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mailer_suppressions")
+            .fetch_one(pool)
+            .await?;
+        Ok(count)
+    }
+
+    /// Page through the suppression list, newest first, for the admin surface
+    /// (BUNYIP-762).
+    pub async fn list(
+        pool: &PgPool,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<MailerSuppression>, AppError> {
+        let rows = sqlx::query_as::<_, MailerSuppression>(
+            "SELECT address, reason, detail, created_at, updated_at
+             FROM mailer_suppressions
+             ORDER BY created_at DESC
+             LIMIT $1 OFFSET $2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Remove `address` from the suppression list so it can be mailed again
+    /// (BUNYIP-762). Returns whether a row existed to delete.
+    pub async fn delete(pool: &PgPool, address: &str) -> Result<bool, AppError> {
+        let normalized = normalize_address(address);
+        let result = sqlx::query("DELETE FROM mailer_suppressions WHERE address = $1")
+            .bind(&normalized)
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
     }
 }
 
