@@ -886,14 +886,19 @@ pub struct AdminIpBan {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AdminInvite {
     pub id: String,
+    #[serde(default)]
     pub email: String,
+    #[serde(default)]
     pub invited_by: String,
+    #[serde(default)]
     pub role: String,
+    #[serde(default)]
     pub expires_at: String,
     #[serde(default)]
     pub accepted_at: Option<String>,
     #[serde(default)]
     pub revoked_at: Option<String>,
+    #[serde(default)]
     pub created_at: String,
 }
 
