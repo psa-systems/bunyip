@@ -166,7 +166,13 @@ pub enum KindEnumerationStatus {
 /// What reading one application's provider status produced. Every variant is
 /// shown on the aggregate page; none is ever omitted, and only [`Ok`](Self::Ok)
 /// reads as healthy.
-#[derive(Debug, Clone, Serialize)]
+///
+/// `Deserialize` (plus the tolerant `Unknown` fallback) exists for consumers
+/// like bunyip-web that read this back off `GET /v1/admin/providers/status`:
+/// an unrecognised `state` (a future variant) decodes as `Unknown` rather
+/// than failing the whole page, the same tolerant-unknown shape every other
+/// wire enum in this crate uses.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum AppProviderStatus {
     /// The report was fetched, authenticated, and understood.
@@ -179,6 +185,9 @@ pub enum AppProviderStatus {
     /// The application answered with a `schema_version` this Bunyip does not
     /// understand.
     VersionMismatch { reported_version: String },
+    #[serde(other)]
+    #[default]
+    Unknown,
 }
 
 impl AppProviderStatus {
@@ -190,9 +199,11 @@ impl AppProviderStatus {
 }
 
 /// One application's row on the aggregate page.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppStatusRow {
+    #[serde(default)]
     pub app: String,
+    #[serde(default)]
     pub status: AppProviderStatus,
 }
 
@@ -202,14 +213,21 @@ pub struct AppStatusRow {
 
 /// One of the three conditions the epic requires flagged without the reader
 /// comparing columns by eye.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+///
+/// `Deserialize` (plus the tolerant `Unknown` fallback) exists for consumers
+/// like bunyip-web that read this back off the aggregate endpoint: an
+/// unrecognised `condition` decodes as `Unknown` rather than failing the page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "condition", rename_all = "snake_case")]
 pub enum ProviderDiscrepancy {
     /// The declared provider for this key holds nothing, and no other
     /// provider does either: the value is genuinely absent everywhere.
     DeclaredProviderHoldsNothing {
+        #[serde(default)]
         app: String,
+        #[serde(default)]
         kind: String,
+        #[serde(default)]
         key: String,
     },
     /// A value is present in more than one provider for this key (or, when
@@ -217,22 +235,33 @@ pub enum ProviderDiscrepancy {
     /// than one provider is enabled and holding something for the whole
     /// kind).
     PresentInMultipleProviders {
+        #[serde(default)]
         app: String,
+        #[serde(default)]
         kind: String,
         /// Empty when this is a kind-level approximation rather than a
         /// specific key.
+        #[serde(default)]
         key: String,
+        #[serde(default)]
         providers: Vec<String>,
     },
     /// The original incident: the highest-priority (declared/serving)
     /// provider does not hold this key, but a lower-priority one does.
     AbsentFromHighestPriorityProvider {
+        #[serde(default)]
         app: String,
+        #[serde(default)]
         kind: String,
+        #[serde(default)]
         key: String,
+        #[serde(default)]
         serving: String,
+        #[serde(default)]
         holder: String,
     },
+    #[serde(other)]
+    Unknown,
 }
 
 /// Compute every discrepancy in one application's report.
@@ -307,9 +336,11 @@ pub fn discrepancies_for(app: &str, report: &ProviderStatusReport) -> Vec<Provid
 
 /// The whole aggregate page's data: every application's status row, and every
 /// discrepancy flagged across the applications that answered [`Ok`](AppProviderStatus::Ok).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AggregatedProviderStatus {
+    #[serde(default)]
     pub apps: Vec<AppStatusRow>,
+    #[serde(default)]
     pub discrepancies: Vec<ProviderDiscrepancy>,
 }
 

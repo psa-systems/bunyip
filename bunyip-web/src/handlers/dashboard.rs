@@ -1175,6 +1175,11 @@ pub async fn membership(
                                     } } }
                             }
                             div class="flex gap-4 pt-4" {
+                                // BUNYIP-760: the API's billing-portal endpoint had no
+                                // caller, so a member could not reach Stripe's own
+                                // billing portal (payment methods, past invoices) from
+                                // here despite the API already supporting it.
+                                form method="post" action="/membership/billing-portal" { button type="submit" class=(button_class("outline", "default", "")) { "Manage Billing" } }
                                 @if will_cancel {
                                     form method="post" action="/membership/reactivate" { button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Reactivate Membership" } }
                                 } @else {
@@ -1373,6 +1378,24 @@ pub async fn membership_reactivate(State(st): State<AppState>, headers: HeaderMa
     let mut cookies = c.set_cookies.clone();
     cookies.extend(extra);
     redirect_cookies("/membership", &cookies)
+}
+
+/// BUNYIP-760: open the Stripe-hosted billing portal for the member's own
+/// customer record, following the API redirect straight to Stripe rather than
+/// rendering the URL. The API 404s when the caller has no Stripe customer id
+/// yet (e.g. never checked out), which surfaces here as a flash banner.
+pub async fn membership_billing_portal(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (_, c) = match guard(&st, &headers, "/membership").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match calls::billing_portal(&st.api, c.forward.as_deref()).await {
+        Ok(portal) => redirect_cookies(&portal.url, &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/membership?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
+    }
 }
 
 // ===========================================================================

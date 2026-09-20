@@ -85,6 +85,21 @@ pub struct IntegrationSignals {
     pub ip2location_set: bool,
     /// The IP2Proxy `.BIN` path is configured.
     pub ip2proxy_set: bool,
+    /// `MAILER_WEBHOOK_SECRET` is present and non-empty, so the mailer
+    /// bounce/complaint feedback webhook can verify its signature.
+    pub mailer_webhook_secret_present: bool,
+    /// The update checker has an upstream URL configured
+    /// (`BUNYIP_UPDATE_CHECK_URL`), i.e. `UpdateStatus::enabled`.
+    pub update_check_enabled: bool,
+    /// The update checker is enabled but its last check against the upstream
+    /// release feed failed (`UpdateStatus::error` is set).
+    pub update_check_failing: bool,
+    /// The `mokosh` application row has a `webhook_url`, so account-deleted
+    /// events are dispatched to it (BUNYIP-336).
+    pub mokosh_webhook_configured: bool,
+    /// `MOKOSH_BACKUP_API_URL` is set, so account backup/restore uses the
+    /// real Mokosh adapter instead of the pending stub (BUNYIP-356).
+    pub mokosh_backup_url_set: bool,
 }
 
 /// The `feature` text an inventory variable carries: what stops working when it
@@ -337,25 +352,95 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
 
     // GeoIP enrichment. A path either resolves at boot or the feature is off;
     // on-disk freshness is the admin dashboard Datasets card's job, not this one.
-    out.push(geoip(
+    out.push(single_var(
         "ip2location",
         "Login-location (IP2Location)",
         sig.ip2location_set,
         "IP2LOCATION_DB_PATH",
     ));
-    out.push(geoip(
+    out.push(single_var(
         "ip2proxy",
         "Proxy / ASN enrichment (IP2Proxy)",
         sig.ip2proxy_set,
         "IP2PROXY_DB_PATH",
     ));
 
+    // Mailer feedback webhook: the SMTP provider's bounce/complaint callback,
+    // fed by one shared HMAC secret (BUNYIP-603).
+    out.push(single_var(
+        "mailer_feedback_webhook",
+        "Mailer feedback webhook",
+        sig.mailer_webhook_secret_present,
+        "MAILER_WEBHOOK_SECRET",
+    ));
+
+    // Update checker: unlike the binary integrations above, a configured
+    // checker can still be `Failing` (the last poll against the upstream
+    // release feed did not succeed), so it gets its own three-state rule.
+    out.push(if !sig.update_check_enabled {
+        status(
+            "update_checker",
+            "Update checker",
+            IntegrationState::Unconfigured,
+            feature_of("BUNYIP_UPDATE_CHECK_URL"),
+            remedy_of("BUNYIP_UPDATE_CHECK_URL"),
+        )
+    } else if sig.update_check_failing {
+        status(
+            "update_checker",
+            "Update checker",
+            IntegrationState::Failing,
+            "The update checker is configured, but the last check against the upstream release \
+             feed failed."
+                .to_string(),
+            "Verify BUNYIP_UPDATE_CHECK_URL is reachable and, for a private release feed, that \
+             BUNYIP_UPDATE_CHECK_TOKEN is set."
+                .to_string(),
+        )
+    } else {
+        status(
+            "update_checker",
+            "Update checker",
+            IntegrationState::Configured,
+            "The update checker is configured and the last check against the upstream release \
+             feed succeeded."
+                .to_string(),
+            String::new(),
+        )
+    });
+
+    // Mokosh account-deleted webhook: dispatches the account_deleted event to
+    // mokosh-server when the mokosh application row carries a webhook_url
+    // (BUNYIP-336).
+    out.push(single_var(
+        "mokosh_webhook",
+        "Mokosh account-deleted webhook",
+        sig.mokosh_webhook_configured,
+        "MOKOSH_WEBHOOK_URL",
+    ));
+
+    // Mokosh backup/restore: account backup/restore calls mokosh-server's
+    // tenant export/import API instead of falling back to the pending stub
+    // (BUNYIP-356).
+    out.push(single_var(
+        "mokosh_backup",
+        "Mokosh backup/restore",
+        sig.mokosh_backup_url_set,
+        "MOKOSH_BACKUP_API_URL",
+    ));
+
     out
 }
 
-/// A dataset-path integration: configured when the path is set, unconfigured
-/// otherwise. There is no half-configured state, so no `Failing`.
-fn geoip(key: &'static str, name: &'static str, set: bool, var: &'static str) -> IntegrationStatus {
+/// A single-variable integration: configured when the signal is set,
+/// unconfigured otherwise. There is no half-configured state, so no
+/// `Failing`.
+fn single_var(
+    key: &'static str,
+    name: &'static str,
+    set: bool,
+    var: &'static str,
+) -> IntegrationStatus {
     if set {
         status(
             key,
@@ -400,6 +485,11 @@ mod tests {
             oci_service_set: false,
             ip2location_set: false,
             ip2proxy_set: false,
+            mailer_webhook_secret_present: false,
+            update_check_enabled: false,
+            update_check_failing: false,
+            mokosh_webhook_configured: false,
+            mokosh_backup_url_set: false,
         }
     }
 
@@ -407,6 +497,30 @@ mod tests {
         list.iter()
             .find(|s| s.key == key)
             .unwrap_or_else(|| panic!("no integration keyed {key}"))
+    }
+
+    /// The Status page lists all 12 gated third-party capabilities, not just
+    /// the original 8 (BUNYIP-763).
+    #[test]
+    fn lists_all_twelve_gated_capabilities() {
+        let list = integration_statuses(&nothing_configured());
+        assert_eq!(list.len(), 12, "{list:#?}");
+        for key in [
+            "email",
+            "stripe",
+            "support_inbox",
+            "infisical",
+            "distribution",
+            "oci",
+            "ip2location",
+            "ip2proxy",
+            "mailer_feedback_webhook",
+            "update_checker",
+            "mokosh_webhook",
+            "mokosh_backup",
+        ] {
+            find(&list, key);
+        }
     }
 
     #[test]
@@ -498,6 +612,31 @@ mod tests {
         sig.infisical_complete = true;
         assert_eq!(
             find(&integration_statuses(&sig), "infisical").state,
+            IntegrationState::Configured
+        );
+    }
+
+    /// The update checker is `Unconfigured` with no URL, `Failing` when
+    /// configured but the last poll failed, and `Configured` when the last
+    /// poll succeeded.
+    #[test]
+    fn update_checker_reflects_enabled_and_last_check_outcome() {
+        let mut sig = nothing_configured();
+        assert_eq!(
+            find(&integration_statuses(&sig), "update_checker").state,
+            IntegrationState::Unconfigured
+        );
+
+        sig.update_check_enabled = true;
+        sig.update_check_failing = true;
+        assert_eq!(
+            find(&integration_statuses(&sig), "update_checker").state,
+            IntegrationState::Failing
+        );
+
+        sig.update_check_failing = false;
+        assert_eq!(
+            find(&integration_statuses(&sig), "update_checker").state,
             IntegrationState::Configured
         );
     }
