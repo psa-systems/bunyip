@@ -335,6 +335,13 @@ pub struct CheckoutSessionResponse {
     pub session_id: String,
 }
 
+/// `POST /v1/memberships/billing-portal` (BUNYIP-760): the Stripe-hosted
+/// billing-portal session URL for the member's own customer record.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BillingPortalResponse {
+    pub url: String,
+}
+
 /// `GET /v1/memberships/payments`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StripePaymentResponse {
@@ -576,191 +583,16 @@ pub struct IntegrationStatusResponse {
 
 // --- BUNYIP-634: the suite provider-status aggregate ------------------------
 //
-// Mirrors `bunyip_domain::services::provider_status`. Every field carries
-// `#[serde(default)]` per the module's own wire-compatibility rule: this is
-// itself an envelope over data another application (Mokosh, Drillmark) may
-// report on an older or newer contract version, so a field it does not send
-// must decode as absent rather than failing the whole page.
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct ProviderEnabledEntry {
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub priority: usize,
-    #[serde(default)]
-    pub reachable: bool,
-    #[serde(default)]
-    pub unreachable_reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct ProviderKeyEntry {
-    #[serde(default)]
-    pub key: String,
-    #[serde(default)]
-    pub feature: Option<String>,
-    #[serde(default)]
-    pub recorded_served_by: Option<String>,
-    #[serde(default)]
-    pub live_holds: bool,
-    #[serde(default)]
-    pub state: String,
-    #[serde(default)]
-    pub providers: Vec<String>,
-}
-
-/// The `list()` outcome for a kind that supports enumeration, mirroring
-/// `bunyip_domain::services::provider_status::KindEnumerationStatus`. An empty
-/// `Supported` and `Unsupported` are different facts and never collapse into
-/// each other.
-#[derive(Debug, Clone, Deserialize)]
-pub enum ProviderKindEnumerationStatus {
-    Supported(Vec<String>),
-    Unsupported,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct ProviderKindEntry {
-    #[serde(default)]
-    pub kind: String,
-    #[serde(default)]
-    pub enabled: Vec<ProviderEnabledEntry>,
-    #[serde(default)]
-    pub serving: Option<String>,
-    #[serde(default)]
-    pub keys: Vec<ProviderKeyEntry>,
-    #[serde(default)]
-    pub enumeration: Option<ProviderKindEnumerationStatus>,
-}
-
-/// A generation identity: number, when it resolved, and a human-readable
-/// actor. Never credential material.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct ProviderGenerationHeader {
-    #[serde(default)]
-    pub number: u64,
-    #[serde(default)]
-    pub resolved_at: Option<String>,
-    #[serde(default)]
-    pub actor: String,
-}
-
-/// One kind's selection differs from its hosting profile's default. Absent
-/// for an application with no hosting-profile concept (Drillmark today).
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct ProviderHostingProfileDeviation {
-    #[serde(default)]
-    pub kind: String,
-    #[serde(default)]
-    pub profile_default: Vec<String>,
-    #[serde(default)]
-    pub explicit: Vec<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct ProviderStatusReport {
-    #[serde(default)]
-    pub hosting_profile: String,
-    #[serde(default)]
-    pub deviations: Vec<ProviderHostingProfileDeviation>,
-    #[serde(default)]
-    pub configuration_generation: Option<ProviderGenerationHeader>,
-    #[serde(default)]
-    pub kinds: Vec<ProviderKindEntry>,
-    #[serde(default)]
-    pub collected_at: Option<String>,
-}
-
-/// One application's outcome. Deserialized from the internally-tagged
-/// `{"state": "ok" | "unreachable" | "unauthenticated" | "version_mismatch", ...}`
-/// bunyip-api's `AppProviderStatus` serializes. An unrecognised `state` (a
-/// future variant) decodes as [`ProviderAppState::Unknown`], the same
-/// tolerant-unknown shape `wire_enum!` gives string enums, so a newer
-/// bunyip-api never breaks this page; it just renders as an unclassified row.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum ProviderAppState {
-    Ok {
-        #[serde(default)]
-        report: ProviderStatusReport,
-    },
-    Unreachable {
-        #[serde(default)]
-        reason: String,
-    },
-    Unauthenticated,
-    VersionMismatch {
-        #[serde(default)]
-        reported_version: String,
-    },
-    #[serde(other)]
-    #[default]
-    Unknown,
-}
-
-impl ProviderAppState {
-    pub fn is_healthy(&self) -> bool {
-        matches!(self, ProviderAppState::Ok { .. })
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ProviderAppStatusRow {
-    #[serde(default)]
-    pub app: String,
-    #[serde(flatten, default)]
-    pub status: ProviderAppState,
-}
-
-/// One flagged discrepancy. Deserialized from the internally-tagged
-/// `{"condition": "...", ...}` shape; an unrecognised condition decodes as
-/// [`ProviderDiscrepancy::Unknown`] rather than failing the page.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "condition", rename_all = "snake_case")]
-pub enum ProviderDiscrepancy {
-    DeclaredProviderHoldsNothing {
-        #[serde(default)]
-        app: String,
-        #[serde(default)]
-        kind: String,
-        #[serde(default)]
-        key: String,
-    },
-    PresentInMultipleProviders {
-        #[serde(default)]
-        app: String,
-        #[serde(default)]
-        kind: String,
-        #[serde(default)]
-        key: String,
-        #[serde(default)]
-        providers: Vec<String>,
-    },
-    AbsentFromHighestPriorityProvider {
-        #[serde(default)]
-        app: String,
-        #[serde(default)]
-        kind: String,
-        #[serde(default)]
-        key: String,
-        #[serde(default)]
-        serving: String,
-        #[serde(default)]
-        holder: String,
-    },
-    #[serde(other)]
-    Unknown,
-}
-
-/// Envelope of `GET /v1/admin/providers/status`.
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct ProviderStatusAggregateResponse {
-    #[serde(default)]
-    pub apps: Vec<ProviderAppStatusRow>,
-    #[serde(default)]
-    pub discrepancies: Vec<ProviderDiscrepancy>,
-}
+// BUNYIP-761: these were hand-copied mirrors of
+// `bunyip_domain::services::provider_status` that drifted out of parity with
+// the real DTOs (most recently dropping `deviations` / `configuration_generation`
+// / `enumeration`). Re-exported from the shared crate instead, so a future
+// field addition there is a compile error here rather than a silent skew.
+pub use bunyip_domain::services::provider_status::{
+    AggregatedProviderStatus as ProviderStatusAggregateResponse,
+    AppProviderStatus as ProviderAppState, AppStatusRow as ProviderAppStatusRow,
+    ProviderDiscrepancy, ProviderKindReport as ProviderKindEntry, ProviderStatusReport,
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminUser {
@@ -911,6 +743,28 @@ pub struct AdminIpBan {
     pub banned_at: String,
     #[serde(default)]
     pub expires_at: String,
+}
+
+/// One admin invite as returned by `GET /v1/admin/invites` (BUNYIP-760).
+/// Mirrors `bunyip_domain::models::token::AdminInvite`; `token_hash` is never
+/// serialized by the API, so it is not carried here.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminInvite {
+    pub id: String,
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub invited_by: String,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub expires_at: String,
+    #[serde(default)]
+    pub accepted_at: Option<String>,
+    #[serde(default)]
+    pub revoked_at: Option<String>,
+    #[serde(default)]
+    pub created_at: String,
 }
 
 /// Advisory ASN / VPN enrichment for one address as returned by
@@ -1783,9 +1637,9 @@ pub struct DocumentedApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthResponse, MembershipStatus, MembershipTier, ProviderKindEnumerationStatus,
-        ProviderStatusReport, User, UserRole,
+        AuthResponse, MembershipStatus, MembershipTier, ProviderStatusReport, User, UserRole,
     };
+    use bunyip_domain::services::provider_status::KindEnumerationStatus as ProviderKindEnumerationStatus;
 
     /// Build a minimal web `User` from JSON so the many required fields don't
     /// have to be spelled out in every test.

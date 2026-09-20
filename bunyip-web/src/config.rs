@@ -165,13 +165,42 @@ impl Config {
         }
     }
 
-    /// BUNYIP-255: whether the BFF is serving over HTTPS. Derived from
-    /// the configured `api_public_origin`: a production deploy points
-    /// the browser at `https://api.<tld>`, dev points at `http://...`.
-    /// Used to set the `Secure` attribute on cookies bunyip-web emits
-    /// directly (e.g. the `bunyip_2fa` challenge cookie) so the cookie
-    /// is HTTPS-only in production but still usable in local dev.
-    pub fn use_secure_cookies(&self) -> bool {
+    /// BUNYIP-759: whether the `Secure` attribute belongs on cookies
+    /// bunyip-web emits directly (the `bunyip_2fa` challenge cookie and the
+    /// defensive auth-cookie clears). String-parsing `api_public_origin` for
+    /// `https://` used to decide this - a typo'd `http://` origin in a
+    /// production config silently shipped non-Secure cookies with nothing to
+    /// catch it. The transport is the authority instead, mirroring
+    /// `bunyip_domain::Config::cookies_secure`: `X-Forwarded-Proto` is
+    /// honoured only when the immediate socket peer is a configured trusted
+    /// proxy (`peer`), so a direct client cannot forge it. Plain-HTTP `just
+    /// dev` on localhost (no trusted proxies configured) still gets
+    /// `false` and keeps working.
+    pub fn cookies_secure(
+        &self,
+        peer: Option<std::net::IpAddr>,
+        headers: &axum::http::HeaderMap,
+    ) -> bool {
+        let peer_is_trusted_proxy =
+            peer.is_some_and(|ip| self.trusted_proxies.iter().any(|net| net.contains(ip)));
+
+        peer_is_trusted_proxy
+            && headers
+                .get("X-Forwarded-Proto")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.split(',').next())
+                .map(str::trim)
+                .is_some_and(|proto| proto.eq_ignore_ascii_case("https"))
+    }
+
+    /// BUNYIP-759: whether `api_public_origin` LOOKS like an HTTPS origin.
+    /// Display-only: it decides the scheme of the Open Graph share-image URL
+    /// and the unknown-host redirect link, where a wrong guess is a cosmetic
+    /// broken link, not a security downgrade. Unlike [`Self::cookies_secure`]
+    /// this has no request to derive a transport signal from (the share image
+    /// is resolved once at boot), so the string heuristic stays here on
+    /// purpose rather than being promoted back onto the cookie path.
+    fn origin_looks_https(&self) -> bool {
         self.api_public_origin.starts_with("https://")
     }
 
@@ -190,7 +219,7 @@ impl Config {
         if self.app_domain.is_empty() {
             return None;
         }
-        let scheme = if self.use_secure_cookies() {
+        let scheme = if self.origin_looks_https() {
             "https"
         } else {
             "http"
@@ -202,3 +231,68 @@ impl Config {
 /// The committed share image every deployment falls back to. Product identity
 /// ships with the product: a deployment that uploads nothing still has one.
 pub const DEFAULT_SHARE_IMAGE_PATH: &str = "/assets/bunyip-hero-718.webp";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    fn cfg(trusted_proxies: Vec<&str>) -> Config {
+        Config {
+            bind_addr: "127.0.0.1:4400".into(),
+            api_url: "http://bunyip-api-app:4401".into(),
+            api_public_origin: "http://bunyip-api-app:4401".into(),
+            oidc_issuer: "http://bunyip-api-app:4401".into(),
+            app_domain: String::new(),
+            community_url: String::new(),
+            trusted_proxies: trusted_proxies
+                .into_iter()
+                .map(|s| s.parse().unwrap())
+                .collect(),
+            csp: CspConfig::default(),
+        }
+    }
+
+    fn headers_with_proto(proto: &str) -> axum::http::HeaderMap {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("X-Forwarded-Proto", proto.parse().unwrap());
+        headers
+    }
+
+    #[test]
+    fn plain_http_dev_is_not_secure() {
+        let cfg = cfg(vec![]);
+        assert!(!cfg.cookies_secure(None, &axum::http::HeaderMap::new()));
+    }
+
+    #[test]
+    fn untrusted_peer_forging_https_header_is_not_secure() {
+        let cfg = cfg(vec![]);
+        let peer: IpAddr = "203.0.113.1".parse().unwrap();
+        assert!(!cfg.cookies_secure(Some(peer), &headers_with_proto("https")));
+    }
+
+    #[test]
+    fn trusted_proxy_forwarding_https_is_secure() {
+        let cfg = cfg(vec!["10.0.0.0/8"]);
+        let peer: IpAddr = "10.0.0.5".parse().unwrap();
+        assert!(cfg.cookies_secure(Some(peer), &headers_with_proto("https")));
+    }
+
+    #[test]
+    fn trusted_proxy_forwarding_http_is_not_secure() {
+        let cfg = cfg(vec!["10.0.0.0/8"]);
+        let peer: IpAddr = "10.0.0.5".parse().unwrap();
+        assert!(!cfg.cookies_secure(Some(peer), &headers_with_proto("http")));
+    }
+
+    #[test]
+    fn origin_string_alone_no_longer_decides_cookie_security() {
+        // BUNYIP-759: a misconfigured `http://` origin used to be the whole
+        // story. Now, even an origin that starts with `https://` grants
+        // nothing without a trusted-proxy-forwarded transport signal.
+        let mut cfg = cfg(vec![]);
+        cfg.api_public_origin = "https://api.example.com".into();
+        assert!(!cfg.cookies_secure(None, &axum::http::HeaderMap::new()));
+    }
+}
