@@ -1818,8 +1818,9 @@ impl EnvVarSpec {
 
 /// The one classified inventory of every environment variable bunyip-api reads
 /// (BUNYIP-537). A new variable is added here with its classification, gated
-/// feature and remediation text, or `env_inventory_covers_every_api_env_read`
-/// (bunyip-api/tests/env_inventory.rs) fails the build.
+/// feature and remediation text, or `env_inventory_covers_every_env_read`
+/// (bunyip-api/tests/env_inventory.rs, which also scans bunyip-web/src:
+/// BUNYIP-751) fails the build.
 ///
 /// The reporting contract:
 ///
@@ -2306,9 +2307,43 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
     ),
     EnvVarSpec::defaulted("BUNYIP_E2E_TOTP_SECRET", "e2e bootstrap TOTP seed"),
     EnvVarSpec::defaulted("BUNYIP_SEED_ALLOW", "non-production demo-seed switch"),
+    // ---- bunyip-web (BFF), BUNYIP-751 --------------------------------------
+    // bunyip-web reports a missing variable by falling back to a working
+    // default rather than through ConfigFailure / fatal_config_error, so every
+    // one of its variables is Defaulted: an absent value never blocks startup.
     EnvVarSpec::defaulted(
-        "BUNYIP_GIT_SHA",
-        "build stamp shown on the version endpoint",
+        "BUNYIP_API_URL",
+        "bunyip-api origin bunyip-web's server process calls over /v1; \
+         defaults to http://localhost:4401",
+    ),
+    EnvVarSpec::defaulted(
+        "BUNYIP_API_PUBLIC_ORIGIN",
+        "public-facing bunyip-api origin the BROWSER hits (SSE/EventSource); \
+         defaults to BUNYIP_API_URL (BUNYIP-192)",
+    ),
+    EnvVarSpec::defaulted(
+        "BUNYIP_BIND_ADDR",
+        "bunyip-web listen address; defaults to 0.0.0.0:4400",
+    ),
+    EnvVarSpec::defaulted(
+        "BUNYIP_OIDC_ISSUER",
+        "OIDC issuer bunyip-web trusts; defaults to BUNYIP_API_URL",
+    ),
+    EnvVarSpec::defaulted(
+        "BUNYIP_APP_DOMAIN",
+        "apex domain for app launch URLs and legal copy; empty falls back to localhost",
+    ),
+    EnvVarSpec::defaulted(
+        "BUNYIP_COMMUNITY_URL",
+        "Let's Chat instance URL; empty hides the Community button (BUNYIP-329)",
+    ),
+    EnvVarSpec::defaulted(
+        "CSP_CONNECT_SRC",
+        "extra connect-src origins a skin appends to bunyip-web's CSP (BUNYIP-503)",
+    ),
+    EnvVarSpec::defaulted(
+        "CSP_FORM_ACTION",
+        "extra form-action origins a skin appends to bunyip-web's CSP (BUNYIP-503)",
     ),
 ];
 

@@ -740,7 +740,7 @@ checksum = "5d20789868f4b01b2f2caec9f5c4e0213b41e3e5702a50157d699ae31ced2fcb"
 
 [[package]]
 name = "bunyip-api"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "actix-cors",
  "actix-multipart",
@@ -796,7 +796,7 @@ dependencies = [
 
 [[package]]
 name = "bunyip-domain"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "actix-cors",
  "actix-multipart",
@@ -855,7 +855,7 @@ dependencies = [
 
 [[package]]
 name = "bunyip-oci"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "actix-rt",
  "actix-web",
@@ -882,7 +882,7 @@ dependencies = [
 
 [[package]]
 name = "bunyip-oidc"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "actix-rt",
  "actix-web",
@@ -911,10 +911,11 @@ dependencies = [
 
 [[package]]
 name = "bunyip-web"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "axum",
  "base64 0.21.7",
+ "bunyip-domain",
  "chrono",
  "ipnetwork",
  "maud",
@@ -5723,7 +5724,7 @@ dependencies = [
 
 [[package]]
 name = "web-kit"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "axum",
  "ipnetwork",

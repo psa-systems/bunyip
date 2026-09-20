@@ -2027,6 +2027,8 @@ pub async fn get_integration_status(
     _admin: AdminUser,
     pool: web::Data<PgPool>,
     config: web::Data<Config>,
+    mailer_webhook_secret: web::Data<crate::handlers::mailer::MailerWebhookSecret>,
+    update_checker: web::Data<Arc<crate::version::UpdateChecker>>,
 ) -> Result<HttpResponse, AppError> {
     use bunyip_domain::config::{GovernedSecret, SecretsProvider};
     use bunyip_domain::services::{integration_statuses, InfisicalClient, IntegrationSignals};
@@ -2045,6 +2047,14 @@ pub async fn get_integration_status(
     let survey = crate::secrets::survey(pool.get_ref(), config.get_ref(), &key_set, probe).await?;
     let present =
         |secret: GovernedSecret| survey.value(secret).is_some_and(|v| !v.trim().is_empty());
+
+    // BUNYIP-763: the 4 gated capabilities the classifier previously missed.
+    let update_status = update_checker.status().await;
+    let mokosh_webhook_configured = ApplicationRepository::find_by_slug(&pool, "mokosh")
+        .await?
+        .is_some_and(|app| app.webhook_url.is_some_and(|url| !url.trim().is_empty()));
+    let mokosh_backup_url_set =
+        std::env::var("MOKOSH_BACKUP_API_URL").is_ok_and(|v| !v.trim().is_empty());
 
     let signals = IntegrationSignals {
         secrets_provider: config.secrets_provider,
@@ -2077,6 +2087,14 @@ pub async fn get_integration_status(
             .ip2proxy_db_path
             .as_deref()
             .is_some_and(|v| !v.trim().is_empty()),
+        mailer_webhook_secret_present: mailer_webhook_secret
+            .0
+            .as_deref()
+            .is_some_and(|v| !v.trim().is_empty()),
+        update_check_enabled: update_status.enabled,
+        update_check_failing: update_status.error.is_some(),
+        mokosh_webhook_configured,
+        mokosh_backup_url_set,
     };
 
     let response = serde_json::json!({ "integrations": integration_statuses(&signals) });

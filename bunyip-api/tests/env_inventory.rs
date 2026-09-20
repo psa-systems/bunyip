@@ -65,6 +65,36 @@ fn literal_env_reads(source: &str) -> Vec<String> {
     names
 }
 
+/// The environment-variable names read through bunyip-web's `var(k)` closure
+/// idiom (`bunyip-web/src/config.rs`: `let var = |k: &str| std::env::var(k)...`),
+/// i.e. bare `var("NAME")` call sites. A word-boundary check on the character
+/// before `var("` keeps this from mistaking `set_var("...")` / `remove_var("...")`
+/// test fixtures for a read: both end in `_var(`, and `_` is a word character.
+fn closure_env_reads(source: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let prefix = "var(\"";
+    for line in source.lines() {
+        if line.trim_start().starts_with("//") {
+            continue;
+        }
+        let bytes = line.as_bytes();
+        let mut search_start = 0;
+        while let Some(rel_idx) = line[search_start..].find(prefix) {
+            let idx = search_start + rel_idx;
+            let is_word_char = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+            let at_boundary = idx == 0 || !is_word_char(bytes[idx - 1]);
+            if at_boundary {
+                let after = &line[idx + prefix.len()..];
+                if let Some(end) = after.find('"') {
+                    names.push(after[..end].to_string());
+                }
+            }
+            search_start = idx + prefix.len();
+        }
+    }
+    names
+}
+
 /// The part of a source file that is NOT its `#[cfg(test)]` module.
 fn without_test_module(source: &str) -> &str {
     match source.find("#[cfg(test)]") {
@@ -74,18 +104,31 @@ fn without_test_module(source: &str) -> &str {
 }
 
 #[test]
-fn env_inventory_covers_every_api_env_read() {
+fn env_inventory_covers_every_env_read() {
     let root = workspace_root();
     let mut scanned = 0usize;
     let mut unclassified: Vec<String> = Vec::new();
 
-    for dir in [root.join("crates"), root.join("bunyip-api/src")] {
+    let scan_dirs = [
+        (root.join("crates"), false),
+        (root.join("bunyip-api/src"), false),
+        // BUNYIP-751: bunyip-web reads its environment through a `var(k)`
+        // closure rather than literal `env::var("NAME")` calls, so it needs
+        // the extra matcher on top of the shared one.
+        (root.join("bunyip-web/src"), true),
+    ];
+
+    for (dir, is_web) in scan_dirs {
         for file in rust_sources(&dir) {
             let source = std::fs::read_to_string(&file).expect("readable source");
-            for name in literal_env_reads(&source) {
+            let mut names = literal_env_reads(&source);
+            if is_web {
+                names.extend(closure_env_reads(&source));
+            }
+            for name in names {
                 scanned += 1;
                 // Test-only fixtures use throwaway names; they are not read by
-                // the running api and are not part of its contract.
+                // the running app and are not part of its contract.
                 if name.starts_with("TEST_") {
                     continue;
                 }
@@ -102,8 +145,8 @@ fn env_inventory_covers_every_api_env_read() {
     );
     assert!(
         unclassified.is_empty(),
-        "environment variables read by the api but not classified in ENV_INVENTORY \
-         (crates/bunyip-domain/src/config.rs): {unclassified:#?}"
+        "environment variables read by the api or bunyip-web but not classified in \
+         ENV_INVENTORY (crates/bunyip-domain/src/config.rs): {unclassified:#?}"
     );
 }
 
