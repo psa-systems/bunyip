@@ -245,7 +245,8 @@ check-fmt:
 check-docker:
     docker build --file bunyip-api/oci-build/Dockerfile --target builder --output type=cacheonly --provenance=false .
 
-# Run fmt + clippy + workspace lib tests inside the pinned rust-builder image.
+# Run fmt + clippy + workspace tests (--all-targets: unit, integration, and
+# doc tests) inside the pinned rust-builder image.
 # For dev boxes with no local Rust toolchain; named volumes keep repeat runs incremental.
 # The build cache is mounted OUTSIDE /work and reached through CARGO_TARGET_DIR
 # (what common's pre-commit-docker does): a volume nested under the bind mount
@@ -390,25 +391,22 @@ dev-sso: ensure-env ensure-oidc-keys
     print $"  bunyip hub:   https://($user_name)-bunyip.a8n.run"
     print $"  OCI registry: https://($user_name)-bunyip-registry.a8n.run  \(when OCI_REGISTRY_ENABLED=true in .env)"
 
-# Register the per-developer OIDC clients (hub + mokosh SPA) in bunyip-api.
+# Register the per-developer mokosh SPA OIDC client in bunyip-api.
 # The committed seed migration registers the static staging hosts; dev hosts
 # carry ${USER} in their redirect URIs and cannot live in a migration, so this
-# recipe upserts them against the running dev DB. Idempotent (ON CONFLICT DO
+# recipe upserts it against the running dev DB. Idempotent (ON CONFLICT DO
 # UPDATE keeps the redirect URIs current if your username or hosts change).
-# Run after `just dev-sso`. bunyip needs no client_id of its own; paste the
-# printed SPA client_id into mokosh-apps/.env.
+# Run after `just dev-sso`. bunyip needs no client_id of its own (it reads no
+# client_id/redirect/scopes vars), so no bunyip-web row is registered; paste
+# the printed SPA client_id into mokosh-apps/.env.
 [group: 'dev']
 register-dev-clients:
     #!/usr/bin/env nu
     let user_name = (^whoami | str trim)
     let pg = $"dev-bunyip-postgres-($user_name)"
-    let hub_id = "b0000000-0000-4000-8000-0000000000d1"
     let spa_id = "b0000000-0000-4000-8000-0000000000d2"
-    let hub_redirect = $"https://($user_name)-bunyip.a8n.run/auth/callback"
     let spa_redirect = $"https://($user_name)-mokosh.a8n.run/auth/callback"
-    let hub_origin = $"https://($user_name)-bunyip.a8n.run"
     let spa_origin = $"https://($user_name)-mokosh.a8n.run"
-    let hub_aud = $"https://($user_name)-bunyip-api.a8n.run"
     let spa_aud = $"https://($user_name)-mokosh-api.a8n.run"
     if (do { ^docker inspect $pg } | complete | get exit_code) != 0 {
         print $"FAIL: ($pg) is not running. Run `just dev-sso` first."
@@ -422,21 +420,17 @@ register-dev-clients:
             token_endpoint_auth_method, require_pkce,
             audience, access_token_ttl_seconds
         \) VALUES
-        \('($hub_id)', 'public', 'bunyip-web-dev',
-          ARRAY['($hub_redirect)'], ARRAY['($hub_origin)'],
-          ARRAY['openid','email','offline_access'], ARRAY['authorization_code','refresh_token'],
-          'none', TRUE, '($hub_aud)', 600\),
         \('($spa_id)', 'public', 'mokosh-apps-dev',
           ARRAY['($spa_redirect)'], ARRAY['($spa_origin)'],
-          ARRAY['openid','email','offline_access'], ARRAY['authorization_code','refresh_token'],
+          ARRAY['openid','email','profile','offline_access'], ARRAY['authorization_code','refresh_token'],
           'none', TRUE, '($spa_aud)', 600\)
         ON CONFLICT \(client_id\) DO UPDATE
             SET redirect_uris = EXCLUDED.redirect_uris,
                 post_logout_redirect_uris = EXCLUDED.post_logout_redirect_uris,
+                allowed_scopes = EXCLUDED.allowed_scopes,
                 audience = EXCLUDED.audience;"
     ^docker exec $pg psql --username bunyip --dbname bunyip --quiet --command $sql
     print ""
-    print $"  hub  \(bunyip-web-dev, registered in bunyip-api\):     ($hub_id)"
     print $"  SPA  \(MOKOSH_OIDC_CLIENT_ID in mokosh-apps/.env\):   ($spa_id)"
 
 # Stop the dev stack.

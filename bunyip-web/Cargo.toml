@@ -28,6 +28,12 @@ maud = "0.26"
 # unchanged. A second front-end (menkent web) consumes the same crate.
 web-kit = { path = "../crates/web-kit" }
 
+# BUNYIP-761: the authoritative response DTOs. `bunyip-web/src/api/types.rs`
+# re-exports the shared cross-service types (e.g. the provider-status
+# aggregate) from here instead of hand-copying a mirror struct that drifts
+# out of parity with the real one.
+bunyip-domain = { path = "../crates/bunyip-domain" }
+
 # BUNYIP-385: render the embedded top-level docs (src/docs/*.md) to HTML for the
 # public /docs pages. `html` feature only (no CLI / default features).
 pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }

@@ -707,6 +707,12 @@ fn admin_items() -> Vec<NavItem> {
             external: false,
         },
         NavItem {
+            title: "Admin Invites",
+            href: "/admin/invites",
+            icon: "user-plus",
+            external: false,
+        },
+        NavItem {
             title: "IP Bans",
             href: "/admin/ip-bans",
             icon: "shield-off",

@@ -26,6 +26,10 @@ message is sent from Bunyip's own domain and header injection there would forge 
 The `From:` identity is ALWAYS this deployment's configured sending identity. A calling app cannot choose it, so no app
 can send as another.
 
+This doc also covers the feedback webhook that feeds the shared suppression list, and the admin read/delete surface
+over that same list (see [Suppression list and the feedback webhook](#suppression-list-and-the-feedback-webhook-bunyip-603)
+and [Admin: viewing and lifting suppressions](#admin-viewing-and-lifting-suppressions-bunyip-762) below).
+
 ## Responses
 
 | Status | When                                                                                          |
@@ -81,6 +85,56 @@ this endpoint; the trust boundary is the signed body.
 
 `/v1/mailer/webhooks/feedback` is in `rate_limit_floor::EXEMPT_PATHS` for the same reason `/v1/webhooks/stripe` is: an
 external provider posts every bounce from one address, and the HMAC (not the per-IP floor) is what gates it.
+
+## Admin: viewing and lifting suppressions (BUNYIP-762)
+
+The feedback webhook above is the write side of the suppression list; these two endpoints are the read/delete side, for
+an operator who needs to see who is suppressed and why, and lift a suppression so that address can be mailed again.
+Both are admin-session-guarded (the `/admin` router prefix), not the client-credential auth the relay and webhook use.
+
+```http
+GET /v1/admin/mailer-suppressions?page=1&per_page=20
+Cookie: <admin session>
+```
+
+Returns the standard paginated envelope, newest suppression first:
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "address": "dead@customer.example",
+        "reason": "bounce",
+        "detail": "550 5.1.1 user unknown",
+        "created_at": "2026-09-01T12:00:00Z",
+        "updated_at": "2026-09-01T12:00:00Z"
+      }
+    ],
+    "total": 1,
+    "page": 1,
+    "per_page": 20,
+    "total_pages": 1
+  },
+  "meta": { "request_id": "...", "timestamp": "..." }
+}
+```
+
+`page` defaults to 1 and `per_page` defaults to 20, clamped to a maximum of 100. An empty list is not an error: it
+means no address is currently suppressed, and `data.items` is `[]` with `data.total` at `0`.
+
+```http
+DELETE /v1/admin/mailer-suppressions/{address}
+Cookie: <admin session>
+```
+
+Lifts the suppression on `address` (matched case-insensitively, the same normalization the webhook writes with) so it
+can be mailed again. Answers `success_no_data` (200, `data: null`) on removal. A 404 means `address` was not on the
+list: nothing to lift. The action is audit-logged (`AdminMailerSuppressionDeleted`) with the acting admin and the
+address, because lifting a suppression resumes sending to a recipient the suite had previously stopped mailing.
+
+There is no admin UI page over this list yet; both endpoints are API-only.
 
 ## Rate limits
 
