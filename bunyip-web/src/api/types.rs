@@ -335,6 +335,13 @@ pub struct CheckoutSessionResponse {
     pub session_id: String,
 }
 
+/// `POST /v1/memberships/billing-portal` (BUNYIP-760): the Stripe-hosted
+/// billing-portal session URL for the member's own customer record.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BillingPortalResponse {
+    pub url: String,
+}
+
 /// `GET /v1/memberships/payments`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StripePaymentResponse {
@@ -584,7 +591,8 @@ pub struct IntegrationStatusResponse {
 pub use bunyip_domain::services::provider_status::{
     AggregatedProviderStatus as ProviderStatusAggregateResponse,
     AppProviderStatus as ProviderAppState, AppStatusRow as ProviderAppStatusRow,
-    ProviderDiscrepancy, ProviderKindReport as ProviderKindEntry, ProviderStatusReport,
+    KindEnumerationStatus as ProviderKindEnumerationStatus, ProviderDiscrepancy,
+    ProviderKindReport as ProviderKindEntry, ProviderStatusReport,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -736,6 +744,28 @@ pub struct AdminIpBan {
     pub banned_at: String,
     #[serde(default)]
     pub expires_at: String,
+}
+
+/// One admin invite as returned by `GET /v1/admin/invites` (BUNYIP-760).
+/// Mirrors `bunyip_domain::models::token::AdminInvite`; `token_hash` is never
+/// serialized by the API, so it is not carried here.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminInvite {
+    pub id: String,
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub invited_by: String,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub expires_at: String,
+    #[serde(default)]
+    pub accepted_at: Option<String>,
+    #[serde(default)]
+    pub revoked_at: Option<String>,
+    #[serde(default)]
+    pub created_at: String,
 }
 
 /// Advisory ASN / VPN enrichment for one address as returned by
@@ -1607,7 +1637,10 @@ pub struct DocumentedApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuthResponse, MembershipStatus, MembershipTier, User, UserRole};
+    use super::{
+        AuthResponse, MembershipStatus, MembershipTier, ProviderKindEnumerationStatus,
+        ProviderStatusReport, User, UserRole,
+    };
 
     /// Build a minimal web `User` from JSON so the many required fields don't
     /// have to be spelled out in every test.
@@ -1740,5 +1773,61 @@ mod tests {
             serde_json::to_value(UserRole::Unknown).expect("serialize"),
             serde_json::json!("unknown")
         );
+    }
+
+    #[test]
+    fn provider_status_report_decodes_deviations_generation_and_enumeration() {
+        // BUNYIP-768: the exact Mokosh shape the producer's own test
+        // (provider_status.rs's `envelope_parses_the_mokosh_and_drillmark_shapes`)
+        // exercises, so the three fields it carries must survive decode here.
+        let report: ProviderStatusReport = serde_json::from_value(serde_json::json!({
+            "hosting_profile": "saas",
+            "deviations": [{
+                "kind": "configuration",
+                "profile_default": ["file"],
+                "explicit": ["database"],
+            }],
+            "configuration_generation": {
+                "number": 3,
+                "resolved_at": "2026-01-01T00:00:00Z",
+                "actor": "System",
+            },
+            "kinds": [{
+                "kind": "configuration",
+                "enabled": [],
+                "serving": null,
+                "keys": [],
+                "enumeration": {"Supported": ["a", "b"]},
+            }],
+            "collected_at": "2026-01-01T00:00:00Z",
+        }))
+        .expect("mokosh-shaped report decodes");
+
+        assert_eq!(report.deviations.len(), 1);
+        assert_eq!(report.deviations[0].kind, "configuration");
+        assert_eq!(report.deviations[0].profile_default, vec!["file"]);
+        assert_eq!(report.deviations[0].explicit, vec!["database"]);
+
+        let generation = report
+            .configuration_generation
+            .expect("configuration_generation present");
+        assert_eq!(generation.number, 3);
+        assert_eq!(generation.actor, "System");
+
+        match &report.kinds[0].enumeration {
+            Some(ProviderKindEnumerationStatus::Supported(names)) => {
+                assert_eq!(names, &vec!["a".to_string(), "b".to_string()]);
+            }
+            other => panic!("expected Supported enumeration, got {other:?}"),
+        }
+
+        // Drillmark's shape: none of the three keys present at all.
+        let drillmark: ProviderStatusReport = serde_json::from_value(serde_json::json!({
+            "hosting_profile": "drillmark",
+            "kinds": [],
+        }))
+        .expect("drillmark-shaped report decodes");
+        assert!(drillmark.deviations.is_empty());
+        assert!(drillmark.configuration_generation.is_none());
     }
 }

@@ -343,9 +343,11 @@ pub struct RateLimitConfigEntry {
     pub max_requests: i32,
     /// Effective window, same precedence.
     pub window_seconds: i64,
-    /// Bootstrap default cap (compile-time const with env vars applied).
+    /// Bootstrap default cap: resolved through the deployment providers
+    /// (`file`, then `environment`) over the compile-time const, before any
+    /// `rate_limit_configs` database override is applied.
     pub default_max_requests: i32,
-    /// Bootstrap default window.
+    /// Bootstrap default window, same precedence.
     pub default_window_seconds: i64,
     /// True when a persisted `rate_limit_configs` row is overriding the default.
     pub overridden: bool,

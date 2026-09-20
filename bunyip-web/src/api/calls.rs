@@ -4,8 +4,8 @@ use serde_json::{json, Value};
 
 use super::types::{
     AppDoc, AppDocSummary, AppDownloadGroup, Application, ApplicationGroup, ApplicationGroupList,
-    ApplicationList, CheckoutSessionResponse, ClientIdentity, DocumentedApp, DownloadGroups,
-    Membership, PaginatedResponse, PricingResponse, SessionInfo, StripeInvoice,
+    ApplicationList, BillingPortalResponse, CheckoutSessionResponse, ClientIdentity, DocumentedApp,
+    DownloadGroups, Membership, PaginatedResponse, PricingResponse, SessionInfo, StripeInvoice,
     StripePaymentResponse,
 };
 use super::{ok_data, parse, parse_bare, Api, ApiError};
@@ -133,6 +133,19 @@ async fn membership_action(
     let cookies = r.set_cookies.clone();
     ok_data(&r)?;
     Ok(cookies)
+}
+
+/// Open a Stripe-hosted billing-portal session for the caller's own customer
+/// record (BUNYIP-760). Wraps `POST /v1/memberships/billing-portal`, which
+/// 404s when the caller has no Stripe customer id yet.
+pub async fn billing_portal(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<BillingPortalResponse, ApiError> {
+    parse(
+        api.post("/memberships/billing-portal", cookie, None)
+            .await?,
+    )
 }
 
 pub async fn payment_history(

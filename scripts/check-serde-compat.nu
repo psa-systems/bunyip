@@ -37,6 +37,8 @@ const ESSENTIAL_FIELDS = [
     {field: "Application.id", reason: "identifier the app links are built from"}
     {field: "Application.slug", reason: "identifier the app links are built from"}
     {field: "CheckoutSessionResponse.checkout_url", reason: "the URL the browser is sent to"}
+    {field: "BillingPortalResponse.url", reason: "the URL the browser is sent to"}
+    {field: "AdminInvite.id", reason: "the revoke target for one invite"}
     {field: "StripePaymentResponse.id", reason: "payment identifier"}
     {field: "StripeInvoice.id", reason: "invoice identifier"}
     {field: "TwoFactorSetupResponse.otpauth_uri", reason: "the QR payload being enrolled"}
