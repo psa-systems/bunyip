@@ -21,6 +21,15 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/seed/export", get(admin::seed_export))
         .route("/admin/seed/import", post(admin::seed_import))
         .route("/admin/seed/template", post(admin::seed_load_template))
+        // BUNYIP-760: admin invites (send / list / revoke).
+        .route(
+            "/admin/invites",
+            get(admin::invites).post(admin::invite_create),
+        )
+        .route(
+            "/admin/invites/:invite_id/revoke",
+            post(admin::invite_revoke),
+        )
         .route("/admin/ip-bans", get(admin::ip_bans))
         .route("/admin/ip-bans/add", post(admin::ip_ban_create))
         .route("/admin/ip-bans/unban", post(admin::ip_unban))

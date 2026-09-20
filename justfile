@@ -58,12 +58,19 @@ default:
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-justfile check-migrations check-workflows check-workflow-shell check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-theme-colors check-em-dash check-system-level-keys check-cache-mounts check-cache-keys check-publish-triggers check-build check-clippy check-fmt check-docker
+check: check-justfile check-migrations check-migration-immutability check-workflows check-workflow-shell check-serde-compat check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-brand-literals check-theme-colors check-em-dash check-system-level-keys check-cache-mounts check-cache-keys check-publish-triggers check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
 check-migrations:
     ./scripts/check-migration-versions.nu
+
+# Gate migration immutability: reject edits/renames/deletes of already-committed
+# migrations, since sqlx checksums applied migrations and a deployed DB refuses
+# to boot if one changes (BUNYIP-293).
+[group: 'checks']
+check-migration-immutability:
+    ./scripts/check-migration-immutability.nu
 
 # Gate the secret scope of pull_request-triggered workflows (BUNYIP-425).
 [group: 'checks']
@@ -76,6 +83,15 @@ check-workflows:
 check-workflow-shell:
     ./scripts/check-workflow-shell.nu --self-test
     ./scripts/check-workflow-shell.nu
+
+# Gate that every field of a Deserialize response struct in
+# bunyip-web/src/api/types.rs defaults unless it is declared essential, so a
+# field renamed or added by a newer bunyip-api degrades instead of breaking
+# the decode (BUNYIP-506).
+[group: 'checks']
+check-serde-compat:
+    ./scripts/check-serde-compat.nu --self-test
+    ./scripts/check-serde-compat.nu
 
 # Gate the runner labels: the native cargo job stays on the dev image, every
 # label carries its reason, no workflow installs at run time what the image
@@ -160,6 +176,13 @@ check-price-literals:
     ./scripts/check-price-literals.nu --self-test
     ./scripts/check-price-literals.nu
 
+# Gate that no product name is compiled into bunyip-web: the brand is an
+# admin-managed database record, not a literal (BUNYIP-561).
+[group: 'checks']
+check-brand-literals:
+    ./scripts/check-brand-literals.nu --self-test
+    ./scripts/check-brand-literals.nu
+
 # Gate the em-dash ban: no U+2014 in any tracked file (BUNYIP-694).
 [group: 'checks']
 check-em-dash:
@@ -222,7 +245,8 @@ check-fmt:
 check-docker:
     docker build --file bunyip-api/oci-build/Dockerfile --target builder --output type=cacheonly --provenance=false .
 
-# Run fmt + clippy + workspace lib tests inside the pinned rust-builder image.
+# Run fmt + clippy + workspace tests (--all-targets: unit, integration, and
+# doc tests) inside the pinned rust-builder image.
 # For dev boxes with no local Rust toolchain; named volumes keep repeat runs incremental.
 # The build cache is mounted OUTSIDE /work and reached through CARGO_TARGET_DIR
 # (what common's pre-commit-docker does): a volume nested under the bind mount
@@ -367,25 +391,22 @@ dev-sso: ensure-env ensure-oidc-keys
     print $"  bunyip hub:   https://($user_name)-bunyip.a8n.run"
     print $"  OCI registry: https://($user_name)-bunyip-registry.a8n.run  \(when OCI_REGISTRY_ENABLED=true in .env)"
 
-# Register the per-developer OIDC clients (hub + mokosh SPA) in bunyip-api.
+# Register the per-developer mokosh SPA OIDC client in bunyip-api.
 # The committed seed migration registers the static staging hosts; dev hosts
 # carry ${USER} in their redirect URIs and cannot live in a migration, so this
-# recipe upserts them against the running dev DB. Idempotent (ON CONFLICT DO
+# recipe upserts it against the running dev DB. Idempotent (ON CONFLICT DO
 # UPDATE keeps the redirect URIs current if your username or hosts change).
-# Run after `just dev-sso`. bunyip needs no client_id of its own; paste the
-# printed SPA client_id into mokosh-apps/.env.
+# Run after `just dev-sso`. bunyip needs no client_id of its own (it reads no
+# client_id/redirect/scopes vars), so no bunyip-web row is registered; paste
+# the printed SPA client_id into mokosh-apps/.env.
 [group: 'dev']
 register-dev-clients:
     #!/usr/bin/env nu
     let user_name = (^whoami | str trim)
     let pg = $"dev-bunyip-postgres-($user_name)"
-    let hub_id = "b0000000-0000-4000-8000-0000000000d1"
     let spa_id = "b0000000-0000-4000-8000-0000000000d2"
-    let hub_redirect = $"https://($user_name)-bunyip.a8n.run/auth/callback"
     let spa_redirect = $"https://($user_name)-mokosh.a8n.run/auth/callback"
-    let hub_origin = $"https://($user_name)-bunyip.a8n.run"
     let spa_origin = $"https://($user_name)-mokosh.a8n.run"
-    let hub_aud = $"https://($user_name)-bunyip-api.a8n.run"
     let spa_aud = $"https://($user_name)-mokosh-api.a8n.run"
     if (do { ^docker inspect $pg } | complete | get exit_code) != 0 {
         print $"FAIL: ($pg) is not running. Run `just dev-sso` first."
@@ -399,10 +420,6 @@ register-dev-clients:
             token_endpoint_auth_method, require_pkce,
             audience, access_token_ttl_seconds
         \) VALUES
-        \('($hub_id)', 'public', 'bunyip-web-dev',
-          ARRAY['($hub_redirect)'], ARRAY['($hub_origin)'],
-          ARRAY['openid','email','offline_access'], ARRAY['authorization_code','refresh_token'],
-          'none', TRUE, '($hub_aud)', 600\),
         \('($spa_id)', 'public', 'mokosh-apps-dev',
           ARRAY['($spa_redirect)'], ARRAY['($spa_origin)'],
           ARRAY['openid','email','profile','offline_access'], ARRAY['authorization_code','refresh_token'],
@@ -414,7 +431,6 @@ register-dev-clients:
                 audience = EXCLUDED.audience;"
     ^docker exec $pg psql --username bunyip --dbname bunyip --quiet --command $sql
     print ""
-    print $"  hub  \(bunyip-web-dev, registered in bunyip-api\):     ($hub_id)"
     print $"  SPA  \(MOKOSH_OIDC_CLIENT_ID in mokosh-apps/.env\):   ($spa_id)"
 
 # Stop the dev stack.

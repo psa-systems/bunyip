@@ -13,7 +13,7 @@ const GIT_TAG: &str = match option_env!("GIT_TAG") {
     Some(v) => v,
     None => "unknown",
 };
-const GIT_COMMIT: &str = match option_env!("GIT_COMMIT") {
+pub(crate) const GIT_COMMIT: &str = match option_env!("GIT_COMMIT") {
     Some(v) => v,
     None => "unknown",
 };

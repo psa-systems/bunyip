@@ -56,6 +56,7 @@ async fn a_deactivated_application_s_docs_404_through_both_public_routes() {
             source_code_url: None,
             release_notes_url: None,
             is_hosted: Some(false),
+            maintenance_message: None,
             forgejo_owner: None,
             forgejo_repo: None,
             forgejo_package: None,
