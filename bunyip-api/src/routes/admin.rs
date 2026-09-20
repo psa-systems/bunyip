@@ -189,6 +189,17 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             // Manual ban, super-admin only (BUNYIP-413)
             .route("/ip-bans", web::post().to(handlers::create_ip_ban))
             .route("/ip-bans/{ip}", web::delete().to(handlers::unban_ip))
+            // Mailer suppression list (BUNYIP-762): list and lift suppressed
+            // addresses. The write half that populates the list (the
+            // bounce/complaint feedback webhook) lives on /mailer.
+            .route(
+                "/mailer-suppressions",
+                web::get().to(handlers::list_mailer_suppressions),
+            )
+            .route(
+                "/mailer-suppressions/{address}",
+                web::delete().to(handlers::delete_mailer_suppression),
+            )
             // Active rate limits (BUNYIP-315)
             .route("/rate-limits", web::get().to(handlers::list_rate_limits))
             // Reset an active rate limit (BUNYIP-316)
