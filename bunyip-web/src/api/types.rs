@@ -591,8 +591,7 @@ pub struct IntegrationStatusResponse {
 pub use bunyip_domain::services::provider_status::{
     AggregatedProviderStatus as ProviderStatusAggregateResponse,
     AppProviderStatus as ProviderAppState, AppStatusRow as ProviderAppStatusRow,
-    KindEnumerationStatus as ProviderKindEnumerationStatus, ProviderDiscrepancy,
-    ProviderKindReport as ProviderKindEntry, ProviderStatusReport,
+    ProviderDiscrepancy, ProviderKindReport as ProviderKindEntry, ProviderStatusReport,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1638,9 +1637,9 @@ pub struct DocumentedApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthResponse, MembershipStatus, MembershipTier, ProviderKindEnumerationStatus,
-        ProviderStatusReport, User, UserRole,
+        AuthResponse, MembershipStatus, MembershipTier, ProviderStatusReport, User, UserRole,
     };
+    use bunyip_domain::services::provider_status::KindEnumerationStatus as ProviderKindEnumerationStatus;
 
     /// Build a minimal web `User` from JSON so the many required fields don't
     /// have to be spelled out in every test.
