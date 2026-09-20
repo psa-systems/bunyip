@@ -261,7 +261,7 @@ check-container:
         -w /work \
         -e CARGO_TARGET_DIR=/cargo-target \
         -e SQLX_OFFLINE=true \
-        ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie \
+        ghcr.io/niceguyit/rust-builder-glibc:v1.2.0-rust1.98.1-trixie \
         bash -c "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace --all-targets"
 
 # Type-check the workspace.
