@@ -156,7 +156,7 @@ pub(super) fn rate_limit_config_card(
                 div class="flex items-center gap-3" { (icon("sliders-horizontal", "h-5 w-5 text-primary-text")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Limit Configuration" } }
                 p class="text-sm text-muted-foreground" {
                     @if editable {
-                        "The cap and window enforced for each action. A saved value takes effect on the next request; Revert restores the built-in default."
+                        "The cap and window enforced for each action. A saved value is written to the database provider and takes effect on the next request; Revert deletes the override and falls back to the file/environment default."
                     } @else {
                         "The cap and window enforced for each action. Only the super admin can change them."
                     }
