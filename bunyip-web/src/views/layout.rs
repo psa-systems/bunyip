@@ -1385,6 +1385,100 @@ mod tests {
         );
     }
 
+    /// BUNYIP-808: every `/assets/<file>` referenced from `src/*.rs` has to
+    /// exist under `bunyip-web/assets/`. Before this the mascot could go
+    /// missing on the homepage silently: a rename or a removed asset
+    /// compiled fine, tests referencing the string still passed (the
+    /// STRING was unchanged), and the reader saw a broken image the
+    /// browser reported as a plain 404.
+    ///
+    /// The scan is conservative: it matches on the smallest shape the
+    /// production references use - a `/assets/<path>.<ext>` string
+    /// literal, quoted, whose extension is one of the static kinds
+    /// `ServeDir("assets")` actually serves - and ignores everything
+    /// else. Anything that reaches through a database-served path
+    /// (`/brand/*`, `/admin/branding/assets/*`) is not a static asset
+    /// on this ServeDir and is deliberately not scanned here.
+    #[test]
+    fn every_referenced_static_asset_exists_on_disk() {
+        // The extensions ServeDir("assets") actually answers with. A
+        // reference to `/assets/foo.md` would be a bug of a different
+        // kind: static docs are not served here.
+        const EXTS: &[&str] = &[
+            ".webp", ".png", ".jpg", ".jpeg", ".svg", ".ico",
+            ".js", ".css", ".woff", ".woff2", ".ttf", ".otf",
+        ];
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+        let mut stack = vec![src];
+        // Collected as `<source-file>:<line>: /assets/<path>` so a failure
+        // names both the reference and where it lives.
+        let mut missing: Vec<String> = Vec::new();
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("readable source dir") {
+                let path = entry.expect("readable dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let body = std::fs::read_to_string(&path).expect("readable source file");
+                // Test fixtures below the marker are inputs to assertions,
+                // never rendered markup, so a literal there is not a
+                // reference the runtime needs on disk.
+                let prod = match body.find("#[cfg(test)]") {
+                    Some(i) => &body[..i],
+                    None => &body[..],
+                };
+                for (lineno, line) in prod.lines().enumerate() {
+                    let mut rest = line;
+                    while let Some(pos) = rest.find("\"/assets/") {
+                        // Advance past the opening quote so the extracted
+                        // slice starts at `/assets/`.
+                        let after_quote = &rest[pos + 1..];
+                        let end = match after_quote.find('"') {
+                            Some(e) => e,
+                            None => break,
+                        };
+                        let literal = &after_quote[..end];
+                        rest = &after_quote[end + 1..];
+                        // Only enforce static-file extensions. A literal
+                        // like `/assets/js` on its own is a route prefix.
+                        if !EXTS.iter().any(|e| literal.ends_with(e)) {
+                            continue;
+                        }
+                        // Route-only references (`ServeDir` mount point) do
+                        // not name a file; skip anything that reduces to
+                        // exactly `/assets` or `/assets/`.
+                        if literal == "/assets" || literal == "/assets/" {
+                            continue;
+                        }
+                        // `/assets/<rel>` -> `bunyip-web/assets/<rel>`.
+                        let rel = literal.trim_start_matches("/assets/");
+                        let on_disk = assets.join(rel);
+                        if !on_disk.exists() {
+                            missing.push(format!(
+                                "{}:{}: {} -> {}",
+                                path.display(),
+                                lineno + 1,
+                                literal,
+                                on_disk.display()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "static assets referenced from source but missing on disk (BUNYIP-808 \
+             regression check):\n{}",
+            missing.join("\n")
+        );
+    }
+
     /// BUNYIP-554 F6: the avatar picker renders on exactly one page, so its
     /// stylesheet and controller ship on that page alone. The shell's avatar
     /// slot keeps its one rule everywhere, or every other page loses the
