@@ -26,7 +26,7 @@
 # (BUNYIP-426 F10), so two builds of the same commit cannot pick up different
 # layers and a bump is a deliberate, reviewable edit. Re-resolve a digest with
 # `docker buildx imagetools inspect <ref> --raw | sha256sum` when bumping a tag.
-FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie@sha256:f075f2433e3ba90ad9210794786d6e9b6e3dcc5c647061a468dc773c1a2789f2 AS chef
+FROM ghcr.io/niceguyit/rust-builder-glibc:v1.2.0-rust1.98.1-trixie@sha256:38bd435e934a1a82939bc473f5226f892a8841df9f5a26bca9b3cb1d57ab4110 AS chef
 WORKDIR /app
 # The cargo cache mounts here and below carry a per-image `id` and
 # `sharing=locked` (BUNYIP-534): an unnamed, shared mount is keyed by target path
