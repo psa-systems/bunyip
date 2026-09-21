@@ -11,7 +11,8 @@
 #
 # Three properties, mechanically enforced so the split cannot silently regress:
 #   1. e2e.yml has no `pull_request` trigger.
-#   2. e2e-pr.yml references no secret outside the base-URL allowlist.
+#   2. every workflow that declares a `pull_request` trigger references no
+#      secret outside the base-URL allowlist (scanned per file, BUNYIP-721).
 #   3. every `npm ci` under .forgejo/workflows/ passes --ignore-scripts.
 #
 # A fourth and fifth property scan EVERY .forgejo/workflows/*.yml file, not
@@ -57,6 +58,8 @@ def grep-tree [dir: string, pattern: string]: nothing -> table {
 # history recording it.
 const REUSABLE_WORKFLOW_PATTERN = '^\s*uses:\s*(?<target>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\.(forgejo|github)/workflows/[A-Za-z0-9_.-]+\.ya?ml)@(?<ref>\S+)\s*$'
 
+const PR_TRIGGER_PATTERN = '^\s{0,4}pull_request:'
+
 const COMMIT_SHA_PATTERN = '^[0-9a-f]{40}$'
 
 # The one way to keep a `secrets: inherit` or an unpinned ref: say why, in a
@@ -93,44 +96,50 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
     let pr_secret_allowlist = ["E2E_STAGING_BASE_URL" "OIDC_ISSUER_STAGING"]
 
     let suite_workflow = $"($workflows_dir)/e2e.yml"
-    let pr_workflow = $"($workflows_dir)/e2e-pr.yml"
 
     if ($workflows_dir | path type) != "dir" {
         print --stderr $"error: workflows dir not found: ($workflows_dir)"
         exit 2
     }
 
-    for required in [$suite_workflow $pr_workflow] {
-        if ($required | path type) != "file" {
-            print --stderr $"error: expected workflow not found: ($required)"
-            exit 2
-        }
-    }
-
     mut status = 0
 
     # 1. The full suite must not run on PR-authored content. Match the trigger
     # key only (a `pull_request` word inside a comment or an expression is fine).
-    if (read-lines $suite_workflow | any {|l| $l =~ '^\s{0,4}pull_request:' }) {
+    # Stronger than property 2: e2e.yml gets no allowlist at all.
+    if ($suite_workflow | path type) != "file" {
+        print --stderr $"error: expected workflow not found: ($suite_workflow)"
+        exit 2
+    }
+    if (read-lines $suite_workflow | any {|l| $l =~ $PR_TRIGGER_PATTERN }) {
         print --stderr $"error: ($suite_workflow) declares a pull_request trigger; the full suite resolves account/Stripe/TOTP secrets and must stay on push + workflow_dispatch \(BUNYIP-425)"
         $status = 1
     }
 
-    # 2. The PR gate may reference nothing but the allowlisted base URLs.
+    # 2. Every workflow that declares a `pull_request` trigger may reference
+    # nothing but the allowlisted base URLs (BUNYIP-721: scanned per file, not
+    # by name, so a new PR-triggered workflow cannot hold a credential).
     let allowlist_text = ($pr_secret_allowlist | str join "|")
-    let referenced = (
-        read-lines $pr_workflow
-        | each {|l| $l | str replace --regex '#.*' '' }
-        | str join "\n"
-        | parse --regex 'secrets\.(?<name>[A-Za-z0-9_]+)'
-        | get name
-        | uniq
-        | sort
+    let all_workflow_files = (glob $"($workflows_dir)/*.yml" | sort)
+    let pr_workflows = (
+        $all_workflow_files
+        | where {|f| read-lines $f | any {|l| $l =~ $PR_TRIGGER_PATTERN } }
     )
-    for name in $referenced {
-        if not ($name in $pr_secret_allowlist) {
-            print --stderr $"error: ($pr_workflow) references secrets.($name); a pull_request-triggered job may only hold ($allowlist_text) \(BUNYIP-425)"
-            $status = 1
+    for pr_workflow in $pr_workflows {
+        let referenced = (
+            read-lines $pr_workflow
+            | each {|l| $l | str replace --regex '#.*' '' }
+            | str join "\n"
+            | parse --regex '(?:^|[^A-Za-z0-9_.-])secrets\.(?<name>[A-Za-z0-9_]+)'
+            | get name
+            | uniq
+            | sort
+        )
+        for name in $referenced {
+            if not ($name in $pr_secret_allowlist) {
+                print --stderr $"error: ($pr_workflow) references secrets.($name); a pull_request-triggered job may only hold ($allowlist_text) \(BUNYIP-425, BUNYIP-721)"
+                $status = 1
+            }
         }
     }
 
@@ -145,7 +154,6 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
     }
 
     # 4 and 5. Every workflow file, not just the two named above.
-    let all_workflow_files = (glob $"($workflows_dir)/*.yml")
     let scope_problems = ($all_workflow_files | each {|f| check-workflow-scope $f } | flatten)
     for p in $scope_problems {
         print --stderr $"error: ($p) \(BUNYIP-766)"
@@ -153,7 +161,7 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
     }
 
     if $status == 0 {
-        print $"workflow secret scope OK: no PR-triggered job holds a credential, all 'npm ci' ignore scripts, every 'secrets: inherit' and unpinned reusable-workflow ref across ($all_workflow_files | length) files is justified"
+        print $"workflow secret scope OK: e2e.yml has no pull_request trigger, the ($pr_workflows | length) pull_request-triggered workflows across ($all_workflow_files | length) files name only allowlisted secrets, all 'npm ci' ignore scripts, every 'secrets: inherit' and unpinned reusable-workflow ref across ($all_workflow_files | length) files is justified"
     }
 
     exit $status
