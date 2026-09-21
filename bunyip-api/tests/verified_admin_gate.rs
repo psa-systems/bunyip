@@ -153,3 +153,71 @@ async fn verified_admin_user_gates_on_verification_status() {
         .await
         .unwrap();
 }
+
+/// BUNYIP-788: the real invite handlers refuse an unverified admin on both
+/// create and revoke, and admit a verification-complete one (the extractor
+/// passes; the handler then fails on the absent service data, which is not 403).
+#[actix_rt::test]
+async fn admin_invites_require_a_verified_admin() {
+    let Some(pool) = maybe_pool().await else {
+        return;
+    };
+    let jwt = Arc::new(JwtService::new(JwtConfig::from_secret(
+        JWT_SECRET,
+        "bunyip-test",
+    )));
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .app_data(jwt.clone())
+            .route(
+                "/invites",
+                web::post().to(bunyip_api::handlers::create_admin_invite),
+            )
+            .route(
+                "/invites/{invite_id}",
+                web::delete().to(bunyip_api::handlers::revoke_admin_invite),
+            ),
+    )
+    .await;
+
+    let user = seed_admin(&pool).await;
+    let revoke_uri = format!("/invites/{}", Uuid::new_v4());
+    let calls = |user: &User| {
+        [
+            test::TestRequest::post()
+                .uri("/invites")
+                .insert_header(("authorization", bearer(&jwt, user)))
+                .set_json(serde_json::json!({"email": "new@example.test"}))
+                .to_request(),
+            test::TestRequest::delete()
+                .uri(&revoke_uri)
+                .insert_header(("authorization", bearer(&jwt, user)))
+                .to_request(),
+        ]
+    };
+
+    for req in calls(&user) {
+        assert_eq!(test::call_service(&app, req).await.status(), 403);
+    }
+
+    UserRepository::update_profile(&pool, user.id, Some("Ada"), Some("Lovelace"), None)
+        .await
+        .expect("set name");
+    UserRepository::set_email_verified(&pool, user.id)
+        .await
+        .expect("verify email");
+    let verified = UserRepository::find_by_id(&pool, user.id)
+        .await
+        .expect("reload")
+        .expect("still exists");
+    for req in calls(&verified) {
+        assert_ne!(test::call_service(&app, req).await.status(), 403);
+    }
+
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+}

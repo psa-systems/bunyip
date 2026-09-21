@@ -1864,7 +1864,7 @@ pub struct ListAdminInvitesQuery {
 /// Create an admin invite and send email
 pub async fn create_admin_invite(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     auth_service: web::Data<Arc<AuthService>>,
     email_service: web::Data<Arc<EmailService>>,
     body: web::Json<CreateAdminInviteRequest>,
@@ -1922,7 +1922,7 @@ pub async fn list_admin_invites(
 /// Revoke a pending admin invite
 pub async fn revoke_admin_invite(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     auth_service: web::Data<Arc<AuthService>>,
     path: web::Path<uuid::Uuid>,
 ) -> Result<HttpResponse, AppError> {
