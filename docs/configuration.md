@@ -322,8 +322,8 @@ they were not under the YAML layer.
 ### Which provider is serving each value
 
 ```nu
-docker exec bunyip-api bunyip-api config-status
-docker exec bunyip-api bunyip-api config-status --json
+docker compose exec api /app/bunyip-api config-status
+docker compose exec api /app/bunyip-api config-status --json
 ```
 
 Per key it prints the providers holding a value, the one serving it, and one of four conditions. No configuration value

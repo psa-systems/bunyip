@@ -262,7 +262,7 @@ check-container:
         -w /work \
         -e CARGO_TARGET_DIR=/cargo-target \
         -e SQLX_OFFLINE=true \
-        ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie \
+        ghcr.io/niceguyit/rust-builder-glibc:v1.2.0-rust1.98.1-trixie \
         bash -c "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace --all-targets"
 
 # Type-check the workspace.
@@ -423,11 +423,12 @@ register-dev-clients:
         \) VALUES
         \('($spa_id)', 'public', 'mokosh-apps-dev',
           ARRAY['($spa_redirect)'], ARRAY['($spa_origin)'],
-          ARRAY['openid','email','offline_access'], ARRAY['authorization_code','refresh_token'],
+          ARRAY['openid','email','profile','offline_access'], ARRAY['authorization_code','refresh_token'],
           'none', TRUE, '($spa_aud)', 600\)
         ON CONFLICT \(client_id\) DO UPDATE
             SET redirect_uris = EXCLUDED.redirect_uris,
                 post_logout_redirect_uris = EXCLUDED.post_logout_redirect_uris,
+                allowed_scopes = EXCLUDED.allowed_scopes,
                 audience = EXCLUDED.audience;"
     ^docker exec $pg psql --username bunyip --dbname bunyip --quiet --command $sql
     print ""
