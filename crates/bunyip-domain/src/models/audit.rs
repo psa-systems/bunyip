@@ -206,6 +206,10 @@ pub enum AuditAction {
     /// (BUNYIP-762), so it can be mailed again. Metadata carries the target
     /// `address`.
     AdminMailerSuppressionDeleted,
+    /// An admin changed an application-level deployment setting from the admin
+    /// System page (BUNYIP-789). One row per changed key; the old and new
+    /// values are on the row, and `metadata.key` names the setting.
+    SystemConfigUpdated,
 }
 
 impl AuditAction {
@@ -313,6 +317,7 @@ impl AuditAction {
             AuditAction::AdminRateLimitConfigDeleted => "admin_rate_limit_config_deleted",
             AuditAction::AdminIpBanCreated => "admin_ip_ban_created",
             AuditAction::AdminMailerSuppressionDeleted => "admin_mailer_suppression_deleted",
+            AuditAction::SystemConfigUpdated => "system_config_updated",
         }
     }
 
@@ -369,6 +374,7 @@ impl AuditAction {
                 | AuditAction::AdminRateLimitConfigDeleted
                 | AuditAction::AdminIpBanCreated
                 | AuditAction::AdminMailerSuppressionDeleted
+                | AuditAction::SystemConfigUpdated
         )
     }
 }
