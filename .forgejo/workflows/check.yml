@@ -366,6 +366,6 @@ jobs:
         run: just check-tree-ownership
 
   secrets:
-    uses: psa-systems/common/.forgejo/workflows/check-secrets.yml@main
+    uses: psa-systems/common/.forgejo/workflows/check-secrets.yml@main  # secret-scope-ok: same-org shared workflow repo, tracked separately for SHA pinning
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_MEDIUM }}
-    secrets: inherit
+    secrets: inherit  # secret-scope-ok: the scanners may need the org tokens the called workflow reads; this caller job runs no step itself
