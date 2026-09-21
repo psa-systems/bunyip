@@ -968,7 +968,7 @@ pub async fn feedback_post(
 // developer runbooks (e2e, sqlx checksums, dev-sso, client-IP forwarding,
 // Stripe test mode, the OCI verification runbook) live under the repo `docs/`
 // and `docs/dev-docs/`, NOT here - do not surface them at /docs. The markdown
-// is embedded from `bunyip-web/src/docs/*.md`. Temporary home until the
+// is embedded from `bunyip-web/src/skin/docs/*.md`. Temporary home until the
 // dedicated docs app matures (then repoint /docs there, or 301); this whole
 // module retires with that cutover.
 
