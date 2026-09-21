@@ -17,9 +17,12 @@
 /crates/bunyip-core/src/config.rs
 /crates/bunyip-domain/src/config.rs
 /crates/bunyip-domain/src/models/stripe.rs
+/crates/bunyip-domain/src/services/org_pricing_tests.rs
+/crates/bunyip-domain/src/services/organizations_tests.rs
 /docs/mailer-relay.md
 /e2e/lib/accounts.ts
 /e2e/tests/account/change-password.spec.ts
+/e2e/tests/auth/email-flows.spec.ts
 /e2e/tests/auth/password-reset.spec.ts
 /e2e/tests/auth/signup.spec.ts
 /e2e/tests/global.setup.ts
