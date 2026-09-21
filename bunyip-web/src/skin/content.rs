@@ -191,12 +191,13 @@ pub(super) fn pricing_content(pricing: &PricingResponse, stripe: bool, signed_in
 /// usable Stripe price. A pricing page with no pricing has nothing to say, and
 /// the nav / footer / hero links are hidden on exactly the same condition.
 pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (c, pricing) = public_ctx(&st, &headers).await;
+    let (c, pricing, app_links_allowed) = public_ctx(&st, &headers).await;
     if !pricing.published() {
         let mut resp = public_response(
             &st,
             &c,
             &pricing,
+            app_links_allowed,
             "Not found",
             false,
             crate::skin::public::not_found_content(),
@@ -211,7 +212,7 @@ pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response
     // most once per TTL instead of once per public render.
     let stripe = st.stripe_enabled().await;
     let content = pricing_content(&pricing, stripe, c.is_signed_in());
-    public_response(&st, &c, &pricing, "Pricing", true, content)
+    public_response(&st, &c, &pricing, app_links_allowed, "Pricing", true, content)
 }
 
 // --- our story --------------------------------------------------------------
@@ -246,7 +247,7 @@ fn personalized_note(brand_name: &str) -> String {
 }
 
 pub async fn our_story(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (c, pricing) = public_ctx(&st, &headers).await;
+    let (c, pricing, app_links_allowed) = public_ctx(&st, &headers).await;
     // BUNYIP-561: the product name comes from the admin-managed record.
     let brand_name = crate::views::layout::brand_name();
     let brand = if brand_name.is_empty() {
@@ -276,7 +277,7 @@ pub async fn our_story(State(st): State<AppState>, headers: HeaderMap) -> Respon
             }
         }
     };
-    public_response(&st, &c, &pricing, "Our Story", true, content)
+    public_response(&st, &c, &pricing, app_links_allowed, "Our Story", true, content)
 }
 
 // --- roadmap ----------------------------------------------------------------
@@ -340,7 +341,7 @@ fn roadmap_section(title: &str, blurb: &str, items: &[(&str, &str)]) -> Markup {
 }
 
 pub async fn roadmap(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (c, pricing) = public_ctx(&st, &headers).await;
+    let (c, pricing, app_links_allowed) = public_ctx(&st, &headers).await;
     let content = html! {
         div class="container max-w-4xl py-12" {
             div class="mb-12" {
@@ -354,7 +355,7 @@ pub async fn roadmap(State(st): State<AppState>, headers: HeaderMap) -> Response
             }
         }
     };
-    public_response(&st, &c, &pricing, "Roadmap", true, content)
+    public_response(&st, &c, &pricing, app_links_allowed, "Roadmap", true, content)
 }
 
 // --- legal ------------------------------------------------------------------
@@ -372,7 +373,7 @@ fn legal_ul(title: &str, items: &[&str]) -> Markup {
 }
 
 pub async fn terms(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (c, pricing) = public_ctx(&st, &headers).await;
+    let (c, pricing, app_links_allowed) = public_ctx(&st, &headers).await;
     let d = st.cfg.domain_or_localhost();
     let content = html! {
         div class="container max-w-4xl py-12" {
@@ -401,11 +402,11 @@ pub async fn terms(State(st): State<AppState>, headers: HeaderMap) -> Response {
             }
         }
     };
-    public_response(&st, &c, &pricing, "Terms of Service", true, content)
+    public_response(&st, &c, &pricing, app_links_allowed, "Terms of Service", true, content)
 }
 
 pub async fn privacy(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (c, pricing) = public_ctx(&st, &headers).await;
+    let (c, pricing, app_links_allowed) = public_ctx(&st, &headers).await;
     let d = st.cfg.domain_or_localhost();
     let content = html! {
         div class="container max-w-4xl py-12" {
@@ -437,7 +438,7 @@ pub async fn privacy(State(st): State<AppState>, headers: HeaderMap) -> Response
             }
         }
     };
-    public_response(&st, &c, &pricing, "Privacy Policy", true, content)
+    public_response(&st, &c, &pricing, app_links_allowed, "Privacy Policy", true, content)
 }
 
 // --- feedback ---------------------------------------------------------------
@@ -757,7 +758,7 @@ pub async fn feedback_get(
     headers: HeaderMap,
     Query(q): Query<FeedbackQuery>,
 ) -> Response {
-    let (c, pricing) = public_ctx(&st, &headers).await;
+    let (c, pricing, app_links_allowed) = public_ctx(&st, &headers).await;
     let from = q.from.as_deref().and_then(sanitize_page_path);
     // BUNYIP-540: pre-fill Name / Email for a signed-in visitor.
     let draft = FeedbackDraft::from_user(c.user.as_ref());
@@ -765,6 +766,7 @@ pub async fn feedback_get(
         &st,
         &c,
         &pricing,
+        app_links_allowed,
         "Feedback",
         false,
         feedback_form(None, None, from.as_deref(), &draft),
@@ -875,7 +877,7 @@ pub async fn feedback_post(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Response {
-    let (c, pricing) = public_ctx(&st, &headers).await;
+    let (c, pricing, app_links_allowed) = public_ctx(&st, &headers).await;
     let cookie = c.forward.clone();
     let parsed = read_feedback_multipart(&mut multipart).await;
     // BUNYIP-540: on any error redraw we carry the visitor's own input back into
@@ -956,7 +958,7 @@ pub async fn feedback_post(
             }
         }
     };
-    public_response(&st, &c, &pricing, "Feedback", false, content)
+    public_response(&st, &c, &pricing, app_links_allowed, "Feedback", false, content)
 }
 
 // --- docs (BUNYIP-385, curated for users in BUNYIP-387) ---------------------
@@ -1191,14 +1193,14 @@ fn docs_index_body(documented: Option<&[DocumentedApp]>) -> Markup {
 pub async fn docs_index(State(st): State<AppState>, headers: HeaderMap) -> Response {
     // `join!`, not `try_join!`: the hub still renders when the documented-app
     // list is the thing that failed.
-    let ((c, pricing), documented) =
+    let ((c, pricing, app_links_allowed), documented) =
         tokio::join!(public_ctx(&st, &headers), st.documented_apps());
     let content = docs_layout(
         documented.as_deref().map(|v| &**v),
         "/docs",
         docs_index_body(documented.as_deref().map(|v| &**v)),
     );
-    public_response(&st, &c, &pricing, "Docs", true, content)
+    public_response(&st, &c, &pricing, app_links_allowed, "Docs", true, content)
 }
 
 /// `GET /docs/{slug}` - render one embedded doc. Public (BUNYIP-385).
@@ -1208,7 +1210,7 @@ pub async fn docs_page(
     Path(slug): Path<String>,
     Query(q): Query<DocQuery>,
 ) -> Response {
-    let ((c, pricing), documented) =
+    let ((c, pricing, app_links_allowed), documented) =
         tokio::join!(public_ctx(&st, &headers), st.documented_apps());
     let active = format!("/docs/{slug}");
     let Some(&(_, title, md)) = DOCS.iter().find(|&&(s, _, _)| s == slug.as_str()) else {
@@ -1219,7 +1221,7 @@ pub async fn docs_page(
                 div class="mt-4" { (back_link("/docs", "Back to documentation")) }
             }
         };
-        let mut resp = public_response(&st, &c, &pricing, "Docs", true, content);
+        let mut resp = public_response(&st, &c, &pricing, app_links_allowed, "Docs", true, content);
         *resp.status_mut() = axum::http::StatusCode::NOT_FOUND;
         return resp;
     };
@@ -1258,6 +1260,7 @@ pub async fn docs_page(
         &st,
         &c,
         &pricing,
+        app_links_allowed,
         &format!("{title} · Docs"),
         true,
         content,
@@ -1278,7 +1281,7 @@ pub async fn app_docs_index(
     // `app_display_name` (an app with a hosted slug but no documentation
     // entry). Ride it beside the two `public_ctx` fetches so the miss
     // cost stays the slower of the three.
-    let ((c, pricing), apps, documented) = tokio::join!(
+    let ((c, pricing, app_links_allowed), apps, documented) = tokio::join!(
         public_ctx(&st, &headers),
         st.public_applications(),
         st.documented_apps(),
@@ -1325,6 +1328,7 @@ pub async fn app_docs_index(
         &st,
         &c,
         &pricing,
+        app_links_allowed,
         &format!("{app_name} docs"),
         true,
         content,
@@ -1340,7 +1344,7 @@ pub async fn app_docs_page(
     // BUNYIP-683: same rationale as `app_docs_index` - keep the fallback
     // for `app_display_name` by fetching the public applications list
     // beside the two `public_ctx` fetches.
-    let ((c, pricing), apps, documented) = tokio::join!(
+    let ((c, pricing, app_links_allowed), apps, documented) = tokio::join!(
         public_ctx(&st, &headers),
         st.public_applications(),
         st.documented_apps(),
@@ -1368,7 +1372,7 @@ pub async fn app_docs_page(
                     }
                 }
             };
-            let mut resp = public_response(&st, &c, &pricing, "Docs", true, content);
+            let mut resp = public_response(&st, &c, &pricing, app_links_allowed, "Docs", true, content);
             *resp.status_mut() = axum::http::StatusCode::NOT_FOUND;
             return resp;
         }
@@ -1387,6 +1391,7 @@ pub async fn app_docs_page(
         &st,
         &c,
         &pricing,
+        app_links_allowed,
         &format!("{} · {app_name} docs", doc.title),
         true,
         content,

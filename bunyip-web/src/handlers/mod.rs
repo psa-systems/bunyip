@@ -74,10 +74,36 @@ pub fn rotating_index(len: usize) -> usize {
 pub async fn public_ctx(
     st: &AppState,
     headers: &HeaderMap,
-) -> (AuthCtx, Arc<PricingResponse>) {
+) -> (AuthCtx, Arc<PricingResponse>, bool) {
     let (c, _fwd) = ctx(st, headers).await;
     let pricing = st.pricing().await;
-    (c, pricing)
+    // BUNYIP-685: resolve once per render so every chrome surface that could
+    // render an application link (header, footer, landing app section) reads
+    // the same decision as the destination's own verification gate. Kept
+    // beside `pricing` rather than joined here: `needs_onboarding` may
+    // consult the shared `setup_status` cache but returns without an API
+    // round-trip on the common named+verified path.
+    let app_links_allowed = application_links_allowed(st, c.user.as_ref()).await;
+    (c, pricing, app_links_allowed)
+}
+
+/// BUNYIP-685: whether the visitor should be shown any application link.
+///
+/// An anonymous visitor sees none, and a signed-in visitor sees them only when
+/// the destination's own verification gate would let them through. That gate
+/// is [`needs_onboarding`]: the two calls read the same thing, so a rendered
+/// link and its destination cannot disagree - an unverified non-admin on a
+/// deployment with email delivery on gets no link, and the admin exemption
+/// plus the email-off exemption already baked into `needs_onboarding`
+/// (BUNYIP-515) carry over unchanged. `None` is a signed-out visitor: the
+/// chrome already hid the Applications entry from them (BUNYIP-667/682), and
+/// this preserves that; a landing-page section that could otherwise leak
+/// per-application links is now gated on the same bool as well.
+pub async fn application_links_allowed(st: &AppState, user: Option<&User>) -> bool {
+    match user {
+        None => false,
+        Some(u) => !needs_onboarding(st, u).await,
+    }
 }
 
 /// Wrap content in the public shell + document and relay any refreshed cookies.
@@ -85,6 +111,7 @@ pub fn public_response(
     st: &AppState,
     c: &AuthCtx,
     pricing: &PricingResponse,
+    app_links_allowed: bool,
     title: &str,
     launcher: bool,
     content: Markup,
@@ -93,6 +120,7 @@ pub fn public_response(
         &st.cfg,
         c.user.as_ref(),
         pricing.published(),
+        app_links_allowed,
         launcher,
         content,
     );
@@ -107,8 +135,8 @@ pub async fn auth_page(
     title: &str,
     content: Markup,
 ) -> Response {
-    let (c, pricing) = public_ctx(st, headers).await;
-    public_response(st, &c, &pricing, title, false, content)
+    let (c, pricing, app_links_allowed) = public_ctx(st, headers).await;
+    public_response(st, &c, &pricing, app_links_allowed, title, false, content)
 }
 
 /// Read a single named cookie from the request.

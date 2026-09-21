@@ -339,7 +339,8 @@ pub async fn login_get(
     // the public chrome does not render the list any more.
     let pricing = pricing_published(&st).await;
     let content = login_content(None, q.redirect.as_deref().unwrap_or("/dashboard"));
-    let body = public_shell(&st.cfg, None, pricing, false, content);
+    // BUNYIP-685: signed-out visitor, so app_links_allowed = false.
+    let body = public_shell(&st.cfg, None, pricing, false, false, content);
     html(document("Sign in", body))
 }
 
@@ -387,7 +388,8 @@ pub async fn login_post(
             // from the public chrome.
             let pricing = pricing_published(&st).await;
             let content = login_content(Some(&e.user_message()), &target);
-            let body = public_shell(&st.cfg, None, pricing, false, content);
+            // BUNYIP-685: signed-out visitor, so app_links_allowed = false.
+            let body = public_shell(&st.cfg, None, pricing, false, false, content);
             html(document("Sign in", body))
         }
     }
@@ -1293,7 +1295,9 @@ pub async fn verify_email(
         // BUNYIP-683: `public_applications()` dropped, per its removal
         // from the public chrome.
         let pricing = pricing_published(&st).await;
-        let body = public_shell(&st.cfg, None, pricing, false, card);
+        // BUNYIP-685: signed-out visitor path (post-verify celebration),
+        // so app_links_allowed = false.
+        let body = public_shell(&st.cfg, None, pricing, false, false, card);
         html_cookies(document("Verify email", body), &rotated_cookies)
     }
 }
