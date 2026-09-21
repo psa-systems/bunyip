@@ -75,6 +75,7 @@ check-migration-immutability:
 # Gate the secret scope of pull_request-triggered workflows (BUNYIP-425).
 [group: 'checks']
 check-workflows:
+    ! ./scripts/check-workflow-secrets.nu scripts/fixtures/workflow-secrets-bad 2>/dev/null
     ./scripts/check-workflow-secrets.nu
 
 # Gate that every workflow step runs under Nushell: each job declares the

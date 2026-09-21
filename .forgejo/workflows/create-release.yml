@@ -1,13 +1,13 @@
 ---
 
-# Create a Forgejo release when a release/* branch is merged to main, by
+# Create a Forgejo release when a release/v* tag is pushed, by
 # calling the reusable workflow in psa-systems/common.
 #
 # Everything the release does - deriving the tag from the branch name, building
 # the changelog, and posting to the releases API - lives in
 # psa-systems/common/.forgejo/workflows/create-release.yml. The caller keeps
-# only what Forgejo cannot read from the called workflow: the trigger, the
-# merged/`release/v` gate, `runs-on`, and `secrets: inherit`.
+# only what Forgejo cannot read from the called workflow: the trigger,
+# `runs-on`, and `secrets: inherit`.
 #
 # Paired with the `just create-release <major|minor|hotfix>` recipe, which also
 # comes from common/common.just. The recipe pushes `release/v<version>` and
@@ -19,18 +19,17 @@
 # `write:repository` scope to call the /api/v1/repos/.../releases endpoint.
 name: Create release
 
+# Not `pull_request` (BUNYIP-721): that trigger runs the PR head's copy of this
+# file, so the registry PAT passed below was reachable from any pushed branch.
+# A tag push runs the definition on the tagged commit, which a maintainer
+# created after review.
 on:
-  pull_request:
-    types:
-      - closed
-    branches:
-      - main
+  push:
+    tags:
+      - 'release/v*'
 
 jobs:
   create-release:
-    if: >-
-      github.event.pull_request.merged == true
-      && startsWith(github.event.pull_request.head.ref, 'release/v')
     # psa-systems/common is the org's own shared workflow repo (same org, same
     # review gate as this one); tracking `@main` is how a shared-workflow fix
     # or a BUNYIP-444-style label rename reaches this caller. Narrowing this to
