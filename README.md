@@ -77,7 +77,7 @@ The development home for this repository is <https://dev.a8n.run/psa-systems/bun
 
 ## Security
 
-Please do not report a suspected vulnerability through the public issue tracker, on Forgejo or on either mirror: filing it there publishes it. Contact a maintainer privately instead. A published disclosure address and a `SECURITY.md` are being set up and this section will link to them.
+Please do not report a suspected vulnerability through the public issue tracker, on Forgejo or on either mirror: filing it there publishes it. Contact a maintainer privately instead. The private disclosure address and the `SECURITY.md` that this section will point to are being decided under [GOV-59](https://youtrack.a8n.run/issue/GOV-59); no interim public contact is provided until that lands.
 
 ## License
 
