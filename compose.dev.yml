@@ -50,7 +50,7 @@ services:
       args:
         HOST_UID: ${HOST_UID:-1000}
         HOST_GID: ${HOST_GID:-1000}
-        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-2}
+        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-default}
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     container_name: dev-bunyip-api-${USER}
     working_dir: /app
@@ -166,7 +166,7 @@ services:
       args:
         HOST_UID: ${HOST_UID:-1000}
         HOST_GID: ${HOST_GID:-1000}
-        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-2}
+        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-default}
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     container_name: dev-bunyip-web-${USER}
     working_dir: /app

@@ -36,11 +36,9 @@ on:
 jobs:
   check:
     name: fmt + clippy + build + tests
-    # Dev label: this job compiles Rust natively on the runner, and only the dev
-    # image carries the C toolchain (cc/gcc/ld) plus the OpenSSL headers that
-    # crate build scripts need. On the base label it fails with
-    # `linker cc not found` (BUNYIP-444, #CLAUDE-203).
-    runs-on: ${{ vars.RUNS_ON_OPENSUSE_DEV_LATEST }}
+    # HEAVY: native cargo build/test plus a docker build; the dev image carries the
+    # C toolchain and OpenSSL headers crate build scripts need (BUNYIP-444, DEV-769).
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_HEAVY }}
     env:
       SQLX_OFFLINE: "true"
       # Disk-footprint controls. CI doesn't need full DWARF debug info -
@@ -73,6 +71,14 @@ jobs:
           # The root justfile opens with `import 'common/common.just'`, so an
           # absent submodule is a parse error and every `just` step below fails.
           submodules: true
+
+      - name: Take build parallelism from the runner
+        # Exports CARGO_BUILD_JOBS / NEXTEST_TEST_THREADS / CI_JOBS; warns and
+        # falls back to a low CPU-derived value when the runner did not set them (DEV-769).
+        uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/build-parallelism@main
+
+      - name: Start job metrics sampler
+        uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/job-metrics-start@main
 
       - name: Validate the justfile
         # First, because it is the cheapest step and its failure invalidates
@@ -127,9 +133,9 @@ jobs:
           ./scripts/check-serde-compat.nu
 
       - name: Check runner labels
-        # Keep the native cargo job on the dev image (the only one with a C
-        # toolchain), keep every label annotated, and keep the run-time
-        # toolchain install from creeping back (BUNYIP-444).
+        # Keep the native cargo job on the HEAVY (dev image) label, no job on a
+        # retired *_LATEST label, every label annotated, and no run-time
+        # toolchain install (BUNYIP-444, DEV-769).
         run: ./scripts/check-runner-labels.nu
 
       - name: Check security invariants
@@ -312,10 +318,6 @@ jobs:
           ./scripts/check-publish-triggers.nu --self-test
           ./scripts/check-publish-triggers.nu
 
-      - name: Cap build parallelism
-        # nproc/2 cap: never claim more than half the host (see CI.md "Concurrency cap").
-        run: $"CARGO_BUILD_JOBS=((sys cpu | length) / 2 | into int)\n" | save --append $env.GITHUB_ENV
-
       - name: Check formatting
         run: cargo fmt --all --check
 
@@ -356,7 +358,7 @@ jobs:
         # line.
         run: |
           ^docker image rm bunyip-api-builder:check | complete | ignore
-          ^docker build --provenance=false --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .
+          ^docker build --provenance=false --build-arg $"CARGO_BUILD_JOBS=($env.CARGO_BUILD_JOBS)" --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .
 
       - name: Check the working tree is fully owned by the runner user
         # Last, so it sees the tree every container above left behind: the
@@ -367,6 +369,11 @@ jobs:
         # Cargo path is staged - which is exactly the file set (justfile,
         # compose.dev.yml, scripts/) that reintroduces one (BUNYIP-647).
         run: just check-tree-ownership
+
+      - name: Report job metrics
+        # Last and always(), so a failing job still reports (composite actions have no post hook).
+        if: always()
+        uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/job-metrics-report@main
 
   secrets:
     # Base image, medium size: the scanners read the tree and compile nothing, so
