@@ -71,6 +71,8 @@ just create-release minor   # bump the workspace version, branch, push, open the
 
 `just check` runs the fuller fmt + clippy + build + docker-builder-stage sequence, but it needs a host toolchain; on a toolchain-less dev box use `just check-container`. Never `cargo build` on the host.
 
+The `common` submodule's own `dev-local` / `dev-local-detach` recipes are also imported and show up in `just --list`, but neither depends on `ensure-oidc-keys` the way bunyip's `dev`, `dev-detach`, and `dev-sso` do: running `just dev-local` on a fresh clone skips OIDC key provisioning and the api fails to boot for want of `secrets/oidc/dev-2026.pem`. Use `just dev` / `just dev-detach` instead, or, if you do use `dev-local`, run `just ensure-oidc-keys` manually first. This is a gap in `common` itself; it goes away once `common` gains the equivalent dependency.
+
 ## Where things live
 
 - `bunyip-api/` - the actix-web backend and OIDC issuer. Owns `main.rs`, the wiring, and the migrations in `bunyip-api/migrations/` (they run on startup).
