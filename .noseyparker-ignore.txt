@@ -9,3 +9,5 @@
 /e2e/tests/auth/signup.spec.ts
 /e2e/tests/global.setup.ts
 /crates/bunyip-domain/src/models/stripe.rs
+/bunyip-api/tests/country_gate.rs
+/bunyip-api/seed/minimal.json

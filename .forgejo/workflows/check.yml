@@ -366,6 +366,8 @@ jobs:
         run: just check-tree-ownership
 
   secrets:
+    # Base image, medium size: the scanners read the tree and compile nothing, so
+    # the dev image's C toolchain is not needed (BUNYIP-786).
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_MEDIUM }}
     # A reusable-workflow caller cannot carry `defaults`, so the shared composite
     # runs as steps of this job and each scanner reports as its own step.
@@ -383,4 +385,5 @@ jobs:
         uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/check-secrets@main
         with:
           # Test fixtures and dev defaults only; Nosey Parker's list is .noseyparker-ignore.txt.
-          kingfisher_excludes: "scripts/init-secrets.nu bunyip-api/migrations/20260721000020_seed_mokosh_setup_docs.sql compose.dev.yml bunyip-api/src/handlers/user.rs bunyip-api/src/handlers/application.rs crates/bunyip-domain/src/models/stripe.rs"
+          # History findings are reported by git object path, so they need the value regex.
+          kingfisher_skip_regex: '^(\(\$pg_pass\)|CHANGE_ME|devpassword|nobody|pw|[rs]k_live_abcdefgh1234|rk_test_abcdefgh5678|sk_live_MIDDLEsecretMATERIAL1234)$'
