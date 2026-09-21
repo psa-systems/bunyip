@@ -35,12 +35,9 @@ jobs:
     # or a BUNYIP-444-style label rename reaches this caller. Narrowing this to
     # a SHA pin is tracked separately.
     uses: psa-systems/common/.forgejo/workflows/create-release.yml@main  # secret-scope-ok: same-org shared workflow repo, tracked separately for SHA pinning
-    # Base label: the called job runs git and two HTTP calls, it compiles
-    # nothing. It has to be set here as well as in the called workflow, because
-    # this Forgejo instance does not expand a cross-repo reusable `uses:` unless
-    # the label resolves in the caller's context (BUNYIP-444 for the label
-    # choice; psa-systems/common README "Release workflow" for the placement).
-    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_LATEST }}
+    # MEDIUM: git plus two API calls, nothing compiles. Set here too because Forgejo
+    # resolves a cross-repo reusable job's label in the caller (common README).
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_MEDIUM }}
     # A called workflow receives no secret it is not passed, and the reusable
     # workflow needs FORGEJO_PAT.
     secrets: inherit  # secret-scope-ok: reusable workflow needs FORGEJO_PAT (write:repository) to call the releases API; this caller job runs no step and reads no secret itself

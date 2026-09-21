@@ -9,8 +9,8 @@
 
 FROM ghcr.io/niceguyit/rust-builder-glibc:v1.2.0-rust1.98.1-trixie
 
-# nproc/2 concurrency cap (per governance CI.md); default keeps small hosts sane.
-ARG CARGO_BUILD_JOBS=2
+# The runner or caller owns parallelism; `default` is cargo's own CPU count (DEV-769).
+ARG CARGO_BUILD_JOBS=default
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
 # Fetch the dunite git dep with the git CLI (honours the optional injected
