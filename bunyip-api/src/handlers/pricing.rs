@@ -96,6 +96,9 @@ pub struct PricingCache {
     /// consulted). Read by `/v1/pricing`'s test and available for ops probes;
     /// it is what makes "N page loads is not N Stripe calls" observable.
     resolves: AtomicU64,
+    /// Single-flight gate (BUNYIP-790): held across the resolve so concurrent
+    /// misses queue behind one `load()` instead of each calling Stripe.
+    flight: tokio::sync::Mutex<()>,
 }
 
 impl PricingCache {
@@ -104,22 +107,35 @@ impl PricingCache {
             ttl: Duration::from_secs(ttl_secs),
             slot: RwLock::new(None),
             resolves: AtomicU64::new(0),
+            flight: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    fn fresh(&self) -> Option<Arc<PublicPricingResponse>> {
+        match self.slot.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            Some((at, hit)) if at.elapsed() < self.ttl => Some(hit.clone()),
+            _ => None,
         }
     }
 
     /// Cached payload, or `load()` on miss / expiry.
     ///
-    /// The lock is never held across the await: a rare concurrent double-load
-    /// is cheaper than serializing every public request behind one Stripe call.
+    /// BUNYIP-790: the miss path is single-flight. The route is exempt from the
+    /// rate-limit floor, so concurrent callers past an expiry must not each hit
+    /// Stripe: the first takes `flight` and loads, the rest queue on it and
+    /// re-check the slot. The slot's `RwLock` is never held across an await, and
+    /// a failed resolve leaves the previous payload in place.
     pub async fn get_or_resolve<F, Fut>(&self, load: F) -> Arc<PublicPricingResponse>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = PublicPricingResponse>,
     {
-        if let Some((at, hit)) = self.slot.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            if at.elapsed() < self.ttl {
-                return hit.clone();
-            }
+        if let Some(hit) = self.fresh() {
+            return hit;
+        }
+        let _flight = self.flight.lock().await;
+        if let Some(hit) = self.fresh() {
+            return hit;
         }
         self.resolves.fetch_add(1, Ordering::Relaxed);
         let fresh = Arc::new(load().await);
@@ -589,6 +605,24 @@ mod tests {
         cache.get_or_resolve(|| async { payload(true) }).await;
         cache.get_or_resolve(|| async { payload(true) }).await;
         assert_eq!(cache.resolves(), 2);
+    }
+
+    #[actix_rt::test]
+    async fn concurrent_misses_past_expiry_resolve_once() {
+        // BUNYIP-790: the route is floor-exempt, so N concurrent callers past
+        // an expired TTL must share one load.
+        let mut cache = PricingCache::new(0);
+        cache.ttl = Duration::from_millis(50);
+        cache.get_or_resolve(|| async { payload(true) }).await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let calls = (0..20).map(|_| {
+            cache.get_or_resolve(|| async {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                payload(true)
+            })
+        });
+        futures_util::future::join_all(calls).await;
+        assert_eq!(cache.resolves(), 2, "one prime plus one shared refresh");
     }
 
     fn unconfigured_stripe() -> Arc<StripeService> {
