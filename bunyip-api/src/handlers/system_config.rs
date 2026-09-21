@@ -12,11 +12,14 @@
 
 use actix_web::{web, HttpRequest, HttpResponse};
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 
 use crate::errors::AppError;
 use crate::middleware::AdminUser;
 use crate::responses::{get_request_id, success};
 use bunyip_domain::config_providers::{ConfigStack, SYSTEM_SETTINGS_KEYS};
+use bunyip_domain::models::{AuditAction, CreateAuditLog};
+use bunyip_domain::repositories::AuditLogRepository;
 use bunyip_domain::sys_config::SystemSettings;
 
 /// The current values, shaped for the admin form. Country lists are comma-joined
@@ -137,10 +140,79 @@ pub async fn get_system_config(
     ))
 }
 
+/// The settings that differ between `old` and `new`: the declared key with its
+/// previous and new value as JSON (BUNYIP-789). Empty when nothing changed.
+fn changed_settings(
+    old: &SystemSettings,
+    new: &SystemSettings,
+) -> Vec<(&'static str, serde_json::Value, serde_json::Value)> {
+    use serde_json::json;
+    let mut out = Vec::new();
+    if old.login_approval_enabled != new.login_approval_enabled {
+        out.push((
+            "LOGIN_APPROVAL_ENABLED",
+            json!(old.login_approval_enabled),
+            json!(new.login_approval_enabled),
+        ));
+    }
+    if old.signup_bot_guard_enabled != new.signup_bot_guard_enabled {
+        out.push((
+            "SIGNUP_BOT_GUARD_ENABLED",
+            json!(old.signup_bot_guard_enabled),
+            json!(new.signup_bot_guard_enabled),
+        ));
+    }
+    if old.country_allow != new.country_allow {
+        out.push((
+            "COUNTRY_ALLOW",
+            json!(old.country_allow),
+            json!(new.country_allow),
+        ));
+    }
+    if old.country_deny != new.country_deny {
+        out.push((
+            "COUNTRY_DENY",
+            json!(old.country_deny),
+            json!(new.country_deny),
+        ));
+    }
+    out
+}
+
+/// Write one audit row per changed setting (BUNYIP-789) and one `info!` naming
+/// the changed keys. Writes nothing when nothing changed.
+async fn record_changes(
+    pool: &PgPool,
+    admin: &AdminUser,
+    old: &SystemSettings,
+    new: &SystemSettings,
+) -> Result<(), AppError> {
+    let changes = changed_settings(old, new);
+    if changes.is_empty() {
+        return Ok(());
+    }
+    for (key, before, after) in &changes {
+        let log = CreateAuditLog::new(AuditAction::SystemConfigUpdated)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+            .with_old_values(serde_json::json!({ *key: before }))
+            .with_new_values(serde_json::json!({ *key: after }))
+            .with_metadata(serde_json::json!({
+                "key": key,
+                "previous": before,
+                "new": after,
+            }));
+        AuditLogRepository::create(pool, log).await?;
+    }
+    let keys: Vec<&str> = changes.iter().map(|(k, _, _)| *k).collect();
+    tracing::info!(actor = %admin.0.sub, changed_keys = ?keys, "system settings updated");
+    Ok(())
+}
+
 /// PUT /v1/admin/system-config
 pub async fn update_system_config(
     req: HttpRequest,
-    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+    admin: AdminUser,
     body: web::Json<UpdateSystemConfigRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -160,7 +232,8 @@ pub async fn update_system_config(
     // file per key. BUNYIP-622: only application-level keys are writable here;
     // the system-level origins have no field on the request and no field on
     // `SystemSettings`.
-    let mut settings = SystemSettings::current();
+    let previous = SystemSettings::current();
+    let mut settings = previous.clone();
     if let Some(v) = body.login_approval_enabled {
         settings.login_approval_enabled = v;
     }
@@ -180,6 +253,8 @@ pub async fn update_system_config(
             SystemSettings::directory().display()
         ))
     })?;
+
+    record_changes(&pool, &admin, &previous, &settings).await?;
 
     // The file provider snapshots its directory when it is built, so the
     // provenance the save produced is only visible through a stack loaded AFTER
@@ -251,6 +326,31 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(fields, ["condition", "key", "providers", "serving"]);
+    }
+
+    fn base() -> SystemSettings {
+        SystemSettings {
+            login_approval_enabled: false,
+            signup_bot_guard_enabled: false,
+            country_allow: vec![],
+            country_deny: vec![],
+        }
+    }
+
+    /// BUNYIP-789: one changed setting yields exactly one entry naming that key
+    /// with its old and new value; no change yields none.
+    #[test]
+    fn a_change_names_one_key_with_old_and_new_and_no_change_names_none() {
+        let old = base();
+        assert!(changed_settings(&old, &old.clone()).is_empty());
+
+        let mut new = base();
+        new.country_deny = vec!["RU".to_string()];
+        let changes = changed_settings(&old, &new);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].0, "COUNTRY_DENY");
+        assert_eq!(changes[0].1, serde_json::json!([]));
+        assert_eq!(changes[0].2, serde_json::json!(["RU"]));
     }
 
     #[test]
