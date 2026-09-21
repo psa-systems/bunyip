@@ -207,8 +207,8 @@ PR gate is a separate workflow that declares only the two base URLs (see
   is unverified, so `tests/account/change-email.spec.ts` first verifies it via
   the verify-email flow (over the same sink) so the change takes the
   link-confirmed path it is meant to exercise.
-- **Stripe billing (staging only, BUNYIP-151):** the billing specs need staging
-  bunyip running Stripe in TEST mode. Operator provisioning:
+- **Stripe billing (staging only, BUNYIP-151):** staging bunyip runs Stripe in
+  TEST mode. How it was provisioned:
   1. In a Stripe TEST-mode account, create the membership product + a recurring
      price; note the price id.
   2. Configure the staging bunyip-api with the test-mode secret key
@@ -220,13 +220,15 @@ PR gate is a separate workflow that declares only the two base URLs (see
   3. Record the same `sk_test_...` as the Forgejo Actions secret
      `E2E_STAGING_STRIPE_SECRET_KEY`. The suite exposes it as `E2E_STRIPE_SECRET_KEY`,
      which both feeds teardown (cancels test-mode subscriptions) AND gates the
-     billing specs: `subscribe` + `billing-portal` run when it is set, skip
-     otherwise; all billing specs also `test.skip` on the production apex.
-  `cancel` stays deferred: it needs an ACTIVE membership to cancel, and
+     billing specs: `subscribe` + `billing-portal` run when it is set (they do,
+     on staging), skip otherwise; all billing specs also `test.skip` on the
+     production apex.
+  `cancel` still stays deferred: it needs an ACTIVE membership to cancel, and
   `/membership/cancel` only engages when `membership_status` is active, which the
-  `customer.subscription.created` webhook flips - so a future setup step must
-  create a test-mode subscription on the account's customer and wait for the
-  webhook. Build it once staging Stripe + the webhook are live and can validate it.
+  `customer.subscription.created` webhook flips - so a setup step must create a
+  test-mode subscription on the account's customer and wait for the webhook
+  before the spec can un-fixme (tracked as the `cancel` row, not BUNYIP-151,
+  which already landed the test-mode config above).
 
 **Rotation source (record per secret).** So each value can be rotated later,
 document where it is generated, per environment: the Forgejo Actions secret
@@ -359,7 +361,8 @@ first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODU
    E2E_STAGING_OIDC_CLIENT_ID    = <step 4>
    E2E_STAGING_OIDC_REDIRECT_URI = <step 4>
    E2E_STAGING_TOTP_SECRET       = <base32, step 3>
-   # optional, teardown-only, once BUNYIP-151 lands:
+   # optional, teardown-only, once staging Stripe test mode is configured (see
+   # "Stripe billing" above, BUNYIP-151):
    E2E_STAGING_STRIPE_SECRET_KEY = sk_test_...
    ```
 
@@ -374,11 +377,16 @@ first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODU
    `cp e2e/.env.example e2e/.env`, fill the same values, then
    `cd e2e && npm ci && npx playwright install chromium && just e2e`.
 
-After this the **runnable** specs pass. The `test.fixme` specs unblock as their
-sub-tasks land: BUNYIP-150 (staging mail sink -> signup / password-reset /
-magic-link / change-email), BUNYIP-151 (staging Stripe test mode -> billing),
-BUNYIP-152 (the 2FA enrollment in step 3 -> two-factor). BUNYIP-149 (bunyip-web
-`/healthz`) is for a future web reachability gate, not a spec blocker.
+After this the **runnable** specs pass. BUNYIP-150 (staging mail sink),
+BUNYIP-151 (staging Stripe test mode) and BUNYIP-152 (the 2FA enrollment in
+step 3) have all landed, which is why `password-reset`, `magic-link`,
+`change-email`, `subscribe`, and `billing-portal` already run. Three specs
+still stay `test.fixme` for a narrower, spec-specific reason each -
+`signup` (see "Mail sink" above), `cancel` (see "Stripe billing" above), and
+`two-factor` (needs a disposable account, see `e2e/README.md`'s
+[Blocked specs](../e2e/README.md#blocked-specs-testfixme-and-their-blockers)
+table for the current picture). BUNYIP-149 (bunyip-web `/healthz`) is for a
+future web reachability gate, not a spec blocker.
 
 ## Deploy gating: the gate scripts
 
@@ -490,8 +498,12 @@ gate's worst case (up to 10 min) plus the serial spec run.
    instead be `test.fixme` with the blocker cited inline, OR target a disposable
    account once one exists. Name created records via `factories.tagged()` so
    teardown's sweep reaps them.
-4. **Cite blockers.** Every `test.fixme` names BUNYIP-150/151/152 or the
-   suite-design reason inline. Billing write specs also add
+4. **Cite blockers.** Every `test.fixme` names its actual remaining reason
+   inline (a suite-design limit, or a specific gap like `cancel`'s
+   webhook-propagated membership - see `e2e/README.md`'s
+   [Blocked specs](../e2e/README.md#blocked-specs-testfixme-and-their-blockers)
+   table for the current set), not a sub-task issue that has already landed.
+   Billing write specs also add
    `test.skip(env.isProductionApex, ...)`.
 5. **Register the route** in `lib/api.ts` if it is a new `/v1` or OP path, rather
    than hardcoding the string in the spec.
