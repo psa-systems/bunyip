@@ -15,7 +15,7 @@ use serde::Deserialize;
 
 use crate::api::admin as admin_api;
 use crate::api::types::AdminInvite;
-use crate::handlers::{admin_guard, admin_response, dashboard_input};
+use crate::handlers::{admin_guard, admin_response, dashboard_input, verification_gate};
 use crate::util::{rel_time, urlenc};
 use crate::views::ui::{badge, button_class, empty_state, error_box, icon, pager};
 use crate::web::{redirect_cookies, AppState};
@@ -71,7 +71,7 @@ fn invite_row(inv: &AdminInvite) -> Markup {
 }
 
 /// The "send an invite" card: an email address, submitted to the create
-/// endpoint. Any admin may send one; the API is the enforcement point.
+/// endpoint. Any verified admin may send one; the API is the enforcement point.
 fn invite_create_card() -> Markup {
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
@@ -91,8 +91,9 @@ fn invite_create_card() -> Markup {
 
 /// Admin invites view (BUNYIP-760): send an invite, and see pending / accepted
 /// / revoked / expired invites with a Revoke action on pending ones.
-/// AdminUser-guarded like the other admin pages; no super-admin restriction,
-/// matching the API's `AdminUser` guard on all three endpoints.
+/// AdminUser-guarded like the other admin pages; no super-admin restriction.
+/// Listing needs no verification (it grants nothing); sending and revoking
+/// are gated on verification, matching the API's `VerifiedAdminUser` guard.
 pub async fn invites(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -148,10 +149,13 @@ pub async fn invite_create(
     headers: HeaderMap,
     Form(f): Form<CreateInviteForm>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) = verification_gate(&user, &c, "/admin/invites") {
+        return refusal;
+    }
     let email = f.email.trim();
     let target = match admin_api::create_admin_invite(&st.api, c.forward.as_deref(), email).await {
         Ok(()) => format!("/admin/invites?toast_ok=Invited%20{}", urlenc(email)),
@@ -167,10 +171,13 @@ pub async fn invite_revoke(
     headers: HeaderMap,
     axum::extract::Path(invite_id): axum::extract::Path<String>,
 ) -> Response {
-    let (_, c) = match admin_guard(&st, &headers).await {
+    let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Some(refusal) = verification_gate(&user, &c, "/admin/invites") {
+        return refusal;
+    }
     let target =
         match admin_api::revoke_admin_invite(&st.api, c.forward.as_deref(), &invite_id).await {
             Ok(()) => "/admin/invites?toast_ok=Invite%20revoked".to_string(),
