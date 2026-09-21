@@ -57,6 +57,20 @@ def main [] {
         $failed = 1
     }
 
+    # -- F11: bunyip-web's Secure cookie attribute derives from the transport -
+    # Same class of defect as F4, in the other binary: `use_secure_cookies`
+    # string-parsed `api_public_origin` for `https://`, so a typo'd `http://`
+    # origin in a production config silently shipped non-Secure cookies with
+    # no gate to catch it. `Config::cookies_secure(peer, headers)` is the
+    # replacement; `use_secure_cookies` must not come back.
+    let f11 = (grep-tree ["bunyip-web/src"] 'use_secure_cookies')
+    if ($f11 | is-not-empty) {
+        print --stderr "error: F11: bunyip-web's origin-string cookie Secure heuristic (`use_secure_cookies`) reappeared."
+        print-hits $f11
+        print --stderr "  use Config::cookies_secure(peer, headers) instead."
+        $failed = 1
+    }
+
     # -- F6: the dunite git dependency is pinned by rev ------------------------
     # `branch = "main"` lets `cargo update` roll the security kernel forward with
     # no reviewable diff outside Cargo.lock.

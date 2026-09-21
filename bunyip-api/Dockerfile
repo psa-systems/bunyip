@@ -7,7 +7,7 @@
 # the build needs no credentials, but an optional DUNITE_GIT_TOKEN (passed
 # through by compose.dev.yml) is honoured for mirrors that require auth.
 
-FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie
+FROM ghcr.io/niceguyit/rust-builder-glibc:v1.2.0-rust1.98.1-trixie
 
 # The runner or caller owns parallelism; `default` is cargo's own CPU count (DEV-769).
 ARG CARGO_BUILD_JOBS=default

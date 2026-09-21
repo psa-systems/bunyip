@@ -36,7 +36,7 @@
 # (BUNYIP-426 F10), so two builds of the same commit cannot pick up different
 # layers and a bump is a deliberate, reviewable edit. Re-resolve a digest with
 # `docker buildx imagetools inspect <ref> --raw | sha256sum` when bumping a tag.
-FROM ghcr.io/niceguyit/rust-builder-musl:v1.0.0-rust1.94-alpine@sha256:6836365513bd46d47b43d014a800f5ae8f429717544fef209b1a0c5730dd5460 AS chef
+FROM ghcr.io/niceguyit/rust-builder-musl:v1.1.0-rust1.98.1-alpine@sha256:981963a685d7a7e4bde857eb024858cc859b66c6b2d46b71c8424a1c71537e7a AS chef
 WORKDIR /build
 ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
     CARGO_NET_GIT_FETCH_WITH_CLI=true \

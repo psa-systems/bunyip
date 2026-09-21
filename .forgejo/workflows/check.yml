@@ -50,8 +50,7 @@ jobs:
       # the next runner allocation anyway), this keeps the runner's
       # /workspace from filling up between consecutive PR jobs - the
       # ENOSPC failures we hit on three back-to-back bunyip-upgrade PRs
-      # were all this. See docs/bunyip-upgrade/00-overview.md for the
-      # surrounding context.
+      # were all this.
       CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
       CARGO_INCREMENTAL: "0"
 
@@ -272,15 +271,18 @@ jobs:
           ./scripts/check-theme-colors.nu --self-test
           ./scripts/check-theme-colors.nu
 
-      - name: Check the system-level key table matches SYSTEM_LEVEL_ENV_KEYS
-        # SYSTEM_LEVEL_ENV_KEYS (crates/bunyip-domain/src/sys_config.rs) and the
-        # system-level table in docs/configuration.md are two hand-written
-        # copies of the same set, and nothing compared them until now
-        # (BUNYIP-734). --self-test first, so a gate that stopped detecting
-        # anything fails the build instead of passing vacuously.
+      - name: Check docs/configuration.md matches its source-of-truth constants
+        # ENV_INVENTORY and GovernedSecret::ALL (crates/bunyip-domain/src/config.rs)
+        # and SYSTEM_LEVEL_ENV_KEYS (crates/bunyip-domain/src/sys_config.rs) are
+        # hand-written copies of docs/configuration.md's tables, and nothing
+        # compared them: five consecutive doc-drift audits found the doc's
+        # "machine-generated" claim unchanged while the gap widened (BUNYIP-783,
+        # absorbing BUNYIP-734's system-level-only check). --self-test first, so
+        # a gate that stopped detecting anything fails the build instead of
+        # passing vacuously.
         run: |
-          ./scripts/check-system-level-keys.nu --self-test
-          ./scripts/check-system-level-keys.nu
+          ./scripts/check-doc-surface.nu --self-test
+          ./scripts/check-doc-surface.nu
 
       - name: Check buildkit cache mounts are per-image and locked
         # Every `--mount=type=cache` carries an `id=` and `sharing=locked`, so
@@ -372,3 +374,26 @@ jobs:
         # Last and always(), so a failing job still reports (composite actions have no post hook).
         if: always()
         uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/job-metrics-report@main
+
+  secrets:
+    # Base image, medium size: the scanners read the tree and compile nothing, so
+    # the dev image's C toolchain is not needed (BUNYIP-786).
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_MEDIUM }}
+    # A reusable-workflow caller cannot carry `defaults`, so the shared composite
+    # runs as steps of this job and each scanner reports as its own step.
+    defaults:
+      run:
+        shell: nu {0}
+    steps:
+      - name: Clone the repository
+        uses: https://code.forgejo.org/actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Secrets scan
+        uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/check-secrets@main
+        with:
+          # Test fixtures and dev defaults only; Nosey Parker's list is .noseyparker-ignore.txt.
+          # History findings are reported by git object path, so they need the value regex.
+          kingfisher_skip_regex: '^(\(\$pg_pass\)|CHANGE_ME|devpassword|nobody|pw|[rs]k_live_abcdefgh1234|rk_test_abcdefgh5678|sk_live_MIDDLE[s]ecretMATERIAL1234)$'

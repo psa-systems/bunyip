@@ -5,7 +5,7 @@
 # /app (see compose.dev.yml). bun and cargo-watch ship in the builder image, so
 # there is nothing to install beyond the JS deps.
 
-FROM ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie
+FROM ghcr.io/niceguyit/rust-builder-glibc:v1.2.0-rust1.98.1-trixie
 
 # The runner or caller owns parallelism; `default` is cargo's own CPU count (DEV-769).
 ARG CARGO_BUILD_JOBS=default
