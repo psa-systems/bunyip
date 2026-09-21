@@ -19,6 +19,7 @@ use tera::{Context, Tera};
 use crate::config::{EmailConfig, SmtpTls};
 use crate::errors::AppError;
 use crate::models::Feedback;
+use crate::services::mailer_relay::SuppressionList;
 
 /// Where a built message is handed off.
 ///
@@ -116,6 +117,14 @@ pub struct EmailService {
     /// `main` attaches it (and in the dev/test constructors), where the
     /// `EmailConfig` value stands.
     branding: std::sync::RwLock<Option<std::sync::Arc<crate::models::BrandingCache>>>,
+    /// BUNYIP-762: the shared `mailer_suppressions` list, consulted by
+    /// [`Self::send_email`] and [`Self::send_support_reply`] before every
+    /// send so a bounce/complaint recipient stops receiving mail through
+    /// every path, not only the mailer relay (which already checked it
+    /// upstream via [`crate::services::MailerRelay`]). `None` before `main`
+    /// attaches it (and in the dev/test constructors), where nothing is
+    /// suppressed.
+    suppression: std::sync::RwLock<Option<std::sync::Arc<dyn SuppressionList>>>,
 }
 
 impl EmailService {
@@ -289,6 +298,30 @@ impl EmailService {
     /// `main` before the listener binds; safe to call again (it replaces).
     pub fn set_branding_cache(&self, cache: std::sync::Arc<crate::models::BrandingCache>) {
         *self.branding.write().unwrap_or_else(|e| e.into_inner()) = Some(cache);
+    }
+
+    /// BUNYIP-762: attach the shared mailer suppression list. Called once
+    /// from `main` before the listener binds, alongside the same list handed
+    /// to `MailerRelay`, so the read on every EmailService send path and the
+    /// read on the relay path consult the one table.
+    pub fn set_suppression_list(&self, list: std::sync::Arc<dyn SuppressionList>) {
+        *self.suppression.write().unwrap_or_else(|e| e.into_inner()) = Some(list);
+    }
+
+    /// Whether `address` is on the suppression list. `false` when no list is
+    /// attached (dev/test construction), never a silent guess when the
+    /// attached list errors: the caller surfaces that failure rather than
+    /// sending to an address that could not be checked.
+    async fn is_suppressed(&self, address: &str) -> Result<bool, AppError> {
+        let list = self
+            .suppression
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        match list {
+            Some(list) => list.is_suppressed(address).await,
+            None => Ok(false),
+        }
     }
 
     /// Snapshot the current config (cheap clone under a short read lock; never held across .await).
@@ -604,6 +637,7 @@ impl EmailService {
             runtime: std::sync::RwLock::new(EmailRuntime { transport, config }),
             templates,
             branding: std::sync::RwLock::new(None),
+            suppression: std::sync::RwLock::new(None),
         })
     }
 
@@ -642,6 +676,7 @@ impl EmailService {
             }),
             templates,
             branding: std::sync::RwLock::new(None),
+            suppression: std::sync::RwLock::new(None),
         }
     }
 
@@ -664,6 +699,7 @@ impl EmailService {
             }),
             templates: Tera::default(),
             branding: std::sync::RwLock::new(None),
+            suppression: std::sync::RwLock::new(None),
         };
         (service, stub)
     }
@@ -836,6 +872,15 @@ impl EmailService {
         html_body: String,
         text_body: String,
     ) -> Result<(), AppError> {
+        // BUNYIP-762: every template sender routes through here, so this is
+        // the one place a suppressed recipient (a hard bounce or a spam
+        // complaint) is guaranteed to be stopped, rather than depending on
+        // each of the ~19 callers to check for itself.
+        if self.is_suppressed(to).await? {
+            tracing::warn!(to = %to, subject = %subject, "Email skipped: recipient is suppressed");
+            return Ok(());
+        }
+
         let transport = self.transport();
         if let Some(transport) = transport {
             let (email, _message_id) =
@@ -871,6 +916,19 @@ impl EmailService {
         in_reply_to: Option<String>,
         references: Option<String>,
     ) -> Result<String, AppError> {
+        // BUNYIP-762: this sender does not route through `send_email`, so it
+        // carries its own check. An admin reply is not best-effort like the
+        // template sends above: the admin needs to know the reply did not go
+        // out, so a suppressed recipient is an error here rather than a
+        // silent skip.
+        if self.is_suppressed(to).await? {
+            tracing::warn!(to = %to, subject = %subject, "Support reply skipped: recipient is suppressed");
+            return Err(AppError::validation(
+                "to",
+                "This recipient is on the mailer suppression list and cannot be sent to.",
+            ));
+        }
+
         let config = self.config();
         let mut context = self.base_context(&config);
         context.insert("response_message", &message);
@@ -1475,6 +1533,88 @@ impl Default for EmailService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::mailer_relay::SuppressionReason;
+    use async_trait::async_trait;
+
+    /// Everything on the suppression list, mirroring `mailer_relay`'s own
+    /// `SuppressAll` fake so both the relay's guard and `EmailService`'s guard
+    /// are proven with the same shape of double.
+    struct SuppressAll;
+
+    #[async_trait]
+    impl SuppressionList for SuppressAll {
+        async fn is_suppressed(&self, _address: &str) -> Result<bool, AppError> {
+            Ok(true)
+        }
+
+        async fn suppress(
+            &self,
+            _address: &str,
+            _reason: SuppressionReason,
+            _detail: Option<&str>,
+        ) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
+
+    /// BUNYIP-762: `send_email` is the shared choke point behind every
+    /// template sender. A suppressed recipient is skipped before the
+    /// transport is ever touched, and the call still reports success (the
+    /// caller's template send is best-effort, matching the mailer relay's own
+    /// silent-skip contract for a bounced or complained-about address).
+    #[tokio::test]
+    async fn send_email_skips_a_suppressed_recipient_before_the_transport() {
+        let (service, stub) = EmailService::new_capturing(config_with_smtp(
+            "smtp.example.test",
+            587,
+            SmtpTls::Starttls,
+        ));
+        service.set_suppression_list(std::sync::Arc::new(SuppressAll));
+
+        let result = service
+            .send_email(
+                &service.config(),
+                "bounced@example.com",
+                "Your magic link",
+                "<p>link</p>".to_string(),
+                "link".to_string(),
+            )
+            .await;
+
+        assert!(result.is_ok(), "a suppressed send is skipped, not failed");
+        assert!(
+            stub.messages().await.is_empty(),
+            "a suppressed recipient must never reach the transport"
+        );
+    }
+
+    /// BUNYIP-762: `send_support_reply` does not route through `send_email`,
+    /// so it carries its own suppression check. Unlike the template sends,
+    /// this one surfaces as an error: the admin composing the reply needs to
+    /// know it did not go out.
+    #[tokio::test]
+    async fn send_support_reply_refuses_a_suppressed_recipient() {
+        let (service, stub) = EmailService::new_capturing(config_with_smtp(
+            "smtp.example.test",
+            587,
+            SmtpTls::Starttls,
+        ));
+        service.set_suppression_list(std::sync::Arc::new(SuppressAll));
+
+        let err = service
+            .send_support_reply("bounced@example.com", "Re: ticket", "body", None, None)
+            .await
+            .expect_err("a suppressed recipient must be refused");
+
+        assert!(
+            err.to_string().contains("suppression list"),
+            "expected a suppression error, got: {err}"
+        );
+        assert!(
+            stub.messages().await.is_empty(),
+            "a suppressed recipient must never reach the transport"
+        );
+    }
 
     /// Build a fully-templated service (every template parses through
     /// `EmailService::new`) for palette/rendering assertions.
@@ -1664,6 +1804,7 @@ mod tests {
             }),
             templates: Tera::default(),
             branding: std::sync::RwLock::new(None),
+            suppression: std::sync::RwLock::new(None),
         }
     }
 
