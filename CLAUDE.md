@@ -90,7 +90,7 @@ api-image builder stage, none of which the reusable check workflow can express.
 ## Toolchain / checks on toolchain-less dev boxes
 
 The canonical Rust toolchain is pinned in `rust-toolchain.toml` (currently
-1.94.1, matching the `ghcr.io/niceguyit/rust-builder-*:v1.0.0-rust1.94-*`
+1.98.1, matching the `ghcr.io/niceguyit/rust-builder-*:*-rust1.98.1-*`
 images and CI). Bumping it means fixing any newly-promoted clippy/rustfmt
 lints in the same PR so `just check` stays green everywhere.
 

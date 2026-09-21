@@ -32,7 +32,7 @@ const BUILT_CSS = "bunyip-web/assets/styles.css"
 
 # Same image `just check-container` uses; it carries bun + tailwind. Only
 # reached when the host has no bun of its own.
-const BUILDER_IMAGE = "ghcr.io/niceguyit/rust-builder-glibc:v1.0.1-rust1.94-trixie"
+const BUILDER_IMAGE = "ghcr.io/niceguyit/rust-builder-glibc:v1.2.0-rust1.98.1-trixie"
 
 # -- @source coverage -------------------------------------------------------
 
