@@ -840,8 +840,7 @@ fn compose_block(snippet: &str) -> Markup {
 /// separate but rendered the same "no payment history yet" empty state and
 /// confused users navigating between them; the membership page now absorbs the
 /// invoices table and the sidebar drops the standalone Billing entry. The
-/// route stays mapped so existing bookmarks land somewhere sensible. See
-/// `docs/bunyip-upgrade/01-membership-plan-data.md`.
+/// route stays mapped so existing bookmarks land somewhere sensible.
 pub async fn billing(_: State<AppState>, _: HeaderMap) -> Response {
     axum::response::Redirect::permanent("/membership").into_response()
 }
@@ -986,8 +985,7 @@ pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap)
 /// Type" cell, and the public Pricing card all route through this so the
 /// in-app name and the marketing-facing name never disagree. Renaming a tier
 /// is a one-line change here that updates every consumer. Closes audit
-/// finding 1 (plan name inconsistency). See
-/// `docs/bunyip-upgrade/01-membership-plan-data.md`.
+/// finding 1 (plan name inconsistency).
 pub fn tier_name(t: &MembershipTier) -> &'static str {
     match t {
         MembershipTier::Lifetime => "Lifetime",
@@ -1068,8 +1066,7 @@ pub async fn membership(
     // different answers to the same question, so each list keeps its fetch
     // outcome and renders an error box rather than the empty state.
     // The page now absorbs the invoices table that used to live on /billing;
-    // /billing is a 308 redirect into this page. See docs/bunyip-upgrade/
-    // 01-membership-plan-data.md.
+    // /billing is a 308 redirect into this page.
     // BUNYIP-590: the pricing payload is the fifth: the Price cell renders the
     // configured price for the member's tier, never a compile-time figure.
     let (membership_data, payments_data, invoices_data, stripe, pricing) = tokio::join!(
@@ -2276,7 +2273,7 @@ fn sensitive_reveal(id: &str, label: &str, content: Markup) -> Markup {
 ///
 /// Caller passes `setup` (the bunyip-api `/v1/auth/2fa/setup` response, which
 /// the upstream handler MUST return the SAME in-progress secret for during
-/// enrollment - see `docs/bunyip-upgrade/04-2fa-error-state-preserves-form.md`).
+/// enrollment).
 /// QR + manual-key + verify-code page, shared by initial setup and the BUNYIP-355
 /// re-key (which points the confirm form at a different action and relabels it).
 fn twofa_qr_view(
@@ -2375,11 +2372,9 @@ pub async fn twofa_setup_post(
             // Re-fetch the in-progress secret so the QR + manual key render
             // identically to what the user is currently scanning. bunyip-api
             // returns the SAME pending secret while an enrollment is in
-            // flight (see the API-side note in
-            // docs/bunyip-upgrade/04-2fa-error-state-preserves-form.md). If
-            // that re-fetch itself fails (network blip, session timeout),
-            // fall through to the legacy banner-only error so the user can
-            // restart enrollment manually.
+            // flight. If that re-fetch itself fails (network blip, session
+            // timeout), fall through to the legacy banner-only error so the
+            // user can restart enrollment manually.
             let err_msg = e.user_message();
             match auth_api::setup_2fa(&st.api, fwd).await {
                 Ok(setup) => twofa_qr_view(
