@@ -1,0 +1,11 @@
+/.env.example
+/bunyip-api/migrations/20260721000020_seed_mokosh_setup_docs.sql
+/bunyip-api/src/handlers/user.rs
+/bunyip-api/tests/login_approval.rs
+/bunyip-api/tests/totp_single_use.rs
+/bunyip-api/seed/demo-msp.json
+/bunyip-api/src/seed.rs
+/e2e/tests/account/change-password.spec.ts
+/e2e/tests/auth/signup.spec.ts
+/e2e/tests/global.setup.ts
+/crates/bunyip-domain/src/models/stripe.rs

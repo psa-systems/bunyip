@@ -366,6 +366,21 @@ jobs:
         run: just check-tree-ownership
 
   secrets:
-    uses: psa-systems/common/.forgejo/workflows/check-secrets.yml@main  # secret-scope-ok: same-org shared workflow repo, tracked separately for SHA pinning
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_MEDIUM }}
-    secrets: inherit  # secret-scope-ok: the scanners may need the org tokens the called workflow reads; this caller job runs no step itself
+    # A reusable-workflow caller cannot carry `defaults`, so the shared composite
+    # runs as steps of this job and each scanner reports as its own step.
+    defaults:
+      run:
+        shell: nu {0}
+    steps:
+      - name: Clone the repository
+        uses: https://code.forgejo.org/actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Secrets scan
+        uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/check-secrets@main
+        with:
+          # Test fixtures and dev defaults only; Nosey Parker's list is .noseyparker-ignore.txt.
+          kingfisher_excludes: "scripts/init-secrets.nu bunyip-api/migrations/20260721000020_seed_mokosh_setup_docs.sql compose.dev.yml bunyip-api/src/handlers/user.rs bunyip-api/src/handlers/application.rs crates/bunyip-domain/src/models/stripe.rs"
