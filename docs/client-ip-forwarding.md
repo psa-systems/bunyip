@@ -27,8 +27,7 @@ cannot spoof its IP.
    ONLY when its socket peer (Traefik) is inside bunyip-web's
    `TRUSTED_PROXY_CIDR`. It then sets that single IP as `X-Forwarded-For` on
    every outbound `/v1` call (JSON, streaming, and multipart send paths). When
-   the peer is untrusted (or no CIDR is configured, the dev default) it
-   forwards nothing.
+   the peer is untrusted (or no CIDR is configured) it forwards nothing.
 3. bunyip-api (`extract_client_ip`, `crates/bunyip-domain/src/middleware/auth.rs`)
    reads that `X-Forwarded-For` as the external client ONLY when its socket
    peer (bunyip-web) is inside bunyip-api's `TRUSTED_PROXY_CIDR`.
@@ -74,9 +73,11 @@ recorded:
   otherwise trust `X-Forwarded-For` from any peer.
 
 Both honour a forwarded header ONLY when the socket peer is inside
-`TRUSTED_PROXY_CIDR`; with the CIDR unset (the dev default) both record the
-socket peer, identical to the pre-BUNYIP-310 behaviour, so no config change is
-needed to deploy. For access lines and spans to carry the external client IP,
+`TRUSTED_PROXY_CIDR`; with the CIDR unset both record the socket peer,
+identical to the pre-BUNYIP-310 behaviour, so no config change is needed to
+deploy (the shipped `compose.yml` / `compose.dev.yml` set a working default,
+see "Default config" below). For access lines and spans to carry the external
+client IP,
 `TRUSTED_PROXY_CIDR` must include the reverse-proxy address range that fronts
 the direct-to-API paths (SSE `/v1/events`, `/oauth2/*`, `/.well-known/*`), the
 same range the SSR chain above already requires.

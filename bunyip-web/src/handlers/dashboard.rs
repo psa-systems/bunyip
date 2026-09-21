@@ -24,6 +24,7 @@ use crate::util::{
     app_gradient, app_host, app_launch_link, days_until, entry_price, format_stripe_amount,
     has_active_membership, pricing_currency, rel_time, tier_price, urlenc,
 };
+use crate::views::layout::community_enabled;
 use crate::views::password::{guard_message, password_field, PwField, PwRole};
 use crate::views::ui::{
     back_link, badge, button_class, empty_state, error_box, icon, pager, success_box,
@@ -164,7 +165,9 @@ fn dashboard_apps_grid(
                         div class="p-6 pt-0 mt-auto" {
                             @if app.is_accessible {
                                 // BUNYIP-684: no declared host, nothing to launch.
-                                @if let Some(href) = app_launch_link(app, base_domain) {
+                                // BUNYIP-755: also absent for the Community app
+                                // when BUNYIP_COMMUNITY_URL is unset.
+                                @if let Some(href) = app_tile_link(app, base_domain) {
                                     a href=(href) target="_blank" rel="noopener noreferrer" {
                                         span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {} text-white border-0 shadow-md shadow-indigo-500/15 hover:shadow-lg hover:shadow-indigo-500/25 transition-shadow", app_gradient(app.group_id.as_deref())))) {
                                             "Open " (app.display_name) (icon("external-link", "ml-2 h-4 w-4"))
@@ -184,6 +187,26 @@ fn dashboard_apps_grid(
             }
         }
     }
+}
+
+/// BUNYIP-755: the row `BUNYIP-533`'s migration set `subdomain = 'chat'` on
+/// (`20260812000020_fix_lets_chat_subdomain.sql`), so this is the one
+/// application whose tile must agree with the sidebar Community nav entry
+/// (BUNYIP-329) on whether the feature is configured, not merely on whether
+/// `app_domain` happens to resolve a host for it.
+const COMMUNITY_APP_SLUG: &str = "lets-chat";
+
+/// Launch link for one application tile. `None` for the Community app when
+/// `community_enabled()` is false even though it carries a declared
+/// subdomain, so the tile never links to a community that
+/// `BUNYIP_COMMUNITY_URL` says does not exist (`app_domain` and
+/// `community_url` are independent settings); otherwise the ordinary
+/// `util::app_launch_link`.
+fn app_tile_link(app: &Application, domain: &str) -> Option<String> {
+    if app.slug == COMMUNITY_APP_SLUG && !community_enabled() {
+        return None;
+    }
+    app_launch_link(app, domain)
 }
 
 /// BUNYIP-329: decide where `/community` sends the caller. A member with a
@@ -341,7 +364,9 @@ fn app_card(
                 @if app.is_accessible {
                     // The `/dashboard` deep link, not the apex: see
                     // `util::app_launch_link` for why the suffix is load-bearing.
-                    @if let Some(href) = app_launch_link(app, domain) {
+                    // BUNYIP-755: also absent for the Community app when
+                    // BUNYIP_COMMUNITY_URL is unset.
+                    @if let Some(href) = app_tile_link(app, domain) {
                         a href=(href) target="_blank" rel="noopener noreferrer" {
                             span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {gradient} text-white border-0 shadow-md"))) { "Launch" (icon("external-link", "ml-2 h-4 w-4")) }
                         }
@@ -815,8 +840,7 @@ fn compose_block(snippet: &str) -> Markup {
 /// separate but rendered the same "no payment history yet" empty state and
 /// confused users navigating between them; the membership page now absorbs the
 /// invoices table and the sidebar drops the standalone Billing entry. The
-/// route stays mapped so existing bookmarks land somewhere sensible. See
-/// `docs/bunyip-upgrade/01-membership-plan-data.md`.
+/// route stays mapped so existing bookmarks land somewhere sensible.
 pub async fn billing(_: State<AppState>, _: HeaderMap) -> Response {
     axum::response::Redirect::permanent("/membership").into_response()
 }
@@ -961,8 +985,7 @@ pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap)
 /// Type" cell, and the public Pricing card all route through this so the
 /// in-app name and the marketing-facing name never disagree. Renaming a tier
 /// is a one-line change here that updates every consumer. Closes audit
-/// finding 1 (plan name inconsistency). See
-/// `docs/bunyip-upgrade/01-membership-plan-data.md`.
+/// finding 1 (plan name inconsistency).
 pub fn tier_name(t: &MembershipTier) -> &'static str {
     match t {
         MembershipTier::Lifetime => "Lifetime",
@@ -1043,8 +1066,7 @@ pub async fn membership(
     // different answers to the same question, so each list keeps its fetch
     // outcome and renders an error box rather than the empty state.
     // The page now absorbs the invoices table that used to live on /billing;
-    // /billing is a 308 redirect into this page. See docs/bunyip-upgrade/
-    // 01-membership-plan-data.md.
+    // /billing is a 308 redirect into this page.
     // BUNYIP-590: the pricing payload is the fifth: the Price cell renders the
     // configured price for the member's tier, never a compile-time figure.
     let (membership_data, payments_data, invoices_data, stripe, pricing) = tokio::join!(
@@ -1150,6 +1172,11 @@ pub async fn membership(
                                     } } }
                             }
                             div class="flex gap-4 pt-4" {
+                                // BUNYIP-760: the API's billing-portal endpoint had no
+                                // caller, so a member could not reach Stripe's own
+                                // billing portal (payment methods, past invoices) from
+                                // here despite the API already supporting it.
+                                form method="post" action="/membership/billing-portal" { button type="submit" class=(button_class("outline", "default", "")) { "Manage Billing" } }
                                 @if will_cancel {
                                     form method="post" action="/membership/reactivate" { button type="submit" class=(button_class("default", "default", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Reactivate Membership" } }
                                 } @else {
@@ -1348,6 +1375,24 @@ pub async fn membership_reactivate(State(st): State<AppState>, headers: HeaderMa
     let mut cookies = c.set_cookies.clone();
     cookies.extend(extra);
     redirect_cookies("/membership", &cookies)
+}
+
+/// BUNYIP-760: open the Stripe-hosted billing portal for the member's own
+/// customer record, following the API redirect straight to Stripe rather than
+/// rendering the URL. The API 404s when the caller has no Stripe customer id
+/// yet (e.g. never checked out), which surfaces here as a flash banner.
+pub async fn membership_billing_portal(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let (_, c) = match guard(&st, &headers, "/membership").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match calls::billing_portal(&st.api, c.forward.as_deref()).await {
+        Ok(portal) => redirect_cookies(&portal.url, &c.set_cookies),
+        Err(e) => redirect_cookies(
+            &format!("/membership?error={}", urlenc(&e.user_message())),
+            &c.set_cookies,
+        ),
+    }
 }
 
 // ===========================================================================
@@ -2228,7 +2273,7 @@ fn sensitive_reveal(id: &str, label: &str, content: Markup) -> Markup {
 ///
 /// Caller passes `setup` (the bunyip-api `/v1/auth/2fa/setup` response, which
 /// the upstream handler MUST return the SAME in-progress secret for during
-/// enrollment - see `docs/bunyip-upgrade/04-2fa-error-state-preserves-form.md`).
+/// enrollment).
 /// QR + manual-key + verify-code page, shared by initial setup and the BUNYIP-355
 /// re-key (which points the confirm form at a different action and relabels it).
 fn twofa_qr_view(
@@ -2327,11 +2372,9 @@ pub async fn twofa_setup_post(
             // Re-fetch the in-progress secret so the QR + manual key render
             // identically to what the user is currently scanning. bunyip-api
             // returns the SAME pending secret while an enrollment is in
-            // flight (see the API-side note in
-            // docs/bunyip-upgrade/04-2fa-error-state-preserves-form.md). If
-            // that re-fetch itself fails (network blip, session timeout),
-            // fall through to the legacy banner-only error so the user can
-            // restart enrollment manually.
+            // flight. If that re-fetch itself fails (network blip, session
+            // timeout), fall through to the legacy banner-only error so the
+            // user can restart enrollment manually.
             let err_msg = e.user_message();
             match auth_api::setup_2fa(&st.api, fwd).await {
                 Ok(setup) => twofa_qr_view(
@@ -2833,6 +2876,35 @@ mod tests {
         // dead external link and return to the dashboard.
         assert_eq!(community_redirect_target("", true), "/dashboard");
         assert_eq!(community_redirect_target("", false), "/membership");
+    }
+
+    #[test]
+    fn community_app_tile_agrees_with_the_sidebar() {
+        // BUNYIP-755: `community_enabled()` reads the process-wide flag `main`
+        // installs from `BUNYIP_COMMUNITY_URL`; nothing in this test binary
+        // installs it, so it reads its default `false` - the same "unconfigured"
+        // state the sidebar's Community nav entry hides on. The Let's Chat tile
+        // must agree even though its row carries a declared subdomain and would
+        // otherwise resolve a host.
+        assert!(!community_enabled());
+        let mut lets_chat = app_with_release_notes(None);
+        lets_chat.slug = "lets-chat".into();
+        lets_chat.subdomain = Some("chat".into());
+        assert_eq!(
+            app_tile_link(&lets_chat, "a8n.systems"),
+            None,
+            "Community app tile must not link out while community_enabled() is false"
+        );
+
+        // An unrelated application with a declared subdomain is unaffected: the
+        // gate is specific to the Community app's slug.
+        let mut other = app_with_release_notes(None);
+        other.slug = "mokosh".into();
+        other.subdomain = Some("mokosh".into());
+        assert_eq!(
+            app_tile_link(&other, "a8n.systems").as_deref(),
+            Some("https://mokosh.a8n.systems/dashboard")
+        );
     }
 
     fn membership_row(price_locked: bool, locked_price_amount: Option<i64>) -> Membership {

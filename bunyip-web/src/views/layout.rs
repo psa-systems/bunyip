@@ -566,8 +566,7 @@ fn dashboard_items(is_member: bool) -> Vec<NavItem> {
         // standalone /downloads page is now a redirect to /applications.
         // Single nav entry covering plan, status, invoices, and payment
         // history. The standalone "Billing" item went away when /billing
-        // became a 302 redirect into /membership. See
-        // docs/bunyip-upgrade/01-membership-plan-data.md.
+        // became a 302 redirect into /membership.
         NavItem {
             title: "Membership & Billing",
             href: "/membership",
@@ -704,6 +703,12 @@ fn admin_items() -> Vec<NavItem> {
             title: "Seed Data",
             href: "/admin/seed",
             icon: "layers",
+            external: false,
+        },
+        NavItem {
+            title: "Admin Invites",
+            href: "/admin/invites",
+            icon: "user-plus",
             external: false,
         },
         NavItem {

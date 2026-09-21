@@ -14,16 +14,16 @@ or **`test.fixme`** (intent sketched, blocked on a cited dependency). Every
 | Area | Spec | Status | What |
 | --- | --- | --- | --- |
 | Auth | `tests/auth/login.spec.ts` | runnable | ONE combined login + logout round-trip via the real `/login` form (TOTP-aware), kept to a single login to stay under the 5/min rate limit |
-| Auth | `tests/auth/signup.spec.ts` | `test.fixme` | self-service `/register`; needs a mail sink to read the confirmation link (BUNYIP-150) |
+| Auth | `tests/auth/signup.spec.ts` | `test.fixme` | self-service `/register`; the mail sink landed (BUNYIP-150) and now serves `password-reset`/`magic-link`/`change-email` below, but `signup` is still the remaining follow-up (see [Blocked specs](#blocked-specs-testfixme-and-their-blockers)) |
 | Auth | `tests/auth/password-reset.spec.ts` | runnable | register a disposable account, request `/password-reset`, read the token from the Stalwart JMAP sink, set a new password, assert it logs in (BUNYIP-150). Skipped without `E2E_MAIL_SINK_URL` |
 | Auth | `tests/auth/magic-link.spec.ts` | runnable | request `/magic-link` for a disposable account, follow the emailed token, assert the new session reads `/v1/users/me` (BUNYIP-150). Skipped without `E2E_MAIL_SINK_URL` |
-| Auth | `tests/auth/two-factor.spec.ts` | `test.fixme` | TOTP enrollment; needs a disposable account + captured secret (BUNYIP-152). The 2FA challenge leg is already exercised by every login in `lib/login.ts` |
+| Auth | `tests/auth/two-factor.spec.ts` | `test.fixme` | TOTP enrollment; BUNYIP-152 enrolled 2FA on the shared account, but exercising the enrollment flow itself still needs a disposable account + captured secret so it does not disturb that shared account (see [Blocked specs](#blocked-specs-testfixme-and-their-blockers)). The 2FA challenge leg is already exercised by every login in `lib/login.ts` |
 | Account | `tests/account/profile.spec.ts` | runnable | edit `POST /settings/profile`, reload, assert persisted (non-destructive) |
 | Account | `tests/account/sessions.spec.ts` | runnable (read-only) | assert the current session is listed (UI + `GET /v1/users/me/sessions`); never revokes, which would kill the shared session |
 | Account | `tests/account/change-password.spec.ts` | `test.fixme` | mutates the shared E2E credential; needs a disposable account (suite-design limit, no sub-task) |
 | Account | `tests/account/change-email.spec.ts` | runnable | register a disposable account, request an email change, confirm via the emailed link from the Stalwart JMAP sink, assert the new email (BUNYIP-150). Skipped without `E2E_MAIL_SINK_URL` |
 | Billing | `tests/billing/subscribe.spec.ts` | runnable + prod skip | `POST /membership/subscribe` 302s to checkout.stripe.com (BUNYIP-151). Skipped without `E2E_STRIPE_SECRET_KEY` (= staging Stripe test mode provisioned) |
-| Billing | `tests/billing/cancel.spec.ts` | `test.fixme` + prod skip | `POST /membership/cancel`; deferred under BUNYIP-151 - needs a setup step that gives the account an active membership, which is webhook-dependent (see the spec). Lands once staging Stripe + the webhook are live |
+| Billing | `tests/billing/cancel.spec.ts` | `test.fixme` + prod skip | `POST /membership/cancel`; BUNYIP-151 landed staging Stripe test mode (`subscribe`/`billing-portal` already run on it), but `cancel` still needs a setup step that gives the account an active membership, which is webhook-dependent (see the spec and [Blocked specs](#blocked-specs-testfixme-and-their-blockers)) |
 | Billing | `tests/billing/billing-portal.spec.ts` | runnable + prod skip | read-only redirect assertion on `/checkout/success` (BUNYIP-151). Skipped without `E2E_STRIPE_SECRET_KEY` |
 | OIDC | `tests/oidc/authorize-redirect.spec.ts` | runnable | `/oauth2/authorize` (no-follow) returns a `code` to the registered redirect host; names `/login` vs `/consent` on a no-code bounce |
 | OIDC | `tests/oidc/token-flow.spec.ts` | runnable | full PKCE: authorize -> code -> `/oauth2/token` -> `/oauth2/userinfo` -> refresh |
@@ -82,8 +82,8 @@ test runs.
 | `E2E_OIDC_CLIENT_ID` | yes | public PKCE client id for the OP token-flow specs |
 | `E2E_OIDC_REDIRECT_URI` | yes | redirect_uri registered for that client (must match EXACTLY, or `invalid_redirect_uri`). Only the `code` is captured; the URL is never loaded |
 | `E2E_TOTP_SECRET` | yes | base32 TOTP secret for the account; the second factor is computed at runtime |
-| `E2E_STRIPE_SECRET_KEY` | no | Stripe test-mode key (`sk_test_...`). Used by teardown to cancel test-mode subscriptions AND as the gate for the billing specs - when set (the operator provisions it as `E2E_STAGING_STRIPE_SECRET_KEY` alongside staging Stripe test mode), `subscribe`/`billing-portal` run; unset, they skip (BUNYIP-151) |
-| `E2E_MAIL_SINK_URL` | no | Staging mail-sink JMAP base URL with the **dedicated** E2E mailbox credentials embedded (e.g. `https://e2e%40a8n.run:APP_PASSWORD@mail.a8n.run`, the Stalwart server). The email-driven specs read token links from this mailbox; unset (e.g. production) makes them skip (BUNYIP-150). See [Mail-sink secret format](#mail-sink-secret-format-bunyip-272) for the exact shape. Do NOT use a personal mailbox (BUNYIP-272) |
+| `E2E_STRIPE_SECRET_KEY` | no | Stripe test-mode key (`sk_test_...`). Used by teardown to cancel test-mode subscriptions AND as the gate for the billing specs - when set (the operator provisions it as `E2E_STAGING_STRIPE_SECRET_KEY` alongside staging Stripe test mode, per BUNYIP-151), `subscribe`/`billing-portal` run; unset, they skip |
+| `E2E_MAIL_SINK_URL` | no | Staging mail-sink JMAP base URL with the **dedicated** E2E mailbox credentials embedded (e.g. `https://e2e%40a8n.run:APP_PASSWORD@mail.a8n.run`, the Stalwart server). The email-driven specs read token links from this mailbox, per BUNYIP-150; unset (e.g. production) makes them skip. See [Mail-sink secret format](#mail-sink-secret-format-bunyip-272) for the exact shape. Do NOT use a personal mailbox (BUNYIP-272) |
 
 ## Forgejo Actions secrets and variables
 
@@ -137,8 +137,8 @@ the two marked optional. Production has no mail sink, so there is deliberately n
 | `E2E_STAGING_OIDC_CLIENT_ID` | `E2E_PRODUCTION_OIDC_CLIENT_ID` | yes | public PKCE client id (`E2E_OIDC_CLIENT_ID`) |
 | `E2E_STAGING_OIDC_REDIRECT_URI` | `E2E_PRODUCTION_OIDC_REDIRECT_URI` | yes | registered redirect_uri, exact match (`E2E_OIDC_REDIRECT_URI`) |
 | `E2E_STAGING_TOTP_SECRET` | `E2E_PRODUCTION_TOTP_SECRET` | yes | base32 TOTP secret for the account (`E2E_TOTP_SECRET`) |
-| `E2E_STAGING_STRIPE_SECRET_KEY` | `E2E_PRODUCTION_STRIPE_SECRET_KEY` | no | Stripe test-mode key; gates the billing specs (`E2E_STRIPE_SECRET_KEY`, BUNYIP-151) |
-| `E2E_STAGING_MAIL_SINK_URL` | (none - staging only) | no | JMAP mail sink; gates the email-driven specs (`E2E_MAIL_SINK_URL`, BUNYIP-150). Production resolves empty, so those specs skip there |
+| `E2E_STAGING_STRIPE_SECRET_KEY` | `E2E_PRODUCTION_STRIPE_SECRET_KEY` | no | Stripe test-mode key, provisioned per BUNYIP-151; gates the billing specs (`E2E_STRIPE_SECRET_KEY`) |
+| `E2E_STAGING_MAIL_SINK_URL` | (none - staging only) | no | JMAP mail sink, provisioned per BUNYIP-150; gates the email-driven specs (`E2E_MAIL_SINK_URL`). Production resolves empty, so those specs skip there |
 
 ### Mail-sink secret format (BUNYIP-272)
 

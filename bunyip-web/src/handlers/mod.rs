@@ -225,6 +225,7 @@ fn onboarding_needed(
 /// Authenticate a protected page. `Err` is a ready redirect (to /login when
 /// signed out, to 2FA setup for an admin who hasn't enabled it yet, or to
 /// /onboarding for a user who hasn't finished onboarding - BUNYIP-206).
+#[allow(clippy::result_large_err)] // Err is the ready-made redirect the caller returns as-is
 pub async fn guard(
     st: &AppState,
     headers: &HeaderMap,
@@ -260,6 +261,7 @@ pub async fn guard(
 }
 
 /// Like `guard` but also requires the admin role (non-admins -> dashboard).
+#[allow(clippy::result_large_err)] // Err is the ready-made redirect the caller returns as-is
 pub async fn admin_guard(st: &AppState, headers: &HeaderMap) -> Result<(User, AuthCtx), Response> {
     let (user, c) = guard(st, headers, "/admin").await?;
     if user.role != UserRole::Admin {

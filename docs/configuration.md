@@ -5,9 +5,11 @@ reference deployment, and the settings that are not environment variables at all
 does not exist.
 
 The source of truth for the api's variables is `ENV_INVENTORY` in `crates/bunyip-domain/src/config.rs`; a variable read
-without an entry there fails `bunyip-api/tests/env_inventory.rs`. The classification tables below are the
-operator-facing rendering of that table, so they cannot drift from the code. The three sections that follow them are not
-derivable from the inventory:
+without an entry there fails `bunyip-api/tests/env_inventory.rs`. The classification tables below, the system-level
+table and the governed-secrets table are the operator-facing rendering of `ENV_INVENTORY`, `SYSTEM_LEVEL_ENV_KEYS` and
+`GovernedSecret::ALL` respectively, and `scripts/check-doc-surface.nu` (in `just check` and CI) fails the build the
+moment any of the three names a variable this document does not, or vice versa (BUNYIP-783). The three sections that
+follow them are not derivable from the inventory:
 
 - [Which provider a running deployment is using](#which-provider-a-running-deployment-is-using), and what each
   provider costs.
@@ -170,8 +172,8 @@ takes effect on the next restart, because the boot read is the only reader.
 anything:
 
 ```nu
-docker exec bunyip-postgres psql --username postgres --dbname bunyip --command "select (secret_key is not null) as has_secret_key, (webhook_secret is not null) as has_webhook_secret, key_version, updated_at from stripe_config"
-docker exec bunyip-postgres psql --username postgres --dbname bunyip --command "select smtp_host, smtp_username, (smtp_password is not null) as has_password, key_version, updated_at from email_config"
+docker exec bunyip-postgres psql --username bunyip --dbname bunyip --command "select (secret_key is not null) as has_secret_key, (webhook_secret is not null) as has_webhook_secret, key_version, updated_at from stripe_config"
+docker exec bunyip-postgres psql --username bunyip --dbname bunyip --command "select smtp_host, smtp_username, (smtp_password is not null) as has_password, key_version, updated_at from email_config"
 docker exec bunyip-api env | lines | where {|l| $l =~ '^(SECRETS_STORAGE|SMTP_PASSWORD)' }
 ```
 
@@ -320,8 +322,8 @@ they were not under the YAML layer.
 ### Which provider is serving each value
 
 ```nu
-docker exec bunyip-api bunyip-api config-status
-docker exec bunyip-api bunyip-api config-status --json
+docker compose exec api /app/bunyip-api config-status
+docker compose exec api /app/bunyip-api config-status --json
 ```
 
 Per key it prints the providers holding a value, the one serving it, and one of four conditions. No configuration value
@@ -352,6 +354,10 @@ logged at boot, one `WARN` per ignored provider, which is the stale-copy case wo
 | `OIDC_ISSUER`                           | -                           | the whole OIDC provider: no RP can log in through bunyip            |
 | `FORGEJO_BASE_URL`                      | -                           | the distribution proxy has no upstream                              |
 | `FORGEJO_API_TOKEN`                     | -                           | downloads cannot authenticate to Forgejo                            |
+| `MOKOSH_PROVIDER_STATUS_URL`            | -                           | the suite provider-status aggregate (BUNYIP-634) cannot reach Mokosh: its admin-page row reads as unreachable rather than being fetched |
+| `DRILLMARK_PROVIDER_STATUS_URL`         | -                           | the suite provider-status aggregate (BUNYIP-634) cannot reach Drillmark: its admin-page row reads as unreachable rather than being fetched |
+| `PROVIDER_STATUS_CLIENT_ID`             | -                           | the suite provider-status aggregate (BUNYIP-634) has no machine credential to present to Mokosh or Drillmark, so every remote fetch answers unreachable |
+| `PROVIDER_STATUS_CLIENT_SECRET`         | -                           | the suite provider-status aggregate (BUNYIP-634) has no machine credential to present to Mokosh or Drillmark, so every remote fetch answers unreachable |
 | `OCI_REGISTRY_ENABLED`                  | -                           | the OCI registry endpoint                                           |
 | `OCI_REGISTRY_SERVICE`                  | `OCI_REGISTRY_ENABLED`      | the registry token realm cannot be derived                          |
 | `SMTP_HOST`                             | -                           | transactional email (outside production, where it is required)      |
@@ -425,8 +431,7 @@ Every variable below has a working default; set it only to tune the deployment.
   it (30 is a sensible value) while investigating database contention. The acquire-timeout counter is collected either
   way; only the periodic line is gated. See
   [`api-performance-measurements.md`](api-performance-measurements.md).
-- **Non-production tooling**: `BUNYIP_E2E_BOOTSTRAP_ALLOW`, `BUNYIP_E2E_TOTP_SECRET`, `BUNYIP_SEED_ALLOW`,
-  `BUNYIP_GIT_SHA`.
+- **Non-production tooling**: `BUNYIP_E2E_BOOTSTRAP_ALLOW`, `BUNYIP_E2E_TOTP_SECRET`, `BUNYIP_SEED_ALLOW`.
 
 ## Secret files and compose coverage
 
@@ -460,7 +465,7 @@ this repository.
 | `OCI_REGISTRY_REALM`                                                                   | the realm is always derived from `OCI_REGISTRY_SERVICE` (correct for production)             |
 | `OIDC_LIFECYCLE_EVENT_KEY`                                                             | the lifecycle event key is fixed at its default                                              |
 | `BUNYIP_BILLING_TRIAL_PERIOD_DAYS`, `TIER_EARLY_ADOPTER_TRIAL_DAYS`                    | those bootstrap seeds cannot be set; the admin pages are the only path                       |
-| `EMAIL_LOG_TOKENS`, `BUNYIP_E2E_BOOTSTRAP_ALLOW`, `BUNYIP_GIT_SHA`                     | dev and build-time only; correctly absent from a production deployment                       |
+| `EMAIL_LOG_TOKENS`, `BUNYIP_E2E_BOOTSTRAP_ALLOW`                                       | dev-only; correctly absent from a production deployment                                      |
 
 The bootstrap-default families are in the same position: `AUTO_BAN_*`, `RATE_LIMIT_{ACTION}_*` and the remaining
 `TIER_*` variables seed a fresh database and are not passed either, so on a deployed instance the admin pages are the
