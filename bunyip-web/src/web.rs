@@ -240,10 +240,16 @@ mod chrome_fetch_guards {
     #[test]
     fn post_guard_fetches_run_concurrently() {
         const FANOUT: &[(&str, &str, &str)] = &[
+            // `public_ctx` used to be a two-fetch fan-out
+            // (pricing + applications). The application list moved onto
+            // the landing handler alone, so `public_ctx` now serves a
+            // single upstream call and no `tokio::join!` is required.
+            // The landing handler takes its place here as the two-fetch
+            // fan-out: it joins `public_ctx` with `st.public_applications()`.
             (
-                "handlers/mod.rs",
-                include_str!("handlers/mod.rs"),
-                "pub async fn public_ctx(",
+                "skin/public.rs",
+                include_str!("skin/public.rs"),
+                "pub async fn landing(",
             ),
             (
                 "handlers/dashboard.rs",
