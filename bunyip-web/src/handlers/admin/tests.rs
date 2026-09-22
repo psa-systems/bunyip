@@ -2769,7 +2769,8 @@ mod rate_limit_management_tests {
             submitter_ip: Some("203.0.113.7".to_string()),
             user_agent: Some("Mozilla/5.0 Firefox/121.0".to_string()),
         };
-        let html = super::feedback_detail_view(&detail, super::FeedbackTab::Spam).into_string();
+        let html = super::feedback_detail_view(&detail, super::FeedbackTab::Spam, None, None)
+            .into_string();
         assert!(
             html.contains(r#"href="/admin/ip-bans?ip=203.0.113.7""#),
             "the IP links into the ip-bans add flow"
@@ -2778,6 +2779,50 @@ mod rate_limit_management_tests {
             html.contains("Mozilla/5.0 Firefox/121.0"),
             "user agent shown"
         );
+    }
+
+    /// BUNYIP-810: a rejected or failed reply re-renders the detail page with
+    /// the admin's just-typed text, not the persisted `admin_response` and
+    /// not an empty field, and the inline error sits inside the response
+    /// form so the admin sees why it was rejected right next to their draft.
+    #[test]
+    fn rejected_reply_echoes_the_typed_text_with_the_error_inside_the_form() {
+        let detail = AdminFeedbackDetail {
+            id: "33333333-3333-3333-3333-333333333333".to_string(),
+            name: Some("Ada".to_string()),
+            email: Some("ada@example.com".to_string()),
+            email_masked: Some("a***@example.com".to_string()),
+            subject: Some("Broken button".to_string()),
+            tags: vec![],
+            message: "It does not work".to_string(),
+            page_path: None,
+            status: FeedbackStatus::New,
+            admin_response: Some("An old stored reply".to_string()),
+            created_at: "2026-08-01T00:00:00Z".to_string(),
+            responded_at: Some("2026-08-01T01:00:00Z".to_string()),
+            attachments: vec![],
+            submitter_ip: None,
+            user_agent: None,
+        };
+        let html = feedback_detail_view(
+            &detail,
+            super::FeedbackTab::Active,
+            Some("A brand new draft the admin just typed"),
+            Some("Could not send response"),
+        )
+        .into_string();
+
+        assert!(
+            html.contains("A brand new draft the admin just typed"),
+            "the just-typed draft is redisplayed, not the stored response: {html}"
+        );
+        assert!(
+            !html.contains("An old stored reply"),
+            "the stale stored response is not shown once a draft is submitted: {html}"
+        );
+        let form = html.find("<form").expect("response form");
+        let error = html.find("Could not send response").expect("inline error");
+        assert!(form < error, "error renders inside the response form");
     }
 
     #[test]
