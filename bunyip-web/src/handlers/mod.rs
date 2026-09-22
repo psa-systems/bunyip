@@ -66,7 +66,7 @@ pub fn rotating_index(len: usize) -> usize {
 /// upstream call, keeping per-render fetches off the rate-limit floor that
 /// used to 404 `/pricing` and empty the footer.
 ///
-/// BUNYIP-683: `public_applications` no longer rides here. The public header
+/// `public_applications` no longer rides here. The public header
 /// and footer stopped rendering per-application entries in BUNYIP-667/682, so
 /// the application list feeds only the landing page's cards now, and that one
 /// caller fetches it beside `public_ctx` (`skin/public::landing`) instead of

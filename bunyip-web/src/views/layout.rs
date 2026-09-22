@@ -1682,7 +1682,7 @@ mod tests {
 
     /// BUNYIP-667 (header) and BUNYIP-682 (footer): the public chrome carries ONE
     /// `Applications` link per half, signed-in only, never an entry per app.
-    /// BUNYIP-683: the shell is not handed the application list any more, so
+    /// the shell is not handed the application list any more, so
     /// there is nothing to render an entry from even if the code tried to.
     /// BUNYIP-638's one-click launch still lives on the dashboard.
     #[test]
@@ -1697,8 +1697,7 @@ mod tests {
         // covers (a signed-in visitor the destination would let through).
         // The false shape is exercised by
         // `an_unverified_user_sees_no_application_link_in_any_chrome_surface`.
-        let signed_in =
-            public_shell(&cfg, Some(&user), false, true, false, html! {}).into_string();
+        let signed_in = public_shell(&cfg, Some(&user), false, true, false, html! {}).into_string();
         let (head, foot) = signed_in
             .split_once("<footer")
             .expect("the public shell renders a footer");
@@ -1761,8 +1760,7 @@ mod tests {
     fn an_unverified_user_sees_no_application_link_in_any_chrome_surface() {
         let cfg = Config::from_env();
         let user = test_user(UserRole::Subscriber);
-        let hidden =
-            public_shell(&cfg, Some(&user), false, false, false, html! {}).into_string();
+        let hidden = public_shell(&cfg, Some(&user), false, false, false, html! {}).into_string();
         assert!(
             !hidden.contains(r#"href="/applications""#),
             "no Applications entry in header or footer when app_links_allowed = false"

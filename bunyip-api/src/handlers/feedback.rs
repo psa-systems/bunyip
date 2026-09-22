@@ -263,6 +263,15 @@ fn should_notify_admins_of_feedback(is_spam: bool) -> bool {
     !is_spam
 }
 
+/// BUNYIP-806: whether a freshly submitted feedback row should charge the
+/// per-IP rate-limit budget. Spam (honeypot-flagged) rows do not, so a
+/// burst of junk from one address cannot exhaust the ceiling and lock a
+/// genuine reporter out of the same window. Factored out so the invariant
+/// is unit-testable without the rate-limit table.
+fn should_charge_rate_limit_for_feedback(is_spam: bool) -> bool {
+    !is_spam
+}
+
 /// BUNYIP-411: normalize a forwarded `User-Agent` before it is persisted and
 /// audited. The BFF already caps the header at 512 chars; we store at most 256
 /// (matching the session-row UA cap) and treat blank / whitespace as absent, so
@@ -313,7 +322,12 @@ pub async fn submit_feedback(
             .get(actix_web::http::header::USER_AGENT)
             .and_then(|v| v.to_str().ok()),
     );
-    check_feedback_rate_limit(&pool, &ip_key).await?;
+    // BUNYIP-806: the rate-limit check moved BELOW multipart parsing so a
+    // honeypot-flagged spam row does not consume the per-IP budget - see the
+    // `should_charge_rate_limit_for_feedback(is_spam)` gate after parsing.
+    // The multipart body itself is still capped by `check_multipart_size`
+    // per field and MAX_REQUEST_SIZE overall, so a spammer cannot use this
+    // window to buffer past those bounds.
 
     // Parse multipart fields
     let mut name_raw: Option<String> = None;
@@ -444,6 +458,15 @@ pub async fn submit_feedback(
         return Err(AppError::validation("message", "Message is required"));
     }
     validate_length("message", &message, 5000)?;
+
+    // BUNYIP-806: charge the per-IP rate-limit budget only for LEGITIMATE
+    // submissions. A honeypot-flagged row is still persisted and audited
+    // (so an operator can see the pattern) but does not increment the
+    // counter, so a burst of spam cannot lock a real reporter out of the
+    // same window.
+    if should_charge_rate_limit_for_feedback(is_spam) {
+        check_feedback_rate_limit(&pool, &ip_key).await?;
+    }
 
     let feedback = FeedbackRepository::create(
         &pool,
@@ -982,6 +1005,37 @@ mod tests {
     #[test]
     fn suppresses_admin_notification_for_spam_feedback() {
         assert!(!should_notify_admins_of_feedback(true));
+    }
+
+    // BUNYIP-806: the honeypot-flagged submissions are still persisted (so an
+    // operator can see the pattern) but do not consume the per-IP rate-limit
+    // budget. A pair of pure-predicate tests around
+    // `should_charge_rate_limit_for_feedback` mirrors the notify pair above
+    // and guards the invariant against regressing back to "always charge".
+    #[test]
+    fn charges_the_budget_for_legitimate_feedback() {
+        assert!(should_charge_rate_limit_for_feedback(false));
+    }
+
+    #[test]
+    fn does_not_charge_the_budget_for_honeypot_flagged_feedback() {
+        assert!(!should_charge_rate_limit_for_feedback(true));
+    }
+
+    /// BUNYIP-806: the notify AND charge decisions are BOTH keyed on
+    /// `is_spam`. Reading them side-by-side catches a future change that
+    /// flipped one without the other (e.g. added a "hard-drop" branch that
+    /// still notifies but no longer charges, or vice versa) and would have
+    /// re-opened the "spam burns the budget" gap.
+    #[test]
+    fn spam_neither_notifies_nor_charges_and_legit_does_both() {
+        for is_spam in [true, false] {
+            assert_eq!(
+                should_notify_admins_of_feedback(is_spam),
+                should_charge_rate_limit_for_feedback(is_spam),
+                "notify and charge diverge for is_spam = {is_spam}"
+            );
+        }
     }
 
     // -- BUNYIP-699: multipart field/request size and tag-count caps --------

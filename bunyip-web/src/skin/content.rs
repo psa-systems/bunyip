@@ -212,7 +212,15 @@ pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response
     // most once per TTL instead of once per public render.
     let stripe = st.stripe_enabled().await;
     let content = pricing_content(&pricing, stripe, c.is_signed_in());
-    public_response(&st, &c, &pricing, app_links_allowed, "Pricing", true, content)
+    public_response(
+        &st,
+        &c,
+        &pricing,
+        app_links_allowed,
+        "Pricing",
+        true,
+        content,
+    )
 }
 
 // --- our story --------------------------------------------------------------
@@ -277,7 +285,15 @@ pub async fn our_story(State(st): State<AppState>, headers: HeaderMap) -> Respon
             }
         }
     };
-    public_response(&st, &c, &pricing, app_links_allowed, "Our Story", true, content)
+    public_response(
+        &st,
+        &c,
+        &pricing,
+        app_links_allowed,
+        "Our Story",
+        true,
+        content,
+    )
 }
 
 // --- roadmap ----------------------------------------------------------------
@@ -355,7 +371,15 @@ pub async fn roadmap(State(st): State<AppState>, headers: HeaderMap) -> Response
             }
         }
     };
-    public_response(&st, &c, &pricing, app_links_allowed, "Roadmap", true, content)
+    public_response(
+        &st,
+        &c,
+        &pricing,
+        app_links_allowed,
+        "Roadmap",
+        true,
+        content,
+    )
 }
 
 // --- legal ------------------------------------------------------------------
@@ -402,7 +426,15 @@ pub async fn terms(State(st): State<AppState>, headers: HeaderMap) -> Response {
             }
         }
     };
-    public_response(&st, &c, &pricing, app_links_allowed, "Terms of Service", true, content)
+    public_response(
+        &st,
+        &c,
+        &pricing,
+        app_links_allowed,
+        "Terms of Service",
+        true,
+        content,
+    )
 }
 
 pub async fn privacy(State(st): State<AppState>, headers: HeaderMap) -> Response {
@@ -438,7 +470,15 @@ pub async fn privacy(State(st): State<AppState>, headers: HeaderMap) -> Response
             }
         }
     };
-    public_response(&st, &c, &pricing, app_links_allowed, "Privacy Policy", true, content)
+    public_response(
+        &st,
+        &c,
+        &pricing,
+        app_links_allowed,
+        "Privacy Policy",
+        true,
+        content,
+    )
 }
 
 // --- feedback ---------------------------------------------------------------
@@ -958,7 +998,15 @@ pub async fn feedback_post(
             }
         }
     };
-    public_response(&st, &c, &pricing, app_links_allowed, "Feedback", false, content)
+    public_response(
+        &st,
+        &c,
+        &pricing,
+        app_links_allowed,
+        "Feedback",
+        false,
+        content,
+    )
 }
 
 // --- docs (BUNYIP-385, curated for users in BUNYIP-387) ---------------------
@@ -1276,7 +1324,7 @@ pub async fn app_docs_index(
 ) -> Response {
     // BUNYIP-635: the section menu rides along, so the reader can move between
     // documentation sections without going back to the hub first.
-    // BUNYIP-683: the public application list is not in `public_ctx` any
+    // the public application list is not in `public_ctx` any
     // more, but this page still needs it as the fallback for
     // `app_display_name` (an app with a hosted slug but no documentation
     // entry). Ride it beside the two `public_ctx` fetches so the miss
@@ -1341,7 +1389,7 @@ pub async fn app_docs_page(
     headers: HeaderMap,
     Path((slug, doc_slug)): Path<(String, String)>,
 ) -> Response {
-    // BUNYIP-683: same rationale as `app_docs_index` - keep the fallback
+    // same rationale as `app_docs_index` - keep the fallback
     // for `app_display_name` by fetching the public applications list
     // beside the two `public_ctx` fetches.
     let ((c, pricing, app_links_allowed), apps, documented) = tokio::join!(
@@ -1372,7 +1420,8 @@ pub async fn app_docs_page(
                     }
                 }
             };
-            let mut resp = public_response(&st, &c, &pricing, app_links_allowed, "Docs", true, content);
+            let mut resp =
+                public_response(&st, &c, &pricing, app_links_allowed, "Docs", true, content);
             *resp.status_mut() = axum::http::StatusCode::NOT_FOUND;
             return resp;
         }

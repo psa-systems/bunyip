@@ -335,7 +335,7 @@ pub async fn login_get(
         );
     }
     // BUNYIP-555: pricing comes from the shared TTL cache.
-    // BUNYIP-683: no longer joins `public_applications()` beside it -
+    // no longer joins `public_applications()` beside it -
     // the public chrome does not render the list any more.
     let pricing = pricing_published(&st).await;
     let content = login_content(None, q.redirect.as_deref().unwrap_or("/dashboard"));
@@ -384,7 +384,7 @@ pub async fn login_post(
             redirect_cookies(&path, &cookies)
         }
         Err(e) => {
-            // BUNYIP-683: public_applications() dropped, per its removal
+            // public_applications() dropped, per its removal
             // from the public chrome.
             let pricing = pricing_published(&st).await;
             let content = login_content(Some(&e.user_message()), &target);
@@ -1292,7 +1292,7 @@ pub async fn verify_email(
         // accept extra cookies, so render through the lower-level path
         // directly here. Pricing comes from the same shared TTL cache
         // `public_ctx` reads (BUNYIP-555).
-        // BUNYIP-683: `public_applications()` dropped, per its removal
+        // `public_applications()` dropped, per its removal
         // from the public chrome.
         let pricing = pricing_published(&st).await;
         // signed-out visitor path (post-verify celebration),
