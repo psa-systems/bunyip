@@ -11,6 +11,7 @@ use crate::api::types::{Application, DocumentedApp, PricingResponse, User};
 use crate::handlers::dashboard::tier_name;
 use crate::handlers::{dashboard_input, public_ctx, public_response};
 use crate::util::format_stripe_amount;
+use crate::views::form_errors::{aria_invalid, field_error_slot, field_invalid_class};
 use crate::views::ui::{back_link, button_class, empty_state, error_box, icon};
 use crate::web::AppState;
 
@@ -628,42 +629,15 @@ fn feedback_thanks(page_path: Option<&str>) -> Markup {
     }
 }
 
-/// `"true"` / `"false"` for an `aria-invalid` attribute. Rendering the literal
-/// value (not a valueless boolean attribute) lets the `aria-[invalid=true]:`
-/// Tailwind variant paint the red border, and lets `app.js` flip it in place.
-fn aria_invalid(is_invalid: bool) -> &'static str {
-    if is_invalid {
-        "true"
-    } else {
-        "false"
-    }
-}
-
-/// The shared class for a text field, plus the invalid-state border/ring driven
-/// by `aria-invalid="true"` (BUNYIP-541), so marking a field invalid is a single
-/// attribute flip on both the server redraw and the client path.
+/// The feedback form's own field class: `views::form_errors::field_invalid_class`
+/// (BUNYIP-813) plus this form's `dashboard_input()` base.
 fn feedback_field_class(extra: &str) -> String {
-    format!(
-        "{} aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-1 aria-[invalid=true]:ring-destructive {extra}",
-        dashboard_input()
-    )
-}
-
-/// The inline error slot rendered under a field. It always exists (so the
-/// input's `aria-describedby` target is real and `app.js` has a stable node to
-/// fill), and is hidden until it carries a message (BUNYIP-541).
-fn feedback_field_error(field: &str, msg: Option<&str>) -> Markup {
-    let hidden = if msg.is_some() { "" } else { " hidden" };
-    html! {
-        p id=(format!("{field}-error")) data-feedback-error=(field) role="alert"
-          class={ "mt-1 text-sm text-destructive-text" (hidden) } {
-            @if let Some(m) = msg { (m) }
-        }
-    }
+    field_invalid_class(dashboard_input(), extra)
 }
 
 /// BUNYIP-541: validation errors render inline under the field they belong to
-/// (`field_error`, keyed by input id), not as a top-of-form banner. `form_error`
+/// (`views::form_errors::field_error_slot`, keyed by input id, extracted as a
+/// named helper by BUNYIP-813), not as a top-of-form banner. `form_error`
 /// stays for the non-field cases (a multipart read failure or an API submit
 /// failure) that no single field owns.
 fn feedback_form(
@@ -708,20 +682,20 @@ fn feedback_form(
                                     label for="name" class="text-sm font-medium" { "Name" }
                                     input id="name" name="name" maxlength="100" placeholder="Optional" value=(draft.name)
                                         aria-describedby="name-error" aria-invalid=(aria_invalid(name_err.is_some())) class=(feedback_field_class(""));
-                                    (feedback_field_error("name", name_err))
+                                    (field_error_slot("name", name_err))
                                 }
                                 div class="grid gap-2" {
                                     label for="email" class="text-sm font-medium" { "Email" }
                                     input id="email" name="email" type="email" maxlength="254" placeholder="you@example.com" value=(draft.email)
                                         aria-describedby="email-error" aria-invalid=(aria_invalid(email_err.is_some())) class=(feedback_field_class(""));
-                                    (feedback_field_error("email", email_err))
+                                    (field_error_slot("email", email_err))
                                 }
                             }
                             div class="grid gap-2" {
                                 label for="subject" class="text-sm font-medium" { "Subject" }
                                 input id="subject" name="subject" maxlength="200" placeholder="Optional" value=(draft.subject)
                                     aria-describedby="subject-error" aria-invalid=(aria_invalid(subject_err.is_some())) class=(feedback_field_class(""));
-                                (feedback_field_error("subject", subject_err))
+                                (field_error_slot("subject", subject_err))
                             }
                             div class="grid gap-3" {
                                 label class="text-sm font-medium" { "Tags " span class="text-muted-foreground font-normal" { "(optional, pick any)" } }
@@ -753,7 +727,7 @@ fn feedback_form(
                                 }
                                 textarea id="message" name="message" rows="7" required aria-required="true" maxlength="16000" placeholder="What would you like to see improved?"
                                     aria-describedby="message-error" aria-invalid=(aria_invalid(message_err.is_some())) class=(feedback_field_class("min-h-[168px]")) { (draft.message) }
-                                (feedback_field_error("message", message_err))
+                                (field_error_slot("message", message_err))
                             }
                             div class="grid gap-2" {
                                 label for="attachments" class="text-sm font-medium" { "Attachments " span class="text-muted-foreground font-normal" { "(optional)" } }
@@ -1760,7 +1734,7 @@ mod feedback_tests {
         );
         // The message lands in the email slot, visible (not hidden).
         assert!(
-            html.contains(r#"id="email-error" data-feedback-error="email" role="alert" class="mt-1 text-sm text-destructive-text">Email domain must contain a dot"#),
+            html.contains(r#"id="email-error" data-field-error="email" role="alert" class="mt-1 text-sm text-destructive-text">Email domain must contain a dot"#),
             "the message renders inside the email slot"
         );
         // A sibling field is neither invalid nor showing a message.
@@ -1769,7 +1743,7 @@ mod feedback_tests {
             "the message field is not marked invalid"
         );
         assert!(
-            html.contains(r#"data-feedback-error="message" role="alert" class="mt-1 text-sm text-destructive-text hidden""#),
+            html.contains(r#"data-field-error="message" role="alert" class="mt-1 text-sm text-destructive-text hidden""#),
             "the message slot stays hidden"
         );
     }
