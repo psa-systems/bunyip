@@ -71,10 +71,7 @@ pub fn rotating_index(len: usize) -> usize {
 /// the application list feeds only the landing page's cards now, and that one
 /// caller fetches it beside `public_ctx` (`skin/public::landing`) instead of
 /// every public render paying for a cache read that nothing else uses.
-pub async fn public_ctx(
-    st: &AppState,
-    headers: &HeaderMap,
-) -> (AuthCtx, Arc<PricingResponse>) {
+pub async fn public_ctx(st: &AppState, headers: &HeaderMap) -> (AuthCtx, Arc<PricingResponse>) {
     let (c, _fwd) = ctx(st, headers).await;
     let pricing = st.pricing().await;
     (c, pricing)

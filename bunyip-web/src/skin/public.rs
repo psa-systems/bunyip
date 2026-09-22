@@ -169,10 +169,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
     // it is fetched here rather than in `public_ctx` (which every public
     // render paid for). `join!` keeps the miss cost the slower of the two,
     // not their sum.
-    let ((c, pricing), apps) = tokio::join!(
-        public_ctx(&st, &headers),
-        st.public_applications(),
-    );
+    let ((c, pricing), apps) = tokio::join!(public_ctx(&st, &headers), st.public_applications(),);
     let signed_in = c.is_signed_in();
     // BUNYIP-487: the advertised trial length comes from
     // `tier_config.standard_trial_days`, never a literal.
@@ -278,13 +275,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
         }
     };
 
-    let body = public_shell(
-        &st.cfg,
-        c.user.as_ref(),
-        pricing.published(),
-        true,
-        content,
-    );
+    let body = public_shell(&st.cfg, c.user.as_ref(), pricing.published(), true, content);
     html_cookies(document(LANDING_PAGE_TITLE, body), &c.set_cookies)
 }
 

@@ -386,12 +386,7 @@ fn feedback_launcher() -> Markup {
 /// those links were built from. The application-list argument that used
 /// to ride here as `_apps` is gone entirely (BUNYIP-683): the list feeds
 /// only the landing page now.
-fn header(
-    _cfg: &Config,
-    user: Option<&User>,
-    pricing: bool,
-    _show_feedback: bool,
-) -> Markup {
+fn header(_cfg: &Config, user: Option<&User>, pricing: bool, _show_feedback: bool) -> Markup {
     let is_admin = user.map(|u| u.role == UserRole::Admin).unwrap_or(false);
     html! {
         header class="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60" {
@@ -1678,8 +1673,7 @@ mod tests {
         };
         let user = test_user(UserRole::Subscriber);
 
-        let signed_in =
-            public_shell(&cfg, Some(&user), false, false, html! {}).into_string();
+        let signed_in = public_shell(&cfg, Some(&user), false, false, html! {}).into_string();
         let (head, foot) = signed_in
             .split_once("<footer")
             .expect("the public shell renders a footer");

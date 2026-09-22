@@ -1191,8 +1191,7 @@ fn docs_index_body(documented: Option<&[DocumentedApp]>) -> Markup {
 pub async fn docs_index(State(st): State<AppState>, headers: HeaderMap) -> Response {
     // `join!`, not `try_join!`: the hub still renders when the documented-app
     // list is the thing that failed.
-    let ((c, pricing), documented) =
-        tokio::join!(public_ctx(&st, &headers), st.documented_apps());
+    let ((c, pricing), documented) = tokio::join!(public_ctx(&st, &headers), st.documented_apps());
     let content = docs_layout(
         documented.as_deref().map(|v| &**v),
         "/docs",
@@ -1208,8 +1207,7 @@ pub async fn docs_page(
     Path(slug): Path<String>,
     Query(q): Query<DocQuery>,
 ) -> Response {
-    let ((c, pricing), documented) =
-        tokio::join!(public_ctx(&st, &headers), st.documented_apps());
+    let ((c, pricing), documented) = tokio::join!(public_ctx(&st, &headers), st.documented_apps());
     let active = format!("/docs/{slug}");
     let Some(&(_, title, md)) = DOCS.iter().find(|&&(s, _, _)| s == slug.as_str()) else {
         let content = html! {
@@ -1254,14 +1252,7 @@ pub async fn docs_page(
         style { (PreEscaped(DOCS_CSS)) }
         (docs_layout(documented.as_deref().map(|v| &**v), &active, body))
     };
-    public_response(
-        &st,
-        &c,
-        &pricing,
-        &format!("{title} · Docs"),
-        true,
-        content,
-    )
+    public_response(&st, &c, &pricing, &format!("{title} · Docs"), true, content)
 }
 
 /// `GET /apps/{slug}/docs` - an application's public documentation index
