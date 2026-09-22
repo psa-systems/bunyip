@@ -169,7 +169,8 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
     // it is fetched here rather than in `public_ctx` (which every public
     // render paid for). `join!` keeps the miss cost the slower of the two,
     // not their sum.
-    let ((c, pricing), apps) = tokio::join!(public_ctx(&st, &headers), st.public_applications(),);
+    let ((c, pricing, app_links_allowed), apps) =
+        tokio::join!(public_ctx(&st, &headers), st.public_applications(),);
     let signed_in = c.is_signed_in();
     // BUNYIP-487: the advertised trial length comes from
     // `tier_config.standard_trial_days`, never a literal.
@@ -250,8 +251,17 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                     }
                 }
             }
-            // Apps wired through the platform
-            (wired_apps_section(&apps, &st.cfg.app_domain, brand))
+            // Apps wired through the platform. BUNYIP-685: the per-app
+            // links inside would take the visitor to a subdomain the
+            // verification gate would refuse, so hide the whole section
+            // when the same bool that hides the header/footer Applications
+            // entry says so. An anonymous visitor (`app_links_allowed
+            // == false`) also loses the block, which was a deliberate
+            // decision: the CTA below reads better without a section
+            // that offers per-app links they cannot follow yet.
+            @if app_links_allowed {
+                (wired_apps_section(&apps, &st.cfg.app_domain, brand))
+            }
             // CTA
             section class="relative overflow-hidden border-t border-border/50 py-20" {
                 div class="container relative" {
@@ -275,7 +285,14 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
         }
     };
 
-    let body = public_shell(&st.cfg, c.user.as_ref(), pricing.published(), true, content);
+    let body = public_shell(
+        &st.cfg,
+        c.user.as_ref(),
+        pricing.published(),
+        app_links_allowed,
+        true,
+        content,
+    );
     html_cookies(document(LANDING_PAGE_TITLE, body), &c.set_cookies)
 }
 
@@ -293,11 +310,12 @@ pub fn not_found_content() -> maud::Markup {
 }
 
 pub async fn not_found(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (c, pricing) = public_ctx(&st, &headers).await;
+    let (c, pricing, app_links_allowed) = public_ctx(&st, &headers).await;
     let body = public_shell(
         &st.cfg,
         c.user.as_ref(),
         pricing.published(),
+        app_links_allowed,
         false,
         not_found_content(),
     );

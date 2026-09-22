@@ -386,7 +386,17 @@ fn feedback_launcher() -> Markup {
 /// those links were built from. The application-list argument that used
 /// to ride here as `_apps` is gone entirely (BUNYIP-683): the list feeds
 /// only the landing page now.
-fn header(_cfg: &Config, user: Option<&User>, pricing: bool, _show_feedback: bool) -> Markup {
+///
+/// the Applications link is gated on `app_links_allowed` rather
+/// than `user.is_some()`, so an unverified user does not see a link that
+/// would immediately redirect them to `/onboarding`.
+fn header(
+    _cfg: &Config,
+    user: Option<&User>,
+    pricing: bool,
+    app_links_allowed: bool,
+    _show_feedback: bool,
+) -> Markup {
     let is_admin = user.map(|u| u.role == UserRole::Admin).unwrap_or(false);
     html! {
         header class="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60" {
@@ -417,7 +427,10 @@ fn header(_cfg: &Config, user: Option<&User>, pricing: bool, _show_feedback: boo
                         // launch itself is unchanged on the dashboard, which is
                         // where `app_launch_link` and its `/dashboard` SSO deep
                         // link still live. Same-origin, so no `target="_blank"`.
-                        @if user.is_some() {
+                        // rendered only when the destination's
+                        // gate would let the user through, so the link never
+                        // dead-ends at /onboarding for an unverified visitor.
+                        @if app_links_allowed {
                             a href="/applications" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Applications" }
                         }
                     }
@@ -441,7 +454,7 @@ fn header(_cfg: &Config, user: Option<&User>, pricing: bool, _show_feedback: boo
     }
 }
 
-fn footer(cfg: &Config, user: Option<&User>, pricing: bool) -> Markup {
+fn footer(cfg: &Config, _user: Option<&User>, pricing: bool, app_links_allowed: bool) -> Markup {
     let year = chrono::Utc::now().format("%Y").to_string();
     html! {
         footer class="border-t border-border/50 bg-gradient-to-b from-background to-indigo-950/5 dark:to-indigo-950/30" {
@@ -467,7 +480,10 @@ fn footer(cfg: &Config, user: Option<&User>, pricing: bool) -> Markup {
                             li { a href="/docs" class="text-muted-foreground hover:text-foreground transition-colors" { "Documentation" } }
                             // BUNYIP-682: one signed-in link, like the header
                             // (BUNYIP-667), never an entry per application.
-                            @if user.is_some() {
+                            // same gate as the header - the link
+                            // is not shown to a user the destination would
+                            // redirect to /onboarding.
+                            @if app_links_allowed {
                                 li { a href="/applications" class="text-muted-foreground hover:text-foreground transition-colors" { "Applications" } }
                             }
                         }
@@ -505,14 +521,15 @@ pub fn public_shell(
     cfg: &Config,
     user: Option<&User>,
     pricing: bool,
+    app_links_allowed: bool,
     show_feedback: bool,
     content: Markup,
 ) -> Markup {
     html! {
         div class="flex min-h-screen flex-col" {
-            (header(cfg, user, pricing, show_feedback))
+            (header(cfg, user, pricing, app_links_allowed, show_feedback))
             main class="flex-1" { (content) }
-            (footer(cfg, user, pricing))
+            (footer(cfg, user, pricing, app_links_allowed))
             @if show_feedback { (feedback_launcher()) }
         }
     }
@@ -1507,14 +1524,17 @@ mod tests {
     #[test]
     fn pricing_links_track_whether_the_page_exists() {
         let cfg = Config::from_env();
-        let shown = public_shell(&cfg, None, true, false, html! {}).into_string();
+        // app_links_allowed is a separate axis from pricing,
+        // so this test pins it to false throughout (an anonymous visitor,
+        // which is the shape it exercises).
+        let shown = public_shell(&cfg, None, true, false, false, html! {}).into_string();
         assert_eq!(
             shown.matches(r#"href="/pricing""#).count(),
             2,
             "nav link + footer link when the page is published"
         );
 
-        let hidden = public_shell(&cfg, None, false, false, html! {}).into_string();
+        let hidden = public_shell(&cfg, None, false, false, false, html! {}).into_string();
         assert!(
             !hidden.contains("/pricing"),
             "no rendered page links to a 404 pricing route"
@@ -1541,7 +1561,7 @@ mod tests {
     #[test]
     fn documentation_is_reachable_from_every_chrome_surface() {
         let cfg = Config::from_env();
-        let degraded = public_shell(&cfg, None, false, false, html! {}).into_string();
+        let degraded = public_shell(&cfg, None, false, false, false, html! {}).into_string();
         assert_eq!(
             degraded.matches(r#"href="/docs""#).count(),
             2,
@@ -1673,7 +1693,11 @@ mod tests {
         };
         let user = test_user(UserRole::Subscriber);
 
-        let signed_in = public_shell(&cfg, Some(&user), false, false, html! {}).into_string();
+        // `app_links_allowed = true` is the shape this test
+        // covers (a signed-in visitor the destination would let through).
+        // The false shape is exercised by
+        // `an_unverified_user_sees_no_application_link_in_any_chrome_surface`.
+        let signed_in = public_shell(&cfg, Some(&user), false, true, false, html! {}).into_string();
         let (head, foot) = signed_in
             .split_once("<footer")
             .expect("the public shell renders a footer");
@@ -1707,7 +1731,9 @@ mod tests {
             );
         }
 
-        let anon = public_shell(&cfg, None, false, false, html! {}).into_string();
+        // an anonymous visitor is `app_links_allowed = false`;
+        // the chrome hides the Applications entry regardless of the bool.
+        let anon = public_shell(&cfg, None, false, false, false, html! {}).into_string();
         assert!(
             !anon.contains(r#"href="/applications""#),
             "an anonymous visitor gets no Applications entry in header or footer"
@@ -1722,6 +1748,25 @@ mod tests {
                 "no application display name reaches an anonymous visitor: {name}"
             );
         }
+    }
+
+    /// a user the destination would redirect to `/onboarding`
+    /// (`app_links_allowed = false`) sees no Applications entry in the
+    /// header or footer, so no rendered link dead-ends in the redirect.
+    /// The verified counterpart is
+    /// `the_public_chrome_carries_one_applications_link_not_one_per_app`
+    /// above.
+    #[test]
+    fn an_unverified_user_sees_no_application_link_in_any_chrome_surface() {
+        let cfg = Config::from_env();
+        let user = test_user(UserRole::Subscriber);
+        let hidden = public_shell(&cfg, Some(&user), false, false, false, html! {}).into_string();
+        assert!(
+            !hidden.contains(r#"href="/applications""#),
+            "no Applications entry in header or footer when app_links_allowed = false"
+        );
+        // The other chrome links stay: Documentation is always available.
+        assert!(hidden.contains(r#"href="/docs""#), "docs stay visible");
     }
 
     /// The admin nav reads "Pricing Tiers" while the route stays put, so
