@@ -19,11 +19,19 @@
 #     searchable.
 #
 # Scanning stops at `#[cfg(test)]`: a test module's literals are assertion
-# messages, not copy. Only double-quoted string literals are scanned, so a
-# comment or a Rust path
+# messages, not copy. In `.rs` files only double-quoted string literals are
+# scanned, so a comment or a Rust path
 # (`serde::Deserialize` carries `:D`, `types::PricingResponse`
 # carries `:P`) is never a hit. Whole-line comments are dropped first, so prose quoting a
 # forbidden shape to explain it does not read as a violation.
+#
+# BUNYIP-816 (F8): the same rules also scan `bunyip-web/assets/js/**/*.js`,
+# where copy lives in single- or double-quoted string literals rather than
+# only double-quoted ones, so the gate reaches the same violations there
+# (`submitLabel.textContent = 'Sending...'` and a bare close glyph both went
+# uncaught because the glob never looked at `.js`). This is a second glob and
+# a second literal pattern reusing the one `$FORBIDDEN` rule set and the one
+# `check-source` function, not a second gate script.
 #
 # Usage:
 #   scripts/check-ui-copy.nu
@@ -31,10 +39,13 @@
 
 # BUNYIP-502: also scan the shared web-kit crate, which now holds UI toolkit
 # code (icons/buttons/badges/boxes) lifted out of bunyip-web/src/views.
-const SRC_GLOB = "{bunyip-web/src,crates/web-kit/src}/**/*.rs"
+const RS_GLOB = "{bunyip-web/src,crates/web-kit/src}/**/*.rs"
+const JS_GLOB = "bunyip-web/assets/js/**/*.js"
 
 # One double-quoted Rust string literal, escapes included.
-const LITERAL = '"(?<lit>(?:[^"\\]|\\.)*)"'
+const LITERAL_DOUBLE = '"(?<lit>(?:[^"\\]|\\.)*)"'
+# One single-quoted JS string literal, escapes included.
+const LITERAL_SINGLE = "'(?<lit>(?:[^'\\\\]|\\\\.)*)'"
 
 # Opens a log or assertion macro, whose message is operator or developer output.
 const MACRO_OPEN = '(tracing::\w+!\(|^\s*(info|warn|error|debug|trace)!\(|assert[a-z_]*!\(|panic!\()'
@@ -57,8 +68,11 @@ const FORBIDDEN = [
     }
 ]
 
-# Problems in one Rust source file, as human-readable lines.
-def check-rs [path: string]: nothing -> list<string> {
+# Problems in one source file, as human-readable lines. `literals` is the list
+# of quoting regexes to extract string literals with (Rust files scan only
+# double-quoted; JS files scan single- and double-quoted), and `stop_at_test`
+# gates the `#[cfg(test)]` cutoff, which only Rust files have.
+def check-source [path: string, literals: list<string>, stop_at_test: bool]: nothing -> list<string> {
     let content = (try { open --raw $path | decode utf-8 } catch { null })
     if $content == null {
         return [$"($path): missing or not readable - the gate cannot prove the copy is clean."]
@@ -79,10 +93,11 @@ def check-rs [path: string]: nothing -> list<string> {
         # Test modules sit at the end of a file by convention, and their
         # literals are assertion messages rather than copy. Everything from the
         # `#[cfg(test)]` line on is developer output.
-        if ($text | str trim | str starts-with "#[cfg(test)]") { break }
+        if ($stop_at_test and ($text | str trim | str starts-with "#[cfg(test)]")) { break }
         # Whole-line comments are prose about the code, not copy the user reads.
         if ($text | str trim | str starts-with "//") { continue }
-        for hit in ($text | parse --regex $LITERAL | get lit) {
+        let hits = ($literals | each {|lit_pattern| $text | parse --regex $lit_pattern | get lit } | flatten)
+        for hit in $hits {
             for rule in $FORBIDDEN {
                 let exempt = ($rule | get --optional exempt_lines)
                 if ($exempt != null and (($text =~ $exempt) or $in_macro)) { continue }
@@ -93,6 +108,14 @@ def check-rs [path: string]: nothing -> list<string> {
         }
     }
     $problems
+}
+
+def check-rs [path: string]: nothing -> list<string> {
+    check-source $path [$LITERAL_DOUBLE] true
+}
+
+def check-js [path: string]: nothing -> list<string> {
+    check-source $path [$LITERAL_DOUBLE $LITERAL_SINGLE] false
 }
 
 def self-test []: nothing -> nothing {
@@ -197,12 +220,47 @@ def self-test []: nothing -> nothing {
         }
     ]
 
-    let results = ($cases | each {|c|
-        let path = $"($dir)/($c.name)"
-        $c.body | save --force $path
-        let problems = (check-rs $path)
-        {why: $c.why, ok: (($problems | is-not-empty) == $c.expect_problems), problems: $problems}
-    })
+    let js_cases = [
+        {
+            name: "three-dots.js"
+            body: "submitLabel.textContent = 'Sending...';"
+            expect_problems: true
+            why: "a three-dot ellipsis in a single-quoted JS string"
+        }
+        {
+            name: "clean.js"
+            body: "submitLabel.textContent = 'Sending…';"
+            expect_problems: false
+            why: "the single-character ellipsis glyph in a single-quoted JS string"
+        }
+        {
+            name: "issue-key.js"
+            body: 'console.log("BUNYIP-816: retrying");'
+            expect_problems: true
+            why: "an issue key in a double-quoted JS string"
+        }
+        {
+            name: "commented.js"
+            body: "// old copy read 'Sending...' before BUNYIP-816"
+            expect_problems: false
+            why: "a JS comment quoting the forbidden shape to explain it"
+        }
+    ]
+
+    let results = (
+        ($cases | each {|c|
+            let path = $"($dir)/($c.name)"
+            $c.body | save --force $path
+            let problems = (check-rs $path)
+            {why: $c.why, ok: (($problems | is-not-empty) == $c.expect_problems), problems: $problems}
+        })
+        | append ($js_cases | each {|c|
+            let path = $"($dir)/($c.name)"
+            $c.body | save --force $path
+            let problems = (check-js $path)
+            {why: $c.why, ok: (($problems | is-not-empty) == $c.expect_problems), problems: $problems}
+        })
+    )
     let missing = (check-rs $"($dir)/absent.rs")
     rm --recursive $dir
 
@@ -231,13 +289,18 @@ def main [
         return
     }
 
-    let files = (glob $SRC_GLOB)
-    if ($files | is-empty) {
-        print --stderr $"error: ($SRC_GLOB) matched no files - the gate cannot prove the copy is clean."
+    let rs_files = (glob $RS_GLOB)
+    let js_files = (glob $JS_GLOB)
+    if (($rs_files | is-empty) and ($js_files | is-empty)) {
+        print --stderr $"error: neither ($RS_GLOB) nor ($JS_GLOB) matched any files - the gate cannot prove the copy is clean."
         exit 1
     }
 
-    let problems = ($files | each {|f| check-rs $f } | flatten)
+    let problems = (
+        ($rs_files | each {|f| check-rs $f })
+        | append ($js_files | each {|f| check-js $f })
+        | flatten
+    )
     if ($problems | is-not-empty) {
         for p in $problems { print --stderr $"error: ($p)" }
         print --stderr ""
@@ -248,5 +311,6 @@ def main [
         exit 1
     }
 
+    let files = ($rs_files | append $js_files)
     print $"check-ui-copy: ($files | length) source files carry no three-dot ellipsis, no emoticon and no issue key"
 }
