@@ -151,7 +151,7 @@ pub async fn application_groups(State(st): State<AppState>, headers: HeaderMap) 
                     @if !reachable {
                         (error_box("Could not reach the API to load application groups."))
                     } @else if groups.is_empty() {
-                        (empty_state("layers", "No groups yet", None))
+                        (empty_state("layers", "No groups yet.", None))
                     } @else {
                         div class="divide-y" {
                             @for g in &groups {
