@@ -79,7 +79,11 @@
     var pill = document.createElement('div');
     pill.className =
       'pointer-events-auto flex items-start gap-3 rounded-md px-4 py-2 text-sm shadow-lg ' + palette;
-    pill.setAttribute('role', 'status');
+    // BUNYIP-818: an error pill is at least as urgent as the app's other
+    // client-injected error surfaces, which use role="alert" alone; success
+    // and info stay role="status" since the container no longer carries its
+    // own aria-live (nesting two live regions announced every pill twice).
+    pill.setAttribute('role', kind === 'error' ? 'alert' : 'status');
     pill.style.transition = 'opacity 200ms ease, transform 200ms ease';
     pill.style.opacity = '0';
     pill.style.transform = 'translateY(-8px)';
@@ -93,7 +97,10 @@
     close.className =
       '-mr-2 shrink-0 cursor-pointer self-start px-2 text-base leading-5 opacity-70 hover:opacity-100';
     close.setAttribute('aria-label', 'Dismiss');
-    close.textContent = '×';
+    // The same "x" glyph web-kit's icon() renders server-side (crates/web-kit/src/ui.rs),
+    // not a bare character, so a screen reader gets only the aria-label above.
+    close.innerHTML =
+      '<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
     close.addEventListener('click', function () {
       dismissToast(pill);
     });
@@ -544,7 +551,7 @@
       form.dataset.feedbackSubmitting = '1';
       if (submitBtn) submitBtn.disabled = true;
       if (spinner) spinner.classList.remove('hidden');
-      if (submitLabel) submitLabel.textContent = 'Sending...';
+      if (submitLabel) submitLabel.textContent = 'Sending…';
     });
   })();
 })();

@@ -91,7 +91,7 @@ pub async fn audit_logs(
                 }
                 div class="p-6 pt-0" {
                     @if !reachable { (error_box("Could not reach the API to load audit logs.")) }
-                    @else if items.is_empty() { (empty_state("file-text", "No audit logs found", None)) }
+                    @else if items.is_empty() { (empty_state("file-text", "No audit logs found.", None)) }
                     @else { div class="space-y-0" { @for log in &items { (audit_row(log)) } } }
                     (pager(base, "page", page, total_pages))
                 }

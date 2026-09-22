@@ -11,7 +11,7 @@ use serde_json::json;
 use crate::api::admin as admin_api;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{button_class, error_box, icon};
+use crate::views::ui::{button_class, error_box, icon, toggle_switch_field};
 use crate::web::{redirect_cookies, AppState};
 
 /// Upper bounds for the auto-ban fields. Threshold is a strike count; the two
@@ -87,12 +87,9 @@ pub(super) fn auto_ban_settings_content(
                             Some("Whether auto-ban is active, and how long a ban holds."),
                             html! {
                                 div class="space-y-4" {
-                                    div class="space-y-2" {
+                                    div class="flex items-center gap-3" {
+                                        (toggle_switch_field("enabled", "enabled", values.enabled, "Auto-ban"))
                                         label for="enabled" class="text-sm font-medium" { "Auto-ban" }
-                                        select id="enabled" name="enabled" class=(dashboard_input()) {
-                                            option value="true" selected[values.enabled] { "Enabled" }
-                                            option value="false" selected[!values.enabled] { "Disabled" }
-                                        }
                                     }
                                     div class="space-y-2" { label for="ban_duration_secs" class="text-sm font-medium" { "Ban duration (seconds)" } input id="ban_duration_secs" name="ban_duration_secs" type="number" min="1" max=(MAX_AUTO_BAN_DURATION_SECS) value=(values.ban_duration_secs) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "How long a ban lasts before it expires." } }
                                 }

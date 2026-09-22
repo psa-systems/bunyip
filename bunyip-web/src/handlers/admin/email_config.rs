@@ -12,7 +12,7 @@ use crate::api::admin as admin_api;
 use crate::handlers::admin::secret_field_note;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{button_class, error_box, icon, success_box};
+use crate::views::ui::{button_class, error_box, icon, success_box, toggle_switch_field};
 use crate::web::{redirect_cookies, AppState};
 
 /// Email form values, kept as strings (numerics) so a failed save echoes back
@@ -98,12 +98,9 @@ pub(super) fn email_settings_content(
                             Some(&format!("Source: {}. Leave a field blank to keep the existing value.", e.source)),
                             html! {
                                 div class="space-y-4" {
-                                    div class="space-y-2" {
+                                    div class="flex items-center gap-3" {
+                                        (toggle_switch_field("enabled", "enabled", values.enabled, "Sending"))
                                         label for="enabled" class="text-sm font-medium" { "Sending" }
-                                        select id="enabled" name="enabled" class=(dashboard_input()) {
-                                            option value="true" selected[values.enabled] { "Enabled" }
-                                            option value="false" selected[!values.enabled] { "Disabled" }
-                                        }
                                     }
                                     div class="space-y-2" { label for="smtp_host" class="text-sm font-medium" { "SMTP host" } input id="smtp_host" name="smtp_host" value=(values.smtp_host) placeholder="smtp.example.com" class=(dashboard_input()); }
                                     div class="space-y-2" { label for="smtp_port" class="text-sm font-medium" { "SMTP port" } input id="smtp_port" name="smtp_port" type="number" min="1" max="65535" value=(values.smtp_port) class=(dashboard_input()); }
@@ -135,12 +132,9 @@ pub(super) fn email_settings_content(
                             Some("Replies to system mail are polled from this mailbox into the support queue. Leave a field blank to keep the existing value."),
                             html! {
                                 div class="space-y-4" {
-                                    div class="space-y-2" {
+                                    div class="flex items-center gap-3" {
+                                        (toggle_switch_field("imap_enabled", "imap_enabled", values.imap_enabled, "Polling"))
                                         label for="imap_enabled" class="text-sm font-medium" { "Polling" }
-                                        select id="imap_enabled" name="imap_enabled" class=(dashboard_input()) {
-                                            option value="true" selected[values.imap_enabled] { "Enabled" }
-                                            option value="false" selected[!values.imap_enabled] { "Disabled" }
-                                        }
                                     }
                                     div class="space-y-2" { label for="imap_host" class="text-sm font-medium" { "IMAP host" } input id="imap_host" name="imap_host" value=(values.imap_host) placeholder="imap.example.com" class=(dashboard_input()); }
                                     div class="space-y-2" { label for="imap_port" class="text-sm font-medium" { "IMAP port" } input id="imap_port" name="imap_port" type="number" min="1" max="65535" value=(values.imap_port) class=(dashboard_input()); }
