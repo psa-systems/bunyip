@@ -1426,6 +1426,16 @@ fn profile_fields_note(brand_name: &str) -> String {
     )
 }
 
+/// BUNYIP-816 (F9): the Danger Zone copy names this app (the admin-managed
+/// brand), not the sibling product it was hardcoded to before.
+fn danger_zone_app_name(brand_name: &str) -> String {
+    if brand_name.is_empty() {
+        "this app".to_string()
+    } else {
+        brand_name.to_string()
+    }
+}
+
 pub async fn settings(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1582,8 +1592,10 @@ pub async fn settings(
             }
 
             // Danger zone
+            @let danger_zone_brand = crate::views::layout::brand_name();
+            @let danger_zone_app = danger_zone_app_name(&danger_zone_brand);
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-destructive/30" {
-                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight text-destructive-text flex items-center gap-2" { (icon("alert-triangle", "h-5 w-5")) "Danger Zone" } p class="text-sm text-muted-foreground" { "This permanently deletes your account AND all of your data in Mokosh and any other connected app. This cannot be undone." } }
+                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight text-destructive-text flex items-center gap-2" { (icon("alert-triangle", "h-5 w-5")) "Danger Zone" } p class="text-sm text-muted-foreground" { (format!("This permanently deletes your account AND all of your data in {danger_zone_app} and any other connected app. This cannot be undone.")) } }
                 div class="p-6 pt-0" {
                     // Delete account. autocomplete="off" on the form + on the
                     // password input together suppress the password-manager
@@ -1592,7 +1604,7 @@ pub async fn settings(
                     // hint so the manager (or iOS / Chrome AutoFill) can
                     // surface a freshly-arrived SMS / TOTP code from a sibling
                     // tab WITHOUT pre-filling the password field.
-                    form method="post" action="/settings/account/delete" autocomplete="off" class="space-y-3 max-w-md" data-confirm="Permanently delete your account AND all of your data in Mokosh and any other connected app? This cannot be undone." {
+                    form method="post" action="/settings/account/delete" autocomplete="off" class="space-y-3 max-w-md" data-confirm=(format!("Permanently delete your account AND all of your data in {danger_zone_app} and any other connected app? This cannot be undone.")) {
                         (password_field("delete-account-password", "password", "Password", PwRole::Current, PwField { autocomplete: Some("off"), ..Default::default() }))
                         @if user.two_factor_enabled { div class="space-y-2" { label for="delete-account-totp_code" class="text-sm font-medium" { "Two-Factor Code" } input id="delete-account-totp_code" name="totp_code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" class=(crate::handlers::dashboard_input()); } }
                         button type="submit" class=(button_class("destructive", "default", "")) { (icon("trash", "mr-2 h-4 w-4")) "Delete My Account" }
