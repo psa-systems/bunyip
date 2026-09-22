@@ -16,6 +16,7 @@ use crate::views::layout::{admin_block, admin_block_grid};
 use crate::views::password::{password_field, PwField, PwRole};
 use crate::views::ui::{
     back_link, badge, button_class, empty_state, error_box, icon, toggle_switch,
+    toggle_switch_field,
 };
 use crate::web::{redirect_cookies, status_cookies, AppState};
 
@@ -100,7 +101,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                     @if !reachable {
                         (error_box("Could not reach the API to load applications."))
                     } @else if apps.is_empty() {
-                        (empty_state("app-window", "No applications", None))
+                        (empty_state("app-window", "No applications.", None))
                     } @else {
                         // BUNYIP-473: drag-and-drop reorder. `data-reorder-list`
                         // + `data-reorder-action` are read by assets/js/app-reorder.js,
@@ -343,9 +344,9 @@ pub(super) fn application_form(
                 (admin_block_grid(vec![
                     admin_block("Details", None, html! {
                         div class="space-y-4" {
-                            div class="flex items-start gap-2" {
-                                input type="checkbox" name="is_hosted" value="true" checked[is_hosted] id="is_hosted" class="mt-1";
-                                label for="is_hosted" class="text-sm font-medium" { "Hosted app" p class="text-xs font-normal text-muted-foreground" { "Checked: shows as a launchable hub tile. Unchecked: catalog-only distribution product (downloads / OCI pulls only)." } }
+                            div class="flex items-start gap-3" {
+                                (toggle_switch_field("is_hosted", "is_hosted", is_hosted, "Hosted app"))
+                                div { span class="text-sm font-medium" { "Hosted app" } p class="text-xs font-normal text-muted-foreground" { "On: shows as a launchable hub tile. Off: catalog-only distribution product (downloads / OCI pulls only)." } }
                             }
                             (details_fields(details))
                         }

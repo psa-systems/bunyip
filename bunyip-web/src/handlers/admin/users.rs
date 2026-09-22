@@ -11,7 +11,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::{AdminRateLimit, AdminUser};
 use crate::handlers::{admin_guard, admin_response, dashboard_input, verification_gate};
 use crate::util::{rel_time, urlenc};
-use crate::views::ui::{back_link, badge, button_class, empty_state, icon};
+use crate::views::ui::{back_link, badge, button_class, empty_state, icon, toggle_switch_field};
 use crate::web::{redirect_cookies, AppState};
 
 use super::rate_limits::rate_limit_row;
@@ -620,7 +620,7 @@ pub(super) fn users_panel(
                     (sort_header(uq, "joined", "Joined"))
                     span {}
                 }
-                div class="divide-y divide-border/50" {
+                div class="divide-y" {
                     @match data {
                         Some(p) if !p.items.is_empty() => {
                             @for u in &p.items { (user_grid_row(u)) }
@@ -1181,9 +1181,9 @@ pub async fn user_detail(
                             input id="admin-email" name="email" type="email" required value=(target.email) class=(dashboard_input());
                             button type="submit" class=(button_class("default", "default", "")) { "Save email" }
                         }
-                        label class="flex items-center gap-2 text-sm text-muted-foreground" {
-                            input type="checkbox" name="verified" value="true" class="h-4 w-4";
-                            "Mark this address verified (leave unchecked to require the user to re-verify)"
+                        div class="flex items-center gap-2 text-sm text-muted-foreground" {
+                            (toggle_switch_field("admin-email-verified", "verified", false, "Mark this address verified"))
+                            "Mark this address verified (leave off to require the user to re-verify)"
                         }
                     }
                     div class="flex flex-wrap gap-2" {
