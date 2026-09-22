@@ -1405,8 +1405,8 @@ mod tests {
         // reference to `/assets/foo.md` would be a bug of a different
         // kind: static docs are not served here.
         const EXTS: &[&str] = &[
-            ".webp", ".png", ".jpg", ".jpeg", ".svg", ".ico",
-            ".js", ".css", ".woff", ".woff2", ".ttf", ".otf",
+            ".webp", ".png", ".jpg", ".jpeg", ".svg", ".ico", ".js", ".css", ".woff", ".woff2",
+            ".ttf", ".otf",
         ];
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
