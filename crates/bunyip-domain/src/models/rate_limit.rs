@@ -257,12 +257,19 @@ impl RateLimitConfig {
         key_kind: KeyKind::Ip,
     };
 
-    /// Feedback submission: 5 per hour per IP. Promoted to a preset (BUNYIP-315)
-    /// so the admin read path can resolve its cap/window from one place instead
-    /// of the value being trapped in a handler-local literal.
+    /// Feedback submission: 20 per hour per IP. Promoted to a preset
+    /// (BUNYIP-315) so the admin read path can resolve its cap/window from
+    /// one place instead of the value being trapped in a handler-local
+    /// literal. BUNYIP-806: raised from 5 to 20 now that a honeypot-flagged
+    /// row no longer consumes the budget (see
+    /// `should_charge_rate_limit_for_feedback` in `bunyip-api::handlers::feedback`),
+    /// so the legitimate ceiling can be closer to what a real reporter needs
+    /// when filing a series of bugs without being throttled by unrelated
+    /// spam sharing their outbound IP. `RateLimitConfigRepository::effective`
+    /// still respects an admin-set override in either direction.
     pub const FEEDBACK_SUBMIT: Self = Self {
         action: "feedback_submit",
-        max_requests: 5,
+        max_requests: 20,
         window_seconds: 3600,
         key_kind: KeyKind::Ip,
     };
